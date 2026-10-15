@@ -80,25 +80,26 @@ func findSkinFavicon(base string, statFn func(name string) bool) (href, mime str
 
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
-	runDir           string
-	Description      string // корневой description флоу (для хедера дашборда)
-	stages           map[string]StageConfig
-	store            *state.Store
-	uiBus            *bus.UIBus
-	accounting       accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
-	showMoney        bool                      // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
-	actions          StageActions              // never nil in practice — see StageActions doc
-	secondary        SecondaryActions          // may be nil — see SecondaryActions doc
-	flowActions      FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
-	reviewState      func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
-	workspace        workspace.FS              // Docker project file browser backend; nil = capability off
-	sideAgent        SideAgentService          // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
-	theme            string                    // "goga" или "" (default graphite)
-	version          string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
-	indexBytes       []byte                    // предподготовленный index.html (с заменами скина/favicon)
-	fileServer       http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
-	httpSrv          *http.Server
+	runDir            string
+	Description       string // корневой description флоу (для хедера дашборда)
+	stages            map[string]StageConfig
+	store             *state.Store
+	uiBus             *bus.UIBus
+	accounting        accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
+	showMoney         bool                      // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
+	actions           StageActions              // never nil in practice — see StageActions doc
+	secondary         SecondaryActions          // may be nil — see SecondaryActions doc
+	flowActions       FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
+	reviewState       func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
+	workspace         workspace.FS              // Docker project file browser backend; nil = capability off
+	sideAgent         SideAgentService          // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
+	assistantProfiles AssistantProfilesService  // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
+	theme             string                    // "goga" или "" (default graphite)
+	version           string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
+	indexBytes        []byte                    // предподготовленный index.html (с заменами скина/favicon)
+	fileServer        http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer  http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	httpSrv           *http.Server
 	// Keepalive-таймауты вебсокета.
 	wsPongWait   time.Duration
 	wsPingPeriod time.Duration
@@ -147,7 +148,9 @@ type Config struct {
 	ReviewState func() (string, []string)
 	Workspace   workspace.FS     // Docker project file browser backend; nil = capability off
 	SideAgent   SideAgentService // «боковой» разговор; nil = capability off
-	Theme       string
+	// AssistantProfiles — реестр помощников (collaboration); nil = capability off.
+	AssistantProfiles AssistantProfilesService
+	Theme             string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
 	SkinDir string
@@ -173,26 +176,27 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		runDir:       cfg.RunDir,
-		Description:  cfg.Description,
-		stages:       cfg.Stages,
-		store:        cfg.Store,
-		uiBus:        cfg.UIBus,
-		accounting:   cfg.Accounting,
-		showMoney:    cfg.ShowMoney,
-		actions:      cfg.Actions,
-		secondary:    cfg.Secondary,
-		flowActions:  cfg.FlowActions,
-		reviewState:  cfg.ReviewState,
-		workspace:    cfg.Workspace,
-		sideAgent:    cfg.SideAgent,
-		theme:        cfg.Theme,
-		version:      cfg.Version,
-		wsPongWait:   pongWait,
-		wsPingPeriod: pingPeriod,
-		wsWriteWait:  writeWait,
-		fileServer:   http.FileServer(http.FS(web.FS)),
-		done:         make(chan struct{}),
+		runDir:            cfg.RunDir,
+		Description:       cfg.Description,
+		stages:            cfg.Stages,
+		store:             cfg.Store,
+		uiBus:             cfg.UIBus,
+		accounting:        cfg.Accounting,
+		showMoney:         cfg.ShowMoney,
+		actions:           cfg.Actions,
+		secondary:         cfg.Secondary,
+		flowActions:       cfg.FlowActions,
+		reviewState:       cfg.ReviewState,
+		workspace:         cfg.Workspace,
+		sideAgent:         cfg.SideAgent,
+		assistantProfiles: cfg.AssistantProfiles,
+		theme:             cfg.Theme,
+		version:           cfg.Version,
+		wsPongWait:        pongWait,
+		wsPingPeriod:      pingPeriod,
+		wsWriteWait:       writeWait,
+		fileServer:        http.FileServer(http.FS(web.FS)),
+		done:              make(chan struct{}),
 	}
 
 	skinName := s.builtinSkinName()
@@ -260,6 +264,11 @@ func New(cfg Config) *Server {
 	if s.sideAgent != nil {
 		mux.HandleFunc("/api/side-agent", s.routeSideAgent)
 		mux.HandleFunc("/api/side-agent/", s.routeSideAgent)
+	}
+	// Маршрут профилей помощников — только при включённой collaboration (capability off → 404, та же схема,
+	// что у бокового агента выше).
+	if s.assistantProfiles != nil {
+		mux.HandleFunc("/api/assistant-profiles", s.handleAssistantProfiles)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {

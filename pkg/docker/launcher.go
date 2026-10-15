@@ -351,6 +351,13 @@ func ReExec(cfg ReExecConfig) error {
 	if os.Getenv("AFM_SIDEAGENT") != "" {
 		args = append(args, "-e", "AFM_SIDEAGENT="+os.Getenv("AFM_SIDEAGENT"))
 	}
+	// AFM_COLLABORATION — не секрет, передаём значением (не bare -e), т.к. это тоггл, а не токен. Пробрасываем
+	// ТОЛЬКО явно заданное хостом значение: невыставленный хостовый env не должен "придумываться" внутри
+	// контейнера — иначе resolveCollaboration на хосте и в контейнере разойдутся в интерпретации
+	// config/flow-слоёв (T1.4).
+	if os.Getenv("AFM_COLLABORATION") != "" {
+		args = append(args, "-e", "AFM_COLLABORATION="+os.Getenv("AFM_COLLABORATION"))
+	}
 	// File browser: манифест корней (не секрет) передаём значением — контейнер
 	// читает его один раз при старте, чтобы знать, какие пути показывать в UI.
 	if cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0 {

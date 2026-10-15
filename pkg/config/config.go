@@ -507,6 +507,9 @@ type Config struct {
 	// inverse of SideAgent's default-ON); explicit true / AFM_WORKTREES=1
 	// enables it. flow.yaml worktrees overrides both.
 	Worktrees WorktreesConfig `yaml:"worktrees,omitempty"`
+	// Collaboration gates the helper-agent ("collaboration") feature: side helpers/sub-tasks a stage agent
+	// can delegate to. nil/true = ON by default; explicit false / AFM_COLLABORATION=0 disables it.
+	Collaboration CollaborationConfig `yaml:"collaboration,omitempty"`
 }
 
 // Default returns the built-in default configuration.
@@ -561,10 +564,10 @@ func (c Config) EffectiveTheme() string {
 // Missing files are silently ignored; defaults apply.
 func LoadFrom(globalDir, projectDir string) (Config, error) {
 	cfg := Default()
-	if err := mergeFile(&cfg, filepath.Join(globalDir, "config.yaml")); err != nil {
+	if err := mergeFile(&cfg, filepath.Join(globalDir, "config.yaml"), "global"); err != nil {
 		return cfg, err
 	}
-	if err := mergeFile(&cfg, filepath.Join(projectDir, "config.yaml")); err != nil {
+	if err := mergeFile(&cfg, filepath.Join(projectDir, "config.yaml"), "project"); err != nil {
 		return cfg, err
 	}
 	if err := cfg.Docker.ExtraMounts.Validate(); err != nil {
@@ -636,7 +639,7 @@ func validateRateCard(label string, rc accounting.RateCard) error {
 	return nil
 }
 
-func mergeFile(dst *Config, path string) error {
+func mergeFile(dst *Config, path string, layer string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -701,6 +704,31 @@ func mergeFile(dst *Config, path string) error {
 	}
 	if overlay.Worktrees.Enabled != nil {
 		dst.Worktrees.Enabled = overlay.Worktrees.Enabled
+	}
+	if overlay.Collaboration.Enabled != nil {
+		dst.Collaboration.Enabled = overlay.Collaboration.Enabled
+	}
+	if overlay.Collaboration.MaxDepth != nil {
+		if err := validateCollaborationMaxDepth(layer, overlay.Collaboration.MaxDepth); err != nil {
+			return err
+		}
+		dst.Collaboration.MaxDepth = overlay.Collaboration.MaxDepth
+		switch layer {
+		case "global":
+			dst.Collaboration.maxDepthGlobal = overlay.Collaboration.MaxDepth
+		case "project":
+			dst.Collaboration.maxDepthProject = overlay.Collaboration.MaxDepth
+		default:
+			// unreachable: LoadFrom only ever calls mergeFile with "global" or "project".
+		}
+	}
+	if overlay.Collaboration.Profiles != nil {
+		if dst.Collaboration.Profiles == nil {
+			dst.Collaboration.Profiles = map[string]ProfileConfig{}
+		}
+		for id, p := range overlay.Collaboration.Profiles {
+			dst.Collaboration.Profiles[id] = p // per-id overlay: later layer replaces the WHOLE profile definition
+		}
 	}
 	if overlay.Docker.AutoShim != nil {
 		dst.Docker.AutoShim = overlay.Docker.AutoShim

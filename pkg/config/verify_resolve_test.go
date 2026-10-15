@@ -158,6 +158,97 @@ func TestValidateVerifySpecs_CodexRecipeWithoutShim(t *testing.T) {
 	}
 }
 
+// --- T1.5: HelperCommandRejection / HelperReadonlyEnforcement — the read-only capability gate ----------
+
+// TestHelperCapability_HostNonCodexIsUnavailable is the main gate test: DefaultClaudeArgs runs claude with
+// --dangerously-skip-permissions (pkg/executor/executor.go), and CODEX_VERIFY is read only by
+// scripts/codex-as-claude.sh — so on the host, bare claude (and any other non-codex command) has no
+// verifiable read-only policy and must be rejected.
+func TestHelperCapability_HostNonCodexIsUnavailable(t *testing.T) {
+	restore := config.SwapContainerMarkerPresent(func() bool { return false })
+	defer restore()
+	t.Setenv("AFM_IN_DOCKER", "")
+	cfg := verifyRejectionCfg()
+	for _, cmd := range []string{config.ClaudeCommand, "myclaude", "implicitclaude", "myagent", "mytextonly", "mycursor"} {
+		if got := config.HelperCommandRejection(cmd, cfg); got == "" {
+			t.Errorf("HelperCommandRejection(%q) = \"\", want a non-empty reason on the host for a non-codex command", cmd)
+		}
+	}
+}
+
+// TestHelperCapability_HostCodexIsAvailable — the codex read-only adapter has a verifiable OS guarantee
+// (Seatbelt/Landlock via -s read-only) on the host, so it is available with readonly_enforcement "os".
+func TestHelperCapability_HostCodexIsAvailable(t *testing.T) {
+	restore := config.SwapContainerMarkerPresent(func() bool { return false })
+	defer restore()
+	t.Setenv("AFM_IN_DOCKER", "")
+	cfg := verifyRejectionCfg()
+	for _, cmd := range []string{"codex-as-claude", "mycodex"} {
+		if got := config.HelperCommandRejection(cmd, cfg); got != "" {
+			t.Errorf("HelperCommandRejection(%q) = %q, want allowed (\"\") on the host via the codex read-only adapter", cmd, got)
+		}
+		if got := config.HelperReadonlyEnforcement(cmd, cfg); got != "os" {
+			t.Errorf("HelperReadonlyEnforcement(%q) = %q, want \"os\"", cmd, got)
+		}
+	}
+}
+
+// TestHelperCapability_NoSilentFallback — an unavailable profile's command is named in the rejection
+// reason and stays rejected; there is no second path that would silently start it unrestricted instead.
+func TestHelperCapability_NoSilentFallback(t *testing.T) {
+	restore := config.SwapContainerMarkerPresent(func() bool { return false })
+	defer restore()
+	t.Setenv("AFM_IN_DOCKER", "")
+	cfg := verifyRejectionCfg()
+	reason := config.HelperCommandRejection(config.ClaudeCommand, cfg)
+	if reason == "" {
+		t.Fatal("expected bare claude to be rejected on the host (no verifiable read-only policy)")
+	}
+	if !strings.Contains(reason, config.ClaudeCommand) {
+		t.Errorf("reason %q does not name the rejected command", reason)
+	}
+	if got := config.HelperReadonlyEnforcement(config.ClaudeCommand, cfg); got != "none" {
+		t.Errorf("HelperReadonlyEnforcement(claude) = %q, want \"none\" when unavailable", got)
+	}
+}
+
+// TestHelperCapability_ContainerAllowsAnyCommandWithoutOsGuarantee — inside any container, there is no
+// verifiable OS read-only guarantee for ANY agent, so the trust boundary becomes the container itself (the
+// same model already accepted for AI-verify in Docker). Any command is "available" there, but with
+// readonly_enforcement "none".
+func TestHelperCapability_ContainerAllowsAnyCommandWithoutOsGuarantee(t *testing.T) {
+	restore := config.SwapContainerMarkerPresent(func() bool { return true })
+	defer restore()
+	t.Setenv("AFM_IN_DOCKER", "")
+	cfg := verifyRejectionCfg()
+	if got := config.HelperCommandRejection(config.ClaudeCommand, cfg); got != "" {
+		t.Errorf("HelperCommandRejection(claude) in a container = %q, want allowed (\"\")", got)
+	}
+	if got := config.HelperReadonlyEnforcement(config.ClaudeCommand, cfg); got != "none" {
+		t.Errorf("HelperReadonlyEnforcement(claude) in a container = %q, want \"none\" (no OS guarantee, trust boundary is the container)", got)
+	}
+}
+
+// TestHelperCapability_PredicateUsesInContainerNotReExec — a foreign container (marker file present, but
+// NOT afm's own docker re-exec: AFM_IN_DOCKER unset) must still be treated as a container. The
+// bwrap-namespace limitation is a property of any unprivileged container, not of afm's own docker
+// transport (see AGENTS.md's "Container auto-detection").
+func TestHelperCapability_PredicateUsesInContainerNotReExec(t *testing.T) {
+	restore := config.SwapContainerMarkerPresent(func() bool { return true })
+	defer restore()
+	t.Setenv("AFM_IN_DOCKER", "")
+	if config.ReExecedIntoContainer() {
+		t.Fatal("test setup invalid: ReExecedIntoContainer() must be false here")
+	}
+	if !config.InContainer() {
+		t.Fatal("test setup invalid: InContainer() must be true via the marker")
+	}
+	cfg := verifyRejectionCfg()
+	if got := config.HelperCommandRejection(config.ClaudeCommand, cfg); got != "" {
+		t.Errorf("HelperCommandRejection(claude) = %q, want allowed (\"\") — gate must use InContainer(), not ReExecedIntoContainer()", got)
+	}
+}
+
 // agentVerify строит однодшаговый агентский VerifySpec напрямую через YAML.
 func agentVerify(t *testing.T, command, prompt string) flow.VerifySpec {
 	t.Helper()

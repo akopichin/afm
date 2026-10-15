@@ -83,8 +83,9 @@ type accountingHealth struct {
 // capabilities advertises optional dashboard features gated by server-side
 // setup (e.g. whether the Docker project file browser is wired up).
 type capabilities struct {
-	FileBrowser bool `json:"file_browser"`
-	SideAgent   bool `json:"side_agent"`
+	FileBrowser   bool `json:"file_browser"`
+	SideAgent     bool `json:"side_agent"`
+	Collaboration bool `json:"collaboration"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -119,6 +120,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Stages = buildStageViews(rs, s.runDir, s.stages, stageCosts)
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	resp.Capabilities.SideAgent = s.sideAgent != nil
+	resp.Capabilities.Collaboration = s.assistantProfiles != nil
 	if s.sideAgent != nil {
 		resp.RunID = s.sideAgent.ConversationID()
 	}

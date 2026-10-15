@@ -1403,3 +1403,72 @@ stages:
 		}
 	})
 }
+
+// --- T1.3: collaboration.max_depth in flow.yaml -------------------------------------------------------
+
+const collabFlowBase = `
+name: f
+description: "collaboration max_depth"
+stages:
+  - id: s
+    name: "S"
+    description: "d"
+    agents: [planning, implementation]
+`
+
+func TestParseFile_CollaborationMaxDepth(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, "collaboration:\n  max_depth: 2\n"+collabFlowBase))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Collaboration == nil || f.Collaboration.MaxDepth == nil || *f.Collaboration.MaxDepth != 2 {
+		t.Fatalf("Collaboration = %+v, want MaxDepth pointing to 2", f.Collaboration)
+	}
+}
+
+func TestParseFile_CollaborationMaxDepthZero(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, "collaboration:\n  max_depth: 0\n"+collabFlowBase))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Collaboration == nil || f.Collaboration.MaxDepth == nil || *f.Collaboration.MaxDepth != 0 {
+		t.Fatalf("Collaboration = %+v, want explicit MaxDepth 0, not lost/nil", f.Collaboration)
+	}
+}
+
+func TestParseFile_CollaborationAbsent(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, collabFlowBase))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Collaboration != nil {
+		t.Errorf("Collaboration = %+v, want nil when the key is absent", f.Collaboration)
+	}
+}
+
+func TestParseFile_RejectsNegativeMaxDepth(t *testing.T) {
+	_, err := flow.ParseFile(writeTemp(t, "collaboration:\n  max_depth: -1\n"+collabFlowBase))
+	if err == nil {
+		t.Fatal("expected ParseFile to reject a negative collaboration.max_depth")
+	}
+	if !strings.Contains(err.Error(), "collaboration.max_depth") {
+		t.Errorf("error = %q, want it to name collaboration.max_depth", err.Error())
+	}
+}
+
+func TestParseFile_RejectsUnknownCollaborationField(t *testing.T) {
+	_, err := flow.ParseFile(writeTemp(t, "collaboration:\n  enabled: true\n"+collabFlowBase))
+	if err == nil {
+		t.Fatal("expected ParseFile to reject collaboration.enabled at the flow level (no per-flow enable)")
+	}
+	if !strings.Contains(err.Error(), "enabled") {
+		t.Errorf("error = %q, want it to name the rejected field \"enabled\"", err.Error())
+	}
+}
+
+func TestParseFile_RejectsUnknownCollaborationField_Other(t *testing.T) {
+	_, err := flow.ParseFile(writeTemp(t, "collaboration:\n  bogus: 1\n"+collabFlowBase))
+	if err == nil {
+		t.Fatal("expected ParseFile to reject an unknown collaboration field")
+	}
+}

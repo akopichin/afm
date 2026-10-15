@@ -312,8 +312,48 @@ type Flow struct {
 	SideAgent *bool `yaml:"side_agent,omitempty"`
 	// Worktrees, when set, overrides env/config for per-flow git worktrees
 	// (nil = no opinion → defer to AFM_WORKTREES / config). Highest precedence.
-	Worktrees *bool   `yaml:"worktrees,omitempty"`
-	Stages    []Stage `yaml:"stages"`
+	Worktrees *bool `yaml:"worktrees,omitempty"`
+	// Collaboration overrides the helper-agent delegation depth for this flow only. Deliberately carries
+	// NO per-flow "enabled": the feature is a deployment-wide switch (config.yaml's collaboration.enabled /
+	// AFM_COLLABORATION), not something an individual flow can turn on for itself — see
+	// FlowCollaboration.UnmarshalYAML.
+	Collaboration *FlowCollaboration `yaml:"collaboration,omitempty"`
+	Stages        []Stage            `yaml:"stages"`
+}
+
+// FlowCollaboration is the per-flow override of collaboration.max_depth only.
+type FlowCollaboration struct {
+	MaxDepth *int
+}
+
+// UnmarshalYAML accepts only the max_depth key, rejecting "enabled" (and anything else) with a message
+// pointing at where to actually enable the feature — mirrors verify.go's explicit-key-switch pattern
+// (verifyStepFromMapping) rather than relying on yaml.v3's lenient default (which would otherwise silently
+// ignore collaboration.enabled in a flow.yaml instead of rejecting it).
+func (c *FlowCollaboration) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return errors.New("collaboration: expected an object")
+	}
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		key := value.Content[i].Value
+		val := value.Content[i+1]
+		switch key {
+		case "max_depth":
+			var v int
+			if err := val.Decode(&v); err != nil {
+				return fmt.Errorf("collaboration.max_depth: %w", err)
+			}
+			if v < 0 {
+				return fmt.Errorf("collaboration.max_depth: must not be negative, got %d", v)
+			}
+			c.MaxDepth = &v
+		case "enabled":
+			return errors.New(`collaboration: unknown field "enabled" — there is no per-flow enable; turn the feature on/off via config.yaml's collaboration.enabled or AFM_COLLABORATION`)
+		default:
+			return fmt.Errorf("collaboration: unknown field %q", key)
+		}
+	}
+	return nil
 }
 
 // MemoryEnabled сообщает, включена ли agent-память для этого флоу.

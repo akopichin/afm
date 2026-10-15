@@ -269,6 +269,10 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"parent reflect path", "name: f\nmemory:\n  path: memory\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: ../escape.md\n", false},
 		{"absolute reflect path", "name: f\nmemory:\n  path: memory\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: /tmp/escape.md\n", false},
 		{"reserved reflect path", "name: f\nmemory:\n  path: memory\nstages:\n  - id: s\n    agents: [planning]\n    reflect:\n      file: ./memory.md\n", false},
+		{"collaboration max_depth", "name: f\ncollaboration:\n  max_depth: 2\nstages:\n  - id: s\n    agents: [planning]\n", true},
+		{"collaboration max_depth zero", "name: f\ncollaboration:\n  max_depth: 0\nstages:\n  - id: s\n    agents: [planning]\n", true},
+		{"collaboration negative max_depth", "name: f\ncollaboration:\n  max_depth: -1\nstages:\n  - id: s\n    agents: [planning]\n", false},
+		{"collaboration enabled is rejected (no per-flow enable)", "name: f\ncollaboration:\n  enabled: true\nstages:\n  - id: s\n    agents: [planning]\n", false},
 	}
 
 	for _, tt := range tests {

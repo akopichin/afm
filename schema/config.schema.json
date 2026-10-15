@@ -37,9 +37,48 @@
     "verify": { "$ref": "#/definitions/verify" },
     "browser": { "$ref": "#/definitions/browser" },
     "side_agent": { "$ref": "#/definitions/sideAgent" },
-    "worktrees": { "$ref": "#/definitions/worktrees" }
+    "worktrees": { "$ref": "#/definitions/worktrees" },
+    "collaboration": { "$ref": "#/definitions/collaboration" }
   },
   "definitions": {
+    "collaboration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The helper-agent (\"collaboration\") feature: side helpers/sub-tasks a stage agent can delegate to. Precedence for enabled: env AFM_COLLABORATION > this > default ON.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable collaboration. ON by default; explicit false / env AFM_COLLABORATION=0 disables it."
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum helper delegation depth. Explicit 0 means no helpers at all. Unset falls back to the project/global layer, then a built-in default of 3 (see assistants.ResolveDepth) — a flow.yaml collaboration.max_depth can override this further."
+        },
+        "profiles": {
+          "type": "object",
+          "description": "Locally configured assistant roles, keyed by profile id. No marketplace: builtin + global config + project config are the only sources.",
+          "additionalProperties": { "$ref": "#/definitions/collaborationProfile" }
+        },
+        "limits": { "$ref": "#/definitions/collaborationLimits" }
+      }
+    },
+    "collaborationProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One locally configured assistant role.",
+      "properties": {
+        "title": { "type": "string", "description": "Title shown in the UI." },
+        "command": { "type": "string", "description": "An already-configured command/recipe name to run this profile with (not a new binary/transport). A built-in profile with no command inherits client.command." },
+        "instructions": { "type": "string", "description": "System instructions for this role." }
+      }
+    },
+    "collaborationLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Delegation/quota limits for the collaboration feature. Empty today; filled in by later stages (admission depth/actor/generation/quota, required-subtask budgets).",
+      "properties": {}
+    },
     "sideAgent": {
       "type": "object",
       "additionalProperties": false,

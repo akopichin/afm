@@ -3,6 +3,21 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-15
+
+### Improvement: collaboration feature switch and assistant profile registry (backend only)
+
+Added the `collaboration` config block (`collaboration.enabled`/`AFM_COLLABORATION`,
+default ON; `collaboration.max_depth` in global/project config and per-flow
+`flow.yaml`) and a local assistant-profile registry (`collaboration.profiles`,
+builtin → global → project layering, each layer fully replacing a same-id
+profile). A profile's command is only considered usable without an unrestricted
+agent risk when it has a verifiable read-only guarantee (the codex adapter on the
+host, or any command inside a container, which is treated as container-trust
+instead). `GET /api/assistant-profiles` and `/api/status`'s
+`capabilities.collaboration` expose this for the dashboard; no UI and no model
+calls are wired up yet — this is groundwork for the upcoming helper-agent feature.
+
 ## 2026-10-14
 
 ### Improvement: send file comments to the Side agent without pausing the flow

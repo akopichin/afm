@@ -26,9 +26,9 @@ export type FlowStatus = {
   idleSince: string | null
   backoffAccumulatedMs: number
   backoffOpenSince: string[]
-  // capabilities — фичефлаги бэкенда для текущего запуска: включён ли файловый браузер проекта и подключён
-  // ли «боковой» агент.
-  capabilities: { fileBrowser: boolean; sideAgent: boolean }
+  // capabilities — фичефлаги бэкенда для текущего запуска: включён ли файловый браузер проекта, подключён
+  // ли «боковой» агент, и включена ли collaboration (помощники/сабагенты стадии).
+  capabilities: { fileBrowser: boolean; sideAgent: boolean; collaboration: boolean }
   // runId — id текущего разговора бокового агента. Используется хуком бокового агента как поколение: смена
   // run_id инвалидирует прежний разговор.
   runId: string
@@ -61,7 +61,7 @@ const EMPTY_STATUS: FlowStatus = {
   idleSince: null,
   backoffAccumulatedMs: 0,
   backoffOpenSince: [],
-  capabilities: { fileBrowser: false, sideAgent: false },
+  capabilities: { fileBrowser: false, sideAgent: false, collaboration: false },
   runId: '',
   flowPauseState: 'none',
   flowPausedStages: [],
@@ -183,6 +183,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const capabilities = {
     fileBrowser: rawCapabilities.file_browser === true,
     sideAgent: rawCapabilities.side_agent === true,
+    collaboration: rawCapabilities.collaboration === true,
   }
   const runId = typeof obj.run_id === 'string' ? obj.run_id : ''
 

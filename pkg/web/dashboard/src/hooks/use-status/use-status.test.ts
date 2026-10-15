@@ -432,6 +432,16 @@ describe('useStatus', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: {} }).capabilities.sideAgent).toBe(false)
   })
 
+  test('normalizeStatus maps capabilities.collaboration to capabilities.collaboration', () => {
+    const result = normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { collaboration: true } })
+    expect(result.capabilities.collaboration).toBe(true)
+  })
+
+  test('normalizeStatus defaults capabilities.collaboration to false when absent (old backend)', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).capabilities.collaboration).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: {} }).capabilities.collaboration).toBe(false)
+  })
+
   test('normalizeStatus reads run_id and defaults to "" when absent/non-string', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], run_id: 'demo-123-ab12' }).runId).toBe('demo-123-ab12')
     expect(normalizeStatus({ flow_name: 'demo', stages: [] }).runId).toBe('')

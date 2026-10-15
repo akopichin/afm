@@ -268,14 +268,17 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	// srv.Shutdown — LIFO выполнит closeStores уже после srv.Shutdown.
 	defer func() { side.closeStores(sideDrained) }()
 
+	collab := startCollaboration(cfg, f)
+
 	srv, err := startDashboard(cfg, server.Config{
-		RunDir:      runDir,
-		Description: f.Description,
-		Stages:      dashboardStageConfig(stages),
-		Store:       store,
-		Workspace:   ws,
-		Accounting:  serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
-		SideAgent:   side.service(),
+		RunDir:            runDir,
+		Description:       f.Description,
+		Stages:            dashboardStageConfig(stages),
+		Store:             store,
+		Workspace:         ws,
+		Accounting:        serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
+		SideAgent:         side.service(),
+		AssistantProfiles: collab.service(),
 	}, orch)
 	if err != nil {
 		return err
