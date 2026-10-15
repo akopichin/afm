@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -98,6 +97,10 @@ type RunState struct {
 	// примененного перехода.
 	IdleAccumulatedMs    int64 `json:"idle_accumulated_ms"`
 	BackoffAccumulatedMs int64 `json:"backoff_accumulated_ms"`
+	// Assistants is the task-tree/policy/quota/idempotency projection restored from control records
+	// (pkg/state/assistants_projection.go, T2.3+). Like the rest of RunState it is a derived cache —
+	// events.jsonl stays authoritative; LoadRunState/Store.Open rebuild it by replay.
+	Assistants AssistantsState `json:"assistants,omitempty"`
 }
 
 // NewRunState creates an initial RunState with all stages pending.
@@ -106,6 +109,7 @@ func NewRunState(stageIDs []string) *RunState {
 		StartedAt:  time.Now(),
 		StageOrder: stageIDs,
 		Stages:     make(map[string]StageState, len(stageIDs)),
+		Assistants: newAssistantsState(),
 	}
 	for _, id := range stageIDs {
 		// UpdatedAt остаётся нулевым, а не time.Now: maxUpdatedAt/accountIdleAndBackoff считает максимум
@@ -298,6 +302,9 @@ func LoadRunState(runDir string) (RunState, error) {
 		return rs, err
 	}
 	res := parseEventLog(data, &rs)
+	if res.unsupported != nil {
+		return RunState{Stages: map[string]StageState{}}, res.unsupported
+	}
 	if res.corrupted {
 		return rs, ErrCorruptLog
 	}
@@ -324,13 +331,18 @@ func splitLines(data []byte) [][]byte {
 // replayResult — итог разбора events.jsonl, общий для обоих путей чтения лога:
 // replayEvents (Open, с усечением по goodOffset) и LoadRunState (read-only check).
 type replayResult struct {
-	history    []Transition
-	lastSeq    uint64
-	goodOffset int64 // байтовый конец последней ЗАФИКСИРОВАННОЙ (newline-terminated) записи
-	corrupted  bool  // битая ПОЛНАЯ строка в середине лога (есть валидные записи после)
+	history     []Transition
+	lastSeq     uint64
+	goodOffset  int64 // байтовый конец последней ЗАФИКСИРОВАННОЙ (newline-terminated) записи
+	corrupted   bool  // битая ПОЛНАЯ строка в середине лога (есть валидные записи после) — карантин
+	unsupported error // control-запись с незнакомым kind/schema_version — fail-closed, БЕЗ карантина
+	// seqOffsets maps a control record's seq -> the byte offset where its line STARTS (T2.5's direct
+	// single-record journal read by seq, without scanning).
+	seqOffsets map[uint64]int64
 }
 
-// parseEventLog — единственный парсер events.jsonl. Применяет переходы к rs.
+// parseEventLog — единственный парсер events.jsonl. Применяет переходы (и, начиная с T2.3, control-записи)
+// к rs.
 func parseEventLog(data []byte, rs *RunState) replayResult {
 	lines := splitLines(data)
 	endsWithNewline := len(data) > 0 && data[len(data)-1] == '\n'
@@ -341,17 +353,43 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 		if isLast && !endsWithNewline {
 			break // незакоммиченный хвост без \n — усечь (см. durability-решение плана)
 		}
+		lineStart := offset
 		offset += int64(len(line)) + 1 // +1 на \n (у не-последних строк он всегда есть)
 		if len(bytes.TrimSpace(line)) == 0 {
 			goodOffset = offset
 			continue
 		}
-		var t Transition
-		if json.Unmarshal(line, &t) != nil {
+		dl, unsupported, err := decodeLine(line)
+		if unsupported {
+			// Fail-closed (T2.1, §6.2): синтаксически валидная, но непонятная запись останавливает разбор
+			// немедленно — ран не продолжается с частичным графом задач. В отличие от corrupted ниже,
+			// оригинал events.jsonl не трогается — вызывающий (Store.Open) не должен его карантинить.
+			res.unsupported = err
+			return res
+		}
+		if err != nil {
 			res.goodOffset = goodOffset
 			res.corrupted = true
 			return res
 		}
+		if dl.control != nil {
+			c := dl.control
+			if perr := applyControlToRunState(rs, c); perr != nil {
+				// The record itself decoded fine, but what it asserts is impossible (cycle/missing parent
+				// — T2.3): treat as log corruption, not as ErrUnsupportedRecord.
+				res.goodOffset = goodOffset
+				res.corrupted = true
+				return res
+			}
+			if res.seqOffsets == nil {
+				res.seqOffsets = map[uint64]int64{}
+			}
+			res.seqOffsets[c.Seq] = lineStart
+			res.lastSeq = c.Seq
+			goodOffset = offset
+			continue
+		}
+		t := *dl.transition
 		// Восстанавливаем реальное начало рана из первого события лога. На свежем ране лог при Open пуст, сюда
 		// не заходим, и StartedAt остаётся временем Open ≈ реальному старту.
 		if res.lastSeq == 0 && !t.Time.IsZero() {

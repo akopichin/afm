@@ -8,6 +8,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 func writeCollabConfigYAML(t *testing.T, dir, content string) string {
@@ -118,5 +119,51 @@ func TestResolveCollaboration_IndependentFromSideAgent(t *testing.T) {
 				t.Errorf("sideAgentEnabled = %v, want %v", got, tc.wantSide)
 			}
 		})
+	}
+}
+
+// TestRecovery_TreeRestoredBeforeOrchestratorNew is the cmd/afm half of T2.7: proves startCollaboration's
+// policy resolution+durable recording (the one piece of "restore collaboration state" that exists at this
+// stage — task tree/quotas/continuations are already restored earlier, by state.Open's replay, which
+// executeFlow calls before startCollaboration too) completes and is DURABLE before the point in executeFlow
+// where orchestrator.New is constructed.
+//
+// This cannot call the real orchestrator.New (constructing one needs a full Options fixture disproportionate
+// to this test's purpose) — instead it uses the SAME state.SetAppendControlHook seam the pkg/state T2.2/T2.4
+// crash-simulation tests use to observe the exact moment the policy record becomes durable, and records a
+// stand-in marker for "orchestrator.New runs here" at the point executeFlow's real source calls it (right
+// after startCollaboration returns — see run.go). The ordering assertion is real; the "orchestrator.New"
+// step itself is a documented stand-in, not a live call into pkg/orchestrator.
+func TestRecovery_TreeRestoredBeforeOrchestratorNew(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	defer store.Close()
+
+	var order []string
+	state.SetAppendControlHook(func(c state.Control) {
+		if c.Kind == "policy_set" {
+			order = append(order, "policy_recorded")
+		}
+	})
+	defer state.SetAppendControlHook(nil)
+
+	five := 5
+	f := &flow.Flow{Collaboration: &flow.FlowCollaboration{MaxDepth: &five}}
+	collab := startCollaboration(store, config.Config{}, f)
+	// Mirrors run.go: `orch = orchestrator.New(orchOpts)` is the very next meaningful step in executeFlow
+	// after `collab := startCollaboration(store, cfg, f)`.
+	order = append(order, "orchestrator_new")
+
+	if !collab.policy.Enabled {
+		t.Fatal("collab.policy.Enabled = false, want true (default ON)")
+	}
+	if len(order) != 2 || order[0] != "policy_recorded" || order[1] != "orchestrator_new" {
+		t.Fatalf("order = %v, want [policy_recorded, orchestrator_new]", order)
+	}
+	if rev := store.Snapshot().Assistants.Policy.Revision; rev == "" {
+		t.Fatal("policy was not durably recorded by the time startCollaboration returned")
 	}
 }

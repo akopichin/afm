@@ -202,6 +202,12 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	runID := filepath.Base(runDir)
 	resumed := store.Snapshot().LastSeq > 0
 
+	// T2.7 recovery ordering: collaboration state (task tree/quotas/continuations restored by state.Open's
+	// replay above, policy resolved and durably recorded here) must be settled BEFORE any consumer —
+	// orchestrator.New below — is created. A flow.yaml change after this run's policy was first recorded
+	// must not silently retake effect on resume without going through its own durable record (T2.6).
+	collab := startCollaboration(store, cfg, f)
+
 	var orch *orchestrator.Orchestrator
 	hooksDisp, err := prepareLifecycleDispatcher(rootDir, lifecyclehooks.DispatcherConfig{
 		FlowName: f.Name,
@@ -267,8 +273,6 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	// Журнал/учёт закрываются ПОСЛЕ остановки сервера и только если агент дренирован. Регистрируем ДО defer
 	// srv.Shutdown — LIFO выполнит closeStores уже после srv.Shutdown.
 	defer func() { side.closeStores(sideDrained) }()
-
-	collab := startCollaboration(cfg, f)
 
 	srv, err := startDashboard(cfg, server.Config{
 		RunDir:            runDir,

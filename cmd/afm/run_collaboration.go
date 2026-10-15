@@ -8,6 +8,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/server"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // collaborationPolicy is the resolved, immutable-for-the-process-lifetime outcome of the collaboration
@@ -56,13 +57,27 @@ type collaborationRuntime struct {
 	registry *assistants.Registry
 }
 
-// startCollaboration resolves the policy and, if enabled, builds the profile registry from this process's
-// config. There is no code here creating profiles from an HTTP request — only config (global/project
-// collaboration.profiles) and the (currently empty) built-in catalog feed the registry.
-func startCollaboration(cfg config.Config, f *flow.Flow) *collaborationRuntime {
+// startCollaboration resolves the policy, durably records it (T2.6/T2.7 — see below) and, if enabled, builds
+// the profile registry from this process's config. There is no code here creating profiles from an HTTP
+// request — only config (global/project collaboration.profiles) and the (currently empty) built-in catalog
+// feed the registry.
+//
+// store is used ONLY to durably record the resolved policy (state.Store.EnsurePolicyRecorded) before this
+// function returns — the T2.7 recovery-ordering requirement that policy be resolved and any change recorded
+// BEFORE any consumer (orchestrator.New) is created. No task is created here and no agent is spawned; this
+// is pure bookkeeping, consistent with Инвариант 9 (default ON must not itself start any model call).
+func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *collaborationRuntime {
 	policy := resolveCollaboration(cfg, f)
 	if !policy.Enabled {
 		return &collaborationRuntime{policy: policy}
+	}
+
+	if _, err := store.EnsurePolicyRecorded(policy.Depth, state.Actor{Kind: "system", ID: "afm"}); err != nil {
+		// A storage hiccup here must not take down the whole run before it even starts its stages — fall
+		// back to "capability off" (same posture as a malformed profile below), surfaced as a warning rather
+		// than a hard failure, mirroring startSideAgent's "open failed → disable, don't crash the flow".
+		fmt.Fprintf(os.Stderr, "warning: collaboration disabled: failed to record policy: %v\n", err)
+		return &collaborationRuntime{policy: collaborationPolicy{Enabled: false, Depth: policy.Depth}}
 	}
 
 	available := func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {

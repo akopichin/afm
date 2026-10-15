@@ -1,0 +1,297 @@
+package state
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/akopichin/afm/pkg/assistants"
+)
+
+// OperationRejectedError is a typed, non-storage rejection of an Operation: the write never reached the
+// journal at all (as opposed to StorageError, where it did and the write/fsync itself failed). Code reuses
+// assistants.ErrorCode so the same machine-readable strings already defined for the collaboration HTTP API
+// (pkg/assistants/errors.go) flow straight through from the storage layer.
+type OperationRejectedError struct {
+	Code   assistants.ErrorCode
+	Reason string
+}
+
+func (e *OperationRejectedError) Error() string {
+	return fmt.Sprintf("operation rejected (%s): %s", e.Code, e.Reason)
+}
+
+// ErrOperationIDConflict is wrapped by OperationRejectedError{Code: CodeInvalidStatus} — kept as a sentinel
+// so callers can errors.Is it without string-matching Reason. Reusing CodeInvalidStatus rather than
+// inventing a new ErrorCode: pkg/assistants/errors.go's catalog is the single source of machine-readable
+// rejection codes for this feature, and "the same operation_id was already used for something else" is, from
+// the caller's point of view, a request that is not valid to retry as given — the same shape of problem
+// CodeInvalidStatus already names.
+var ErrOperationIDConflict = errors.New("assistants: operation_id already used with different content")
+
+// Effect is one state mutation bundled into an Operation. Reuses the SAME per-kind payload shapes as
+// standalone control records (task_created, task_status_changed, policy_set, quota_reserved, ...) — see
+// controlKinds in record.go and dispatchControlKind in assistants_projection.go.
+type Effect struct {
+	Kind    string          `json:"kind"`
+	Target  Target          `json:"target"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// operationCommittedPayload is the Control.Payload shape for the "operation_committed" wrapper kind: the
+// caller's semantic op.Kind plus every bundled Effect, applied together (applyOperationCommitted).
+type operationCommittedPayload struct {
+	OpKind  string   `json:"op_kind"`
+	Effects []Effect `json:"effects"`
+}
+
+// Preconditions are checked against the CURRENT snapshot under the SAME lock as the write (T2.4 step 2) —
+// never against a read taken earlier. Zero-value fields mean "no constraint".
+type Preconditions struct {
+	// PolicyRevision, if non-empty, must match the run's current effective policy revision
+	// (rs.Assistants.Policy.Revision) — stale_revision otherwise.
+	PolicyRevision string
+	// TaskStatus, if non-empty, maps taskID -> the status that task is expected to currently hold —
+	// stale_revision on any mismatch or missing task. Optimistic-concurrency guard for operations that act
+	// on an existing task (e.g. "only pause it if it's still running").
+	TaskStatus map[string]assistants.TaskStatus
+	// MaxQuota, if non-nil, is the whole-tree quota ceiling this operation's own quota_reserved effects (if
+	// any) must not push the running total past — budget_exceeded otherwise. See T2.6's QuotaReserved.
+	MaxQuota *int
+}
+
+// Operation is a single caller-intent: ApplyRunOperation either durably commits ALL of its Effects as one
+// Control record, or none of them — see dev-plan.md T2.4's 7-step ordering.
+type Operation struct {
+	// ID is the idempotency key (T2.5) — required. The SAME ID with the SAME Effects repeated any number of
+	// times (including after a restart) returns the original OperationResult without creating anything new;
+	// the same ID with DIFFERENT content is rejected.
+	ID      string
+	Kind    string
+	Actor   Actor
+	Expect  Preconditions
+	Effects []Effect
+}
+
+// OperationResult is what ApplyRunOperation returns on success — including when the call is a replay of an
+// already-committed operation_id (T2.5), in which case Seq is the ORIGINAL commit's seq, not a new one.
+type OperationResult struct {
+	OperationID string
+	Seq         uint64
+}
+
+// ApplyRunOperation is the single mutation path for new (assistants/task) state (§6.3, dev-plan T2.4). The
+// durable commit (steps 1-6) happens entirely under s.mu; externalWork — if non-nil — runs strictly AFTER
+// the lock is released (step 7: spawning an agent or any other external side effect must never happen while
+// the lock is held, since it may block for an arbitrary time). externalWork is only invoked when the
+// operation was actually admitted (including an idempotent replay of a prior success); it is never called
+// for a rejected operation.
+func (s *Store) ApplyRunOperation(op Operation, externalWork func(OperationResult)) (OperationResult, error) {
+	res, err := s.applyRunOperationLocked(op)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if externalWork != nil {
+		externalWork(res)
+	}
+	return res, nil
+}
+
+func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
+	if op.ID == "" {
+		return OperationResult{}, errors.New("assistants: operation id is required")
+	}
+
+	payload, err := json.Marshal(operationCommittedPayload{OpKind: op.Kind, Effects: op.Effects})
+	if err != nil {
+		return OperationResult{}, fmt.Errorf("marshal operation effects: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.eventsLog == nil {
+		return OperationResult{}, errors.New("run store is closed")
+	}
+
+	// T2.5 idempotency: the never-evicted operationIndex is checked FIRST, before any lifecycle/precondition
+	// check — a repeat of an already-committed operation returns the ORIGINAL outcome, it is not re-validated
+	// against preconditions that may have changed since (that would make a successful repeat retroactively
+	// fail, which defeats the point of idempotency).
+	if seq, known := s.snapshot.Assistants.OperationIndex[op.ID]; known {
+		return s.reconcileIdempotentRepeatLocked(op.ID, seq, payload)
+	}
+
+	// Step 1: run lifecycle not finalizing. (Flow-wide pause is a stage-FSM concept with no equivalent here
+	// yet — pkg/state has no notion of "the whole flow is paused" independent of individual stage statuses;
+	// a later stage wires that precondition in via Expect once it exists.)
+	if s.runFinalizing {
+		return OperationResult{}, &OperationRejectedError{Code: assistants.CodeRunFinalizing, Reason: "run is finalizing"}
+	}
+
+	// T2.6: no task may be created before SOME policy has been durably recorded — depth/MaxDepthAtCreate
+	// only mean anything relative to a recorded policy. This gate lives here (the one production admission
+	// path), not in the raw projection (applyTaskCreated/AppendControl stay usable by lower-level callers,
+	// including recording the very first policy_set itself, without needing a policy to already exist).
+	if requiresPolicy(op.Effects) && s.snapshot.Assistants.Policy.Revision == "" {
+		return OperationResult{}, fmt.Errorf("%w: operation %s", ErrPolicyNotRecorded, op.ID)
+	}
+
+	// Step 2: check Expect against the snapshot, UNDER LOCK.
+	if err := checkPreconditions(s.snapshot, op); err != nil {
+		return OperationResult{}, err
+	}
+
+	// Step 3: build ONE Control record with ALL effects.
+	c := &Control{
+		Kind:          kindOperationCommitted,
+		SchemaVersion: ControlSchemaVersion,
+		OperationID:   op.ID,
+		Actor:         op.Actor,
+		Payload:       payload,
+	}
+
+	// Steps 4-5: write+fsync, then update projections — appendControlLocked validates (dry-run) before ever
+	// touching the journal, exactly like AppendControl, so a batch that would fail projection never gets
+	// durably written at all.
+	if err := s.appendControlLocked(c); err != nil {
+		return OperationResult{}, err
+	}
+
+	res := OperationResult{OperationID: op.ID, Seq: c.Seq}
+	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, payloadJSON: payload})
+
+	// Step 6: publish a notice. pkg/state has no notice bus (that lives in pkg/orchestrator) — left as the
+	// caller's responsibility; ApplyRunOperation's return value (and the durable record itself) is what a
+	// pkg/orchestrator wrapper observes to publish one.
+	return res, nil
+}
+
+// checkPreconditions validates op.Expect against rs's CURRENT projection and, for MaxQuota, against this
+// SAME operation's own quota_reserved effects (so the ceiling check and the reservation are atomic under one
+// lock acquisition — see TestQuota_ReservedAtomicallyForChildGroup).
+func checkPreconditions(rs *RunState, op Operation) error {
+	exp := op.Expect
+	if exp.PolicyRevision != "" && rs.Assistants.Policy.Revision != exp.PolicyRevision {
+		return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: "policy revision changed"}
+	}
+	for id, want := range exp.TaskStatus {
+		t, ok := rs.Assistants.Tasks[assistants.TaskID(id)]
+		if !ok || t.Status != want {
+			return &OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("task %s status changed", id)}
+		}
+	}
+	if exp.MaxQuota != nil {
+		requested := 0
+		for _, e := range op.Effects {
+			if e.Kind != kindQuotaReserved {
+				continue
+			}
+			var p quotaReservedPayload
+			if err := decodePayload(e.Payload, &p); err != nil {
+				return fmt.Errorf("decode quota_reserved effect: %w", err)
+			}
+			requested += p.Amount
+		}
+		if rs.Assistants.QuotaReserved+requested > *exp.MaxQuota {
+			return &OperationRejectedError{Code: assistants.CodeBudgetExceeded, Reason: fmt.Sprintf("quota %d + %d exceeds max %d", rs.Assistants.QuotaReserved, requested, *exp.MaxQuota)}
+		}
+	}
+	return nil
+}
+
+// reconcileIdempotentRepeatLocked handles a request whose operation_id is already in operationIndex. Caller
+// holds s.mu. Fast path: the bounded opCache. Slow path (cache miss, index hit): a direct single read of the
+// journal at the known seq — no scan of the rest of the log.
+func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayload []byte) (OperationResult, error) {
+	if e, ok := s.opCache.get(opID); ok {
+		if !bytes.Equal(e.payloadJSON, newPayload) {
+			return OperationResult{}, fmt.Errorf("%w: %s", ErrOperationIDConflict, opID)
+		}
+		return OperationResult{OperationID: opID, Seq: e.seq}, nil
+	}
+
+	payload, err := s.readControlPayloadAtSeq(seq)
+	if err != nil {
+		return OperationResult{}, &StorageError{Inner: fmt.Errorf("re-read committed operation %s at seq %d: %w", opID, seq, err)}
+	}
+	if !bytes.Equal(payload, newPayload) {
+		return OperationResult{}, fmt.Errorf("%w: %s", ErrOperationIDConflict, opID)
+	}
+	// Repopulate the cache so a THIRD repeat of the same operation_id hits the fast path again.
+	s.opCache.put(opID, opCacheEntry{seq: seq, payloadJSON: payload})
+	return OperationResult{OperationID: opID, Seq: seq}, nil
+}
+
+// ---- T2.5: bounded response-body cache ----
+//
+// operationIndex (AssistantsState.OperationIndex) is the UNBOUNDED, never-evicted half of the idempotency
+// boundary — see its doc comment and dev-plan.md T2.5's "Почему не кольцо ключей" for why a bounded ring of
+// KEYS was rejected. opResultCache below is the bounded half: a small cache of recent response BODIES, pure
+// optimization on top of the always-correct index+journal-read path.
+
+const defaultOpResultCacheCapacity = 1024
+
+// opResultCacheCapacityOverride lets tests configure a tiny capacity so eviction is fast and deterministic
+// without depending on (or hardcoding assumptions about) the production constant. Set it before Open(); each
+// Store captures the value at construction time (see newOpResultCache's call site).
+var opResultCacheCapacityOverride int
+
+// SetOperationResultCacheCapacityForTest overrides the capacity used by Stores opened AFTER this call.
+// Production code MUST NOT call this. n<=0 restores the default.
+func SetOperationResultCacheCapacityForTest(n int) {
+	opResultCacheCapacityOverride = n
+}
+
+func opResultCacheCapacity() int {
+	if opResultCacheCapacityOverride > 0 {
+		return opResultCacheCapacityOverride
+	}
+	return defaultOpResultCacheCapacity
+}
+
+type opCacheEntry struct {
+	seq         uint64
+	payloadJSON []byte
+}
+
+// opResultCache is a small, evicting (oldest-first) cache of recent operation results keyed by operation_id.
+// Guarded by its own mutex (not s.mu) since the fast-path get/put is also useful for future read-only
+// callers that don't want to take the store-wide lock — today it is only ever used from under s.mu, but
+// there is no reason to couple it to that lock.
+type opResultCache struct {
+	mu       sync.Mutex
+	capacity int
+	order    []string // oldest first
+	entries  map[string]opCacheEntry
+}
+
+func newOpResultCache(capacity int) *opResultCache {
+	if capacity <= 0 {
+		capacity = defaultOpResultCacheCapacity
+	}
+	return &opResultCache{capacity: capacity, entries: map[string]opCacheEntry{}}
+}
+
+func (c *opResultCache) get(id string) (opCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[id]
+	return e, ok
+}
+
+func (c *opResultCache) put(id string, e opCacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.entries[id]; !exists {
+		c.order = append(c.order, id)
+		if len(c.order) > c.capacity {
+			oldest := c.order[0]
+			c.order = c.order[1:]
+			delete(c.entries, oldest)
+		}
+	}
+	c.entries[id] = e
+}

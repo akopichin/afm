@@ -1,9 +1,11 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -43,6 +45,21 @@ type Store struct {
 	history   []Transition
 	lock      *progress.Lock
 	mu        sync.Mutex
+
+	// writeOffset is the byte offset in events.jsonl where the NEXT write will land — always the current
+	// end of file, since every write is a sequential append. Seeded from replay's lastGoodOffset in Open.
+	writeOffset int64
+	// seqOffsets maps a control record's seq -> the byte offset where its line STARTS. Populated by both
+	// replay (Open) and live writes (appendControlLocked), so T2.5's "direct single read of the journal at
+	// the known seq, no scan" can seek straight to it instead of scanning the file. Transitions are not
+	// indexed here — only control records need this (idempotent-operation replay).
+	seqOffsets map[uint64]int64
+	// runFinalizing gates ApplyRunOperation's admission check (T2.4 step 1). Sti set by the orchestrator
+	// layer when the run begins shutting down; pkg/state itself has no opinion on WHEN that happens.
+	runFinalizing bool
+	// opCache is the bounded, evicting fast-path cache of recent operation results (T2.5). The unbounded,
+	// never-evicted half of the idempotency boundary is rs.Assistants.OperationIndex (restored by replay).
+	opCache *opResultCache
 }
 
 func Open(runDir string, stageIDs []string) (*Store, error) {
@@ -77,9 +94,16 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		}
 	}
 
-	history, lastSeq, lastGoodOffset, corrupted, err := replayEvents(eventsPath, rs)
+	history, lastSeq, lastGoodOffset, corrupted, unsupported, seqOffsets, err := replayEvents(eventsPath, rs)
 	if err != nil {
 		return nil, fmt.Errorf("replay: %w", err)
+	}
+	if unsupported != nil {
+		// Fail-closed (T2.1): a syntactically valid but unrecognized control record must not be silently
+		// reinterpreted, and the run must not continue with a partial task graph. Unlike corrupted below,
+		// the original events.jsonl is left untouched — this is not data corruption to quarantine, it is a
+		// forward-compatibility hazard (an older afm build opening a log written by a newer one).
+		return nil, unsupported
 	}
 	if corrupted {
 		quarantine := fmt.Sprintf("%s.corrupt-%d", eventsPath, time.Now().UnixNano())
@@ -100,13 +124,19 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 		return nil, fmt.Errorf("seek events.jsonl: %w", err)
 	}
 
+	if seqOffsets == nil {
+		seqOffsets = map[uint64]int64{}
+	}
 	s := &Store{
-		runDir:    runDir,
-		eventsLog: f,
-		snapshot:  rs,
-		lastSeq:   lastSeq,
-		history:   history,
-		lock:      lock,
+		runDir:      runDir,
+		eventsLog:   f,
+		snapshot:    rs,
+		lastSeq:     lastSeq,
+		history:     history,
+		lock:        lock,
+		writeOffset: lastGoodOffset,
+		seqOffsets:  seqOffsets,
+		opCache:     newOpResultCache(opResultCacheCapacity()),
 	}
 
 	// if started from legacy fallback — write synthetic events
@@ -130,6 +160,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 			if _, werr := f.Write(data); werr != nil {
 				return nil, fmt.Errorf("write legacy event: %w", werr)
 			}
+			s.writeOffset += int64(len(data))
 			s.history = append(s.history, tr)
 		}
 		if s.lastSeq > 0 {
@@ -155,16 +186,16 @@ func loadLegacyState(path string) (*RunState, error) {
 	return &rs, nil
 }
 
-func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint64, lastGoodOffset int64, corrupted bool, err error) {
+func replayEvents(path string, rs *RunState) (history []Transition, lastSeq uint64, lastGoodOffset int64, corrupted bool, unsupported error, seqOffsets map[uint64]int64, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, 0, 0, false, nil
+			return nil, 0, 0, false, nil, nil, nil
 		}
-		return nil, 0, 0, false, err
+		return nil, 0, 0, false, nil, nil, err
 	}
 	res := parseEventLog(data, rs)
-	return res.history, res.lastSeq, res.goodOffset, res.corrupted, nil
+	return res.history, res.lastSeq, res.goodOffset, res.corrupted, res.unsupported, res.seqOffsets, nil
 }
 
 func (s *Store) Get(stageID string) StageStatus {
@@ -198,6 +229,7 @@ func (s *Store) Snapshot() RunState {
 		Stages:               make(map[string]StageState, len(s.snapshot.Stages)),
 		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,
 		BackoffAccumulatedMs: s.snapshot.BackoffAccumulatedMs,
+		Assistants:           s.snapshot.Assistants.Clone(),
 	}
 	if s.snapshot.EndedAt != nil {
 		ended := *s.snapshot.EndedAt
@@ -287,12 +319,14 @@ func (s *Store) appendRunEvent(event string) error {
 	if err != nil {
 		return fmt.Errorf("marshal run event: %w", err)
 	}
-	if _, err := s.eventsLog.Write(append(data, '\n')); err != nil {
+	line := append(data, '\n')
+	if _, err := s.eventsLog.Write(line); err != nil {
 		return fmt.Errorf("write run event: %w", err)
 	}
 	if err := s.eventsLog.Sync(); err != nil {
 		return fmt.Errorf("fsync run event: %w", err)
 	}
+	s.writeOffset += int64(len(line))
 	if s.lastSeq == 0 && event == runEventStarted {
 		s.snapshot.StartedAt = t.Time
 	}
@@ -345,6 +379,7 @@ func (s *Store) Apply(t *Transition) error {
 	if err := s.eventsLog.Sync(); err != nil {
 		return fmt.Errorf("fsync events.jsonl: %w", err)
 	}
+	s.writeOffset += int64(len(data))
 
 	s.history = append(s.history, *t)
 
@@ -365,6 +400,166 @@ func (s *Store) Apply(t *Transition) error {
 		fmt.Fprintf(os.Stderr, "warning: snapshot write failed: %v\n", err)
 	}
 	return nil
+}
+
+// StorageError signals that AppendControl/ApplyRunOperation failed because the underlying log write (or
+// fsync) itself failed — as opposed to a benign precondition rejection (stale revision, run finalizing).
+// Distinct from bus.StorageError (pkg/orchestrator/bus, which wraps Store.Apply failures for the stage FSM):
+// pkg/state cannot import pkg/orchestrator/bus (that package imports pkg/state), and AppendControl does not
+// go through Store.Apply at all, so it needs its own typed error for the same purpose.
+type StorageError struct{ Inner error }
+
+func (e *StorageError) Error() string { return "storage failure: " + e.Inner.Error() }
+func (e *StorageError) Unwrap() error { return e.Inner }
+
+// appendControlHookMu/appendControlHook — test seam for AppendControl, modeled on applyHook/SetApplyHook
+// above but kept as its own named variable rather than overloading the Transition-typed one: AppendControl
+// writes Control records, not Transitions, so a shared hook would need a lossy union type for no benefit.
+var appendControlHookMu sync.Mutex
+var appendControlHook func(Control)
+
+// SetAppendControlHook installs a test hook called inside AppendControl between fsync and snapshot rewrite.
+// Production code MUST NOT call this.
+func SetAppendControlHook(h func(Control)) {
+	appendControlHookMu.Lock()
+	appendControlHook = h
+	appendControlHookMu.Unlock()
+}
+
+// AppendControl durably appends a new control record, assigning Seq/Time from the SAME monotonic counter
+// used by Apply (stage transitions) and the same events.jsonl file/mutex — seq is strictly increasing across
+// both kinds of records. AppendControl never calls Apply and never changes stage status: it is a new,
+// parallel write path for assistant/task state, not a backdoor around the stage FSM (setstatuslinter only
+// polices Store.Apply call sites, which remain unchanged).
+//
+// A write/fsync failure returns a *StorageError so callers can tell it apart from a benign rejection, the
+// same way FSM.Apply distinguishes state.ErrConcurrentChange from bus.StorageError for stage transitions.
+// Calling AppendControl after Close returns a plain error without touching s.eventsLog — s.eventsLog is nil
+// after Close, and (*os.File)(nil).Write silently returns fs.ErrInvalid ("invalid argument"), which is
+// exactly the historical flake this guards against (see AGENTS.md).
+func (s *Store) AppendControl(c *Control) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendControlLocked(c)
+}
+
+// appendControlLocked is AppendControl's body, factored out so ApplyRunOperation (T2.4) can reuse the exact
+// same write/fsync/hook/projection/offset-tracking sequence for its single bundled "operation_committed"
+// record instead of duplicating it — one code path for "durably write one control record", two callers.
+// Caller MUST hold s.mu.
+func (s *Store) appendControlLocked(c *Control) error {
+	if s.eventsLog == nil {
+		return errors.New("run store is closed")
+	}
+
+	nextSeq := s.lastSeq + 1
+	c.Seq = nextSeq
+	c.Time = time.Now()
+
+	// Validate BEFORE ever touching the journal: a record that fails projection must never be durably
+	// written, or every future replay of this run would fail the exact same way forever (unlike a torn tail
+	// or a corrupted line, there is no quarantine-and-move-on for "this run's journal asserts an impossible
+	// task tree"). validateControlForRunState mutates nothing — see its doc comment for why this is safe to
+	// call speculatively against the live snapshot.
+	if verr := validateControlForRunState(s.snapshot, c); verr != nil {
+		return fmt.Errorf("reject control record: %w", verr)
+	}
+
+	data, err := json.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal control record: %w", err)
+	}
+	data = append(data, '\n')
+
+	offset := s.writeOffset
+	if _, werr := s.eventsLog.Write(data); werr != nil {
+		return &StorageError{Inner: fmt.Errorf("write events.jsonl: %w", werr)}
+	}
+	if serr := s.eventsLog.Sync(); serr != nil {
+		return &StorageError{Inner: fmt.Errorf("fsync events.jsonl: %w", serr)}
+	}
+	s.writeOffset += int64(len(data))
+	s.seqOffsets[c.Seq] = offset
+
+	appendControlHookMu.Lock()
+	hook := appendControlHook
+	appendControlHookMu.Unlock()
+	if hook != nil {
+		hook(*c)
+	}
+
+	if perr := applyControlToRunState(s.snapshot, c); perr != nil {
+		// Unreachable in practice: validateControlForRunState just proved this exact record is admissible
+		// against this exact snapshot, under the same lock, with nothing else able to run concurrently. Fail
+		// loudly rather than let the live snapshot silently diverge from what replay would compute — the
+		// record IS already durably written at this point, so this is a genuine storage-fatal situation
+		// (the live cache and the authoritative log have diverged), not a benign rejection.
+		return &StorageError{Inner: fmt.Errorf("apply control to projection after a successful write (should be unreachable): %w", perr)}
+	}
+	s.lastSeq = nextSeq
+	s.snapshot.LastSeq = s.lastSeq
+
+	// Snapshot write failure is best-effort, same as Apply: events.jsonl is already durable, state.json is
+	// only a derived cache.
+	if err := s.writeSnapshot(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: snapshot write failed: %v\n", err)
+	}
+	return nil
+}
+
+// SetRunFinalizing marks whether the run is winding down — ApplyRunOperation rejects new operations with
+// CodeRunFinalizing while true (T2.4 step 1). pkg/state has no opinion on WHEN a run starts finalizing; the
+// orchestrator layer calls this as part of its own shutdown sequence.
+func (s *Store) SetRunFinalizing(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runFinalizing = v
+}
+
+// readControlPayloadAtSeq reads exactly the ONE control record at seq directly via its recorded byte offset
+// (T2.5) — no scan of the rest of the journal. Caller MUST hold s.mu (same lock as the operation deciding
+// whether to admit a repeat).
+func (s *Store) readControlPayloadAtSeq(seq uint64) (json.RawMessage, error) {
+	controlReadHookMu.Lock()
+	hook := controlReadHook
+	controlReadHookMu.Unlock()
+	if hook != nil {
+		hook()
+	}
+
+	offset, ok := s.seqOffsets[seq]
+	if !ok {
+		return nil, fmt.Errorf("no recorded journal offset for seq %d", seq)
+	}
+	const maxLineBytes = 1 << 20 // 1 MiB — generous for a human-scale operation's bundled effects
+	buf := make([]byte, maxLineBytes)
+	n, err := s.eventsLog.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("read journal at offset %d: %w", offset, err)
+	}
+	idx := bytes.IndexByte(buf[:n], '\n')
+	if idx < 0 {
+		return nil, fmt.Errorf("control record at seq %d exceeds %d bytes or is missing its terminating newline", seq, maxLineBytes)
+	}
+	var c Control
+	if err := json.Unmarshal(buf[:idx], &c); err != nil {
+		return nil, fmt.Errorf("decode control record at seq %d: %w", seq, err)
+	}
+	return c.Payload, nil
+}
+
+// controlReadHookMu/controlReadHook — test seam counting/observing calls to readControlPayloadAtSeq, so T2.5
+// can assert a brand-new operation_id's hot path never touches the journal (TestIdempotency_
+// NewOperationDoesNotReadJournal) while a cache-miss-but-index-hit repeat reads it exactly once.
+var controlReadHookMu sync.Mutex
+var controlReadHook func()
+
+// SetControlReadHook installs a test hook called every time readControlPayloadAtSeq runs. Production code
+// MUST NOT call this.
+func SetControlReadHook(h func()) {
+	controlReadHookMu.Lock()
+	controlReadHook = h
+	controlReadHookMu.Unlock()
 }
 
 func (s *Store) writeSnapshot() error {
