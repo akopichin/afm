@@ -108,6 +108,17 @@ func (o *Orchestrator) persistTaskCache(dir string, task assistants.Task) {
 // and classify its outcome into a terminal task status. Never calls Trigger/completeStage — a helper task's
 // outcome never changes its root stage's FSM status (Этап 3's acceptance criterion).
 func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.TaskID, task assistants.Task) {
+	// A CancelTask can commit "cancelled" before this goroutine ever gets scheduled — the durable
+	// queued->running status write (maybeScheduleTask) and this goroutine's own first instruction are not
+	// synchronized with each other. Bail out before touching the filesystem AT ALL in that case: every write
+	// below (workspace dirs, task.json, context.md, agent.log, result files) happens under the task's own
+	// directory, and a write that starts only because this goroutine was scheduled late would otherwise race
+	// a caller that reasonably treats "task already terminal" as "nothing more will touch its directory"
+	// (e.g. a test's TempDir cleanup, or — in production — a later CancelTask/cleanup of the same task dir).
+	if o.taskTerminal(taskID) {
+		return
+	}
+
 	runCtx, cancel := context.WithCancel(ctx)
 	o.taskCancels.Store(taskID, cancel)
 	defer func() {
@@ -149,14 +160,31 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		}})
 	}
 
+	// finalizedByOther is true when ANOTHER writer (CancelTask) has ALREADY committed a terminal status for
+	// this task while the agent call above was in flight. CancelTask cancels this exact task's runCtx (via
+	// o.taskCancels) and then, in the SAME goroutine with no intervening blocking call, immediately commits
+	// "cancelled" itself — so by the time this subprocess call notices ctx.Done(), unwinds, and reaches here,
+	// that commit has, in practice, already landed. Checking the task's CURRENT projected status (o.taskTerminal,
+	// rather than runCtx.Err()) is deliberate: runCtx is a CHILD of the whole run's ctx (o.runContext), so a
+	// plain "was runCtx cancelled" check cannot tell a targeted CancelTask apart from an unrelated whole-run
+	// shutdown — which has no other writer and MUST still let this goroutine commit the task's terminal
+	// status (see TestShutdown_NoWritesAfterStoreClose). Without this check, any outcome surfacing after a
+	// CancelTask (including a stale "success" from a subprocess that happened to finish right as it was
+	// killed) would either race a second, contradictory status onto "cancelled", or wrongly persist/attach a
+	// result.json + task_result event to a task the caller already told to stop.
+	finalizedByOther := o.taskTerminal(taskID)
+
 	if err != nil {
+		if finalizedByOther {
+			return
+		}
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
 		return
 	}
 	switch {
-	case outcome.Interrupted:
-		// PauseTask/CancelTask already recorded (or will record) their own status transition — a cancelled
-		// subprocess reaching here must not clobber it with a second, contradictory "failed".
+	case outcome.Interrupted || finalizedByOther:
+		// PauseTask/CancelTask already recorded (or will record) their own status transition — a stopped
+		// subprocess reaching here must not clobber it with a second, contradictory status.
 		return
 	case outcome.TimedOut:
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
@@ -192,5 +220,13 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
 		return
 	}
-	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "")
+	// The decoded result is attached as a SECOND effect of the SAME finish operation — never a separate
+	// ApplyRunOperation call — so the journal never has a window where status says "completed" but the
+	// result event does not exist yet (see finishTaskFrom's extra doc comment).
+	resultEff, eerr := taskResultEffect(taskID, result)
+	if eerr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
+		return
+	}
+	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
 }

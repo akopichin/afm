@@ -147,6 +147,8 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 	}
 	fetchJSON(t, baseURL+"/api/assistants/"+taskID+"/events", &evOut)
 	var sawCreated, sawCompleted bool
+	var sawResult bool
+	var resultVerdict, resultSummary string
 	for _, e := range evOut.Events {
 		switch e.Type {
 		case "task_created":
@@ -157,6 +159,12 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 					sawCompleted = true
 				}
 			}
+		case "task_result":
+			sawResult = true
+			if m, ok := e.Data.(map[string]any); ok {
+				resultVerdict, _ = m["verdict"].(string)
+				resultSummary, _ = m["summary"].(string)
+			}
 		default:
 		}
 	}
@@ -165,6 +173,19 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 	}
 	if !sawCompleted {
 		t.Error("task event history (via HTTP) is missing task_status_changed -> completed")
+	}
+	// This is the gap the fix closes: the decoded verdict/summary a real subprocess produced must be visible
+	// through the REAL HTTP read path (not just persisted to disk) — the frontend's AssistantTaskView already
+	// scans every event's `data` for exactly this shape and was, until this fix, a no-op against the real
+	// backend because no such event was ever emitted.
+	if !sawResult {
+		t.Fatal("task event history (via HTTP) is missing a task_result event")
+	}
+	if resultVerdict != string(assistants.VerdictPass) {
+		t.Errorf("task_result event verdict (via HTTP) = %q, want %q", resultVerdict, assistants.VerdictPass)
+	}
+	if resultSummary != "Looks fine from the fake reviewer." {
+		t.Errorf("task_result event summary (via HTTP) = %q, want %q", resultSummary, "Looks fine from the fake reviewer.")
 	}
 
 	// Let the stage's own agent finish so orch.Run can return cleanly, and confirm the task's outcome never

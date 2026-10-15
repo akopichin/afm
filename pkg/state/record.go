@@ -55,6 +55,12 @@ const (
 	kindTaskContinuationSaved = "task_continuation_saved"
 	kindPolicySet             = "policy_set"
 	kindQuotaReserved         = "quota_reserved"
+	// kindTaskResult — carries a completed task's decoded assistants.Result (verdict/summary/findings/...)
+	// as its Payload, bundled in the SAME ApplyRunOperation call as the task_status_changed-to-"completed"
+	// effect (pkg/orchestrator's finishTaskFrom). Observational only: applyTaskResult (below) never mutates
+	// TaskState — the durable control stream (Store.TaskEvents) IS the read path the dashboard's per-task
+	// event-history page (GET /api/assistants/{id}/events) consumes.
+	kindTaskResult = "task_result"
 	// kindOperationCommitted — the single wrapper kind ApplyRunOperation (T2.4) writes: one Control record
 	// bundling every Effect of one caller-intent operation, applied all-or-nothing. Its payload's kind is
 	// op.Kind (the caller's semantic name, e.g. "create_children") — distinct from the Control's own Kind,
@@ -74,6 +80,7 @@ var controlKinds = map[string]bool{
 	kindTaskContinuationSaved: true,
 	kindPolicySet:             true,
 	kindQuotaReserved:         true,
+	kindTaskResult:            true,
 	kindOperationCommitted:    true,
 }
 

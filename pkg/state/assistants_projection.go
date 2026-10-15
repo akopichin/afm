@@ -322,6 +322,8 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyPolicySet(as, c, dryRun)
 	case kindQuotaReserved:
 		return applyQuotaReserved(as, c, dryRun)
+	case kindTaskResult:
+		return applyTaskResult(as, c, dryRun)
 	case kindOperationCommitted:
 		return applyOperationCommitted(as, c, dryRun)
 	default:
@@ -466,6 +468,23 @@ func applyTaskHoldCleared(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	delete(t.Holds, p.Owner)
+	return nil
+}
+
+// applyTaskResult validates a task_result effect's target task exists and its payload decodes as an
+// assistants.Result — but, unlike every other task_* kind, never mutates TaskState. The result's content has
+// nowhere to live in the projection (no field for it); it is carried durably only in the control stream
+// itself, which Store.TaskEvents already returns verbatim per target task_id — exactly what the dashboard's
+// per-task event-history page (GET /api/assistants/{id}/events) reads.
+func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
+	id := assistants.TaskID(c.Target.TaskID)
+	if _, ok := as.Tasks[id]; !ok {
+		return fmt.Errorf("task %s: %w", id, ErrUnknownTask)
+	}
+	var p assistants.Result
+	if err := decodePayload(c.Payload, &p); err != nil {
+		return fmt.Errorf("task %s: decode task_result payload: %w", id, err)
+	}
 	return nil
 }
 

@@ -94,6 +94,21 @@ func taskHoldEffect(kind string, taskID assistants.TaskID, owner, reason string)
 	return state.Effect{Kind: kind, Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
 }
 
+// taskResultEffect carries a completed task's decoded assistants.Result as a "task_result" effect's Payload —
+// bundled into the SAME ApplyRunOperation call as the task_status_changed-to-"completed" effect (see
+// finishTaskFrom's extra parameter and runHelperTask's call site) so both commit in one atomic control
+// record. assistants.Result's own json tags ARE the wire shape (verdict/summary/findings/evidence/
+// context_version/suggested_change/limitations) — no mirror payload struct needed, unlike
+// taskCreatedPayload/taskStatusChangedPayload/taskHoldPayload above, since pkg/state's applyTaskResult
+// decodes directly into assistants.Result too.
+func taskResultEffect(taskID assistants.TaskID, result assistants.Result) (state.Effect, error) {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return state.Effect{}, fmt.Errorf("marshal task_result payload: %w", err)
+	}
+	return state.Effect{Kind: "task_result", Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
+}
+
 // deriveTaskID computes a deterministic, path-safe task id from an Attach operation id: the SAME
 // OperationID always yields the SAME TaskID. That is what lets a duplicate Attach
 // (T3.7's TestAttach_DuplicateRequestIdReturnsSameTask) be a true no-op idempotent replay — the Effects
@@ -146,6 +161,17 @@ func (o *Orchestrator) taskHeld(taskID assistants.TaskID) bool {
 	rs := o.opts.Store.Snapshot()
 	held, _ := rs.Assistants.EffectivelyHeld(taskID)
 	return held
+}
+
+// taskTerminal reports whether taskID's CURRENT projected status is already terminal — an unknown task id
+// reports false (nothing to be terminal about yet). Used by runHelperTask at two points: before doing any
+// file I/O at all (a CancelTask that raced ahead of this goroutine's very first instruction may have already
+// committed "cancelled") and again after the agent call returns (CancelTask racing the subprocess call
+// itself) — see runHelperTask's doc comments for why a plain ctx.Err() check cannot stand in for this.
+func (o *Orchestrator) taskTerminal(taskID assistants.TaskID) bool {
+	rs := o.opts.Store.Snapshot()
+	t, ok := rs.Assistants.Tasks[taskID]
+	return ok && t.Status.Terminal()
 }
 
 // Attach creates one new top-level helper task for a stage: capability + stage + profile + delegation-depth
@@ -360,16 +386,22 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 // status, guarded by a Preconditions check against the status it is expected to be coming FROM — without
 // this guard, a racing CancelTask and a task's own natural completion could each successfully overwrite the
 // other's terminal status (applyTaskStatusChanged has no built-in "already terminal" guard of its own).
-func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assistants.TaskStatus, reason string) {
+//
+// extra bundles additional effects into the SAME ApplyRunOperation call as the status transition — used only
+// by runHelperTask's success path to attach a task_result effect (taskResultEffect) so the result and the
+// "completed" status land in one atomic control record (T2.4's "all effects of one operation commit
+// together" invariant). The failure/cancel/requeue call sites all pass none.
+func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assistants.TaskStatus, reason string, extra ...state.Effect) {
 	eff, err := taskStatusEffect(taskID, to, reason)
 	if err != nil {
 		return
 	}
+	effects := append([]state.Effect{eff}, extra...)
 	op := state.Operation{
 		ID:      "task-finish:" + string(taskID) + ":" + string(to) + ":" + randomOpSuffix(),
 		Kind:    "finish_task",
 		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}},
-		Effects: []state.Effect{eff},
+		Effects: effects,
 	}
 	rootStage := o.taskRootStage(taskID)
 	_, _ = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {

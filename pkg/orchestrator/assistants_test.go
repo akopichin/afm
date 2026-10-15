@@ -173,6 +173,48 @@ func TestLifecycle_HappyPath(t *testing.T) {
 	if result.Verdict != assistants.VerdictPass {
 		t.Fatalf("verdict = %q, want pass", result.Verdict)
 	}
+
+	// The same decoded result must also be visible as a durable "task_result" event — not just on disk — so
+	// the dashboard's GET /api/assistants/{id}/events can surface verdict/summary (the gap this fix closes).
+	events, _, _, err := o.TaskEvents(taskID, 0, 100)
+	if err != nil {
+		t.Fatalf("TaskEvents: %v", err)
+	}
+	var resultEvent *state.TaskEvent
+	var statusEvent *state.TaskEvent
+	for i := range events {
+		switch events[i].Kind {
+		case "task_result":
+			resultEvent = &events[i]
+		case "task_status_changed":
+			var p struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(events[i].Payload, &p) == nil && p.Status == string(assistants.StatusCompleted) {
+				statusEvent = &events[i]
+			}
+		default:
+		}
+	}
+	if resultEvent == nil {
+		t.Fatal("TaskEvents is missing a task_result event")
+	}
+	var eventResult assistants.Result
+	if err := json.Unmarshal(resultEvent.Payload, &eventResult); err != nil {
+		t.Fatalf("decode task_result event payload: %v", err)
+	}
+	if eventResult.Verdict != assistants.VerdictPass || eventResult.Summary != "looks fine" {
+		t.Fatalf("task_result event = %+v, want verdict=pass summary=%q", eventResult, "looks fine")
+	}
+
+	// Atomicity: the result event and the terminal status-transition event must land in the SAME control
+	// record (same Seq) — proving they were committed together via one ApplyRunOperation call, not two.
+	if statusEvent == nil {
+		t.Fatal("TaskEvents is missing the task_status_changed -> completed event")
+	}
+	if resultEvent.Seq != statusEvent.Seq {
+		t.Fatalf("task_result Seq=%d, task_status_changed(completed) Seq=%d — want the SAME seq (one atomic operation)", resultEvent.Seq, statusEvent.Seq)
+	}
 }
 
 func TestLifecycle_RunnerFailure(t *testing.T) {
@@ -223,6 +265,69 @@ func TestLifecycle_Timeout(t *testing.T) {
 	tk := waitForTaskStatus(t, store, taskID, assistants.StatusFailed, 2*time.Second)
 	if !strings.Contains(tk.StatusReason, "timed out") {
 		t.Fatalf("reason = %q, want it to mention the timeout", tk.StatusReason)
+	}
+}
+
+// taskEventKinds returns, in Seq order, every event Kind recorded for taskID — used by the regression tests
+// below to assert the failure/cancel paths attach exactly one effect (status only), never a stray task_result.
+func taskEventKinds(t *testing.T, o *Orchestrator, taskID assistants.TaskID) []string {
+	t.Helper()
+	events, _, _, err := o.TaskEvents(taskID, 0, 100)
+	if err != nil {
+		t.Fatalf("TaskEvents: %v", err)
+	}
+	kinds := make([]string, len(events))
+	for i, e := range events {
+		kinds[i] = e.Kind
+	}
+	return kinds
+}
+
+// TestLifecycle_FailurePathHasNoResultEvent is a regression test for the task_result wiring: a failed task
+// (runner error) must never carry a task_result event — attaching a zero-value result on a path that never
+// decoded one would be worse than the original gap (a fabricated/empty "result").
+func TestLifecycle_FailurePathHasNoResultEvent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{}, errors.New("boom: subprocess exec failed")
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusFailed, 2*time.Second)
+
+	for _, kind := range taskEventKinds(t, o, taskID) {
+		if kind == "task_result" {
+			t.Fatal("a failed task must not carry a task_result event")
+		}
+	}
+}
+
+// TestCancel_HasNoResultEvent mirrors TestLifecycle_FailurePathHasNoResultEvent for CancelTask: cancelling a
+// running task finishes it with a reason string, never a decoded result — no task_result effect must appear.
+func TestCancel_HasNoResultEvent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	release := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		<-release
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	if err := o.CancelTask(context.Background(), taskID); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	waitForTaskStatus(t, store, taskID, assistants.StatusCancelled, 2*time.Second)
+	close(release) // let the blocked fake runner return so its goroutine doesn't leak past the test
+
+	for _, kind := range taskEventKinds(t, o, taskID) {
+		if kind == "task_result" {
+			t.Fatal("a cancelled task must not carry a task_result event")
+		}
 	}
 }
 
