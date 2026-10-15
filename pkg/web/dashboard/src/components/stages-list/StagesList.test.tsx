@@ -2,7 +2,25 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import type { Stage } from '../../types'
 import type { AccountingState, CostSummary } from '../../types/cost'
+import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
+import type { AssistantTask } from '../../types/assistant-task'
 import { StagesList } from './StagesList'
+
+function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
+  return {
+    id: 't1', parentTaskId: null, profileId: 'reviewer', title: 'Reviewer', mode: 'advisory',
+    trigger: 'one_shot', status: 'running', statusReason: '', ...overrides,
+  }
+}
+
+function summaryOf(tasks: AssistantTask[]): StageAssistantsSummary {
+  return {
+    tasks,
+    roots: tasks.filter((t) => t.parentTaskId === null).map((t) => ({ ...t, children: [] })),
+    count: tasks.length,
+    hasAttention: tasks.some((t) => t.status === 'paused'),
+  }
+}
 
 // Минимальный валидный CostSummary для тестов рейла (значения токенов не
 // проверяются — важен только displayCost/coverage).
@@ -645,5 +663,121 @@ describe('StagesList', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
       expect(onPause).toHaveBeenCalledWith('a')
     })
+  })
+})
+
+describe('StagesList — helper-task child rows (T3.9)', () => {
+  const stage: Stage = {
+    id: 's1', name: 'Build', status: 'running', updatedAt: '', interactive: false, autonomous: false,
+    autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '',
+    preNote: '', buttons: [],
+  }
+
+  test('a stage with helper tasks auto-expands: child rows render under the parent with no ordinal number', () => {
+    const summary = summaryOf([makeTask({ id: 't1', title: 'Reviewer' })])
+    const { container } = render(
+      <StagesList stages={[stage]} selectedStageId="s1" onSelect={() => {}} accounting={{ supported: false }} assistants={{ s1: summary }} />,
+    )
+    const row = container.querySelector('[data-task-id="t1"]')
+    expect(row).not.toBeNull()
+    expect(row).toHaveClass('assistant-task-item')
+    // No stage ordinal (.dot-num) anywhere inside the task row — it has its own, simpler status dot.
+    expect(row?.querySelector('.dot-num')).toBeNull()
+    expect(row?.querySelector('.assistant-task-status-dot')).not.toBeNull()
+    expect(screen.getByText('Reviewer')).toBeInTheDocument()
+  })
+
+  test('child rows appear AFTER their parent stage in document order', () => {
+    const summary = summaryOf([makeTask({ id: 't1' })])
+    const { container } = render(
+      <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} assistants={{ s1: summary }} />,
+    )
+    const items = Array.from(container.querySelectorAll('#stages-list > li, #stages-list > [data-task-id]'))
+    const stageIdx = items.findIndex((el) => el.getAttribute('data-stage-id') === 's1')
+    const taskIdx = items.findIndex((el) => el.getAttribute('data-task-id') === 't1')
+    expect(stageIdx).toBeGreaterThanOrEqual(0)
+    expect(taskIdx).toBeGreaterThan(stageIdx)
+  })
+
+  test('collapsing the branch hides the rows and shows an aggregate (count + attention flag)', () => {
+    const summary = summaryOf([makeTask({ id: 't1', status: 'paused' }), makeTask({ id: 't2', status: 'running' })])
+    render(
+      <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} assistants={{ s1: summary }} />,
+    )
+    // Auto-expanded on first sight — collapse it.
+    fireEvent.click(screen.getByRole('button', { name: /collapse helper tasks for s1/i }))
+
+    expect(screen.queryByText('Reviewer')).not.toBeInTheDocument()
+    expect(document.querySelector('[data-task-id="t1"]')).toBeNull()
+    const aggregate = document.querySelector('.assistant-branch-aggregate')
+    expect(aggregate).toHaveTextContent('2')
+    expect(aggregate).toHaveAttribute('data-attention', 'true')
+  })
+
+  test('no aggregate badge is shown while the branch is expanded', () => {
+    const summary = summaryOf([makeTask({ id: 't1' })])
+    render(
+      <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} assistants={{ s1: summary }} />,
+    )
+    expect(document.querySelector('.assistant-branch-aggregate')).toBeNull()
+  })
+
+  test('TestSelection_ChildSelectable: clicking a child row calls onSelectTask with (stageId, taskId)', () => {
+    const summary = summaryOf([makeTask({ id: 't1' })])
+    const onSelectTask = vi.fn()
+    render(
+      <StagesList
+        stages={[stage]}
+        selectedStageId={null}
+        onSelect={() => {}}
+        accounting={{ supported: false }}
+        assistants={{ s1: summary }}
+        onSelectTask={onSelectTask}
+      />,
+    )
+    fireEvent.click(screen.getByText('Reviewer'))
+    expect(onSelectTask).toHaveBeenCalledWith('s1', 't1')
+  })
+
+  test('selectedTaskId marks the matching child row active', () => {
+    const summary = summaryOf([makeTask({ id: 't1' }), makeTask({ id: 't2', title: 'Second' })])
+    render(
+      <StagesList
+        stages={[stage]}
+        selectedStageId="s1"
+        onSelect={() => {}}
+        accounting={{ supported: false }}
+        assistants={{ s1: summary }}
+        selectedTaskId="t2"
+      />,
+    )
+    expect(document.querySelector('[data-task-id="t1"]')).not.toHaveClass('active')
+    expect(document.querySelector('[data-task-id="t2"]')).toHaveClass('active')
+  })
+
+  test('a stage with no helper tasks renders no branch toggle and no child rows (prop omitted entirely — existing callers unaffected)', () => {
+    const { container } = render(
+      <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />,
+    )
+    expect(container.querySelector('.assistant-branch-toggle-wrap')).toBeNull()
+    expect(container.querySelector('.assistant-task-item')).toBeNull()
+  })
+
+  test('keyboard: the child row is a real, focusable <button>; the expand toggle is a sibling, never nested inside .stage-row or .assistant-task-row (no nested interactive elements)', () => {
+    const summary = summaryOf([makeTask({ id: 't1' }), makeTask({ id: 't2', title: 'Second', status: 'waiting_parent' })])
+    const { container } = render(
+      <StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} assistants={{ s1: summary }} />,
+    )
+    const taskRow = screen.getByRole('button', { name: /^Reviewer/i })
+    expect(taskRow.tagName).toBe('BUTTON')
+    expect(taskRow.className).toContain('assistant-task-row')
+    taskRow.focus()
+    expect(document.activeElement).toBe(taskRow)
+
+    // No interactive element nested inside .stage-row or .assistant-task-row (a <button> inside a <button>
+    // is invalid HTML and breaks keyboard activation) — the branch toggle and any per-task expand toggle are
+    // always siblings, never descendants, of the row button.
+    expect(container.querySelectorAll('.stage-row button')).toHaveLength(0)
+    expect(container.querySelectorAll('.assistant-task-row button')).toHaveLength(0)
   })
 })

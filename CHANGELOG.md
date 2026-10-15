@@ -5,6 +5,23 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-15
 
+### Improvement: one advisory helper-agent, dashboard surface (frontend)
+
+The dashboard can now show a stage's helper tasks and let you open one. The
+stage rail gets collapsible child rows under a stage that has attached helper
+tasks (own 3s poll of `GET /api/stages/{id}/assistants`, independent of
+`/api/status` — the status payload stays as small as before); a collapsed
+branch shows a count + attention badge instead of the rows. Selection is a
+typed union (`{kind:'stage',...}` / `{kind:'assistant',stageId,taskId}`, not a
+concatenated string) so a helper task's completion can never be mistaken for
+its root stage finishing, and a manually-opened task — even a completed one —
+is never auto-switched away from. Picking a task opens a new `'assistant'`
+workspace view (`AssistantTaskView`) with empty/error/completed-result states,
+the completed result rendered through the existing safe markdown renderer; a
+new skin-agnostic `assistants.css` (imported by all four built-in skins) styles
+it with semantic tokens only, distinguishing required/advisory and verdicts by
+text/icon, not color alone.
+
 ### Improvement: one advisory helper-agent, end to end (backend only)
 
 Backend plumbing for attaching a single one-shot advisory helper agent to a

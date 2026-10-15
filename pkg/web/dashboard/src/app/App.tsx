@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
+import { AssistantTaskView } from '../components/assistants'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -16,6 +17,7 @@ import { SideAgentProvider } from '../components/side-agent'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
+import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
@@ -127,17 +129,43 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory } = useWorkspaceView(stages, editing, ownedHandledSigs)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant } = useWorkspaceView(stages, editing, ownedHandledSigs)
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
   useEffect(() => {
     pauseOnFocus.reconcile(stages.map((s) => ({ id: s.id, status: s.status })))
   }, [stages, pauseOnFocus.reconcile])
-  const [selectedStageId, setSelectedStageId] = useSelectedStage(
+  const [selection, setSelection] = useSelectedStage(
     stages,
     wsState.view === 'attention' ? attnItem?.stageId ?? null : null,
   )
+  // selectedStageId — какая стадия подсвечена активной в рейле, ВНЕ зависимости от того, смотрит ли
+  // пользователь на саму стадию или на один из её помощников (Selection.stageId несёт родителя в обоих
+  // случаях). selectedTaskId — только когда выбран конкретный помощник.
+  const selectedStageId = selection?.stageId ?? null
+  const selectedTaskId = selection?.kind === 'assistant' ? selection.taskId : null
+
+  // assistantsByStage — дерево задач помощников КАЖДОЙ стадии, из ОТДЕЛЬНОГО поллинга (useStageAssistants),
+  // а не из /api/status (AGENTS.md: статус не раздувается). Капабилити выключена → хук не делает запросов.
+  const assistantsByStage = useStageAssistants(stages.map((s) => s.id), capabilities.collaboration)
+  const selectedTask =
+    selection?.kind === 'assistant'
+      ? assistantsByStage[selection.stageId]?.tasks.find((t) => t.id === selection.taskId) ?? null
+      : null
+
+  // Защита: если collaboration выключена на бэкенде, а вид застрял на 'assistant' — уводим в Feed (тот же
+  // паттерн, что и у accounting/'cost' ниже).
+  useEffect(() => {
+    if (!capabilities.collaboration && wsState.view === 'assistant') openFeed()
+  }, [capabilities.collaboration, wsState.view])
+
+  // Клик по строке помощника в рейле: выбираем задачу и открываем её ленту.
+  function handleSelectAssistantTask(stageId: string, taskId: string): void {
+    setSelection({ kind: 'assistant', stageId, taskId })
+    setScrollToDialogTarget(null)
+    openAssistant()
+  }
 
   // После активации Cost из поповера переносим фокус на вкладку Cost; inline-клик сохраняет свой фокус.
   const [costFocusPending, setCostFocusPending] = useState(false)
@@ -167,7 +195,7 @@ export function App(): ReactElement {
   // Клик по стадии в рейле: выбираем её и открываем подходящий вид — attention, если стадия ждёт действия;
   // иначе Feed для завершённых/ещё не начавшихся стадий; историю живой стадии — если есть.
   function handleSelectStage(stageId: string): void {
-    setSelectedStageId(stageId)
+    setSelection({ kind: 'stage', stageId })
     // Ручной выбор другой стадии инвалидирует прицельный скролл к Q&A, заданный кликом по элементу ленты —
     // иначе, если у новой стадии случайно совпадёт phase/id, DialogChannel проскроллит не туда.
     setScrollToDialogTarget(null)
@@ -189,7 +217,7 @@ export function App(): ReactElement {
   // открываем диалог и запоминаем, к какому именно Q&A прокрутить.
   const [scrollToDialogTarget, setScrollToDialogTarget] = useState<{ stageId: string; phase: string; id: string } | null>(null)
   function handleOpenDialogFromFeed(stageId: string, phase: string, id: string): void {
-    setSelectedStageId(stageId)
+    setSelection({ kind: 'stage', stageId })
     const stage = stages.find((s) => s.id === stageId) ?? null
     if (stage?.status === 'awaiting_user_input') openAttention(stageId)
     else openHistory('dialog-history')
@@ -268,7 +296,7 @@ export function App(): ReactElement {
     const base = attnIndex >= 0 ? attnIndex : 0
     const next = attnItems[(base + delta + attnItems.length) % attnItems.length]
     if (next) {
-      setSelectedStageId(next.stageId)
+      setSelection({ kind: 'stage', stageId: next.stageId })
       openAttention(next.stageId)
     }
   }
@@ -285,7 +313,7 @@ export function App(): ReactElement {
     ? {
         label: ATTENTION_SHORTCUT_LABEL[attentionTabItem.kind],
         onActivate: (): void => {
-          setSelectedStageId(attentionTabItem.stageId)
+          setSelection({ kind: 'stage', stageId: attentionTabItem.stageId })
           openAttention(attentionTabItem.stageId)
         },
       }
@@ -349,12 +377,14 @@ export function App(): ReactElement {
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
       if (attentionTabItem !== null) {
-        setSelectedStageId(attentionTabItem.stageId)
+        setSelection({ kind: 'stage', stageId: attentionTabItem.stageId })
         openAttention(attentionTabItem.stageId)
       }
       return
     }
-    // detail — контекст выбранной стадии.
+    // detail — контекст выбранной стадии. Помощник — ручной read-only вид (как history), переоткрываем его
+    // же, а не теряем выбор клика по уже активной вкладке.
+    if (selection?.kind === 'assistant') { openAssistant(); return }
     if (workspaceStage === null) return
     if (contextKind !== null) openAttention(workspaceStage.id)
     else if (workspaceStage.showDialog) openHistory('dialog-history')
@@ -429,6 +459,9 @@ export function App(): ReactElement {
                 progressTotal={stages.length}
                 accounting={accounting}
                 version={version}
+                assistants={assistantsByStage}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={handleSelectAssistantTask}
               />
             }
             tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}
@@ -494,6 +527,8 @@ export function App(): ReactElement {
                       workspaceStage !== null && pauseOnFocus.resumeNow(workspaceStage.id)
                     }
                   />
+                ) : wsState.view === 'assistant' ? (
+                  <AssistantTaskView task={selectedTask} />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

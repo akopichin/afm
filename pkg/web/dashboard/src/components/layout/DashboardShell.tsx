@@ -125,12 +125,16 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
     else if (e.key === 'ArrowRight') { e.preventDefault(); setRailWidth((w) => clampRail(w + RAIL_STEP)) }
   }
 
-  // Клик по строке стадии внутри шторки = выбор сделан → закрываем её. Клик по кебабу (и его меню) НЕ
-  // закрывает — иначе меню действий стадии схлопнулось бы вместе со шторкой.
+  // Клик по строке стадии (или строке помощника, T3.9) внутри шторки = выбор сделан → закрываем её. Клик по
+  // кебабу/его меню, или по развернуть-свернуть ветки помощников (.assistant-toggle — живёт и на самой
+  // стадии, и на любом узле-помощнике с детьми), НЕ закрывает — иначе открытое меню или ветка схлопнулись бы
+  // вместе со шторкой.
   function onRailClickCapture(e: MouseEvent<HTMLElement>): void {
     if (!railOpen) return
     const target = e.target as HTMLElement
-    if (target.closest('[data-stage-id]') && target.closest('.stage-kebab-wrap') === null) {
+    if (target.closest('.stage-kebab-wrap') !== null) return
+    if (target.closest('.assistant-toggle') !== null) return
+    if (target.closest('[data-stage-id]') !== null || target.closest('[data-task-id]') !== null) {
       setRailOpen(false)
     }
   }

@@ -194,6 +194,51 @@ export async function deleteNote(id: string, expectedRev: number): Promise<void>
   }
 }
 
+// --- Collaboration (helper assistants) — GET only, T3.9/T3.10's own poll. Mutations (attach/pause/
+// continue/cancel) are out of scope here (not part of T3.9/T3.10's exact acceptance criteria) — adding them
+// now would be speculative surface with no test driving it.
+
+export type AssistantTaskWire = {
+  id: string
+  parent_task_id?: string
+  profile_id: string
+  title?: string
+  mode: string
+  trigger: string
+  status: string
+  status_reason?: string
+}
+
+// listStageAssistants reads one stage's task tree (flat, parent-linked) — GET /api/stages/{id}/assistants.
+// A 404 (capability off) surfaces as a thrown FlowApiError like every other stage sub-route; callers decide
+// how to degrade (useStageAssistants treats any error as "no data yet", not a hard failure).
+export async function listStageAssistants(stageId: string): Promise<{ tasks: AssistantTaskWire[] }> {
+  const url = stageUrl(stageId, 'assistants')
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new FlowApiError(url, response.status, await readErrorCode(response))
+  }
+  const body = (await response.json()) as { tasks?: AssistantTaskWire[] | null }
+  return { tasks: body.tasks ?? [] }
+}
+
+export type AssistantEventWire = { seq: number; type: string; data?: unknown }
+
+// getAssistantTaskEvents reads one page of a task's durable event history, strictly after cursor — GET
+// /api/assistants/{id}/events.
+export async function getAssistantTaskEvents(
+  taskId: string,
+  cursor: number,
+): Promise<{ events: AssistantEventWire[]; nextCursor: number; hasMore: boolean }> {
+  const url = `/api/assistants/${encodeURIComponent(taskId)}/events?cursor=${cursor}`
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new FlowApiError(url, response.status, await readErrorCode(response))
+  }
+  const body = (await response.json()) as { events?: AssistantEventWire[] | null; next_cursor?: number; has_more?: boolean }
+  return { events: body.events ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
+}
+
 export async function uploadAttachment(stageId: string, file: Blob): Promise<{ path: string }> {
   const url = stageUrl(stageId, 'attachments')
   const response = await fetch(url, {

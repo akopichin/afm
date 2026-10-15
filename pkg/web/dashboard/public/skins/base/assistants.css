@@ -1,0 +1,287 @@
+/* pkg/web/dashboard/skins/base/assistants.css — helper-task child rows (rail, T3.9) and the task feed
+   (workspace 'assistant' view, T3.10). Structural stylesheet: must render sanely under a skin_dir override
+   that has never heard of this feature (§15.3) — it is wired independently of the active skin and uses ONLY
+   the semantic tokens every skin already provides (--surface-*/--text-*/--accent-primary/--attention/
+   --success/--danger/--focus-ring). No new --c-* status-color mapping lives here — see status-colors.test.ts
+   and skins-contract.test.ts for the DRY contract this file must not violate. */
+
+/* === Rail: branch toggle on the parent stage row === */
+.assistant-branch-toggle-wrap {
+  display: inline-flex;
+}
+.assistant-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.assistant-toggle:hover {
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+}
+.assistant-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Collapsed-branch aggregate: count + attention flag. Attention is carried by a dot BEFORE the number (never
+   color alone — see .assistant-branch-aggregate[data-attention]'s ::before) plus the title attribute (set in
+   JSX) spelling it out for assistive tech. */
+.assistant-branch-aggregate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.assistant-branch-aggregate[data-attention="true"]::before {
+  content: "●";
+  color: var(--attention);
+  font-size: 8px;
+}
+
+/* === Rail: one helper-task child row === */
+.assistant-task-item {
+  display: flex;
+  align-items: stretch;
+  border-radius: var(--radius-md);
+  position: relative;
+  font-family: var(--font-ui);
+  color: var(--text-secondary);
+  /* --assistant-depth (set inline per row) scales the indent; capped in AssistantTaskRow.tsx — the
+     underlying tree depth itself is not limited, only how far this renders visually. */
+  padding-left: calc(28px * var(--assistant-depth, 1));
+  transition: background 0.15s ease;
+}
+.assistant-task-item:hover {
+  background: var(--surface-hover);
+}
+.assistant-task-item.active {
+  background: var(--surface-hover);
+}
+.assistant-task-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent-primary);
+}
+
+.assistant-task-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px 7px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.assistant-task-row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
+.assistant-task-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+.assistant-task-status-dot[data-status="running"],
+.assistant-task-status-dot[data-status="queued"],
+.assistant-task-status-dot[data-status="waiting_parent"],
+.assistant-task-status-dot[data-status="waiting_children"],
+.assistant-task-status-dot[data-status="watching"] { background: var(--accent-primary); }
+.assistant-task-status-dot[data-status="paused"] { background: var(--attention); }
+.assistant-task-status-dot[data-status="completed"] { background: var(--success); }
+.assistant-task-status-dot[data-status="failed"],
+.assistant-task-status-dot[data-status="cancelled"] { background: var(--danger); }
+
+.assistant-task-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.assistant-task-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Required/advisory — text, never color alone (T3.10 accessibility requirement). A small pill keeps it
+   scannable without relying on a second hue. */
+.assistant-task-mode {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  border: 1px solid var(--separator-subtle);
+}
+.assistant-task-mode[data-mode="required"] {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+.assistant-task-status-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* === Workspace: one task's feed (AssistantTaskView, T3.10) === */
+.assistant-task-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+.assistant-task-view-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.assistant-task-view-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.assistant-task-view-mode {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  border: 1px solid var(--separator-subtle);
+}
+.assistant-task-view-mode[data-mode="required"] {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+.assistant-task-view-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.assistant-task-view-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assistant-task-view-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.85;
+  animation: assistantTaskSpin 0.7s linear infinite;
+}
+@keyframes assistantTaskSpin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-task-view-spinner { animation: none; }
+}
+
+.assistant-task-view-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--danger);
+  color: var(--text-primary);
+}
+.assistant-task-view-error-icon {
+  color: var(--danger);
+  flex-shrink: 0;
+}
+
+.assistant-task-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Verdict — icon + text, never color alone. */
+.assistant-task-verdict {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--separator-subtle);
+  color: var(--text-primary);
+}
+.assistant-task-verdict[data-verdict="pass"] { border-color: var(--success); }
+.assistant-task-verdict[data-verdict="needs_changes"] { border-color: var(--attention); }
+.assistant-task-verdict[data-verdict="inconclusive"] { border-color: var(--text-muted); }
+
+.assistant-task-findings {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-task-finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  font-size: 12px;
+}
+.assistant-task-finding-severity {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.assistant-task-finding-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.assistant-task-finding-detail {
+  color: var(--text-primary);
+}

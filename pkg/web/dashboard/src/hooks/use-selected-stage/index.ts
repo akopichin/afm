@@ -1,1 +1,1 @@
-export { useSelectedStage } from './use-selected-stage'
+export { useSelectedStage, type Selection } from './use-selected-stage'

@@ -4,6 +4,10 @@ import tokensCss from '../../skins/base/tokens.css?raw'
 import feedWorkspaceCss from '../../skins/base/feed-workspace.css?raw'
 import planPanelCss from '../../skins/base/plan-panel.css?raw'
 import sideAgentCss from '../../public/side-agent.css?raw'
+import graphiteIndexCss from '../../skins/graphite/index.css?raw'
+import gogaIndexCss from '../../skins/goga/index.css?raw'
+import novacorpsIndexCss from '../../skins/novacorps/index.css?raw'
+import coffeeIndexCss from '../../skins/coffee/index.css?raw'
 
 const tokens = () => tokensCss
 const keyframe = (css: string, name: string) =>
@@ -100,6 +104,19 @@ describe('skins CSS contract — reduced motion (Task 5)', () => {
   it('does NOT disable .feed-item--enter (it needs animationend to self-clear)', () => {
     expect(rmBlock()).not.toMatch(/\.feed-item--enter/)
   })
+})
+
+// assistants.css (T3.9/T3.10's helper-task rail rows + task feed) is a structural, skin-agnostic stylesheet
+// — §15.3 requires it to apply independently of whichever skin is active, so EVERY skin must import it
+// explicitly. Checked by exact string per skin (no glob) so a forgotten import fails loudly here instead of
+// silently rendering an unstyled rail branch under whichever skin's author forgot the line.
+describe('skins CSS contract — assistants.css is imported by every skin (T3.10)', () => {
+  const IMPORT_LINE = '@import url("../base/assistants.css");'
+
+  it('graphite imports assistants.css', () => expect(graphiteIndexCss).toContain(IMPORT_LINE))
+  it('goga imports assistants.css', () => expect(gogaIndexCss).toContain(IMPORT_LINE))
+  it('novacorps imports assistants.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
+  it('coffee imports assistants.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
 })
 
 describe('skins CSS contract — composer options bar', () => {

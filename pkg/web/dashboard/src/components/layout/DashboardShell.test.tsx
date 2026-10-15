@@ -122,6 +122,47 @@ describe('DashboardShell rail drawer', () => {
     fireEvent.click(screen.getByText('Stage one'))
     expect(body.classList.contains('rail-open')).toBe(false)
   })
+
+  test('TestRail_DrawerDoesNotCloseOnKebabOrChildToggle: kebab AND the helper-task branch toggle are both carved out, a child row click still closes it', () => {
+    const { container } = render(
+      <DashboardShell
+        rail={
+          <div>
+            <div data-stage-id="s1" className="stage-item">
+              Stage one
+              <span className="stage-kebab-wrap">
+                <button type="button" className="stage-kebab">More actions</button>
+              </span>
+              <span className="assistant-branch-toggle-wrap">
+                <button type="button" className="assistant-toggle">Expand helper tasks</button>
+              </span>
+            </div>
+            <div data-task-id="t1" className="assistant-task-item">
+              Reviewer task
+            </div>
+          </div>
+        }
+        tabs={<div>tabs</div>}
+        workspace={<div>workspace</div>}
+      />,
+    )
+    const body = container.querySelector('.dashboard-body') as HTMLElement
+    fireEvent.click(screen.getByLabelText('Toggle stages'))
+    expect(body.classList.contains('rail-open')).toBe(true)
+
+    // Кебаб — carve-out, как и раньше.
+    fireEvent.click(screen.getByText('More actions'))
+    expect(body.classList.contains('rail-open')).toBe(true)
+
+    // Переключатель ветки помощников — тоже carve-out: разворот/сворот не должен схлопывать шторку вместе с
+    // собой, иначе пользователь терял бы шторку на каждый клик по ▾/▸.
+    fireEvent.click(screen.getByText('Expand helper tasks'))
+    expect(body.classList.contains('rail-open')).toBe(true)
+
+    // Клик по самой дочерней строке помощника — выбор сделан → шторка закрывается, как и у обычной стадии.
+    fireEvent.click(screen.getByText('Reviewer task'))
+    expect(body.classList.contains('rail-open')).toBe(false)
+  })
 })
 
 describe('DashboardShell rail drawer — mobile a11y (R2 #5)', () => {

@@ -19,6 +19,7 @@ export interface UseWorkspaceView {
   openFullFeed: () => void
   openAttention: (stageId?: string) => void
   openHistory: (view: 'plan-history' | 'dialog-history') => void
+  openAssistant: () => void
 }
 
 export function useWorkspaceView(
@@ -46,8 +47,9 @@ export function useWorkspaceView(
     (view: 'plan-history' | 'dialog-history') => dispatch({ type: 'openHistory', view }),
     [],
   )
+  const openAssistant = useCallback(() => dispatch({ type: 'openAssistant' }), [])
 
-  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory }
+  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant }
 }
 
 export type { WorkspaceState, WorkspaceView }

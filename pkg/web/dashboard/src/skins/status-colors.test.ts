@@ -7,6 +7,7 @@ import gogaCss from '../../skins/goga/index.css?raw'
 import coffeeCss from '../../skins/coffee/index.css?raw'
 import graphiteCss from '../../skins/graphite/index.css?raw'
 import novacorpsCss from '../../skins/novacorps/index.css?raw'
+import assistantsCss from '../../skins/base/assistants.css?raw'
 
 // decl reads the LAST declared value of a custom property in a stylesheet string (cascade order).
 const decl = (css: string, name: string): string | undefined => {
@@ -50,5 +51,15 @@ describe('DRY: no skin index.css redeclares the status-color map', () => {
     ] as const) {
       expect(css, `${name} must not declare --c-* (hoisted to tokens.css)`).not.toMatch(/--c-[a-z-]+\s*:/)
     }
+  })
+})
+
+// T3.10: the new helper-task statuses (running/paused/completed/failed/...) are presented with color in the
+// rail/feed (assistants.css), but that stylesheet must lean on the EXISTING semantic palette
+// (--accent-primary/--attention/--success/--danger/--text-muted) rather than inventing its own --c-* status
+// map outside tokens.css — same single-source-of-truth rule as the stage rail above.
+describe("assistants.css does not redefine any --c-* token (T3.10's own version of the DRY rule above)", () => {
+  it('declares no --c-* custom property at all', () => {
+    expect(assistantsCss).not.toMatch(/--c-[a-z-]+\s*:/)
   })
 })

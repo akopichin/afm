@@ -487,3 +487,49 @@ describe('workspaceReducer — cost view + returnView contract', () => {
     expect(s.view).toBe('full-feed')
   })
 })
+
+// 'assistant' — Этап 3/T3.10's helper-task feed. A manual, read-only view exactly like plan-history/
+// dialog-history: never part of the attention auto-open queue (a helper task completing/appearing must
+// never steal focus — see use-selected-stage's own tests for the companion selection-side guarantee), but
+// still correctly superseded by (and returned to from) a genuine attention arrival.
+describe("workspaceReducer — 'assistant' view (T3.10)", () => {
+  it('is a valid WorkspaceView union member reachable via openAssistant', () => {
+    const s = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })
+    expect(s.view).toBe('assistant')
+  })
+
+  it('does not alter returnView by itself (manual read-only view, like openHistory)', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const assistant = workspaceReducer(cost, { type: 'openAssistant' })
+    expect(assistant.view).toBe('assistant')
+    expect(assistant.returnView).toBe('cost')
+  })
+
+  it('a genuine attention arrival still auto-opens over an open assistant view', () => {
+    const assistant = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })
+    const s = sync(assistant, [item('b', 'approval')])
+    expect(s.view).toBe('attention')
+    expect(s.activeStageId).toBe('b')
+  })
+
+  it('returnView after attention is handled falls back to feed, exactly like other non-cost/full-feed views', () => {
+    const assistant = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })
+    const opened = sync(assistant, [item('b', 'approval')])
+    expect(opened.view).toBe('attention')
+    expect(opened.returnView).toBe('feed')
+    const resolved = sync(opened, [])
+    expect(resolved.view).toBe('feed')
+  })
+
+  it('does not disturb an in-progress attention episode when dispatched mid-queue (existing transitions unaffected)', () => {
+    let s = sync(initialWorkspaceState, [item('a', 'approval')])
+    expect(s.view).toBe('attention')
+    // Switching tabs away from attention to the assistant view and back behaves like any other manual
+    // openX/openHistory round-trip — the queue and its handled-bookkeeping are untouched.
+    s = workspaceReducer(s, { type: 'openAssistant' })
+    expect(s.view).toBe('assistant')
+    const reopened = workspaceReducer(s, { type: 'openAttention' })
+    expect(reopened.view).toBe('attention')
+    expect(reopened.activeStageId).toBe('a')
+  })
+})

@@ -1,8 +1,10 @@
-import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
+import { Fragment, useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
 import { ATTENTION_STATUSES } from '../../hooks/use-attention'
+import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
+import { AssistantTaskRow } from '../assistants'
 
 // Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
 // иначе right-выравнивание относительно кнопки съедет.
@@ -27,6 +29,12 @@ type StagesListProps = {
   // version — версия afm: тихая моно-строка, прибитая к низу рейла. Опциональна, чтобы существующие
   // вызовы/тесты без неё оставались валидными; пустая/undefined → футер не рендерится.
   version?: string
+  // assistants — per-stage helper-task tree + aggregate, from useStageAssistants' OWN poll (not /api/status —
+  // see AGENTS.md: the status payload stays un-fattened). Absent/undefined stage id → no data yet or
+  // capability off; omitting the whole prop (existing callers/tests) renders the rail exactly as before.
+  assistants?: Record<string, StageAssistantsSummary>
+  selectedTaskId?: string | null
+  onSelectTask?: (stageId: string, taskId: string) => void
 }
 
 // verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора: один нейтральный глиф "AI
@@ -115,7 +123,10 @@ function hasKebab(stage: Stage): boolean {
 }
 
 // Левая панель: список стадий с выбором активной.
-export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting, version }: StagesListProps): ReactElement {
+export function StagesList({
+  stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting,
+  version, assistants, selectedTaskId, onSelectTask,
+}: StagesListProps): ReactElement {
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
   const costIdBase = useId()
@@ -194,6 +205,37 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
     }
   }, [])
 
+  // expandedBranches — какие стадии (по id стадии) и/или задачи (по task_id, для будущей рекурсии) сейчас
+  // показывают свою ветку помощников развёрнутой. Один Set на оба уровня: узел с детьми сам решает,
+  // развёрнут ли ОН, по собственному id — глубина не зашита числом (dev-plan.md T3.9).
+  const [expandedBranches, setExpandedBranches] = useState<Set<string>>(new Set())
+  // autoExpandedStages — стадии, чья ветка уже получила свой ОДИН автоматический авто-разворот при первом
+  // появлении помощников. Без этой памяти ручное сворачивание пользователем откатывалось бы назад на
+  // каждом следующем поллинге (useStageAssistants обновляет assistants каждые 3с).
+  const autoExpandedStages = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (assistants === undefined) return
+    const newlySeen = Object.entries(assistants).filter(
+      ([stageId, summary]) => summary.count > 0 && !autoExpandedStages.current.has(stageId),
+    )
+    if (newlySeen.length === 0) return
+    newlySeen.forEach(([stageId]) => autoExpandedStages.current.add(stageId))
+    setExpandedBranches((prev) => {
+      const next = new Set(prev)
+      newlySeen.forEach(([stageId]) => next.add(stageId))
+      return next
+    })
+  }, [assistants])
+
+  function toggleBranch(id: string): void {
+    setExpandedBranches((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   return (
     <aside id="stages-panel">
       <div className="rail-head">
@@ -218,9 +260,14 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
           // есть что описывать — иначе aria-describedby указывал бы в никуда.
           const cost = railCost(stage, accounting)
           const costId = cost !== null ? `${costIdBase}-cost-${index}` : undefined
+          // summary — this stage's helper-task tree from its OWN poll (useStageAssistants), not /api/status.
+          // null (prop never passed, or stage not in the map yet) and {count:0} both render no branch.
+          const summary = assistants?.[stage.id] ?? null
+          const hasBranch = summary !== null && summary.count > 0
+          const isExpandedBranch = hasBranch && expandedBranches.has(stage.id)
           return (
+          <Fragment key={stage.id}>
           <li
-            key={stage.id}
             className={`stage-item${stage.id === selectedStageId ? ' active' : ''}${justDone.has(stage.id) ? ' just-done' : ''}`}
             data-stage-id={stage.id}
             data-status={stage.status}
@@ -291,6 +338,33 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
                   ? <span className="stage-cost-spinner" aria-hidden="true" />
                   : <span aria-hidden="true">{cost.text}</span>}
                 <span id={costId} className="stage-cost-sr">{cost.a11y}</span>
+              </span>
+            )}
+            {summary !== null && hasBranch && (
+              <span className="assistant-branch-toggle-wrap">
+                <button
+                  type="button"
+                  className="assistant-toggle"
+                  aria-label={isExpandedBranch ? `Collapse helper tasks for ${stage.id}` : `Expand helper tasks for ${stage.id}`}
+                  aria-expanded={isExpandedBranch}
+                  onClick={(e) => {
+                    e.stopPropagation() // не триггерить onSelect клика по строке
+                    toggleBranch(stage.id)
+                  }}
+                >
+                  <span aria-hidden="true">{isExpandedBranch ? '▾' : '▸'}</span>
+                  {/* Свёрнутая ветка показывает агрегат: счётчик задач + флаг внимания (кто-то на паузе,
+                      ждёт решения). Развёрнутая ветка уже показывает сами строки ниже — агрегат ей не нужен. */}
+                  {!isExpandedBranch && (
+                    <span
+                      className="assistant-branch-aggregate"
+                      data-attention={summary.hasAttention ? 'true' : undefined}
+                      title={summary.hasAttention ? `${summary.count} helper task(s), needs attention` : `${summary.count} helper task(s)`}
+                    >
+                      {summary.count}
+                    </span>
+                  )}
+                </button>
               </span>
             )}
             {hasKebab(stage) && (
@@ -380,8 +454,25 @@ export function StagesList({ stages, selectedStageId, onSelect, onEditPreNote, o
               </span>
             )}
             </span>
-            {index < stages.length - 1 && <span className="stage-connector" aria-hidden="true" />}
+            {/* Коннектор — абсолютно спозиционированная линия к НОДЕ следующей стадии, её пиксельная
+                математика (stages-list.css) считает ровно одну строку на этот <li>. Развёрнутая ветка
+                добавляет строки помощников между этой стадией и следующей — коннектор бы просто проткнул их
+                насквозь, поэтому рисуем его только пока ветка свёрнута (или её нет). */}
+            {index < stages.length - 1 && !isExpandedBranch && <span className="stage-connector" aria-hidden="true" />}
           </li>
+          {summary !== null && isExpandedBranch &&
+            summary.roots.map((node) => (
+              <AssistantTaskRow
+                key={node.id}
+                node={node}
+                depth={1}
+                selectedTaskId={selectedTaskId ?? null}
+                expanded={expandedBranches}
+                onToggleExpand={toggleBranch}
+                onSelect={(taskId) => onSelectTask?.(stage.id, taskId)}
+              />
+            ))}
+          </Fragment>
           )
         })}
         </ul>
