@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/assistant-result.schema.json",
+  "title": "afm assistant result",
+  "description": "Machine-readable envelope a collaboration assistant returns for one turn. \"kind\" is a required discriminator: \"result\" (verdict/findings) and \"delegate\" (children/continuation) are structurally distinct and must not be told apart by field presence alone. See docs/collaboration-journal.md for the compatibility policy.",
+  "oneOf": [
+    { "$ref": "#/definitions/result" },
+    { "$ref": "#/definitions/delegate" }
+  ],
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity", "detail"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier for this finding, unique within the turn's result."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "minor", "major", "blocker"],
+          "description": "\"blocker\" is incompatible with verdict:\"pass\" (see the result definition's consistency rule)."
+        },
+        "path": {
+          "type": "string",
+          "description": "Repo-relative path the finding is about. Omitted/null when the finding is not tied to a specific file."
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "kind", "verdict", "summary"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "result" },
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "needs_changes", "inconclusive"]
+        },
+        "summary": { "type": "string" },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/finding" }
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "context_version": {
+          "type": "string",
+          "description": "Identifies the context snapshot this result was computed against, to detect stale answers."
+        },
+        "suggested_change": { "type": "string" },
+        "limitations": { "type": "string" }
+      },
+      "not": {
+        "description": "verdict:\"pass\" cannot coexist with a blocker finding.",
+        "required": ["verdict", "findings"],
+        "properties": {
+          "verdict": { "const": "pass" },
+          "findings": {
+            "type": "array",
+            "contains": {
+              "type": "object",
+              "required": ["severity"],
+              "properties": { "severity": { "const": "blocker" } }
+            }
+          }
+        }
+      }
+    },
+    "delegateChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "title", "instruction", "mode", "trigger"],
+      "properties": {
+        "profile_id": { "type": "string" },
+        "title": { "type": "string" },
+        "instruction": { "type": "string" },
+        "mode": { "type": "string", "enum": ["advisory", "required"] },
+        "trigger": { "type": "string", "enum": ["one_shot", "checkpoints", "on_completion"] }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger"],
+      "properties": {
+        "trigger": { "type": "string", "enum": ["one_shot", "checkpoints", "on_completion"] },
+        "note": { "type": "string" }
+      }
+    },
+    "delegate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Full shape (delegation authorization/limits) is finalized in stage 4a; this is the minimal decodable form.",
+      "required": ["schema_version", "kind", "children"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "delegate" },
+        "summary": { "type": "string" },
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/delegateChild" }
+        },
+        "continuation": { "$ref": "#/definitions/continuation" }
+      }
+    }
+  }
+}

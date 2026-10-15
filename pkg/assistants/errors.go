@@ -1,0 +1,31 @@
+package assistants
+
+// ErrorCode — стабильный машинный код ошибки collaboration-API (§13.3). Строковая
+// константа, а не int-enum: код уходит в HTTP-ответы и журнал, должен остаться
+// читаемым и не смещаться при рефакторинге/добавлении новых кодов.
+type ErrorCode string
+
+const (
+	// CodeFeatureDisabled — collaboration выключен конфигурацией (флоу/проект/глобально).
+	CodeFeatureDisabled ErrorCode = "feature_disabled"
+	// CodeCapabilityUnavailable — запрошенная возможность (например, Browser) недоступна
+	// выбранному профилю/агенту.
+	CodeCapabilityUnavailable ErrorCode = "capability_unavailable"
+	// CodeStaleRevision — операция ссылается на устаревшую ревизию политики/контекста.
+	CodeStaleRevision ErrorCode = "stale_revision"
+	// CodeInvalidStatus — переход запрошен из статуса, из которого он невозможен.
+	CodeInvalidStatus ErrorCode = "invalid_status"
+	// CodeFlowPaused — операция недоступна, пока флоу/стадия на паузе.
+	CodeFlowPaused ErrorCode = "flow_paused"
+	// CodeRunFinalizing — ран уже заканчивается, новые задачи помощников не принимаются.
+	CodeRunFinalizing ErrorCode = "run_finalizing"
+	// CodeBudgetExceeded — исчерпан бюджет (стоимость/число задач/т.п.).
+	CodeBudgetExceeded ErrorCode = "budget_exceeded"
+	// CodeDelegationDepthExceeded — новая задача превысила разрешённую глубину делегирования.
+	CodeDelegationDepthExceeded ErrorCode = "delegation_depth_exceeded"
+	// CodeInvalidParent — указанный родитель не проходит инварианты дерева задач (см. tree.go).
+	CodeInvalidParent ErrorCode = "invalid_parent"
+	// CodeAncestorInactive — предок задачи уже не активен (завершён/отменён), создавать
+	// от его имени потомков нельзя.
+	CodeAncestorInactive ErrorCode = "ancestor_inactive"
+)
