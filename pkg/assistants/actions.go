@@ -9,8 +9,15 @@ type ActionType string
 // only draft type Этап 4 implements end-to-end (T4.5's validation, T4.6's confirmation card).
 const ActionAttachAssistant ActionType = "attach_assistant"
 
+// ActionAddStage proposes inserting one new ordinary stage into the flow graph (Этап 9/10, T10.1) — validated
+// and committed through the EXACT SAME orchestrator.PreviewAddStage/CommitAddStage the manual dashboard
+// dialog already uses (dev-plan's TestAction_AddStageDraftValidatedLikeManual), never a parallel copy of the
+// DAG rules.
+const ActionAddStage ActionType = "add_stage"
+
 var knownActionTypes = map[ActionType]struct{}{
 	ActionAttachAssistant: {},
+	ActionAddStage:        {},
 }
 
 // KnownActionType reports whether typ is a recognized action draft type — the narrow predicate

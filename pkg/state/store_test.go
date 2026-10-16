@@ -81,6 +81,24 @@ func TestApply_RejectsWrongFrom(t *testing.T) {
 	}
 }
 
+// TestApply_AfterClose_ReturnsErrStoreClosed — Этап 10 (T10.5): a Transition applied after Store.Close() has
+// already nil'd eventsLog must be rejected with the benign ErrStoreClosed sentinel, not reach
+// s.eventsLog.Write on a nil *os.File (which would still not panic — nil-safe Write returns fs.ErrInvalid —
+// but produced an unrecognizable "write events.jsonl: invalid argument" that FSM.Apply used to wrap as a
+// FATAL StorageError, misreporting a benign "the run already shut down" race as storage corruption).
+func TestApply_AfterClose_ReturnsErrStoreClosed(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := Open(dir, []string{"a"})
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	err := store.Apply(&Transition{StageID: "a", From: StatusPending, To: StatusRunning, Event: "start"})
+	if !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("Apply after Close: err = %v, want ErrStoreClosed", err)
+	}
+}
+
 // TestApply_StaleFromAgainstDone_RejectedAndStaysDone proves the Store CAS protects an already-done stage:
 // a transition carrying a stale From (running) applied against a live done stage is rejected with
 // ErrConcurrentChange and the snapshot stays done. This is the storage-level half of the "a Done stage

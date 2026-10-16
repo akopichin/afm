@@ -95,7 +95,7 @@ func (s *Store) AddStageToGraph(op StageGraphOperation) (StageGraphResult, error
 	defer s.mu.Unlock()
 
 	if s.eventsLog == nil {
-		return StageGraphResult{}, errors.New("run store is closed")
+		return StageGraphResult{}, ErrStoreClosed
 	}
 
 	// T2.5 idempotency: checked FIRST, before any precondition — a repeat of an already-committed operation

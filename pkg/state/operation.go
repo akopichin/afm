@@ -129,7 +129,7 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 	defer s.mu.Unlock()
 
 	if s.eventsLog == nil {
-		return OperationResult{}, errors.New("run store is closed")
+		return OperationResult{}, ErrStoreClosed
 	}
 
 	// T2.5 idempotency: the never-evicted operationIndex is checked FIRST, before any lifecycle/precondition

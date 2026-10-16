@@ -112,6 +112,16 @@ func (o *Orchestrator) admitChildren(
 		if !view.Available {
 			return nil, &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: view.UnavailableReason}
 		}
+		// Этап 10 (T10.2, "no self elevation"): an assistant delegating to ITS OWN task (actor.Kind ==
+		// assistant, already self-match-checked above) must never be able to hand a child a LESS restricted
+		// executor than its own profile's — otherwise a read-only-enforced helper could escape its own
+		// guarantee simply by delegating to a profile with none. A "user"/"side_agent" actor's explicit,
+		// already-confirmed child-creation is NOT subject to this (same carve-out as the self-match check
+		// above, and for the same reason: a human/side-agent choosing a different profile for a child is an
+		// affirmative decision, not the model elevating itself).
+		if actor.Kind == string(assistants.OriginAssistant) && view.ReadonlyEnforcement.WeakerThan(parent.ProfileSnapshot.ReadonlyEnforcement) {
+			return nil, &state.OperationRejectedError{Code: assistants.CodeExecutorNotPermitted, Reason: fmt.Sprintf("child profile %q (%s) is less restricted than the parent's own (%s)", child.ProfileID, view.ReadonlyEnforcement, parent.ProfileSnapshot.ReadonlyEnforcement)}
+		}
 		// Same freeze-at-admission-time rule as Attach (assistants.go) — see its own comment for why.
 		profile.ReadonlyEnforcement = view.ReadonlyEnforcement
 

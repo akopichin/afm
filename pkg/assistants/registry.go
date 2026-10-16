@@ -18,6 +18,16 @@ const (
 	ReadonlyEnforcementNone ReadonlyEnforcement = "none"
 )
 
+// WeakerThan reports whether e is a STRICTLY weaker read-only guarantee than other — "os" (a verifiable OS
+// sandbox) is strictly stronger than "none" (no OS guarantee, boundary is the container/prompt only); any
+// other value (including both equal) is never weaker. Этап 10 (T10.2, "no self elevation"): a delegating
+// assistant must never be able to hand a child a less-restricted executor than its own — this is the one
+// comparison that check needs, kept here (next to the two constants it orders) rather than re-derived at
+// each call site.
+func (e ReadonlyEnforcement) WeakerThan(other ReadonlyEnforcement) bool {
+	return e == ReadonlyEnforcementNone && other == ReadonlyEnforcementOS
+}
+
 // AvailabilityCheck reports whether a command can run a helper profile at all (ok), why not if it can't
 // (reason — non-empty exactly when ok is false), and which read-only guarantee backs a positive answer
 // (enforcement — meaningful only when ok is true). Production callers build this around

@@ -31,4 +31,9 @@ const (
 	// CodeActorNotAllowed — операция требует конкретного происхождения actor'а (например, T7.6's waiver:
 	// только человек, никогда результат самой модели).
 	CodeActorNotAllowed ErrorCode = "actor_not_allowed"
+	// CodeExecutorNotPermitted — Этап 10 (T10.2, "no self elevation"): помощник пытается делегировать ребёнку
+	// профиль с МЕНЕЕ строгой read-only-гарантией, чем у него самого (см. ReadonlyEnforcement.WeakerThan).
+	// Применяется только когда делегирует сам помощник (actor.Kind == assistant) — явное, уже подтверждённое
+	// действие человека/бокового агента этим правилом не ограничено (та же оговорка, что у self-match выше).
+	CodeExecutorNotPermitted ErrorCode = "executor_not_permitted"
 )

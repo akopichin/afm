@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -318,6 +319,15 @@ func writeAssistantError(w http.ResponseWriter, err error) {
 		writeAssistantErrCode(w, assistantErrStatus(rej.Code), string(rej.Code))
 		return
 	}
+	// Этап 10 (T10.1): a delivered add_stage proposal can ALSO fail with a *graph.ValidationError — the exact
+	// same error shape /api/run/graph/commit already renders via graphRejectedStatus (graph.go). Proposal
+	// delivery deliberately reuses orchestrator.CommitAddStage verbatim (not a hand-rolled copy), so its
+	// errors must be rendered with the SAME fidelity here, not fall through to a bare 500.
+	var ve *graph.ValidationError
+	if errors.As(err, &ve) {
+		writeAssistantErrCode(w, graphRejectedStatus(ve.Code), ve.Code)
+		return
+	}
 	writeAssistantErrCode(w, http.StatusInternalServerError, "internal")
 }
 
@@ -329,7 +339,7 @@ func assistantErrStatus(code assistants.ErrorCode) int {
 		return http.StatusNotFound
 	case assistants.CodeRunFinalizing:
 		return http.StatusServiceUnavailable
-	case assistants.CodeCapabilityUnavailable, assistants.CodeDelegationDepthExceeded, assistants.CodeInvalidParent, assistants.CodeAncestorInactive:
+	case assistants.CodeCapabilityUnavailable, assistants.CodeDelegationDepthExceeded, assistants.CodeInvalidParent, assistants.CodeAncestorInactive, assistants.CodeExecutorNotPermitted:
 		return http.StatusUnprocessableEntity
 	case assistants.CodeActorNotAllowed:
 		return http.StatusForbidden

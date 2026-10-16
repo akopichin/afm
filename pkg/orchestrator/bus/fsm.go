@@ -155,6 +155,11 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		if errors.Is(err, state.ErrConcurrentChange) {
 			return from, from, 0, false, nil // доброкачественный CAS-mismatch, не storage-fatal
 		}
+		if errors.Is(err, state.ErrStoreClosed) {
+			// Этап 10 (T10.5): run уже штатно закрывается (Store.Close() обнулил eventsLog) — та же
+			// доброкачественная классификация, что CAS-mismatch, НЕ fatal StorageError.
+			return from, from, 0, false, nil
+		}
 		return from, from, 0, false, &StorageError{Inner: err}
 	}
 	return from, to, tr.Seq, true, nil

@@ -38,6 +38,15 @@ var ErrCorruptLog = errors.New("events.jsonl is corrupted mid-log")
 // Доброкачественно: ожидаемо при конкурентных переходах, НЕ storage-ошибка.
 var ErrConcurrentChange = errors.New("concurrent change")
 
+// ErrStoreClosed — попытка записи (Apply/ApplyRunOperation/AddStageToGraph) после Store.Close() уже обнулил
+// eventsLog (Этап 10, T10.5: "действие бриджа не пишет в закрытый store"). Доброкачественно, как
+// ErrConcurrentChange: ОДИН и тот же "store is closed" sentinel для ВСЕХ трёх путей записи — до этого каждый
+// возвращал свой голый errors.New("run store is closed"), неразличимый от реальной storage-ошибки для
+// вызывающего (errors.Is не сработал бы). FSM.Apply (pkg/orchestrator/bus/fsm.go) классифицирует его так же
+// доброкачественно, как ErrConcurrentChange, а НЕ как fatal StorageError — стадия, которую scheduler пытается
+// запустить ровно в момент штатного shutdown рана, не должна выглядеть как повреждение журнала.
+var ErrStoreClosed = errors.New("state: run store is closed")
+
 type Store struct {
 	runDir    string
 	eventsLog *os.File
@@ -422,7 +431,7 @@ func (s *Store) appendRunEvent(event string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.eventsLog == nil {
-		return errors.New("run store is closed")
+		return ErrStoreClosed
 	}
 	if event != runEventStarted && s.snapshot.EndedAt != nil {
 		return nil
@@ -469,6 +478,16 @@ func SetApplyHook(h func(Transition)) {
 func (s *Store) Apply(t *Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Этап 10 (T10.5): without this check, a FSM transition racing a real Store.Close() would reach
+	// s.eventsLog.Write on a nil *os.File below — nil-safe (returns fs.ErrInvalid, "invalid argument"), so it
+	// would NOT panic, but FSM.Apply has no way to tell that apart from a genuine disk failure and would wrap
+	// it as a fatal StorageError, ending the run with a misleading "storage failure" for what is actually a
+	// benign "the run is already shutting down" race (see AGENTS.md's own write-up of this exact symptom
+	// class). ApplyRunOperation/AddStageToGraph already guard this the same way; Apply never did.
+	if s.eventsLog == nil {
+		return ErrStoreClosed
+	}
 
 	current := s.snapshot.Stages[t.StageID].Status
 	if current != t.From {
@@ -562,7 +581,7 @@ func (s *Store) AppendControl(c *Control) error {
 // Caller MUST hold s.mu.
 func (s *Store) appendControlLocked(c *Control) error {
 	if s.eventsLog == nil {
-		return errors.New("run store is closed")
+		return ErrStoreClosed
 	}
 
 	nextSeq := s.lastSeq + 1

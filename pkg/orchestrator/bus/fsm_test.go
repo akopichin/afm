@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -499,5 +500,29 @@ func TestFSM_Apply_VerifyFail_IllegalFromPausedOrRevising(t *testing.T) {
 		if to != from {
 			t.Errorf("verify_fail from %s: to = %v, want unchanged %v (rejected transition must not report a new status)", from, to, from)
 		}
+	}
+}
+
+// TestFSM_Apply_AfterStoreClosed_IsBenignNotFatal — Этап 10 (T10.5): a transition reaching FSM.Apply AFTER
+// the store has already been closed (the run is winding down) must be classified EXACTLY like a benign
+// ErrConcurrentChange CAS-miss (ok=false, err=nil) — never wrapped as a fatal *StorageError. Before this
+// stage, Store.Apply had no eventsLog==nil guard of its own (unlike ApplyRunOperation/AddStageToGraph), so
+// this exact scenario produced a confusing "write events.jsonl: invalid argument" that WAS wrapped as fatal.
+func TestFSM_Apply_AfterStoreClosed_IsBenignNotFatal(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, _, _, ok, err := fsm.Apply("a", EvReady, GuardCtx{}, "late scheduler wake after shutdown")
+	if err != nil {
+		t.Fatalf("Apply after store close: err = %v, want nil (benign, like ErrConcurrentChange)", err)
+	}
+	if ok {
+		t.Fatal("Apply after store close: ok = true, want false")
+	}
+	var se *StorageError
+	if errors.As(err, &se) {
+		t.Fatalf("Apply after store close must NOT be a fatal StorageError: %v", err)
 	}
 }

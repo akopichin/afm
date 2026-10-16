@@ -58,6 +58,39 @@ func proposalStatusEffect(proposalID string, p state.ProposalStatusChangedPayloa
 	return state.Effect{Kind: "proposal_status_changed", Target: state.Target{ProposalID: proposalID}, Payload: raw}, nil
 }
 
+// maxPendingSelfProposals caps how many UNCONFIRMED ("pending") proposals authored (at least in part) by an
+// assistant can be outstanding across the WHOLE run at once (Этап 10, T10.4: "собственные предложения
+// помощников не порождают лавину задач"). dev-plan.md names no exact number for this cap — 5 is a judgment
+// call (same order of magnitude as assistants.MaxDelegateChildren's own per-group cap), recorded in
+// dev-plan.md's Review decisions: small enough to keep one human's confirmation queue manageable, not so
+// tight that a legitimate multi-step improvement plan cannot even be proposed.
+const maxPendingSelfProposals = 5
+
+// isSelfSourced reports whether at least one of authors is the assistant team itself — a proposal with NO
+// assistant author (e.g. one a human drafted directly, should that ever exist) is never counted against the
+// avalanche cap below.
+func isSelfSourced(authors []assistants.MessageAuthor) bool {
+	for _, a := range authors {
+		if a.Kind == assistants.AuthorAssistant {
+			return true
+		}
+	}
+	return false
+}
+
+// pendingSelfProposalCount counts currently-"pending" (unconfirmed) proposals authored at least in part by an
+// assistant, across every stage of the run.
+func (o *Orchestrator) pendingSelfProposalCount() int {
+	rs := o.opts.Store.Snapshot()
+	n := 0
+	for _, p := range rs.Assistants.Proposals.Proposals {
+		if p != nil && p.Status == assistants.ProposalPending && isSelfSourced(p.Authors) {
+			n++
+		}
+	}
+	return n
+}
+
 // CreateProposal durably commits one new Proposal in "pending" status. OperationID is the idempotency key —
 // the SAME OperationID always resolves to the SAME proposal id.
 func (o *Orchestrator) CreateProposal(ctx context.Context, req CreateProposalRequest) (string, error) {
@@ -72,6 +105,15 @@ func (o *Orchestrator) CreateProposal(ctx context.Context, req CreateProposalReq
 	}
 
 	proposalID := deriveProposalID(req.OperationID)
+	// Avalanche cap (T10.4): checked only for a GENUINELY new proposal — an idempotent replay of an already-
+	// committed OperationID must keep resolving to its own prior outcome regardless of how the cap has since
+	// filled up (ApplyRunOperation's own operation-id index is what actually makes a replay a no-op; this
+	// check runs before that call and would otherwise spuriously reject a legitimate repeat right at the cap).
+	if _, exists := o.Proposal(proposalID); !exists && isSelfSourced(req.Authors) {
+		if n := o.pendingSelfProposalCount(); n >= maxPendingSelfProposals {
+			return "", &state.OperationRejectedError{Code: assistants.CodeBudgetExceeded, Reason: fmt.Sprintf("%d pending self-proposals already outstanding (max %d)", n, maxPendingSelfProposals)}
+		}
+	}
 	eff, err := proposalCreatedEffect(req.StageID, proposalID, state.ProposalCreatedPayload{
 		TaskID: req.TaskID, Type: string(req.Type), Title: req.Title, Rationale: req.Rationale,
 		Payload: req.Payload, Authors: req.Authors, SourceMessageIDs: req.SourceMessageIDs,

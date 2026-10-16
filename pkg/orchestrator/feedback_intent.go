@@ -58,16 +58,20 @@ func feedbackIntentConsumedEffect(intentID string, p state.FeedbackIntentConsume
 	return state.Effect{Kind: "feedback_intent_consumed", Target: state.Target{IntentID: intentID}, Payload: raw}, nil
 }
 
-// ErrProposalTypeNotDeliverable — Этап 6 only wires end-to-end delivery for assistants.ProposalFeedback; the
-// other three ProposalType values are modeled (durable, listable, dismissable) but AcceptProposal rejects
-// them rather than silently doing nothing — see proposal.go's package doc comment and dev-plan.md's Review
-// decisions for Этап 6.
+// ErrProposalTypeNotDeliverable — Этап 10 wires end-to-end delivery for assistants.ProposalAddStage/
+// ProposalAttachAssistant too (proposal_delivery.go), joining ProposalFeedback; only
+// assistants.ProposalRequiredChange (the advisory/required mode flip) still has no delivery path and
+// AcceptProposal rejects it rather than silently doing nothing — see proposal.go's package doc comment and
+// dev-plan.md's Review decisions for Этап 6/10.
 var ErrProposalTypeNotDeliverable = errors.New("assistants: this proposal type has no delivery path yet")
 
 // AcceptProposal is the ONLY path that turns a human's "yes" on a proposal into something that reaches the
-// main agent. requestID is the idempotency key for the WHOLE accept+intent-creation step (T6.6): the SAME
-// requestID repeated (double-click, retry-after-timeout, a second browser tab racing a slightly different
-// requestID) either replays the identical first outcome or is cleanly rejected — never double-delivers.
+// main agent (ProposalFeedback), the task tree (ProposalAttachAssistant, Этап 10/T10.1), or the flow graph
+// (ProposalAddStage, Этап 10/T10.1). requestID is the idempotency key for the WHOLE accept+delivery step
+// (T6.6): the SAME requestID repeated (double-click, retry-after-timeout, a second browser tab racing a
+// slightly different requestID) either replays the identical first outcome or is cleanly rejected — never
+// double-delivers. assistants.ProposalRequiredChange has no delivery path yet (Этап 6/Этап 10 Review
+// decisions) — ErrProposalTypeNotDeliverable for that one, same as before Этап 10.
 func (o *Orchestrator) AcceptProposal(ctx context.Context, proposalID, requestID string, actor state.Actor) error {
 	if !o.opts.AssistantsEnabled {
 		return &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
@@ -79,9 +83,22 @@ func (o *Orchestrator) AcceptProposal(ctx context.Context, proposalID, requestID
 	if !ok {
 		return ErrProposalNotFound
 	}
-	if p.Type != assistants.ProposalFeedback {
+	switch p.Type {
+	case assistants.ProposalFeedback:
+		return o.acceptFeedbackProposal(ctx, p, requestID, actor)
+	case assistants.ProposalAddStage:
+		return o.acceptAddStageProposal(ctx, p, requestID, actor)
+	case assistants.ProposalAttachAssistant:
+		return o.acceptAttachAssistantProposal(ctx, p, requestID, actor)
+	default:
 		return ErrProposalTypeNotDeliverable
 	}
+}
+
+// acceptFeedbackProposal is AcceptProposal's original ProposalFeedback-only body (Этап 6), factored out
+// unchanged so AcceptProposal itself can dispatch on p.Type (Этап 10).
+func (o *Orchestrator) acceptFeedbackProposal(ctx context.Context, p assistants.Proposal, requestID string, actor state.Actor) error {
+	proposalID := p.ID
 	var payload FeedbackProposalPayload
 	if len(p.Payload) > 0 {
 		if err := json.Unmarshal(p.Payload, &payload); err != nil {
