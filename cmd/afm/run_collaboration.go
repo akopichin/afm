@@ -132,6 +132,7 @@ func profilesFromConfig(m map[string]config.ProfileConfig) []assistants.Profile 
 			Title:        p.Title,
 			Command:      p.Command,
 			Instructions: p.Instructions,
+			Capabilities: assistants.Capabilities{Delegate: p.Delegate},
 		})
 	}
 	return out

@@ -3,6 +3,23 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-16
+
+### Fix: make helper delegation reachable and bound its rejection loop
+
+Recursive helper delegation was unreachable in production: no configured
+profile could ever carry the `Delegate` capability (`collaboration.profiles`
+had no field for it and the registry is built with no built-in layer), so every
+`kind:"delegate"` turn was rejected with "this profile is not permitted to
+delegate". A profile now opts in with `delegate: true`
+(`config.ProfileConfig.Delegate`), wired through to `assistants.Capabilities`.
+Separately, a task whose delegate turn is rejected is requeued with a follow-up
+note so the model can react — but a model that ignored the note and re-sent the
+same rejected delegate every turn would spin `running`⇄`queued` forever with no
+backoff. That loop is now bounded: after three consecutive delegation
+rejections the task fails instead of requeueing (the counter resets on any
+successful delegation).
+
 ## 2026-10-15
 
 ### Improvement: one advisory helper-agent, dashboard surface (frontend)

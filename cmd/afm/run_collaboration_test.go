@@ -183,6 +183,26 @@ func TestAssistantProfileCommands_EmptyWhenDisabled(t *testing.T) {
 
 // TestAssistantProfileCommands_DedupedWhenEnabled: configured profile commands come back deduplicated, and a
 // profile with an empty Command (inherits the client default, already scanned separately) is skipped.
+// TestProfilesFromConfig_DelegateCapability — the config `delegate: true` flag must reach the built
+// registry's Profile.Capabilities.Delegate, otherwise admitChildren rejects every delegate turn ("this
+// profile is not permitted to delegate") and recursive delegation is unreachable in production.
+func TestProfilesFromConfig_DelegateCapability(t *testing.T) {
+	profiles := profilesFromConfig(map[string]config.ProfileConfig{
+		"lead":   {Command: "codex-as-claude", Delegate: true},
+		"helper": {Command: "codex-as-claude"},
+	})
+	got := map[assistants.ProfileID]bool{}
+	for _, p := range profiles {
+		got[p.ID] = p.Capabilities.Delegate
+	}
+	if !got["lead"] {
+		t.Error("profile with delegate:true must have Capabilities.Delegate == true")
+	}
+	if got["helper"] {
+		t.Error("profile without delegate must default Capabilities.Delegate == false")
+	}
+}
+
 func TestAssistantProfileCommands_DedupedWhenEnabled(t *testing.T) {
 	cfg := config.Config{Collaboration: config.CollaborationConfig{
 		Profiles: map[string]config.ProfileConfig{

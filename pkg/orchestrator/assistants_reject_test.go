@@ -58,6 +58,34 @@ func TestReject_DepthExceededReturnsTypedResultToParent(t *testing.T) {
 	}
 }
 
+// TestReject_RepeatedDelegationIsBoundedNotInfinite: a model that ignores the rejection follow-up and
+// re-emits the SAME rejected delegate on every turn must NOT spin running⇄queued forever. After
+// maxConsecutiveDelegationRejections the task is failed instead of requeued — the terminal status is the
+// proof the loop was bounded (without the cap this test would hang until its timeout).
+func TestReject_RepeatedDelegationIsBoundedNotInfinite(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 1, Source: assistants.DepthSourceDefault, Revision: "rev-shallow"}, state.Actor{Kind: "system"}); err != nil {
+		t.Fatalf("EnsurePolicyRecorded: %v", err)
+	}
+
+	var calls atomic.Int32
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		calls.Add(1)
+		return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil // always depth 2 > max_depth 1 → always rejected
+	}
+
+	parentID := attachTestTask(context.Background(), t, o, "op-parent")
+	waitForTaskStatus(t, store, parentID, assistants.StatusFailed, 3*time.Second)
+
+	if got := int(calls.Load()); got != maxConsecutiveDelegationRejections {
+		t.Fatalf("helper ran %d times, want exactly %d (the rejection cap)", got, maxConsecutiveDelegationRejections)
+	}
+	if len(store.Snapshot().Assistants.ByParent[parentID]) != 0 {
+		t.Fatal("a rejected delegation must not have created any child")
+	}
+}
+
 // TestReject_BudgetExceeded mirrors the depth test for a whole-run quota ceiling of zero.
 func TestReject_BudgetExceeded(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)

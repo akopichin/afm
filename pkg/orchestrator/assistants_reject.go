@@ -15,10 +15,20 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// maxConsecutiveDelegationRejections caps how many times in a row a single task may have a delegate turn
+// rejected before the orchestrator stops requeueing it and fails it outright. The rejection path (below) is
+// deliberately non-fatal — it hands the model a follow-up note so it can do the work itself or report the
+// limitation instead — but a model that ignores the note and re-emits the SAME rejected delegate every turn
+// would otherwise spin running⇄queued forever with no backoff, flooding events.jsonl. This bound makes that
+// pathological loop terminate instead. The counter resets on any successful delegation (handleDelegate).
+const maxConsecutiveDelegationRejections = 3
+
 // deliverDelegationRejection turns an admitChildren error into a typed, human-readable note saved as the
 // task's own follow-up (the SAME mechanism FollowUp/StopAndClarify already use, T4.7 — reused rather than
 // inventing a second "message to a task" channel) and requeues the task for a fresh turn that will read it.
-// Never fails the task outright: a rejection is information for the model to act on, not a crash.
+// A rejection is information for the model to act on, not a crash — but after
+// maxConsecutiveDelegationRejections in a row the task is failed instead of requeued, so a model that keeps
+// re-sending the same rejected delegate cannot spin forever.
 func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, rejectErr error) {
 	code := assistants.ErrorCode("delegation_rejected")
 	reason := rejectErr.Error()
@@ -26,6 +36,18 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, reje
 	if errors.As(rejectErr, &rej) {
 		code = rej.Code
 		reason = rej.Reason
+	}
+
+	count := 1
+	if prev, ok := o.taskDelegationRejects.Load(taskID); ok {
+		count = prev.(int) + 1
+	}
+	o.taskDelegationRejects.Store(taskID, count)
+	if count >= maxConsecutiveDelegationRejections {
+		o.taskDelegationRejects.Delete(taskID)
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed,
+			fmt.Sprintf("delegation_rejected %d times in a row (%s): %s", count, code, reason))
+		return
 	}
 
 	note := fmt.Sprintf(

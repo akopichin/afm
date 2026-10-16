@@ -197,6 +197,11 @@ type Orchestrator struct {
 	// из-за чего отменённая по Pause попытка ошибочно помечается failed вместо requeue (см.
 	// TestPause_ImmediateContinueBeforeClassificationStillRequeues).
 	taskPausePending sync.Map
+	// taskDelegationRejects считает ПОДРЯД идущие отклонения delegate-хода для одной задачи (ключ —
+	// assistants.TaskID, значение — int). Сбрасывается при успешном делегировании (handleDelegate). Нужен,
+	// чтобы модель, упорно повторяющая один и тот же отклоняемый delegate, не крутила задачу running⇄queued
+	// бесконечно без backoff — после maxConsecutiveDelegationRejections задача падает (assistants_reject.go).
+	taskDelegationRejects sync.Map
 
 	// terminalFlow — финальное flow-событие, установленное одним из выходов Run; эмитится finalizeLifecycle
 	// ПОСЛЕ остановки продюсеров.

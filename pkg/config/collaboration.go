@@ -55,6 +55,11 @@ type ProfileConfig struct {
 	Title        string `yaml:"title,omitempty"`
 	Command      string `yaml:"command,omitempty"`
 	Instructions string `yaml:"instructions,omitempty"`
+	// Delegate opts this profile into creating its own child tasks (assistants.Capabilities.Delegate).
+	// Default false: delegation spawns additional helper subprocesses, so it is opt-in per profile. Without
+	// this field no configured profile could ever delegate (BuildRegistry is called with no builtin layer),
+	// leaving the whole recursive-delegation path unreachable in production.
+	Delegate bool `yaml:"delegate,omitempty"`
 }
 
 // CollaborationLimits carries delegation/quota limits (T4a.2 admission). MaxTasks is a whole-RUN ceiling —

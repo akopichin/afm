@@ -70,7 +70,8 @@
       "properties": {
         "title": { "type": "string", "description": "Title shown in the UI." },
         "command": { "type": "string", "description": "An already-configured command/recipe name to run this profile with (not a new binary/transport). A built-in profile with no command inherits client.command." },
-        "instructions": { "type": "string", "description": "System instructions for this role." }
+        "instructions": { "type": "string", "description": "System instructions for this role." },
+        "delegate": { "type": "boolean", "description": "Allow this profile to create its own child tasks (recursive delegation). Default false — delegation is opt-in per profile because it spawns additional helper subprocesses." }
       }
     },
     "collaborationLimits": {

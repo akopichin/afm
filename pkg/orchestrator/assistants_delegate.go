@@ -262,7 +262,11 @@ func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.Tas
 		// T4a.7 gives the parent a typed, actionable rejection instead of a bare failure — see
 		// assistants_reject.go's deliverDelegationRejection.
 		o.deliverDelegationRejection(taskID, err)
+		return
 	}
+	// Successful delegation resets the consecutive-rejection guard: the task reacted correctly, so a future
+	// rejection starts counting from zero again.
+	o.taskDelegationRejects.Delete(taskID)
 }
 
 // requiredChildOpen reports whether taskID has at least one DIRECT required child that has not (yet, or
