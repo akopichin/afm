@@ -5,6 +5,21 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: attach a helper to a stage from the dashboard
+
+The stage kebab menu now has an "Attach helper…" item (when collaboration is on
+and the stage can still host helpers). It opens a dialog to pick a role, write an
+instruction, and choose mode (advisory/required) and trigger, then attaches the
+helper via `POST /api/stages/{id}/assistants`. Previously helpers could only be
+attached over raw HTTP — there was no entry point in the running dashboard.
+
+### Fix: side-agent context selector no longer shows blank rows
+
+The side-agent conversation's "Context" stage dropdown rendered an empty row for
+any stage whose display name was blank. It now falls back to the stage id (the
+stage rail already did this; `state.Store.SetStageNames` documents that the UI
+must handle empty names).
+
 ### Fix: make helper delegation reachable and bound its rejection loop
 
 Recursive helper delegation was unreachable in production: no configured

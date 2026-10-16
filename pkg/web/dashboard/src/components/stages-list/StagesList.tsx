@@ -18,6 +18,11 @@ type StagesListProps = {
   // убран. Кебаб оставляет pre-note (pending), кастомные кнопки стадии и Pause.
   onEditPreNote?: (stageId: string) => void // «Add note (before start)» (pending-стадия)
   onPause?: (stageId: string) => void
+  // collaborationEnabled — capabilities.collaboration. Гейтит пункт кебаба «Attach helper…»: без включённой
+  // фичи прикреплять помощника некуда (сервер всё равно вернул бы 404).
+  collaborationEnabled?: boolean
+  // onAttachHelper — открыть диалог прикрепления помощника к стадии (App владеет модалкой).
+  onAttachHelper?: (stageId: string) => void
   // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём только метку, сервер сам
   // резолвит промпт и доставляет его живому агенту через Revise.
   onButton?: (stageId: string, name: string) => void
@@ -116,16 +121,27 @@ function canPause(stage: Stage): boolean {
   return PAUSABLE_STATUSES.has(stage.status) && !(stage.isScript && stage.status === 'running')
 }
 
+// Прикрепить помощника можно к любой не-скрипт стадии, которая ещё не достигла терминального статуса
+// (сервер отвергает done/failed и script — см. orchestrator.Attach). Совпадает с гейтом пункта в JSX.
+function canAttachHelper(stage: Stage, collaborationEnabled: boolean): boolean {
+  return collaborationEnabled && !stage.isScript && stage.status !== 'done' && stage.status !== 'failed'
+}
+
 // Кебаб показываем ТОЛЬКО если реально есть хоть один пункт меню — считаем из тех же предикатов, что и
 // сами пункты.
-function hasKebab(stage: Stage): boolean {
-  return (hasLiveAgent(stage) && stage.buttons.length > 0) || canPreNote(stage) || canPause(stage)
+function hasKebab(stage: Stage, collaborationEnabled: boolean): boolean {
+  return (
+    (hasLiveAgent(stage) && stage.buttons.length > 0) ||
+    canPreNote(stage) ||
+    canPause(stage) ||
+    canAttachHelper(stage, collaborationEnabled)
+  )
 }
 
 // Левая панель: список стадий с выбором активной.
 export function StagesList({
   stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting,
-  version, assistants, selectedTaskId, onSelectTask,
+  version, assistants, selectedTaskId, onSelectTask, collaborationEnabled = false, onAttachHelper,
 }: StagesListProps): ReactElement {
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -377,7 +393,7 @@ export function StagesList({
                 </button>
               </span>
             )}
-            {hasKebab(stage) && (
+            {hasKebab(stage, collaborationEnabled) && (
               <span className="stage-kebab-wrap">
                 <button
                   type="button"
@@ -455,6 +471,20 @@ export function StagesList({
                             }}
                           >
                             Pause
+                          </button>
+                        </li>
+                      )}
+                      {canAttachHelper(stage, collaborationEnabled) && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuStageId(null)
+                              setMenuPos(null)
+                              onAttachHelper?.(stage.id)
+                            }}
+                          >
+                            Attach helper…
                           </button>
                         </li>
                       )}

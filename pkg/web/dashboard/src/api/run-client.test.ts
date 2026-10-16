@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   addNote,
+  attachAssistant,
   cancelNotes,
   continueStage,
   deleteNote,
@@ -12,6 +13,48 @@ import {
   triggerStageButton,
   updateNote,
 } from './run-client'
+
+describe('run-client attachAssistant', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('POSTs to /assistants with profile/mode/trigger and returns the new task id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ task_id: 't-123' }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { taskId } = await attachAssistant('build', {
+      profileId: 'reviewer',
+      title: 'Correctness',
+      instruction: 'Please review.',
+      mode: 'required',
+      trigger: 'one_shot',
+    })
+
+    expect(taskId).toBe('t-123')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('/api/stages/build/assistants')
+    expect(init).toMatchObject({ method: 'POST' })
+    const body = JSON.parse(init.body)
+    expect(body).toMatchObject({
+      profile_id: 'reviewer',
+      title: 'Correctness',
+      instruction: 'Please review.',
+      mode: 'required',
+      trigger: 'one_shot',
+    })
+    expect(typeof body.request_id).toBe('string')
+    expect(body.request_id.length).toBeGreaterThan(0)
+  })
+
+  test('throws FlowApiError on a rejected attach', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: 'invalid_status' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      attachAssistant('done-stage', { profileId: 'reviewer', title: '', instruction: 'x', mode: 'advisory', trigger: 'one_shot' }),
+    ).rejects.toThrow()
+  })
+})
 
 describe('run-client pause/continue', () => {
   afterEach(() => {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
-import { AssistantTaskView } from '../components/assistants'
+import { AssistantTaskView, AttachHelperDialog } from '../components/assistants'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -17,7 +17,7 @@ import { SideAgentProvider } from '../components/side-agent'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
-import { useAssistantMaxDepth } from '../hooks/use-assistant-profiles'
+import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -68,6 +68,7 @@ export function App(): ReactElement {
 
   // Стадия, для которой открыта модалка pre-note; null — модалка скрыта.
   const [preNoteModalStageId, setPreNoteModalStageId] = useState<string | null>(null)
+  const [attachHelperStageId, setAttachHelperStageId] = useState<string | null>(null)
 
   async function handleSubmitPreNote(note: string): Promise<void> {
     if (preNoteModalStageId === null) return
@@ -122,7 +123,7 @@ export function App(): ReactElement {
   // sideAgentOpen — видимость «бокового» агента. Входит в anyModalOpen, чтобы attention других стадий не
   // авто-открывался за открытой беседой (только сигналил).
   const [sideAgentOpen, setSideAgentOpen] = useState(false)
-  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen
+  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null
   const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
@@ -160,6 +161,9 @@ export function App(): ReactElement {
   // assistantMaxDepth — the run's effective delegation-depth ceiling (T4a.8's breadcrumb "depth N of max_depth"),
   // independent of assistantsByStage's own per-stage poll (a run-wide, rarely-changing number).
   const assistantMaxDepth = useAssistantMaxDepth(capabilities.collaboration)
+  // assistantProfiles — configured helper roles, for the "Attach helper…" dialog. Same collaboration gate as
+  // the rest; empty list when the capability is off (no network calls).
+  const assistantProfiles = useAssistantProfiles(capabilities.collaboration)
 
   // Защита: если collaboration выключена на бэкенде, а вид застрял на 'assistant' — уводим в Feed (тот же
   // паттерн, что и у accounting/'cost' ниже).
@@ -478,6 +482,8 @@ export function App(): ReactElement {
                 assistants={assistantsByStage}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={handleSelectAssistantTask}
+                collaborationEnabled={capabilities.collaboration}
+                onAttachHelper={setAttachHelperStageId}
               />
             }
             tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}
@@ -601,6 +607,16 @@ export function App(): ReactElement {
 
       {reviewModalOpen && (
         <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} attentionShortcut={attentionShortcut} />
+      )}
+
+      {attachHelperStageId !== null && (
+        <AttachHelperDialog
+          stageId={attachHelperStageId}
+          stageTitle={stages.find((s) => s.id === attachHelperStageId)?.name || attachHelperStageId}
+          profiles={assistantProfiles}
+          onAttached={() => setAttachHelperStageId(null)}
+          onCancel={() => setAttachHelperStageId(null)}
+        />
       )}
       </FileBrowserProvider>
     </SideAgentProvider>

@@ -718,3 +718,76 @@
   border: 1px solid var(--danger);
   color: var(--text-primary);
 }
+
+/* === AttachHelperDialog — the operator-driven "attach a helper to this stage" modal === */
+.attach-helper-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 420px;
+  max-width: 560px;
+}
+
+.attach-helper-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.attach-helper-empty {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.attach-helper-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.attach-helper-field > span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.attach-helper-field select,
+.attach-helper-field input,
+.attach-helper-field textarea {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.attach-helper-field textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.attach-helper-field select:focus,
+.attach-helper-field input:focus,
+.attach-helper-field textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.attach-helper-row {
+  display: flex;
+  gap: 12px;
+}
+
+.attach-helper-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--danger);
+  color: var(--text-primary);
+}

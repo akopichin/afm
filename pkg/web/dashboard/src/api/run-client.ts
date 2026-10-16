@@ -195,9 +195,33 @@ export async function deleteNote(id: string, expectedRev: number): Promise<void>
   }
 }
 
-// --- Collaboration (helper assistants) — GET only, T3.9/T3.10's own poll. Mutations (attach/pause/
-// continue/cancel) are out of scope here (not part of T3.9/T3.10's exact acceptance criteria) — adding them
-// now would be speculative surface with no test driving it.
+// --- Collaboration (helper assistants). Reads are each hook's own poll; the mutations below (attach a
+// helper to a stage, waive/cancel/retry a task) back the dashboard's helper controls.
+
+// AttachHelperRequest mirrors the POST /api/stages/{id}/assistants body (pkg/server/assistants.go's
+// handleAttach). request_id is generated client-side for idempotency, same convention as addStageRequestId.
+export type AttachHelperRequest = {
+  profileId: string
+  title: string
+  instruction: string
+  mode: 'advisory' | 'required'
+  trigger: 'one_shot' | 'checkpoints' | 'on_completion'
+}
+
+// attachAssistant attaches a helper task to a stage — POST /api/stages/{id}/assistants, returns the new
+// task id. Errors surface as FlowApiError (e.g. 400 for a terminal/script stage or unknown profile) so the
+// dialog can show the server's reason.
+export async function attachAssistant(stageId: string, req: AttachHelperRequest): Promise<{ taskId: string }> {
+  const body = await jsonRequest<{ task_id: string }>(stageUrl(stageId, 'assistants'), 'POST', {
+    request_id: `attach-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    profile_id: req.profileId,
+    title: req.title,
+    instruction: req.instruction,
+    mode: req.mode,
+    trigger: req.trigger,
+  })
+  return { taskId: body.task_id }
+}
 
 export type AssistantTaskWire = {
   id: string
