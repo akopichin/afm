@@ -92,7 +92,6 @@ func TestNoWriteAfterStoreClose(t *testing.T) {
 	start := make(chan struct{})
 	results := make([]error, 8)
 	for i := range results {
-		i := i
 		wg.Go(func() {
 			<-start
 			_, err := o.admitChildren(ctx, fmt.Sprintf("race-child-%d", i), parentID, oneChild(), state.Actor{Kind: "user"}, "", nil)
