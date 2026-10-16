@@ -23,6 +23,10 @@ type StagesListProps = {
   collaborationEnabled?: boolean
   // onAttachHelper — открыть диалог прикрепления помощника к стадии (App владеет модалкой).
   onAttachHelper?: (stageId: string) => void
+  // canAddStage — capabilities.add_stage; показывает кнопку «+ Stage» в шапке рейла. onAddStage открывает
+  // диалог добавления динамической стадии (App владеет модалкой).
+  canAddStage?: boolean
+  onAddStage?: () => void
   // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём только метку, сервер сам
   // резолвит промпт и доставляет его живому агенту через Revise.
   onButton?: (stageId: string, name: string) => void
@@ -142,6 +146,7 @@ function hasKebab(stage: Stage, collaborationEnabled: boolean): boolean {
 export function StagesList({
   stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting,
   version, assistants, selectedTaskId, onSelectTask, collaborationEnabled = false, onAttachHelper,
+  canAddStage = false, onAddStage,
 }: StagesListProps): ReactElement {
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -256,6 +261,11 @@ export function StagesList({
     <aside id="stages-panel">
       <div className="rail-head">
         <h2>Stages</h2>
+        {canAddStage && (
+          <button type="button" className="rail-add-stage" onClick={() => onAddStage?.()} title="Add a dynamic stage">
+            + Stage
+          </button>
+        )}
         {progressTotal !== undefined && progressTotal > 0 && (
           <div className="rail-progress" title={`${progressDone ?? 0} of ${progressTotal} stages done`}>
             <span id="progress-text" className="rail-progress-text">{progressDone ?? 0} / {progressTotal}</span>

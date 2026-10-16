@@ -28,7 +28,10 @@ export type FlowStatus = {
   backoffOpenSince: string[]
   // capabilities — фичефлаги бэкенда для текущего запуска: включён ли файловый браузер проекта, подключён
   // ли «боковой» агент, и включена ли collaboration (помощники/сабагенты стадии).
-  capabilities: { fileBrowser: boolean; sideAgent: boolean; collaboration: boolean }
+  capabilities: { fileBrowser: boolean; sideAgent: boolean; collaboration: boolean; addStage: boolean }
+  // graphRevision — текущая ревизия рантайм-реестра стадий (Этап 9); add-stage диалог использует её как
+  // стартовую optimistic-concurrency метку. 0, когда add_stage выключен/не сообщён.
+  graphRevision: number
   // runId — id текущего разговора бокового агента. Используется хуком бокового агента как поколение: смена
   // run_id инвалидирует прежний разговор.
   runId: string
@@ -61,7 +64,8 @@ const EMPTY_STATUS: FlowStatus = {
   idleSince: null,
   backoffAccumulatedMs: 0,
   backoffOpenSince: [],
-  capabilities: { fileBrowser: false, sideAgent: false, collaboration: false },
+  capabilities: { fileBrowser: false, sideAgent: false, collaboration: false, addStage: false },
+  graphRevision: 0,
   runId: '',
   flowPauseState: 'none',
   flowPausedStages: [],
@@ -184,7 +188,9 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     fileBrowser: rawCapabilities.file_browser === true,
     sideAgent: rawCapabilities.side_agent === true,
     collaboration: rawCapabilities.collaboration === true,
+    addStage: rawCapabilities.add_stage === true,
   }
+  const graphRevision = typeof obj.graph_revision === 'number' ? obj.graph_revision : 0
   const runId = typeof obj.run_id === 'string' ? obj.run_id : ''
 
   const flowPauseState: FlowStatus['flowPauseState'] =
@@ -222,6 +228,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     backoffAccumulatedMs,
     backoffOpenSince,
     capabilities,
+    graphRevision,
     runId,
     flowPauseState,
     flowPausedStages,

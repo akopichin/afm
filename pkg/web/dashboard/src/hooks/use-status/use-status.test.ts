@@ -453,6 +453,18 @@ describe('useStatus', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: {} }).capabilities.sideAgent).toBe(false)
   })
 
+  test('normalizeStatus maps capabilities.add_stage and graph_revision (Этап 9)', () => {
+    const result = normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { add_stage: true }, graph_revision: 7 })
+    expect(result.capabilities.addStage).toBe(true)
+    expect(result.graphRevision).toBe(7)
+  })
+
+  test('normalizeStatus defaults capabilities.addStage to false and graphRevision to 0 when absent', () => {
+    const result = normalizeStatus({ flow_name: 'demo', stages: [] })
+    expect(result.capabilities.addStage).toBe(false)
+    expect(result.graphRevision).toBe(0)
+  })
+
   test('normalizeStatus maps capabilities.collaboration to capabilities.collaboration', () => {
     const result = normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { collaboration: true } })
     expect(result.capabilities.collaboration).toBe(true)

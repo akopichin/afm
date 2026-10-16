@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
-import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel } from '../components/assistants'
+import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, AddStageDialog } from '../components/assistants'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -59,7 +59,7 @@ export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
-    backoffOpenSince, capabilities, runId, flowPauseState, flowPausedStages, runCost,
+    backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, runCost,
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
   } = useStatus()
 
@@ -69,6 +69,7 @@ export function App(): ReactElement {
   // Стадия, для которой открыта модалка pre-note; null — модалка скрыта.
   const [preNoteModalStageId, setPreNoteModalStageId] = useState<string | null>(null)
   const [attachHelperStageId, setAttachHelperStageId] = useState<string | null>(null)
+  const [addStageOpen, setAddStageOpen] = useState(false)
 
   async function handleSubmitPreNote(note: string): Promise<void> {
     if (preNoteModalStageId === null) return
@@ -123,7 +124,7 @@ export function App(): ReactElement {
   // sideAgentOpen — видимость «бокового» агента. Входит в anyModalOpen, чтобы attention других стадий не
   // авто-открывался за открытой беседой (только сигналил).
   const [sideAgentOpen, setSideAgentOpen] = useState(false)
-  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null
+  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen
   const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
@@ -489,6 +490,8 @@ export function App(): ReactElement {
                 onSelectTask={handleSelectAssistantTask}
                 collaborationEnabled={capabilities.collaboration}
                 onAttachHelper={setAttachHelperStageId}
+                canAddStage={capabilities.addStage}
+                onAddStage={() => setAddStageOpen(true)}
               />
             }
             tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}
@@ -625,6 +628,16 @@ export function App(): ReactElement {
           profiles={assistantProfiles}
           onAttached={() => setAttachHelperStageId(null)}
           onCancel={() => setAttachHelperStageId(null)}
+        />
+      )}
+
+      {addStageOpen && (
+        <AddStageDialog
+          capabilityEnabled={capabilities.addStage}
+          graphRevision={graphRevision}
+          stages={stages.map((s) => ({ id: s.id, title: s.name || s.id }))}
+          onCommitted={() => { setAddStageOpen(false); refresh() }}
+          onCancel={() => setAddStageOpen(false)}
         />
       )}
       </FileBrowserProvider>

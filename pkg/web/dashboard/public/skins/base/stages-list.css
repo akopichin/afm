@@ -55,6 +55,22 @@
   padding-bottom: 10px;
   border-bottom: 1px solid var(--separator-subtle);
 }
+.rail-add-stage {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rail-add-stage:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
 #stages-panel h2 {
   font-size: 11px;
   font-weight: 600;

@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: add a dynamic stage from the dashboard
+
+A "+ Stage" button in the stage rail (shown when the add_stage capability is on)
+opens a dialog to insert a dynamic `agents: [auto]` stage into the running flow,
+with a live `HEAD → preview` of where it lands and what it waits for before
+committing (`/api/run/graph/{preview,commit}`). The dashboard now also reads the
+`add_stage` capability and `graph_revision` from `/api/status` (previously
+unparsed), so the committed stage appears in the rail on the next poll.
+
 ### Improvement: stage discussion tab in the dashboard
 
 A "Discussion" workspace tab (shown when collaboration is on) renders a stage's
