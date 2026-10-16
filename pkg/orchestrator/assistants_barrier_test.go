@@ -524,6 +524,63 @@ func TestPause_AllowedFromAwaitingAssistants(t *testing.T) {
 	}
 }
 
+func TestContinueDoesNotDoubleSpawnOrBypass(t *testing.T) {
+	stage := flow.Stage{ID: assistantsTestStageID, Command: "claude"}
+	o, store := newBarrierTestOrchestrator(t, stage)
+	activateStage(t, o, assistantsTestStageID)
+	release := make(chan struct{})
+	spawnCount := 0
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		spawnCount++
+		<-release
+		return passResultOutcome(), nil
+	}
+	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingAssistants {
+		t.Fatalf("status = %v, want awaiting_assistants", got)
+	}
+
+	// Pause while awaiting_assistants (T7.1), then Continue back — must NOT bypass the still-open barrier (the
+	// task is still mid-flight, blocked on release) by marking the stage done, and must NOT spawn a second main
+	// executor (there is none to resume — only the still-running required task matters).
+	if err := o.Pause(context.Background(), assistantsTestStageID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if err := o.Continue(context.Background(), assistantsTestStageID); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingAssistants {
+		t.Fatalf("status after Continue = %v, want awaiting_assistants (barrier must not be bypassed)", got)
+	}
+
+	// A second Continue (e.g. a double-click) must also be a safe no-op — not a second spawn attempt.
+	if err := o.Continue(context.Background(), assistantsTestStageID); err != nil {
+		t.Fatalf("Continue (second call): %v", err)
+	}
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingAssistants {
+		t.Fatalf("status after second Continue = %v, want awaiting_assistants", got)
+	}
+
+	close(release)
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if o.currentStatus(assistantsTestStageID) == state.StatusDone {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusDone {
+		t.Fatalf("status after task passes = %v, want done", got)
+	}
+	if spawnCount != 1 {
+		t.Fatalf("runHelperAgent invoked %d times, want exactly 1 — Continue must never re-spawn the required task's own turn", spawnCount)
+	}
+}
+
 // --- T7.4/T7.5 at the orchestrator level: who exactly is blocked ---
 
 func TestChain_ExplainedInApi(t *testing.T) {
