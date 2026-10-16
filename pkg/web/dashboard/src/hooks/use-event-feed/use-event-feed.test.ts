@@ -835,4 +835,77 @@ describe('useEventFeed', () => {
     // Второй onopen — реконнект после close — досасывает историю ещё раз.
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  // T11.2 — discussion_message/assistant_task_status events (the helper-agents feature) never carry a
+  // stable `seq` (AGENTS.md: "discussion/assistant-task bus.Events never set this field") — unlike
+  // stage-transition events, this is the ONE family of events whose reconnect-dedup falls back to
+  // feedDedupeKey's content-based key, not seq. These two tests pin that the fallback is still correct for
+  // exactly that family, not just for the seq-carrying case every other test in this file already covers.
+  test('TestHistory_WebSocketLossCompensatedByCursorReplay', async () => {
+    // The WS connection is down (closed) for a stretch during which the orchestrator durably appended a
+    // discussion message — the client never saw it live. A reconnect's /api/events replay (durable,
+    // seq-anchored on the SERVER side even though this particular event's own JSON has no `seq`) must still
+    // deliver it.
+    vi.useFakeTimers()
+    const missed = { type: 'discussion_message', stage_id: 'impl', data: { author: 'reviewer', text: 'please add a timeout' }, timestamp: '2026-10-16T10:00:00.000Z' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) }) // initial mount: nothing yet
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve([missed]) }) // reconnect: the missed message is now durable
+
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) }) // flush the initial-mount fetch
+
+    act(() => {
+      FakeWebSocket.last().emitOpen() // first connect — not a reconnect, no extra fetch
+    })
+    expect(result.current.events.filter((e) => e.type === 'discussion_message')).toHaveLength(0)
+
+    // WS loss, never delivered live.
+    act(() => {
+      FakeWebSocket.last().emitClose()
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) }) // reconnect timer fires
+    act(() => {
+      FakeWebSocket.last().emitOpen() // reconnect → syncHistory() re-fetches /api/events
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) }) // flush the reconnect fetch
+
+    expect(result.current.events.filter((e) => e.type === 'discussion_message')).toHaveLength(1)
+    expect(result.current.events.find((e) => e.type === 'discussion_message')?.payload).toEqual(missed.data)
+  })
+
+  test('TestHistory_NoDuplicatesAfterReconnect', async () => {
+    // The SAME discussion message was already delivered live over the WS BEFORE the drop. A reconnect's full
+    // /api/events replay re-sends it (it is still durably in the log) — the no-seq content-based dedupe must
+    // collapse it back to one row, not double it.
+    vi.useFakeTimers()
+    const msg = { type: 'discussion_message', stage_id: 'impl', data: { author: 'reviewer', text: 'please add a timeout' } }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) }) // initial mount: not durable yet
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve([{ ...msg, timestamp: '2026-10-16T10:00:00.000Z' }]) }) // reconnect: now durable
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage(msg) // delivered live first
+    })
+    expect(result.current.events.filter((e) => e.type === 'discussion_message')).toHaveLength(1)
+
+    act(() => {
+      FakeWebSocket.last().emitClose()
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    act(() => {
+      FakeWebSocket.last().emitOpen() // reconnect re-fetches the SAME message from history
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result.current.events.filter((e) => e.type === 'discussion_message')).toHaveLength(1)
+  })
 })

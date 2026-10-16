@@ -452,7 +452,7 @@
 .proposal-card-accept,
 .proposal-card-refresh {
   background: var(--accent-primary);
-  color: var(--surface-base, #fff);
+  color: var(--surface-canvas);
   border: 0;
   border-radius: var(--radius-sm);
   padding: 6px 14px;
@@ -530,7 +530,7 @@
 .add-stage-dialog-field textarea {
   font: inherit;
   color: var(--text-primary);
-  background: var(--surface-base);
+  background: var(--surface-canvas);
   border: 1px solid var(--separator-subtle);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
@@ -626,4 +626,95 @@
 .graph-preview-warning {
   font-size: 11px;
   color: var(--attention);
+}
+
+/* === `@`-mention menu (T4.2) — side-agent composer's profile suggestion popup === */
+.assistant-mention-menu {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface-overlay);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+}
+.assistant-mention-item.active .assistant-mention-option,
+.assistant-mention-option:hover {
+  background: var(--surface-hover);
+}
+.assistant-mention-option {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.assistant-mention-option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.assistant-mention-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+.assistant-mention-title {
+  color: var(--text-secondary);
+  flex: 1;
+}
+.assistant-mention-unavailable {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* === Action card (T4.6) — read-only confirmation summary before a helper task is actually created === */
+.action-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.action-card-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+.action-card-fields dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.action-card-fields dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+.action-card-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.action-card-note-warning {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* === AttachAssistantDialog's own error line (mirrors .assistant-task-view-error's shape) === */
+.attach-assistant-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--danger);
+  color: var(--text-primary);
 }

@@ -24,6 +24,11 @@ const (
 	StageDone              StageStatus = "done"
 	StageFailed            StageStatus = "failed"
 	StageHookFailed        StageStatus = "hook_failed"
+	// StageAwaitingAssistants (afm's helper-agents feature, dev-plan.md Stage 7/T7.1): a stage whose main
+	// work is done but whose completion barrier is still waiting on a required helper task. Neither Done nor
+	// Failed — an SDK consumer polling Status in a loop must be able to tell this apart from "still running"
+	// or "actually stuck", rather than seeing an unrecognized raw string.
+	StageAwaitingAssistants StageStatus = "awaiting_assistants"
 )
 
 // RunStatus is a snapshot of a run's flow name and per-stage statuses.

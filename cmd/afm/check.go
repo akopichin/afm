@@ -113,6 +113,11 @@ func newCheckCmd() *cobra.Command {
 			var rows []row
 			for id, s := range rs.Stages {
 				action := lastLogAction(filepath.Join(latest, id))
+				if s.Status == state.StatusAwaitingAssistants {
+					if blocked := blockingTaskNote(rs, id); blocked != "" {
+						action = blocked
+					}
+				}
 				r := row{
 					id:         id,
 					status:     string(s.Status),
@@ -224,6 +229,23 @@ func coverageNote(led *accounting.Ledger) string {
 		parts = append(parts, fmt.Sprintf("%d unpriced", unpriced))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// blockingTaskNote reports which required helper task is currently blocking stageID's completion barrier
+// (state.AssistantsState.RequiredBlocker), formatted for the LAST ACTION column — so `afm check` names the
+// actual blocker instead of just the bare `awaiting_assistants` status word. Empty if the barrier is
+// satisfied or stageID has no required branch (should not happen for a stage genuinely in this status, but
+// RequiredBlocker's own ok=false is a legitimate "race between status and this read" per its doc comment).
+func blockingTaskNote(rs state.RunState, stageID string) string {
+	blocker, ok := rs.Assistants.RequiredBlocker(stageID)
+	if !ok {
+		return ""
+	}
+	title := blocker.Title
+	if title == "" {
+		title = string(blocker.ID)
+	}
+	return fmt.Sprintf("blocked by required task %s (%s, profile %s): %s", blocker.ID, blocker.Status, blocker.ProfileID, title)
 }
 
 func lastLogAction(stageDir string) string {

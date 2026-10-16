@@ -71,3 +71,43 @@ describe("assistants.css does not redefine any --c-* token (T3.10's own version 
     expect(assistantsCss).not.toMatch(/--c-[a-z-]+\s*:/)
   })
 })
+
+// decl-in-rule reads the value of prop from the FIRST matching selector block in css — unlike decl() above
+// (which reads a top-level custom-property declaration by name), this reads an ordinary property (e.g.
+// `background`) inside a specific selector's rule body.
+function declInRule(css: string, selector: string, prop: string): string | undefined {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const block = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))?.[1] ?? ''
+  return block.match(new RegExp(`${prop}\\s*:\\s*([^;]+);`))?.[1]?.trim()
+}
+
+// T11.1 (§15.4): the helper-task rail dot's active/paused/completed/failed states must each resolve to a
+// DIFFERENT semantic family (never the same token reused for two different states, which would make them
+// visually indistinguishable), and none of them may be --c-* (locked above) or a raw palette name
+// (--amber/--mint/--coral/…) — only the semantic accent/attention/success/danger layer every skin provides.
+describe('assistants.css task-status dot uses distinct semantic tokens per state (T11.1)', () => {
+  it('active states (running/queued/waiting/watching) use --accent-primary', () => {
+    expect(declInRule(assistantsCss, '.assistant-task-status-dot[data-status="running"],\n.assistant-task-status-dot[data-status="queued"],\n.assistant-task-status-dot[data-status="waiting_parent"],\n.assistant-task-status-dot[data-status="waiting_children"],\n.assistant-task-status-dot[data-status="watching"]', 'background'))
+      .toBe('var(--accent-primary)')
+  })
+  it('paused uses --attention', () => {
+    expect(declInRule(assistantsCss, '.assistant-task-status-dot[data-status="paused"]', 'background')).toBe('var(--attention)')
+  })
+  it('completed uses --success', () => {
+    expect(declInRule(assistantsCss, '.assistant-task-status-dot[data-status="completed"]', 'background')).toBe('var(--success)')
+  })
+  it('failed/cancelled uses --danger', () => {
+    expect(declInRule(assistantsCss, '.assistant-task-status-dot[data-status="failed"],\n.assistant-task-status-dot[data-status="cancelled"]', 'background')).toBe('var(--danger)')
+  })
+  it('the four state families are all pairwise distinct tokens', () => {
+    const values = new Set([
+      declInRule(assistantsCss, '.assistant-task-status-dot[data-status="paused"]', 'background'),
+      declInRule(assistantsCss, '.assistant-task-status-dot[data-status="completed"]', 'background'),
+      declInRule(assistantsCss, '.assistant-task-status-dot[data-status="failed"],\n.assistant-task-status-dot[data-status="cancelled"]', 'background'),
+    ])
+    expect(values.size).toBe(3) // paused/completed/failed must each be visually distinct from one another
+  })
+  it("required mode's pill border uses --accent-primary, not a bespoke color", () => {
+    expect(declInRule(assistantsCss, '.assistant-task-mode[data-mode="required"]', 'border-color')).toBe('var(--accent-primary)')
+  })
+})

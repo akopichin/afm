@@ -230,6 +230,74 @@ func TestAdmission_AncestorHoldBlocksChild(t *testing.T) {
 	}
 }
 
+// TestAdmission_AncestorHoldBlocksGrandchild — T11.3 (§19.3 scenario 17): the SAME ancestor-walk as
+// TestAdmission_AncestorHoldBlocksChild, but one level deeper — Pause lands on the ROOT task while a
+// GRANDCHILD (not a direct child) is queued behind the single command slot, racing its own admission. The
+// hold must still propagate the full two hops (root -> child -> grandchild), not just to an immediate child —
+// EffectivelyHeld's ancestor-walk is only genuinely exercised past depth 1 by a test like this one.
+func TestAdmission_AncestorHoldBlocksGrandchild(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	// Single-slot semaphore: the ROOT's own in-flight turn occupies the only slot, so BOTH the child's and
+	// the grandchild's spawnTask goroutines queue behind it — giving PauseTask (on the ROOT, two hops above
+	// the grandchild) a window to land before either descendant's subprocess ever gets a chance to start.
+	sem := concurrency.ChannelSemaphore(make(chan struct{}, 1))
+	o.concurrency = concurrency.NewWithSemaphores(o.critical, map[string]concurrency.Semaphore{"helper-cmd": sem}, "claude")
+
+	var calls atomic.Int32
+	var childRan, grandchildRan atomic.Bool
+	rootRelease := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		switch calls.Add(1) {
+		case 1: // deterministically the root's turn — attached and spawned before anything else exists
+			<-rootRelease
+			return passResultOutcome(), nil
+		case 2:
+			childRan.Store(true)
+		default:
+			grandchildRan.Store(true)
+		}
+		return passResultOutcome(), nil
+	}
+
+	rootID := attachTestTask(context.Background(), t, o, "op-root")
+	waitForTaskStatus(t, store, rootID, assistants.StatusRunning, 2*time.Second)
+
+	childIDs, err := o.admitChildren(context.Background(), "op-child", rootID, oneChild(), state.Actor{Kind: "assistant", ID: string(rootID)}, "", nil)
+	if err != nil {
+		t.Fatalf("admitChildren (child under root): %v", err)
+	}
+	childID := childIDs[0]
+
+	// Admit the grandchild right behind the child — admitChildren's own precondition is a CAS on the parent's
+	// CURRENT status at snapshot time (whatever it happens to be: queued, or already optimistically bumped to
+	// running by maybeScheduleTask while still blocked on the semaphore), not "must be running" — this is
+	// legal exactly as a real delegate-while-queued race would produce, and is deliberately NOT gated on
+	// observing any particular transient status here (that would itself be a race).
+	grandchildIDs, err := o.admitChildren(context.Background(), "op-grandchild", childID, oneChild(), state.Actor{Kind: "assistant", ID: string(childID)}, "", nil)
+	if err != nil {
+		t.Fatalf("admitChildren (grandchild under child): %v", err)
+	}
+	grandchildID := grandchildIDs[0]
+
+	// Pause the ROOT — two hops above the grandchild — THEN free the slot both descendants are waiting on.
+	if err := o.PauseTask(context.Background(), rootID); err != nil {
+		t.Fatalf("PauseTask on the root: %v", err)
+	}
+	close(rootRelease)
+
+	waitForTaskStatus(t, store, rootID, assistants.StatusCompleted, 2*time.Second)
+	waitForTaskStatus(t, store, childID, assistants.StatusQueued, 2*time.Second)
+	waitForTaskStatus(t, store, grandchildID, assistants.StatusQueued, 2*time.Second)
+	if childRan.Load() {
+		t.Fatal("the child must not have run — its ancestor (root) is held")
+	}
+	if grandchildRan.Load() {
+		t.Fatal("the grandchild must not have run — its ancestor TWO HOPS up (root) is held, not just its immediate parent")
+	}
+}
+
 // TestAdmission_ConcurrentParentsRespectSharedQuota races two independently-running parent tasks, each
 // admitting its own child group, against ONE shared whole-run quota — the total number of ADMITTED children
 // must never exceed the configured ceiling, regardless of interleaving (-race).

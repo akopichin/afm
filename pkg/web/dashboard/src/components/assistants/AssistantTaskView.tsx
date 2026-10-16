@@ -14,6 +14,10 @@ import { AssistantBreadcrumb } from './AssistantBreadcrumb'
 import { MarkdownRenderer } from '../plan-panel'
 
 const POLL_INTERVAL_MS = 3000
+// MAX_ACCUMULATED_EVENTS bounds useTaskResult's in-memory accumulated event history (T11.2, "bounded
+// memory") — a long-lived watcher task (checkpoints/on_completion, Этап 5) can accumulate many pages over a
+// long run; only the most recent events are kept, which is all latestResult ever needs.
+const MAX_ACCUMULATED_EVENTS = 2000
 
 // latestResult scans a task's event page, newest first, for the latest entry whose payload already matches
 // assistants.Result's shape (verdict + summary, see pkg/assistants/types.go). Since commit 419753b the
@@ -42,18 +46,32 @@ export function useTaskResult(taskId: string | null): AssistantResult | null {
 
     const mySeq = ++seq.current
     let cancelled = false
+    // cursor/accumulated (T11.2, TestHistory_LargeHistoryNotFullyLoadedOnEveryPoll) — each poll tick fetches
+    // only what's NEW since the last page it already consumed, instead of re-reading the whole history from
+    // cursor 0 every 3s. A long-lived watcher task (checkpoints/on_completion) can accumulate a large event
+    // history over a long run; re-reading all of it on every tick would make the poll cost grow with the
+    // task's age, not stay flat.
+    let cursor = 0
+    let accumulated: AssistantEventWire[] = []
+
+    const drainOnce = async (): Promise<void> => {
+      for (;;) {
+        const page = await getAssistantTaskEvents(taskId, cursor)
+        if (cancelled || seq.current !== mySeq) return
+        if (page.events.length > 0) {
+          accumulated = accumulated.concat(page.events).slice(-MAX_ACCUMULATED_EVENTS)
+          setResult(latestResult(accumulated))
+        }
+        cursor = page.nextCursor
+        if (!page.hasMore) return
+      }
+    }
+
     const load = (): void => {
-      // Этап 3 scope: a task's whole event history (creation + a handful of status changes) comfortably
-      // fits the server's default page size — always re-reading from cursor 0 is simpler than threading
-      // pagination state through a 3s poll for a page that never realistically grows past it.
-      getAssistantTaskEvents(taskId, 0)
-        .then(({ events }) => {
-          if (cancelled || seq.current !== mySeq) return
-          setResult(latestResult(events))
-        })
-        .catch(() => {
-          /* transient network error — keep whatever result we already had, next tick retries */
-        })
+      drainOnce().catch(() => {
+        /* transient network error — keep whatever result we already had; next tick retries from the SAME
+           cursor, since cursor/accumulated are only advanced after a successful page. */
+      })
     }
 
     load()

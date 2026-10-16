@@ -121,7 +121,15 @@ export function useStageAssistants(stageIds: string[], enabled: boolean): Record
     }
 
     let cancelled = false
+    // generation (T11.2, TestHistory_StaleResponsesInvalidatedOnStageTaskRunSwitch) — the same
+    // useFilePreview-style monotonic-ref guard, but per POLL TICK rather than per effect run: `cancelled`
+    // alone only protects against unmount/stageIds-set changes, not a slower EARLIER tick's response arriving
+    // AFTER a faster LATER tick's response already landed (a real race under network jitter, since
+    // setInterval fires load() again without waiting for the previous call's Promise.all to settle). Without
+    // this, the stale earlier tick would silently overwrite the fresher one.
+    const generation = { current: 0 }
     const load = (): void => {
+      const gen = ++generation.current
       Promise.all(
         ids.map((id) =>
           listStageAssistants(id)
@@ -129,7 +137,7 @@ export function useStageAssistants(stageIds: string[], enabled: boolean): Record
             .catch((): [string, AssistantTask[] | null] => [id, null]),
         ),
       ).then((results) => {
-        if (cancelled) return
+        if (cancelled || gen !== generation.current) return
         setData((prev) => {
           let changedAny = false
           const next = { ...prev }

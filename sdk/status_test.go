@@ -110,6 +110,36 @@ func TestStatus_IgnoresUnknownVerifyRelatedFields(t *testing.T) {
 	}
 }
 
+// TestSdk_StatusContractIncludesNewFields — T11.5: afm's helper-agents feature (dev-plan.md stages 0-10)
+// added a real stage status, awaiting_assistants, that did not exist when this SDK module was first written.
+// Before this test/fix, sdk/status.go had no StageAwaitingAssistants constant at all — an SDK consumer would
+// see a stage's Status as the raw unrecognized string "awaiting_assistants" with no named value to compare
+// against, and worse, that stage would silently count as neither Done nor Failed forever with no way for a
+// caller to name what it actually was. This locks the contract: the wire status string round-trips to the
+// typed constant, and it participates correctly (neither Done nor Failed) in the aggregate flags.
+func TestSdk_StatusContractIncludesNewFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"flow_name":"demo","stages":[{"id":"a","status":"done"},{"id":"impl","status":"awaiting_assistants"}]}`)
+	}))
+	defer srv.Close()
+
+	run := &Run{baseURL: srv.URL, httpClient: srv.Client()}
+	status, err := run.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Stages["impl"] != StageAwaitingAssistants {
+		t.Fatalf("stage impl: got %q, want the named constant %q", status.Stages["impl"], StageAwaitingAssistants)
+	}
+	if status.Done {
+		t.Error("Done: got true, want false — a stage still awaiting_assistants is not done")
+	}
+	if status.Failed {
+		t.Error("Failed: got true, want false — awaiting_assistants is not a failure, it needs a human decision")
+	}
+}
+
 func TestStatus_NonOKResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)

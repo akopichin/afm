@@ -137,4 +137,44 @@ describe('useStageAssistants', () => {
     expect(result.current.s1).not.toBe(first)
     expect(result.current.s1?.tasks[0]?.status).toBe('completed')
   })
+
+  // TestHistory_StaleResponsesInvalidatedOnStageTaskRunSwitch (T11.2) — the same useFilePreview-style
+  // monotonic-generation guard, here protecting against an EARLIER poll tick's response landing AFTER a
+  // LATER tick's response already updated state. setInterval fires load() again without waiting for the
+  // previous call's Promise.all to settle, so under real network jitter a slow first response can arrive
+  // after a fast second one — before this fix, nothing stopped the stale first response from silently
+  // overwriting the fresher data.
+  it('TestHistory_StaleResponsesInvalidatedOnStageTaskRunSwitch', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let resolveFirst: (v: Response) => void = () => {}
+    let callCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        // The FIRST poll's fetch never resolves until the test explicitly does so, below.
+        return new Promise<Response>((resolve) => { resolveFirst = resolve })
+      }
+      return jsonResponse({ tasks: [wire({ id: 't1', status: 'completed' })] })
+    })
+
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0) // first poll fires; its fetch is still pending
+    })
+    expect(result.current.s1).toBeUndefined()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000) // second poll fires AND resolves immediately — fresher data lands first
+    })
+    expect(result.current.s1?.tasks[0]?.status).toBe('completed')
+
+    // The stale FIRST poll's response finally arrives, carrying OLDER data.
+    await act(async () => {
+      resolveFirst(jsonResponse({ tasks: [wire({ id: 't1', status: 'running' })] }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(result.current.s1?.tasks[0]?.status).toBe('completed') // must NOT be clobbered back to the stale value
+  })
 })

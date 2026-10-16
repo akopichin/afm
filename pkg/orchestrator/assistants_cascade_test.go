@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -254,6 +255,51 @@ func TestReviseRoot_InvalidatesRootGenerationAcrossTree(t *testing.T) {
 
 	close(release)
 	o.concurrency.WaitAgents()
+}
+
+// TestLateResult_AfterGenerationBump_DoesNotResurrectCancelledTask — T11.3 (§19.3 scenario 5): the SAME setup
+// as TestReviseRoot_InvalidatesRootGenerationAcrossTree, but actually observing what happens once the child's
+// stale, already-in-flight runHelperAgent call finally returns a SUCCESSFUL result AFTER BumpRootGeneration
+// already cancelled it. A late pass/fail/anything result for a task whose generation has already moved on
+// must never resurrect it from "cancelled" back to "completed", and must never write a result file or emit a
+// task_result event for the superseded attempt.
+func TestLateResult_AfterGenerationBump_DoesNotResurrectCancelledTask(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	var calls atomic.Int32
+	release := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if calls.Add(1) == 1 {
+			return delegateOutcome(childJSON(assistants.ModeRequired)), nil
+		}
+		<-release
+		// The stale subprocess "wins the race" and reports a clean PASS — exactly as if it had been about to
+		// succeed right as the generation bump cancelled it.
+		return passResultOutcome(), nil
+	}
+
+	parentID := attachTestTask(context.Background(), t, o, "op-parent")
+	waitForTaskStatus(t, store, parentID, assistants.StatusWaitingChildren, 2*time.Second)
+	childID := store.Snapshot().Assistants.ByParent[parentID][0]
+	waitForTaskStatus(t, store, childID, assistants.StatusRunning, 2*time.Second)
+
+	if err := o.BumpRootGeneration(assistantsTestStageID); err != nil {
+		t.Fatalf("BumpRootGeneration: %v", err)
+	}
+	waitForTaskStatus(t, store, childID, assistants.StatusCancelled, 2*time.Second)
+
+	// NOW let the stale subprocess call return its late, successful result.
+	close(release)
+	o.concurrency.WaitAgents()
+
+	rs := store.Snapshot()
+	if got := rs.Assistants.Tasks[childID].Status; got != assistants.StatusCancelled {
+		t.Fatalf("child status = %s, want still cancelled — a late PASS result must never resurrect a superseded-generation task", got)
+	}
+	if path := filepath.Join(o.taskDir(childID), "result.json"); fileExists(path) {
+		t.Fatalf("result.json must never be written for a task whose generation was already superseded: %s", path)
+	}
 }
 
 // TestRetryTask_InvalidatesOwnSubtreeNotSiblings: retrying a failed task bumps ITS OWN TaskGeneration and

@@ -1,7 +1,14 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { AssistantTaskView } from './AssistantTaskView'
+import { AssistantTaskView, useTaskResult } from './AssistantTaskView'
 import type { AssistantTask } from '../../types/assistant-task'
+import { getAssistantTaskEvents } from '../../api/run-client'
+
+vi.mock('../../api/run-client', async () => {
+  const actual = await vi.importActual<typeof import('../../api/run-client')>('../../api/run-client')
+  return { ...actual, getAssistantTaskEvents: vi.fn(actual.getAssistantTaskEvents) }
+})
+const mockGetEvents = getAssistantTaskEvents as unknown as ReturnType<typeof vi.fn>
 
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
@@ -114,5 +121,36 @@ describe('AssistantTaskView', () => {
   test('a plain one_shot task shows no watcher status line', () => {
     render(<AssistantTaskView task={makeTask({ trigger: 'one_shot' })} />)
     expect(screen.queryByText(/^Watches:/)).not.toBeInTheDocument()
+  })
+
+  // TestHistory_LargeHistoryNotFullyLoadedOnEveryPoll (T11.2, §19.4): a long-lived watcher task accumulates a
+  // large event history over a run. Before this fix, useTaskResult always re-read from cursor=0 on every 3s
+  // poll tick ("Этап 3 scope" comment, now removed) — cost grew with the task's full history size on EVERY
+  // tick, not just once. This pins that a later poll continues from the cursor it already consumed, never
+  // re-requesting the already-seen page.
+  test('TestHistory_LargeHistoryNotFullyLoadedOnEveryPoll', async () => {
+    vi.useFakeTimers()
+    mockGetEvents.mockClear()
+    const largePage = Array.from({ length: 150 }, (_, i) => ({ seq: i + 1, type: 'agent_action', data: null }))
+    mockGetEvents.mockImplementation((_taskId: string, cursor: number) => {
+      if (cursor === 0) {
+        return Promise.resolve({ events: largePage, nextCursor: largePage.length, hasMore: false })
+      }
+      // Any later poll must be asking for what's NEW since its own last cursor, never cursor 0 again.
+      return Promise.resolve({ events: [], nextCursor: cursor, hasMore: false })
+    })
+
+    renderHook(() => useTaskResult('t-watcher'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) }) // first load()
+
+    expect(mockGetEvents).toHaveBeenCalledTimes(1)
+    expect(mockGetEvents).toHaveBeenNthCalledWith(1, 't-watcher', 0)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) }) // next poll tick
+
+    expect(mockGetEvents).toHaveBeenCalledTimes(2)
+    // The large 150-event page must never be re-requested from scratch — the second call continues from the
+    // cursor the first call already advanced past.
+    expect(mockGetEvents).toHaveBeenNthCalledWith(2, 't-watcher', largePage.length)
   })
 })

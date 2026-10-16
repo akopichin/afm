@@ -31,6 +31,9 @@ func newRetryCmd() *cobra.Command {
 
 			current := store.Get(stageID)
 			if current != state.StatusFailed {
+				if msg := explainAwaitingAssistants(store, stageID); msg != "" {
+					return errors.New(msg)
+				}
 				return fmt.Errorf("stage %q is %v, not failed", stageID, current)
 			}
 			if err := store.Apply(&state.Transition{
