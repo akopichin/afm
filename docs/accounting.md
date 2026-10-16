@@ -19,6 +19,11 @@ file is the single source of truth: `afm check`, `afm report`, and the
 dashboard's `/api/status` all read (or are fed from) it, so they can never
 disagree.
 
+Helper invocations also write usage records. Each carries its task, profile,
+and root stage IDs; its estimated cost contributes to that stage's total.
+Task accounting can show a helper's own cost and the cost of its descendants
+without counting child usage twice. See [Helpers and collaboration](collaboration.md).
+
 ## Token schema semantics
 
 Different providers report usage differently; afm normalizes all of them

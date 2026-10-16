@@ -98,12 +98,18 @@ stages:
 `root_dir` (project root and, unless worktrees are enabled, agents' working
 directory; see below),
 `memory` ([agent-memory config](agent-memory.md)), `hooks`
-([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `worktrees`, `stages`.
+([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `collaboration`,
+`worktrees`, `stages`.
 
 `side_agent: true|false` overrides the dashboard
 [side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) toggle for
 this flow, taking precedence over `AFM_SIDEAGENT` and `config.yaml`. Omit it to defer
 to those (default ON).
+
+`collaboration: { max_depth: N }` overrides the helper delegation depth for this
+flow. It has no `enabled` field; use `collaboration.enabled` in `config.yaml` or
+`AFM_COLLABORATION` to switch helpers on or off. See
+[Helpers and collaboration](collaboration.md).
 
 ### `root_dir` — the project root for agents
 

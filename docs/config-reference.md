@@ -38,6 +38,14 @@ server:
 #   enabled: false          # dashboard side agent; ON by default. env AFM_SIDEAGENT overrides,
 #                           # and flow.yaml side_agent overrides both. See dashboard.md
 
+# collaboration:
+#   enabled: true           # stage helpers; ON by default. env AFM_COLLABORATION overrides
+#   max_depth: 3            # helper delegation depth; flow.yaml may override it
+#   limits: { max_tasks: 20 } # optional whole-run task limit
+#   profiles:               # locally configured roles; see collaboration.md
+#     reviewer: { title: Code reviewer, command: codex-as-claude,
+#                 instructions: Review the stage, delegate: false }
+
 # worktrees:
 #   enabled: true           # per-flow git worktrees; OFF by default. env AFM_WORKTREES
 #                           # overrides, and flow.yaml worktrees overrides both

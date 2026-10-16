@@ -1,10 +1,8 @@
 # Collaboration journal compatibility policy
 
-Collaboration (helper/side assistants working on a stage) will add its own records
-to a run's durable journal — the same `events.jsonl` append-only log that already
-carries the stage FSM. This document fixes the compatibility policy for those
-records **before** any of them exist, so the format isn't designed around whatever a
-single early version happened to write.
+Collaboration (helpers working on a stage) writes control records to a run's
+durable `events.jsonl` journal, alongside stage transitions. This document
+describes the compatibility policy for those records.
 
 ## What's promised
 
@@ -15,9 +13,8 @@ single early version happened to write.
   afm commits to reading every `schema_version`/`kind` combination it has ever
   shipped. Dropping support for an old record shape is a breaking change, not a
   routine release.
-- **Minimum version for reading a collaboration journal: this version (Stage 0) and
-  later.** No afm release before collaboration existed can read a journal that
-  contains collaboration records — there is no retrofit.
+- **Older binaries cannot read collaboration journals.** A release from before
+  collaboration existed has no reader for these control records.
 
 ## What's NOT promised
 

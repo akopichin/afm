@@ -133,6 +133,7 @@ Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github
 | Carrying lessons across runs | [Agent memory](https://akopichin.github.io/afm/agent-memory/) |
 | Token/cost tracking, `pricing:` overrides | [Cost accounting](https://akopichin.github.io/afm/accounting/) |
 | The web dashboard | [Dashboard](https://akopichin.github.io/afm/dashboard/) |
+| Helper roles and stage collaboration | [Helpers and collaboration](https://akopichin.github.io/afm/collaboration/) |
 | Running in Docker, non-Claude agents | [Docker mode](https://akopichin.github.io/afm/docker/) |
 | Event log, directory layout, prompts | [Internals](https://akopichin.github.io/afm/internals/directory-layout/) |
 

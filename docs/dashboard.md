@@ -8,7 +8,9 @@ right (there is no three-column layout or bottom progress bar).
 
 - **Stage rail** — a vertical timeline of the run: numbered status nodes, each
   stage's `name` (or `id`), a human-readable status line, and, in the rail head, the
-  run progress (`done / total`). A stage using [AI-verify](verify.md) shows a small
+  run progress (`done / total`). Attached helper tasks appear beneath their stage;
+  **+ Stage** is available when a live stage can be added. A stage using
+  [AI-verify](verify.md) shows a small
   verify-status badge next to its status line; it's a durable field computed
   server-side from the stage's own notices, so — unlike the feed it used to be
   derived from — a completed verify outcome stays visible for as long as the stage
@@ -21,7 +23,8 @@ right (there is no three-column layout or bottom progress bar).
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
   *selected stage's own* event history, capped at its last 200 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
-  plan or Q&A history to reopen — plus a permanent
+  plan or Q&A history to reopen — and, when collaboration is enabled, a
+  **Discussion** tab. The workspace also has a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
   flow's last 1000 events across every stage. Feed always reflects whichever
   stage is selected — including an old, already-completed one, which used to
@@ -53,6 +56,10 @@ right (there is no three-column layout or bottom progress bar).
   cost and opens a **Cost** tab with a per-stage/overhead/total breakdown; the stage
   rail shows a quiet per-stage cost. All of it can be switched off — see
   [Cost tracking](#cost-tracking) below.
+- **Helpers and Discussion** — attached helper tasks appear beneath their stage.
+  Select one to see its result and controls. The **Discussion** tab shows stage
+  messages and pending agent proposals; **+ Stage** can add a stage to a live run.
+  See [Helpers and collaboration](collaboration.md).
 
 ## Side agent — a free-form chat alongside the run
 
@@ -87,6 +94,10 @@ project, or run a quick command-style exchange *without* touching the run.
   **Without pause** while commenting on a file, then **Send to side agent** to open
   this chat with the comments attached. Write a message and send it to deliver both
   the comments and your request. See [File comments without pausing](#file-comments-without-pausing-docker-mode).
+- **Mention a helper role.** When collaboration is available, type `@` in the
+  message field to choose a configured role. A mention is recorded with the
+  message; it does not attach a helper by itself. See
+  [Helpers and collaboration](collaboration.md).
 
 The side agent is on by default whenever the dashboard is up. Disable it with a
 toggle resolved **flow `side_agent` > env `AFM_SIDEAGENT` > config

@@ -5,12 +5,24 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: configured helpers can observe and gate stage completion
+
+Helpers can run once or watch stage output. A watcher configured for stage
+completion may run on sufficient output before the stage result is ready; if
+still active then, it receives a final turn. Attach helpers after their stage
+starts: tasks attached to a `pending` stage remain in `waiting_parent`. Required
+helpers hold stage completion until they pass or a human waives them with a
+reason. Configured roles can delegate to child helpers when `delegate: true`
+and the run's depth and task limits allow it. The Side agent now suggests
+configured roles after `@` in the message composer; a mention alone does not
+create a task.
+
 ### Improvement: review agent proposals in the dashboard
 
 The Discussion tab now shows a stage's pending proposals as proposal cards
 (clearly badged "not a user command") above the discussion thread, each with
-Accept / Dismiss — the single explicit human confirmation step before a proposal
-reaches the main agent (`/api/stages/{id}/proposals`,
+Accept / Dismiss — the explicit human confirmation step before a supported
+proposal applies its change (`/api/stages/{id}/proposals`,
 `/api/proposals/{id}/{accept,dismiss}`). The delegation breadcrumb was already
 mounted in the helper-task view.
 
@@ -102,13 +114,11 @@ a reproducible server-built context (`ContextVersion`, redacted, byte-capped)
 and its own file namespace under `.afm/runs/<run_id>/assistants/<task_id>/`, a
 narrow HTTP API (`/api/stages/{id}/assistants`, `/api/assistants/{id}/...`), and
 cost attribution (`task_id`/`profile_id`/`root_stage_id` on usage records, with
-own/subtree cost computed without double-counting). A helper task never affects
-its root stage's status — advisory only. Now wired into `afm run` itself: with
+own/subtree cost computed without double-counting). An advisory helper does not
+affect its root stage's status. Now wired into `afm run` itself: with
 `collaboration.enabled` and at least one usable profile, `POST /api/stages/{id}/assistants`
 attaches a real task and `GET /api/stages/{id}/assistants` / `GET /api/assistants/{id}/events`
-read its status and durable history back — still no dashboard UI (the read-side
-only reports status/reason, not the decoded verdict/summary) — that lands with
-the frontend follow-up.
+read its status and durable history back.
 
 ### Improvement: collaboration feature switch and assistant profile registry (backend only)
 
@@ -120,8 +130,7 @@ profile). A profile's command is only considered usable without an unrestricted
 agent risk when it has a verifiable read-only guarantee (the codex adapter on the
 host, or any command inside a container, which is treated as container-trust
 instead). `GET /api/assistant-profiles` and `/api/status`'s
-`capabilities.collaboration` expose this for the dashboard; no UI and no model
-calls are wired up yet — this is groundwork for the upcoming helper-agent feature.
+`capabilities.collaboration` expose this for the dashboard.
 
 ## 2026-10-14
 

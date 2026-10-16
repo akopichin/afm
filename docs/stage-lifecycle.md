@@ -2,6 +2,8 @@
 
 ```
 pending → planning → awaiting_approval → ready → running → done
+                                                  ↓
+                                          awaiting_assistants → done
                 ↓                                     ↓        ↘ failed
                 └────→ awaiting_user_input ←──────────┘
          ↑                                         ↓
@@ -17,6 +19,9 @@ pending → running(autonomous_execution) → done
 - `awaiting_approval` — the plan is ready, awaiting approval (web or CLI)
 - `ready` — the plan is approved, waiting its turn
 - `running` — the AI implements the plan (or runs the [autonomous track](autonomous-track.md))
+- `awaiting_assistants` — the stage's own work is finished, but a
+  [required helper](collaboration.md) has not passed or been waived; the stage
+  completes when the required helper gate closes
 - `awaiting_user_input` — an [interactive stage](interactive-stages.md) is waiting for
   a user answer; once answered, it returns to the phase where the question was asked
 - `revising` — feedback was sent and the AI is reworking: either the plan (from
@@ -37,6 +42,8 @@ On a repeated `afm run`, the tool automatically:
 
 - Skips completed stages (`done`)
 - Preserves stages awaiting approval (`awaiting_approval`)
+- Rechecks the required-helper gate for stages in `awaiting_assistants`, without
+  rerunning their completed main agent
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
 - Preserves stages in `awaiting_user_input`: question/answer files survive the
