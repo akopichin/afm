@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
-import { AssistantTaskView, AttachHelperDialog } from '../components/assistants'
+import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel } from '../components/assistants'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -133,7 +133,7 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant } = useWorkspaceView(stages, editing, ownedHandledSigs)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openDiscussion } = useWorkspaceView(stages, editing, ownedHandledSigs)
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
@@ -168,7 +168,7 @@ export function App(): ReactElement {
   // Защита: если collaboration выключена на бэкенде, а вид застрял на 'assistant' — уводим в Feed (тот же
   // паттерн, что и у accounting/'cost' ниже).
   useEffect(() => {
-    if (!capabilities.collaboration && wsState.view === 'assistant') openFeed()
+    if (!capabilities.collaboration && (wsState.view === 'assistant' || wsState.view === 'discussion')) openFeed()
   }, [capabilities.collaboration, wsState.view])
 
   // Клик по строке помощника в рейле: выбираем задачу и открываем её ленту.
@@ -352,7 +352,7 @@ export function App(): ReactElement {
         count: countByKind(attnItems, contextKind),
         glow: true,
       })
-    } else if (!isGlobalView || (wsState.view === 'feed' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
+    } else if ((!isGlobalView && wsState.view !== 'discussion') || (wsState.view === 'feed' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
       // Тело показывает историю/детали выбранной стадии — вкладка это и отражает. В history-виде
       // (!isGlobalView) таб нужен всегда — он и есть активная вкладка истории.
       tabs.push({
@@ -373,6 +373,10 @@ export function App(): ReactElement {
       glow: true,
     })
   }
+  // Discussion — вкладка обсуждения выбранной стадии (Этап 6), когда collaboration включена. Перед Cost.
+  if (workspaceStage !== null && capabilities.collaboration) {
+    tabs.push({ id: 'discussion', label: 'Discussion' })
+  }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.
   if (accounting.supported) {
     tabs.push({ id: 'cost', label: 'Cost' })
@@ -380,11 +384,12 @@ export function App(): ReactElement {
   // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка, читает весь событийный поток флоу. Всегда ПОСЛЕДНЯЯ в
   // списке — правее Cost, а не второй сразу после Feed (тот же порядок, что и у Cost выше).
   tabs.push({ id: 'full-feed', label: 'Full feed' })
-  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : 'detail'
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'discussion' ? 'discussion' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
     if (id === 'cost') { openCost(); return }
     if (id === 'full-feed') { openFullFeed(); return }
+    if (id === 'discussion') { openDiscussion(); return }
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
       if (attentionTabItem !== null) {
@@ -551,6 +556,10 @@ export function App(): ReactElement {
                   />
                 ) : wsState.view === 'assistant' ? (
                   <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
+                ) : wsState.view === 'discussion' ? (
+                  workspaceStage !== null
+                    ? <StageDiscussionPanel stageId={workspaceStage.id} />
+                    : <div className="detail-empty empty-hint">Select a stage to see its discussion</div>
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

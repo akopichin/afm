@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: stage discussion tab in the dashboard
+
+A "Discussion" workspace tab (shown when collaboration is on) renders a stage's
+discussion log and lets the operator append a human message
+(`POST /api/stages/{id}/discussion`, observational — never touches the stage
+FSM). Previously discussion messages only appeared as terse rows in the event
+feed with no way to read the thread or post into it.
+
 ### Improvement: helper-task controls (pause/continue/cancel/waive) in the dashboard
 
 The helper-task detail view now has an action bar: pause/continue/cancel a live

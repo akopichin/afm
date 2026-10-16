@@ -503,6 +503,15 @@ describe('workspaceReducer — cost view + returnView contract', () => {
 // dialog-history: never part of the attention auto-open queue (a helper task completing/appearing must
 // never steal focus — see use-selected-stage's own tests for the companion selection-side guarantee), but
 // still correctly superseded by (and returned to from) a genuine attention arrival.
+describe("workspaceReducer — 'discussion' view (Этап 6)", () => {
+  it('is reachable via openDiscussion and does not alter returnView', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const discussion = workspaceReducer(cost, { type: 'openDiscussion' })
+    expect(discussion.view).toBe('discussion')
+    expect(discussion.returnView).toBe('cost')
+  })
+})
+
 describe("workspaceReducer — 'assistant' view (T3.10)", () => {
   it('is a valid WorkspaceView union member reachable via openAssistant', () => {
     const s = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })

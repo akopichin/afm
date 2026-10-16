@@ -3,7 +3,7 @@ import type { Stage } from '../../types'
 // WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла стадий. 'assistant' — лента
 // одной выбранной задачи помощника (Этап 3, T3.10); как и history-виды, это read-only ручной выбор, а не
 // часть attention-очереди — завершение/появление помощника никогда не открывает его автоматически.
-export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant'
+export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'discussion'
 
 // AttentionKind — вид элемента, требующего действия пользователя. 'assistants' (Этап 7, T7.9) — стадия в
 // awaiting_assistants, чей required-гейт требует решения человека (см. attentionKindForStatus ниже). NB: это
@@ -91,6 +91,9 @@ export type WorkspaceAction =
   // уровне App, не этот редьюсер); тот же паттерн, что и openHistory — ручной read-only вид, не связанный с
   // attention-очередью.
   | { type: 'openAssistant' }
+  // openDiscussion — пользователь открыл вкладку обсуждения выбранной стадии (Этап 6); ручной read-only-ish
+  // вид (есть композер для своего сообщения), не часть attention-очереди, как и openAssistant/openHistory.
+  | { type: 'openDiscussion' }
 
 // activeItem возвращает элемент, на котором сейчас сфокусирован attention, либо
 // null. Учитывает и view: в history/feed активного attention-элемента нет.
@@ -214,6 +217,8 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: action.view }
     case 'openAssistant':
       return { ...state, view: 'assistant' }
+    case 'openDiscussion':
+      return { ...state, view: 'discussion' }
     default:
       return state
   }
