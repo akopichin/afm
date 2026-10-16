@@ -98,6 +98,28 @@ describe('AssistantTaskView', () => {
     await waitFor(() => expect(screen.getByText(/Проверил\. Всё плохо/)).toBeInTheDocument())
   })
 
+  test('switching to a different failed task does not keep showing the previous task\'s raw answer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    mockGetRaw.mockImplementation((taskId: string) => Promise.resolve(`RAW-FOR-${taskId}`))
+    const { rerender } = render(
+      <AssistantTaskView task={makeTask({ id: 't1', status: 'failed', statusReason: 'protocol_error: invalid JSON' })} />,
+    )
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    await waitFor(() => expect(screen.getByText('RAW-FOR-t1')).toBeInTheDocument())
+
+    rerender(
+      <AssistantTaskView task={makeTask({ id: 't2', status: 'failed', statusReason: 'protocol_error: invalid JSON' })} />,
+    )
+
+    await waitFor(() => expect(screen.queryByText('RAW-FOR-t1')).not.toBeInTheDocument())
+    expect(screen.queryByText('RAW-FOR-t2')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    await waitFor(() => expect(mockGetRaw).toHaveBeenLastCalledWith('t2'))
+    await waitFor(() => expect(screen.getByText('RAW-FOR-t2')).toBeInTheDocument())
+  })
+
   test('keeps showing the plain error when the raw answer is unavailable', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
     mockGetRaw.mockImplementation(() => Promise.reject(new Error('404')))

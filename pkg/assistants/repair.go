@@ -9,6 +9,14 @@ import (
 	"github.com/akopichin/afm/pkg/jsonstrict"
 )
 
+// maxCandidateNestingDepth bounds how deeply nested a candidate object's braces may be before RepairResult
+// gives up on it. The vendored jsonrepair.Repair (recursive-descent) is quadratic in nesting depth — a
+// legitimate envelope never nests more than a few levels (findings[]/evidence[] are flat arrays of flat
+// objects/strings), so this cap is generous for any real answer while keeping jsonrepair's worst case
+// negligible; it is what stands between a pathologically deep helper answer and several seconds of
+// synchronous CPU inside the task's own completion goroutine.
+const maxCandidateNestingDepth = 200
+
 // RepairResult returns a syntactically repaired candidate envelope, and ok=true when it found exactly one
 // plausible envelope object in raw and that candidate differs from raw. ok=false means "nothing worth
 // re-decoding".
@@ -18,7 +26,10 @@ func RepairResult(raw []byte) (fixed []byte, ok bool) {
 	}
 
 	trimmed := bytes.TrimSpace(raw)
-	candidates := findObjectSpans(trimmed)
+	candidates, tooDeep := findObjectSpans(trimmed)
+	if tooDeep {
+		return nil, false
+	}
 	var candidate []byte
 	found := 0
 	for _, span := range candidates {
@@ -66,14 +77,30 @@ func DecodeResultWithRepair(raw []byte) (env Envelope, repaired bool, err error)
 // findObjectSpans finds every balanced top-level {...} span in raw, tracking string literals and escapes so
 // that braces inside a string value never affect span boundaries. The scanner treats only " as a string
 // delimiter, never ' — an apostrophe in ordinary prose is far more common than a single-quoted envelope, and
-// honouring it would mis-span the much more frequent input.
-func findObjectSpans(raw []byte) [][]byte {
-	var spans [][]byte
+// honouring it would mis-span the much more frequent input. tooDeep reports whether any candidate's nesting
+// exceeded maxCandidateNestingDepth — the caller must discard everything found rather than hand such a
+// candidate to jsonrepair.
+//
+// String/escape tracking is scoped to EACH candidate object independently (reset at every depth 0->1
+// transition), never carried across prose outside an object. Prose is not JSON — a single unescaped `"`
+// anywhere in surrounding text (a dropped closing quote, an inch-mark, a quoted word) would otherwise flip
+// quote parity for the rest of the buffer and silently swallow the real envelope's own braces as "inside a
+// string", defeating detection entirely.
+func findObjectSpans(raw []byte) (spans [][]byte, tooDeep bool) {
 	inString := false
 	escaped := false
 	depth := 0
 	start := 0
 	for i, b := range raw {
+		if depth == 0 {
+			if b == '{' {
+				depth = 1
+				start = i
+				inString = false
+				escaped = false
+			}
+			continue
+		}
 		if inString {
 			switch {
 			case escaped:
@@ -91,22 +118,20 @@ func findObjectSpans(raw []byte) [][]byte {
 		case '"':
 			inString = true
 		case '{':
-			if depth == 0 {
-				start = i
-			}
 			depth++
+			if depth > maxCandidateNestingDepth {
+				return nil, true
+			}
 		case '}':
-			if depth > 0 {
-				depth--
-				if depth == 0 {
-					spans = append(spans, raw[start:i+1])
-				}
+			depth--
+			if depth == 0 {
+				spans = append(spans, raw[start:i+1])
 			}
 		default:
 			// ordinary byte outside a string
 		}
 	}
-	return spans
+	return spans, false
 }
 
 // containsKindKey reports whether span contains the envelope discriminator "kind" as an object key, accepting

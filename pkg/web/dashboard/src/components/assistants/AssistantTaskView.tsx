@@ -169,7 +169,11 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
                   ? 'This helper task was cancelled.'
                   : 'This helper task failed.'}
             </span>
-            {task.statusReason.includes('protocol_error') && <RawAnswerExpander taskId={task.id} />}
+            {/* key={task.id}: AssistantTaskView itself is never remounted when the selected task changes
+                (the caller passes task={selectedTask} without a key) — without this key, this child's own
+                raw/loaded state would survive the prop change and keep showing the PREVIOUS task's raw
+                answer after switching to a different failed task. */}
+            {task.statusReason.includes('protocol_error') && <RawAnswerExpander key={task.id} taskId={task.id} />}
           </div>
         </div>
       ) : result !== null ? (

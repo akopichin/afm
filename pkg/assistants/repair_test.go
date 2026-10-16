@@ -36,6 +36,23 @@ func TestRepairResult_ProseAroundSingleObject(t *testing.T) {
 	}
 }
 
+func TestRepairResult_StrayQuoteInSurroundingProseDoesNotBreakDetection(t *testing.T) {
+	// A single unescaped '"' anywhere before the envelope object must not desync a scanner that tracks string
+	// state across the WHOLE buffer — it must not make the real object's braces look like they are "inside a
+	// string" and get silently dropped.
+	raw := []byte(`The model said "ok this is fine. ` + assistantstest.FixtureValidResult)
+	env, repaired, err := assistants.DecodeResultWithRepair(raw)
+	if err != nil {
+		t.Fatalf("DecodeResultWithRepair: %v", err)
+	}
+	if !repaired {
+		t.Fatal("expected repaired == true")
+	}
+	if env.Result == nil || env.Result.Verdict != assistants.VerdictPass {
+		t.Fatalf("expected verdict pass, got %+v", env.Result)
+	}
+}
+
 func TestRepairResult_TwoCandidateObjectsRefused(t *testing.T) {
 	raw := []byte(assistantstest.FixtureValidResult + "\nи ещё\n" + assistantstest.FixtureNeedsChangesResult)
 	if _, ok := assistants.RepairResult(raw); ok {
@@ -99,6 +116,49 @@ func TestRepairResult_OversizeRefusedBeforeRepair(t *testing.T) {
 	raw := []byte("```json\n" + assistantstest.FixtureValidResult + padding + "\n```")
 	if _, ok := assistants.RepairResult(raw); ok {
 		t.Fatal("expected RepairResult ok == false when input exceeds MaxResultBytes")
+	}
+}
+
+// TestRepairResult_ExcessiveNestingRefused pins a defensive cap: jsonrepair.Repair (recursive-descent) is
+// quadratic in nesting depth, so a candidate nested deeper than is ever plausible for a real envelope must be
+// refused BEFORE it is handed to jsonrepair — never spend seconds of CPU on a pathological answer.
+func TestRepairResult_ExcessiveNestingRefused(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"schema_version":1,"kind":"result","verdict":"pass","summary":`)
+	const depth = 500
+	for range depth {
+		b.WriteString(`{"a":`)
+	}
+	b.WriteString(`"x"`)
+	for range depth {
+		b.WriteString(`}`)
+	}
+	b.WriteString(`}`)
+
+	if _, ok := assistants.RepairResult([]byte(b.String())); ok {
+		t.Fatal("expected RepairResult ok == false for a candidate nested far beyond any real envelope")
+	}
+}
+
+func TestRepairResult_BareKindKey(t *testing.T) {
+	raw := []byte("```json\n" + `{schema_version: 1, kind: result, verdict: "needs_changes", summary: "found a bug"}` + "\n```")
+	env, repaired, err := assistants.DecodeResultWithRepair(raw)
+	if err != nil {
+		t.Fatalf("DecodeResultWithRepair: %v", err)
+	}
+	if !repaired {
+		t.Fatal("expected repaired == true")
+	}
+	if env.Result == nil || env.Result.Verdict != assistants.VerdictNeedsChanges {
+		t.Fatalf("expected verdict needs_changes, got %+v", env.Result)
+	}
+}
+
+func TestRepairResult_BareKindKeyDoesNotMatchLongerIdentifier(t *testing.T) {
+	// "mykind" must not be mistaken for the "kind" key — isIdentByte's boundary check.
+	raw := []byte(`{"schema_version":1,"mykind":"result","verdict":"pass","summary":"ok"}`)
+	if _, ok := assistants.RepairResult(raw); ok {
+		t.Fatal("expected RepairResult ok == false: \"mykind\" must not be mistaken for the \"kind\" key")
 	}
 }
 
