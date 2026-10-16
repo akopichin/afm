@@ -168,7 +168,10 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
               >
                 <option value="">No stage</option>
                 {stages.map((s) => (
-                  <option key={s.id} value={s.id}>{s.title}</option>
+                  // Fall back to the id when the stage has no display name — state.Store.SetStageNames stores
+                  // empty names as-is and documents that "the UI handles them" (the stage rail already does
+                  // this); without the fallback the context dropdown renders a blank, unselectable-looking row.
+                  <option key={s.id} value={s.id}>{s.title || s.id}</option>
                 ))}
               </select>
             ) : (

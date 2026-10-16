@@ -233,4 +233,19 @@ describe('SideAgentModal', () => {
     fireEvent.change(select, { target: { value: 'backend' } })
     expect(setContextStageId).toHaveBeenCalledWith('backend')
   })
+
+  it('falls back to the stage id when a stage has no display name (no blank context rows)', () => {
+    let utils!: ReturnType<typeof render>
+    act(() => {
+      utils = render(
+        <SideAgentModal
+          api={fakeApi({ isOpen: true })}
+          stages={[{ id: 'implement', title: '' }, { id: 'ship', title: 'Ship it' }]}
+        />,
+      )
+    })
+    const options = utils.getAllByRole('option').map((o) => o.textContent)
+    // No stage + two stages, and the nameless one shows its id rather than an empty row.
+    expect(options).toEqual(['No stage', 'implement', 'Ship it'])
+  })
 })
