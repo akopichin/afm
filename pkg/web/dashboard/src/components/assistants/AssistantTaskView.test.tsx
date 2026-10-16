@@ -1,14 +1,29 @@
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { AssistantTaskView, useTaskResult } from './AssistantTaskView'
 import type { AssistantTask } from '../../types/assistant-task'
-import { getAssistantTaskEvents } from '../../api/run-client'
+import {
+  cancelAssistantTask,
+  getAssistantTaskEvents,
+  pauseAssistantTask,
+  waiveAssistantTask,
+} from '../../api/run-client'
 
 vi.mock('../../api/run-client', async () => {
   const actual = await vi.importActual<typeof import('../../api/run-client')>('../../api/run-client')
-  return { ...actual, getAssistantTaskEvents: vi.fn(actual.getAssistantTaskEvents) }
+  return {
+    ...actual,
+    getAssistantTaskEvents: vi.fn(actual.getAssistantTaskEvents),
+    pauseAssistantTask: vi.fn(() => Promise.resolve()),
+    continueAssistantTask: vi.fn(() => Promise.resolve()),
+    cancelAssistantTask: vi.fn(() => Promise.resolve()),
+    waiveAssistantTask: vi.fn(() => Promise.resolve()),
+  }
 })
 const mockGetEvents = getAssistantTaskEvents as unknown as ReturnType<typeof vi.fn>
+const mockPause = pauseAssistantTask as unknown as ReturnType<typeof vi.fn>
+const mockCancel = cancelAssistantTask as unknown as ReturnType<typeof vi.fn>
+const mockWaive = waiveAssistantTask as unknown as ReturnType<typeof vi.fn>
 
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
@@ -24,6 +39,14 @@ function eventsResponse(events: Array<{ seq: number; type: string; data?: unknow
 }
 
 describe('AssistantTaskView', () => {
+  // afterEach(restoreAllMocks) resets the factory vi.fns' implementations; re-establish them each test so the
+  // mutation mocks return a resolved promise (not undefined) regardless of test order.
+  beforeEach(() => {
+    vi.useRealTimers() // some sibling tests opt into fake timers; make sure waitFor here uses real ones.
+    mockPause.mockImplementation(() => Promise.resolve())
+    mockCancel.mockImplementation(() => Promise.resolve())
+    mockWaive.mockImplementation(() => Promise.resolve())
+  })
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -152,5 +175,38 @@ describe('AssistantTaskView', () => {
     // The large 150-event page must never be re-requested from scratch — the second call continues from the
     // cursor the first call already advanced past.
     expect(mockGetEvents).toHaveBeenNthCalledWith(2, 't-watcher', largePage.length)
+  })
+
+  test('actions: a running task offers Pause and Cancel and fires them', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    render(<AssistantTaskView task={makeTask({ status: 'running' })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    await waitFor(() => expect(mockPause).toHaveBeenCalledWith('t1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('t1'))
+  })
+
+  test('actions: a required needs_changes task can be waived with a reason', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    // Required + completed (needs_changes is a terminal 'completed' status with an open gate) + not passed.
+    render(<AssistantTaskView task={makeTask({ mode: 'required', status: 'completed', blocksRootCompletion: true })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Waive…' }))
+    const confirm = screen.getByRole('button', { name: 'Confirm waive' })
+    // Reason is required: the confirm button is disabled until one is typed.
+    expect((confirm as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByPlaceholderText(/why are you accepting/i), { target: { value: 'known risk, shipping anyway' } })
+    expect((confirm as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(confirm)
+    await waitFor(() => expect(mockWaive).toHaveBeenCalledWith('t1', 'known risk, shipping anyway'))
+  })
+
+  test('actions: a waived required task offers no actions', () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    render(<AssistantTaskView task={makeTask({ mode: 'required', status: 'completed', waived: true })} />)
+    expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
+    // Terminal + waived + advisory-less → the action bar renders nothing at all.
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 })

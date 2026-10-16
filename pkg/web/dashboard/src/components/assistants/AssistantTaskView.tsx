@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { getAssistantTaskEvents, type AssistantEventWire } from '../../api/run-client'
+import {
+  cancelAssistantTask,
+  continueAssistantTask,
+  getAssistantTaskEvents,
+  pauseAssistantTask,
+  waiveAssistantTask,
+  type AssistantEventWire,
+} from '../../api/run-client'
 import {
   ASSISTANT_TASK_STATUS_LABELS,
   ASSISTANT_TASK_TERMINAL,
@@ -135,6 +142,7 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
         </span>
         <span className="assistant-task-view-status" data-status={task.status}>{label}</span>
       </div>
+      <TaskActions task={task} passed={result?.verdict === 'pass'} />
       {isWatcher && (
         <div className="assistant-task-view-watch" data-trigger={task.trigger}>
           <span className="assistant-task-view-watch-trigger">
@@ -194,6 +202,91 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
           <span className="assistant-task-view-spinner" aria-hidden="true" />
           Waiting for the first result…
         </div>
+      )}
+    </div>
+  )
+}
+
+// TaskActions renders the human controls for one helper task (Этап 7: pause/continue/cancel + waive). It
+// calls the task-level mutation endpoints directly and lets the stage-assistants poll refresh the view — the
+// same "fire the mutation, let the existing poll reconcile" pattern the rest of the dashboard uses. Waive
+// asks for a required reason inline (the server rejects an empty one). The buttons are gated by the task's
+// current status so a stale action is never offered; the server's CAS is still the final authority.
+function TaskActions({ task, passed }: { task: AssistantTask; passed: boolean }): ReactElement | null {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [waiveOpen, setWaiveOpen] = useState(false)
+  const [reason, setReason] = useState('')
+
+  const terminal = ASSISTANT_TASK_TERMINAL.has(task.status)
+  const canPause = !terminal && task.status !== 'paused'
+  const canContinue = task.status === 'paused'
+  const canCancel = !terminal
+  // A required task can be waived until it either passes cleanly or is already waived — waiving is exactly how
+  // a human unblocks a stage held by a required task that returned needs_changes (which is a terminal
+  // 'completed' status but an open gate), so this is intentionally NOT gated on `!terminal`.
+  const canWaive = task.mode === 'required' && !task.waived && !passed
+
+  if (!canPause && !canContinue && !canCancel && !canWaive) return null
+
+  function run(fn: () => Promise<void>): void {
+    setBusy(true)
+    setError(null)
+    fn()
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'request failed'))
+      .finally(() => setBusy(false))
+  }
+
+  function confirmWaive(): void {
+    if (reason.trim() === '') return
+    run(() => waiveAssistantTask(task.id, reason.trim()).then(() => setWaiveOpen(false)))
+  }
+
+  return (
+    <div className="assistant-task-actions">
+      <div className="assistant-task-actions-row">
+        {canPause && (
+          <button type="button" className="assistant-task-action" disabled={busy} onClick={() => run(() => pauseAssistantTask(task.id))}>
+            Pause
+          </button>
+        )}
+        {canContinue && (
+          <button type="button" className="assistant-task-action" disabled={busy} onClick={() => run(() => continueAssistantTask(task.id))}>
+            Continue
+          </button>
+        )}
+        {canCancel && (
+          <button type="button" className="assistant-task-action" disabled={busy} onClick={() => run(() => cancelAssistantTask(task.id))}>
+            Cancel
+          </button>
+        )}
+        {canWaive && !waiveOpen && (
+          <button type="button" className="assistant-task-action assistant-task-action-waive" disabled={busy} onClick={() => setWaiveOpen(true)}>
+            Waive…
+          </button>
+        )}
+      </div>
+      {waiveOpen && (
+        <div className="assistant-task-waive">
+          <textarea
+            className="assistant-task-waive-reason"
+            placeholder="Why are you accepting this required task not passing?"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+          />
+          <div className="assistant-task-actions-row">
+            <button type="button" className="assistant-task-action" disabled={busy} onClick={() => { setWaiveOpen(false); setReason('') }}>
+              Cancel
+            </button>
+            <button type="button" className="assistant-task-action assistant-task-action-waive" disabled={busy || reason.trim() === ''} onClick={confirmWaive}>
+              Confirm waive
+            </button>
+          </div>
+        </div>
+      )}
+      {error !== null && (
+        <div className="assistant-task-actions-error" role="alert">{error}</div>
       )}
     </div>
   )

@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: helper-task controls (pause/continue/cancel/waive) in the dashboard
+
+The helper-task detail view now has an action bar: pause/continue/cancel a live
+task, and waive a required task that will not pass (with a required reason). This
+is how an operator unblocks a stage held by a required helper that returned
+needs_changes — previously the "blocks stage" state was shown but could only be
+resolved over raw HTTP. Buttons are gated by the task's current status; the
+server's CAS remains the final authority.
+
 ### Improvement: attach a helper to a stage from the dashboard
 
 The stage kebab menu now has an "Attach helper…" item (when collaboration is on

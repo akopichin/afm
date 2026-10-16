@@ -208,6 +208,31 @@ export type AttachHelperRequest = {
   trigger: 'one_shot' | 'checkpoints' | 'on_completion'
 }
 
+// Task-level lifecycle mutations — POST /api/assistants/{id}/{action}. Distinct from the stage-level
+// pauseStage/continueStage above (those act on a whole stage's own agent). Errors surface as FlowApiError so
+// the task view can show the server's reason (e.g. a stale status).
+function assistantTaskUrl(taskId: string, action: string): string {
+  return `/api/assistants/${encodeURIComponent(taskId)}/${action}`
+}
+
+export async function pauseAssistantTask(taskId: string): Promise<void> {
+  await jsonRequest(assistantTaskUrl(taskId, 'pause'), 'POST', null)
+}
+
+export async function continueAssistantTask(taskId: string): Promise<void> {
+  await jsonRequest(assistantTaskUrl(taskId, 'continue'), 'POST', null)
+}
+
+export async function cancelAssistantTask(taskId: string): Promise<void> {
+  await jsonRequest(assistantTaskUrl(taskId, 'cancel'), 'POST', null)
+}
+
+// waiveAssistantTask records a human decision to accept the risk of a required task never closing its gate.
+// The server requires a non-empty reason (400 reason_required otherwise).
+export async function waiveAssistantTask(taskId: string, reason: string): Promise<void> {
+  await jsonRequest(assistantTaskUrl(taskId, 'waive'), 'POST', { reason })
+}
+
 // attachAssistant attaches a helper task to a stage — POST /api/stages/{id}/assistants, returns the new
 // task id. Errors surface as FlowApiError (e.g. 400 for a terminal/script stage or unknown profile) so the
 // dialog can show the server's reason.

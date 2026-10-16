@@ -719,6 +719,62 @@
   color: var(--text-primary);
 }
 
+/* === AssistantTaskView action bar (pause/continue/cancel/waive, Этап 7) === */
+.assistant-task-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-task-actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.assistant-task-action {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.assistant-task-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.assistant-task-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.assistant-task-action-waive {
+  border-color: rgba(var(--attention-rgb), 0.6);
+  color: var(--attention);
+}
+.assistant-task-waive {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-task-waive-reason {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 48px;
+}
+.assistant-task-waive-reason:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+.assistant-task-actions-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* === AttachHelperDialog — the operator-driven "attach a helper to this stage" modal === */
 .attach-helper-dialog {
   display: flex;
