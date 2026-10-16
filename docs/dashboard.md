@@ -57,7 +57,9 @@ right (there is no three-column layout or bottom progress bar).
   rail shows a quiet per-stage cost. All of it can be switched off — see
   [Cost tracking](#cost-tracking) below.
 - **Helpers and Discussion** — attached helper tasks appear beneath their stage.
-  Select one to see its result and controls. The **Discussion** tab shows stage
+  Select one to see its result and controls, including a **repaired** badge for an
+  answer whose JSON needed repair or the raw answer behind a protocol error when
+  available. The **Discussion** tab shows stage
   messages and pending agent proposals; **+ Stage** can add a stage to a live run.
   See [Helpers and collaboration](collaboration.md).
 

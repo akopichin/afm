@@ -122,6 +122,27 @@ func TestRepairResult_ConcatenatedObjectWithoutSeparatorRefused(t *testing.T) {
 // envelope object in an array (a plausible model mistake, not a truncation) leaves exactly ONE balanced {...}
 // span — the "exactly one span" requirement does not react to brackets that are not braces, so this is still
 // recovered, same as a markdown fence is stripped.
+// TestRepairResult_UnterminatedSecondObjectRefused pins the gap codex review found: findObjectSpans only
+// records a span once depth returns to 0, so a SECOND object that never closes (the model's answer cuts off
+// mid-object, e.g. the stream was truncated) leaves no span behind at all — "exactly one span" then sees only
+// the first, complete object and happily repairs it, silently discarding the dropped second answer. A scan that
+// ends with depth != 0 means an object was opened but never closed, which must refuse exactly like a second
+// balanced span does.
+func TestRepairResult_UnterminatedSecondObjectRefused(t *testing.T) {
+	raw := []byte(`{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok"}` +
+		`{"kind":"result","verdict":"needs_changes"`)
+	if _, ok := assistants.RepairResult(raw); ok {
+		t.Fatal("expected RepairResult ok == false: an unterminated second object must refuse, not silently drop it")
+	}
+	_, repaired, err := assistants.DecodeResultWithRepair(raw)
+	if err == nil {
+		t.Fatal("expected DecodeResultWithRepair to fail rather than silently report a truncated pass")
+	}
+	if repaired {
+		t.Fatal("expected repaired == false")
+	}
+}
+
 func TestRepairResult_ArrayWrappedSingleObjectRepaired(t *testing.T) {
 	raw := []byte("[" + assistantstest.FixtureValidResult + "]")
 	env, repaired, err := assistants.DecodeResultWithRepair(raw)

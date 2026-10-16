@@ -30,7 +30,14 @@ func RepairResult(raw []byte) (fixed []byte, ok bool) {
 	}
 
 	trimmed := bytes.TrimSpace(raw)
-	candidates := findObjectSpans(trimmed)
+	candidates, truncated := findObjectSpans(trimmed)
+	// A scan that ends with an object opened but never closed (depth != 0 at EOF) means content was dropped —
+	// most commonly a second answer that got cut off mid-object before it could close and leave its own
+	// balanced span behind. That is just as much a sign of lost content as a second COMPLETE span, so it must
+	// refuse the same way, not silently repair the first, complete object as if nothing else was ever there.
+	if truncated {
+		return nil, false
+	}
 	// Exactly one balanced {...} span anywhere in the buffer is required — not just one that happens to carry
 	// "kind". A genuine single-envelope answer, with or without surrounding prose, never leaves a SECOND
 	// balanced {...} span lying around elsewhere in the text. A second span is an equally strong signal that
@@ -114,8 +121,11 @@ type objectSpan struct {
 // Only {}'s are tracked, never []'s — a `[`/`]` pair nested inside a candidate never changes which `{` an
 // outer `}` matches (JSON brackets must already nest correctly within themselves for the candidate to parse
 // at all), so tracking them would add complexity without changing a single span boundary.
-func findObjectSpans(raw []byte) []objectSpan {
-	var spans []objectSpan
+//
+// truncated reports whether the scan ended with an object opened but never closed (depth != 0 at EOF) — a
+// second answer that cut off mid-object never becomes a span (a span is only recorded once depth returns to
+// 0), so callers must check this separately from len(spans) to notice content was dropped.
+func findObjectSpans(raw []byte) (spans []objectSpan, truncated bool) {
 	inString := false
 	escaped := false
 	depth := 0
@@ -157,7 +167,7 @@ func findObjectSpans(raw []byte) []objectSpan {
 			// ordinary byte outside a string
 		}
 	}
-	return spans
+	return spans, depth != 0
 }
 
 // containsKindKey reports whether span contains the envelope discriminator "kind" as an object key, accepting
