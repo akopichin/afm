@@ -271,6 +271,14 @@ func (o *Orchestrator) requiredChildOpen(taskID assistants.TaskID) bool {
 		if c.Mode != assistants.ModeRequired {
 			continue
 		}
+		// Этап 7 (T7.6): a human-waived child no longer keeps the parent's own verdict:"pass" blocked — the
+		// same rule AssistantsState.RequiredBlocker/taskGateClosed already applies at the root-stage level.
+		// Without this, waiving a nested required child would unblock the ROOT stage's barrier but leave this
+		// protocol check rejecting the parent's own pass forever — a human waiver must actually route around
+		// every gate the child would otherwise hold closed, not just the outermost one.
+		if c.Waived {
+			continue
+		}
 		if !c.Status.Terminal() {
 			return true
 		}

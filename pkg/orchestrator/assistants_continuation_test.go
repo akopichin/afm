@@ -304,6 +304,50 @@ func TestContinuation_ParentPassRejectedWithOpenRequiredChild(t *testing.T) {
 	}
 }
 
+// TestContinuation_WaivedChildUnblocksParentPass is Этап 7's (T7.6) consistency fix for
+// TestContinuation_ParentPassRejectedWithOpenRequiredChild above: once a human WAIVES the open required
+// child (accepting the risk its needs_changes verdict will never become pass), the SAME resumed parent
+// pass must now be accepted — a waiver has to route around every gate the child held closed, not just the
+// root stage's own barrier (AssistantsState.RequiredBlocker already handles that half; requiredChildOpen,
+// this task-level protocol check, needed the identical Waived short-circuit).
+func TestContinuation_WaivedChildUnblocksParentPass(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	// tryResumeParent fires as soon as the child reaches ANY terminal status (needs_changes still means
+	// Status: Completed) — REGARDLESS of the waiver, which only affects what the GATE check does once the
+	// parent's own resumed turn claims pass. resumeBlocked forces a deterministic window to call WaiveTask
+	// BEFORE that resumed turn (call #3) runs, instead of racing it.
+	resumeBlocked := make(chan struct{})
+	var calls atomic.Int32
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		switch calls.Add(1) {
+		case 1:
+			return delegateOutcome(childJSON(assistants.ModeRequired)), nil
+		case 2: // the required child reports needs_changes, never pass
+			return executor.HelperOutcome{ProcessOK: true, RawText: `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"not done yet"}`}, nil
+		default: // the resumed parent's pass, this time legitimately unblocked by the waiver below
+			<-resumeBlocked
+			return passResultOutcome(), nil
+		}
+	}
+
+	parentID := attachTestTask(context.Background(), t, o, "op-parent")
+	waitForTaskStatus(t, store, parentID, assistants.StatusWaitingChildren, 2*time.Second)
+	childID := store.Snapshot().Assistants.ByParent[parentID][0]
+	waitForTaskStatus(t, store, childID, assistants.StatusCompleted, 2*time.Second)
+
+	if err := o.WaiveTask(context.Background(), childID, state.Actor{Kind: string(assistants.OriginUser)}, "accepted: cosmetic lint nit"); err != nil {
+		t.Fatalf("WaiveTask: %v", err)
+	}
+	close(resumeBlocked)
+
+	tk := waitForTaskStatus(t, store, parentID, assistants.StatusCompleted, 2*time.Second)
+	if tk.StatusReason != "" {
+		t.Fatalf("parent StatusReason = %q, want empty (clean pass, not a rejected protocol_error)", tk.StatusReason)
+	}
+}
+
 // ---- T4a.4: lease/slot released before waiting ----
 
 // TestLease_ReleasedBeforeWaitingChildren proves a parent's turn ending in waiting_children releases its
