@@ -55,7 +55,7 @@ func TestStartPlanningForPending_HookFailedRecovery_RegistersLeaseForVerifierSlo
 	fake := doneWritingRunner{}
 	o := &Orchestrator{
 		opts:        Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default(), Runner: fake},
-		graph:       graph.NewGraph([]flow.Stage{stage}),
+		graph:       graph.NewRegistry([]flow.Stage{stage}),
 		runner:      fake,
 		critical:    cb,
 		ui:          bus.NewUIBus(),

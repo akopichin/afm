@@ -21,6 +21,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/worktree"
@@ -199,6 +200,14 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	}
 
 	stages := normalizeInteractiveStages(f.Stages, cfg.Server.GetPort() > 0)
+	// T8.6 recovery ordering: the stage registry itself must be settled — restored from this run's own
+	// durable graph_registry.json on resume, or persisted fresh on a first start — BEFORE any consumer
+	// (orchestrator.New, the dashboard's stage provider) is constructed below. A flow.yaml edited between
+	// runs must never silently replace a resumed run's graph (graph.RestoreOrPersist's whole point).
+	stages, err = graph.RestoreOrPersist(runDir, stages)
+	if err != nil {
+		return fmt.Errorf("restore stage registry: %w", err)
+	}
 	runID := filepath.Base(runDir)
 	resumed := store.Snapshot().LastSeq > 0
 
@@ -277,9 +286,11 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	defer func() { side.closeStores(sideDrained) }()
 
 	srv, err := startDashboard(cfg, server.Config{
-		RunDir:            runDir,
-		Description:       f.Description,
-		Stages:            dashboardStageConfig(stages),
+		RunDir:      runDir,
+		Description: f.Description,
+		// T8.3: the dashboard reads stage config through the orchestrator's runtime registry on every call,
+		// not a map frozen here at startup (registryStageProvider, cmd/afm/run_dashboard.go).
+		Stages:            registryStageProvider{orch: orch},
 		Store:             store,
 		Workspace:         ws,
 		Accounting:        serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),

@@ -58,7 +58,7 @@ func (o *Orchestrator) reflectNotice(stageName, msg string) {
 func (o *Orchestrator) eligibleMemoryDatasets() ([]flow.Stage, []memorypipeline.DatasetResult) {
 	var stages []flow.Stage
 	var datasets []memorypipeline.DatasetResult
-	for _, s := range o.opts.Stages {
+	for _, s := range o.graph.Stages() {
 		if s.Reflect == nil || !s.Reflect.CanWrite() || s.IsScript() {
 			continue
 		}

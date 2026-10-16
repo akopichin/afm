@@ -87,7 +87,7 @@ func TestRecovery_AutoApproveAutoAnswerQAndASurviveRestart(t *testing.T) {
 		Store:   store2,
 		UIBus:   bus.NewUIBus(),
 		Actions: fakeStageActions{},
-		Stages: map[string]StageConfig{
+		Stages: StaticStageConfigs{
 			stageID: {Interactive: false, AutoApprove: true},
 		},
 	})

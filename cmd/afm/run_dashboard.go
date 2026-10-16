@@ -34,6 +34,20 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 	return configs
 }
 
+// registryStageProvider implements server.RuntimeStageProvider by re-deriving the dashboard-facing config
+// from the orchestrator's runtime registry (orchestrator.Orchestrator.Stages) on EVERY call, instead of a
+// map frozen at startup (T8.3). Today (Этап 8, no dynamic stage edits wired in yet) orch.Stages() always
+// returns the same set the run started with; this adapter is what lets a future registry revision (Этап 9)
+// become visible to the dashboard without restarting it.
+type registryStageProvider struct {
+	orch *orchestrator.Orchestrator
+}
+
+// StageConfigs implements server.RuntimeStageProvider.
+func (p registryStageProvider) StageConfigs() map[string]server.StageConfig {
+	return dashboardStageConfig(p.orch.Stages())
+}
+
 // startDashboard transfers workspace ownership to the server, including on failure.
 func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orchestrator) (*server.Server, error) {
 	if cfg.Server.GetPort() <= 0 {

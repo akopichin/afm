@@ -99,7 +99,7 @@ const sectionAssumptions = "Assumptions"
 // collectDependencyPlansNoticing — тонкая обёртка над stagefiles.CollectDependencyPlans: колбэк дублирует
 // предупреждение о недостающей зависимости и live, и durable.
 func (o *Orchestrator) collectDependencyPlansNoticing(s flow.Stage) string {
-	return stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.opts.Stages, func(depID, msg string) {
+	return stagefiles.CollectDependencyPlans(o.opts.RunDir, s, o.graph.Stages(), func(depID, msg string) {
 		o.publishNotice(bus.Event{Type: bus.EventContextWarning, StageID: s.ID, Data: fmt.Sprintf("%s: %s", depID, msg)})
 	})
 }
@@ -107,7 +107,7 @@ func (o *Orchestrator) collectDependencyPlansNoticing(s flow.Stage) string {
 // collectArtifactsNoticing — тонкая обёртка над stagefiles.CollectArtifacts: ошибка сбора не фатальна,
 // только WARN в лог afm.
 func (o *Orchestrator) collectArtifactsNoticing(s flow.Stage, label string) string {
-	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.graph.Stages())
 	if artErr != nil {
 		log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, label, artErr)
 	}

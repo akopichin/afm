@@ -199,7 +199,7 @@ func TestHandleDialogAnswer_RejectsOutOfOrder(t *testing.T) {
 			return nil
 		}},
 		ReviewState: func() (string, []string) { return "none", nil },
-		Stages:      map[string]StageConfig{testStageID: {Interactive: true}},
+		Stages:      StaticStageConfigs{testStageID: {Interactive: true}},
 	})
 
 	postAnswer := func(id string) *httptest.ResponseRecorder {
@@ -258,7 +258,7 @@ func TestHandleDialogAnswer_RegressionBatchOfEight_NoDeadlock(t *testing.T) {
 			return nil
 		}},
 		ReviewState: func() (string, []string) { return "none", nil },
-		Stages:      map[string]StageConfig{testStageID: {Interactive: true}},
+		Stages:      StaticStageConfigs{testStageID: {Interactive: true}},
 	})
 
 	postAnswer := func(id string) *httptest.ResponseRecorder {

@@ -97,7 +97,7 @@ func (o *Orchestrator) activatePrePlannedStage(s flow.Stage) {
 
 // tryActivatePrePlanned activates pending stages that need no planning agent.
 func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
-	for _, s := range o.opts.Stages {
+	for _, s := range o.graph.Stages() {
 		if !s.NeedsPlanning() && o.opts.Store.Get(s.ID) == state.StatusPending {
 			o.activatePrePlannedStage(s)
 		}
@@ -110,7 +110,7 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 // startPlanningForUnblocked starts planning for pending stages whose dependencies are all done. Stages
 // with eager_planning start at flow start and are never gated here.
 func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
-	for _, s := range o.opts.Stages {
+	for _, s := range o.graph.Stages() {
 		if !s.NeedsPlanning() {
 			continue
 		}
@@ -284,7 +284,7 @@ func (o *Orchestrator) failBlockedStages() {
 	changed := true
 	for changed {
 		changed = false
-		for _, s := range o.opts.Stages {
+		for _, s := range o.graph.Stages() {
 			current := o.opts.Store.Get(s.ID)
 
 			if current != state.StatusPending {

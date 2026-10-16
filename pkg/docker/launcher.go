@@ -173,23 +173,16 @@ func ResetExecFunc() {
 // ScanCommands возвращает список нестандартных агентов из flow, которые нужно смонтировать в
 // Docker-контейнер. Бинарники, не найденные в PATH, молча пропускаются.
 func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []CommandMount {
-	seen := make(map[string]bool)
-	var mounts []CommandMount
+	return ScanCommandsWithExtra(f, globalCmd, generated, nil)
+}
 
-	addCmd := func(cmd string) {
-		if cmd == "" || cmd == config.ClaudeCommand || generated[cmd] || seen[cmd] {
-			return
-		}
-		seen[cmd] = true
-		hostPath, err := exec.LookPath(cmd)
-		if err != nil {
-			return
-		}
-		mounts = append(mounts, CommandMount{
-			HostPath:      hostPath,
-			ContainerName: filepath.Base(cmd),
-		})
-	}
+// ScanCommandsWithExtra is ScanCommands plus extra command names to scan for mounting — T8.5: assistant
+// (helper-agent) profile commands are not part of f.Stages, so without this they never got a Docker mount
+// even when the flow had collaboration enabled with a non-standard profile command. extra commands go
+// through the exact same PATH lookup / generated / claude-bare exclusion rules as flow-stage commands; a
+// command present in both a stage and extra is only mounted once (shared `seen` dedup).
+func ScanCommandsWithExtra(f *flow.Flow, globalCmd string, generated map[string]bool, extra []string) []CommandMount {
+	addCmd, mounts := newCommandMountCollector(generated)
 
 	addCmd(globalCmd)
 	if f != nil {
@@ -200,7 +193,35 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 			}
 		}
 	}
-	return mounts
+	for _, cmd := range extra {
+		addCmd(cmd)
+	}
+	return mounts()
+}
+
+// newCommandMountCollector returns an addCmd closure (dedups against generated/claude-bare/already-seen, and
+// resolves the host binary via PATH, silently skipping anything not found) and a mounts accessor for the
+// CommandMounts collected so far.
+func newCommandMountCollector(generated map[string]bool) (addCmd func(cmd string), mounts func() []CommandMount) {
+	seen := make(map[string]bool)
+	var collected []CommandMount
+
+	addCmd = func(cmd string) {
+		if cmd == "" || cmd == config.ClaudeCommand || generated[cmd] || seen[cmd] {
+			return
+		}
+		seen[cmd] = true
+		hostPath, err := exec.LookPath(cmd)
+		if err != nil {
+			return
+		}
+		collected = append(collected, CommandMount{
+			HostPath:      hostPath,
+			ContainerName: filepath.Base(cmd),
+		})
+	}
+	mounts = func() []CommandMount { return collected }
+	return addCmd, mounts
 }
 
 // stageVerifyCommands включает verify-агентов в discovery для монтирования и генерации wrapper'ов.

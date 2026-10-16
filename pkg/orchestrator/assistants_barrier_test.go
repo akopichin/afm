@@ -59,7 +59,7 @@ func newMultiStageBarrierTestOrchestrator(t *testing.T, stages []flow.Stage) (*O
 			RunDir: dir, Stages: stages, Store: store, RunID: "run1",
 			AssistantsEnabled: true, AssistantsRegistry: reg,
 		},
-		graph:         graph.NewGraph(stages),
+		graph:         graph.NewRegistry(stages),
 		ui:            bus.NewUIBus(),
 		critical:      bus.NewCriticalBus(16),
 		fsm:           bus.NewFSM(store),
@@ -219,7 +219,7 @@ func TestBarrier_RestoredAfterRestart(t *testing.T) {
 	}
 	o := &Orchestrator{
 		opts:          Options{RunDir: dir, Stages: []flow.Stage{stage}, Store: store, RunID: "run1", AssistantsEnabled: true, AssistantsRegistry: reg},
-		graph:         graph.NewGraph([]flow.Stage{stage}),
+		graph:         graph.NewRegistry([]flow.Stage{stage}),
 		ui:            bus.NewUIBus(),
 		critical:      bus.NewCriticalBus(16),
 		fsm:           bus.NewFSM(store),
@@ -333,7 +333,7 @@ func TestResumeByDoneMarkerDoesNotBypassBarrier(t *testing.T) {
 	}
 	o := &Orchestrator{
 		opts:          Options{RunDir: dir, Stages: []flow.Stage{stage}, Store: store, RunID: "run1", AssistantsEnabled: true, AssistantsRegistry: reg},
-		graph:         graph.NewGraph([]flow.Stage{stage}),
+		graph:         graph.NewRegistry([]flow.Stage{stage}),
 		ui:            bus.NewUIBus(),
 		critical:      bus.NewCriticalBus(16),
 		fsm:           bus.NewFSM(store),
@@ -376,7 +376,7 @@ func TestPlanningOnlyStageUnaffected(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	o := &Orchestrator{
 		opts:          Options{RunDir: dir, Stages: []flow.Stage{stage}, Store: store, RunID: "run1"},
-		graph:         graph.NewGraph([]flow.Stage{stage}),
+		graph:         graph.NewRegistry([]flow.Stage{stage}),
 		ui:            bus.NewUIBus(),
 		critical:      bus.NewCriticalBus(16),
 		fsm:           bus.NewFSM(store),

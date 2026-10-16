@@ -167,3 +167,32 @@ func TestRecovery_TreeRestoredBeforeOrchestratorNew(t *testing.T) {
 		t.Fatal("policy was not durably recorded by the time startCollaboration returned")
 	}
 }
+
+// TestAssistantProfileCommands_EmptyWhenDisabled: T8.5's Docker-mount wiring must not try to prepare any
+// profile command for a capability that is off.
+func TestAssistantProfileCommands_EmptyWhenDisabled(t *testing.T) {
+	off := false
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Enabled:  &off,
+		Profiles: map[string]config.ProfileConfig{"reviewer": {Command: "frontend-reviewer"}},
+	}}
+	if got := assistantProfileCommands(cfg, nil); got != nil {
+		t.Fatalf("assistantProfileCommands(disabled) = %v, want nil", got)
+	}
+}
+
+// TestAssistantProfileCommands_DedupedWhenEnabled: configured profile commands come back deduplicated, and a
+// profile with an empty Command (inherits the client default, already scanned separately) is skipped.
+func TestAssistantProfileCommands_DedupedWhenEnabled(t *testing.T) {
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{
+			"reviewer":  {Command: "frontend-reviewer"},
+			"reviewer2": {Command: "frontend-reviewer"},
+			"inherits":  {Command: ""},
+		},
+	}}
+	got := assistantProfileCommands(cfg, nil)
+	if len(got) != 1 || got[0] != "frontend-reviewer" {
+		t.Fatalf("assistantProfileCommands = %v, want exactly [frontend-reviewer]", got)
+	}
+}

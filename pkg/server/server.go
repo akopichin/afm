@@ -82,7 +82,7 @@ func findSkinFavicon(base string, statFn func(name string) bool) (href, mime str
 type Server struct {
 	runDir            string
 	Description       string // корневой description флоу (для хедера дашборда)
-	stages            map[string]StageConfig
+	stages            RuntimeStageProvider
 	store             *state.Store
 	uiBus             *bus.UIBus
 	accounting        accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
@@ -123,6 +123,21 @@ func (s *Server) ConnectedClients() int {
 	return int(s.wsClients.Load())
 }
 
+// stageConfigs returns ONE consistent snapshot of every stage's static config — callers building a response
+// that spans multiple stages (handleStatus/buildStageViews) must call this exactly once and reuse the
+// result (see RuntimeStageProvider's doc comment).
+func (s *Server) stageConfigs() map[string]StageConfig {
+	if s.stages == nil {
+		return nil
+	}
+	return s.stages.StageConfigs()
+}
+
+// stageConfig returns one stage's static config (zero value if unknown or no provider is configured).
+func (s *Server) stageConfig(id string) StageConfig {
+	return s.stageConfigs()[id]
+}
+
 // StageConfig is the immutable, per-stage configuration used by the dashboard.
 // Runtime status and filesystem-derived flags belong to StageView.
 type StageConfig struct {
@@ -133,13 +148,37 @@ type StageConfig struct {
 	Buttons     []string // Labels only; the orchestrator resolves prompts on click.
 }
 
+// RuntimeStageProvider is the dashboard's one source of per-stage static configuration (T8.3). Unlike a bare
+// map captured once at startup, an implementation backed by the orchestrator's runtime registry
+// (cmd/afm/run_dashboard.go) re-derives its answer from the registry's CURRENT revision on every call — so a
+// dashboard built before a registry change (Этап 9: dynamic stages) still reflects it, without this package
+// needing to know anything about registries or revisions.
+//
+// A single call must return every stage's config computed from ONE consistent registry revision: a caller
+// building a response that joins several stages (buildStageViews) must call StageConfigs() exactly ONCE and
+// reuse the result, never once per stage — otherwise two stages in the same response could be drawn from two
+// different registry revisions (TestStatusRead_NeverMixesTwoGraphVersions).
+type RuntimeStageProvider interface {
+	StageConfigs() map[string]StageConfig
+}
+
+// StaticStageConfigs adapts a fixed map to RuntimeStageProvider — for tests, and for any caller that has no
+// versioned registry to back it.
+type StaticStageConfigs map[string]StageConfig
+
+// StageConfigs implements RuntimeStageProvider.
+func (m StaticStageConfigs) StageConfigs() map[string]StageConfig { return map[string]StageConfig(m) }
+
 // Config holds server settings.
 type Config struct {
 	Port        int
 	RunDir      string
 	Description string // корневой description флоу (для хедера дашборда)
-	Stages      map[string]StageConfig
-	Store       *state.Store
+	// Stages — provider of per-stage static config; nil means no stages (e.g. no flow loaded yet). Production
+	// wiring passes an orchestrator-registry-backed provider (cmd/afm/run_dashboard.go); tests can use a plain
+	// StaticStageConfigs map.
+	Stages RuntimeStageProvider
+	Store  *state.Store
 	// Accounting — источник данных о стоимости/токенах run'а для /api/status.
 	Accounting accounting.CostProvider
 	// ShowMoney включает показ денежных ($) величин в дашборде

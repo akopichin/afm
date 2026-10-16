@@ -97,6 +97,27 @@ func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *co
 	return &collaborationRuntime{policy: policy, registry: reg}
 }
 
+// assistantProfileCommands returns the distinct, non-empty commands named by this process's configured
+// collaboration profiles — T8.5: Docker mount/wrapper preparation (reexecFlow, run_environment.go) needs this
+// list BEFORE startCollaboration ever runs (that happens after re-exec, possibly inside the container), so a
+// profile's non-standard command gets the same ":ro" binary mount flow.Stage commands already get. Returns
+// nil when collaboration is disabled — no profile command needs preparing for a capability that is off.
+func assistantProfileCommands(cfg config.Config, f *flow.Flow) []string {
+	if !resolveCollaboration(cfg, f).Enabled {
+		return nil
+	}
+	seen := make(map[string]bool, len(cfg.Collaboration.Profiles))
+	var cmds []string
+	for _, p := range cfg.Collaboration.Profiles {
+		if p.Command == "" || seen[p.Command] {
+			continue
+		}
+		seen[p.Command] = true
+		cmds = append(cmds, p.Command)
+	}
+	return cmds
+}
+
 // profilesFromConfig converts the config layer's YAML-natural map[string]ProfileConfig into the slice form
 // assistants.BuildRegistry expects — Profile.ID carries the map key, which BuildRegistry's duplicate-id
 // guard and path-safety check then validate.

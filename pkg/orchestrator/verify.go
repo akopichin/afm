@@ -220,7 +220,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 
 	plan, _ := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 	authorSummary, _ := os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
-	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.opts.Stages)
+	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.graph.Stages())
 	if artErr != nil {
 		log.Printf("WARN: collect artifacts for %s verify: %v", s.ID, artErr)
 	}

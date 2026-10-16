@@ -251,7 +251,7 @@ func TestHandleStatus_FlowPauseStateDefaultsToNone(t *testing.T) {
 
 func TestHandleStatus_IncludesInteractiveAndAutonomous(t *testing.T) {
 	srv, runDir := setupTestServer(t)
-	srv.stages = map[string]StageConfig{testStageID: {Interactive: true}}
+	srv.stages = StaticStageConfigs{testStageID: {Interactive: true}}
 	// пометить стадию автономной
 	if err := os.WriteFile(filepath.Join(runDir, testStageID, "autonomous.flag"), nil, 0644); err != nil {
 		t.Fatalf("write flag: %v", err)
@@ -340,7 +340,7 @@ func TestHandleStatus_HasDialogFalseWhenNoDialogFile(t *testing.T) {
 
 func TestHandleStatus_IncludesAutoApprove(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.stages = map[string]StageConfig{testStageID: {AutoApprove: true}}
+	srv.stages = StaticStageConfigs{testStageID: {AutoApprove: true}}
 
 	req := httptest.NewRequest("GET", "/api/status", nil)
 	w := httptest.NewRecorder()
@@ -456,7 +456,7 @@ func setupPendingServer(t *testing.T, isScript bool) (*Server, string) {
 		Store:   store,
 		UIBus:   bus.NewUIBus(),
 		Actions: fakeStageActions{},
-		Stages:  map[string]StageConfig{testStageID: {IsScript: isScript}},
+		Stages:  StaticStageConfigs{testStageID: {IsScript: isScript}},
 	})
 	return srv, runDir
 }
@@ -519,7 +519,7 @@ func TestHandleStageNote_RejectsScriptStage(t *testing.T) {
 func TestHandleStageButton_Success(t *testing.T) {
 	var gotStage, gotName string
 	srv, _ := setupTestServer(t) // seeded at awaiting_approval — allowed
-	srv.stages = map[string]StageConfig{testStageID: {Buttons: []string{"Run linter"}}}
+	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
 	srv.actions = fakeStageActions{button: func(_ context.Context, id, name string) error {
 		gotStage, gotName = id, name
 		return nil
@@ -540,7 +540,7 @@ func TestHandleStageButton_Success(t *testing.T) {
 func TestHandleStageButton_UnknownName(t *testing.T) {
 	called := false
 	srv, _ := setupTestServer(t)
-	srv.stages = map[string]StageConfig{testStageID: {Buttons: []string{"Run linter"}}}
+	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
 	srv.actions = fakeStageActions{button: func(_ context.Context, _, _ string) error {
 		called = true
 		return nil
@@ -563,7 +563,7 @@ func TestHandleStageButton_WrongStatus(t *testing.T) {
 	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusFailed, Event: "test"}); err != nil {
 		t.Fatal(err)
 	}
-	srv.stages = map[string]StageConfig{testStageID: {Buttons: []string{"Run linter"}}}
+	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
 	w := httptest.NewRecorder()
@@ -576,7 +576,7 @@ func TestHandleStageButton_WrongStatus(t *testing.T) {
 
 func TestHandleStageButton_ScriptStage(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.stages = map[string]StageConfig{testStageID: {IsScript: true, Buttons: []string{"Run linter"}}}
+	srv.stages = StaticStageConfigs{testStageID: {IsScript: true, Buttons: []string{"Run linter"}}}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
 	w := httptest.NewRecorder()
@@ -589,7 +589,7 @@ func TestHandleStageButton_ScriptStage(t *testing.T) {
 
 func TestHandleStageButton_MissingName(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	srv.stages = map[string]StageConfig{testStageID: {Buttons: []string{"Run linter"}}}
+	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":""}`))
 	w := httptest.NewRecorder()
@@ -683,7 +683,7 @@ func TestHandlePause_ScriptStageRunning_Returns409(t *testing.T) {
 	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
 	}
-	srv.stages = map[string]StageConfig{testStageID: {IsScript: true}}
+	srv.stages = StaticStageConfigs{testStageID: {IsScript: true}}
 	srv.actions = fakeStageActions{}
 
 	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)

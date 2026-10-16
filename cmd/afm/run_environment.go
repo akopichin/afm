@@ -120,10 +120,12 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 	}
 	defer browserCleanup()
 
+	// T8.5: assistant (helper-agent) profile commands are pre-prepared for Docker alongside flow-stage
+	// commands — a profile configured after this scan has no mount and stays unavailable until the next run.
 	rc := docker.ReExecConfig{
 		Image:         cfg.Docker.GetImage(),
 		ProjectDir:    absDir,
-		Commands:      docker.ScanCommands(f, cfg.Client.Command, generatedForMount),
+		Commands:      docker.ScanCommandsWithExtra(f, cfg.Client.Command, generatedForMount, assistantProfileCommands(cfg, f)),
 		DashboardPort: port,
 		ExtraMounts:   cfg.Docker.ExtraMounts,
 		// The absolute, final --dir wins over a user's relative flag inside Docker.

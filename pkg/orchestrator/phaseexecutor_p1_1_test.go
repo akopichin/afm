@@ -40,7 +40,7 @@ func newP11Orch(t *testing.T, stageID string, initialStatus state.StageStatus, r
 		ui:       bus.NewUIBus(),
 		critical: bus.NewCriticalBus(16),
 		fsm:      bus.NewFSM(store),
-		graph:    graph.NewGraph(stages),
+		graph:    graph.NewRegistry(stages),
 		runner:   runner,
 	}
 	o.opts.Runner = runner
@@ -303,6 +303,7 @@ func TestP11_RunImplementationAgent_EmbeddedReview_ReusesCapturedDepPlans(t *tes
 
 	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentImplementation, flow.AgentReview}, DependsOn: []string{"dep1"}}
 	o.opts.Stages = append(o.opts.Stages, flow.Stage{ID: "dep1", Name: "Dep1"})
+	o.graph = graph.NewRegistry(o.opts.Stages) // dependency-plan collection now reads o.graph, not o.opts.Stages
 
 	warnings := countContextWarnings(o, func() {
 		o.runImplementationAgent(context.Background(), s)
@@ -464,6 +465,7 @@ func TestP11_RunImplementationWithFeedback_EmbeddedReview_ReusesCapturedContext(
 
 	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentImplementation, flow.AgentReview}, DependsOn: []string{"dep1"}}
 	o.opts.Stages = append(o.opts.Stages, flow.Stage{ID: "dep1", Name: "Dep1"})
+	o.graph = graph.NewRegistry(o.opts.Stages) // dependency-plan collection now reads o.graph, not o.opts.Stages
 
 	warnings := countContextWarnings(o, func() {
 		o.runImplementationWithFeedback(context.Background(), s)

@@ -117,7 +117,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.CoverageIssues = bundle.Issues
 		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData, ShowMoney: s.showMoney}
 	}
-	resp.Stages = buildStageViews(rs, s.runDir, s.stages, stageCosts)
+	resp.Stages = buildStageViews(rs, s.runDir, s.stageConfigs(), stageCosts)
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	resp.Capabilities.SideAgent = s.sideAgent != nil
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil
@@ -198,7 +198,7 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 	}
 	// A script stage has no live agent to revise; Revise would move it to `revising`, after which script
 	// completion is dropped and the stage would hang.
-	if s.stages[stageID].IsScript {
+	if s.stageConfig(stageID).IsScript {
 		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
 		return
 	}
@@ -254,7 +254,7 @@ func (s *Server) handleStageNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not pending", st.Status), http.StatusBadRequest)
 		return
 	}
-	if s.stages[stageID].IsScript {
+	if s.stageConfig(stageID).IsScript {
 		http.Error(w, "script stage has no agent to note", http.StatusBadRequest)
 		return
 	}
@@ -301,7 +301,7 @@ func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
 		return
 	}
-	if s.stages[stageID].IsScript {
+	if s.stageConfig(stageID).IsScript {
 		http.Error(w, "script stage has no agent", http.StatusBadRequest)
 		return
 	}
@@ -314,7 +314,7 @@ func (s *Server) handleStageButton(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "button name is required", http.StatusBadRequest)
 		return
 	}
-	if !slices.Contains(s.stages[stageID].Buttons, req.Name) {
+	if !slices.Contains(s.stageConfig(stageID).Buttons, req.Name) {
 		http.Error(w, "unknown button", http.StatusBadRequest)
 		return
 	}
@@ -371,7 +371,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
 		return
 	}
-	if s.stages[stageID].IsScript && st.Status == state.StatusRunning {
+	if s.stageConfig(stageID).IsScript && st.Status == state.StatusRunning {
 		http.Error(w, "pause is not supported mid-script execution", http.StatusConflict)
 		return
 	}
@@ -455,7 +455,7 @@ func (s *Server) handleDialogGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stageDir := filepath.Join(s.runDir, stageID)
-	out := buildDialogEntries(stageDir, s.stages[stageID].Interactive)
+	out := buildDialogEntries(stageDir, s.stageConfig(stageID).Interactive)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
@@ -640,7 +640,7 @@ func (s *Server) handleDialogAnswer(w http.ResponseWriter, r *http.Request) {
 
 	// Interactive answers must follow question order or the polling agent deadlocks; non-interactive
 	// auto-answers are exempt.
-	if s.stages[stageID].Interactive {
+	if s.stageConfig(stageID).Interactive {
 		cur, hasCur, err := mcp.CurrentQuestion(stageDir)
 		if err != nil {
 			writeFlowError(w, http.StatusInternalServerError, "current_question_lookup_failed")

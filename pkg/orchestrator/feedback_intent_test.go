@@ -37,7 +37,7 @@ func newFeedbackIntentTestOrchestrator(t *testing.T) (*Orchestrator, *state.Stor
 			RunDir: dir, Stages: stages, Store: store, RunID: "run1",
 			AssistantsEnabled: true, Runner: noopPlanningRunner{},
 		},
-		graph:       graph.NewGraph(stages),
+		graph:       graph.NewRegistry(stages),
 		runner:      noopPlanningRunner{},
 		ui:          bus.NewUIBus(),
 		critical:    cb,

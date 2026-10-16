@@ -88,7 +88,7 @@ func TestAssistants_EndToEnd_AttachRunCompleteReadBack(t *testing.T) {
 		Actions:          orch,
 		Secondary:        orch,
 		FlowActions:      orch,
-		Stages:           dashboardStageConfig(stages),
+		Stages:           registryStageProvider{orch: orch},
 		AssistantActions: collab.actions(orch),
 		AssistantsReader: collab.reader(orch),
 	})

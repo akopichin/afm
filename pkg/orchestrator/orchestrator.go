@@ -114,7 +114,7 @@ type ResolvedFile struct {
 // Orchestrator manages the full lifecycle of a flow run via event loop.
 type Orchestrator struct {
 	opts     Options
-	graph    *graph.Graph
+	graph    *graph.Registry
 	runner   executor.Runner
 	critical *bus.CriticalBus
 	ui       *bus.UIBus
@@ -411,14 +411,18 @@ func New(opts Options) *Orchestrator {
 		})
 	}
 
+	// T8.1/T8.2: opts.Stages is read here ONCE, to seed the runtime registry — every other stage-definition
+	// lookup in this package goes through o.graph (the registry), never opts.Stages again.
+	reg := graph.NewRegistry(opts.Stages)
+
 	// Семафоры на команду строятся из конфигурации стадий: per-stage MaxParallel имеет приоритет над
 	// глобальным дефолтом.
-	conc := concurrency.New(critical, opts.Stages, opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
+	conc := concurrency.New(critical, reg.Stages(), opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
 		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
 
 	o := &Orchestrator{
 		opts:           opts,
-		graph:          graph.NewGraph(opts.Stages),
+		graph:          reg,
 		runner:         r,
 		critical:       critical,
 		ui:             ui,
@@ -456,6 +460,13 @@ func New(opts Options) *Orchestrator {
 
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
 func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
+
+// Stages returns the run's CURRENT stage definitions from the runtime registry, in stable declaration
+// order. T8.3: callers that need to re-derive dashboard-facing config (cmd/afm's RuntimeStageProvider) call
+// this fresh every time, instead of snapshotting a static []flow.Stage once at startup — so a future registry
+// revision (Этап 9: dynamic stages) is visible without rebuilding the dashboard. Today (Этап 8, no dynamic
+// edits wired in yet) this always returns the same stage set the run started with.
+func (o *Orchestrator) Stages() []flow.Stage { return o.graph.Stages() }
 
 // publishCritical wraps o.critical.Publish, logging instead of silently discarding a drop. Logging exists
 // purely so this class of loss is visible during debugging instead of silent.
