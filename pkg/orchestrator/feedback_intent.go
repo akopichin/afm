@@ -213,6 +213,17 @@ func (o *Orchestrator) attemptFeedbackDelivery(ctx context.Context, intentID str
 			return
 		}
 		o.finishFeedbackDelivery(fi)
+	case deliverStartWithFeedback:
+		body := renderForwardedFeedback(fi)
+		_, _, err := o.reviseAwaitingAssistants(ctx, fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
+			_, err := state.SaveFeedbackOnce(stageDir, fi.ID, body)
+			return err
+		})
+		if err != nil {
+			log.Printf("feedback intent %s: deliver (awaiting_assistants) failed: %v", fi.ID, err)
+			return
+		}
+		o.finishFeedbackDelivery(fi)
 	case deliverPreNote:
 		stageDir := o.stageDirFor(fi.StageID)
 		body := renderForwardedFeedback(fi)
@@ -336,15 +347,12 @@ const (
 	deliverPreNote
 	deliverDefer
 	deliverRejectTerminal
+	// deliverStartWithFeedback (Этап 7, T7.8) — awaiting_assistants: the main executor's own process has
+	// ALREADY exited, there is nothing to interrupt. Delivery here is an explicit "start a fresh execution
+	// pass with this feedback" action (reviseAwaitingAssistants, control_api.go), not reviseRunning's
+	// interrupt-signal mechanics.
+	deliverStartWithFeedback
 )
-
-// statusAwaitingAssistantsForward is Этап 7's (T7.1) future `awaiting_assistants` FSM status, referenced here
-// by its literal future string value AHEAD of its real definition in pkg/state — see dev-plan.md's Review
-// decisions for Этап 6. Not reachable via any live FSM transition today (no stage can ever actually be in
-// this status yet); included so feedbackDeliveryPlanForStatus's switch is forward-compatible the day T7.1
-// adds the real constant, and so its "nothing to interrupt, needs its own explicit start-with-feedback path"
-// behavior can be unit-tested in isolation today.
-const statusAwaitingAssistantsForward = state.StageStatus("awaiting_assistants")
 
 // feedbackDeliveryPlanForStatus implements dev-plan.md's T6.5 per-parent-status table — a pure function, one
 // test per row.
@@ -356,13 +364,13 @@ func feedbackDeliveryPlanForStatus(status state.StageStatus) feedbackDeliveryPla
 		return deliverAwaitingApproval
 	case state.StatusPending:
 		return deliverPreNote
+	case state.StatusAwaitingAssistants:
+		return deliverStartWithFeedback
 	case state.StatusDone, state.StatusFailed:
 		return deliverRejectTerminal
 	default:
-		// planning/revising/retrying/paused/awaiting_user_input/hook_failed, plus Этап 7's future
-		// awaiting_assistants (statusAwaitingAssistantsForward — see its own doc comment: no live FSM status
-		// reaches this branch via that value today) all defer: stay "accepted", retried by the next relevant
-		// stage transition or by recoverFeedbackIntents after a restart.
+		// planning/revising/retrying/paused/awaiting_user_input/hook_failed all defer: stay "accepted",
+		// retried by the next relevant stage transition or by recoverFeedbackIntents after a restart.
 		return deliverDefer
 	}
 }

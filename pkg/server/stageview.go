@@ -42,6 +42,11 @@ type StageView struct {
 	Cost *accounting.CostView `json:"cost,omitempty"`
 	// Verify — последний durable verify-индикатор из полного notices.jsonl; nil, если verify-событий не было.
 	Verify *VerifyView `json:"verify,omitempty"`
+	// AwaitingAssistantsBlocked (Этап 7, T7.9) — только при Status == awaiting_assistants: true, если текущий
+	// блокирующий required-гейт требует решения человека (needs_changes/failed/cancelled/held помощник), а не
+	// просто ждёт, пока помощник доработает (state.AssistantsState.NeedsHumanDecision, T7.7's же
+	// классификация). Фронт рисует needs_changes как actionable attention только когда это true.
+	AwaitingAssistantsBlocked bool `json:"awaiting_assistants_blocked,omitempty"`
 }
 
 // VerifyView отражает последний verify_started как running, verify_result как verdict либо error; новый
@@ -75,24 +80,26 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 		if st.Status == state.StatusPaused {
 			pausedFrom = st.PausedFrom
 		}
+		awaitingAssistantsBlocked := st.Status == state.StatusAwaitingAssistants && rs.Assistants.NeedsHumanDecision(id)
 
 		views = append(views, StageView{
-			ID:          id,
-			Name:        rs.StageNames[id],
-			Status:      st.Status,
-			UpdatedAt:   st.UpdatedAt,
-			Interactive: cfg.Interactive,
-			Autonomous:  autonomous,
-			AutoApprove: cfg.AutoApprove,
-			HasDialog:   hasDialog,
-			IsScript:    isScript,
-			PausedFrom:  pausedFrom,
-			ShowPlan:    showPlan,
-			ShowDialog:  showDialog,
-			PreNote:     state.LoadPreNote(filepath.Join(runDir, id)),
-			Buttons:     cfg.Buttons,
-			Cost:        stageCosts[id],
-			Verify:      verifyByStage[id],
+			ID:                        id,
+			Name:                      rs.StageNames[id],
+			Status:                    st.Status,
+			UpdatedAt:                 st.UpdatedAt,
+			Interactive:               cfg.Interactive,
+			Autonomous:                autonomous,
+			AutoApprove:               cfg.AutoApprove,
+			HasDialog:                 hasDialog,
+			IsScript:                  isScript,
+			PausedFrom:                pausedFrom,
+			ShowPlan:                  showPlan,
+			ShowDialog:                showDialog,
+			PreNote:                   state.LoadPreNote(filepath.Join(runDir, id)),
+			Buttons:                   cfg.Buttons,
+			Cost:                      stageCosts[id],
+			Verify:                    verifyByStage[id],
+			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
 		})
 	}
 	return views

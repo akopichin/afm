@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // StageStatus represents the lifecycle state of a single stage.
@@ -156,7 +154,7 @@ func isIdle(rs *RunState) bool {
 		case StatusAwaitingUserInput, StatusAwaitingApproval, StatusPaused, StatusHookFailed:
 			return true
 		case StatusAwaitingAssistants:
-			if assistantsBlockerNeedsDecision(rs.Assistants, stageID) {
+			if rs.Assistants.NeedsHumanDecision(stageID) {
 				return true
 			}
 			anyActive = true // машинная работа помощника — как running/planning/revising
@@ -171,26 +169,6 @@ func isIdle(rs *RunState) bool {
 	return hasFailed && !anyActive
 }
 
-// assistantsBlockerNeedsDecision сообщает, требует ли текущий блокирующий required-гейт стадии stageID
-// решения человека, а не просто ждёт, пока помощник доработает (T7.7, §5.6). ok=false у RequiredBlocker
-// (гейт уже удовлетворён, либо требуемых задач вовсе нет) трактуется как "не ждём решения" — это гонка между
-// статусом стадии и проекцией, не постоянное состояние.
-func assistantsBlockerNeedsDecision(as AssistantsState, stageID string) bool {
-	blocker, ok := as.RequiredBlocker(stageID)
-	if !ok {
-		return false
-	}
-	switch blocker.Status {
-	case assistants.StatusFailed, assistants.StatusCancelled, assistants.StatusPaused:
-		return true
-	case assistants.StatusCompleted:
-		return blocker.LastVerdict != assistants.VerdictPass
-	default:
-		// waiting_parent/queued/running/waiting_children/watching — помощник ещё активен или вот-вот будет
-		// подхвачен планировщиком; это машинная работа, не пользовательский Idle.
-		return false
-	}
-}
 
 // maxUpdatedAt возвращает самый свежий UpdatedAt среди всех стадий — момент последнего примененного во
 // флоу перехода.

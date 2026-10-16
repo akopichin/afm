@@ -135,10 +135,10 @@ func TestFeedbackIntent_ParentStatus_AwaitingApproval(t *testing.T) {
 }
 
 func TestFeedbackIntent_ParentStatus_AwaitingAssistants(t *testing.T) {
-	// awaiting_assistants does not exist as a real FSM status until Этап 7 (T7.1) — exercised directly against
-	// the pure classifier (see feedback_intent.go's doc comment on statusAwaitingAssistantsForward).
-	if plan := feedbackDeliveryPlanForStatus(statusAwaitingAssistantsForward); plan != deliverDefer {
-		t.Fatalf("awaiting_assistants must defer delivery (nothing to interrupt yet), got plan=%d", plan)
+	// Этап 7 (T7.8): awaiting_assistants means the main executor's own process has ALREADY exited — there is
+	// nothing to interrupt, so delivery must be an explicit start-with-feedback action, never a plain defer.
+	if plan := feedbackDeliveryPlanForStatus(state.StatusAwaitingAssistants); plan != deliverStartWithFeedback {
+		t.Fatalf("awaiting_assistants must start a fresh execution pass with feedback, got plan=%d, want deliverStartWithFeedback", plan)
 	}
 }
 

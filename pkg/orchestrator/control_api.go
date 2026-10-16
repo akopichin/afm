@@ -135,6 +135,8 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 		return o.reviseRunning(stageID, feedback, save)
 	case state.StatusAwaitingApproval:
 		return o.reviseAwaitingApproval(reqCtx, stageID, feedback, save)
+	case state.StatusAwaitingAssistants:
+		return o.reviseAwaitingAssistants(reqCtx, stageID, feedback, save)
 	default:
 		return false, 0, nil
 	}
@@ -158,6 +160,43 @@ func (o *Orchestrator) reviseRunning(stageID, reason string, save func(stageDir 
 		case ch.(chan struct{}) <- struct{}{}:
 		default: // канал уже сигнализирован (двойной клик) — не блокируемся
 		}
+	}
+	return true, seq, nil
+}
+
+// reviseAwaitingAssistants is Revise's StatusAwaitingAssistants branch (Этап 7, T7.8). The main executor's
+// own process has ALREADY exited — there is nothing to signal/interrupt. Revise here is an explicit "start a
+// fresh execution pass with this feedback" action: the SAME shape resumeStageAtStatus's StatusRevising case
+// already uses for a crash-recovered revise (recovery.go), just triggered live instead of at startup.
+//
+// Two things a plain interrupt-and-restart would NOT otherwise do, both required so the NEW attempt is never
+// silently satisfied by the OLD one: BumpRootGeneration cancels every still-open helper task under this stage
+// (TestRevise_CancelsStaleAssistantTurns) and advances the root generation counter so an already-recorded
+// pass from before this Revise becomes invisible to RequiredBlocker for the new attempt
+// (TestRevise_InvalidatesPriorPass — mirrors TestBarrier_GenerationAwareCas's read-side proof).
+func (o *Orchestrator) reviseAwaitingAssistants(reqCtx context.Context, stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
+	stageDir := filepath.Join(o.opts.RunDir, stageID)
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, reason)
+	if !ok {
+		return false, 0, nil
+	}
+	if err := save(stageDir); err != nil {
+		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
+	}
+	if err := o.BumpRootGeneration(stageID); err != nil {
+		return false, 0, fmt.Errorf("invalidate stale assistant tree for %s: %w", stageID, err)
+	}
+
+	stage := o.graph.Stage(stageID)
+	if stage == nil {
+		return true, seq, nil
+	}
+	// Spawn under run ctx, not reqCtx — see reviseAwaitingApproval's identical comment below.
+	runCtx := o.runContext(reqCtx)
+	if o.executionKind(*stage) == kindAutonomous {
+		o.spawnKind(runCtx, *stage, kindAutonomous, o.runAutonomousWithFeedback)
+	} else {
+		o.spawnKind(runCtx, *stage, kindImplementation, o.runImplementationWithFeedback)
 	}
 	return true, seq, nil
 }

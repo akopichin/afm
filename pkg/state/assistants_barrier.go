@@ -85,3 +85,25 @@ func (as AssistantsState) RequiredBlocker(stageID string) (TaskState, bool) {
 	}
 	return *ts, true
 }
+
+// NeedsHumanDecision reports whether stageID's CURRENT required-completion blocker (if any) requires a human
+// decision rather than just more machine work (T7.7, §5.6): a failed/cancelled/held task, or one that
+// completed with a non-pass verdict (needs_changes/inconclusive), needs a Revise/Retry/Waiver from a person.
+// A task still actively working (waiting_parent/queued/running/waiting_children/watching) does not. ok=false
+// from RequiredBlocker (gate already satisfied, or nothing required attached) is "no decision pending" — a
+// race between the stage's status and this read, not a durable state. Used both by isIdle (state.go) and by
+// pkg/server's StageView (Этап 7, T7.9) to decide whether awaiting_assistants counts as dashboard attention.
+func (as AssistantsState) NeedsHumanDecision(stageID string) bool {
+	blocker, ok := as.RequiredBlocker(stageID)
+	if !ok {
+		return false
+	}
+	switch blocker.Status {
+	case assistants.StatusFailed, assistants.StatusCancelled, assistants.StatusPaused:
+		return true
+	case assistants.StatusCompleted:
+		return blocker.LastVerdict != assistants.VerdictPass
+	default:
+		return false
+	}
+}
