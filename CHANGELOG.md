@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: review agent proposals in the dashboard
+
+The Discussion tab now shows a stage's pending proposals as proposal cards
+(clearly badged "not a user command") above the discussion thread, each with
+Accept / Dismiss — the single explicit human confirmation step before a proposal
+reaches the main agent (`/api/stages/{id}/proposals`,
+`/api/proposals/{id}/{accept,dismiss}`). The delegation breadcrumb was already
+mounted in the helper-task view.
+
 ### Improvement: add a dynamic stage from the dashboard
 
 A "+ Stage" button in the stage rail (shown when the add_stage capability is on)

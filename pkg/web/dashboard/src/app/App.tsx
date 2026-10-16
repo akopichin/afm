@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from 'rea
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
-import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, AddStageDialog } from '../components/assistants'
+import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, StageProposals, AddStageDialog } from '../components/assistants'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -560,9 +560,14 @@ export function App(): ReactElement {
                 ) : wsState.view === 'assistant' ? (
                   <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
                 ) : wsState.view === 'discussion' ? (
-                  workspaceStage !== null
-                    ? <StageDiscussionPanel stageId={workspaceStage.id} />
-                    : <div className="detail-empty empty-hint">Select a stage to see its discussion</div>
+                  workspaceStage !== null ? (
+                    <div className="stage-collab-view">
+                      <StageProposals stageId={workspaceStage.id} />
+                      <StageDiscussionPanel stageId={workspaceStage.id} />
+                    </div>
+                  ) : (
+                    <div className="detail-empty empty-hint">Select a stage to see its discussion</div>
+                  )
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

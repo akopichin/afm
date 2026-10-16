@@ -356,6 +356,25 @@
   color: var(--text-primary);
 }
 
+/* === Discussion workspace view — pending proposals above the discussion thread === */
+.stage-collab-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+}
+.stage-proposals {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 16px 0;
+}
+.stage-proposals-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* === Stage discussion panel — the mounted wrapper: the message list plus a composer === */
 .stage-discussion-panel {
   display: flex;
