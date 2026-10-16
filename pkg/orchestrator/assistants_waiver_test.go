@@ -100,6 +100,9 @@ func TestWaiver_RecordedWithActorAndReason(t *testing.T) {
 	if ts.WaivedAt.IsZero() {
 		t.Fatal("WaivedAt is zero, want a timestamp")
 	}
+	if waived, reason, ok := o.TaskWaiver(taskID); !ok || !waived || reason != "accepted the stale lint warning risk" {
+		t.Fatalf("TaskWaiver(%s) = (%v, %q, %v), want (true, the given reason, true) — pkg/server's AssistantTaskView reads through this", taskID, waived, reason, ok)
+	}
 
 	// Reject an empty reason — a waiver must always explain itself.
 	taskID2 := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-2")

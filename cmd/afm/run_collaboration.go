@@ -235,6 +235,10 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 		}
 		// T5.6: surface a watcher's own progress (trigger kind is already view.Trigger above) — ok is false for
 		// a plain one_shot task (never bound), leaving both pointers nil/omitted.
+		if waived, reason, ok := r.orch.TaskWaiver(t.ID); ok && waived {
+			view.Waived = true
+			view.WaiverReason = reason
+		}
 		if passes, lastSeq, hasLast, ok := r.orch.WatcherStatus(t.ID); ok {
 			view.WatchPasses = &passes
 			if hasLast {

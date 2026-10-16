@@ -39,6 +39,18 @@ func (o *Orchestrator) TaskTree(stageID string) ([]assistants.Task, error) {
 	return out, nil
 }
 
+// TaskWaiver reports a task's waiver state (Этап 7, T7.6) — ok is false for an unknown task id. Mirrors
+// WatcherStatus's pattern (watch_tasks.go): extra per-task info not carried by the bare assistants.Task struct
+// TaskTree returns, read via a small side lookup rather than widening TaskTree's return type.
+func (o *Orchestrator) TaskWaiver(taskID assistants.TaskID) (waived bool, reason string, ok bool) {
+	rs := o.opts.Store.Snapshot()
+	t, found := rs.Assistants.Tasks[taskID]
+	if !found {
+		return false, "", false
+	}
+	return t.Waived, t.WaiverReason, true
+}
+
 // AssistantsPolicyRevision returns the run's current effective collaboration depth-policy revision and max
 // depth (T4.5: the live values an action draft's ExpectedRevision must still match before the draft-confirm
 // HTTP path proceeds to Attach).

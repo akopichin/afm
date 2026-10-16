@@ -50,6 +50,12 @@ type AssistantTaskView struct {
 	// from this plus Mode/ParentTaskID (§4.3). Purely structural (mode-chain only) — does not account for a
 	// stale/old task-tree generation, which the durable barrier (RequiredBlocker) already excludes on its own.
 	BlocksRootCompletion bool `json:"blocks_root_completion"`
+	// Waived/WaiverReason (Этап 7, T7.6) — true once a human has explicitly accepted the risk of this task
+	// never closing its own gate (POST /api/assistants/{id}/waive). A waived required task's gate reads as
+	// CLOSED to the durable barrier regardless of Status/verdict — the dashboard must not keep showing it as
+	// "blocks stage"/"blocks helper X" once Waived is true, or render it as outstanding work.
+	Waived       bool   `json:"waived,omitempty"`
+	WaiverReason string `json:"waiver_reason,omitempty"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.
