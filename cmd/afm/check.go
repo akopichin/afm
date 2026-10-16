@@ -31,7 +31,7 @@ func statusColor(s state.StageStatus) string {
 		return colorGreen
 	case state.StatusFailed:
 		return colorRed
-	case state.StatusAwaitingApproval, state.StatusPaused:
+	case state.StatusAwaitingApproval, state.StatusPaused, state.StatusAwaitingAssistants:
 		return colorYellow
 	case state.StatusRunning, state.StatusPlanning:
 		return colorBlue
