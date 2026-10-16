@@ -169,7 +169,6 @@ func isIdle(rs *RunState) bool {
 	return hasFailed && !anyActive
 }
 
-
 // maxUpdatedAt возвращает самый свежий UpdatedAt среди всех стадий — момент последнего примененного во
 // флоу перехода.
 func maxUpdatedAt(stages map[string]StageState) time.Time {

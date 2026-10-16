@@ -47,7 +47,9 @@ func newMultiStageBarrierTestOrchestrator(t *testing.T, stages []flow.Stage) (*O
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) { return true, "", assistants.ReadonlyEnforcementOS })
+		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
+			return true, "", assistants.ReadonlyEnforcementOS
+		})
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -82,10 +84,6 @@ func attachRequiredTask(ctx context.Context, t *testing.T, o *Orchestrator, stag
 		t.Fatalf("Attach(required): %v", err)
 	}
 	return taskID
-}
-
-func needsChangesOutcome() executor.HelperOutcome {
-	return executor.HelperOutcome{ProcessOK: true, RawText: `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"please fix X"}`}
 }
 
 // --- T7.2: durable completion barrier ---
@@ -213,7 +211,9 @@ func TestBarrier_RestoredAfterRestart(t *testing.T) {
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) { return true, "", assistants.ReadonlyEnforcementOS })
+		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
+			return true, "", assistants.ReadonlyEnforcementOS
+		})
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -325,7 +325,9 @@ func TestResumeByDoneMarkerDoesNotBypassBarrier(t *testing.T) {
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) { return true, "", assistants.ReadonlyEnforcementOS })
+		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
+			return true, "", assistants.ReadonlyEnforcementOS
+		})
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}

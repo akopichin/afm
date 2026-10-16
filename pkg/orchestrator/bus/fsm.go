@@ -118,8 +118,8 @@ func NewFSM(store *state.Store) *FSM {
 			EvHookResolved:     {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
 			// awaiting_assistants добавлен в T7.1's чеклист (выход в paused допустим: пользователь может
 			// вручную поставить на паузу стадию, пока она ждёт помощников).
-			EvPause: {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants}, To: to(state.StatusPaused)},
-			EvContinue:         {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
+			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants}, To: to(state.StatusPaused)},
+			EvContinue: {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}
 }
