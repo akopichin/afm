@@ -248,7 +248,9 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
 		return err
 	}
 	switch o.currentStatus(stageID) {
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying:
+	// awaiting_assistants добавлен в T7.1's чеклист: пользователь может вручную поставить на паузу стадию,
+	// пока она ждёт required-помощников — EvPause.From уже разрешает этот переход (bus/fsm.go).
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants:
 	default:
 		return nil
 	}

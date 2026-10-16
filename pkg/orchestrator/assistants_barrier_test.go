@@ -497,6 +497,33 @@ func TestCollaborationDisabledBeforeResumeDoesNotSkipRequirement(t *testing.T) {
 	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
 }
 
+func TestPause_AllowedFromAwaitingAssistants(t *testing.T) {
+	// T7.1's checklist: awaiting_assistants exits to paused (manual pause while waiting on helpers).
+	stage := flow.Stage{ID: assistantsTestStageID, Command: "claude"}
+	o, store := newBarrierTestOrchestrator(t, stage)
+	activateStage(t, o, assistantsTestStageID)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		<-release
+		return executor.HelperOutcome{}, context.Canceled
+	}
+	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingAssistants {
+		t.Fatalf("status = %v, want awaiting_assistants", got)
+	}
+
+	if err := o.Pause(context.Background(), assistantsTestStageID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusPaused {
+		t.Fatalf("status after Pause = %v, want paused", got)
+	}
+}
+
 // --- T7.4/T7.5 at the orchestrator level: who exactly is blocked ---
 
 func TestChain_ExplainedInApi(t *testing.T) {
