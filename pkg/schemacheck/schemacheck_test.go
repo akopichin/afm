@@ -273,6 +273,17 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"collaboration max_depth zero", "name: f\ncollaboration:\n  max_depth: 0\nstages:\n  - id: s\n    agents: [planning]\n", true},
 		{"collaboration negative max_depth", "name: f\ncollaboration:\n  max_depth: -1\nstages:\n  - id: s\n    agents: [planning]\n", false},
 		{"collaboration enabled is rejected (no per-flow enable)", "name: f\ncollaboration:\n  enabled: true\nstages:\n  - id: s\n    agents: [planning]\n", false},
+		{"assistants scalar", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: reviewer\n", true},
+		{"assistants list of names", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: [reviewer, qa]\n", true},
+		{"assistants object form", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: qa\n        title: QA gate\n        instruction: check coverage\n        mode: required\n        trigger: on_completion\n", true},
+		{"assistants mixed list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - reviewer\n      - profile: qa\n        mode: required\n", true},
+		{"assistants mixed with script", "name: f\nstages:\n  - id: s\n    script: echo ok\n    assistants: reviewer\n", false},
+		{"assistants empty profile name", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: [\"\"]\n", false},
+		{"assistants duplicate profile", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: [reviewer, reviewer]\n", false},
+		{"assistants invalid mode", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        mode: advisry\n", false},
+		{"assistants invalid trigger", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        trigger: on_complete\n", false},
+		{"assistants explicit empty mode and trigger", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        mode: \"\"\n        trigger: \"\"\n", true},
+		{"assistants unknown object key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        triger: on_completion\n", false},
 	}
 
 	for _, tt := range tests {

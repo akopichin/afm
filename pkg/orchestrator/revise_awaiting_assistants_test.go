@@ -19,9 +19,8 @@ import (
 // enterAwaitingAssistantsForRevise drives assistantsTestStageID into awaiting_assistants with one blocked
 // required task, wiring a fake agent runner so a subsequent Revise's spawned runImplementationWithFeedback
 // never touches a real subprocess.
-func enterAwaitingAssistantsForRevise(t *testing.T) (*Orchestrator, *state.Store, assistants.TaskID) {
+func enterAwaitingAssistantsForRevise(t *testing.T, stage flow.Stage) (*Orchestrator, *state.Store, assistants.TaskID) {
 	t.Helper()
-	stage := flow.Stage{ID: assistantsTestStageID, Command: "claude"}
 	o, store := newBarrierTestOrchestrator(t, stage)
 	fake := &fakeAgentRunner{}
 	o.opts.Runner = fake
@@ -46,7 +45,8 @@ func enterAwaitingAssistantsForRevise(t *testing.T) (*Orchestrator, *state.Store
 }
 
 func TestRevise_FromAwaitingAssistantsStartsExecutorWithFeedback(t *testing.T) {
-	o, store, _ := enterAwaitingAssistantsForRevise(t)
+	stage := flow.Stage{ID: assistantsTestStageID, Command: "claude"}
+	o, store, _ := enterAwaitingAssistantsForRevise(t, stage)
 
 	applied, _, err := o.Revise(context.Background(), assistantsTestStageID, "please also update the docs")
 	if err != nil {
@@ -88,7 +88,8 @@ func TestRevise_FromAwaitingAssistantsStartsExecutorWithFeedback(t *testing.T) {
 }
 
 func TestRevise_InvalidatesPriorPass(t *testing.T) {
-	o, store, taskID := enterAwaitingAssistantsForRevise(t)
+	stage := flow.Stage{ID: assistantsTestStageID, Command: "claude"}
+	o, store, taskID := enterAwaitingAssistantsForRevise(t, stage)
 
 	// The OLD task completed with needs_changes in this fixture — but even a PASS from the old generation must
 	// stop counting once Revise bumps the root generation (mirrors TestBarrier_GenerationAwareCas's read-side

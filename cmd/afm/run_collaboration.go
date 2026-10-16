@@ -97,6 +97,38 @@ func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *co
 	return &collaborationRuntime{policy: policy, registry: reg}
 }
 
+// checkDeclaredAssistants preflights every stage's assistants: field against the resolved collaboration
+// runtime, BEFORE any stage starts. Mirrors config.ValidateVerifySpecs's spot in executeFlow, but cannot live
+// there: it needs the real profile registry, which doesn't exist until startCollaboration runs.
+//
+// When collaboration is disabled, a declared assistants: is a silent no-op at runtime (attachDeclaredAssistants's
+// own gate) — so this does not error, only warns once per offending stage, keeping AFM_COLLABORATION=0 a
+// working way to temporarily turn helpers off without editing every flow.yaml that declares them.
+//
+// Profile command AVAILABILITY (ProfileView.Available) is deliberately NOT checked here — PATH differs
+// between host and container, and a hard check here would break Docker runs where the profile's command
+// only exists inside the image. An unavailable profile is instead rejected, best-effort, by Attach itself at
+// runtime (attachDeclaredAssistants already logs and moves on without blocking the stage).
+func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
+	if !collab.policy.Enabled || collab.registry == nil {
+		for _, s := range f.Stages {
+			if len(s.Assistants) == 0 {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "warning: stage %q declares \"assistants\" but collaboration is disabled — they will not be attached\n", s.ID)
+		}
+		return nil
+	}
+	for _, s := range f.Stages {
+		for _, a := range s.Assistants {
+			if _, ok := collab.registry.Get(assistants.ProfileID(a.Profile)); !ok {
+				return fmt.Errorf("stage %q: unknown assistant profile %q (not in collaboration.profiles)", s.ID, a.Profile)
+			}
+		}
+	}
+	return nil
+}
+
 // assistantProfileCommands returns the distinct, non-empty commands named by this process's configured
 // collaboration profiles — T8.5: Docker mount/wrapper preparation (reexecFlow, run_environment.go) needs this
 // list BEFORE startCollaboration ever runs (that happens after re-exec, possibly inside the container), so a

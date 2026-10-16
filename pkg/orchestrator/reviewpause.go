@@ -62,6 +62,7 @@ func (o *Orchestrator) spawnAgentLeased(ctx context.Context, s flow.Stage, run f
 
 func (o *Orchestrator) spawnKind(ctx context.Context, s flow.Stage, kind string, run func(context.Context, flow.Stage)) {
 	o.setRunnerKind(s.ID, kind)
+	o.attachDeclaredAssistants(ctx, s, kind) // before the spawn below — see its own doc comment for why
 	o.spawnAgentLeased(ctx, s, run)
 }
 

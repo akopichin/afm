@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-16
 
+### Improvement: declare stage helpers in flow.yaml
+
+Stages can use `assistants:` to attach configured helper profiles automatically
+when execution starts. The field accepts a profile name, an object with optional
+title, instruction, mode, and trigger, or a list of both. Attachments survive
+retries and recovery without duplication; a new revision can attach a fresh
+task. Unknown profiles fail startup, while disabling collaboration skips declared
+helpers with a warning.
+
 ### Improvement: configured helpers can observe and gate stage completion
 
 Helpers can run once or watch stage output. A watcher configured for stage

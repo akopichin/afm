@@ -40,18 +40,20 @@ func TestTotals_NoDoubleCountingAcrossTree(t *testing.T) {
 	if !ok {
 		t.Fatal("root missing from ComputeTaskCosts result")
 	}
-	if rootCost.SubtreeCostUSD != want {
+	if diff := rootCost.SubtreeCostUSD - want; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("root.SubtreeCostUSD = %v, want %v (own + child + grandchild + sibling)", rootCost.SubtreeCostUSD, want)
 	}
 
 	// Summing every task's OWN cost (never subtree) across the whole tree must also equal the run total —
 	// this is the non-double-counting invariant expressed from the per-task-own-cost side, independent of
 	// the tree shape, and it's what a UI reconciliation check would actually compare against RunSummary.
+	// costs is a map, so iteration order (and thus float addition order) is randomized per run; tolerate
+	// the last-bit rounding differences that come from summing the same four values in a different order.
 	var sumOfOwn float64
 	for _, tc := range costs {
 		sumOfOwn += tc.OwnCostUSD
 	}
-	if sumOfOwn != want {
+	if diff := sumOfOwn - want; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("sum of every task's OwnCostUSD = %v, want %v (== run total, independent of depth)", sumOfOwn, want)
 	}
 }

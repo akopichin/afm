@@ -52,6 +52,16 @@ const (
 	ModeRequired Mode = "required"
 )
 
+// Valid reports whether m is a recognized Mode, or empty (meaning "use Attach's own default").
+func (m Mode) Valid() bool {
+	switch m {
+	case "", ModeAdvisory, ModeRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Trigger определяет, когда помощник приглашается высказаться.
 type Trigger string
 
@@ -64,6 +74,16 @@ const (
 	// работа завершена.
 	TriggerOnCompletion Trigger = "on_completion"
 )
+
+// Valid reports whether t is a recognized Trigger, or empty (meaning "use Attach's own default").
+func (t Trigger) Valid() bool {
+	switch t {
+	case "", TriggerOneShot, TriggerCheckpoints, TriggerOnCompletion:
+		return true
+	default:
+		return false
+	}
+}
 
 // TaskStatus — состояние задачи помощника в её собственном, отдельном от
 // stage-FSM жизненном цикле.

@@ -82,6 +82,7 @@ stages:
 | `script_after` | no | Shell script run right after the stage successfully completes |
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
 | `buttons` | no | Named one-click prompts for the stage's live agent, shown in the dashboard kebab menu (see [Dashboard](dashboard.md)) |
+| `assistants` | no | Helper profiles to attach automatically when this stage starts execution. A profile name, an object, or a list of either; see [Declared helpers](#declared-helpers) |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into [agent memory](agent-memory.md): `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (default `rw`). Requires the flow-level `memory:` block |
 | `memory_use` | no | Overrides the flow-level `memory.memory_use` for this stage (`true`/`false`; unset = inherit). Controls whether the stage **reads** [memory](agent-memory.md) |
 
@@ -91,6 +92,34 @@ stages:
     `script:`. A `script:` stage must **not** also set `agents`/`command`/
     `interactive`/`plan`/`verify` (they're mutually exclusive), and `agents: [auto]`
     must be the stage's only agent.
+
+### Declared helpers
+
+Use `assistants:` to attach configured [helper profiles](collaboration.md) as
+soon as a stage enters its execution phase, without a dashboard click. It accepts
+one profile name (`assistants: reviewer`), one object, or a list mixing both:
+
+```yaml
+stages:
+  - id: build
+    agents: [auto]
+    assistants:
+      - reviewer
+      - profile: qa
+        title: QA gate
+        instruction: Check test coverage.
+        mode: required
+        trigger: on_completion
+```
+
+Object fields are `profile` (required), `title`, `instruction`, `mode`
+(`advisory` or `required`), and `trigger` (`one_shot`, `checkpoints`, or
+`on_completion`). Omitted mode and trigger default to `advisory` and `one_shot`.
+Profiles must be defined in `collaboration.profiles`; an unknown profile stops
+`afm run` at preflight. Each profile can appear only once per stage. The field is
+valid on execution stages (including `agents: [auto]`), but not on `script:` or
+planning-only stages. See [Helpers and collaboration](collaboration.md) for
+completion gates and behavior when collaboration is disabled.
 
 ## Flow fields (top level)
 

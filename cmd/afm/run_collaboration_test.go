@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/assistants"
@@ -10,6 +11,13 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+// captureStderr redirects os.Stderr for the duration of fn and returns everything written to it — shares
+// captureStream with captureStdout (check_test.go).
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	return captureStream(t, &os.Stderr, fn)
+}
 
 func writeCollabConfigYAML(t *testing.T, dir, content string) string {
 	t.Helper()
@@ -214,5 +222,103 @@ func TestAssistantProfileCommands_DedupedWhenEnabled(t *testing.T) {
 	got := assistantProfileCommands(cfg, nil)
 	if len(got) != 1 || got[0] != "frontend-reviewer" {
 		t.Fatalf("assistantProfileCommands = %v, want exactly [frontend-reviewer]", got)
+	}
+}
+
+// ---- T4: preflight of declared assistant profile names + disabled-collaboration warning ----
+
+func newCollabTestStore(t *testing.T) *state.Store {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := state.Open(dir, []string{"s1"})
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func TestCheckDeclaredAssistants_UnknownProfileErrors(t *testing.T) {
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{"reviewer": {Command: "frontend-reviewer"}},
+	}}
+	f := &flow.Flow{Stages: []flow.Stage{
+		{ID: "s1", Assistants: flow.StageAssistants{{Profile: "reviewer"}, {Profile: "ghost"}}},
+	}}
+	collab := startCollaboration(newCollabTestStore(t), cfg, f)
+	if !collab.policy.Enabled {
+		t.Fatal("setup: collaboration must be enabled by default")
+	}
+
+	err := checkDeclaredAssistants(f, collab)
+	if err == nil {
+		t.Fatal("checkDeclaredAssistants: want error for unknown profile, got nil")
+	}
+	if !strings.Contains(err.Error(), "s1") || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("error = %q, want it to name stage %q and profile %q", err.Error(), "s1", "ghost")
+	}
+}
+
+func TestCheckDeclaredAssistants_KnownProfilesPass(t *testing.T) {
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{
+			"reviewer": {Command: "frontend-reviewer"},
+			"qa":       {Command: "qa-bot"},
+		},
+	}}
+	f := &flow.Flow{Stages: []flow.Stage{
+		{ID: "s1", Assistants: flow.StageAssistants{{Profile: "reviewer"}, {Profile: "qa"}}},
+	}}
+	collab := startCollaboration(newCollabTestStore(t), cfg, f)
+
+	if err := checkDeclaredAssistants(f, collab); err != nil {
+		t.Fatalf("checkDeclaredAssistants: %v", err)
+	}
+}
+
+func TestCheckDeclaredAssistants_DisabledCollaborationWarnsNotErrors(t *testing.T) {
+	off := false
+	cfg := config.Config{Collaboration: config.CollaborationConfig{Enabled: &off}}
+	f := &flow.Flow{Stages: []flow.Stage{
+		{ID: "s1", Assistants: flow.StageAssistants{{Profile: "reviewer"}}},
+	}}
+	collab := startCollaboration(newCollabTestStore(t), cfg, f)
+	if collab.policy.Enabled {
+		t.Fatal("setup: collaboration must be disabled")
+	}
+
+	var err error
+	stderr := captureStderr(t, func() { err = checkDeclaredAssistants(f, collab) })
+	if err != nil {
+		t.Fatalf("checkDeclaredAssistants: %v, want nil (disabled collaboration must not block the run)", err)
+	}
+	if !strings.Contains(stderr, "s1") {
+		t.Fatalf("stderr = %q, want a warning naming stage %q", stderr, "s1")
+	}
+}
+
+func TestCheckDeclaredAssistants_NoStageDeclaresAssistants(t *testing.T) {
+	cases := []struct {
+		name    string
+		enabled *bool
+	}{
+		{"enabled", nil},
+		{"disabled", func() *bool { f := false; return &f }()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{Collaboration: config.CollaborationConfig{Enabled: tc.enabled}}
+			f := &flow.Flow{Stages: []flow.Stage{{ID: "s1"}}}
+			collab := startCollaboration(newCollabTestStore(t), cfg, f)
+
+			var err error
+			stderr := captureStderr(t, func() { err = checkDeclaredAssistants(f, collab) })
+			if err != nil {
+				t.Fatalf("checkDeclaredAssistants: %v, want nil", err)
+			}
+			if stderr != "" {
+				t.Fatalf("stderr = %q, want empty (no stage declares assistants)", stderr)
+			}
+		})
 	}
 }

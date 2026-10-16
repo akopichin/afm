@@ -324,6 +324,25 @@
         "browser": {
           "type": "boolean",
           "description": "Explicit false opts this stage out of the managed Chrome DevTools (afm_chrome) capability. Omitted inherits the global browser policy."
+        },
+        "assistants": {
+          "description": "Helper profiles (collaboration.profiles) auto-attached at the start of this stage's execution phase, the same way a manual dashboard Attach click would: a profile name, an object with profile plus optional title/instruction/mode/trigger, or a list mixing both forms.",
+          "oneOf": [
+            { "type": "string", "minLength": 1, "description": "Profile name." },
+            { "$ref": "#/definitions/stageAssistant" },
+            {
+              "type": "array",
+              "description": "Several declared assistants, attached in order.",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "oneOf": [
+                  { "type": "string", "minLength": 1, "description": "Profile name." },
+                  { "$ref": "#/definitions/stageAssistant" }
+                ]
+              }
+            }
+          ]
         }
       },
       "allOf": [
@@ -363,7 +382,8 @@
               "interactive": { "const": false },
               "plan": { "maxLength": 0 },
               "verify": { "not": {} },
-              "buttons": { "maxProperties": 0 }
+              "buttons": { "maxProperties": 0 },
+              "assistants": { "not": {} }
             }
           }
         }
@@ -421,6 +441,27 @@
           "type": "string",
           "enum": ["r", "w", "rw"],
           "description": "Access mode for this stage's file: r/w/rw. Default rw."
+        }
+      }
+    },
+    "stageAssistant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "description": "One declared assistant, object form: a profile reference plus optional overrides.",
+      "properties": {
+        "profile": { "type": "string", "minLength": 1, "description": "Assistant profile id (a key under collaboration.profiles)." },
+        "title": { "type": "string", "description": "Short label for this helper task, shown in the dashboard." },
+        "instruction": { "type": "string", "description": "Instruction given to the helper agent." },
+        "mode": {
+          "type": "string",
+          "enum": ["", "advisory", "required"],
+          "description": "advisory (default, same as omitting this key or an explicit empty string): the task does not block stage completion. required: the stage cannot complete until it reaches pass."
+        },
+        "trigger": {
+          "type": "string",
+          "enum": ["", "one_shot", "checkpoints", "on_completion"],
+          "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion."
         }
       }
     },

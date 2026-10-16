@@ -2,9 +2,10 @@
 
 Helpers are agent tasks attached to a stage. They have their own status, result,
 and cost records. A helper can give advice, or it can be **required** to pass
-before its stage finishes. Enabling collaboration does not start a helper by
-itself; attach one from the dashboard. The Side agent can record mentions of
-configured roles, but a mention alone does not create a task.
+before its stage finishes. Attach helpers from the dashboard or declare them in
+`flow.yaml` to attach automatically when a stage starts execution. The Side agent
+can record mentions of configured roles, but a mention alone does not create a
+task.
 
 ## Configure roles
 
@@ -45,6 +46,39 @@ Depth 1 is a helper attached directly to a stage; deeper tasks are its children.
 `delegate: true` permits a role to create children, subject to the depth and
 whole-run `limits.max_tasks` limits. A flow cannot re-enable collaboration when
 config or the environment disables it.
+
+## Attach helpers from flow.yaml
+
+Add `assistants:` to an execution stage to attach configured roles when that
+stage starts its implementation, review, or autonomous phase:
+
+```yaml
+stages:
+  - id: build
+    agents: [auto]
+    assistants:
+      - reviewer
+      - profile: qa
+        title: QA gate
+        instruction: Check test coverage.
+        mode: required
+        trigger: on_completion
+```
+
+A single name (`assistants: reviewer`) or a single object also works. List order
+is preserved. The object accepts `profile` plus optional `title`, `instruction`,
+`mode`, and `trigger`. Defaults are `advisory` and `one_shot`; the mode and trigger
+choices have the same meaning as in the dashboard below. For stages with planning,
+helpers attach when execution begins, after plan approval. Retries and crash
+recovery do not duplicate an attachment; a new revision can attach a fresh task.
+
+Profiles must exist in `collaboration.profiles` when the run starts. An unknown
+profile stops startup; a configured profile that is unavailable at attach time
+is logged and skipped without stopping the stage. `assistants:` cannot be used on
+`script:` or planning-only stages, and a stage cannot list the same profile twice.
+When collaboration is disabled, afm warns about declared helpers and runs the
+stage without attaching them. This also lets `AFM_COLLABORATION=0` temporarily
+disable a flow's helpers.
 
 ## Use helpers in the dashboard
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"gopkg.in/yaml.v3"
 )
@@ -183,6 +184,9 @@ type Stage struct {
 	// Browser (managed Chrome DevTools capability): explicit false opts this
 	// stage out of the afm_chrome MCP. nil — inherits the global browser policy.
 	Browser *bool `yaml:"browser,omitempty"`
+	// Assistants — helper profiles auto-attached at the start of this stage's execution phase, the same way
+	// a manual dashboard Attach click would. See pkg/flow/assistants.go.
+	Assistants StageAssistants `yaml:"assistants,omitempty"`
 }
 
 // isBuiltIn reports whether the agent type is one of the three built-in phases.
@@ -240,6 +244,14 @@ func (s *Stage) IsAuto() bool {
 // agent (agents: [] entirely absent, replaced by the Script field).
 func (s *Stage) IsScript() bool {
 	return s.Script != ""
+}
+
+// IsExecutionStage reports whether the stage ever runs an implementation/review/autonomous pass — as
+// opposed to a planning-only stage, which never "declares completion" (no .done, no execution_summary.md).
+// Shared by the verify and assistants validate() rules: both features attach to that completion moment, so
+// neither can do anything on a stage that never reaches it.
+func (s *Stage) IsExecutionStage() bool {
+	return s.HasAgent(AgentImplementation) || s.HasAgent(AgentReview) || s.IsAuto()
 }
 
 // AutoRunDisabled reports whether this stage's first activation should pause
@@ -589,8 +601,7 @@ func (f *Flow) validate() error {
 		if err := s.Verify.validate(s.ID); err != nil {
 			return err
 		}
-		isExecutionStage := s.HasAgent(AgentImplementation) || s.HasAgent(AgentReview) || s.IsAuto()
-		if !isExecutionStage {
+		if !s.IsExecutionStage() {
 			return fmt.Errorf("stage %q: verify requires an execution stage (planning-only stage cannot have verify)", s.ID)
 		}
 	}
@@ -614,6 +625,36 @@ func (f *Flow) validate() error {
 				return fmt.Errorf("stage %q: duplicate button label %q", s.ID, btn.Label)
 			}
 			seen[btn.Label] = true
+		}
+	}
+
+	for _, s := range f.Stages {
+		if len(s.Assistants) == 0 {
+			continue
+		}
+		if s.IsScript() {
+			return fmt.Errorf("stage %q: \"assistants\" cannot be combined with script", s.ID)
+		}
+		// Mirrors the verify check above: attachDeclaredAssistants gates on kind != kindPlanning, so a
+		// planning-only stage's assistants: would pass validation but never actually attach, on any run.
+		if !s.IsExecutionStage() {
+			return fmt.Errorf("stage %q: assistants requires an execution stage (planning-only stage would never attach them)", s.ID)
+		}
+		seen := make(map[string]bool, len(s.Assistants))
+		for i, a := range s.Assistants {
+			if a.Profile == "" {
+				return fmt.Errorf("stage %q: assistants[%d]: profile is required", s.ID, i)
+			}
+			if seen[a.Profile] {
+				return fmt.Errorf("stage %q: duplicate assistant profile %q", s.ID, a.Profile)
+			}
+			seen[a.Profile] = true
+			if !a.Mode.Valid() {
+				return fmt.Errorf("stage %q: assistants[%d]: mode must be %q or %q, got %q", s.ID, i, assistants.ModeAdvisory, assistants.ModeRequired, a.Mode)
+			}
+			if !a.Trigger.Valid() {
+				return fmt.Errorf("stage %q: assistants[%d]: trigger must be %q, %q, or %q, got %q", s.ID, i, assistants.TriggerOneShot, assistants.TriggerCheckpoints, assistants.TriggerOnCompletion, a.Trigger)
+			}
 		}
 	}
 

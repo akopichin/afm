@@ -15,16 +15,17 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// captureStdout redirects os.Stdout for the duration of fn and returns everything written to it.
-func captureStdout(t *testing.T, fn func()) string {
+// captureStream redirects *streamVar (os.Stdout or os.Stderr) for the duration of fn and returns everything
+// written to it. For capturing both streams at once, see captureOutput below.
+func captureStream(t *testing.T, streamVar **os.File, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	orig := os.Stdout
-	os.Stdout = w
-	defer func() { os.Stdout = orig }()
+	orig := *streamVar
+	*streamVar = w
+	defer func() { *streamVar = orig }()
 
 	fn()
 
@@ -36,6 +37,12 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return buf.String()
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns everything written to it.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	return captureStream(t, &os.Stdout, fn)
 }
 
 // writeEventsLog writes authoritative stage transitions, including multiple transitions per stage.

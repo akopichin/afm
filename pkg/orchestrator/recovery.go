@@ -209,16 +209,8 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusRunning, state.StatusRetrying:
 		o.resumeExecutionStage(ctx, s, status)
 	case state.StatusRevising:
-		switch o.detectInterruptedPhase(filepath.Join(o.opts.RunDir, s.ID)) {
-		case phaseImplementation:
-			o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback)
-		case phaseReview:
-			o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback)
-		case phaseAutonomous:
-			o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback)
-		default:
-			o.spawnKind(ctx, s, kindPlanning, o.runPlanningWithFeedback)
-		}
+		kind := o.revisingKind(s)
+		o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind))
 	case state.StatusAwaitingAssistants:
 		// Shared by startup (startPlanningForPending) and Continue (PausedFrom == AwaitingAssistants, restored
 		// by the FSM's EvContinue table itself before this is reached) — re-check the durable barrier, it may
@@ -299,4 +291,27 @@ func (o *Orchestrator) detectInterruptedPhase(stageDir string) string {
 		}
 	}
 	return latestPhase
+}
+
+// revisingKind selects which phase a crash-interrupted Revise resumes with. Session files answer this
+// precisely for an interactive stage, but runnerFor only ever writes them under s.Interactive — a
+// non-interactive stage (including agents:[auto], which has no planning phase at all) has none, and used to
+// fall through to planning unconditionally, silently re-planning an already-implemented stage. Without a
+// session file, the phase is derived from the stage itself instead: a Revise targeting the PLAN archives
+// plan.md to plan.v<N>.md (state.VersionPlan, from reviseAwaitingApproval) and leaves no plan.md behind — so
+// "stage plans AND has no plan.md" is the one case that means planning; everything else means execution.
+func (o *Orchestrator) revisingKind(s flow.Stage) string {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	switch o.detectInterruptedPhase(stageDir) {
+	case phaseImplementation:
+		return kindImplementation
+	case phaseReview:
+		return kindReview
+	case phaseAutonomous:
+		return kindAutonomous
+	}
+	if s.NeedsPlanning() && stagefiles.CheckPlanCompletion(stageDir) != nil {
+		return kindPlanning
+	}
+	return o.executionKind(s)
 }

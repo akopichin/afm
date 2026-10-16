@@ -47,7 +47,10 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
 
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}}}, nil, "claude",
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
+		{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
+		{ID: "qa", Title: "QA", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
+	}, nil, "claude",
 		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
 			return true, "", assistants.ReadonlyEnforcementOS
 		})

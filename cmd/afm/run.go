@@ -225,6 +225,9 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	// orchestrator.New below — is created. A flow.yaml change after this run's policy was first recorded
 	// must not silently retake effect on resume without going through its own durable record (T2.6).
 	collab := startCollaboration(store, cfg, f)
+	if err := checkDeclaredAssistants(f, collab); err != nil {
+		return err
+	}
 
 	var orch *orchestrator.Orchestrator
 	hooksDisp, err := prepareLifecycleDispatcher(rootDir, lifecyclehooks.DispatcherConfig{
