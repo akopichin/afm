@@ -55,6 +55,13 @@ type Prompts struct {
 	// Verify — assets/prompts/verify.md, инструкция AI-verify агенту. Отдельно от остальных фаз: verify не
 	// входит в flow.Phases(), это ортогональный проход ПОСЛЕ заявленного стадией завершения.
 	Verify string
+	// HelperResult — assets/prompts/helper-result.md, машинный контракт ответа помощника (envelope
+	// kind:"result"), приложенный к каждому ходу assistants-задачи (buildTaskContext).
+	HelperResult string
+	// HelperDelegate — assets/prompts/helper-delegate.md, альтернативная форма ответа kind:"delegate".
+	// Приложена только для профилей с Capabilities.Delegate — непригодному профилю её не показывают, иначе
+	// он может попытаться делегировать и потратить ход на отказ admission.
+	HelperDelegate string
 }
 
 // DefaultPrompts returns empty prompts (will be set from assets).

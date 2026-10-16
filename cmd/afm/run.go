@@ -409,7 +409,8 @@ func newRunID(runName string) string {
 
 func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 	names := []string{"planning.md", "implementation.md", "review.md", "summary.md", "autonomous.md",
-		"reflect.md", "aggregate.md", "prioritize.md", "update.md", "verify.md"}
+		"reflect.md", "aggregate.md", "prioritize.md", "update.md", "verify.md",
+		"helper-result.md", "helper-delegate.md"}
 	texts := make([]string, len(names))
 	var custom, embedded []string
 	for i, name := range names {
@@ -440,5 +441,7 @@ func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 		Prioritize:     texts[7],
 		Update:         texts[8],
 		Verify:         texts[9],
+		HelperResult:   texts[10],
+		HelperDelegate: texts[11],
 	}, nil
 }

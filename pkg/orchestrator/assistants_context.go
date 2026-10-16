@@ -69,8 +69,10 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// parent sees what its own delegated children actually produced, not just "they are done".
 	writeFencedSection(&b, "Results from the children you delegated to", childResults)
 	// Follow-up (T4.7): a user message addressed to THIS task specifically — read this, it may change or
-	// refine the original instruction above. Placed LAST so it is the freshest thing the model reads.
+	// refine the original instruction above. Followed by afm's own output contract (below), which the model
+	// reads last of all — a user-supplied follow-up can never override afm's answer format by recency.
 	writeFencedSection(&b, "Follow-up instruction from the user for this task", followUp)
+	b.WriteString(o.outputContractBlock(task))
 
 	prompt := b.String()
 	if len(prompt) > maxTaskContextBytes {
@@ -80,6 +82,27 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	generation := o.stageGeneration(stage.ID)
 	version := computeContextVersion(stage.ID, generation, roleInstructions, instruction, plan, artifacts, prevResult, childResults, followUp)
 	return TaskContext{Prompt: prompt, Version: version}, nil
+}
+
+// outputContractBlock returns afm's own "## Output contract" section carrying the machine-answer contract
+// (assets/prompts/helper-result.md), plus the delegate form (helper-delegate.md) when task's profile is
+// delegate-capable — showing it to a profile that cannot delegate would only invite a delegation admission
+// has to reject, wasting a turn. Returns "" when Prompts.HelperResult is empty (e.g. existing orchestrator
+// tests that construct an empty Prompts). Appended as a plain section, not via writeFencedSection: fencing
+// marks DATA for the model to read about, but this is afm's own instruction.
+func (o *Orchestrator) outputContractBlock(task assistants.Task) string {
+	if o.opts.Prompts.HelperResult == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Output contract\n\n")
+	b.WriteString(o.opts.Prompts.HelperResult)
+	if task.ProfileSnapshot.Capabilities.Delegate && o.opts.Prompts.HelperDelegate != "" {
+		b.WriteString("\n\n")
+		b.WriteString(o.opts.Prompts.HelperDelegate)
+	}
+	b.WriteString("\n\n")
+	return b.String()
 }
 
 // writeFencedSection appends a titled section whose body is fenced with FOUR backticks — content (plan/
