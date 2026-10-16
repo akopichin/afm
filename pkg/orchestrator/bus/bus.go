@@ -72,6 +72,11 @@ const (
 	// fingerprint taken before/after the helper's turn differed. Purely observational — never changes the
 	// task's verdict.
 	EventHelperTreeModified EventType = "helper_tree_modified"
+	// EventHelperResultRepaired fires when a helper task's raw answer needed mechanical repair
+	// (assistants.DecodeResultWithRepair) before it could be strictly decoded — e.g. wrapped in a markdown
+	// fence or surrounded by prose. Non-FSM, live + durable (notices.jsonl): the task's own verdict is
+	// unaffected, this is purely observational. Data: {"task_id": string}.
+	EventHelperResultRepaired EventType = "helper_result_repaired"
 	// EventDiscussionMessage fires once a discussion_message control record is durably committed (T6.1).
 	// Never an FSM transition — a discussion message never changes the root stage's status
 	// (TestDiscussion_UserMessageIsNotAutoRevise).

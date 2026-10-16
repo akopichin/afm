@@ -204,6 +204,10 @@ type Result struct {
 	ContextVersion  ContextVersion `json:"context_version,omitempty"`
 	SuggestedChange string         `json:"suggested_change,omitempty"`
 	Limitations     string         `json:"limitations,omitempty"`
+	// Repaired is set by the SERVER when the model's raw answer needed mechanical repair (RepairResult)
+	// before it could be strictly decoded. Deliberately absent from resultEnvelope/
+	// schema/assistant-result.schema.json — a model must never be able to declare itself repaired.
+	Repaired bool `json:"repaired,omitempty"`
 }
 
 // DelegateRequest — один дочерний таск, который помощник с kind:"delegate"

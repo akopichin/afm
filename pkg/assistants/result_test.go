@@ -206,3 +206,13 @@ func TestDecodeEnvelope_RejectsMalformed(t *testing.T) {
 		})
 	}
 }
+
+// TestAssistantResult_RejectsModelSuppliedRepaired pins the Global Constraint that Repaired is a server
+// stamp and never a wire field: a model claiming "repaired":true for itself must be rejected exactly like
+// any other unknown field.
+func TestAssistantResult_RejectsModelSuppliedRepaired(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok","repaired":true}`
+	if _, err := assistants.DecodeResult([]byte(raw)); err == nil {
+		t.Fatal(`DecodeResult with a model-supplied "repaired" field: want rejection, got nil error`)
+	}
+}
