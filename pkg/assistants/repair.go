@@ -9,28 +9,17 @@ import (
 	"github.com/akopichin/afm/pkg/jsonstrict"
 )
 
-// maxCandidateNestingDepth bounds how deeply nested a candidate's brackets — BOTH {}'s and []'s, counted
-// together — may be before RepairResult gives up on it. The vendored jsonrepair.Repair (recursive-descent) is
-// quadratic in nesting DEPTH for both object and array repair paths, so the two bracket kinds must share one
-// bound: a cap on {} alone would leave a deeply array-nested candidate (e.g. a value like [[[[...]]]]) just as
-// costly and completely unguarded. 200 is ~40x deeper than any plausible envelope (findings[]/evidence[] are
-// flat arrays of flat objects/strings, so real nesting tops out around depth 3-4) while keeping jsonrepair's
-// worst case well under a millisecond — far below the several seconds a pathologically deep candidate would
-// otherwise cost inside the task's own completion goroutine.
-const maxCandidateNestingDepth = 200
-
-// maxCandidateElements bounds how many structural tokens — commas, bracket opens, and string starts, at any
-// nesting level — a candidate may contain before RepairResult gives up on it. This is a SEPARATE axis from
-// nesting depth: jsonrepair.Repair's "insert a missing separator" repair rebuilds its entire accumulated
-// output buffer on every occurrence (measured: ~32,000 comma-separated siblings in a 224 KiB array — well
-// within MaxResultBytes and nowhere near maxCandidateNestingDepth — took ~2.8s), so a FLAT candidate with
-// thousands of siblings is just as costly as a deeply nested one and needs its own bound. Counting ONLY commas
-// would miss the exact defect this guards against — siblings jsonrepair itself had to insert a separator
-// between (e.g. space- or newline-separated string values with no comma at all) — so string starts and
-// bracket opens are counted too, each counted once per sibling regardless of whether a separator between them
-// was present. 2000 is well beyond any plausible envelope's field/finding count while keeping jsonrepair's
-// worst case under ~20ms (measured).
-const maxCandidateElements = 2000
+// maxCandidateRepairBytes bounds how large the single selected candidate object may be before RepairResult
+// hands it to jsonrepair.Repair. The vendored jsonrepair (recursive-descent) is quadratic in cost for several
+// DIFFERENT malformed-JSON shapes it repairs — missing commas between quoted strings, missing commas between
+// bare numbers/keywords, deeply nested brackets — and bounding each shape separately turned out to be
+// whack-a-mole (three rounds of review, each finding a different shape the previous bound missed). What every
+// one of those costs is ultimately a function of is the candidate's own byte length, so bounding THAT closes
+// all of them — present and future variants alike — in one place. 16 KiB is far larger than any plausible real
+// envelope (a result/delegate envelope's structural shell is a few hundred bytes even with a dozen findings;
+// the realistic size driver is prose length, not structural shape) while keeping jsonrepair's measured worst
+// case (~2.8s at 224 KiB on the densest adversarial shape found) scaled down to tens of milliseconds.
+const maxCandidateRepairBytes = 16 * 1024
 
 // RepairResult returns a syntactically repaired candidate envelope, and ok=true when it found exactly one
 // plausible envelope object in raw and that candidate differs from raw. ok=false means "nothing worth
@@ -41,34 +30,28 @@ func RepairResult(raw []byte) (fixed []byte, ok bool) {
 	}
 
 	trimmed := bytes.TrimSpace(raw)
-	candidates, tooComplex := findObjectSpans(trimmed)
-	if tooComplex {
+	candidates := findObjectSpans(trimmed)
+	// Exactly one balanced {...} span anywhere in the buffer is required — not just one that happens to carry
+	// "kind". A genuine single-envelope answer, with or without surrounding prose, never leaves a SECOND
+	// balanced {...} span lying around elsewhere in the text. A second span is an equally strong signal that
+	// something was silently dropped whether or not it carries its own "kind": a model printing a literal
+	// "before/after" pair (the Review Focus case this was originally written for) is one example, but so is a
+	// FIRST span whose own boundary was found in the wrong place — an unescaped quote inside a string value
+	// can re-sync quote parity exactly at a `}` that was never meant to close the envelope, leaving the real
+	// remainder (often a finding object) to surface here as its own, separate top-level span. Trying to instead
+	// recognize "suspicious" trailing text right after the chosen candidate was tried and abandoned: enumerating
+	// which bytes "look like JSON continuing" (and which whitespace bytes must be skipped first) is exactly the
+	// kind of incomplete-by-construction blacklist that kept finding new gaps. Requiring the WHOLE buffer to
+	// contain only one balanced span sidesteps that enumeration entirely.
+	if len(candidates) != 1 {
 		return nil, false
 	}
-	var candidate objectSpan
-	found := 0
-	for _, span := range candidates {
-		if containsKindKey(span.text) {
-			found++
-			candidate = span
-		}
-	}
-	if found != 1 {
+	candidate := candidates[0]
+	if !containsKindKey(candidate.text) {
 		return nil, false
 	}
-	// A quote left unescaped INSIDE a string value (not just in surrounding prose, which the reset-per-
-	// candidate string tracking above already handles) can re-sync the scanner's quote parity exactly where a
-	// `}` that was never meant to close the envelope happens to sit — producing a candidate that is valid JSON
-	// on its own but is really only a TRUNCATED PREFIX of the model's actual answer, with everything after
-	// (possibly a blocker finding) silently dropped. The real envelope never has anything JSON-structural
-	// immediately after its own closing brace — only prose (the whole point of this feature) or nothing. If
-	// what immediately follows instead looks like a continuation of JSON structure, refuse rather than guess
-	// which `}` the model meant.
-	if rest := bytes.TrimLeft(trimmed[candidate.end:], " \t\r\n"); len(rest) > 0 {
-		switch rest[0] {
-		case ',', ':', ']', '}':
-			return nil, false
-		}
+	if len(candidate.text) > maxCandidateRepairBytes {
+		return nil, false
 	}
 
 	repaired, err := jsonrepair.Repair(string(candidate.text))
@@ -104,8 +87,8 @@ func DecodeResultWithRepair(raw []byte) (env Envelope, repaired bool, err error)
 }
 
 // objectSpan is one candidate {...} span found by findObjectSpans, together with its end offset (exclusive)
-// within the scanned buffer — RepairResult needs the offset to inspect what, if anything, immediately follows
-// the candidate's own closing brace.
+// within the scanned buffer. The offset is kept even though RepairResult no longer inspects trailing bytes
+// directly, because it is cheap to carry and callers may still want it (e.g. for diagnostics).
 type objectSpan struct {
 	text []byte
 	end  int
@@ -114,41 +97,33 @@ type objectSpan struct {
 // findObjectSpans finds every balanced top-level {...} span in raw, tracking string literals and escapes so
 // that braces inside a string value never affect span boundaries. The scanner treats only " as a string
 // delimiter, never ' — an apostrophe in ordinary prose is far more common than a single-quoted envelope, and
-// honouring it would mis-span the much more frequent input. tooComplex reports whether any candidate crossed
-// maxCandidateNestingDepth OR maxCandidateElements (nesting and breadth are independent cost vectors into the
-// same quadratic jsonrepair.Repair call — see each constant's own doc comment): on tooComplex,
-// findObjectSpans has ALREADY discarded everything it found so far (returns nil, true) — there is nothing
-// left for the caller to discard, it only needs to treat this as outright refusal, never a zero-candidate
-// miss.
-//
-// depth counts BOTH {}'s and []'s together, not just braces: a deeply array-nested value (e.g. a field
-// holding [[[[...]]]]) costs jsonrepair just as much as deeply nested objects, so the same bound must cover
-// both bracket kinds sharing one counter — a `{`/`[` always closes with a `}`/`]` in well-formed JSON, so
-// depth still correctly returns to 0 exactly when the span's own opening `{` finds its match, regardless of
-// which bracket kinds were nested inside it. elements counts every comma, bracket-open, and string-start seen
-// while depth>0 — a flat proxy for "how many siblings", reset at the same depth 0->1 transition as depth
-// itself. Commas alone are not enough: the exact defect being guarded against is often a MISSING separator
-// (jsonrepair inserts one), so counting only commas would undercount precisely the pathological case.
+// honouring it would mis-span the much more frequent input.
 //
 // String/escape tracking is scoped to EACH candidate object independently (reset at every depth 0->1
 // transition), never carried across prose outside an object. Prose is not JSON — a single unescaped `"`
 // anywhere in surrounding text (a dropped closing quote, an inch-mark, a quoted word) would otherwise flip
 // quote parity for the rest of the buffer and silently swallow the real envelope's own braces as "inside a
-// string", defeating detection entirely. An unescaped `"` INSIDE the candidate itself (an even number of stray
-// quotes in one string field value) is a separate, more dangerous case this function does NOT try to detect —
-// it can re-sync parity exactly at an unrelated `}`, producing a valid-looking but truncated span; RepairResult
-// catches that case instead, by checking what immediately follows the chosen candidate.
-func findObjectSpans(raw []byte) (spans []objectSpan, tooComplex bool) {
+// string", defeating detection entirely.
+//
+// This function does NOT try to detect an unescaped `"` INSIDE the candidate itself (an even number of stray
+// quotes in one string field value, which can re-sync parity exactly at an unrelated `}` and produce a
+// genuinely truncated-but-valid-looking span) — RepairResult's "exactly one span total" check catches that
+// case instead: the content a truncation drops almost always contains its own balanced {...} (a finding
+// object, a second concatenated value), which shows up here as a SECOND span.
+//
+// Only {}'s are tracked, never []'s — a `[`/`]` pair nested inside a candidate never changes which `{` an
+// outer `}` matches (JSON brackets must already nest correctly within themselves for the candidate to parse
+// at all), so tracking them would add complexity without changing a single span boundary.
+func findObjectSpans(raw []byte) []objectSpan {
+	var spans []objectSpan
 	inString := false
 	escaped := false
 	depth := 0
-	elements := 0
 	start := 0
 	for i, b := range raw {
 		if depth == 0 {
 			if b == '{' {
 				depth = 1
-				elements = 0
 				start = i
 				inString = false
 				escaped = false
@@ -171,33 +146,18 @@ func findObjectSpans(raw []byte) (spans []objectSpan, tooComplex bool) {
 		switch b {
 		case '"':
 			inString = true
-			elements++
-			if elements > maxCandidateElements {
-				return nil, true
-			}
-		case '{', '[':
+		case '{':
 			depth++
-			elements++
-			if depth > maxCandidateNestingDepth || elements > maxCandidateElements {
-				return nil, true
-			}
 		case '}':
 			depth--
 			if depth == 0 {
 				spans = append(spans, objectSpan{text: raw[start : i+1], end: i + 1})
 			}
-		case ']':
-			depth--
-		case ',':
-			elements++
-			if elements > maxCandidateElements {
-				return nil, true
-			}
 		default:
 			// ordinary byte outside a string
 		}
 	}
-	return spans, false
+	return spans
 }
 
 // containsKindKey reports whether span contains the envelope discriminator "kind" as an object key, accepting
