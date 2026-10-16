@@ -47,6 +47,10 @@
   --c-awaiting-user: var(--violet);
   --c-hook-failed:   var(--c-failed);
   --c-paused:        var(--amber);
+  /* awaiting_assistants (T7.9) — same active-amber family as retrying/revising while a required helper is
+     still working; the row switches to --c-failed via a separate [data-blocked] modifier once that helper's
+     gate needs a human decision (see stages-list.css/plan-panel.css) rather than a second token here. */
+  --c-awaiting-assistants: var(--amber);
 
   /* chrome */
   --focus-ring:     rgba(95, 120, 255, 0.5);

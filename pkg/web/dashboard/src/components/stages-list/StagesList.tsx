@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState, type ReactElement } from 
 import { createPortal } from 'react-dom'
 import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
-import { ATTENTION_STATUSES } from '../../hooks/use-attention'
+import { attentionKindFor } from '../../hooks/use-attention'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import { AssistantTaskRow } from '../assistants'
 
@@ -265,13 +265,16 @@ export function StagesList({
           const summary = assistants?.[stage.id] ?? null
           const hasBranch = summary !== null && summary.count > 0
           const isExpandedBranch = hasBranch && expandedBranches.has(stage.id)
+          // awaitingAssistantsBlocked (T7.9) — true only when awaiting_assistants' own required gate needs a
+          // human decision, not merely "a helper is still working" (see attentionKindFor's own doc comment).
+          const awaitingAssistantsBlocked = stage.status === 'awaiting_assistants' && stage.awaitingAssistantsBlocked === true
           return (
           <Fragment key={stage.id}>
           <li
             className={`stage-item${stage.id === selectedStageId ? ' active' : ''}${justDone.has(stage.id) ? ' just-done' : ''}`}
             data-stage-id={stage.id}
             data-status={stage.status}
-            data-attention={ATTENTION_STATUSES.has(stage.status) ? 'true' : undefined}
+            data-attention={attentionKindFor(stage) !== null ? 'true' : undefined}
           >
             {/* Сама строка — настоящая <button> (Enter/Space/focus-visible из
                 коробки): рейл стал основным способом открыть стадию, поэтому он
@@ -288,7 +291,11 @@ export function StagesList({
               onClick={() => onSelect(stage.id)}
               aria-describedby={costId}
             >
-              <span className="status-dot" data-status={stage.status}>
+              <span
+                className="status-dot"
+                data-status={stage.status}
+                data-blocked={awaitingAssistantsBlocked ? 'true' : undefined}
+              >
                 <span className="dot-check" aria-hidden="true">✓</span>
                 <span className="dot-num" aria-hidden="true">{index + 1}</span>
               </span>
@@ -317,6 +324,9 @@ export function StagesList({
                   <circle cx="8" cy="11.5" r="1.15" fill="var(--surface-canvas)" />
                 </svg>
               </span>
+            )}
+            {awaitingAssistantsBlocked && (
+              <span className="assistants-blocked-badge" title="A required helper task needs your decision">⚠</span>
             )}
             {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
             {stage.verify !== undefined && !isStaleRunningVerify(stage.status, stage.verify.phase) && (
@@ -470,6 +480,7 @@ export function StagesList({
                 expanded={expandedBranches}
                 onToggleExpand={toggleBranch}
                 onSelect={(taskId) => onSelectTask?.(stage.id, taskId)}
+                allTasks={summary?.tasks ?? []}
               />
             ))}
           </Fragment>

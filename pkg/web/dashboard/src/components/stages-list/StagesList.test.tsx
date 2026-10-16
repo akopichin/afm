@@ -10,7 +10,8 @@ function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
     id: 't1', parentTaskId: null, profileId: 'reviewer', title: 'Reviewer', mode: 'advisory',
     trigger: 'one_shot', status: 'running', statusReason: '', depth: 1,
-    watchPasses: null, watchLastCheckpointSeq: null, ...overrides,
+    watchPasses: null, watchLastCheckpointSeq: null, blocksRootCompletion: false, waived: false, waiverReason: '',
+    ...overrides,
   }
 }
 
@@ -64,6 +65,47 @@ describe('StagesList', () => {
       { id: 's2', name: 'B', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} accounting={{ supported: false }} />)
+    expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
+    expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
+  })
+
+  // §14.1/TestProgress_AdvisoryDoesNotInflateDenominator: the rail's "N / M stages done" progress is computed
+  // by the CALLER purely from the stages array (App.tsx: stages.filter(done).length / stages.length) — it
+  // never reads useStageAssistants' summaries at all. Attaching any number of advisory (or required) helper
+  // tasks to a stage must not change progressDone/progressTotal's rendered output, because the rail component
+  // itself has no code path from `assistants` to `progress-text`/`progress-fill`.
+  test('TestProgress_AdvisoryDoesNotInflateDenominator', () => {
+    const stages: Stage[] = [
+      { id: 's1', name: 'A', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+      { id: 's2', name: 'B', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    // A pile of advisory tasks (plus one required one) attached to s2 — none of this is "stage completion"
+    // work and must not leak into the stage-level progress denominator.
+    const manyAdvisory = summaryOf([
+      makeTask({ id: 'adv-1', mode: 'advisory' }),
+      makeTask({ id: 'adv-2', mode: 'advisory' }),
+      makeTask({ id: 'adv-3', mode: 'advisory' }),
+      makeTask({ id: 'req-1', mode: 'required' }),
+    ])
+    const { rerender } = render(
+      <StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} accounting={{ supported: false }} />,
+    )
+    expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
+    expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
+
+    rerender(
+      <StagesList
+        stages={stages}
+        selectedStageId={null}
+        onSelect={vi.fn()}
+        progressDone={1}
+        progressTotal={2}
+        accounting={{ supported: false }}
+        assistants={{ s2: manyAdvisory }}
+      />,
+    )
+    // Same progressDone/progressTotal props in → identical rendered progress out, regardless of how many
+    // helper tasks (of either mode) are attached to a stage.
     expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
     expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
   })
@@ -663,6 +705,34 @@ describe('StagesList', () => {
       fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
       fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
       expect(onPause).toHaveBeenCalledWith('a')
+    })
+  })
+
+  // Этап 7, T7.9: the stage row's own status label/dot for awaiting_assistants, plus the attention escalation
+  // that only fires when the stage's required gate actually needs a human decision.
+  describe('awaiting_assistants row (T7.9)', () => {
+    const stage: Stage = { id: 'a', name: 'QA gate', status: 'awaiting_assistants', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] }
+
+    test('TestStageRow_ShowsAwaitingAssistants', () => {
+      const { container } = render(<StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+      expect(screen.getByRole('button', { name: /QA gate/i })).toHaveAttribute('title', 'Awaiting assistants')
+      expect(container.querySelector('.status-dot[data-status="awaiting_assistants"]')).not.toBeNull()
+    })
+
+    test('TestNeedsChanges_AppearsAsActionableAttention — blocked renders a visible row badge and attention marker, unblocked does not', () => {
+      const working = stage // awaitingAssistantsBlocked absent/false — a helper is just still running
+      const { container, rerender } = render(
+        <StagesList stages={[working]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />,
+      )
+      expect(container.querySelector('.assistants-blocked-badge')).toBeNull()
+      expect(container.querySelector('.stage-item')).not.toHaveAttribute('data-attention', 'true')
+      expect(container.querySelector('.status-dot[data-blocked="true"]')).toBeNull()
+
+      const blocked: Stage = { ...stage, awaitingAssistantsBlocked: true }
+      rerender(<StagesList stages={[blocked]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+      expect(container.querySelector('.assistants-blocked-badge')).not.toBeNull()
+      expect(container.querySelector('.stage-item')).toHaveAttribute('data-attention', 'true')
+      expect(container.querySelector('.status-dot[data-blocked="true"]')).not.toBeNull()
     })
   })
 })

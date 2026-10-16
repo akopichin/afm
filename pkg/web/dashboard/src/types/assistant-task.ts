@@ -67,6 +67,16 @@ export type AssistantTask = {
   // она никогда не была привязана как наблюдатель, показывать нечего.
   watchPasses: number | null
   watchLastCheckpointSeq: number | null
+  // blocksRootCompletion (Этап 7, T7.5/T7.9) — зеркало server.AssistantTaskView.BlocksRootCompletion: true,
+  // только если КАЖДОЕ звено от этой задачи до стадии — required (одно advisory-звено где угодно в цепочке
+  // ломает это для всего, что ниже). Required-задача с blocksRootCompletion === false блокирует только своего
+  // непосредственного родителя (parentTaskId), а не стадию напрямую — см. assistantBlockingExplanation ниже.
+  blocksRootCompletion: boolean
+  // waived/waiverReason (Этап 7, T7.6/T7.9) — человек явно принял риск того, что эта required-задача никогда
+  // не закроет свой гейт. Once waived, blocksRootCompletion остаётся структурно true, но UI обязан перестать
+  // рисовать задачу как "blocks stage"/"blocks helper X" — см. assistantBlockingExplanation.
+  waived: boolean
+  waiverReason: string
 }
 
 // AssistantTaskNode — AssistantTask плюс дети по дереву (ByParent-проекция). Глубина не ограничена данными —
@@ -90,6 +100,21 @@ export function buildBreadcrumbChain(tasks: AssistantTask[], taskId: string): As
     current = current.parentTaskId !== null ? byId.get(current.parentTaskId) : undefined
   }
   return chain.reverse()
+}
+
+// assistantBlockingExplanation — T7.9/§4.3's "blocks stage" vs "blocks helper <X>" text for a required task's
+// mode badge. tasks is the SAME flat list task was read from (useStageAssistants' summary.tasks) — looked up
+// only to resolve the parent's title by id, never a second API call. Returns null for an advisory task (it
+// never blocks anything by construction) and for a waived required task (a human already accepted the risk —
+// rendering it as still blocking would contradict that decision, see server AssistantTaskView's own doc
+// comment on Waived).
+export function assistantBlockingExplanation(task: AssistantTask, tasks: AssistantTask[]): string | null {
+  if (task.mode !== 'required' || task.waived) return null
+  if (task.blocksRootCompletion) return 'Blocks stage completion'
+  if (task.parentTaskId === null) return null // defensive: a root required task always blocks root completion
+  const parent = tasks.find((t) => t.id === task.parentTaskId)
+  const parentTitle = parent !== undefined ? (parent.title !== '' ? parent.title : parent.profileId) : 'its parent task'
+  return `Blocks ${parentTitle}`
 }
 
 // Verdict — зеркало assistants.Verdict (pkg/assistants/types.go).

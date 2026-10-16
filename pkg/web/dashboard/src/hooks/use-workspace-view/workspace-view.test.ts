@@ -12,7 +12,7 @@ import {
 } from './workspace-view'
 import type { Stage, StageStatus } from '../../types'
 
-function stage(id: string, status: StageStatus): Stage {
+function stage(id: string, status: StageStatus, awaitingAssistantsBlocked?: boolean): Stage {
   return {
     id,
     name: id,
@@ -28,6 +28,7 @@ function stage(id: string, status: StageStatus): Stage {
     pausedFrom: '',
     preNote: '',
     buttons: [],
+    awaitingAssistantsBlocked,
   }
 }
 
@@ -45,14 +46,24 @@ function sync(
 
 describe('attentionKindForStatus', () => {
   it('maps each actionable status to its kind, others to null', () => {
-    expect(attentionKindForStatus('awaiting_approval')).toBe('approval')
-    expect(attentionKindForStatus('awaiting_user_input')).toBe('question')
-    expect(attentionKindForStatus('failed')).toBe('failed')
-    expect(attentionKindForStatus('hook_failed')).toBe('hook_failed')
-    expect(attentionKindForStatus('paused')).toBe('paused')
-    expect(attentionKindForStatus('running')).toBeNull()
-    expect(attentionKindForStatus('done')).toBeNull()
-    expect(attentionKindForStatus('pending')).toBeNull()
+    expect(attentionKindForStatus(stage('a', 'awaiting_approval'))).toBe('approval')
+    expect(attentionKindForStatus(stage('a', 'awaiting_user_input'))).toBe('question')
+    expect(attentionKindForStatus(stage('a', 'failed'))).toBe('failed')
+    expect(attentionKindForStatus(stage('a', 'hook_failed'))).toBe('hook_failed')
+    expect(attentionKindForStatus(stage('a', 'paused'))).toBe('paused')
+    expect(attentionKindForStatus(stage('a', 'running'))).toBeNull()
+    expect(attentionKindForStatus(stage('a', 'done'))).toBeNull()
+    expect(attentionKindForStatus(stage('a', 'pending'))).toBeNull()
+  })
+
+  // T7.9/TestNeedsChanges_AppearsAsActionableAttention: awaiting_assistants itself is ordinary background
+  // progress (a required helper still working) — it only becomes attention when the stage's own
+  // awaitingAssistantsBlocked flag says the blocker needs a human decision (failed/cancelled/paused helper,
+  // or a non-pass verdict like needs_changes/inconclusive).
+  it('TestNeedsChanges_AppearsAsActionableAttention', () => {
+    expect(attentionKindForStatus(stage('a', 'awaiting_assistants', true))).toBe('assistants')
+    expect(attentionKindForStatus(stage('a', 'awaiting_assistants', false))).toBeNull()
+    expect(attentionKindForStatus(stage('a', 'awaiting_assistants'))).toBeNull()
   })
 })
 

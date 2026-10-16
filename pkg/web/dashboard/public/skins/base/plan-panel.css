@@ -72,13 +72,18 @@
 .status-badge[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); }
 .status-badge[data-status="hook_failed"]          { color: var(--c-hook-failed); }
 .status-badge[data-status="paused"]               { color: var(--c-paused); }
+.status-badge[data-status="awaiting_assistants"]  { color: var(--c-awaiting-assistants); }
+/* Blocked (T7.9) — same escalation as the rail's status-dot: a required gate needing a human decision reads
+   as attention/failed, overriding the amber rule above via the extra [data-blocked] attribute. */
+.status-badge[data-status="awaiting_assistants"][data-blocked="true"] { color: var(--c-failed); }
 
 /* Pulsing badges for "running" states */
 .status-badge[data-status="running"],
 .status-badge[data-status="planning"],
 .status-badge[data-status="revising"],
 .status-badge[data-status="retrying"],
-.status-badge[data-status="awaiting_user_input"] {
+.status-badge[data-status="awaiting_user_input"],
+.status-badge[data-status="awaiting_assistants"] {
   animation: badgePulse 2.2s ease-in-out infinite;
 }
 

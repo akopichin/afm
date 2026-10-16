@@ -11,6 +11,7 @@ const TITLES: Record<AttentionKind, string> = {
   dialog: 'You have a question',
   failed: 'Stage failed',
   paused: 'Stage paused',
+  assistants: 'Assistant needs a decision',
 }
 
 function readInitialPermission(): NotificationPermissionState {

@@ -12,6 +12,11 @@ const COPY: Record<AttentionKind, { title: string; subtitle: string; glyph: stri
   paused: { title: 'Stage is paused', subtitle: 'Continue when you are ready to resume this stage.', glyph: '❙❙' },
   failed: { title: 'Stage failed', subtitle: 'Review the details and retry when the problem is resolved.', glyph: '!' },
   hook_failed: { title: 'Hook failed', subtitle: 'A stage hook failed. Retry it or skip to continue.', glyph: '!' },
+  assistants: {
+    title: 'A helper task needs your decision',
+    subtitle: 'A required assistant did not pass cleanly — review it, then revise, retry, or waive.',
+    glyph: '!',
+  },
 }
 
 // AttentionBanner — шапка внутри контекстной вкладки: большая сияющая иконка + заголовок «что происходит»

@@ -1,5 +1,10 @@
 import type { CSSProperties, ReactElement } from 'react'
-import { ASSISTANT_TASK_STATUS_LABELS, type AssistantTaskNode } from '../../types/assistant-task'
+import {
+  ASSISTANT_TASK_STATUS_LABELS,
+  assistantBlockingExplanation,
+  type AssistantTask,
+  type AssistantTaskNode,
+} from '../../types/assistant-task'
 
 // Visual indent caps here; the tree itself is not limited — buildTree (use-stage-assistants) walks an
 // arbitrary ParentTaskID chain, Этап 4a's recursion will produce real depth > 1 without this component
@@ -15,6 +20,12 @@ type AssistantTaskRowProps = {
   expanded: ReadonlySet<string>
   onToggleExpand: (taskId: string) => void
   onSelect: (taskId: string) => void
+  // allTasks (T7.9) — the SAME stage's full flat task list node was read from (useStageAssistants'
+  // summary.tasks), used ONLY to resolve a required task's parent title for assistantBlockingExplanation
+  // (never a second API call — see that function's own doc comment). Optional/defaults to [] so existing
+  // call sites/tests that never pass it keep compiling (an advisory-only tree renders no blocking text either
+  // way, same as AssistantTaskView's allTasks precedent).
+  allTasks?: AssistantTask[]
 }
 
 // AssistantTaskRow — one helper-task row under its root stage in the rail, plus (recursively, depth-first)
@@ -33,11 +44,15 @@ export function AssistantTaskRow({
   expanded,
   onToggleExpand,
   onSelect,
+  allTasks,
 }: AssistantTaskRowProps): ReactElement {
   const hasChildren = node.children.length > 0
   const isExpanded = expanded.has(node.id)
   const indent = Math.min(depth, MAX_VISUAL_DEPTH)
   const label = ASSISTANT_TASK_STATUS_LABELS[node.status]
+  // blockingText (T7.9/§4.3) — "Blocks stage completion" vs "Blocks <parent task>", shown only for a
+  // required, non-waived task. null for advisory tasks (and for waived ones) renders nothing extra.
+  const blockingText = assistantBlockingExplanation(node, allTasks ?? [])
 
   return (
     <>
@@ -59,6 +74,11 @@ export function AssistantTaskRow({
             <span className="assistant-task-mode" data-mode={node.mode}>
               {node.mode === 'required' ? 'Required' : 'Advisory'}
             </span>
+            {blockingText !== null && (
+              <span className="assistant-task-blocks" title={blockingText}>
+                {blockingText}
+              </span>
+            )}
             <span className="assistant-task-status-sr">{label}</span>
           </span>
         </button>
@@ -88,6 +108,7 @@ export function AssistantTaskRow({
             expanded={expanded}
             onToggleExpand={onToggleExpand}
             onSelect={onSelect}
+            allTasks={allTasks}
           />
         ))}
     </>

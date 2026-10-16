@@ -24,7 +24,12 @@ export function WorkspaceHeader({ stage, connected, attentionNav }: WorkspaceHea
     <div className="workspace-header">
       <h2 id="detail-title" className="workspace-title">{stage.name !== '' ? stage.name : stage.id}</h2>
       <span className="status-badge-wrap">
-        <span id="detail-status" className="status-badge" data-status={stage.status}>
+        <span
+          id="detail-status"
+          className="status-badge"
+          data-status={stage.status}
+          data-blocked={stage.status === 'awaiting_assistants' && stage.awaitingAssistantsBlocked === true ? 'true' : undefined}
+        >
           {STAGE_STATUS_LABELS[stage.status]}
         </span>
         {stage.status === 'running' && connected && (

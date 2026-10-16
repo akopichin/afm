@@ -41,6 +41,7 @@ const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
   failed: 'Failed',
   hook_failed: 'Hook failed',
   paused: 'Paused',
+  assistants: 'Assistants',
 }
 
 // Подпись ждущего действия в шапке файлового оверлея.
@@ -50,6 +51,7 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
   failed: 'Stage failed',
   hook_failed: 'Hook failed',
   paused: 'Stage paused',
+  assistants: 'Assistant decision needed',
 }
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
@@ -205,7 +207,7 @@ export function App(): ReactElement {
     // иначе, если у новой стадии случайно совпадёт phase/id, DialogChannel проскроллит не туда.
     setScrollToDialogTarget(null)
     const stage = stages.find((s) => s.id === stageId) ?? null
-    const kind = stage === null ? null : attentionKindForStatus(stage.status)
+    const kind = stage === null ? null : attentionKindForStatus(stage)
     if (kind !== null) {
       openAttention(stageId)
       return
@@ -307,7 +309,7 @@ export function App(): ReactElement {
   }
 
   const inAttention = wsState.view === 'attention'
-  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage.status)
+  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage)
 
   // Первый нерешённый элемент очереди (для маяка/шортката). В attention-виде это
   // активный элемент; иначе — голова очереди.

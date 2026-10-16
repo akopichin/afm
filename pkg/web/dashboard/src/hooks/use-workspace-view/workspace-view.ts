@@ -1,20 +1,25 @@
-import type { Stage, StageStatus } from '../../types'
+import type { Stage } from '../../types'
 
 // WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла стадий. 'assistant' — лента
 // одной выбранной задачи помощника (Этап 3, T3.10); как и history-виды, это read-only ручной выбор, а не
 // часть attention-очереди — завершение/появление помощника никогда не открывает его автоматически.
 export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant'
 
-// AttentionKind — вид элемента, требующего действия пользователя.
-export type AttentionKind = 'approval' | 'question' | 'failed' | 'hook_failed' | 'paused'
+// AttentionKind — вид элемента, требующего действия пользователя. 'assistants' (Этап 7, T7.9) — стадия в
+// awaiting_assistants, чей required-гейт требует решения человека (см. attentionKindForStatus ниже). NB: это
+// отдельный, вручную синхронизируемый список от hooks/use-attention's AttentionKind (та же, принятая ранее
+// дупликация — см. AGENTS.md) — там failed/hook_failed схлопнуты в один 'failed', здесь разделены.
+export type AttentionKind = 'approval' | 'question' | 'failed' | 'hook_failed' | 'paused' | 'assistants'
 
 // episode — идентификатор attention-эпизода.
 export type AttentionItem = { stageId: string; kind: AttentionKind; episode: string }
 
-// attentionKindForStatus — статус стадии → вид attention, либо null, если статус
-// не требует действия. Единственная точка соответствия статус→вид.
-export function attentionKindForStatus(status: StageStatus): AttentionKind | null {
-  switch (status) {
+// attentionKindForStatus — стадия → вид attention, либо null, если она не требует действия. Единственная
+// точка соответствия стадия→вид в этом модуле. Принимает ВСЮ стадию (не только статус): awaiting_assistants
+// сам по себе ничего не решает — требуется ещё awaitingAssistantsBlocked (T7.9: «помощник ещё работает» —
+// это обычный фон, не attention; «нужно решение человека» — attention).
+export function attentionKindForStatus(stage: Stage): AttentionKind | null {
+  switch (stage.status) {
     case 'awaiting_approval':
       return 'approval'
     case 'awaiting_user_input':
@@ -25,6 +30,8 @@ export function attentionKindForStatus(status: StageStatus): AttentionKind | nul
       return 'hook_failed'
     case 'paused':
       return 'paused'
+    case 'awaiting_assistants':
+      return stage.awaitingAssistantsBlocked === true ? 'assistants' : null
     default:
       return null
   }
@@ -34,7 +41,7 @@ export function attentionKindForStatus(status: StageStatus): AttentionKind | nul
 export function deriveAttentionItems(stages: Stage[]): AttentionItem[] {
   const items: AttentionItem[] = []
   for (const s of stages) {
-    const kind = attentionKindForStatus(s.status)
+    const kind = attentionKindForStatus(s)
     if (kind !== null) items.push({ stageId: s.id, kind, episode: s.updatedAt })
   }
   return items

@@ -7,7 +7,8 @@ function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
     id: 't1', parentTaskId: null, profileId: 'reviewer', title: 'Reviewer', mode: 'advisory',
     trigger: 'one_shot', status: 'running', statusReason: '', depth: 1,
-    watchPasses: null, watchLastCheckpointSeq: null, ...overrides,
+    watchPasses: null, watchLastCheckpointSeq: null, blocksRootCompletion: false, waived: false, waiverReason: '',
+    ...overrides,
   }
 }
 

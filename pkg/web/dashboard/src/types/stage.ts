@@ -32,6 +32,12 @@ export type Stage = {
   // verify — durable-индикатор последнего AI-verify прохода стадии. undefined — у стадии ни разу не было
   // verify_started/verify_result.
   verify?: StageVerify
+  // awaitingAssistantsBlocked (Этап 7, T7.9) — значим только при status === 'awaiting_assistants': true, если
+  // блокирующая required-задача требует решения человека (failed/cancelled/paused помощник либо
+  // needs_changes/inconclusive вердикт), а не просто ещё работает. Зеркало Go
+  // StageView.AwaitingAssistantsBlocked (omitempty на бэке). Опционально и здесь же — чтобы существующие
+  // Stage-фикстуры в тестах не пришлось поголовно трогать (как cost/verify выше).
+  awaitingAssistantsBlocked?: boolean
 }
 
 // StageVerify — компактное текущее состояние AI-verify одной стадии: verify_started → 'running',
@@ -56,6 +62,10 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   paused: 'Paused',
   awaiting_user_input: 'Awaiting reply',
   hook_failed: 'Hook failed',
+  // awaiting_assistants (Этап 7, T7.9) — главный executor стадии уже закончил, стадия ждёт, пока required-
+  // помощник закроет свой гейт. Сам по себе ярлык не различает «помощник ещё работает» и «нужно решение
+  // человека» — это несёт stage.awaitingAssistantsBlocked (см. use-attention/attentionKindFor).
+  awaiting_assistants: 'Awaiting assistants',
 }
 
 // Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует прогресс флоу и ждёт решения
@@ -69,5 +79,6 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'awaiting_user_input',
   'awaiting_approval',
   'hook_failed',
+  'awaiting_assistants',
 ])
 

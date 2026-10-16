@@ -50,6 +50,7 @@ describe('STAGE_STATUS_LABELS', () => {
       pending: 'Pending',
       planning: 'Planning',
       awaiting_approval: 'Awaiting approval',
+      awaiting_assistants: 'Awaiting assistants',
       revising: 'Revising',
       ready: 'Ready',
       running: 'Running',
@@ -74,6 +75,7 @@ describe('ACTIVE_STAGE_STATUSES', () => {
         'paused',
         'awaiting_user_input',
         'awaiting_approval',
+        'awaiting_assistants',
         'hook_failed',
       ]),
     )

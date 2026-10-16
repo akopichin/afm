@@ -92,6 +92,7 @@ describe('useStatus', () => {
       pausedFrom: '',
       preNote: '',
       buttons: [],
+      awaitingAssistantsBlocked: false,
     })
     expect(result.current.stages[1]?.status).toBe('running')
   })
@@ -162,6 +163,26 @@ describe('useStatus', () => {
     expect(byId.get('s2')?.isScript).toBe(false)
     expect(byId.get('s2')?.pausedFrom).toBe('')
     expect(byId.get('s2')?.preNote).toBe('')
+  })
+
+  // T7.9: awaiting_assistants_blocked различает «помощник ещё работает» (false/отсутствует) от «нужно решение
+  // человека» (true) — дашборд рисует actionable attention только во втором случае.
+  test('парсит awaiting_assistants_blocked, дефолт false при отсутствии/мусоре', () => {
+    const raw = {
+      flow_name: 'demo',
+      stages: [
+        { id: 's1', status: 'awaiting_assistants', awaiting_assistants_blocked: true },
+        { id: 's2', status: 'awaiting_assistants', awaiting_assistants_blocked: false },
+        { id: 's3', status: 'awaiting_assistants' },
+        { id: 's4', status: 'awaiting_assistants', awaiting_assistants_blocked: 'yes' },
+      ],
+    }
+    const { stages } = normalizeStatus(raw)
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('s1')?.awaitingAssistantsBlocked).toBe(true)
+    expect(byId.get('s2')?.awaitingAssistantsBlocked).toBe(false)
+    expect(byId.get('s3')?.awaitingAssistantsBlocked).toBe(false)
+    expect(byId.get('s4')?.awaitingAssistantsBlocked).toBe(false)
   })
 
   test('парсит interactive/autonomous/has_dialog с дефолтом false', () => {

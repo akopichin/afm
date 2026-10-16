@@ -33,6 +33,14 @@ describe('status-color mapping lives once in base/tokens.css', () => {
     }
   })
 
+  // T7.9: awaiting_assistants starts in the same active-amber family as retrying/revising — most of the time
+  // the status just means a required helper is still working, ordinary background progress. It escalates to
+  // the attention/failed look via a [data-blocked] CSS modifier (stages-list.css/plan-panel.css), not a
+  // second --c-* token, so this single declaration stays the source of truth either way.
+  it('maps awaiting_assistants to the active amber family', () => {
+    expect(decl(tokensCss, '--c-awaiting-assistants')).toBe('var(--amber)')
+  })
+
   it('maps attention/neutral states to their own families', () => {
     expect(decl(tokensCss, '--c-failed')).toBe('var(--coral)')
     expect(decl(tokensCss, '--c-hook-failed')).toBe('var(--c-failed)')

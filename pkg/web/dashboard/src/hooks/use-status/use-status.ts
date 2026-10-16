@@ -262,6 +262,7 @@ function toStage(raw: unknown): Stage | null {
     buttons: Array.isArray(obj.buttons) ? obj.buttons.filter((x): x is string => typeof x === 'string') : [],
     cost,
     verify,
+    awaitingAssistantsBlocked: obj.awaiting_assistants_blocked === true,
   }
 }
 

@@ -145,6 +145,18 @@
   color: var(--text-primary);
   border-color: var(--accent-primary);
 }
+/* assistantBlockingExplanation (T7.9/§4.3) — "Blocks stage completion" / "Blocks <parent task>", shown only
+   next to a required (non-waived) task's mode pill. Quiet muted text, truncated like the title — the full
+   text is always also in the title attribute for a hover tooltip. */
+.assistant-task-blocks {
+  flex-shrink: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .assistant-task-status-sr {
   position: absolute;
   width: 1px;

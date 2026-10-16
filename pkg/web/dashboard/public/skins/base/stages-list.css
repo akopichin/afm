@@ -211,6 +211,14 @@
 .status-dot[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); border-color: var(--c-awaiting-user); }
 .status-dot[data-status="hook_failed"]          { color: var(--c-hook-failed);   border-color: var(--c-hook-failed); }
 .status-dot[data-status="paused"]               { color: var(--c-paused);        border-color: var(--c-paused); }
+.status-dot[data-status="awaiting_assistants"]  { color: var(--c-awaiting-assistants); border-color: var(--c-awaiting-assistants); }
+/* Blocked (T7.9) — the required gate needs a human decision, not just "a helper is still working": the dot
+   escalates to the same attention color as failed, overriding the amber rule above via higher specificity
+   ([data-status][data-blocked] beats the single-attribute [data-status] selector). */
+.status-dot[data-status="awaiting_assistants"][data-blocked="true"] {
+  color: var(--c-failed);
+  border-color: var(--c-failed);
+}
 
 /* Filled node for every active/attention/terminal status; the number is punched out in the canvas colour
    so it reads on the bright fill. Pending/ready stay as hollow rings with a muted number. */
@@ -234,14 +242,17 @@
 .stage-item[data-status="done"] .stage-connector { background: var(--success); }
 
 /* Active statuses breathe gently (low amplitude); frozen under reduced-motion by
-   the global gate. */
+   the global gate. awaiting_assistants breathes the same way UNLESS its gate is blocked (T7.9) — a blocked
+   gate reads as urgent, same cadence as awaiting_user_input's askPulse below, not routine progress. */
 .status-dot[data-status="running"],
 .status-dot[data-status="planning"],
 .status-dot[data-status="revising"],
-.status-dot[data-status="retrying"] {
+.status-dot[data-status="retrying"],
+.status-dot[data-status="awaiting_assistants"]:not([data-blocked="true"]) {
   animation: runRing 1.8s ease-in-out infinite;
 }
-.status-dot[data-status="awaiting_user_input"] {
+.status-dot[data-status="awaiting_user_input"],
+.status-dot[data-status="awaiting_assistants"][data-blocked="true"] {
   animation: askPulse 2s ease-in-out infinite;
 }
 @keyframes runRing {
@@ -276,6 +287,18 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .approval-badge { animation: none; }
+}
+/* assistants-blocked-badge (T7.9) — the one visible row-level signal that a required helper task's gate
+   needs a human decision (failed/cancelled/paused helper, or a non-pass verdict). Same pulse as approval-badge
+   (another "needs your attention now" state) but in the attention/failed color, not --c-awaiting. */
+.assistants-blocked-badge {
+  display: inline-flex;
+  font-size: 11px;
+  color: var(--c-failed);
+  animation: approvalPulse 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistants-blocked-badge { animation: none; }
 }
 .prenote-badge {
   font-size: 11px;

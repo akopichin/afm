@@ -37,6 +37,9 @@ function toAssistantTask(raw: AssistantTaskWire): AssistantTask {
     depth: typeof raw.depth === 'number' && raw.depth > 0 ? raw.depth : 1,
     watchPasses: typeof raw.watch_passes === 'number' ? raw.watch_passes : null,
     watchLastCheckpointSeq: typeof raw.watch_last_checkpoint_seq === 'number' ? raw.watch_last_checkpoint_seq : null,
+    blocksRootCompletion: raw.blocks_root_completion === true,
+    waived: raw.waived === true,
+    waiverReason: raw.waiver_reason ?? '',
   }
 }
 
@@ -86,7 +89,7 @@ function tasksSignature(tasks: AssistantTask[]): string {
   return tasks
     .map(
       (t) =>
-        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}`,
+        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}`,
     )
     .join('\n')
 }

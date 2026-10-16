@@ -8,7 +8,8 @@ function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
     id: 't1', parentTaskId: null, profileId: 'reviewer', title: '', mode: 'advisory',
     trigger: 'one_shot', status: 'running', statusReason: '', depth: 1,
-    watchPasses: null, watchLastCheckpointSeq: null, ...overrides,
+    watchPasses: null, watchLastCheckpointSeq: null, blocksRootCompletion: false, waived: false, waiverReason: '',
+    ...overrides,
   }
 }
 
@@ -127,5 +128,74 @@ describe('AssistantTaskRow', () => {
     // .assistant-task-title's overflow:hidden/text-overflow:ellipsis actually truncate inside a flex row —
     // asserting the class names here is the render-level half of that CSS contract.
     expect(title.closest('.assistant-task-label')).not.toBeNull()
+  })
+
+  // T7.9/§4.3: a required task explains WHAT it blocks — the root stage itself, or just its own immediate
+  // parent helper — so the rail never shows an unqualified "Required" pill that leaves the user guessing.
+  it('TestBadge_RequiredExplainsWhoIsBlocked', () => {
+    const blocksStage = makeTask({ id: 'qa', title: 'QA review', mode: 'required', blocksRootCompletion: true })
+    const parent = makeTask({ id: 'mobile', title: 'Mobile lead', mode: 'required', blocksRootCompletion: true })
+    const blocksParent = makeTask({
+      id: 'android',
+      parentTaskId: 'mobile',
+      title: 'Android check',
+      mode: 'required',
+      blocksRootCompletion: false,
+      depth: 2,
+    })
+    const tasks = [blocksStage, parent, blocksParent]
+
+    const [stageRoot] = buildTree([blocksStage])
+    const { unmount } = render(
+      <ul>
+        <AssistantTaskRow
+          node={stageRoot!}
+          depth={1}
+          selectedTaskId={null}
+          expanded={new Set()}
+          onToggleExpand={vi.fn()}
+          onSelect={vi.fn()}
+          allTasks={tasks}
+        />
+      </ul>,
+    )
+    expect(screen.getByText('Blocks stage completion')).toBeInTheDocument()
+    unmount()
+
+    const [parentRoot] = buildTree([parent, blocksParent])
+    render(
+      <ul>
+        <AssistantTaskRow
+          node={parentRoot!}
+          depth={1}
+          selectedTaskId={null}
+          expanded={new Set(['mobile'])}
+          onToggleExpand={vi.fn()}
+          onSelect={vi.fn()}
+          allTasks={tasks}
+        />
+      </ul>,
+    )
+    expect(screen.getByText('Blocks Mobile lead')).toBeInTheDocument()
+  })
+
+  // An advisory task never blocks anything — no explanation text is rendered next to its mode pill.
+  it('renders no blocking explanation for an advisory task', () => {
+    const task = makeTask({ mode: 'advisory', title: 'Advisory check' })
+    const [root] = buildTree([task])
+    render(
+      <ul>
+        <AssistantTaskRow
+          node={root!}
+          depth={1}
+          selectedTaskId={null}
+          expanded={new Set()}
+          onToggleExpand={vi.fn()}
+          onSelect={vi.fn()}
+          allTasks={[task]}
+        />
+      </ul>,
+    )
+    expect(screen.queryByText(/Blocks/)).not.toBeInTheDocument()
   })
 })

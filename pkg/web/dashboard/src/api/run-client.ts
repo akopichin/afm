@@ -213,6 +213,15 @@ export type AssistantTaskWire = {
   // watch_passes/watch_last_checkpoint_seq (T5.6) — present only for a checkpoints/on_completion watcher task.
   watch_passes?: number
   watch_last_checkpoint_seq?: number
+  // blocks_root_completion (Этап 7, T7.5/T7.9) — whether an unresolved instance of this task would block the
+  // ROOT STAGE's own completion (vs. only its immediate parent helper). See
+  // pkg/server/assistants.go's AssistantTaskView.BlocksRootCompletion.
+  blocks_root_completion?: boolean
+  // waived/waiver_reason (Этап 7, T7.6/T7.9) — a human has explicitly accepted the risk of this required task
+  // never closing its own gate. Once waived, the dashboard must stop rendering it as "blocks stage"/"blocks
+  // helper X" even though blocks_root_completion stays structurally true.
+  waived?: boolean
+  waiver_reason?: string
 }
 
 // listStageAssistants reads one stage's task tree (flat, parent-linked) — GET /api/stages/{id}/assistants.
