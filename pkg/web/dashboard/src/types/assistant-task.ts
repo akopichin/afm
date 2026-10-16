@@ -175,6 +175,10 @@ export type AssistantResult = {
   contextVersion: string
   suggestedChange: string
   limitations: string
+  // repaired — mirrors assistants.Result.Repaired: true when afm mechanically repaired the answer's syntax
+  // (markdown fence, surrounding prose, …) before it could be strictly decoded. The verdict is still the
+  // assistant's own — repair never touches it.
+  repaired: boolean
 }
 
 export function parseAssistantResult(raw: unknown): AssistantResult | null {
@@ -195,6 +199,7 @@ export function parseAssistantResult(raw: unknown): AssistantResult | null {
     contextVersion: typeof obj.context_version === 'string' ? obj.context_version : '',
     suggestedChange: typeof obj.suggested_change === 'string' ? obj.suggested_change : '',
     limitations: typeof obj.limitations === 'string' ? obj.limitations : '',
+    repaired: obj.repaired === true,
   }
 }
 

@@ -247,6 +247,19 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // ремонта битого question.json) — прежняя не навигируемая mono-строка.
       return { actor: 'system', tone: 'neutral', kind: 'dialog', text: `auto-answered ${str(obj.id)}: ${str(obj.answer)}`, mono: true }
     }
+    case 'helper_result_repaired': {
+      // A helper answer needed mechanical repair (markdown fence/surrounding prose) before it could be
+      // strictly decoded — observational only, the task's own verdict is unaffected.
+      const taskId = str(obj.task_id)
+      return {
+        actor: 'system',
+        tone: 'warning',
+        kind: 'status',
+        text: `Helper task ${taskId}'s answer needed mechanical repair`,
+        mono: false,
+        dedupeId: `helper:${taskId}:repaired`,
+      }
+    }
     case 'context_warning':
       return { actor: 'system', tone: 'warning', kind: 'status', text: `context warning: ${str(data)}`, mono: false }
     default:

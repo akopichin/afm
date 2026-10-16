@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assistantBlockingExplanation, type AssistantTask } from './assistant-task'
+import { assistantBlockingExplanation, parseAssistantResult, type AssistantTask } from './assistant-task'
 
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
@@ -44,5 +44,13 @@ describe('assistantBlockingExplanation', () => {
   it('falls back gracefully when the parent id cannot be found in the given list', () => {
     const child = makeTask({ id: 'android', parentTaskId: 'missing-parent', mode: 'required', blocksRootCompletion: false })
     expect(assistantBlockingExplanation(child, [child])).toBe('Blocks its parent task')
+  })
+})
+
+describe('parseAssistantResult', () => {
+  it('parses repaired as a boolean, defaulting to false', () => {
+    const base = { verdict: 'pass', summary: 'ok' }
+    expect(parseAssistantResult({ ...base, repaired: true })?.repaired).toBe(true)
+    expect(parseAssistantResult(base)?.repaired).toBe(false)
   })
 })

@@ -244,6 +244,17 @@ describe('verify_tree_modified — предупреждение о наруше�
   })
 })
 
+describe('helper_result_repaired — a helper answer needed mechanical repair', () => {
+  it('maps helper_result_repaired to a warning status line', () => {
+    const items = toFeedItems([
+      ev('helper_result_repaired', { task_id: 't-1' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toContain('t-1')
+  })
+})
+
 describe('dialog_question/dialog_answer — реальный текст диалога, ask_user/user_answered вытеснены', () => {
   it('dialog_question maps to a navigable agent item carrying phase/id from the payload', () => {
     const items = toFeedItems([

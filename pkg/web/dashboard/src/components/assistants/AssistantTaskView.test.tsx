@@ -5,6 +5,7 @@ import type { AssistantTask } from '../../types/assistant-task'
 import {
   cancelAssistantTask,
   getAssistantTaskEvents,
+  getAssistantTaskRaw,
   pauseAssistantTask,
   waiveAssistantTask,
 } from '../../api/run-client'
@@ -14,6 +15,7 @@ vi.mock('../../api/run-client', async () => {
   return {
     ...actual,
     getAssistantTaskEvents: vi.fn(actual.getAssistantTaskEvents),
+    getAssistantTaskRaw: vi.fn(() => Promise.resolve('')),
     pauseAssistantTask: vi.fn(() => Promise.resolve()),
     continueAssistantTask: vi.fn(() => Promise.resolve()),
     cancelAssistantTask: vi.fn(() => Promise.resolve()),
@@ -21,6 +23,7 @@ vi.mock('../../api/run-client', async () => {
   }
 })
 const mockGetEvents = getAssistantTaskEvents as unknown as ReturnType<typeof vi.fn>
+const mockGetRaw = getAssistantTaskRaw as unknown as ReturnType<typeof vi.fn>
 const mockPause = pauseAssistantTask as unknown as ReturnType<typeof vi.fn>
 const mockCancel = cancelAssistantTask as unknown as ReturnType<typeof vi.fn>
 const mockWaive = waiveAssistantTask as unknown as ReturnType<typeof vi.fn>
@@ -46,6 +49,8 @@ describe('AssistantTaskView', () => {
     mockPause.mockImplementation(() => Promise.resolve())
     mockCancel.mockImplementation(() => Promise.resolve())
     mockWaive.mockImplementation(() => Promise.resolve())
+    mockGetRaw.mockClear()
+    mockGetRaw.mockImplementation(() => Promise.resolve(''))
   })
   afterEach(() => {
     vi.restoreAllMocks()
@@ -79,11 +84,56 @@ describe('AssistantTaskView', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/was cancelled/i))
   })
 
+  test('offers the raw answer on a protocol_error failure and fetches it lazily on expand', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    mockGetRaw.mockImplementation(() => Promise.resolve('Проверил. Всё плохо, вот пять замечаний...'))
+    render(<AssistantTaskView task={makeTask({ status: 'failed', statusReason: 'protocol_error: invalid JSON' })} />)
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    expect(mockGetRaw).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    await waitFor(() => expect(mockGetRaw).toHaveBeenCalledTimes(1))
+    expect(mockGetRaw).toHaveBeenCalledWith('t1')
+    await waitFor(() => expect(screen.getByText(/Проверил\. Всё плохо/)).toBeInTheDocument())
+  })
+
+  test('keeps showing the plain error when the raw answer is unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    mockGetRaw.mockImplementation(() => Promise.reject(new Error('404')))
+    render(<AssistantTaskView task={makeTask({ status: 'failed', statusReason: 'protocol_error: invalid JSON' })} />)
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    await waitFor(() => expect(mockGetRaw).toHaveBeenCalledTimes(1))
+    // No crash, and the plain error text is still there.
+    expect(screen.getByRole('alert')).toHaveTextContent('protocol_error: invalid JSON')
+  })
+
   test('completed, no structured result available: falls back to a calm message instead of an empty screen', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_status_changed', data: { status: 'completed', reason: '' } }]))
     render(<AssistantTaskView task={makeTask({ status: 'completed', statusReason: '' })} />)
 
     await waitFor(() => expect(screen.getByText(/no detailed result/i)).toBeInTheDocument())
+  })
+
+  test('shows a repaired badge when the result was mechanically repaired', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      eventsResponse([{ seq: 1, type: 'task_result', data: { verdict: 'pass', summary: 'ok', repaired: true } }]),
+    )
+    render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('repaired')).toBeInTheDocument())
+  })
+
+  test('does not show the badge for an unrepaired result', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      eventsResponse([{ seq: 1, type: 'task_result', data: { verdict: 'pass', summary: 'ok' } }]),
+    )
+    render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('ok')).toBeInTheDocument())
+    expect(screen.queryByText('repaired')).toBeNull()
   })
 
   test('completed result renders through the shared safe markdown renderer, not a second dangerouslySetInnerHTML', async () => {
