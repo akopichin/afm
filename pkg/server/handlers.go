@@ -59,6 +59,10 @@ type statusResponse struct {
 	BackoffAccumulatedMs int64           `json:"backoff_accumulated_ms"`
 	BackoffOpenSince     []time.Time     `json:"backoff_open_since,omitempty"`
 	Capabilities         capabilities    `json:"capabilities"`
+	// GraphRevision (Этап 9) — the runtime stage registry's current revision; omitted when the add-stage
+	// capability is off. The dashboard compares this against a previously-fetched preview's graph_revision to
+	// detect staleness without a dedicated endpoint.
+	GraphRevision int64 `json:"graph_revision,omitempty"`
 	// FlowPauseState/FlowPausedStages surface the flow-wide review-pause round: "none"|"paused"|"resuming",
 	// plus the ids of stages this round is holding paused.
 	FlowPauseState   string   `json:"flow_pause_state"`
@@ -86,6 +90,8 @@ type capabilities struct {
 	FileBrowser   bool `json:"file_browser"`
 	SideAgent     bool `json:"side_agent"`
 	Collaboration bool `json:"collaboration"`
+	// AddStage (Этап 9) — whether POST /api/run/graph/{preview|commit} is wired.
+	AddStage bool `json:"add_stage"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -121,6 +127,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	resp.Capabilities.SideAgent = s.sideAgent != nil
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil
+	resp.Capabilities.AddStage = s.graphActions != nil
+	if s.graphActions != nil {
+		resp.GraphRevision = s.graphActions.GraphRevision()
+	}
 	if s.sideAgent != nil {
 		resp.RunID = s.sideAgent.ConversationID()
 	}

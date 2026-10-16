@@ -85,7 +85,7 @@ func (o *Orchestrator) PauseFlow(ctx context.Context) ([]string, error) {
 	var ids []string
 	for _, id := range snap.StageOrder {
 		st := snap.Stages[id]
-		stage := o.graph.Stage(id)
+		stage := o.reg().Stage(id)
 		if stage == nil || stage.IsScript() {
 			continue // scripts have no interruptChans registration point (see Pause)
 		}
@@ -278,7 +278,7 @@ func (o *Orchestrator) resumeOwner(ctx context.Context, ow state.PauseOwner, isT
 		}
 	}
 
-	stage := o.graph.Stage(ow.ID)
+	stage := o.reg().Stage(ow.ID)
 	if stage == nil {
 		return true // nothing to resume; don't retry
 	}

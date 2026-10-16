@@ -60,7 +60,7 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 			RunDir: dir, Stages: stages, Store: store, RunID: "run1",
 			AssistantsEnabled: enabled, AssistantsRegistry: reg,
 		},
-		graph:         graph.NewRegistry(stages),
+		graph:         graph.NewStore(graph.NewRegistry(stages)),
 		ui:            bus.NewUIBus(),
 		critical:      bus.NewCriticalBus(16),
 		fsm:           bus.NewFSM(store),
@@ -169,7 +169,7 @@ func TestAttach_RejectedForScriptStage(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, true)
 	scriptStage := flow.Stage{ID: "scr", Script: "echo hi"}
 	o.opts.Stages = append(o.opts.Stages, scriptStage)
-	o.graph = graph.NewRegistry(o.opts.Stages)
+	o.graph = graph.NewStore(graph.NewRegistry(o.opts.Stages))
 
 	_, err := o.Attach(context.Background(), AttachRequest{
 		OperationID: "op-1", StageID: "scr", ProfileID: "reviewer", Actor: state.Actor{Kind: "user"},

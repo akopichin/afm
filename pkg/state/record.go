@@ -102,6 +102,14 @@ const (
 	// audited operation — never a side effect of cancel/retry/any task_result — Actor is checked at admission
 	// (pkg/orchestrator's WaiveTask) to be a human, never a model's own result (§13.2/§19.5).
 	kindTaskWaived = "task_waived"
+	// kindStageGraphAdded (Этап 9, T9.4) — one durable record of a dynamically-added regular stage: the new
+	// stage's full definition, any additional dependency it gives an EXISTING stage (insert-before never
+	// removes a dependency, only adds one — see DynamicStageAdded's doc comment), and the resulting stage
+	// display order, all three bundled into this ONE control record/journal write. Deliberately a TOP-LEVEL
+	// kind (handled directly in dispatchControl against the whole *RunState), not an Effect nested inside
+	// kindOperationCommitted: that wrapper's per-effect projection (applyOperationCommitted) only ever mutates
+	// AssistantsState, which has nothing to do with the stage graph/StageOrder this kind needs to touch.
+	kindStageGraphAdded = "stage_graph_added"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
@@ -125,6 +133,7 @@ var controlKinds = map[string]bool{
 	kindFeedbackIntentCreated:  true,
 	kindFeedbackIntentConsumed: true,
 	kindTaskWaived:             true,
+	kindStageGraphAdded:        true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

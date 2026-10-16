@@ -360,6 +360,63 @@ export async function dismissProposal(proposalId: string, requestId: string, rea
   })
 }
 
+// --- Этап 9 (T9.6): dynamic "add a regular stage" dialog — POST /api/run/graph/{preview|commit}. Same wire
+// shape for both calls (addStageRequest, pkg/server/graph.go); preview never mutates anything, commit is the
+// idempotent write (request_id required).
+
+export type AddStageRequest = {
+  kind: 'insert_before' | 'append'
+  id: string
+  name?: string
+  command: string
+  prompt: string
+  // target_id — insert_before only.
+  target_id?: string
+  // depends_on — append only, an explicit override of the default (current sinks).
+  depends_on?: string[]
+  // expected_revision — 0 (or omitted) means "don't check" (graph_mutate.go's AddStageDraft.ExpectedRevision).
+  expected_revision?: number
+  // request_id — required for /commit (idempotency key), ignored by /preview.
+  request_id?: string
+}
+
+// AddStagePreviewView mirrors pkg/server/graph.go's stagePreviewView. depends_on is the NEW stage's own
+// dependencies; extra_deps maps an EXISTING stage id to the dependency ids newly added to it (insert_before
+// only). order/warnings are present on /preview's response and omitted by /commit's.
+export type AddStagePreviewView = {
+  id: string
+  name?: string
+  command: string
+  prompt: string
+  depends_on: string[]
+  extra_deps?: Record<string, string[]>
+  order?: string[]
+  warnings?: string[]
+}
+
+export type AddStagePreviewResponse = {
+  stage: AddStagePreviewView
+  graph_revision: number
+}
+
+export type AddStageCommitResponse = {
+  stage: AddStagePreviewView
+  graph_revision: number
+}
+
+// previewAddStage validates req against the CURRENT registry and returns the resolved dependency diff WITHOUT
+// mutating anything — POST /api/run/graph/preview. A rejection surfaces as FlowApiError with .code set to one
+// of graph_mutate.go's documented error codes (stale_revision, invalid_status, target_not_found, ...).
+export async function previewAddStage(req: AddStageRequest): Promise<AddStagePreviewResponse> {
+  return jsonRequest('/api/run/graph/preview', 'POST', req)
+}
+
+// commitAddStage durably adds the stage and wakes the scheduler — POST /api/run/graph/commit. req.request_id
+// is the idempotency key: resending the SAME id after a timeout/double-click is always safe.
+export async function commitAddStage(req: AddStageRequest): Promise<AddStageCommitResponse> {
+  return jsonRequest('/api/run/graph/commit', 'POST', req)
+}
+
 export async function uploadAttachment(stageId: string, file: Blob): Promise<{ path: string }> {
   const url = stageUrl(stageId, 'attachments')
   const response = await fetch(url, {

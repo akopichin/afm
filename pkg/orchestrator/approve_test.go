@@ -27,7 +27,7 @@ func TestApproveStage_DurableTransition(t *testing.T) {
 	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{
 		opts:        Options{RunDir: dir, Stages: stages, Store: store},
-		graph:       graph.NewRegistry(stages),
+		graph:       graph.NewStore(graph.NewRegistry(stages)),
 		fsm:         bus.NewFSM(store),
 		ui:          bus.NewUIBus(),
 		critical:    cb,
@@ -74,7 +74,7 @@ func TestRevise_DurableTransition(t *testing.T) {
 	o := &Orchestrator{
 		// Устанавливаем opts.Runner: иначе runnerFor выберет реальный claude вместо мока.
 		opts:        Options{RunDir: dir, Stages: stages, Store: store, Runner: noopPlanningRunner{}},
-		graph:       graph.NewRegistry(stages),
+		graph:       graph.NewStore(graph.NewRegistry(stages)),
 		runner:      noopPlanningRunner{},
 		fsm:         bus.NewFSM(store),
 		ui:          bus.NewUIBus(),

@@ -238,6 +238,7 @@ func (s *Store) Snapshot() RunState {
 		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,
 		BackoffAccumulatedMs: s.snapshot.BackoffAccumulatedMs,
 		Assistants:           s.snapshot.Assistants.Clone(),
+		DynamicStages:        append([]DynamicStageAdded(nil), s.snapshot.DynamicStages...),
 	}
 	if s.snapshot.EndedAt != nil {
 		ended := *s.snapshot.EndedAt

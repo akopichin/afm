@@ -156,7 +156,7 @@ func (r *Registry) Get(id ProfileID) (Profile, bool) {
 	return e.profile, true
 }
 
-// profileIDSafe mirrors pkg/flow's stage-id safety check (stageIDSafe): a profile id becomes a task
+// profileIDSafe mirrors pkg/flow's stage-id safety check (StageIDSafe): a profile id becomes a task
 // workspace directory name later (T3.x), so the same restrictive charset applies — reject empty, ".", "..",
 // path separators, and any other character outside [A-Za-z0-9._-].
 func profileIDSafe(id string) bool {

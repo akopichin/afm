@@ -276,7 +276,7 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 // maybeRunAfterHook spawns a tracked goroutine to keep the event loop responsive; increment
 // pendingAfterHooks before spawning.
 func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil || stage.ScriptAfter == "" {
 		return
 	}
@@ -293,7 +293,7 @@ func (o *Orchestrator) maybeRunAfterHook(ctx context.Context, stageID string) {
 // maybeRunAfterHookThen runs script_after and then invokes cont — inside the SAME tracked goroutine, AFTER
 // runAfterHook returns — so a consumer of cont sees after.log on disk.
 func (o *Orchestrator) maybeRunAfterHookThen(ctx context.Context, stageID string, cont func(context.Context)) {
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil || stage.ScriptAfter == "" {
 		cont(ctx)
 		return

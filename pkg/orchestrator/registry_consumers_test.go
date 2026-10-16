@@ -52,7 +52,7 @@ func TestVerifyContext_UsesRegistry(t *testing.T) {
 		opts:           Options{RunDir: runDir, Stages: []flow.Stage{main}, RunID: "run1"},
 		ui:             bus.NewUIBus(),
 		runVerifyShell: runVerifyShellCommand,
-		graph:          graph.NewRegistry([]flow.Stage{dep, main}),
+		graph:          graph.NewStore(graph.NewRegistry([]flow.Stage{dep, main})),
 	}
 
 	var gotPrompt string
@@ -88,7 +88,7 @@ func TestMemoryEndOfRun_SeesSameDefinitions(t *testing.T) {
 
 	o := &Orchestrator{
 		opts:  Options{RunDir: runDir, Stages: nil, MemoryDir: filepath.Join(runDir, ".memory")}, // opts.Stages deliberately empty
-		graph: graph.NewRegistry([]flow.Stage{reflectStage}),
+		graph: graph.NewStore(graph.NewRegistry([]flow.Stage{reflectStage})),
 	}
 
 	stages, datasets := o.eligibleMemoryDatasets()
@@ -107,13 +107,13 @@ func TestMemoryEndOfRun_SeesSameDefinitions(t *testing.T) {
 func TestLifecyclePayload_StageInfoFromRegistry(t *testing.T) {
 	o := &Orchestrator{
 		opts:  Options{Stages: nil}, // deliberately stale/empty — stageName must not depend on this
-		graph: graph.NewRegistry([]flow.Stage{{ID: "build", Name: "Build the thing"}}),
+		graph: graph.NewStore(graph.NewRegistry([]flow.Stage{{ID: "build", Name: "Build the thing"}})),
 	}
 	if got := o.stageName("build"); got != "Build the thing" {
 		t.Fatalf("stageName(build) = %q, want %q (must resolve via o.graph)", got, "Build the thing")
 	}
 	// A stage with no Name falls back to its id — same as before T8.2/T8.4's migration.
-	oNoName := &Orchestrator{graph: graph.NewRegistry([]flow.Stage{{ID: "deploy"}})}
+	oNoName := &Orchestrator{graph: graph.NewStore(graph.NewRegistry([]flow.Stage{{ID: "deploy"}}))}
 	if got := oNoName.stageName("deploy"); got != "deploy" {
 		t.Fatalf("stageName(deploy) = %q, want %q (id fallback)", got, "deploy")
 	}

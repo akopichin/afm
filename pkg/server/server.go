@@ -98,6 +98,7 @@ type Server struct {
 	assistantsReader  AssistantsReader          // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
 	discussionService DiscussionService         // обсуждение стадии (T6.7); nil = capability off (GET|POST .../discussion 404)
 	proposalActions   ProposalActions           // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
+	graphActions      GraphActions              // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
 	theme             string                    // "goga" или "" (default graphite)
 	version           string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
 	indexBytes        []byte                    // предподготовленный index.html (с заменами скина/favicon)
@@ -199,7 +200,9 @@ type Config struct {
 	// DiscussionService/ProposalActions — обсуждения и предложения (T6.7); nil = capability off.
 	DiscussionService DiscussionService
 	ProposalActions   ProposalActions
-	Theme             string
+	// GraphActions — Этап 9's dynamic-stage API; nil = capability off.
+	GraphActions GraphActions
+	Theme        string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
 	SkinDir string
@@ -243,6 +246,7 @@ func New(cfg Config) *Server {
 		assistantsReader:  cfg.AssistantsReader,
 		discussionService: cfg.DiscussionService,
 		proposalActions:   cfg.ProposalActions,
+		graphActions:      cfg.GraphActions,
 		theme:             cfg.Theme,
 		version:           cfg.Version,
 		wsPongWait:        pongWait,
@@ -334,6 +338,10 @@ func New(cfg Config) *Server {
 	// {accept|dismiss} gets its own mux entry, same conditional-registration convention as side-agent/assistants.
 	if s.proposalActions != nil {
 		mux.HandleFunc("/api/proposals/", s.routeProposals)
+	}
+	// /api/run/graph/{preview|commit} (Этап 9) — same conditional-registration convention as above.
+	if s.graphActions != nil {
+		mux.HandleFunc("/api/run/graph/", s.routeRunGraph)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {

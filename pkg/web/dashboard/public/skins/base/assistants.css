@@ -479,3 +479,151 @@
 .proposal-card-refresh {
   background: var(--attention);
 }
+
+/* === Add-stage dialog + graph operation preview (Этап 9, T9.6): building a dynamic "agents: [auto]" stage
+   and showing the user the actual dependency diff before they commit it. Theme-agnostic — semantic tokens
+   only, same contract as the rest of this file. === */
+.add-stage-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 520px;
+  width: 100%;
+}
+.add-stage-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+.add-stage-dialog-disabled-note {
+  font-size: 12px;
+  color: var(--attention);
+  margin: 0;
+}
+.add-stage-dialog-kind,
+.add-stage-dialog-deps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.add-stage-dialog-kind legend,
+.add-stage-dialog-deps legend {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.add-stage-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.add-stage-dialog-field input,
+.add-stage-dialog-field select,
+.add-stage-dialog-field textarea {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface-base);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+.add-stage-dialog-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.add-stage-dialog-preview {
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  padding: 10px 12px;
+}
+.add-stage-dialog-preview-hint,
+.add-stage-dialog-preview-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.add-stage-dialog-preview-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0;
+}
+.add-stage-dialog-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.graph-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.graph-preview-summary {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  margin: 0;
+}
+.graph-preview-diff {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.graph-preview-diff-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.graph-preview-diff-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.graph-preview-diff-arrow {
+  color: var(--text-muted);
+  padding-top: 18px;
+}
+.graph-preview-deps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+.graph-preview-dep {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+.graph-preview-dep[data-added="true"] {
+  color: var(--text-primary);
+  border: 1px solid var(--accent-primary);
+}
+.graph-preview-deps-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.graph-preview-warnings {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+}
+.graph-preview-warning {
+  font-size: 11px;
+  color: var(--attention);
+}

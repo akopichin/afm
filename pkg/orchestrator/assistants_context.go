@@ -45,7 +45,7 @@ type TaskContext struct {
 func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) (TaskContext, error) {
 	stageDir := filepath.Join(o.opts.RunDir, stage.ID)
 	planRaw, _ := os.ReadFile(filepath.Join(stageDir, "plan.md"))
-	artifactsRaw, _ := stagefiles.CollectArtifacts(".", o.opts.RunDir, stage, o.graph.Stages())
+	artifactsRaw, _ := stagefiles.CollectArtifacts(".", o.opts.RunDir, stage, o.reg().Stages())
 	prevResult := o.previousTaskResultJSON(task.ID)
 	followUp := o.loadFollowUp(task.ID)
 	childResults := o.collectChildResultsJSON(task.ID)

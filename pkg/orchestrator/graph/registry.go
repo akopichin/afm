@@ -176,8 +176,16 @@ func NewStore(initial *Registry) *Store {
 	return s
 }
 
-// Load returns the current Registry. Safe to call concurrently with Replace.
-func (s *Store) Load() *Registry { return s.ptr.Load() }
+// Load returns the current Registry. Safe to call concurrently with Replace. nil-safe: a nil *Store (a test
+// fixture built as a bare &Orchestrator{} literal, never routed through orchestrator.New — the same "nil
+// receiver behaves like empty" convention Registry's own accessors use) returns a nil Registry instead of
+// panicking; every Registry method already tolerates that nil.
+func (s *Store) Load() *Registry {
+	if s == nil {
+		return nil
+	}
+	return s.ptr.Load()
+}
 
 // Replace builds a new Registry one revision ahead of the current one and atomically installs it, returning
 // the new Registry. Safe to call concurrently with Load and with other Replace calls: a CompareAndSwap loop

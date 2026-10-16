@@ -16,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/execprep"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
@@ -113,12 +114,19 @@ type ResolvedFile struct {
 
 // Orchestrator manages the full lifecycle of a flow run via event loop.
 type Orchestrator struct {
-	opts     Options
-	graph    *graph.Registry
-	runner   executor.Runner
-	critical *bus.CriticalBus
-	ui       *bus.UIBus
-	fsm      *bus.FSM
+	opts Options
+	// graph is a *graph.Store, not a bare *graph.Registry (Этап 9, T9.4): every read in this file goes
+	// through reg() (o.graph.Load()), a fresh snapshot each time, so a successful AddStageToGraph commit's
+	// subsequent graph.Replace becomes visible to the NEXT read everywhere in this package without restarting
+	// anything. Before Этап 9 this was always revision 1, so nothing here changed behavior.
+	graph *graph.Store
+	// preparedCommands is this run's pre-resolved command set (T8.5), consulted by Этап 9's draft validation
+	// (IsCommandPrepared) — built once in New from the stage set the run actually started with.
+	preparedCommands *execprep.Set
+	runner           executor.Runner
+	critical         *bus.CriticalBus
+	ui               *bus.UIBus
+	fsm              *bus.FSM
 	// concurrency инкапсулирует семафоры на команду, учёт активных агентских
 	// горутин и WaitGroup для чистого shutdown (вынесено в отдельный пакет).
 	concurrency *concurrency.Manager
@@ -266,6 +274,12 @@ type Orchestrator struct {
 	// попытка успевает сохранить свой cancel-entry раньше старой (см. TestPauseTask_SurvivesImmediateRequeueRace).
 	taskRequeuePreDeferHook func(taskID assistants.TaskID)
 
+	// commitAddStageBarrier — тест-сейм (Этап 9, T9.4): вызывается в CommitAddStage ПОСЛЕ planDraft
+	// (advisory preflight), НЕПОСРЕДСТВЕННО ПЕРЕД Store.AddStageToGraph — т.е. в точке, где ни один lock ещё
+	// не взят. Позволяет тесту детерминированно доказать TestCommit_NoLockHeldDuringModelWorkOrPreflight: пока
+	// хук блокирует эту горутину, конкурентная операция над тем же Store не должна ждать.
+	commitAddStageBarrier func()
+
 	// flowPauseMu защищает составные решения PauseFlow; отдельные поля activationHeld/finalizing/reviewMarker
 	// читаются атомарно.
 	flowPauseMu sync.Mutex
@@ -412,26 +426,29 @@ func New(opts Options) *Orchestrator {
 	}
 
 	// T8.1/T8.2: opts.Stages is read here ONCE, to seed the runtime registry — every other stage-definition
-	// lookup in this package goes through o.graph (the registry), never opts.Stages again.
-	reg := graph.NewRegistry(opts.Stages)
+	// lookup in this package goes through o.graph (the registry store), never opts.Stages again. Этап 9's
+	// AddStageToGraph commit path is the only thing that ever calls o.graph.Replace after this.
+	initialReg := graph.NewRegistry(opts.Stages)
+	gstore := graph.NewStore(initialReg)
 
 	// Семафоры на команду строятся из конфигурации стадий: per-stage MaxParallel имеет приоритет над
 	// глобальным дефолтом.
-	conc := concurrency.New(critical, reg.Stages(), opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
+	conc := concurrency.New(critical, initialReg.Stages(), opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
 		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
 
 	o := &Orchestrator{
-		opts:           opts,
-		graph:          reg,
-		runner:         r,
-		critical:       critical,
-		ui:             ui,
-		fsm:            bus.NewFSM(opts.Store),
-		concurrency:    conc,
-		violationCache: make(map[string]violationCacheEntry),
-		lastRootScan:   make(map[string]time.Time),
-		maxRetries:     MaxRetries,
-		retryBackoff:   RetryBackoff,
+		opts:             opts,
+		graph:            gstore,
+		preparedCommands: buildPreparedCommandSet(initialReg.Stages(), opts.Config.Client.Command),
+		runner:           r,
+		critical:         critical,
+		ui:               ui,
+		fsm:              bus.NewFSM(opts.Store),
+		concurrency:      conc,
+		violationCache:   make(map[string]violationCacheEntry),
+		lastRootScan:     make(map[string]time.Time),
+		maxRetries:       MaxRetries,
+		retryBackoff:     RetryBackoff,
 	}
 	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
@@ -461,12 +478,21 @@ func New(opts Options) *Orchestrator {
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
 func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
 
+// reg returns the CURRENT registry snapshot — every stage-definition read in this package goes through this,
+// never o.graph directly, so a call right before and right after a concurrent AddStageToGraph commit can see
+// either the old or the new revision, but always a single, internally consistent one (graph.Store's own
+// atomic-pointer contract).
+func (o *Orchestrator) reg() *graph.Registry { return o.graph.Load() }
+
 // Stages returns the run's CURRENT stage definitions from the runtime registry, in stable declaration
 // order. T8.3: callers that need to re-derive dashboard-facing config (cmd/afm's RuntimeStageProvider) call
-// this fresh every time, instead of snapshotting a static []flow.Stage once at startup — so a future registry
-// revision (Этап 9: dynamic stages) is visible without rebuilding the dashboard. Today (Этап 8, no dynamic
-// edits wired in yet) this always returns the same stage set the run started with.
-func (o *Orchestrator) Stages() []flow.Stage { return o.graph.Stages() }
+// this fresh every time, instead of snapshotting a static []flow.Stage once at startup — so a registry
+// revision bumped by Этап 9's AddStageToGraph is visible without rebuilding the dashboard.
+func (o *Orchestrator) Stages() []flow.Stage { return o.reg().Stages() }
+
+// GraphRevision returns the runtime registry's current revision (Этап 9, T9.1's preview/T9.4's commit
+// optimistic-concurrency check).
+func (o *Orchestrator) GraphRevision() int64 { return o.reg().Revision() }
 
 // publishCritical wraps o.critical.Publish, logging instead of silently discarding a drop. Logging exists
 // purely so this class of loss is visible during debugging instead of silent.
@@ -627,6 +653,10 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 				o.flowPauseMu.Lock()
 				if !o.reviewTxnActive() {
 					o.finalizing.Store(true)
+					// Этап 9, T9.3: a dynamic-stage commit (Store.AddStageToGraph, Expect.RunNotFinalizing)
+					// must be rejected run_finalizing from this exact point on — the run has decided to wind
+					// down and must never be "revived" by a concurrent POST adding a new stage.
+					o.opts.Store.SetRunFinalizing(true)
 					o.flowPauseMu.Unlock()
 					o.runEndOfRunMemory(ctx)
 					snap := o.opts.Store.Snapshot()
@@ -713,7 +743,7 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		o.Trigger(ev.StageID, bus.EvPlanReady, bus.GuardCtx{}, "")
 		// auto_approve: true on the stage config wins regardless of
 		// dashboard/--require-approval — checked before the headless branch.
-		if stage := o.graph.Stage(ev.StageID); stage != nil && o.autoApproveIfConfigured(ctx, *stage) {
+		if stage := o.reg().Stage(ev.StageID); stage != nil && o.autoApproveIfConfigured(ctx, *stage) {
 			return nil
 		}
 		// Headless: нет дашборда → никто не нажмёт Approve. RequireApproval=true → fail-fast с понятным
@@ -732,7 +762,7 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// Revise мог опередить естественное завершение агента без SIGINT; перезапускаем revising-стадию с
 		// сохранённым feedback.
 		if current == state.StatusRevising {
-			stage := o.graph.Stage(ev.StageID)
+			stage := o.reg().Stage(ev.StageID)
 			if stage == nil {
 				return nil
 			}
@@ -835,7 +865,7 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 		return nil
 	}
 
-	stage := o.graph.Stage(ev.StageID)
+	stage := o.reg().Stage(ev.StageID)
 	if stage == nil {
 		return nil
 	}

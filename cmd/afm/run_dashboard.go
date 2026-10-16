@@ -18,6 +18,7 @@ import (
 var (
 	_ server.StageActions     = (*orchestrator.Orchestrator)(nil)
 	_ server.SecondaryActions = (*orchestrator.Orchestrator)(nil)
+	_ server.GraphActions     = (*orchestrator.Orchestrator)(nil)
 )
 
 func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
@@ -60,6 +61,7 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	sc.ShowMoney = cfg.Accounting.ShowMoneyEnabled()
 	sc.UIBus = orch.UIBus()
 	sc.Actions, sc.Secondary, sc.FlowActions = orch, orch, orch
+	sc.GraphActions = orch
 	sc.ReviewState = orch.ReviewState
 	srv := server.New(sc)
 	addr, err := srv.Start()

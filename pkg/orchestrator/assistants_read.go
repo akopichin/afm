@@ -17,7 +17,7 @@ import (
 // pre-order) — a parent always appears before any of its descendants, and no task appears twice. Backs GET
 // /api/stages/{id}/assistants (pkg/server/assistants.go's AssistantsReader.TaskTree) via a cmd/afm adapter.
 func (o *Orchestrator) TaskTree(stageID string) ([]assistants.Task, error) {
-	if o.graph.Stage(stageID) == nil {
+	if o.reg().Stage(stageID) == nil {
 		return nil, fmt.Errorf("assistants: unknown stage %q", stageID)
 	}
 	rs := o.opts.Store.Snapshot()

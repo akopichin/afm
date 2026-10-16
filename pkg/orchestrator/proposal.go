@@ -67,7 +67,7 @@ func (o *Orchestrator) CreateProposal(ctx context.Context, req CreateProposalReq
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
-	if o.graph.Stage(req.StageID) == nil {
+	if o.reg().Stage(req.StageID) == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
 	}
 

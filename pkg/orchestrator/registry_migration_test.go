@@ -81,7 +81,7 @@ func newRegistryMigrationTestOrchestrator(t *testing.T, graphStages, optsStages 
 		ui:       bus.NewUIBus(),
 		critical: bus.NewCriticalBus(16),
 		fsm:      bus.NewFSM(store),
-		graph:    graph.NewRegistry(graphStages),
+		graph:    graph.NewStore(graph.NewRegistry(graphStages)),
 	}
 }
 

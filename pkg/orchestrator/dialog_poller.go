@@ -71,7 +71,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 		default:
 			continue
 		}
-		if stage := o.graph.Stage(id); stage != nil && stage.Interactive {
+		if stage := o.reg().Stage(id); stage != nil && stage.Interactive {
 			activeInteractiveCount++
 		}
 	}
@@ -84,7 +84,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			continue
 		}
 		stageDir := filepath.Join(o.opts.RunDir, stageID)
-		stage := o.graph.Stage(stageID)
+		stage := o.reg().Stage(stageID)
 		// Once a fix-agent has made a tracked question.json valid again, stop tracking it — from here it flows
 		// through the normal question path.
 		o.reconcileMalformedFixes(malformed, stageID, stageDir)
@@ -253,7 +253,7 @@ func (o *Orchestrator) reconcileMalformedFixes(malformed map[string]*malformedQu
 // handleMalformedQuestion advances the repair state machine for a question.json that failed to parse even
 // after jsonrepair. First sighting of broken content: remember it, do nothing.
 func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQuestionState, stageID, stageDir string, q mcp.QuestionFile, key string) {
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil {
 		return
 	}

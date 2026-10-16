@@ -487,9 +487,11 @@ func (f *Flow) applyScriptTimeoutDefaults() {
 	}
 }
 
-// stageIDSafe сообщает, безопасен ли s как stage.ID. Кроме пути на диске (<runDir>/<stageID>) id попадает
-// в URL managed-browser сессии (/session/<epoch>/<stageID>) и в имя профиля Chrome.
-func stageIDSafe(s string) bool {
+// StageIDSafe сообщает, безопасен ли s как stage.ID — единственный charset-валидатор, переиспользуемый
+// pkg/orchestrator/graph (Этап 9, T9.1) при проверке id динамически добавляемой стадии вместо второго,
+// независимого regex. Кроме пути на диске (<runDir>/<stageID>) id попадает в URL managed-browser сессии
+// (/session/<epoch>/<stageID>) и в имя профиля Chrome.
+func StageIDSafe(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
 	}
@@ -522,7 +524,7 @@ func (f *Flow) validate() error {
 
 	// stage.ID входит в пути и URL; допускаем только [A-Za-z0-9._-], исключая пустую строку, "." и "..".
 	for _, s := range f.Stages {
-		if !stageIDSafe(s.ID) {
+		if !StageIDSafe(s.ID) {
 			return fmt.Errorf("stage %q: id must match [A-Za-z0-9._-] (non-empty, not \".\"/\"..\")", s.ID)
 		}
 	}

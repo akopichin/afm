@@ -148,7 +148,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	}
 	o.persistTaskCache(dir, task)
 
-	stage := o.graph.Stage(task.RootStageID)
+	stage := o.reg().Stage(task.RootStageID)
 	if stage == nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: root stage no longer exists")
 		return

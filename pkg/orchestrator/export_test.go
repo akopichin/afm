@@ -51,3 +51,10 @@ func SetVerifyOutcomeGuardHookForTest(o *Orchestrator, fn func(stageID string)) 
 func SetVerifyAgentRunnerForTest(o *Orchestrator, fn func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error)) {
 	o.runVerifyAgent = fn
 }
+
+// SetCommitAddStageBarrierForTest инъектирует хук, вызываемый в CommitAddStage сразу после planDraft
+// (advisory preflight) и непосредственно перед Store.AddStageToGraph — см. поле commitAddStageBarrier
+// (Этап 9, T9.4's TestCommit_NoLockHeldDuringModelWorkOrPreflight).
+func SetCommitAddStageBarrierForTest(o *Orchestrator, fn func()) {
+	o.commitAddStageBarrier = fn
+}

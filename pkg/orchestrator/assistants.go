@@ -202,7 +202,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
-	st := o.graph.Stage(req.StageID)
+	st := o.reg().Stage(req.StageID)
 	if st == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
 	}

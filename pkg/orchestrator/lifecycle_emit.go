@@ -73,7 +73,7 @@ func (o *Orchestrator) emitStageEvent(ev lifecyclehooks.EventType, stageID, reas
 
 // stageName — отображаемое имя стадии (Name, иначе ID).
 func (o *Orchestrator) stageName(id string) string {
-	if s := o.graph.Stage(id); s != nil {
+	if s := o.reg().Stage(id); s != nil {
 		if s.Name != "" {
 			return s.Name
 		}

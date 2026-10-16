@@ -115,7 +115,7 @@ func TestActivationHold_BlocksNewActivation(t *testing.T) {
 	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{
 		opts:        Options{RunDir: dir, Stages: stages, Store: store},
-		graph:       graph.NewRegistry(stages),
+		graph:       graph.NewStore(graph.NewRegistry(stages)),
 		fsm:         bus.NewFSM(store),
 		ui:          bus.NewUIBus(),
 		critical:    cb,
@@ -158,7 +158,7 @@ func seedStageStatus(t *testing.T, store *state.Store, id string, status state.S
 // seedScriptStage seeds a declared script stage that PauseFlow must skip.
 func seedScriptStage(t *testing.T, o *Orchestrator, id string, status state.StageStatus) {
 	t.Helper()
-	stage := o.graph.Stage(id)
+	stage := o.reg().Stage(id)
 	if stage == nil || !stage.IsScript() {
 		t.Fatalf("seedScriptStage: %q is not declared as a script stage in the graph", id)
 	}

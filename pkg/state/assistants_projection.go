@@ -440,7 +440,14 @@ func dispatchControl(rs *RunState, c *Control, dryRun bool) error {
 	}
 	as := &rs.Assistants
 
-	if err := dispatchControlKind(as, c, dryRun); err != nil {
+	// kindStageGraphAdded (Этап 9, T9.4) mutates rs.Stages/rs.StageOrder/rs.DynamicStages directly — it has
+	// nothing to do with the task-tree/policy/discussion domain dispatchControlKind below projects onto
+	// AssistantsState, so it gets its own top-level branch instead of a case inside that switch.
+	if c.Kind == kindStageGraphAdded {
+		if err := applyStageGraphAdded(rs, c, dryRun); err != nil {
+			return err
+		}
+	} else if err := dispatchControlKind(as, c, dryRun); err != nil {
 		return err
 	}
 

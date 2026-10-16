@@ -23,7 +23,7 @@ func TestCancelDialog_FailsStage(t *testing.T) {
 	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{
 		opts:        Options{RunDir: dir, Stages: stages, Store: store},
-		graph:       graph.NewRegistry(stages),
+		graph:       graph.NewStore(graph.NewRegistry(stages)),
 		fsm:         bus.NewFSM(store),
 		ui:          bus.NewUIBus(),
 		critical:    cb,

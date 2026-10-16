@@ -321,7 +321,7 @@ func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
 		ui:       ui,
 		critical: critical,
 		fsm:      bus.NewFSM(store),
-		graph:    graph.NewRegistry(stages),
+		graph:    graph.NewStore(graph.NewRegistry(stages)),
 	}
 	return o, runDir
 }

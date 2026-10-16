@@ -22,7 +22,7 @@ func (o *Orchestrator) maybeRunReflection(ctx context.Context, stageID string) {
 	if o.opts.MemoryDir == "" {
 		return
 	}
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil || stage.Reflect == nil || !stage.Reflect.CanWrite() || stage.IsScript() {
 		return
 	}
@@ -58,7 +58,7 @@ func (o *Orchestrator) reflectNotice(stageName, msg string) {
 func (o *Orchestrator) eligibleMemoryDatasets() ([]flow.Stage, []memorypipeline.DatasetResult) {
 	var stages []flow.Stage
 	var datasets []memorypipeline.DatasetResult
-	for _, s := range o.graph.Stages() {
+	for _, s := range o.reg().Stages() {
 		if s.Reflect == nil || !s.Reflect.CanWrite() || s.IsScript() {
 			continue
 		}

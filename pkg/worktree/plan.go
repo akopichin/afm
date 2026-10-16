@@ -25,7 +25,7 @@ type Plan struct {
 //
 // name ends up both as a git branch name and as a single path component
 // under <base>/.worktrees, so it must satisfy both constraints at once. This
-// mirrors the stageIDSafe / lifecycle-hook-id convention used elsewhere in
+// mirrors the StageIDSafe / lifecycle-hook-id convention used elsewhere in
 // this repo: a conservative allowlist beats trying to replicate the full
 // `git check-ref-format` rule set.
 func PlanFor(base, name string) (Plan, error) {

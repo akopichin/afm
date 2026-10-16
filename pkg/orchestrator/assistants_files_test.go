@@ -84,7 +84,7 @@ func TestTaskDir_AnchoredToRunDirNotCwd(t *testing.T) {
 func TestTaskDir_NoAccessToRunControlFiles(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, true)
 	taskID := assistants.TaskID("t-control-test")
-	stage := *o.graph.Stage(assistantsTestStageID)
+	stage := *o.reg().Stage(assistantsTestStageID)
 	task := assistants.Task{ID: taskID, RootStageID: assistantsTestStageID, Instruction: "x"}
 
 	tc, err := o.buildTaskContext(task, stage)

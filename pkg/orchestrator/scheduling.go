@@ -60,7 +60,16 @@ func (o *Orchestrator) activateScriptStage(s flow.Stage) bool {
 
 // activatePrePlannedStage prepares a pending stage that needs no planning agent.
 // Startup recovery and dependency-driven activation use the same gates and files.
+//
+// Этап 9: re-fetches s from the registry before depsDone — a caller may have captured s moments earlier (e.g.
+// StageByID in TryActivatePrePlanned's loop), and a concurrent AddStageToGraph commit could have added a new
+// dependency to THIS stage in between. This does not fully close the race (there is still a zero-width window
+// between the re-fetch below and the Trigger call), but it narrows it from "the whole scheduling pass" to "one
+// in-memory read" — see dev-plan's T9.4 notes and TestCommit_SharedAdmissionSerialization.
 func (o *Orchestrator) activatePrePlannedStage(s flow.Stage) {
+	if fresh := o.reg().Stage(s.ID); fresh != nil {
+		s = *fresh
+	}
 	if !o.depsDone(s) {
 		return
 	}
@@ -97,7 +106,7 @@ func (o *Orchestrator) activatePrePlannedStage(s flow.Stage) {
 
 // tryActivatePrePlanned activates pending stages that need no planning agent.
 func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
-	for _, s := range o.graph.Stages() {
+	for _, s := range o.reg().Stages() {
 		if !s.NeedsPlanning() && o.opts.Store.Get(s.ID) == state.StatusPending {
 			o.activatePrePlannedStage(s)
 		}
@@ -110,7 +119,7 @@ func (o *Orchestrator) tryActivatePrePlanned(ctx context.Context) {
 // startPlanningForUnblocked starts planning for pending stages whose dependencies are all done. Stages
 // with eager_planning start at flow start and are never gated here.
 func (o *Orchestrator) startPlanningForUnblocked(ctx context.Context) {
-	for _, s := range o.graph.Stages() {
+	for _, s := range o.reg().Stages() {
 		if !s.NeedsPlanning() {
 			continue
 		}
@@ -144,17 +153,21 @@ func (o *Orchestrator) startReadyStages(ctx context.Context) {
 		statuses[id] = s.Status
 	}
 
-	ready := o.graph.ReadyStages(statuses)
+	ready := o.reg().ReadyStages(statuses)
 	for _, id := range ready {
-		if stage := o.graph.Stage(id); stage != nil {
+		if stage := o.reg().Stage(id); stage != nil {
 			o.startReadyStage(ctx, *stage)
 		}
 	}
 }
 
 // startReadyStage is shared by normal scheduling and manual retry. Only the winner of the durable ready ->
-// running transition may spawn the stage.
+// running transition may spawn the stage. Re-fetches s from the registry first — see activatePrePlannedStage's
+// doc comment (Этап 9) for why.
 func (o *Orchestrator) startReadyStage(ctx context.Context, s flow.Stage) bool {
+	if fresh := o.reg().Stage(s.ID); fresh != nil {
+		s = *fresh
+	}
 	if o.activationBlocked() || !o.depsDone(s) {
 		return false
 	}
@@ -204,7 +217,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		return
 	}
 
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil {
 		return
 	}
@@ -284,7 +297,7 @@ func (o *Orchestrator) failBlockedStages() {
 	changed := true
 	for changed {
 		changed = false
-		for _, s := range o.graph.Stages() {
+		for _, s := range o.reg().Stages() {
 			current := o.opts.Store.Get(s.ID)
 
 			if current != state.StatusPending {

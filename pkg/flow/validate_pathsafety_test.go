@@ -3,7 +3,7 @@ package flow
 import "testing"
 
 // minimalFlowWithStageID строит минимальный валидный флоу с одной нескриптовой стадией, чтобы изолированно
-// проверить только stageIDSafe-проверку id.
+// проверить только StageIDSafe-проверку id.
 func minimalFlowWithStageID(id string) *Flow {
 	return &Flow{
 		Name: "f",

@@ -84,7 +84,7 @@ func (o *Orchestrator) autoApproveIfConfigured(ctx context.Context, stage flow.S
 // Идемпотентна: если стадия уже не в awaiting_approval, только до-запускает побочные эффекты.
 func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
 	if o.currentStatus(stageID) == state.StatusAwaitingApproval {
-		stage := o.graph.Stage(stageID)
+		stage := o.reg().Stage(stageID)
 		if stage != nil && !stage.HasAgent(flow.AgentImplementation) {
 			// EvComplete из awaiting_approval может проиграть CAS конкурентному Revise на HTTP-горутине — тогда
 			// стадия не завершилась, и after-hook запускать нельзя.
@@ -187,7 +187,7 @@ func (o *Orchestrator) reviseAwaitingAssistants(reqCtx context.Context, stageID,
 		return false, 0, fmt.Errorf("invalidate stale assistant tree for %s: %w", stageID, err)
 	}
 
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil {
 		return true, seq, nil
 	}
@@ -216,7 +216,7 @@ func (o *Orchestrator) reviseAwaitingApproval(reqCtx context.Context, stageID, r
 		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
 	}
 
-	if stage := o.graph.Stage(stageID); stage != nil {
+	if stage := o.reg().Stage(stageID); stage != nil {
 		// Спавним под run ctx, а не reqCtx: HTTP-хэндлер отменит reqCtx сразу
 		// после возврата ответа, и агент был бы убит немедленно (см. runContext).
 		o.concurrency.SpawnAgent(o.runContext(reqCtx), *stage, o.runPlanningWithFeedback)
@@ -230,7 +230,7 @@ func (o *Orchestrator) Button(ctx context.Context, stageID, name string) error {
 	if err := o.rejectIfReviewPaused(); err != nil {
 		return err
 	}
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil {
 		return nil
 	}
@@ -254,7 +254,7 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
 	default:
 		return nil
 	}
-	if stage := o.graph.Stage(stageID); stage != nil && stage.IsScript() && o.currentStatus(stageID) == state.StatusRunning {
+	if stage := o.reg().Stage(stageID); stage != nil && stage.IsScript() && o.currentStatus(stageID) == state.StatusRunning {
 		return nil // mid-script pause не поддержан — RunScript не принимает InterruptCh
 	}
 
@@ -284,7 +284,7 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 		o.continueMu.Unlock()
 		return nil
 	}
-	stage := o.graph.Stage(stageID)
+	stage := o.reg().Stage(stageID)
 	if stage == nil {
 		o.continueMu.Unlock()
 		return nil

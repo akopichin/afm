@@ -52,7 +52,7 @@ func TestApprove_SpawnsAgentUnderRunCtx_NotRequestCtx(t *testing.T) {
 	cb := bus.NewCriticalBus(16)
 	o := &Orchestrator{
 		opts:        Options{RunDir: dir, Stages: stages, Store: store, Runner: runner},
-		graph:       graph.NewRegistry(stages),
+		graph:       graph.NewStore(graph.NewRegistry(stages)),
 		runner:      runner,
 		fsm:         bus.NewFSM(store),
 		ui:          bus.NewUIBus(),

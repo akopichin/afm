@@ -209,7 +209,16 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		return fmt.Errorf("restore stage registry: %w", err)
 	}
 	runID := filepath.Base(runDir)
-	resumed := store.Snapshot().LastSeq > 0
+	runSnap := store.Snapshot()
+	resumed := runSnap.LastSeq > 0
+	// Этап 9, T9.5: fold every stage_graph_added record committed before this process started (or crashed)
+	// back on top of the frozen stage set — orchestrator.New must see a dynamically-added stage from its very
+	// first Stages() read, the same way it already sees every stage flow.yaml originally declared. The
+	// original flow.yaml file on disk is never touched by this; graph_registry.json (restored above) stays the
+	// frozen baseline forever, only the IN-MEMORY stage list handed to the orchestrator grows.
+	if len(runSnap.DynamicStages) > 0 {
+		stages = graph.Materialize(stages, runSnap.DynamicStages, runSnap.StageOrder)
+	}
 
 	// T2.7 recovery ordering: collaboration state (task tree/quotas/continuations restored by state.Open's
 	// replay above, policy resolved and durably recorded here) must be settled BEFORE any consumer —

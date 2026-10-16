@@ -78,7 +78,7 @@ func (o *Orchestrator) autoRecoverFailedStages() {
 	if !o.opts.Config.IsAutoRecover() {
 		return
 	}
-	for _, s := range o.graph.Stages() {
+	for _, s := range o.reg().Stages() {
 		if o.opts.Store.Get(s.ID) != state.StatusFailed {
 			continue
 		}
@@ -95,7 +95,7 @@ func (o *Orchestrator) autoRecoverFailedStages() {
 // unblocked stages. Completed stages and human decisions remain untouched.
 func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 	o.autoRecoverFailedStages()
-	for _, s := range o.graph.Stages() {
+	for _, s := range o.reg().Stages() {
 		stageDir := filepath.Join(o.opts.RunDir, s.ID)
 		// After-hooks do not change stage status, so their recovery marker
 		// takes precedence over the status-based dispatch (including done).

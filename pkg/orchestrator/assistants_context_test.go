@@ -15,7 +15,7 @@ import (
 func contextTestFixture(t *testing.T) (*Orchestrator, flow.Stage, assistants.Task) {
 	t.Helper()
 	o, _ := newAssistantsTestOrchestrator(t, true)
-	stage := *o.graph.Stage(assistantsTestStageID)
+	stage := *o.reg().Stage(assistantsTestStageID)
 	task := assistants.Task{
 		ID:              "t-ctx-test",
 		RootStageID:     assistantsTestStageID,

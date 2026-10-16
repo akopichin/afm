@@ -107,6 +107,13 @@ type RunState struct {
 	// (pkg/state/assistants_projection.go, T2.3+). Like the rest of RunState it is a derived cache —
 	// events.jsonl stays authoritative; LoadRunState/Store.Open rebuild it by replay.
 	Assistants AssistantsState `json:"assistants,omitempty"`
+	// DynamicStages (Этап 9, T9.4/T9.5) records every stage_graph_added control record applied so far, in
+	// commit order — the durable, replay-restored effect of every "add a regular stage to the live run" HTTP
+	// commit. pkg/orchestrator/graph folds these on top of the stage set frozen at run start
+	// (graph_registry.json) to reconstruct the CURRENT stage graph after a restart; flow.yaml on disk is never
+	// touched by any of this. len(DynamicStages)+1 IS the runtime registry's current revision — the two can
+	// never drift apart because stage_graph_added is the ONLY way either one changes.
+	DynamicStages []DynamicStageAdded `json:"dynamic_stages,omitempty"`
 }
 
 // NewRunState creates an initial RunState with all stages pending.
