@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
@@ -290,6 +291,38 @@ func TestSpawnOwned_CountedInDrain(t *testing.T) {
 	<-done
 	if !finished.Load() {
 		t.Fatal("helper task body never ran to completion")
+	}
+}
+
+// TestWaitAgents_DrainTimeoutFiresViaFakeClock asserts the drain WARN timeout is clock-driven: a stuck
+// agent goroutine that never finishes makes WaitAgents return once the clock is advanced past
+// agentDrainTimeout, not after a real 10s wait (T10, dev-plan.md).
+func TestWaitAgents_DrainTimeoutFiresViaFakeClock(t *testing.T) {
+	fc := clock.NewFake(time.Unix(0, 0))
+	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
+	m.Clock = fc
+
+	started := make(chan struct{})
+	stuck := make(chan struct{}) // never closed — this agent goroutine never finishes
+	m.SpawnOwned(context.Background(), TaskOwnerKey("t1"), "", nil, func(ctx context.Context, lease *Lease) {
+		close(started)
+		<-stuck
+	})
+	<-started
+
+	done := make(chan struct{})
+	go func() {
+		m.WaitAgents()
+		close(done)
+	}()
+
+	fc.BlockUntil(1)
+	fc.Advance(agentDrainTimeout)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitAgents did not return after the drain timeout should have fired")
 	}
 }
 

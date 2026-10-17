@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -346,17 +347,17 @@ func (r *alwaysRetryableAgentRunner) RunJSONQuery(ctx context.Context, prompt st
 var _ executor.Runner = (*alwaysRetryableAgentRunner)(nil)
 
 func TestPause_RetryingStage_CancelsBackoffImmediately(t *testing.T) {
-	origBackoff := orchestrator.RetryBackoff
-	origMax := orchestrator.MaxRetries
-	orchestrator.RetryBackoff = 30 * time.Second
-	orchestrator.MaxRetries = 15
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
+	// A fake clock that is NEVER Advanced: its backoff timer can only ever fire if explicitly advanced, so
+	// the stage reaching paused PROVES Pause (interruptCh), not the timer, ended the backoff wait —
+	// deterministic by construction rather than "30s is probably longer than the test's own timeout" (T8,
+	// dev-plan.md).
+	fc := clock.NewFake(time.Unix(0, 0))
 
 	stages := []flow.Stage{
 		{ID: "impl", Name: "Impl", Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 	runner := &alwaysRetryableAgentRunner{delegate: mockRunner(t, mockPlanningScript)}
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+	orch, _, stateFile := setupOrchestratorWithRunnerAndClock(t, stages, runner, fc)
 
 	cancel := autoApprove(orch)
 	defer cancel()
@@ -370,8 +371,7 @@ func TestPause_RetryingStage_CancelsBackoffImmediately(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	// RetryBackoff is 30s — if Pause didn't cancel the backoff wait, this
-	// would time out instead of passing quickly.
+	// The backoff timer is never Advanced — only Pause's interruptCh can end the select in this window.
 	waitForStatus(t, stateFile, "impl", state.StatusPaused, 3*time.Second)
 }
 

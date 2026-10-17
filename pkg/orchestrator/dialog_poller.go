@@ -43,7 +43,7 @@ func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 	o.pollerDone = make(chan struct{})
 	go func() {
 		defer close(o.pollerDone)
-		ticker := time.NewTicker(time.Second)
+		ticker := o.clk().NewTicker(time.Second)
 		defer ticker.Stop()
 		processed := map[string]bool{}                    // "stageID|phase|id" → true
 		malformed := map[string]*malformedQuestionState{} // "stageID|phase|id" → retry state
@@ -51,8 +51,11 @@ func (o *Orchestrator) startQuestionPoller(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-ticker.C():
 				o.pollQuestions(processed, malformed)
+				if o.pollTickHook != nil {
+					o.pollTickHook()
+				}
 			}
 		}
 	}()
@@ -565,8 +568,9 @@ func (o *Orchestrator) relocateMisplacedQuestions(stageID, stageDir string, allo
 
 	if allowRootScan && o.opts.RootDir != "" && !pathInside(o.opts.RootDir, stageDir) {
 		last, seen := o.lastRootScan[stageID]
-		if !seen || time.Since(last) >= relocateScanInterval {
-			o.lastRootScan[stageID] = time.Now()
+		now := o.clk().Now()
+		if !seen || now.Sub(last) >= relocateScanInterval {
+			o.lastRootScan[stageID] = now
 			collectQuestionFiles(o.opts.RootDir, candidates)
 		}
 	}

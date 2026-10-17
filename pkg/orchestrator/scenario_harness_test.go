@@ -144,6 +144,7 @@ func writeSynthAgent(t *testing.T, spec AgentSpec) string {
 	b.WriteString("#!/bin/bash\n")
 
 	phase := ""
+	skipCompletion := false
 	if q := spec.Question; q != nil {
 		phase = q.Phase
 		var qExpr, aExpr string
@@ -169,16 +170,27 @@ func writeSynthAgent(t *testing.T, spec AgentSpec) string {
 		fmt.Fprintf(&b, `echo '{"id":"%s","question":"q?","options":["a","b"]}' > "$Q"`+"\n", q.ID)
 		b.WriteString(`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"'"$Q"'","content":"..."}}]}}'` + "\n")
 
-		// Ограниченный поллинг (100 x 0.2с ≈ 20с): Answer=="" в hung-dialog
-		// даёт скрипту сдаться и выйти, вместо того чтобы висеть вечно.
-		b.WriteString("for i in $(seq 1 100); do\n")
-		b.WriteString(`  if [ -f "$A" ]; then break; fi` + "\n")
-		b.WriteString("  sleep 0.2\n")
-		b.WriteString("done\n")
-		b.WriteString(`if [ ! -f "$A" ]; then echo 'no answer received, giving up' >&2; exit 0; fi` + "\n")
+		if q.Answer == "" {
+			// hung-dialog: ответа по условию сценария не будет никогда — выходим
+			// сразу после публикации вопроса, не тратя время на поллинг (T3,
+			// dev-plan.md). Ветка выбирается по спецификации (Answer==""), а не по
+			// имени сценария.
+			b.WriteString("exit 0\n")
+			skipCompletion = true
+		} else {
+			// Ограниченный поллинг (100 x 0.2с ≈ 20с) — страховка на случай, если
+			// ответ задержится дольше ожидаемого.
+			b.WriteString("for i in $(seq 1 100); do\n")
+			b.WriteString(`  if [ -f "$A" ]; then break; fi` + "\n")
+			b.WriteString("  sleep 0.2\n")
+			b.WriteString("done\n")
+			b.WriteString(`if [ ! -f "$A" ]; then echo 'no answer received, giving up' >&2; exit 0; fi` + "\n")
+		}
 	}
 
-	b.WriteString(synthCompletionScript(phase))
+	if !skipCompletion {
+		b.WriteString(synthCompletionScript(phase))
+	}
 
 	if err := os.WriteFile(scriptPath, []byte(b.String()), 0o755); err != nil {
 		t.Fatalf("write synth agent script: %v", err)
@@ -275,20 +287,54 @@ func runScenarioUpToAssert(t *testing.T, sc Scenario) (*orchestrator.Orchestrato
 	// фиксирует факт для hung-dialog, где Answer=="").
 	reached := answerDialogs(t, orch, runDir, sc)
 
+	// Сценарии с нетерминальным ожидаемым статусом (стадия должна остаться,
+	// например, в awaiting_user_input) не возвращают orch.Run сами — агент уже
+	// вышел (см. writeSynthAgent), дожидаться больше нечего. Дожидаемся агентских
+	// горутин — ПЕРЕД cancel(), иначе он может убить ещё живой подпроцесс и увести
+	// стадию в failed до assertExpectation (T3, dev-plan.md) — и отменяем ран сами,
+	// не тратя время на ctx-дедлайн харнесса. Для терминальных исходов (done/failed)
+	// Run возвращается сам: досрочная отмена испортила бы файлы, которые дописывает
+	// завершение стадии (FilesPresent/FilesAbsent).
+	nonTerminal := isNonTerminalExpectation(sc.Expect)
+	if nonTerminal {
+		orchestrator.WaitAgentsForTest(orch)
+		cancel()
+	}
+
 	select {
 	case err := <-done:
-		if sc.Expect.RunErrSubstr != "" {
+		switch {
+		case sc.Expect.RunErrSubstr != "":
 			if err == nil || !strings.Contains(err.Error(), sc.Expect.RunErrSubstr) {
 				t.Fatalf("expected Run error containing %q, got %v", sc.Expect.RunErrSubstr, err)
 			}
-		} else if err != nil && err != context.DeadlineExceeded {
+		case nonTerminal:
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("orch.Run: %v", err)
+			}
+		case err != nil && err != context.DeadlineExceeded:
 			t.Fatalf("orch.Run: %v", err)
+		default:
 		}
-	case <-time.After(35 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("scenario timed out")
 	}
 
 	return orch, runDir, reached
+}
+
+// isNonTerminalExpectation reports whether the scenario expects some stage to
+// still be in a non-terminal status (anything but done/failed) once the
+// harness is done driving it — e.g. awaiting_user_input for a hung dialog.
+// orch.Run never returns on its own for such scenarios, so the harness must
+// cancel it explicitly instead of waiting out its ctx deadline.
+func isNonTerminalExpectation(e Expectation) bool {
+	for _, want := range e.Statuses {
+		if want != state.StatusDone && want != state.StatusFailed {
+			return true
+		}
+	}
+	return false
 }
 
 // answerDialogs ждёт awaiting_user_input и пишет ответ по каноническому пути; пустой Answer оставляет

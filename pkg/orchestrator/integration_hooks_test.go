@@ -37,6 +37,7 @@ func TestIntegration_ScriptAfter_FailsThenSkip_StageStaysDone(t *testing.T) {
 		Store:   store,
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
+		Clock:   newFakeClockWithPump(t),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

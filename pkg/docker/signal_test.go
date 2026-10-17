@@ -12,7 +12,7 @@ import (
 
 func TestDefaultExecFunc_ForwardsSignalToChild(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "signaled")
-	script := fmt.Sprintf(`trap 'touch %q; exit 42' TERM; sleep 30`, marker)
+	script := fmt.Sprintf(`trap 'touch %q; exit 42' TERM; for i in $(seq 1 600); do sleep 0.05; done`, marker)
 
 	resultErr := make(chan error, 1)
 	go func() {
@@ -35,10 +35,11 @@ func TestDefaultExecFunc_ForwardsSignalToChild(t *testing.T) {
 		if exitErr.Code != 42 {
 			t.Errorf("exit code = %d, want 42 (child's trap handler exit code)", exitErr.Code)
 		}
-	case <-time.After(30 * time.Second):
-		// 30с — щедрый запас: доставка сигналов дочерним процессам в некоторых песочницах ощутимо задержана
-		// (секунды, не мс), хотя в обычной среде форвардинг практически мгновенный.
-		t.Fatal("defaultExecFunc did not return within 30s after SIGTERM — signal was not forwarded, child left running orphaned")
+	case <-time.After(5 * time.Second):
+		// 5s — щедрый запас против медленной доставки сигналов в некоторых песочницах, но уже не 30s:
+		// дочерний скрипт сам поллит trap каждые 0.05s, так что нормальная доставка укладывается в
+		// доли секунды.
+		t.Fatal("defaultExecFunc did not return within 5s after SIGTERM — signal was not forwarded, child left running orphaned")
 	}
 
 	if _, err := os.Stat(marker); err != nil {

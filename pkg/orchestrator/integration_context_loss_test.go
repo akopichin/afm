@@ -73,11 +73,10 @@ func (r *promptCapturingImplRunner) RunJSONQuery(ctx context.Context, prompt str
 }
 
 func TestIntegration_RetryContextSurvivesTruncation(t *testing.T) {
-	origBackoff := orchestrator.RetryBackoff
 	origMax := orchestrator.MaxRetries
-	orchestrator.RetryBackoff = 1 * time.Millisecond
 	orchestrator.MaxRetries = 3
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
+	t.Cleanup(func() { orchestrator.MaxRetries = origMax })
+	clk := newFakeClockWithPump(t)
 
 	longCmd := strings.Repeat("echo-marker-", 30) // 360 chars, far above TruncateOutput below
 	script := fmt.Sprintf(`echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"%s"}}]}}'
@@ -100,7 +99,7 @@ echo '{"type":"result","subtype":"success"}'`, longCmd)
 			Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 
-	orch, runDir, stateFile := setupOrchestratorWithRunner(t, stages, capture)
+	orch, runDir, stateFile := setupOrchestratorWithRunnerAndClock(t, stages, capture, clk)
 	cancel := autoApprove(orch)
 	defer cancel()
 

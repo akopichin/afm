@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -15,8 +16,10 @@ import (
 )
 
 // newPollerOrch builds an orchestrator whose stage starts in StatusRunning, returning the store and a
-// cancellable context for the Run loop.
-func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestrator, *state.Store, context.Context, context.CancelFunc) {
+// cancellable context for the Run loop. pollerClock is the poller's clock — tests that only need ticks to
+// resolve fast pass newFakeClockWithPump(t); tests that need to count exact ticks pass their own
+// clock.FakeClock and drive it with BlockUntil/Advance.
+func newPollerOrch(t *testing.T, runDir, stageID string, pollerClock clock.Clock) (*orchestrator.Orchestrator, *state.Store, context.Context, context.CancelFunc) {
 	t.Helper()
 	stageDir := filepath.Join(runDir, stageID)
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
@@ -45,6 +48,7 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 		Stages: []flow.Stage{{ID: stageID, Name: stageID, Interactive: true, Command: scriptPath}},
 		Store:  store,
 		Config: config.Default(),
+		Clock:  pollerClock,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	return orch, store, ctx, cancel
@@ -53,7 +57,7 @@ func newPollerOrch(t *testing.T, runDir, stageID string) (*orchestrator.Orchestr
 func TestPollQuestions_DetectsNewQuestion(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "poll-test"
-	orch, store, ctx, cancel := newPollerOrch(t, runDir, stageID)
+	orch, store, ctx, cancel := newPollerOrch(t, runDir, stageID, newFakeClockWithPump(t))
 	t.Cleanup(func() { store.Close() })
 
 	// Write the question file BEFORE starting Run.
@@ -84,12 +88,14 @@ func TestPollQuestions_DetectsNewQuestion(t *testing.T) {
 	}
 }
 
-// TestPollQuestions_Idempotent verifies that the same question file triggers
-// EventAskUser exactly once across multiple poller ticks.
+// TestPollQuestions_Idempotent verifies that the same question file triggers EventAskUser exactly once
+// across multiple poller ticks — driven explicitly via Advance instead of sleeping out several real 1s
+// ticks (dev-plan.md, T7).
 func TestPollQuestions_Idempotent(t *testing.T) {
 	runDir := t.TempDir()
 	stageID := "idem-test"
-	orch, store, ctx, cancel := newPollerOrch(t, runDir, stageID)
+	fc := clock.NewFake(time.Unix(0, 0))
+	orch, store, ctx, cancel := newPollerOrch(t, runDir, stageID, fc)
 	t.Cleanup(func() { store.Close() })
 
 	stageDir := filepath.Join(runDir, stageID)
@@ -103,19 +109,25 @@ func TestPollQuestions_Idempotent(t *testing.T) {
 
 	runOrchestratorAsync(ctx, t, orch, cancel)
 
-	// Observe for long enough that the 1-second poller ticks at least twice.
 	askCount := 0
-	timer := time.After(2500 * time.Millisecond)
-	done := false
-	for !done {
-		select {
-		case ev := <-sub:
-			if ev.Type == bus.EventAskUser && ev.StageID == stageID {
-				askCount++
+	drainAsks := func() {
+		for {
+			select {
+			case ev := <-sub:
+				if ev.Type == bus.EventAskUser && ev.StageID == stageID {
+					askCount++
+				}
+			case <-time.After(100 * time.Millisecond):
+				return // settle window for the poller goroutine to process this tick
 			}
-		case <-timer:
-			done = true
 		}
+	}
+
+	// Advance 3 ticks explicitly — the same question file must surface EventAskUser on the first tick only.
+	for i := 0; i < 3; i++ {
+		fc.BlockUntil(1)
+		fc.Advance(time.Second)
+		drainAsks()
 	}
 	uiBus.Unsubscribe(subID)
 	if askCount != 1 {

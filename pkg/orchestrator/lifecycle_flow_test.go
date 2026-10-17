@@ -79,6 +79,7 @@ func newScriptFlowOrch(t *testing.T, dispatcher *lifecyclehooks.Dispatcher, scri
 		Prompts: orchestrator.DefaultPrompts(),
 		Resumed: resumed,
 		Hooks:   dispatcher,
+		Clock:   newFakeClockWithPump(t),
 	}
 	if withDashboard {
 		opts.DashboardURL = "http://test.invalid"

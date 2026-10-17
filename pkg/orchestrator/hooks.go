@@ -34,8 +34,8 @@ const dataKeyStderrTail = "stderr_tail"
 const dataKeySeq = "seq"
 
 // runScriptWithRetry runs fn up to hookMaxRetries+1 times, waiting hookRetryBackoff[attempt] between
-// attempts.
-func runScriptWithRetry(ctx context.Context, fn func() error) error {
+// attempts (by o.clk(), so tests can advance the wait instead of sleeping real seconds).
+func (o *Orchestrator) runScriptWithRetry(ctx context.Context, fn func() error) error {
 	var lastErr error
 	for attempt := 0; attempt <= hookMaxRetries; attempt++ {
 		lastErr = fn()
@@ -44,7 +44,7 @@ func runScriptWithRetry(ctx context.Context, fn func() error) error {
 		}
 		if attempt < hookMaxRetries {
 			select {
-			case <-time.After(hookRetryBackoff[attempt]):
+			case <-o.clk().After(hookRetryBackoff[attempt]):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -193,7 +193,7 @@ func (o *Orchestrator) runBeforeHook(ctx context.Context, s flow.Stage) bool {
 	for {
 		// Публикуем started для каждой серии попыток; пользовательский Retry начинает новую серию.
 		o.emitStageEvent(lifecyclehooks.EventStageScriptBeforeStarted, s.ID, "")
-		err := runScriptWithRetry(ctx, func() error {
+		err := o.runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookBefore, s.ScriptBefore, s.ScriptBeforeTimeout, logFile)
 		})
 		if err == nil {
@@ -241,7 +241,7 @@ func (o *Orchestrator) runAfterHook(ctx context.Context, s flow.Stage) {
 	for {
 		// Публикуем started для каждой серии попыток; пользовательский Retry начинает новую серию.
 		o.emitStageEvent(lifecyclehooks.EventStageScriptAfterStarted, s.ID, "")
-		err := runScriptWithRetry(ctx, func() error {
+		err := o.runScriptWithRetry(ctx, func() error {
 			return o.execScript(ctx, s, hookAfter, s.ScriptAfter, s.ScriptAfterTimeout, logFile)
 		})
 		if err == nil {

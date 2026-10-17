@@ -133,6 +133,40 @@
   восстановлении опроса получает новый anchor. Терминальный ответ фиксирует
   точные значения независимо от соединения.
 
+### `pkg/clock` — тестируемое время (nil-safe `clk()` seam)
+
+Реальный `time.Now()`/`time.After`/`time.NewTimer`/`time.NewTicker` в reliability-core
+заменены на интерфейс `clock.Clock` (`Now`/`After`/`NewTimer`/`NewTicker`), чтобы тесты
+могли проматывать паузы (`clock.NewFake(start).Advance(d)`) вместо реального сна.
+`clock.Real()` — тонкая обёртка над stdlib; `clock.FakeClock.BlockUntil(n)` синхронизирует
+тест с горутиной под тестом (ждёт, пока она реально встанет в `select` на таймер/тикер),
+закрывая гонку «Advance промотал время раньше, чем горутина успела подписаться».
+
+- **Один и тот же nil-safe паттерн в четырёх местах**, каждое со своим `clk()`-аксессором:
+  `Orchestrator.clock`/`clk()` (`pkg/orchestrator/orchestrator.go`),
+  `concurrency.Manager.Clock`/`clk()` (`pkg/orchestrator/concurrency/concurrency.go`),
+  `executor.Config.Clock`/`e.clk()` (`pkg/executor/executor.go`), и пакетный
+  `pkg/state`'s `clk()` (`pkg/state/clock.go`) — package-level var + мьютекс, тот же приём,
+  что уже был у `applyHook`/`appendControlHook` (`state/store.go`), т.к. `state.Open` имеет
+  >200 call sites и threading через него `Options.Clock` было бы несоразмерным.
+  **Во всех четырёх nil означает `clock.Real()`** — прод-поведение не меняется, если
+  вызывающий не передал часы явно (а он их не передаёт нигде в `cmd/afm`).
+  **`orchestrator.New` НЕ прокидывает `opts.Clock` в `conc.Clock`** — намеренно: быстро
+  прокрученные тестами fake-часы (hookRetryBackoff-pump) racе'или бы с
+  `WaitAgents`'ов `agentDrainTimeout`, мгновенно обходя реальное ожидание `agentWG` и
+  срывая happens-before гарантию `cancel → WaitAgents → Close` (тот же класс флейка, что
+  выше). `concurrency`-тесты, которым нужен fake-clock-driven drain-таймаут, ставят
+  `Manager.Clock` напрямую на отдельно сконструированном `Manager`, в обход Orchestrator.
+- **Прямое обращение к полю запрещено** — только через `clk()`: `o.clock.X()` паникует на
+  nil в десятках тестов, конструирующих `&Orchestrator{}`/`&Executor{}` литералом в обход
+  конструктора.
+- **Конвертированные горячие точки:** `hookRetryBackoff`/`runScriptWithRetry`,
+  `verifyExecBackoff`, диалог-поллер (тикер + throttle `relocateScanInterval`),
+  retry-backoff+jitter (`retry.go`), `Store.Apply`/`AppendControl`/`NewRunState`'s
+  таймстемпы (НЕ `parseEventLog` — replay обязан использовать историческое `t.Time` из
+  лога, а не текущие часы), executor'ов idle-таймер/`Reset`/interrupt-grace-период,
+  `concurrency.WaitAgents`'ов drain-таймаут.
+
 ### Stage order in the dashboard — топологический, не порядок объявления
 
 - `buildStageViews` (`pkg/server/stageview.go`) пересчитывает порядок через

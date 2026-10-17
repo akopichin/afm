@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
@@ -81,6 +82,21 @@ type Manager struct {
 	// back to an unlimited noopSemaphore (§7.2 — "an unknown command must not get an unbounded run").
 	dynMu   sync.Mutex
 	dynSems map[string]Semaphore
+
+	// Clock — часы WaitAgents' drain таймаута. nil (не задан конструктором — New/NewWithSemaphores его не
+	// принимают, чтобы не трогать ~40 call sites) означает clock.Real(). orchestrator.New НАМЕРЕННО не
+	// прокидывает сюда opts.Clock: тестовый fake-clock-pump (ускоряющий hookRetryBackoff) racе'ил бы с
+	// этим drain-таймаутом и срывал бы happens-before агента (см. AGENTS.md's "pkg/clock"). Тесты, которым
+	// нужен управляемый drain-таймаут, ставят Clock напрямую на отдельно сконструированном Manager.
+	Clock clock.Clock
+}
+
+// clk возвращает часы менеджера; nil означает clock.Real().
+func (m *Manager) clk() clock.Clock {
+	if m.Clock == nil {
+		return clock.Real()
+	}
+	return m.Clock
 }
 
 // OwnerKey is the activeAgents key for one concurrently-running agent goroutine. Two different owners must
@@ -255,7 +271,7 @@ func (m *Manager) WaitAgents() {
 	}()
 	select {
 	case <-done:
-	case <-time.After(agentDrainTimeout):
+	case <-m.clk().After(agentDrainTimeout):
 		log.Printf("WARN: agent drain timed out after %v", agentDrainTimeout)
 	}
 }

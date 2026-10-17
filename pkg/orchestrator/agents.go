@@ -72,7 +72,7 @@ func (o *Orchestrator) runScriptStage(ctx context.Context, s flow.Stage) {
 	logFile := filepath.Join(stageDir, phaseScript+".log")
 
 	o.emitStageEvent(lifecyclehooks.EventStageScriptStarted, s.ID, "")
-	err := runScriptWithRetry(ctx, func() error {
+	err := o.runScriptWithRetry(ctx, func() error {
 		return o.execScript(ctx, s, phaseScript, s.Script, s.ScriptTimeout, logFile)
 	})
 	if err != nil {

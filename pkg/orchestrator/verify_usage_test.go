@@ -64,6 +64,7 @@ func setupVerifyUsageOrchestrator(t *testing.T, verifyScript string) (orch *orch
 		Prompts:    orchestrator.DefaultPrompts(),
 		Runner:     &autonomousSummaryRunner{},
 		Accounting: acct,
+		Clock:      newFakeClockWithPump(t),
 	})
 	return orch, runDir, filepath.Join(runDir, "state.json"), acct
 }

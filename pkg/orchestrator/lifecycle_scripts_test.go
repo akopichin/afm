@@ -67,6 +67,7 @@ func newScriptStageOrch(t *testing.T, rec *flowEventRecorder, stage flow.Stage, 
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
 		Hooks:   newFlowRecorderDispatcher(t, rec),
+		Clock:   newFakeClockWithPump(t),
 	})
 	return &scriptTestOrch{orch: orch, stateFile: filepath.Join(runDir, "state.json")}
 }

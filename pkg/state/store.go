@@ -166,7 +166,7 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 			s.lastSeq++
 			tr := Transition{
 				Seq:     s.lastSeq,
-				Time:    time.Now(),
+				Time:    clk().Now(),
 				StageID: id,
 				From:    StatusPending,
 				To:      st,
@@ -436,7 +436,7 @@ func (s *Store) appendRunEvent(event string) error {
 	if event != runEventStarted && s.snapshot.EndedAt != nil {
 		return nil
 	}
-	t := Transition{Seq: s.lastSeq + 1, Time: time.Now(), Event: event}
+	t := Transition{Seq: s.lastSeq + 1, Time: clk().Now(), Event: event}
 	data, err := json.Marshal(t)
 	if err != nil {
 		return fmt.Errorf("marshal run event: %w", err)
@@ -497,7 +497,7 @@ func (s *Store) Apply(t *Transition) error {
 
 	s.lastSeq++
 	t.Seq = s.lastSeq
-	t.Time = time.Now()
+	t.Time = clk().Now()
 
 	data, err := json.Marshal(t)
 	if err != nil {
@@ -586,7 +586,7 @@ func (s *Store) appendControlLocked(c *Control) error {
 
 	nextSeq := s.lastSeq + 1
 	c.Seq = nextSeq
-	c.Time = time.Now()
+	c.Time = clk().Now()
 
 	// Validate BEFORE ever touching the journal: a record that fails projection must never be durably
 	// written, or every future replay of this run would fail the exact same way forever (unlike a torn tail

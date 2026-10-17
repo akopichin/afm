@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
@@ -73,18 +74,7 @@ func TestScenarios(t *testing.T) {
 				ReachesAwaitingInput: []string{"wrongfolder-stage"},
 			},
 		},
-		{
-			// Без ответа стадия остаётся awaiting_user_input до таймаута харнесса.
-			Name:   "hung-dialog",
-			Stages: []flow.Stage{{ID: "hung-stage", Agents: []flow.AgentType{flow.AgentPlanning}}},
-			Agents: map[string]AgentSpec{
-				"hung-stage": {Interactive: true, Question: &QuestionInject{Phase: "planning", ID: "q1", Answer: "", Fault: FaultNone}},
-			},
-			Expect: Expectation{
-				Statuses:             map[string]state.StageStatus{"hung-stage": state.StatusAwaitingUserInput},
-				ReachesAwaitingInput: []string{"hung-stage"},
-			},
-		},
+		hungDialogScenario(),
 		{
 			// InjectNoDone: RunAgent "отрабатывает", но не пишет .done — имитирует агента, который вышел, не
 			// закончив работу.
@@ -106,6 +96,34 @@ func TestScenarios(t *testing.T) {
 	}
 	for _, sc := range scenarios {
 		t.Run(sc.Name, func(t *testing.T) { runScenario(t, sc) })
+	}
+}
+
+// hungDialogScenario — без ответа стадия остаётся awaiting_user_input до
+// таймаута харнесса. Вынесена в функцию, чтобы TestScenarios и
+// TestScenarios_HungDialogIsFast гоняли один и тот же сценарий.
+func hungDialogScenario() Scenario {
+	return Scenario{
+		Name:   "hung-dialog",
+		Stages: []flow.Stage{{ID: "hung-stage", Agents: []flow.AgentType{flow.AgentPlanning}}},
+		Agents: map[string]AgentSpec{
+			"hung-stage": {Interactive: true, Question: &QuestionInject{Phase: "planning", ID: "q1", Answer: "", Fault: FaultNone}},
+		},
+		Expect: Expectation{
+			Statuses:             map[string]state.StageStatus{"hung-stage": state.StatusAwaitingUserInput},
+			ReachesAwaitingInput: []string{"hung-stage"},
+		},
+	}
+}
+
+// TestScenarios_HungDialogIsFast гарантирует, что сценарий с нетерминальным
+// ожидаемым статусом (стадия зависает в awaiting_user_input) не ждёт ctx-
+// дедлайн харнесса — см. T3 в dev-plan.md.
+func TestScenarios_HungDialogIsFast(t *testing.T) {
+	start := time.Now()
+	runScenario(t, hungDialogScenario())
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("hung-dialog scenario took %v, want < 5s", elapsed)
 	}
 }
 

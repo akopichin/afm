@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/browser"
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/execprep"
 	"github.com/akopichin/afm/pkg/executor"
@@ -107,6 +108,10 @@ type Options struct {
 	// its own (Инвариант 9).
 	AssistantsEnabled  bool
 	AssistantsRegistry *assistants.Registry
+	// Clock — часы рана. Пусто (nil) означает clock.Real(): прод-код и большинство тестов, конструирующих
+	// Orchestrator через New, не задают его явно и получают реальное время без дополнительных действий.
+	// Fake-часы инжектируют только тесты, которым нужно проматывать паузы вручную.
+	Clock clock.Clock
 }
 
 // ResolvedFile описывает файл review-ноты: путь, ссылку, текущий SHA и, для построчной ноты, текст строки
@@ -168,6 +173,15 @@ type Orchestrator struct {
 	retryBackoff      time.Duration
 	maxUnknownRetries int
 	retryBackoffMax   time.Duration
+	// clock — часы рана, снятые в New из opts.Clock. nil означает Orchestrator собран структурным литералом в
+	// тестах, в обход New (>40 мест в pkg/orchestrator) — доступ ТОЛЬКО через nil-safe o.clk(), прямое o.clock.X()
+	// запаниковало бы в половине тестов пакета.
+	clock clock.Clock
+	// jitterFrac — доля retry-backoff (см. jittered, retry.go), которую New снимает с defaultJitterFrac.
+	// Zero value (структурный литерал в тестах) означает 0 — тест видит точный номинал backoffFor, а не
+	// случайный шум; нет отдельного nil-safe аксессора, т.к. 0 — корректное самостоятельное значение, а не
+	// маркер "не задано" (в отличие от clock, где nil не является валидным Clock).
+	jitterFrac float64
 	// spawnJSONFix запускает свежий изолированный агент, единственная задача которого — переписать битый
 	// question.json валидным JSON. Возвращает канал, закрываемый по завершении агента.
 	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
@@ -226,6 +240,10 @@ type Orchestrator struct {
 
 	// pollerDone закрывается горутиной startQuestionPoller при её выходе.
 	pollerDone chan struct{}
+	// pollTickHook — тестовый seam (nil-safe, тот же приём, что и у retryCASBarrier/commitAddStageBarrier):
+	// вызывается ПОСЛЕ каждого pollQuestions внутри тика поллера, чтобы тест мог посчитать реальные тики по
+	// fake-часам, не имея другого способа наблюдать внутренний цикл startQuestionPoller.
+	pollTickHook func()
 
 	// fatalMu/fatalErr/cancelRun останавливают run только при StorageError; CAS-mismatch не фатален.
 	fatalMu   sync.Mutex
@@ -457,6 +475,13 @@ func New(opts Options) *Orchestrator {
 	// глобальным дефолтом.
 	conc := concurrency.New(critical, initialReg.Stages(), opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
 		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
+	// conc.Clock намеренно остаётся nil (реальные часы), а не opts.Clock: тесты подсовывают в Options.Clock
+	// быстро прокручиваемые fake-часы, чтобы пропустить ожидания hookRetryBackoff, и те же часы обогнали бы
+	// drain-таймаут WaitAgents (agentDrainTimeout, concurrency.go) ЗАДОЛГО до реального завершения agentWG,
+	// которое этот таймаут обязан ограничивать — тихо срывая happens-before гарантию cancel->WaitAgents->Close
+	// в тестовой инфраструктуре (ровно тот класс флейка "write events.jsonl: invalid argument", AGENTS.md).
+	// Ни прод, ни тесты сейчас не нуждаются в Manager.Clock, управляемом часами Orchestrator — тесты самого
+	// concurrency ставят Clock напрямую на отдельно сконструированный Manager, когда нужно прогнать drain-таймаут.
 
 	absRunDir := opts.RunDir
 	if abs, err := filepath.Abs(opts.RunDir); err == nil {
@@ -479,6 +504,8 @@ func New(opts Options) *Orchestrator {
 		retryBackoff:      RetryBackoff,
 		maxUnknownRetries: MaxUnknownRetries,
 		retryBackoffMax:   RetryBackoffMax,
+		clock:             opts.Clock,
+		jitterFrac:        defaultJitterFrac,
 	}
 	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
@@ -512,6 +539,17 @@ func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
 // агента (root_dir/worktree) не совпадает с CWD afm, и относительный путь резолвился бы не туда.
 func (o *Orchestrator) stageDir(stageID string) string {
 	return filepath.Join(o.absRunDir, stageID)
+}
+
+// clk возвращает часы рана; nil (Orchestrator собран структурным литералом в тестах, в обход New) означает
+// реальные часы — тот же fail-open приём, что уже есть у o.fingerprintFn (verify.go). Все обращения к
+// времени ОБЯЗАНЫ идти через o.clk(), а не o.clock напрямую — прямой вызов паникует на nil в половине
+// тестов пакета.
+func (o *Orchestrator) clk() clock.Clock {
+	if o.clock == nil {
+		return clock.Real()
+	}
+	return o.clock
 }
 
 // reg returns the CURRENT registry snapshot — every stage-definition read in this package goes through this,

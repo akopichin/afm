@@ -149,23 +149,44 @@ func TestManager_SameStageReconnect_ReusesSession(t *testing.T) {
 }
 
 func TestManager_ChromeLaunchDeadline(t *testing.T) {
-	blockForever := func() { select {} }
+	blockForever := func() { <-t.Context().Done() }
 	m := newTestManager(t, blockForever)
 	m.launchTimeout = 50 * time.Millisecond
 	_, err := m.firstConnect(context.Background(), "ep1", "build")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("launch must time out, got %v", err)
 	}
+	assertCloseIsFast(t, m)
 }
 
 func TestManager_ClientCancelReleasesConnect(t *testing.T) {
-	blockForever := func() { select {} }
+	blockForever := func() { <-t.Context().Done() }
 	m := newTestManager(t, blockForever)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
 	if _, err := m.firstConnect(ctx, "ep1", "build"); err == nil {
 		t.Fatal("client cancellation must abort the pending launch")
 	}
+	assertCloseIsFast(t, m)
+}
+
+// assertCloseIsFast registers a Cleanup (so it runs after t.Context() is
+// canceled, like the real teardown) that fails if Close() has to wait out
+// Manager.Close's 10s session-launch budget (manager.go:269-279) — a stuck
+// fake launch leaks that wait into every test using it. Close is idempotent,
+// so this running before newTestManager's own Cleanup-registered Close is
+// harmless.
+func assertCloseIsFast(t *testing.T, m *Manager) {
+	t.Helper()
+	t.Cleanup(func() {
+		start := time.Now()
+		if err := m.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("Close took %v, want < 1s (fake launch did not finish promptly)", elapsed)
+		}
+	})
 }
 
 func writeOwnedProfile(t *testing.T, parent, name string, pid int) string {

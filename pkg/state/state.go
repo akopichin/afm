@@ -119,7 +119,7 @@ type RunState struct {
 // NewRunState creates an initial RunState with all stages pending.
 func NewRunState(stageIDs []string) *RunState {
 	rs := &RunState{
-		StartedAt:  time.Now(),
+		StartedAt:  clk().Now(),
 		StageOrder: stageIDs,
 		Stages:     make(map[string]StageState, len(stageIDs)),
 		Assistants: newAssistantsState(),
@@ -134,7 +134,7 @@ func NewRunState(stageIDs []string) *RunState {
 
 // SetStageStatus updates a stage status, stamping the current time.
 func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
-	rs.SetStageStatusAt(stageID, status, time.Now())
+	rs.SetStageStatusAt(stageID, status, clk().Now())
 }
 
 // SetStageStatusAt updates a stage status, stamping it with the given time t instead of time.Now.

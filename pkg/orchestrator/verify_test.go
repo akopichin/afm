@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -33,6 +35,61 @@ func newVerifyTestOrchestrator(t *testing.T, stage flow.Stage) (*Orchestrator, s
 		runVerifyShell: runVerifyShellCommand,
 	}
 	return o, stageDir
+}
+
+// TestVerifyBackoffInterruptible_WaitsExactDuration asserts verifyBackoffInterruptible waits exactly d by
+// the clock, not "eventually" — an Advance short of d must not fire it.
+func TestVerifyBackoffInterruptible_WaitsExactDuration(t *testing.T) {
+	fc := clock.NewFake(time.Unix(0, 0))
+	o := &Orchestrator{clock: fc}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- o.verifyBackoffInterruptible(context.Background(), "s1", 8*time.Second)
+	}()
+	fc.BlockUntil(1)
+
+	fc.Advance(7 * time.Second)
+	select {
+	case <-done:
+		t.Fatal("verifyBackoffInterruptible returned before its backoff elapsed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	fc.Advance(1 * time.Second)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("expected true (backoff elapsed, not interrupted)")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("verifyBackoffInterruptible did not return after the backoff elapsed")
+	}
+}
+
+// TestVerifyBackoffInterruptible_InterruptReturnsFalseWithoutAdvancing proves interruption does not depend
+// on the clock moving at all — a pre-buffered interrupt must win with ZERO Advance calls.
+func TestVerifyBackoffInterruptible_InterruptReturnsFalseWithoutAdvancing(t *testing.T) {
+	fc := clock.NewFake(time.Unix(0, 0))
+	o := &Orchestrator{clock: fc}
+
+	interruptCh := make(chan struct{}, 1)
+	interruptCh <- struct{}{}
+	o.interruptChans.Store("s1", interruptCh)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- o.verifyBackoffInterruptible(context.Background(), "s1", 8*time.Second)
+	}()
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("expected false (interrupted), got true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("verifyBackoffInterruptible did not return promptly on interrupt")
+	}
 }
 
 func readManifest(t *testing.T, stageDir, verID string) stagefiles.Manifest {
@@ -190,6 +247,7 @@ func TestRunVerification_AgentNonZeroExitAfterPassText_NeverPasses(t *testing.T)
 		}},
 	}
 	o, stageDir := newVerifyTestOrchestrator(t, stage)
+	o.clock = newFakeClockWithPump(t)
 	o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
 		// Result is non-nil despite ProcessOK:false — the point of this test is that a non-OK process outcome
 		// rejects EVEN IF the model's text somehow decoded to a "pass".

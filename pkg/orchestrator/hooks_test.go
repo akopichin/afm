@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
+	"github.com/akopichin/afm/pkg/clock/clocktest"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memorypipeline"
@@ -19,9 +21,16 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// newFakeClockWithPump — алиас на clocktest.NewFakeWithPump. Сам хелпер живёт
+// в pkg/clock/clocktest, т.к. Go test-пакеты не шарят неэкспортируемые хелперы
+// между package orchestrator (этот файл) и package orchestrator_test
+// (clockpump_test.go) в одном каталоге.
+var newFakeClockWithPump = clocktest.NewFakeWithPump
+
 func TestRunScriptWithRetry_SucceedsOnThirdAttempt(t *testing.T) {
+	o := &Orchestrator{clock: newFakeClockWithPump(t)}
 	attempts := 0
-	err := runScriptWithRetry(context.Background(), func() error {
+	err := o.runScriptWithRetry(context.Background(), func() error {
 		attempts++
 		if attempts < 3 {
 			return errors.New("boom")
@@ -37,8 +46,9 @@ func TestRunScriptWithRetry_SucceedsOnThirdAttempt(t *testing.T) {
 }
 
 func TestRunScriptWithRetry_ExhaustsAfterFourAttempts(t *testing.T) {
+	o := &Orchestrator{clock: newFakeClockWithPump(t)}
 	attempts := 0
-	err := runScriptWithRetry(context.Background(), func() error {
+	err := o.runScriptWithRetry(context.Background(), func() error {
 		attempts++
 		return errors.New("always fails")
 	})
@@ -50,17 +60,50 @@ func TestRunScriptWithRetry_ExhaustsAfterFourAttempts(t *testing.T) {
 	}
 }
 
+// TestRunScriptWithRetry_RespectsBackoffTiming asserts the EXACT nominal
+// backoff between attempts (1s, 2s, 3s) via BlockUntil+Advance — stronger than
+// the old "elapsed >= 6s" check, which couldn't have caught a shuffled order
+// or an extra wait (dev-plan.md, T5).
 func TestRunScriptWithRetry_RespectsBackoffTiming(t *testing.T) {
-	attempts := 0
-	start := time.Now()
-	_ = runScriptWithRetry(context.Background(), func() error {
-		attempts++
-		return errors.New("fail")
-	})
-	elapsed := time.Since(start)
-	// 1s + 2s + 3s = 6s minimum between the 4 attempts.
-	if elapsed < 6*time.Second {
-		t.Errorf("elapsed = %v, want >= 6s (backoff not respected)", elapsed)
+	fc := clock.NewFake(time.Unix(0, 0))
+	o := &Orchestrator{clock: fc}
+
+	var attempts int
+	var waits []time.Duration
+	var last time.Time
+
+	done := make(chan error, 1)
+	go func() {
+		done <- o.runScriptWithRetry(context.Background(), func() error {
+			now := fc.Now()
+			attempts++
+			if attempts > 1 {
+				waits = append(waits, now.Sub(last))
+			}
+			last = now
+			return errors.New("fail")
+		})
+	}()
+
+	for _, backoff := range hookRetryBackoff {
+		fc.BlockUntil(1)
+		fc.Advance(backoff)
+	}
+
+	if err := <-done; err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+
+	if attempts != hookMaxRetries+1 {
+		t.Fatalf("attempts = %d, want %d", attempts, hookMaxRetries+1)
+	}
+	if len(waits) != len(hookRetryBackoff) {
+		t.Fatalf("recorded %d inter-attempt waits, want %d", len(waits), len(hookRetryBackoff))
+	}
+	for i, want := range hookRetryBackoff {
+		if waits[i] != want {
+			t.Errorf("wait before attempt %d = %v, want exactly %v", i+2, waits[i], want)
+		}
 	}
 }
 
@@ -322,6 +365,7 @@ func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
 		critical: critical,
 		fsm:      bus.NewFSM(store),
 		graph:    graph.NewStore(graph.NewRegistry(stages)),
+		clock:    newFakeClockWithPump(t),
 	}
 	return o, runDir
 }

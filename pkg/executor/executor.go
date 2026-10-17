@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
@@ -119,6 +120,9 @@ type Config struct {
 	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
 	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
 	runMode RunMode
+	// Clock is the executor's clock. nil (the production default) means clock.Real(); tests inject a
+	// clock.FakeClock to drive the idle timer / interrupt grace period without real sleeps.
+	Clock clock.Clock
 }
 
 // ErrUserInterrupted signals that the agent process was stopped because the user requested an interrupt —
@@ -205,6 +209,14 @@ func New(cfg Config) *Executor {
 		cfg.ExtraArgs = DefaultClaudeArgs()
 	}
 	return &Executor{cfg: cfg}
+}
+
+// clk returns the executor's clock; nil (cfg.Clock unset — the production default) means clock.Real().
+func (e *Executor) clk() clock.Clock {
+	if e.cfg.Clock == nil {
+		return clock.Real()
+	}
+	return e.cfg.Clock
 }
 
 type streamContent struct {
@@ -971,7 +983,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
 	}
 
-	idleTimer := time.NewTimer(e.cfg.IdleTimeout)
+	idleTimer := e.clk().NewTimer(e.cfg.IdleTimeout)
 	defer idleTimer.Stop()
 
 	done := make(chan error, 1)
@@ -990,7 +1002,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			return readErr
 		}
 		return waitErr
-	case <-idleTimer.C:
+	case <-idleTimer.C():
 		killProcessGroup(cmd, syscall.SIGKILL)
 		<-done // wait for stdout reader to finish
 		_ = cmd.Wait()
@@ -1008,7 +1020,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		case <-done:
 			_ = cmd.Wait()
 			return ErrUserInterrupted
-		case <-time.After(interruptGracePeriod):
+		case <-e.clk().After(interruptGracePeriod):
 			// Не среагировал на SIGINT вовремя — принудительно, как страховка.
 			killProcessGroup(cmd, syscall.SIGKILL)
 			<-done
@@ -1026,7 +1038,7 @@ func (e *Executor) logAgentInput(phase, prompt string) {
 	}
 	entry := fmt.Sprintf(
 		"=== [%s] stage=%s phase=%s cmd=%s session=%s resume=%t ===\n--- BEGIN PROMPT ---\n%s\n--- END PROMPT ---\n\n",
-		time.Now().UTC().Format(time.RFC3339Nano), e.cfg.StageID, phase, e.cfg.Command, e.cfg.SessionID, e.cfg.Resume, prompt,
+		e.clk().Now().UTC().Format(time.RFC3339Nano), e.cfg.StageID, phase, e.cfg.Command, e.cfg.SessionID, e.cfg.Resume, prompt,
 	)
 	if e.cfg.RunDir != "" {
 		appendDebug(filepath.Join(e.cfg.RunDir, "debug.log"), entry)

@@ -41,6 +41,7 @@ func TestIntegration_ScriptStage_HappyPath(t *testing.T) {
 		Store:   store,
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
+		Clock:   newFakeClockWithPump(t),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -94,6 +95,7 @@ func TestIntegration_RetryFailedScriptStage(t *testing.T) {
 		// DashboardURL непустой — Run не должен завершиться сразу после того, как стадия стала terminal: нужен
 		// живой run-ctx для ручного Retry ниже, как в реальном прогоне с открытым дашбордом.
 		DashboardURL: "http://test.invalid",
+		Clock:        newFakeClockWithPump(t),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -145,6 +147,7 @@ func TestRunScriptStage_Failure_PublishesScriptFailedNotice(t *testing.T) {
 		Store:   store,
 		Config:  config.Default(),
 		Prompts: orchestrator.DefaultPrompts(),
+		Clock:   newFakeClockWithPump(t),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

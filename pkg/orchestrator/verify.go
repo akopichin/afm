@@ -40,7 +40,10 @@ const (
 const verifyTimedOutReason = "verify timed out"
 
 // verifyExecMaxRetries/verifyExecBackoff — бюджет и пауза ретраев транзиентного инфра-сбоя verify-процесса
-// (v1, без конфига — YAGNI). verifyExecBackoff — var лишь затем, чтобы тесты могли сжать паузу.
+// (v1, без конфига — YAGNI). verifyExecBackoff остаётся var (не const): verify_execretry_test.go мутирует
+// его на РЕАЛЬНЫХ часах, чтобы детерминированно выиграть гонку backoff vs interrupt/step-timeout (огромный
+// backoff гарантирует, что короткий конкурирующий таймаут/прерывание сработает первым) — Clock тут не
+// подключать нечем (эти тесты не вызывают Advance), var — единственный рычаг.
 const verifyExecMaxRetries = 2
 
 var verifyExecBackoff = 8 * time.Second
@@ -127,14 +130,15 @@ func (o *Orchestrator) verifyTreeFingerprint() (string, bool) {
 	return o.fingerprintFn(o.fingerprintDir())
 }
 
-// verifyBackoffInterruptible спит d; возвращает false, если Pause/Revise/cancel оборвали ожидание.
+// verifyBackoffInterruptible спит d по часам рана; возвращает false, если Pause/Revise/cancel оборвали
+// ожидание.
 func (o *Orchestrator) verifyBackoffInterruptible(ctx context.Context, stageID string, d time.Duration) bool {
 	waitCtx, stop := o.pauseAwareVerifyCtx(ctx, stageID)
 	defer stop()
-	t := time.NewTimer(d)
+	t := o.clk().NewTimer(d)
 	defer t.Stop()
 	select {
-	case <-t.C:
+	case <-t.C():
 		return true
 	case <-waitCtx.Done():
 		return false

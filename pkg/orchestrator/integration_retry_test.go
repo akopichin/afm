@@ -134,11 +134,10 @@ func (r *noDoneRunner) RunJSONQuery(ctx context.Context, prompt string) ([]byte,
 // TestIntegration_RetryOnServerError verifies that 500 errors trigger
 // backoff retry, same as rate limit errors.
 func TestIntegration_RetryOnServerError(t *testing.T) {
-	origBackoff := orchestrator.RetryBackoff
 	origMax := orchestrator.MaxRetries
-	orchestrator.RetryBackoff = 1 * time.Millisecond
 	orchestrator.MaxRetries = 3
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
+	t.Cleanup(func() { orchestrator.MaxRetries = origMax })
+	clk := newFakeClockWithPump(t)
 
 	stages := []flow.Stage{
 		{ID: "server-err", Name: "Server Error", Description: "test 500 retry", Agents: []flow.AgentType{flow.AgentPlanning}},
@@ -151,7 +150,7 @@ func TestIntegration_RetryOnServerError(t *testing.T) {
 		failMsg:   "500 Internal Server Error",
 	}
 	runner := &doneCreatingRunner{delegate: rlRunner}
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+	orch, _, stateFile := setupOrchestratorWithRunnerAndClock(t, stages, runner, clk)
 
 	cancel := autoApprove(orch)
 	defer cancel()
@@ -176,12 +175,10 @@ func TestIntegration_RetryOnServerError(t *testing.T) {
 // TestIntegration_RetryOnRateLimit verifies that the orchestrator retries
 // when the runner returns a rate limit error, and eventually succeeds.
 func TestIntegration_RetryOnRateLimit(t *testing.T) {
-	// Speed up retries: use minimal backoff durations
-	origBackoff := orchestrator.RetryBackoff
 	origMax := orchestrator.MaxRetries
-	orchestrator.RetryBackoff = 1 * time.Millisecond
 	orchestrator.MaxRetries = 3
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
+	t.Cleanup(func() { orchestrator.MaxRetries = origMax })
+	clk := newFakeClockWithPump(t)
 
 	stages := []flow.Stage{
 		{ID: "retry-stage", Name: "Retry Stage", Description: "test retry", Agents: []flow.AgentType{flow.AgentPlanning}},
@@ -196,7 +193,7 @@ func TestIntegration_RetryOnRateLimit(t *testing.T) {
 	}
 	runner := &doneCreatingRunner{delegate: rlRunner}
 
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+	orch, _, stateFile := setupOrchestratorWithRunnerAndClock(t, stages, runner, clk)
 
 	// autoApprove so the stage completes fully after the retry succeeds
 	cancel := autoApprove(orch)
@@ -223,12 +220,10 @@ func TestIntegration_RetryOnRateLimit(t *testing.T) {
 // TestIntegration_RetryExhausted verifies that after exhausting all retry
 // attempts the stage ends up in failed status.
 func TestIntegration_RetryExhausted(t *testing.T) {
-	// Speed up retries: use minimal backoff durations
-	origBackoff := orchestrator.RetryBackoff
 	origMax := orchestrator.MaxRetries
-	orchestrator.RetryBackoff = 1 * time.Millisecond
 	orchestrator.MaxRetries = 3
-	t.Cleanup(func() { orchestrator.RetryBackoff = origBackoff; orchestrator.MaxRetries = origMax })
+	t.Cleanup(func() { orchestrator.MaxRetries = origMax })
+	clk := newFakeClockWithPump(t)
 
 	stages := []flow.Stage{
 		{ID: "exhaust", Name: "Exhaust Stage", Description: "test retry exhausted", Agents: []flow.AgentType{flow.AgentPlanning}},
@@ -242,7 +237,7 @@ func TestIntegration_RetryExhausted(t *testing.T) {
 		failMsg:   "You've hit your limit · resets 3pm",
 	}
 
-	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
+	orch, _, stateFile := setupOrchestratorWithRunnerAndClock(t, stages, runner, clk)
 
 	if err := orch.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)

@@ -175,14 +175,21 @@ func backoffFor(attempt int, base, limit time.Duration) time.Duration {
 	return d
 }
 
-// jittered ВЫЧИТАЕТ из паузы 0..20 %: при max_parallel > 1 стадии не бьются в rate-limited API в такт.
+// defaultJitterFrac — доля паузы, которую jittered вычитает в проде (см. jittered). Orchestrator.jitterFrac
+// снимается с этой константы в New; структурные литералы в тестах (>40 мест в pkg/orchestrator) получают
+// нулевое значение поля по умолчанию — jittered(d, 0) возвращает d без изменений, поэтому такие тесты видят
+// точный номинал backoffFor, а не случайный шум.
+const defaultJitterFrac = 0.2
+
+// jittered ВЫЧИТАЕТ из паузы 0..frac: при max_parallel > 1 стадии не бьются в rate-limited API в такт.
 // Именно вычитание, а не прибавление: иначе на потолке пауза уходила бы за RetryBackoffMax и потолок
-// стал бы ложным. Результат в (0.8*d, d] ⇒ инвариант "не больше max" держится по построению.
-func jittered(d time.Duration) time.Duration {
-	if d <= 0 {
+// стал бы ложным. При frac<=0 результат РОВНО d (инвариант "не больше max" держится по построению в обоих
+// случаях — с джиттером результат в (d*(1-frac), d], без него — ровно d).
+func jittered(d time.Duration, frac float64) time.Duration {
+	if d <= 0 || frac <= 0 {
 		return d
 	}
-	maxCut := d / 5
+	maxCut := time.Duration(float64(d) * frac)
 	if maxCut <= 0 {
 		return d
 	}
@@ -402,7 +409,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		// Сохраняем сообщение retry в reason, чтобы reload восстановил тот же payload; seq дедуплицирует live и
 		// историю. delay растёт с attempt до потолка retryBackoffMax и вычитающе джиттерится (D2) — сообщение
 		// показывает фактическую паузу, а не номинальный RetryBackoff.
-		delay := jittered(backoffFor(attempt, retryBackoff, retryBackoffMax))
+		delay := jittered(backoffFor(attempt, retryBackoff, retryBackoffMax), o.jitterFrac)
 		msg := fmt.Sprintf("attempt %d/%d in %v", numerator, budget, delay)
 		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, msg)
 		o.ui.Publish(bus.Event{
@@ -412,7 +419,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			Seq:     seq,
 		})
 		select {
-		case <-time.After(delay):
+		case <-o.clk().After(delay):
 		case <-interruptCh:
 			return // Pause() already transitioned to paused — nothing to resume here
 		case <-ctx.Done():

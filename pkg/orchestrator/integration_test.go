@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -60,6 +61,19 @@ func mockFatalRunner(t *testing.T) executor.Runner {
 // setupOrchestratorWithRunner creates a test environment with a custom Runner.
 func setupOrchestratorWithRunner(t *testing.T, stages []flow.Stage, runner executor.Runner) (*orchestrator.Orchestrator, string, string) {
 	t.Helper()
+	return newTestOrchestrator(t, stages, runner, nil)
+}
+
+// setupOrchestratorWithRunnerAndClock is setupOrchestratorWithRunner plus an explicit Clock — for tests that
+// used to shrink the package-level orchestrator.RetryBackoff var to speed up a retry-backoff wait; they pass
+// their own clock.FakeClock and drive it instead (dev-plan.md, T8).
+func setupOrchestratorWithRunnerAndClock(t *testing.T, stages []flow.Stage, runner executor.Runner, clk clock.Clock) (*orchestrator.Orchestrator, string, string) {
+	t.Helper()
+	return newTestOrchestrator(t, stages, runner, clk)
+}
+
+func newTestOrchestrator(t *testing.T, stages []flow.Stage, runner executor.Runner, clk clock.Clock) (*orchestrator.Orchestrator, string, string) {
+	t.Helper()
 
 	runDir := t.TempDir()
 	stageIDs := make([]string, len(stages))
@@ -82,6 +96,7 @@ func setupOrchestratorWithRunner(t *testing.T, stages []flow.Stage, runner execu
 		Config:  cfg,
 		Prompts: orchestrator.DefaultPrompts(),
 		Runner:  runner,
+		Clock:   clk,
 	})
 
 	return orch, runDir, filepath.Join(runDir, "state.json")

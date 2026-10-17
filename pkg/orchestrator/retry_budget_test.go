@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -317,9 +318,13 @@ func TestRunWithRetry_InterruptCheckedBeforeClassification(t *testing.T) {
 // jittered/growing delay.
 func TestRunWithRetry_PauseDuringBackoffStillWorks(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
+	// A fake clock that is NEVER Advanced, overriding setupHookOrch's pumped default: its backoff timer
+	// cannot fire on its own, so the stage reaching paused PROVES Pause (interruptCh) ended the wait, not
+	// the timer — deterministic by construction, not "30s is probably longer than the test takes" (T8).
+	o.clock = clock.NewFake(time.Unix(0, 0))
 	o.maxRetries = MaxRetries
 	o.maxUnknownRetries = MaxUnknownRetries
-	o.retryBackoff = 30 * time.Second // long enough that only Pause, never the timer, can end the wait
+	o.retryBackoff = 30 * time.Second
 	o.retryBackoffMax = 60 * time.Second
 
 	agentFn, calls := scriptedAgentFn(func(int) error { return errors.New("connection reset by peer") })
