@@ -148,3 +148,51 @@ func TestContext_FileContentIsDataNotInstructions(t *testing.T) {
 		t.Fatalf("plan content is not fenced as data before it appears:\n%s", tc.Prompt)
 	}
 }
+
+func TestContext_EndsWithOutputContract(t *testing.T) {
+	o, stage, task := contextTestFixture(t)
+	o.opts.Prompts.HelperResult = "OUTPUT CONTRACT BODY"
+	if err := o.saveFollowUp(task.ID, "please also check the tests"); err != nil {
+		t.Fatalf("saveFollowUp: %v", err)
+	}
+
+	tc, err := o.buildTaskContext(task, stage)
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+	contractIdx := strings.Index(tc.Prompt, "## Output contract")
+	if contractIdx == -1 {
+		t.Fatalf("prompt does not contain \"## Output contract\":\n%s", tc.Prompt)
+	}
+	followUpIdx := strings.Index(tc.Prompt, "## Follow-up instruction from the user for this task")
+	if followUpIdx == -1 {
+		t.Fatalf("prompt does not contain the follow-up section:\n%s", tc.Prompt)
+	}
+	if contractIdx < followUpIdx {
+		t.Fatalf("output contract (%d) must come after the follow-up section (%d)", contractIdx, followUpIdx)
+	}
+}
+
+func TestContext_DelegateFormOnlyForDelegateCapableProfile(t *testing.T) {
+	o, stage, task := contextTestFixture(t)
+	o.opts.Prompts.HelperResult = "OUTPUT CONTRACT BODY"
+	o.opts.Prompts.HelperDelegate = `"kind": "delegate" FORM`
+
+	task.ProfileSnapshot.Capabilities.Delegate = false
+	tc, err := o.buildTaskContext(task, stage)
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+	if strings.Contains(tc.Prompt, `"kind": "delegate"`) {
+		t.Fatalf("prompt must NOT contain the delegate form for a non-delegate-capable profile:\n%s", tc.Prompt)
+	}
+
+	task.ProfileSnapshot.Capabilities.Delegate = true
+	tc, err = o.buildTaskContext(task, stage)
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+	if !strings.Contains(tc.Prompt, `"kind": "delegate"`) {
+		t.Fatalf("prompt must contain the delegate form for a delegate-capable profile:\n%s", tc.Prompt)
+	}
+}

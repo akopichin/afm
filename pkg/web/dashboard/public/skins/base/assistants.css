@@ -324,6 +324,40 @@
 .assistant-task-verdict[data-verdict="needs_changes"] { border-color: var(--attention); }
 .assistant-task-verdict[data-verdict="inconclusive"] { border-color: var(--text-muted); }
 
+/* repaired badge (mirrors .assistant-task-view-mode's pill shape) — afm fixed the answer's syntax; the
+   verdict next to it is still the assistant's own. */
+.assistant-task-repaired {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--attention);
+  border: 1px solid var(--separator-subtle);
+}
+
+/* Raw-answer expander on a protocol_error failure — lazily fetched on open. */
+.assistant-task-raw-answer {
+  margin-top: 6px;
+}
+.assistant-task-raw-answer summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.assistant-task-raw-answer-text {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .assistant-task-findings {
   list-style: none;
   display: flex;

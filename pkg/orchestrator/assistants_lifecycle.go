@@ -3,7 +3,10 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/accounting"
@@ -164,7 +167,16 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	}
 
 	logFile := filepath.Join(dir, "agent.log")
-	resultFile := filepath.Join(dir, "result.json.raw")
+	resultFile := filepath.Join(dir, rawResultFileName)
+
+	// The path is per-task, but a watch/continuation task re-runs under the SAME id (fireWatcherTask ->
+	// maybeScheduleTask -> runHelperTask), and the executor only overwrites resultFile when the turn produced
+	// nonempty text (RunHelperAgent, pkg/executor/hardening.go). Without clearing it first, a textless turn
+	// would silently serve an EARLIER turn's answer as if it were this one's.
+	if rerr := os.Remove(resultFile); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: clear stale raw answer: "+rerr.Error())
+		return
+	}
 
 	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
@@ -238,12 +250,19 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
-	env, decErr := assistants.DecodeResult([]byte(outcome.RawText))
+	env, repaired, decErr := assistants.DecodeResultWithRepair([]byte(outcome.RawText))
 	if decErr != nil {
 		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's
-		// §9.3 acceptance criterion), regardless of how plausible the raw text looks.
+		// §9.3 acceptance criterion), regardless of how plausible the raw text looks. Mechanical repair has
+		// already been tried and failed — decErr is the ORIGINAL strict decode error.
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
 		return
+	}
+	if repaired {
+		// Observational only — repair changes syntax, never the model's own verdict text.
+		o.publishNotice(bus.Event{Type: bus.EventHelperResultRepaired, StageID: task.RootStageID, Data: map[string]any{
+			"task_id": string(taskID),
+		}})
 	}
 	if env.Kind == assistants.KindDelegate {
 		// T4a.3: admit the requested children and move this task to waiting_children — never treated as a
@@ -269,6 +288,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// possibly-stale or fabricated claim about it.
 	result := *env.Result
 	result.ContextVersion = tc.Version
+	result.Repaired = repaired
 	if werr := o.persistTaskResult(dir, result); werr != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
 		return

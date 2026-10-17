@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/assistants/assistantstest"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -280,6 +281,121 @@ func TestLifecycle_MalformedResult(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(o.taskDir(taskID), "result.json")); err == nil {
 		t.Fatal("result.json must not exist for a malformed answer")
+	}
+}
+
+func TestLifecycle_FencedResultIsRepaired(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessOK: true, RawText: "```json\n" + assistantstest.FixtureValidResult + "\n```"}, nil
+	}
+
+	subID, ch := o.ui.Subscribe(16)
+	defer o.ui.Unsubscribe(subID)
+
+	taskID := attachTestTask(context.Background(), t, o, "op-1")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+
+	raw, err := os.ReadFile(filepath.Join(o.taskDir(taskID), "result.json"))
+	if err != nil {
+		t.Fatalf("read durable result.json: %v", err)
+	}
+	var result assistants.Result
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("parse result.json: %v", err)
+	}
+	if !result.Repaired {
+		t.Fatal("result.Repaired = false, want true for a fenced answer")
+	}
+
+	var liveRepaired int
+	drainUIBus(ch, func(ev bus.Event) {
+		if ev.Type == bus.EventHelperResultRepaired {
+			liveRepaired++
+			if data, ok := ev.Data.(map[string]any); !ok || data["task_id"] != string(taskID) {
+				t.Errorf("helper_result_repaired event missing task_id: %+v", ev.Data)
+			}
+		}
+	})
+	if liveRepaired != 1 {
+		t.Fatalf("expected exactly one live helper_result_repaired event, got %d", liveRepaired)
+	}
+
+	notices := readVerifyNotices(t, o.opts.RunDir)
+	repaired := noticesOfType(notices, bus.EventHelperResultRepaired)
+	if len(repaired) != 1 {
+		t.Fatalf("expected exactly one durable helper_result_repaired notice, got %d", len(repaired))
+	}
+	if repaired[0].Data["task_id"] != string(taskID) {
+		t.Errorf("durable notice task_id = %v, want %v", repaired[0].Data["task_id"], taskID)
+	}
+}
+
+func TestLifecycle_RepairedPassClosesRequiredGate(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessOK: true, RawText: "```json\n" + assistantstest.FixtureValidResult + "\n```"}, nil
+	}
+
+	taskID, err := o.Attach(context.Background(), AttachRequest{
+		OperationID: "op-1", StageID: assistantsTestStageID, ProfileID: "reviewer", Mode: assistants.ModeRequired,
+		Instruction: "block until resolved", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("Attach(required): %v", err)
+	}
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && o.currentStatus(assistantsTestStageID) != state.StatusDone {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusDone {
+		t.Fatalf("status after a repaired pass = %v, want done — mechanical repair changes syntax only, the verdict is still the model's own", got)
+	}
+}
+
+func TestLifecycle_TextlessTurnLeavesNoStaleRawAnswer(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+
+	var turn atomic.Int32
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if turn.Add(1) == 1 {
+			if err := os.WriteFile(resultFile, []byte(assistantstest.FixtureValidResult), 0o644); err != nil {
+				t.Fatalf("seed first turn's raw answer: %v", err)
+			}
+			return passResultOutcome(), nil
+		}
+		return executor.HelperOutcome{ProcessOK: true, ProtocolErr: errors.New("helper produced no final answer")}, nil
+	}
+
+	// A watcher (checkpoints) trigger is the real-world way the SAME task id re-enters runHelperTask for a
+	// second turn: it starts life resting in "watching" with NO turn yet run (Attach's startsWatching path),
+	// and fireWatcherTask (the same transition a real checkpoint firing or a forced final pass uses) is what
+	// drives each turn, one at a time, under the identical task id.
+	taskID := attachWatcherTask(t, o, "op-1", assistantsTestStageID, assistants.TriggerCheckpoints, assistants.ModeAdvisory)
+	waitForTaskStatus(t, store, taskID, assistants.StatusWatching, 2*time.Second)
+
+	resultRawPath := filepath.Join(o.taskDir(taskID), "result.json.raw")
+
+	o.fireWatcherTask(context.Background(), taskID)
+	waitForTaskStatus(t, store, taskID, assistants.StatusWatching, 2*time.Second)
+	if _, err := os.Stat(resultRawPath); err != nil {
+		t.Fatalf("first turn must have left result.json.raw behind: %v", err)
+	}
+
+	o.fireWatcherTask(context.Background(), taskID)
+	waitForTaskStatus(t, store, taskID, assistants.StatusFailed, 2*time.Second)
+
+	if _, err := os.Stat(resultRawPath); err == nil {
+		t.Fatal("result.json.raw must not exist after a textless second turn — it must never show the previous turn's answer as this failure's own")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat result.json.raw: %v", err)
 	}
 }
 

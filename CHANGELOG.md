@@ -27,6 +27,15 @@ now report the path and cause in the completion error.
 
 ## 2026-10-16
 
+### Fix: recover valid helper results from malformed answer formatting
+
+afm now gives helpers an explicit JSON output contract and makes one mechanical
+repair attempt when an answer fails strict decoding, such as a fenced or
+prose-wrapped JSON object. The repaired answer must still pass schema validation;
+its verdict is unchanged. The dashboard marks accepted repaired results and adds
+a stage-feed warning. For a helper that fails with a protocol error, its task view
+can reveal the raw answer when available.
+
 ### Improvement: declare stage helpers in flow.yaml
 
 Stages can use `assistants:` to attach configured helper profiles automatically

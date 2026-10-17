@@ -4,6 +4,7 @@
 //	    task.json        # projection cache (not authoritative — events.jsonl is)
 //	    context.md        # the context actually handed to the helper (T3.5's buildTaskContext output)
 //	    result.json        # the accepted result, once completed
+//	    result.json.raw    # the model's raw final-turn text, cleared before each turn (see rawResultFileName)
 //	    agent.log          # human-readable log
 //	    agent.jsonl        # raw stream
 //	    scratch/           # the ONLY writable directory given to the helper
@@ -23,6 +24,17 @@ import (
 
 const assistantsNamespaceDir = "assistants"
 const taskScratchDirName = "scratch"
+
+// rawResultFileName — the single literal for a task's raw-answer file, shared by runHelperTask (which clears
+// and derives its path from it) and TaskRawResultRelPath (which pkg/server reads it through).
+const rawResultFileName = "result.json.raw"
+
+// TaskRawResultRelPath returns the run-dir-relative path of taskID's raw answer file — for pkg/server's
+// GET /api/assistants/{id}/raw, which must resolve the path WITHOUT importing orchestrator's full Orchestrator
+// (it only has RunDir).
+func TaskRawResultRelPath(taskID string) string {
+	return filepath.Join(assistantsNamespaceDir, safeTaskDirName(taskID), rawResultFileName)
+}
 
 // taskIDSafe mirrors pkg/assistants' internal profileIDSafe charset: a task id becomes a directory name
 // under RunDir, so the same restrictive [A-Za-z0-9._-] set applies, rejecting empty, ".", "..", path

@@ -111,6 +111,21 @@ is applied, while **Dismiss** discards it. In the Side agent, type `@` to choose
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
+## Helper answers and protocol errors
+
+Helpers must return one JSON object with `schema_version: 1` and either
+`kind: "result"` (with a verdict and summary) or, for a role with `delegate: true`,
+`kind: "delegate"` (with child tasks). afm includes this output contract at the
+end of each helper's task context, including after any follow-up instruction.
+
+If strict decoding fails, afm tries one mechanical repair of a single JSON
+object, such as extracting an answer from a markdown fence or surrounding prose.
+The repaired object still has to pass the same schema and verdict checks; repair
+cannot change its verdict. An accepted result shows a **repaired** badge in the
+helper view and a warning in the stage feed. If the answer still fails, the
+helper gets a `protocol_error`. Open **Show the assistant's raw answer** in the
+helper view to inspect its final text, when available.
+
 ## Add a stage during a run
 
 When available, **+ Stage** in the stage rail opens a dialog for a new dynamic

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/config"
@@ -107,5 +108,22 @@ func TestLoadPrompts_IncludesMemoryPrompts(t *testing.T) {
 	if p.Reflect == "" || p.Aggregate == "" || p.Prioritize == "" || p.Update == "" {
 		t.Fatalf("memory prompts empty: reflect=%d aggregate=%d prioritize=%d update=%d",
 			len(p.Reflect), len(p.Aggregate), len(p.Prioritize), len(p.Update))
+	}
+}
+
+// TestLoadPrompts_IncludesHelperPrompts regression-guards the names/texts index wiring for the two newest
+// prompt assets: a swapped index or a forgotten struct-field assignment would build and pass every other
+// test touching these fields (they all set Prompts.HelperResult/HelperDelegate by hand), since none of them
+// go through the real loadPrompts -> embedded-asset path.
+func TestLoadPrompts_IncludesHelperPrompts(t *testing.T) {
+	p, err := loadPrompts("") // "" = embedded defaults
+	if err != nil {
+		t.Fatalf("loadPrompts: %v", err)
+	}
+	if !strings.Contains(p.HelperResult, "OUTPUT CONTRACT") {
+		t.Fatalf("HelperResult does not look like assets/prompts/helper-result.md: %q", p.HelperResult)
+	}
+	if !strings.Contains(p.HelperDelegate, "delegate") {
+		t.Fatalf("HelperDelegate does not look like assets/prompts/helper-delegate.md: %q", p.HelperDelegate)
 	}
 }

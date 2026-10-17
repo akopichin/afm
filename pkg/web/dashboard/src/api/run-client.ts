@@ -329,6 +329,19 @@ export async function getAssistantTaskEvents(
   return { events: body.events ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
 }
 
+// getAssistantTaskRaw reads the raw text a helper task's final turn produced — GET /api/assistants/{id}/raw.
+// Only meaningful for a failed task (protocol_error): the dashboard fetches this lazily, on expand, never on
+// mount — see AssistantTaskView's raw-answer <details>.
+export async function getAssistantTaskRaw(taskId: string): Promise<string> {
+  const url = `/api/assistants/${encodeURIComponent(taskId)}/raw`
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new FlowApiError(url, response.status, await readErrorCode(response))
+  }
+  const body = (await response.json()) as { content?: string }
+  return body.content ?? ''
+}
+
 // DiscussionMessageWire mirrors pkg/server/discussion.go's DiscussionMessageView.
 export type DiscussionMessageWire = {
   id: string

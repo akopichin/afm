@@ -196,6 +196,8 @@ func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case action == "events" && r.Method == http.MethodGet:
 		s.handleAssistantEvents(w, r, taskID)
+	case action == "raw" && r.Method == http.MethodGet:
+		s.handleAssistantRawResult(w, r, taskID)
 	case action == taskActionWaive && r.Method == http.MethodPost:
 		s.handleWaiveTask(w, r, taskID)
 	case action == taskActionPause && r.Method == http.MethodPost,

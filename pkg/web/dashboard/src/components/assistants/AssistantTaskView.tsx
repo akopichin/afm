@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type SyntheticEvent } from 'react'
 import {
   cancelAssistantTask,
   continueAssistantTask,
   getAssistantTaskEvents,
+  getAssistantTaskRaw,
   pauseAssistantTask,
   waiveAssistantTask,
   type AssistantEventWire,
@@ -160,13 +161,20 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
       {isError ? (
         <div className="assistant-task-view-error" role="alert">
           <span className="assistant-task-view-error-icon" aria-hidden="true">⚠</span>
-          <span>
-            {task.statusReason !== ''
-              ? task.statusReason
-              : task.status === 'cancelled'
-                ? 'This helper task was cancelled.'
-                : 'This helper task failed.'}
-          </span>
+          <div>
+            <span>
+              {task.statusReason !== ''
+                ? task.statusReason
+                : task.status === 'cancelled'
+                  ? 'This helper task was cancelled.'
+                  : 'This helper task failed.'}
+            </span>
+            {/* key={task.id}: AssistantTaskView itself is never remounted when the selected task changes
+                (the caller passes task={selectedTask} without a key) — without this key, this child's own
+                raw/loaded state would survive the prop change and keep showing the PREVIOUS task's raw
+                answer after switching to a different failed task. */}
+            {task.statusReason.includes('protocol_error') && <RawAnswerExpander key={task.id} taskId={task.id} />}
+          </div>
         </div>
       ) : result !== null ? (
         <div className="assistant-task-result">
@@ -174,6 +182,11 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
           <div className="assistant-task-verdict" data-verdict={result.verdict}>
             <span aria-hidden="true">{verdictGlyph(result.verdict)}</span>
             <span>{verdictLabel(result.verdict)}</span>
+            {result.repaired && (
+              <span className="assistant-task-repaired" title="afm repaired this answer's syntax (markdown fence/surrounding prose); the verdict is unchanged">
+                repaired
+              </span>
+            )}
           </div>
           <MarkdownRenderer source={result.summary} />
           {result.findings.length > 0 && (
@@ -204,6 +217,32 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
         </div>
       )}
     </div>
+  )
+}
+
+// RawAnswerExpander lets a human see the raw text behind a protocol_error failure — lazily: the fetch only
+// happens once the <details> is actually opened, never on mount (a task view that never expands this must
+// never pay for it). A rejected fetch (e.g. the task crashed before producing any text, GET 404s) leaves the
+// plain error alone — no crash, no empty block.
+function RawAnswerExpander({ taskId }: { taskId: string }): ReactElement {
+  const [raw, setRaw] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  function onToggle(e: SyntheticEvent<HTMLDetailsElement>): void {
+    if (!e.currentTarget.open || loaded) return
+    setLoaded(true)
+    getAssistantTaskRaw(taskId)
+      .then(setRaw)
+      .catch(() => {
+        /* no raw answer available — the plain error above is enough */
+      })
+  }
+
+  return (
+    <details className="assistant-task-raw-answer" onToggle={onToggle}>
+      <summary>Show the assistant&apos;s raw answer</summary>
+      {raw !== null && <pre className="assistant-task-raw-answer-text">{raw}</pre>}
+    </details>
   )
 }
 
