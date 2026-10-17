@@ -9,6 +9,12 @@ agent (with its skills) does the work right away and is required to write
 of a plan. [Interactive dialog](interactive-stages.md) is still available on an
 autonomous stage.
 
+The summary must contain non-empty content at the stage directory path given in
+the agent prompt. afm includes that absolute path in its completion instructions,
+even when a project overrides prompt templates with `prompts_dir`. A missing,
+empty, or unreadable summary fails the completion check; afm gives the agent one
+chance to correct an initial completion-check failure before failing the stage.
+
 ```yaml
 stages:
   - id: sync-manifests

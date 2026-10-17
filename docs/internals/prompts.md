@@ -28,12 +28,18 @@ structure and the default template content.
 [<plan>...]                     ← plan.md (implementation/review)
 [<previous_plan>...]            ← plan.vN.md (planning with feedback)
 [<feedback>...]                 ← feedback.md (planning with feedback)
-[{RetryContext}]                ← context on retry
+[{RetryContext}]                ← context on retry; includes the completion
+                                 contract for implementation/review/autonomous
 ```
 
 The contents of `<description>`, `<prompt>`, `<plan>`, `<previous_plan>`,
 `<feedback>` and `<example_output>` pass through `escapeTags()` — XML tags are
 neutralized to prevent prompt injection.
+
+For implementation and review, afm appends a completion contract requiring a
+non-empty `.done` file. For autonomous execution, it requires a non-empty
+`execution_summary.md`. This contract gives the exact absolute stage path and is
+added by code on every attempt, including when `prompts_dir` replaces a template.
 
 ## 1. Planning agent
 

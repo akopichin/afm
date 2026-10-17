@@ -92,13 +92,25 @@ printf '%s' "$content" | jq -c --arg model "$OPENAI_MODEL" --arg re "$OPENAI_REA
     '{model: $model, stream: true, stream_options: {include_usage: true}, messages: [{role: "user", content: .}]}
      + (if $re != "" then {reasoning_effort: $re} else {} end)' > "$request_file"
 
-# Один SSE-ответ читаем для текста и usage/model; после сбоя curl всё равно эмитим частичный или пустой
-# конверт.
-response=$(curl -sS --no-buffer \
+# Один SSE-ответ читаем для текста и usage/model. Сетевой сбой curl или не-2xx статус
+# не должны тихо выглядеть как успех — проверяем код выхода curl и HTTP-статус ниже
+# (зеркалим openai-agent-as-claude.sh:165-191).
+set +e
+response=$(curl -sS --no-buffer -w '\n%{http_code}' \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $OPENAI_API_KEY" \
     --data-binary "@$request_file" \
-    "${OPENAI_BASE_URL}/chat/completions" 2>/dev/null || true)
+    "${OPENAI_BASE_URL}/chat/completions")
+curl_exit=$?
+set -e
+
+http_code=$(printf '%s' "$response" | tail -n1)
+response=$(printf '%s' "$response" | sed '$d')
+
+if [[ "$curl_exit" -ne 0 || "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    echo "error: request to $OPENAI_BASE_URL failed (curl exit $curl_exit, http $http_code): $response" >&2
+    exit 1
+fi
 
 # Собираем SSE-текст в один assistant-конверт: executor игнорирует content_block_delta.
 text=$(jq -njr --rawfile sse <(printf '%s' "$response") '

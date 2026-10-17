@@ -211,10 +211,13 @@ func TestP11_RunImplementationAgent_Fresh_NoteOrder(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected exactly 1 RunAgent call (no review agent declared), got %d: %+v", len(calls), calls)
 	}
+	// T8/D5: completion contract is appended LAST (after preNote and verifyNote), not as a leading
+	// "Stage directory for .done file" note anymore — see runImplementationAttempt (agents.go).
+	doneMarker := filepath.Join(stageID, ".done") // o.stageDir(stageID) in the test harness (absRunDir unset)
 	assertNoteOrder(t, calls[0].prompt,
-		"Stage directory for .done file",
 		"added before this stage started",
 		verifyFeedbackHeading,
+		doneMarker,
 	)
 }
 
@@ -345,7 +348,8 @@ func TestP11_RunImplementationAgent_EmbeddedReviewSkippedOnImplementationFailure
 // --- runImplementationWithFeedback ----------------------------------------
 
 // TestP11_RunImplementationWithFeedback_NoteOrder пинит порядок RetryContext
-// = retryContext + stageDirNote + feedbackNote + verifyNote (agents.go:505).
+// = retryContext + feedbackNote + verifyNote + completion contract (T8/D5, agents.go's
+// runImplementationAttempt) — "Stage directory for .done file" больше не ведущая заметка.
 func TestP11_RunImplementationWithFeedback_NoteOrder(t *testing.T) {
 	stageID := "impl2"
 	runner := &p11CapturingRunner{}
@@ -369,10 +373,11 @@ func TestP11_RunImplementationWithFeedback_NoteOrder(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected exactly 1 RunAgent call (no review agent declared), got %d: %+v", len(calls), calls)
 	}
+	doneMarker := filepath.Join(stageID, ".done") // o.stageDir(stageID) in the test harness (absRunDir unset)
 	assertNoteOrder(t, calls[0].prompt,
-		"Stage directory for .done file",
 		"added while this stage was running",
 		verifyFeedbackHeading,
+		doneMarker,
 	)
 	assertNoMarker(t, calls[0].prompt, "added before this stage started")
 }
@@ -589,10 +594,13 @@ func TestP11_RunAutonomousAgent_Fresh_NoteOrder_AndFlagWritten(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected exactly 1 RunAgent call, got %d: %+v", len(calls), calls)
 	}
+	// T8/D5: completion contract is appended LAST (after preNote and verifyNote), not as a leading
+	// "Stage directory: ... / Write execution_summary.md here when done." note anymore.
+	summaryMarker := filepath.Join(stageID, "execution_summary.md") // o.stageDir(stageID) in the test harness (absRunDir unset)
 	assertNoteOrder(t, calls[0].prompt,
-		"Write execution_summary.md here when done.",
 		"added before this stage started",
 		verifyFeedbackHeading,
+		summaryMarker,
 	)
 }
 
@@ -618,10 +626,11 @@ func TestP11_RunAutonomousWithFeedback_NoteOrder(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected exactly 1 RunAgent call, got %d: %+v", len(calls), calls)
 	}
+	summaryMarker := filepath.Join(stageID, "execution_summary.md") // o.stageDir(stageID) in the test harness (absRunDir unset)
 	assertNoteOrder(t, calls[0].prompt,
-		"Write execution_summary.md here when done.",
 		"added while this stage was running",
 		verifyFeedbackHeading,
+		summaryMarker,
 	)
 	assertNoMarker(t, calls[0].prompt, "added before this stage started")
 

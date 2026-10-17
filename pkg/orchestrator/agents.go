@@ -249,6 +249,9 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stageDir, depPlans, artCtx, verifyNote string) error {
 	// Инлайн-ревью тоже должен видеть замечания AI-verify предыдущего прохода (владелец коррекции остаётся
 	// implementation — ревью здесь не гейтится отдельно, это просто дополнительный контекст).
+	// T8/D6: review гейтится на .done (CheckCompletion), но до этой правки его промпт ни разу не упоминал ни
+	// .done, ни stage-директорию — гейт и инструкция теперь говорят об одном.
+	contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
 	reviewPrompt := prompts.Build(prompts.Inputs{
 		Template:        o.opts.Prompts.Review,
 		Stage:           s,
@@ -259,7 +262,7 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 		Interactive:     s.Interactive,
 		GlobalPrompt:    o.opts.GlobalPrompt,
 		MemoryBlock:     o.memoryBlockForStage(s),
-		RetryContext:    verifyNote,
+		RetryContext:    verifyNote + contract,
 		BrowserRuntime:  o.browserRuntimeFor(s),
 	})
 	reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
@@ -298,8 +301,10 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 		}
 
 		verifyNote := o.verifyFeedbackBlock(stageDir)
-		stageDirNote := fmt.Sprintf("\n\nStage directory for .done file: %s", stageDir)
-		stageDirNote += verifyStageNote(s.Verify)
+		verifyCmdNote := verifyStageNote(s.Verify)
+		// T8/D5: обязательный блок завершения строит код по фактической фазе, не шаблон — доклеивается
+		// последним, чтобы prompts_dir не мог его подменить/стереть.
+		contract := prompts.CompletionContract(flow.PhaseImplementation, o.stageDir(s.ID))
 		prompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation,
 			Stage:           s,
@@ -309,7 +314,7 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			Plan:            string(planData),
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + stageDirNote + note + verifyNote,
+			RetryContext:    retryContext + note + verifyNote + verifyCmdNote + contract,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			BrowserRuntime:  o.browserRuntimeFor(s),
@@ -353,6 +358,9 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, depPlans, artCtx string) {
 	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
 		verifyNote := o.verifyFeedbackBlock(stageDir)
+		// T8/D6: standalone review (resume/revise/pause-recovery паths) гейтится на .done так же, как
+		// embedded review — промпт теперь тоже об этом говорит.
+		contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
 		reviewPrompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Review,
 			Stage:           s,
@@ -361,7 +369,7 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 			Artifacts:       artCtx,
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + note + verifyNote,
+			RetryContext:    retryContext + note + verifyNote + contract,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			BrowserRuntime:  o.browserRuntimeFor(s),
@@ -397,7 +405,9 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 		depCtx := o.collectDependencyPlansNoticing(s)
 
 		verifyNote := o.verifyFeedbackBlock(stageDir)
-		summaryNote := fmt.Sprintf("\n\nStage directory: %s\nWrite execution_summary.md here when done.", stageDir)
+		// T8/D5: обязательный блок завершения строит код по фактической фазе (execution_summary.md для
+		// autonomous), не шаблон — доклеивается последним.
+		contract := prompts.CompletionContract(flow.PhaseAutonomous, o.stageDir(s.ID))
 		prompt := prompts.Build(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
 			Autonomous:      o.opts.Prompts.Autonomous,
@@ -409,7 +419,7 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + summaryNote + note + verifyNote,
+			RetryContext:    retryContext + note + verifyNote + contract,
 			BrowserRuntime:  o.browserRuntimeFor(s),
 		})
 		logFile := filepath.Join(stageDir, logFileName)

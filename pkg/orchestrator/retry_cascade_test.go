@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -35,7 +36,10 @@ func (r *cascadeRetryRunner) RunAgent(_ context.Context, _, stageName, _, logFil
 		n := r.aCalls
 		r.mu.Unlock()
 		if n == 1 {
-			return errors.New("boom: first attempt always fails")
+			// D1: wrap executor.ErrAgentStart so the first attempt is ClassFatal (instant fail, no
+			// retry) — an unwrapped generic error is now ClassRetryableUnknown and would retry with
+			// real backoff before this test's manual Retry() ever runs, blowing the 10s waits below.
+			return fmt.Errorf("%w: boom: first attempt always fails", executor.ErrAgentStart)
 		}
 	}
 	return os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644)
@@ -126,7 +130,10 @@ func (r *blockingAutonomousRunner) RunAgent(ctx context.Context, _, stageName, _
 		n := r.aCalls
 		r.mu.Unlock()
 		if n == 1 {
-			return errors.New("boom: first attempt always fails")
+			// D1: wrap executor.ErrAgentStart so the first attempt is ClassFatal (instant fail, no
+			// retry) — an unwrapped generic error is now ClassRetryableUnknown and would retry with
+			// real backoff before this test's manual Retry() ever runs, blowing the 10s waits below.
+			return fmt.Errorf("%w: boom: first attempt always fails", executor.ErrAgentStart)
 		}
 		select {
 		case <-r.release:

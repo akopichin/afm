@@ -43,7 +43,9 @@
   `cmd/afm/agent_environment.go` и протягивается `orchestrator.Options.RootDir` →
   `executor.Config.Dir` → `cmd.Dir`. Пусто → наследуется CWD процесса.
   `AFM_STAGE_DIR` (файлы диалога) всегда анкорится к afm-root, независимо от
-  `root_dir`.
+  `root_dir`, и передаётся агенту **абсолютным** путём (`(*Orchestrator).stageDir`,
+  `orchestrator.go`) — CWD агента отличается от CWD afm, относительный путь
+  резолвился бы не туда.
 - `agent_action`-события получают `stageID` из `OnAction`-замыкания per-stage
   раннера (`runnerFor`, `runner_factory.go`). Инъектированный `o.runner` (тесты,
   пустой stageID) используется только при `opts.Runner != nil` и у стадии нет

@@ -22,7 +22,8 @@ func TestOpenAIAsClaude_UsageEnvelopeEmitted(t *testing.T) {
 	fakeCurlDir := writeFakeCurl(t, `printf 'data: {"choices":[{"delta":{"content":"Hello "}}]}\n'
 printf 'data: {"choices":[{"delta":{"content":"world"}}]}\n'
 printf 'data: {"choices":[],"model":"gpt-4o-2024","usage":{"prompt_tokens":50,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":20}}}\n'
-printf 'data: [DONE]\n'`)
+printf 'data: [DONE]\n'
+printf '200'`)
 
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
@@ -78,7 +79,7 @@ func TestOpenAIAsClaude_NoUsageInResponseStaysBareResult(t *testing.T) {
 		t.Skip("jq not available")
 	}
 
-	fakeCurlDir := writeFakeCurl(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir := writeFakeCurl(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'; printf '200'`)
 
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
@@ -118,7 +119,8 @@ func TestOpenAIAsClaude_NoSecretOrPromptLeakage(t *testing.T) {
 
 	fakeCurlDir := writeFakeCurl(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\n'
 printf 'data: {"choices":[],"model":"m","usage":{"prompt_tokens":1,"completion_tokens":1}}\n'
-printf 'data: [DONE]\n'`)
+printf 'data: [DONE]\n'
+printf '200'`)
 
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),

@@ -3,6 +3,28 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-17
+
+### Fix: retry agent transport failures with bounded backoff
+
+Agent stderr from the current attempt now contributes to failure classification,
+so network errors reported only on stderr can trigger a retry. Recognized rate
+limits, server errors, and network failures retain the 15-retry budget; other
+agent process failures and idle timeouts get up to 3 retries. A process that
+cannot start still fails immediately. Retry delays now double from 5 seconds to
+a 60-second cap, with up to 20% subtracted as jitter; notices show the actual
+delay. The OpenAI compatibility wrapper now exits on curl failures and non-2xx
+HTTP responses instead of reporting an empty success.
+
+### Fix: make stage completion paths explicit and reliable
+
+Agent prompts now include a code-generated completion contract with the absolute
+path for `.done` (implementation and review) or `execution_summary.md`
+(autonomous), even with custom prompt templates. `AFM_STAGE_DIR` is passed as an
+absolute path, and lifecycle hooks receive absolute `AFM_RUN_DIR` and
+`AFM_ROOT_DIR` values when set. Missing, empty, and unreadable completion files
+now report the path and cause in the completion error.
+
 ## 2026-10-16
 
 ### Improvement: declare stage helpers in flow.yaml

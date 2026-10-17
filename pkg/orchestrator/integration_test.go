@@ -45,6 +45,18 @@ func mockRunner(t *testing.T, script string) executor.Runner {
 	})
 }
 
+// mockFatalRunner returns a Runner whose process never starts — a nonexistent binary, so the agent error is
+// always wrapped in executor.ErrAgentStart (D1: ClassFatal, zero retry budget). Tests that need a stage to
+// fail INSTANTLY (no ClassRetryableUnknown backoff) use this instead of mockFailScript, whose real-but-
+// unrecognized exit-1 failure is now retried with the limited MaxUnknownRetries budget before giving up.
+func mockFatalRunner(t *testing.T) executor.Runner {
+	t.Helper()
+	return executor.New(executor.Config{
+		Command:     filepath.Join(t.TempDir(), "afm-mock-fatal-does-not-exist"),
+		IdleTimeout: 10 * time.Second,
+	})
+}
+
 // setupOrchestratorWithRunner creates a test environment with a custom Runner.
 func setupOrchestratorWithRunner(t *testing.T, stages []flow.Stage, runner executor.Runner) (*orchestrator.Orchestrator, string, string) {
 	t.Helper()

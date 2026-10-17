@@ -50,7 +50,7 @@ func TestIsRetryableError(t *testing.T) {
 		{matchAtCapacity, true},
 		{"500 Internal Server Error", true},
 		{matchInternalServerError, true},
-		{"something went wrong", false},
+		{"something went wrong", true}, // D1: unrecognized crash is ClassRetryableUnknown, not ClassFatal
 		{"", false},
 	}
 	for _, c := range cases {

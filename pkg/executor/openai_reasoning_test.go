@@ -21,7 +21,7 @@ func skipIfNoShellTools(t *testing.T) {
 
 func TestOpenAIAsClaude_ReasoningEffortForwarded(t *testing.T) {
 	skipIfNoShellTools(t)
-	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'; printf '200'`)
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
 		"PATH="+fakeCurlDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -44,7 +44,7 @@ func TestOpenAIAsClaude_ReasoningEffortForwarded(t *testing.T) {
 
 func TestOpenAIAsClaude_ReasoningEffortUnsetOmitted(t *testing.T) {
 	skipIfNoShellTools(t)
-	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'; printf '200'`)
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
 		"PATH="+fakeCurlDir+string(os.PathListSeparator)+os.Getenv("PATH"),

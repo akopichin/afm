@@ -1,8 +1,11 @@
 package stagefiles
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -154,4 +157,164 @@ func TestCheckCompletion_Verify(t *testing.T) {
 			t.Errorf("missing .done should still be incomplete work, got %v", err)
 		}
 	})
+}
+
+// asIncompleteWorkError fails the test if err is not a *IncompleteWorkError and
+// otherwise returns it, to keep the assertions below to the point.
+func asIncompleteWorkError(t *testing.T, err error) *IncompleteWorkError {
+	t.Helper()
+	var inc *IncompleteWorkError
+	if !errors.As(err, &inc) {
+		t.Fatalf("expected *IncompleteWorkError, got %v (%T)", err, err)
+	}
+	return inc
+}
+
+// TestCheckCompletion_MissingNamesPath гарантирует, что ошибка «нет .done» называет
+// полный путь к файлу, а не только общую фразу — иначе причину приходится угадывать
+// по содержимому stageDir руками.
+func TestCheckCompletion_MissingNamesPath(t *testing.T) {
+	dir := t.TempDir()
+	donePath := filepath.Join(dir, ".done")
+	stage := flow.Stage{ID: testStageID}
+
+	inc := asIncompleteWorkError(t, CheckCompletion(dir, ".", stage))
+
+	if !strings.Contains(inc.Error(), donePath) {
+		t.Errorf("error %q does not mention path %q", inc.Error(), donePath)
+	}
+	if !strings.Contains(inc.Error(), "missing") {
+		t.Errorf("error %q does not mention 'missing'", inc.Error())
+	}
+}
+
+// TestCheckCompletion_EmptyNamesPath — то же самое, но для пустого (из пробелов)
+// .done: текст должен отличать «пусто» от «нет файла».
+func TestCheckCompletion_EmptyNamesPath(t *testing.T) {
+	dir := t.TempDir()
+	donePath := filepath.Join(dir, ".done")
+	writeFile(t, donePath, []byte("   \n\t  "))
+	stage := flow.Stage{ID: testStageID}
+
+	inc := asIncompleteWorkError(t, CheckCompletion(dir, ".", stage))
+
+	if !strings.Contains(inc.Error(), donePath) {
+		t.Errorf("error %q does not mention path %q", inc.Error(), donePath)
+	}
+	if !strings.Contains(inc.Error(), "empty") {
+		t.Errorf("error %q does not mention 'empty'", inc.Error())
+	}
+}
+
+// TestCheckCompletion_UnreadableIsDistinct покрывает третий, отдельный от
+// missing/empty случай: .done существует, но os.ReadFile не может его прочитать
+// (здесь — потому что это каталог, портативный способ получить ошибку чтения без
+// игр с правами доступа). Сообщение должно называть путь, отличаться от текста
+// «missing», и сохранять причину, которую вернул os.ReadFile.
+func TestCheckCompletion_UnreadableIsDistinct(t *testing.T) {
+	dir := t.TempDir()
+	donePath := filepath.Join(dir, ".done")
+	if err := os.Mkdir(donePath, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", donePath, err)
+	}
+	stage := flow.Stage{ID: testStageID}
+
+	inc := asIncompleteWorkError(t, CheckCompletion(dir, ".", stage))
+	if !strings.Contains(inc.Error(), donePath) {
+		t.Errorf("error %q does not mention path %q", inc.Error(), donePath)
+	}
+
+	missingInc := asIncompleteWorkError(t, CheckCompletion(dir+"-does-not-exist", ".", stage))
+	if inc.Error() == missingInc.Error() {
+		t.Errorf("unreadable .done message should differ from missing .done message, both are %q", inc.Error())
+	}
+
+	// Причина, которую вернул os.ReadFile на каталоге (обычно "is a directory"),
+	// должна остаться видимой в тексте, а не потеряться при обёртывании.
+	_, readErr := os.ReadFile(donePath)
+	if readErr == nil {
+		t.Fatalf("expected os.ReadFile(%s) to fail on a directory", donePath)
+	}
+	if !strings.Contains(inc.Error(), readErr.Error()) {
+		t.Errorf("error %q does not preserve underlying reason %q", inc.Error(), readErr.Error())
+	}
+}
+
+// TestCheckAutonomousCompletion_SameDiagnostics проверяет тот же трёхсторонний
+// диагноз (missing/empty/unreadable), что и CheckCompletion, но для
+// execution_summary.md — путь автономного трека не должен отставать от основного.
+func TestCheckAutonomousCompletion_SameDiagnostics(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		dir := t.TempDir()
+		summaryPath := filepath.Join(dir, "execution_summary.md")
+
+		inc := asIncompleteWorkError(t, CheckAutonomousCompletion(dir))
+
+		if !strings.Contains(inc.Error(), summaryPath) {
+			t.Errorf("error %q does not mention path %q", inc.Error(), summaryPath)
+		}
+		if !strings.Contains(inc.Error(), "missing") {
+			t.Errorf("error %q does not mention 'missing'", inc.Error())
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		dir := t.TempDir()
+		summaryPath := filepath.Join(dir, "execution_summary.md")
+		writeFile(t, summaryPath, []byte("  \n  "))
+
+		inc := asIncompleteWorkError(t, CheckAutonomousCompletion(dir))
+
+		if !strings.Contains(inc.Error(), summaryPath) {
+			t.Errorf("error %q does not mention path %q", inc.Error(), summaryPath)
+		}
+		if !strings.Contains(inc.Error(), "empty") {
+			t.Errorf("error %q does not mention 'empty'", inc.Error())
+		}
+	})
+
+	t.Run("unreadable is distinct", func(t *testing.T) {
+		dir := t.TempDir()
+		summaryPath := filepath.Join(dir, "execution_summary.md")
+		if err := os.Mkdir(summaryPath, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", summaryPath, err)
+		}
+
+		inc := asIncompleteWorkError(t, CheckAutonomousCompletion(dir))
+		if !strings.Contains(inc.Error(), summaryPath) {
+			t.Errorf("error %q does not mention path %q", inc.Error(), summaryPath)
+		}
+
+		missingInc := asIncompleteWorkError(t, CheckAutonomousCompletion(dir+"-does-not-exist"))
+		if inc.Error() == missingInc.Error() {
+			t.Errorf("unreadable message should differ from missing message, both are %q", inc.Error())
+		}
+
+		_, readErr := os.ReadFile(summaryPath)
+		if readErr == nil {
+			t.Fatalf("expected os.ReadFile(%s) to fail on a directory", summaryPath)
+		}
+		if !strings.Contains(inc.Error(), readErr.Error()) {
+			t.Errorf("error %q does not preserve underlying reason %q", inc.Error(), readErr.Error())
+		}
+	})
+}
+
+// TestCheckPlanCompletion_MissingNamesPath закрепляет, что уже корректно
+// %w-оборачиваемая ошибка "missing plan.md" теперь ещё и называет полный путь.
+func TestCheckPlanCompletion_MissingNamesPath(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "plan.md")
+
+	err := CheckPlanCompletion(dir)
+
+	if err == nil {
+		t.Fatal("expected error for missing plan.md")
+	}
+	if !strings.Contains(err.Error(), planPath) {
+		t.Errorf("error %q does not mention path %q", err.Error(), planPath)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("error %v does not wrap the underlying os.ErrNotExist", err)
+	}
 }

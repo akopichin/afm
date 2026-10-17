@@ -52,8 +52,8 @@ func afmVars(cfg DispatcherConfig, p Payload) []string {
 	set("AFM_HOOK_EVENT_ID", p.EventID)
 	set("AFM_FLOW_NAME", p.Flow.Name)
 	set("AFM_RUN_ID", p.Flow.RunID)
-	set("AFM_RUN_DIR", p.Flow.RunDir)
-	set("AFM_ROOT_DIR", p.Flow.RootDir)
+	set("AFM_RUN_DIR", absEnvPath(p.Flow.RunDir))
+	set("AFM_ROOT_DIR", absEnvPath(p.Flow.RootDir))
 	if stage != nil {
 		set("AFM_STAGE_ID", stage.ID)
 		set("AFM_STAGE_NAME", stage.Name)
@@ -66,6 +66,21 @@ func afmVars(cfg DispatcherConfig, p Payload) []string {
 		set("AFM_STAGE_TO", "")
 	}
 	return env
+}
+
+// absEnvPath абсолютизирует путь ТОЛЬКО на границе процесса — в окружении hook-команды (cmd.Dir afm не
+// меняет, значит относительный RunDir/RootDir внутри afm резолвится стабильно и сам по себе не ломается;
+// проблема ровно там, где путь пересекает границу процесса, см. AGENTS.md/dev-plan.md D4). JSON payload на
+// stdin (Flow.RunDir/RootDir) намеренно не трогаем — у него отдельный контракт схемы. Пустая строка (легитимно
+// означает "не задано") остаётся пустой — filepath.Abs("") вернул бы CWD, что было бы сменой семантики.
+func absEnvPath(p string) string {
+	if p == "" {
+		return p
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 // minimalBaseEnv — spec-дефолт окружения hook-процесса: whitelist PATH/HOME/ locale/TMPDIR/proxy/certs из

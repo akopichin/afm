@@ -141,7 +141,7 @@ func TestOpenAIAsClaude_ScreenshotMarkerEmbedsImage(t *testing.T) {
 	pngPath := writeTestPNG(t)
 	wantB64 := readTestPNGBase64(t, pngPath)
 
-	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'; printf '200'`)
 
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
@@ -204,7 +204,7 @@ func TestOpenAIAsClaude_NoMarkerContentUnchanged(t *testing.T) {
 		t.Skip("jq not available")
 	}
 
-	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'; printf '200'`)
 
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
@@ -244,7 +244,7 @@ func TestOpenAIAsClaude_MissingScreenshotFileFallsBackToText(t *testing.T) {
 		t.Skip("jq not available")
 	}
 
-	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir, captureFile := writeFakeCurlCapturing(t, `printf 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n'; printf '200'`)
 
 	cmd := exec.Command("bash", scriptPath(t))
 	cmd.Env = append(os.Environ(),
@@ -287,7 +287,7 @@ func TestOpenAIAsClaude_OutputParses(t *testing.T) {
 	}
 
 	// Поддельный curl печатает два SSE-чанка с текстом, затем [DONE].
-	fakeCurlDir := writeFakeCurl(t, `printf 'data: {"choices":[{"delta":{"content":"Hello "}}]}\ndata: {"choices":[{"delta":{"content":"world"}}]}\ndata: [DONE]\n'`)
+	fakeCurlDir := writeFakeCurl(t, `printf 'data: {"choices":[{"delta":{"content":"Hello "}}]}\ndata: {"choices":[{"delta":{"content":"world"}}]}\ndata: [DONE]\n'; printf '200'`)
 
 	// PATH: сначала поддельный curl, потом системный PATH (для jq).
 	cmd := exec.Command("bash", scriptPath(t))
@@ -343,9 +343,12 @@ func TestOpenAIAsClaude_OutputParses(t *testing.T) {
 	}
 }
 
-// TestOpenAIAsClaude_CurlFailureStillEmitsEnvelope: даже при падении curl скрипт
-// обязан выдать well-formed (возможно, пустой) assistant-конверт + result.
-func TestOpenAIAsClaude_CurlFailureStillEmitsEnvelope(t *testing.T) {
+// TestOpenAIAsClaude_CurlFailureWithPartialBodyStillFails: a curl invocation that
+// emitted a partial chunk before dying with a non-zero exit code must still fail
+// the stage (no success envelope) — partial stdout must not be mistaken for a
+// completed response. See TestOpenAIAsClaude_CurlFailureExitsNonZero in
+// openai_failure_test.go for the plain (no partial body) case.
+func TestOpenAIAsClaude_CurlFailureWithPartialBodyStillFails(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -364,14 +367,16 @@ func TestOpenAIAsClaude_CurlFailureStillEmitsEnvelope(t *testing.T) {
 	)
 	cmd.Stdin = bytes.NewBufferString("x\n")
 
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("script exited non-zero on curl failure (should swallow it): %v\n%s", err, out)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err == nil {
+		t.Fatalf("expected non-zero exit on curl failure, got success; stdout:\n%s", out)
 	}
-	if !strings.Contains(string(out), `"type":"assistant"`) {
-		t.Errorf("expected assistant envelope even on curl failure, got:\n%s", out)
+	if !strings.Contains(stderr.String(), "curl exit 1") {
+		t.Errorf("expected stderr to mention \"curl exit 1\", got:\n%s", stderr.String())
 	}
-	if !strings.Contains(string(out), `"subtype":"success"`) {
-		t.Errorf("expected result success line even on curl failure, got:\n%s", out)
+	if strings.Contains(string(out), `"subtype":"success"`) {
+		t.Errorf("must not report success after curl failure, got:\n%s", out)
 	}
 }

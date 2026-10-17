@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,9 +57,16 @@ func (o *Orchestrator) completeAgent(ctx context.Context, stageID, phase string)
 	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: stageID, Data: phase})
 }
 
-// isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
+// isRetryableError checks if the error should be retried at all (with backoff). Recognizes both
+// ClassRetryable (known transient pattern, full budget) and ClassRetryableUnknown (unrecognized crash,
+// limited budget) — budget differentiation itself is wired separately (T5), this just answers "retry or not".
 func isRetryableError(err error) bool {
-	return Classify(err) == ClassRetryable
+	switch Classify(err) {
+	case ClassRetryable, ClassRetryableUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 // verifyMaxFailures — бюджет отклонений verify для стадии: сколько коррекций автора разрешить, прежде чем
@@ -127,13 +135,61 @@ func buildRetryContext(stageDir, phase string) string {
 	return buf.String()
 }
 
-// RetryBackoff — фиксированная пауза между попытками после retryable-ошибки. Прежний exponential
-// [5s,10s,30s] сдавался после 4 попыток — z.ai overload длится дольше.
+// RetryBackoff — база растущего backoff'а (см. RetryBackoffMax, D2): пауза между попытками растёт как
+// RetryBackoff*2^attempt до потолка. Прежний exponential [5s,10s,30s] сдавался после 4 попыток — z.ai
+// overload длится дольше, поэтому потолок подняли, а не вернули фиксированную паузу.
 var RetryBackoff = 5 * time.Second
 
 // MaxRetries — число повторных попыток после первого запуска. См. RetryBackoff: фиксируется в
 // Orchestrator.maxRetries при New.
 var MaxRetries = 15
+
+// MaxUnknownRetries — бюджет ретраев для ClassRetryableUnknown (D1): процесс стартовал и упал с текстом,
+// которого Classify не узнал. Детерминированный сбой (сломанный wrapper, отсутствующий jq) не должен жечь
+// полный MaxRetries наравне с настоящим транспортным сбоем — отсюда отдельный, маленький бюджет.
+var MaxUnknownRetries = 3
+
+// RetryBackoffMax — потолок паузы. База остаётся 5s (см. RetryBackoff): терпение растёт за счёт роста
+// паузы, а не за счёт сокращения числа попыток — прежнее решение про долгий overload не ломается.
+var RetryBackoffMax = 60 * time.Second
+
+// backoffFor — min(base*2^attempt, limit). Сдвиг ограничен, чтобы большой attempt не переполнил int64.
+// Параметр назван limit, а не max, — max с Go 1.21 встроенная функция, затенять её линтер запрещает.
+func backoffFor(attempt int, base, limit time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	// 62 бита сдвига для int64 уже гарантированно перевалят за любой разумный limit — дальше
+	// можно сразу возвращать потолок, не вычисляя степень двойки.
+	const maxShift = 62
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > maxShift {
+		return limit
+	}
+	d := base << attempt
+	if d <= 0 || d > limit {
+		return limit
+	}
+	return d
+}
+
+// jittered ВЫЧИТАЕТ из паузы 0..20 %: при max_parallel > 1 стадии не бьются в rate-limited API в такт.
+// Именно вычитание, а не прибавление: иначе на потолке пауза уходила бы за RetryBackoffMax и потолок
+// стал бы ложным. Результат в (0.8*d, d] ⇒ инвариант "не больше max" держится по построению.
+func jittered(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	maxCut := d / 5
+	if maxCut <= 0 {
+		return d
+	}
+	// Джиттер против синхронного ретрая нескольких стадий — не секрет и не криптография.
+	cut := time.Duration(rand.Int64N(int64(maxCut))) //nolint:gosec // G404: math/rand достаточно для таймингового джиттера
+	return d - cut
+}
 
 // runWithRetry wraps an agent function with automatic retry on rate limit errors. After exhausting all
 // retries: publishes EventRetryExhausted.
@@ -154,10 +210,15 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-	// maxRetries/retryBackoff — снапшоты с инстанса (см. Orchestrator-комментарий):
-	// эта горутина может пережить возврат Run(), поэтому globals не читаем.
+	// maxRetries/retryBackoff/maxUnknownRetries/retryBackoffMax — снапшоты с инстанса (см.
+	// Orchestrator-комментарий): эта горутина может пережить возврат Run(), поэтому globals не читаем.
 	maxRetries := o.maxRetries
 	retryBackoff := o.retryBackoff
+	maxUnknownRetries := o.maxUnknownRetries
+	retryBackoffMax := o.retryBackoffMax
+	// unknownRetries — счётчик ТОЛЬКО ClassRetryableUnknown-сбоев этой горутины (T5, D1): независим от attempt
+	// (который растит и backoff, и ClassRetryable-бюджет) и от verifyFailures (отдельная политика коррекции).
+	unknownRetries := 0
 	// verifyFailures — счётчик verify-отклонений этой горутины; maxVerifyFailures — их бюджет. In-memory,
 	// сбрасывается на resume — как и прежнее однократное поведение.
 	verifyFailures := 0
@@ -293,7 +354,8 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			return
 		}
 
-		if !isRetryableError(err) {
+		class := Classify(err)
+		if class != ClassRetryable && class != ClassRetryableUnknown {
 			// Drop the session file so a later retry starts a fresh Claude session instead of resuming a
 			// conversation that was never created. Mirrors the retryable branch.
 			_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
@@ -306,36 +368,63 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		// next attempt starts a fresh Claude session.
 		_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 
-		if attempt < maxRetries {
-			// Сохраняем сообщение retry в reason, чтобы reload восстановил тот же payload; seq дедуплицирует live и
-			// историю.
-			msg := fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff)
-			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, msg)
-			o.ui.Publish(bus.Event{
-				Type:    bus.EventRetryScheduled,
-				StageID: s.ID,
-				Data:    msg,
-				Seq:     seq,
-			})
-			select {
-			case <-time.After(retryBackoff):
-			case <-interruptCh:
-				return // Pause() already transitioned to paused — nothing to resume here
-			case <-ctx.Done():
-				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "cancelled during retry")
-				o.failBlockedStages()
-				return
-			}
-			switch phase {
-			case phasePlanning:
-				o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phasePlanning}, "")
-			default:
-				o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phaseImplementation}, "")
-			}
-		} else {
+		// T5: два независимых бюджета (D1). ClassRetryable держит полный maxRetries — как и раньше, через общий
+		// attempt. ClassRetryableUnknown (процесс стартовал и упал с неузнанным текстом) — ограниченный
+		// maxUnknownRetries через отдельный unknownRetries, чтобы детерминированный сбой не жёг тот же бюджет,
+		// что настоящий транспортный сбой.
+		//
+		// `&& attempt < maxRetries` в обеих ветках — ОБЯЗАТЕЛЬНОЕ условие, не дублирующая подстраховка: внешний
+		// `for attempt <= maxRetries` выходит из цикла без публикации EvFail/EventRetryExhausted, как только
+		// attempt перестаёт удовлетворять своему условию. Без этого && неузнанный сбой на ПОСЛЕДНЕЙ разрешённой
+		// попытке (attempt == maxRetries), чей unknownRetries ещё не исчерпан, получил бы retryOK=true →
+		// EvResumeAfterRetry → цикл завершился бы по своему condition на следующей итерации МОЛЧА, без единого
+		// события о провале — стадия осталась бы висеть в running навсегда (найдено ревью, см. репродукцию в
+		// dev-plan.md).
+		budget := maxRetries
+		numerator := attempt + 1
+		retryOK := attempt < maxRetries
+		if class == ClassRetryableUnknown {
+			unknownRetries++
+			budget = maxUnknownRetries
+			numerator = unknownRetries
+			retryOK = unknownRetries <= maxUnknownRetries && attempt < maxRetries
+		}
+
+		if !retryOK {
 			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, "retries exhausted")
 			o.failBlockedStages()
 			o.publishCritical(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
+			// Бюджет исчерпан: unknownRetries может пройти это раньше, чем attempt достигнет maxRetries —
+			// явный return (в отличие от прежнего кода, где это совпадало с последней итерацией цикла).
+			return
+		}
+
+		// Сохраняем сообщение retry в reason, чтобы reload восстановил тот же payload; seq дедуплицирует live и
+		// историю. delay растёт с attempt до потолка retryBackoffMax и вычитающе джиттерится (D2) — сообщение
+		// показывает фактическую паузу, а не номинальный RetryBackoff.
+		delay := jittered(backoffFor(attempt, retryBackoff, retryBackoffMax))
+		msg := fmt.Sprintf("attempt %d/%d in %v", numerator, budget, delay)
+		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, msg)
+		o.ui.Publish(bus.Event{
+			Type:    bus.EventRetryScheduled,
+			StageID: s.ID,
+			Data:    msg,
+			Seq:     seq,
+		})
+		select {
+		case <-time.After(delay):
+		case <-interruptCh:
+			return // Pause() already transitioned to paused — nothing to resume here
+		case <-ctx.Done():
+			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "cancelled during retry")
+			o.failBlockedStages()
+			return
+		}
+		switch phase {
+		case phasePlanning:
+			o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phasePlanning}, "")
+		default:
+			o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phaseImplementation}, "")
 		}
 	}
 }

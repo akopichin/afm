@@ -2,7 +2,6 @@ package orchestrator_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +25,10 @@ type manualRetryRunner struct {
 
 func (r *manualRetryRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
 	if stageName == "First" {
-		return errors.New("planning exploded")
+		// D1: wrap executor.ErrAgentStart so this is ClassFatal (instant fail, no retry) — an unwrapped
+		// generic error is now ClassRetryableUnknown and would retry with real backoff before the cascade
+		// to "second" ever happens, blowing the waitForStatus timeouts below.
+		return fmt.Errorf("%w: planning exploded", executor.ErrAgentStart)
 	}
 	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
 }
@@ -51,9 +53,20 @@ func (r *manualRetryRunner) RunJSONQuery(ctx context.Context, prompt string) ([]
 type rateLimitThenSuccessRunner struct {
 	delegate  executor.Runner
 	failCount int    // number of calls to fail before succeeding
-	failMsg   string // error message for failures
+	failMsg   string // error message for failures (used unless failErr is set)
+	// failErr, if set, is returned as-is instead of fmt.Errorf(failMsg) for the first failCount calls — lets
+	// a caller control the error's Classify identity (e.g. wrap executor.ErrAgentStart for a ClassFatal case)
+	// instead of just its text.
+	failErr   error
 	mu        sync.Mutex
 	callCount int
+}
+
+func (r *rateLimitThenSuccessRunner) failure() error {
+	if r.failErr != nil {
+		return r.failErr
+	}
+	return fmt.Errorf("%s", r.failMsg)
 }
 
 func (r *rateLimitThenSuccessRunner) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
@@ -63,7 +76,7 @@ func (r *rateLimitThenSuccessRunner) RunPlanning(ctx context.Context, stageName,
 	r.mu.Unlock()
 
 	if count <= r.failCount {
-		return fmt.Errorf("%s", r.failMsg)
+		return r.failure()
 	}
 	return r.delegate.RunPlanning(ctx, stageName, prompt, outFile, logFile)
 }
@@ -75,7 +88,7 @@ func (r *rateLimitThenSuccessRunner) RunAgent(ctx context.Context, agentType, st
 	r.mu.Unlock()
 
 	if count <= r.failCount {
-		return fmt.Errorf("%s", r.failMsg)
+		return r.failure()
 	}
 	return r.delegate.RunAgent(ctx, agentType, stageName, prompt, logFile)
 }

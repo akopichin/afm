@@ -27,7 +27,12 @@ pending → running(autonomous_execution) → done
 - `revising` — feedback was sent and the AI is reworking: either the plan (from
   `awaiting_approval`), or a `running` stage that just got a note and a graceful
   interrupt (see [Dashboard → Suggesting a note](dashboard.md#suggesting-a-note-to-a-running-stage))
-- `retrying` — a transient error (rate limit / 5xx), auto-retry with backoff
+- `retrying` — an agent process failed and an automatic retry is scheduled. Known
+  rate-limit, server, and network errors get up to 15 retries; an unrecognized
+  process failure or idle timeout gets up to 3. A process that could not start
+  fails immediately. Delays start at 5 seconds, double up to a 60-second cap,
+  and are reduced by up to 20% of jitter. The retry notice shows the actual delay.
+  Completion-check corrections and `verify` retries have separate rules.
 - `hook_failed` — a [`script_before` hook](script-stages.md) exhausted its retries;
   the stage is blocked until you hit **Retry** or **Skip** on the dashboard (a
   `script_after` failure never uses this status — the stage stays `done`)

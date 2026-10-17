@@ -3,6 +3,7 @@ package stagefiles
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,9 +33,10 @@ func CheckPlanCompletion(stageDir string) error {
 
 // CheckPlanCompletionFor verifies that plan.md exists and is not empty.
 func CheckPlanCompletionFor(stageDir string, interactive bool) error {
-	data, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
+	planPath := filepath.Join(stageDir, "plan.md")
+	data, err := os.ReadFile(planPath)
 	if err != nil {
-		return fmt.Errorf("missing plan.md: %w", err)
+		return fmt.Errorf("missing %s: %w", planPath, err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return errors.New("plan.md is empty")
@@ -57,28 +59,37 @@ func IsIncompleteWorkError(err error) bool {
 	return errors.As(err, &target)
 }
 
+// checkMarkerFile reads a completion marker file (.done / execution_summary.md) and
+// turns a failure into an *IncompleteWorkError whose text always carries the full
+// path (taken from the very variable passed to os.ReadFile, so the message and the
+// actual read target can never diverge) and distinguishes three separate causes:
+// missing, empty, or unreadable for some other reason (bad permissions, the path
+// being a directory, etc). label names the marker in the message, e.g. ".done file".
+func checkMarkerFile(path, label string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return &IncompleteWorkError{Reason: fmt.Sprintf("missing %s: %v", label, err)}
+		}
+		return &IncompleteWorkError{Reason: fmt.Sprintf("cannot read %s: %v", label, err)}
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return &IncompleteWorkError{Reason: fmt.Sprintf("%s is empty: %s", label, path)}
+	}
+	return nil
+}
+
 // CheckAutonomousCompletion проверяет, что execution_summary.md существует и не пуст. Используется как
 // completion-check для runAutonomousAgent (автономный трек).
 func CheckAutonomousCompletion(stageDir string) error {
-	data, err := os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
-	if err != nil {
-		return &IncompleteWorkError{Reason: "missing execution_summary.md"}
-	}
-	if len(strings.TrimSpace(string(data))) == 0 {
-		return &IncompleteWorkError{Reason: "execution_summary.md is empty"}
-	}
-	return nil
+	return checkMarkerFile(filepath.Join(stageDir, "execution_summary.md"), "execution_summary.md")
 }
 
 // CheckCompletion verifies that .done exists and all declared artifacts are present. Returns
 // IncompleteWorkError if .done is missing (retryable).
 func CheckCompletion(stageDir, projectDir string, stage flow.Stage) error {
-	data, err := os.ReadFile(filepath.Join(stageDir, ".done"))
-	if err != nil {
-		return &IncompleteWorkError{Reason: "missing .done file"}
-	}
-	if len(strings.TrimSpace(string(data))) == 0 {
-		return &IncompleteWorkError{Reason: ".done file is empty"}
+	if err := checkMarkerFile(filepath.Join(stageDir, ".done"), ".done file"); err != nil {
+		return err
 	}
 
 	for _, art := range stage.Artifacts {

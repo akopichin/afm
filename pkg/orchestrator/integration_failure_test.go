@@ -3,10 +3,12 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -18,7 +20,11 @@ func TestIntegration_FailedStage(t *testing.T) {
 		{ID: "fail", Name: "Failing Stage", Description: "will fail", Agents: []flow.AgentType{flow.AgentPlanning}},
 	}
 
-	runner := mockRunner(t, mockFailScript)
+	// D1: mockFailScript's real-but-unrecognized exit-1 is now ClassRetryableUnknown and would burn real
+	// package-level backoff (~35s) before giving up — mockFatalRunner is instantly ClassFatal instead
+	// (mirrors TestIntegration_FailedDependencyCascade's fix above; this test only cares that the stage
+	// ends up failed, not which failure class triggered it).
+	runner := mockFatalRunner(t)
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
 
 	if err := orch.Run(context.Background()); err != nil {
@@ -42,7 +48,9 @@ func TestIntegration_FailedDependencyCascade(t *testing.T) {
 		{ID: "c", Name: "C", Description: "depends on B", DependsOn: []string{"b"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 
-	runner := mockRunner(t, mockFailScript)
+	// D1: mockFailScript's real-but-unrecognized exit-1 is now ClassRetryableUnknown and would retry with
+	// real backoff, blowing the 10s timeout below — mockFatalRunner is instantly ClassFatal instead.
+	runner := mockFatalRunner(t)
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -103,9 +111,12 @@ func TestIntegration_NoPlanningForDoomedStage(t *testing.T) {
 		{ID: "second", Name: "Second", Description: "never plans", DependsOn: []string{"first"}, Agents: []flow.AgentType{flow.AgentPlanning, flow.AgentImplementation}},
 	}
 
+	// D1: mockFailScript's real-but-unrecognized exit-1 is now ClassRetryableUnknown and would burn real
+	// package-level backoff (~35s) on "first"'s implementation before giving up — mockFatalRunner is
+	// instantly ClassFatal instead; this test only cares that "second" never plans, not the failure class.
 	rec := &callRecordingRunner{delegate: &phaseDispatchRunner{
 		planning: mockRunner(t, mockPlanningScript),
-		other:    mockRunner(t, mockFailScript),
+		other:    mockFatalRunner(t),
 	}}
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, rec)
 
@@ -136,7 +147,8 @@ func TestIntegration_DashboardStaysAliveOnAllFailed(t *testing.T) {
 			Agents: []flow.AgentType{flow.AgentPlanning}},
 	}
 
-	runner := mockRunner(t, mockFailScript)
+	// D1: see TestIntegration_FailedDependencyCascade — mockFatalRunner keeps this ClassFatal/instant.
+	runner := mockFatalRunner(t)
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, runner)
 	orch.SetDashboardURL("http://localhost:9876")
 
@@ -174,12 +186,14 @@ func TestIntegration_DashboardRetryAfterAllFailed(t *testing.T) {
 			Agents: []flow.AgentType{flow.AgentPlanning}},
 	}
 
-	// First planning call: non-retryable failure.
+	// First planning call: non-retryable failure (D1: wrap executor.ErrAgentStart for ClassFatal — an
+	// unrecognized plain-text error is now ClassRetryableUnknown and would auto-retry before the manual
+	// Retry() below ever runs).
 	// Subsequent calls (after manual Retry): succeed.
 	failOnce := &rateLimitThenSuccessRunner{
 		delegate:  mockRunner(t, mockPlanningScript),
 		failCount: 1,
-		failMsg:   "permanent_failure",
+		failErr:   fmt.Errorf("%w: permanent_failure", executor.ErrAgentStart),
 	}
 
 	orch, _, stateFile := setupOrchestratorWithRunner(t, stages, failOnce)

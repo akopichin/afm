@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -23,7 +22,7 @@ func TestRunWithRetry_InterruptChans_OverlappingGenerationsPreservesNewerChannel
 			func(string) error {
 				close(aStarted)
 				<-releaseA
-				return errors.New("boom")
+				return context.Canceled
 			},
 			nil,
 			func() { t.Error("onUserInterrupted must not be called for generation A") },
@@ -48,7 +47,7 @@ func TestRunWithRetry_InterruptChans_OverlappingGenerationsPreservesNewerChannel
 			func(string) error {
 				close(bStarted)
 				<-releaseB
-				return errors.New("boom")
+				return context.Canceled
 			},
 			nil,
 			func() { t.Error("onUserInterrupted must not be called for generation B") },

@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
@@ -21,6 +23,11 @@ const (
 	ClassStorageFatal
 	// ClassVerifyFailed — верификатор не смог выдать вердикт.
 	ClassVerifyFailed
+	// ClassRetryableUnknown — процесс агента стартовал и упал с текстом ошибки, который Classify не узнал
+	// (D1). В отличие от ClassRetryable, идёт по ОГРАНИЧЕННОМУ бюджету ретраев (MaxUnknownRetries) — иначе
+	// детерминированный сбой (сломанный wrapper, отсутствующий jq) жёг бы полный бюджет наравне с настоящим
+	// транспортным сбоем. Добавлена в конец const-блока, чтобы не сдвинуть значения существующих классов.
+	ClassRetryableUnknown
 )
 
 // Retryable error pattern substrings used by Classify and tests.
@@ -37,6 +44,29 @@ const (
 	matchAPIError502         = "api error: 502"
 	matchAPIError503         = "api error: 503"
 	matchAPIError504         = "api error: 504"
+)
+
+// Сетевые паттерны (T3, D1): формулировки транспортных сбоев из Node/Go/curl/разных CLI и прокси.
+// Allowlist по подстрокам в принципе не может перечислить их все — отсюда инверсия дефолта в конце
+// Classify, но узнанные паттерны всё ещё идут по полному бюджету ретраев, а не по ограниченному.
+const (
+	matchConnectionReset       = "connection reset by peer"
+	matchTLSHandshake          = "tls handshake timeout"
+	matchNoSuchHost            = "no such host"
+	matchFetchFailed           = "fetch failed"
+	matchSocketHangUp          = "socket hang up"
+	matchUnexpectedEOF         = "unexpected eof"
+	matchETIMEDOUT             = "etimedout"
+	matchEAIAgain              = "eai_again"
+	matchConnectionRefused     = "connection refused"
+	matchNetworkUnreachable    = "network is unreachable"
+	matchBrokenPipe            = "broken pipe"
+	matchIOTimeout             = "i/o timeout"
+	matchBadGateway502         = "502 bad gateway"
+	matchServiceUnavailable503 = "503 service unavailable"
+	matchGatewayTimeout504     = "504 gateway timeout"
+	matchTooManyRequests429    = "429 too many requests"
+	matchUpstreamConnectError  = "upstream connect error"
 )
 
 // Алиасы stagefiles сохраняют identity ошибок для errors.As и классификации ретраев.
@@ -115,10 +145,22 @@ func Classify(err error) Classification {
 		return ClassStorageFatal
 	}
 	// VerifyExecError — типизированная проверка ДО скана по подстрокам ниже: свободный текст Reason не должен
-	// пройти как транспортная ретраебельная ошибка.
+	// пройти как транспортная ретраебельная ошибка (даже если Reason упоминает "rate limit" — тип побеждает).
 	var verr *VerifyExecError
 	if errors.As(err, &verr) {
 		return ClassVerifyFailed
+	}
+	// Типизированные сентинелы (T1/T2) тоже идут ДО скана по подстрокам: процесс, который не стартовал,
+	// детерминированно фатален независимо от текста; idle timeout — ограниченный бюджет, а не угаданный
+	// по подстроке.
+	if errors.Is(err, executor.ErrAgentStart) {
+		return ClassFatal
+	}
+	if errors.Is(err, context.Canceled) {
+		return ClassFatal
+	}
+	if errors.Is(err, executor.ErrIdleTimeout) {
+		return ClassRetryableUnknown
 	}
 	msg := strings.ToLower(err.Error())
 	for _, p := range []string{
@@ -126,10 +168,22 @@ func Classify(err error) Classification {
 		matchOverloaded, matchAtCapacity,
 		matchHTTP500, matchStatus500, matchInternalServerError,
 		matchAPIError529, matchAPIError502, matchAPIError503, matchAPIError504,
+		matchConnectionReset, matchTLSHandshake, matchNoSuchHost, matchFetchFailed,
+		matchSocketHangUp, matchUnexpectedEOF, matchETIMEDOUT, matchEAIAgain,
+		matchConnectionRefused, matchNetworkUnreachable, matchBrokenPipe, matchIOTimeout,
+		matchBadGateway502, matchServiceUnavailable503, matchGatewayTimeout504,
+		matchTooManyRequests429, matchUpstreamConnectError,
 	} {
 		if strings.Contains(msg, p) {
 			return ClassRetryable
 		}
 	}
-	return ClassFatal
+	// D1: инверсия дефолта. Процесс агента СТАРТОВАЛ и упал с текстом, которого нет в allowlist выше —
+	// allowlist по подстрокам принципиально не может перечислить все формулировки сетевых сбоев (они приходят
+	// из Node/Go/curl/разных CLI и прокси). Симметрично уже существующей логике verify-пути
+	// (verify.go:514-519, "любой ненулевой exit — транзиентный"): считаем неузнанный сбой transient-by-default,
+	// но ограниченным бюджетом (ClassRetryableUnknown, MaxUnknownRetries), чтобы детерминированный сбой
+	// (сломанный wrapper, отсутствующий бинарь в PATH) не жёг полный бюджет ретраев наравне с настоящим
+	// транспортным сбоем.
+	return ClassRetryableUnknown
 }

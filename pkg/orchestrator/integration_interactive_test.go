@@ -224,11 +224,10 @@ func TestIntegration_PlanningWithOpenQuestionWaits(t *testing.T) {
 func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 	dir := t.TempDir()
 
-	failScript := filepath.Join(dir, "fail.sh")
-	script := "#!/bin/bash\necho 'fatal: exit status 1' >&2\nexit 1\n"
-	if err := os.WriteFile(failScript, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// D1: the process must never start (ErrAgentStart → ClassFatal, no retry budget) — a script that starts
+	// and exits non-zero would now be ClassRetryableUnknown and retry with real backoff, blowing past the
+	// test's waitForStatus timeout below. A nonexistent command path guarantees exec.Start() itself fails.
+	missingCommand := filepath.Join(dir, "does-not-exist.sh")
 
 	stages := []flow.Stage{{
 		ID:          "propose",
@@ -236,7 +235,7 @@ func TestIntegration_InteractiveFailureClearsSession(t *testing.T) {
 		Description: "interactive planning that fails",
 		Agents:      []flow.AgentType{flow.AgentPlanning},
 		Interactive: true,
-		Command:     failScript,
+		Command:     missingCommand,
 	}}
 
 	store, err := state.Open(dir, []string{"propose"})

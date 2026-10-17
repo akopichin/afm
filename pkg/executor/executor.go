@@ -128,6 +128,10 @@ var ErrUserInterrupted = errors.New("user interrupted")
 // ErrIdleTimeout — сигнальная ошибка простоя.
 var ErrIdleTimeout = errors.New("idle timeout")
 
+// ErrAgentStart — процесс агента НЕ стартовал (нет бинаря, нет прав, плохие аргументы). Детерминированный
+// сбой: ретрай его не починит, поэтому Classify держит его фатальным.
+var ErrAgentStart = errors.New("agent start failed")
+
 // interruptGracePeriod bounds how long we wait for the subprocess to exit gracefully after SIGINT before
 // force-killing it as a safety net against a hung/misbehaving process.
 const interruptGracePeriod = 15 * time.Second
@@ -335,6 +339,49 @@ func openStderrLog(logFile string) *os.File {
 	return f
 }
 
+// openStderrLogAt открывает durable stderr-лог и возвращает его вместе со стартовым смещением —
+// позицией, с которой начинается stderr ИМЕННО этого запуска (лог append-only и общий для попыток).
+func openStderrLogAt(logFile string) (*os.File, int64) {
+	f := openStderrLog(logFile)
+	if f == nil {
+		return nil, 0
+	}
+	info, err := f.Stat()
+	if err != nil {
+		// Деградация к поведению "смещение неизвестно" — не паника; withStderrTail в худшем случае
+		// прочитает чуть больше хвоста, чем нужно.
+		return f, 0
+	}
+	return f, info.Size()
+}
+
+// stderrTailLines/stderrTailBytes ограничивают, сколько хвоста stderr попадает в обогащённую ошибку
+// авторского агента — достаточно для диагноза, но не раздувает лог/уведомление.
+const (
+	stderrTailLines = 20
+	stderrTailBytes = 4096
+)
+
+// withStderrTail дополняет ошибку запуска агента хвостом его stderr: без этого транспортный сбой (CLI
+// пишет диагноз в stderr и выходит ненулевым кодом) доходит до Classify как голый "exit status 1".
+// from отсекает stderr прошлых попыток (см. D7 в dev-plan.md: лог append-only и общий для всех попыток
+// стадии). Прерывание пользователем и отмена контекста (shutdown/Pause гасят процесс SIGKILL'ом) не
+// обогащаем — это не сбой агента, а внешняя остановка. Это не только семантика: ClassFatal-ошибки (к
+// которым относится и context.Canceled) идут в EvFail reason как есть и могут дойти до lifecycle-хука,
+// который оператор форвардит во внешний webhook (AGENTS.md) — обогащать их хвостом чужого stderr значит
+// отправлять наружу то, что раньше туда не попадало. %w сохраняет сентинелы (ErrIdleTimeout и пр.) даже
+// когда хвост добавлен.
+func withStderrTail(logFile string, from int64, err error) error {
+	if err == nil || errors.Is(err, ErrUserInterrupted) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	tail := ReadStderrTailFrom(logFile, from, stderrTailLines, stderrTailBytes)
+	if tail == "" {
+		return err
+	}
+	return fmt.Errorf("%w\n--- stderr ---\n%s", err, tail)
+}
+
 // dualWriter always writes to BOTH stream and file — and always reports success to its caller.
 type dualWriter struct {
 	stream io.Writer
@@ -374,10 +421,14 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	}
 	defer jf.Close()
 
-	// Capture the agent's stderr to a sibling .stderr.log (diagnostic only).
+	// Capture the agent's stderr to a sibling .stderr.log. Also remember the offset at which THIS run's
+	// stderr begins (D7) — withStderrTail needs it below to fold only this run's tail into the error, not
+	// stale content left over from a previous retry attempt sharing the same append-only log.
 	var stderr = io.Discard
-	if sf := openStderrLog(logFile); sf != nil {
+	var stderrFrom int64
+	if sf, from := openStderrLogAt(logFile); sf != nil {
 		stderr = sf
+		stderrFrom = from
 		defer sf.Close()
 	}
 
@@ -445,6 +496,7 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
 	}
+	runErr = withStderrTail(logFile, stderrFrom, runErr)
 	if runErr != nil {
 		if firstErr != "" {
 			return fmt.Errorf("%s: %w", firstErr, runErr)
@@ -505,10 +557,14 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	}
 	defer jf.Close()
 
-	// Capture the agent's stderr to a sibling .stderr.log (diagnostic only).
+	// Capture the agent's stderr to a sibling .stderr.log. Also remember the offset at which THIS run's
+	// stderr begins (D7) — withStderrTail needs it below to fold only this run's tail into the error, not
+	// stale content left over from a previous retry attempt sharing the same append-only log.
 	var stderr = io.Discard
-	if sf := openStderrLog(logFile); sf != nil {
+	var stderrFrom int64
+	if sf, from := openStderrLogAt(logFile); sf != nil {
 		stderr = sf
+		stderrFrom = from
 		defer sf.Close()
 	}
 
@@ -561,6 +617,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
 	}
+	runErr = withStderrTail(logFile, stderrFrom, runErr)
 	if runErr != nil && firstErr != "" {
 		return fmt.Errorf("%s: %w", firstErr, runErr)
 	}
@@ -911,7 +968,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start %s: %w", e.cfg.Command, err)
+		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
 	}
 
 	idleTimer := time.NewTimer(e.cfg.IdleTimeout)

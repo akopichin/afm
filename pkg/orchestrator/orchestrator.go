@@ -115,6 +115,13 @@ type ResolvedFile struct {
 // Orchestrator manages the full lifecycle of a flow run via event loop.
 type Orchestrator struct {
 	opts Options
+	// absRunDir — опредёлённый ОДИН РАЗ в New абсолютный вариант opts.RunDir (filepath.Abs; при ошибке —
+	// исходное значение as-is). Используется ТОЛЬКО через stageDir() — на границе с агентом (AFM_STAGE_DIR),
+	// где CWD агента (root_dir/worktree) может не совпадать с CWD afm, и относительный путь резолвился бы не
+	// туда. Внутренние call sites (filepath.Join(o.opts.RunDir, s.ID)) намеренно не переведены на него — afm
+	// никогда не делает os.Chdir, поэтому относительный RunDir резолвится стабильно везде, где путь не
+	// пересекает границу процесса (D4, dev-plan.md).
+	absRunDir string
 	// graph is a *graph.Store, not a bare *graph.Registry (Этап 9, T9.4): every read in this file goes
 	// through reg() (o.graph.Load()), a fresh snapshot each time, so a successful AddStageToGraph commit's
 	// subsequent graph.Replace becomes visible to the NEXT read everywhere in this package without restarting
@@ -147,10 +154,13 @@ type Orchestrator struct {
 	// lastRootScan хранит время последнего скана root_dir на стадию (throttle
 	// в relocateMisplacedQuestions). Доступен только из горутины поллера.
 	lastRootScan map[string]time.Time
-	// maxRetries/retryBackoff — снапшоты package-level RetryBackoff/MaxRetries, снятые в New. Снапшот на
-	// инстансе устраняет гонку: горутины читают immutable-поля.
-	maxRetries   int
-	retryBackoff time.Duration
+	// maxRetries/retryBackoff/maxUnknownRetries/retryBackoffMax — снапшоты package-level
+	// RetryBackoff/MaxRetries/MaxUnknownRetries/RetryBackoffMax, снятые в New. Снапшот на инстансе устраняет
+	// гонку: горутины читают immutable-поля.
+	maxRetries        int
+	retryBackoff      time.Duration
+	maxUnknownRetries int
+	retryBackoffMax   time.Duration
 	// spawnJSONFix запускает свежий изолированный агент, единственная задача которого — переписать битый
 	// question.json валидным JSON. Возвращает канал, закрываемый по завершении агента.
 	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
@@ -441,19 +451,27 @@ func New(opts Options) *Orchestrator {
 	conc := concurrency.New(critical, initialReg.Stages(), opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
 		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
 
+	absRunDir := opts.RunDir
+	if abs, err := filepath.Abs(opts.RunDir); err == nil {
+		absRunDir = abs
+	}
+
 	o := &Orchestrator{
-		opts:             opts,
-		graph:            gstore,
-		preparedCommands: buildPreparedCommandSet(initialReg.Stages(), opts.Config.Client.Command),
-		runner:           r,
-		critical:         critical,
-		ui:               ui,
-		fsm:              bus.NewFSM(opts.Store),
-		concurrency:      conc,
-		violationCache:   make(map[string]violationCacheEntry),
-		lastRootScan:     make(map[string]time.Time),
-		maxRetries:       MaxRetries,
-		retryBackoff:     RetryBackoff,
+		opts:              opts,
+		absRunDir:         absRunDir,
+		graph:             gstore,
+		preparedCommands:  buildPreparedCommandSet(initialReg.Stages(), opts.Config.Client.Command),
+		runner:            r,
+		critical:          critical,
+		ui:                ui,
+		fsm:               bus.NewFSM(opts.Store),
+		concurrency:       conc,
+		violationCache:    make(map[string]violationCacheEntry),
+		lastRootScan:      make(map[string]time.Time),
+		maxRetries:        MaxRetries,
+		retryBackoff:      RetryBackoff,
+		maxUnknownRetries: MaxUnknownRetries,
+		retryBackoffMax:   RetryBackoffMax,
 	}
 	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
@@ -482,6 +500,12 @@ func New(opts Options) *Orchestrator {
 
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
 func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
+
+// stageDir — каталог стадии АБСОЛЮТНЫМ путём. Нужен там, где путь пересекает границу процесса: CWD
+// агента (root_dir/worktree) не совпадает с CWD afm, и относительный путь резолвился бы не туда.
+func (o *Orchestrator) stageDir(stageID string) string {
+	return filepath.Join(o.absRunDir, stageID)
+}
 
 // reg returns the CURRENT registry snapshot — every stage-definition read in this package goes through this,
 // never o.graph directly, so a call right before and right after a concurrent AddStageToGraph commit can see

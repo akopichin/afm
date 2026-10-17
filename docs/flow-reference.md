@@ -156,7 +156,9 @@ for example, in a Docker setup where the sources are mounted at `/workspace` but
 `.afm/` lives in a different directory — relative project paths (`docs/arch/…`, etc.)
 resolve to different roots for different stages: one stage writes a file, another
 can't find it. `root_dir` fixes a single root for all stages. Dialog paths
-(`AFM_STAGE_DIR`) stay anchored to the afm root regardless of `root_dir`.
+(`AFM_STAGE_DIR`) stay anchored to the afm root regardless of `root_dir`, and are
+always passed to the agent as an absolute path — the agent's CWD can differ from
+afm's, so a relative path would resolve to the wrong place.
 When worktrees are enabled, `root_dir` instead anchors the worktree location;
 stages run inside that worktree.
 

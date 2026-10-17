@@ -108,6 +108,9 @@ AFM_STAGE_FROM      AFM_STAGE_TO
 For flow-level events the stage variables are empty. Use `AFM_HOOK_EVENT_ID` as
 an idempotency key if your receiver needs one.
 
+`AFM_RUN_DIR` and `AFM_ROOT_DIR` are absolute paths when set, even if afm was
+started with relative paths. An unset `AFM_ROOT_DIR` stays empty.
+
 The command is run through `sh -c` with the working directory set to the
 effective `flow.root_dir` (the same CWD agents use). Event values are never
 interpolated into the command string — pass a static command and read the event

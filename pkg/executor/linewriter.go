@@ -89,6 +89,14 @@ func (lw *lineWriter) Flush() {
 // ReadStderrTail returns the last up-to-maxLines lines of the stderr log file associated with logFile —
 // i.e. logFile with its ".log" suffix replaced by ".stderr.log".
 func ReadStderrTail(logFile string, maxLines, maxBytes int) string {
+	return ReadStderrTailFrom(logFile, 0, maxLines, maxBytes)
+}
+
+// ReadStderrTailFrom — как ReadStderrTail, но читает только то, что дописано начиная со смещения from.
+// Лог открыт O_APPEND и общий для всех попыток стадии, поэтому для классификации нужен хвост ТОЛЬКО
+// текущего запуска: иначе сетевой диагноз прошлой попытки сменил бы класс (и бюджет) следующей (см. D7
+// в dev-plan.md). from=0 воспроизводит поведение ReadStderrTail (весь файл).
+func ReadStderrTailFrom(logFile string, from int64, maxLines, maxBytes int) string {
 	if maxLines <= 0 || maxBytes <= 0 {
 		return ""
 	}
@@ -106,28 +114,33 @@ func ReadStderrTail(logFile string, maxLines, maxBytes int) string {
 	}
 
 	size := info.Size()
+	if from >= size {
+		// За этот запуск в лог ничего не дописано (молчаливый сбой) — хвоста нет.
+		return ""
+	}
+	if from < 0 {
+		from = 0
+	}
+
 	window := int64(maxBytes)*4 + 64*1024
-	var data []byte
-	if size > window {
-		if _, err := f.Seek(size-window, io.SeekStart); err != nil {
-			return ""
-		}
-		data, err = io.ReadAll(f)
-		if err != nil {
-			return ""
-		}
-		// The seek almost certainly landed inside a line; drop that partial leading line so we don't report a
-		// truncated first line as if it were complete.
+	start := from
+	if size-window > start {
+		start = size - window
+	}
+
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return ""
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	if start > from {
+		// Окно (а не смещение from) определило позицию seek'а — она почти наверняка попала в середину
+		// строки, отбрасываем частичную первую строку. Сик ровно на from так не делаем: from — граница
+		// записи (конец файла до текущего запуска), а не произвольная точка внутри строки.
 		if idx := bytes.IndexByte(data, '\n'); idx >= 0 {
 			data = data[idx+1:]
-		}
-	} else {
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return ""
-		}
-		data, err = io.ReadAll(f)
-		if err != nil {
-			return ""
 		}
 	}
 

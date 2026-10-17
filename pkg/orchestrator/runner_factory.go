@@ -124,7 +124,9 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		return o.nonInteractiveRunner(s, phase)
 	}
 
-	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// Абсолютный путь (T6, D4): AFM_STAGE_DIR пересекает границу процесса (CWD агента = root_dir/worktree,
+	// может не совпадать с CWD afm) — относительный путь резолвился бы не туда.
+	stageDir := o.stageDir(s.ID)
 	resume := willResume(s, stageDir, phase)
 	sessionID, err := stagefiles.LoadOrCreateSession(stageDir, phase)
 	if err != nil {
@@ -190,8 +192,9 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		RunDir:         o.opts.RunDir,
 		StageID:        s.ID,
 		// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or skill that uses the file-based
-		// dialog protocol always has somewhere to write question.json — the poller auto-answers it.
-		StageDir:      filepath.Join(o.opts.RunDir, s.ID),
+		// dialog protocol always has somewhere to write question.json — the poller auto-answers it. Absolute
+		// (T6, D4): see the comment on the interactive branch above — same cross-process-boundary reasoning.
+		StageDir:      o.stageDir(s.ID),
 		Phase:         phase,
 		UsageHint:     o.usageHintFor(cmd),
 		OnUsage:       o.recordUsage(s.ID, phase, ""),

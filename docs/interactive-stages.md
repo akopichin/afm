@@ -2,7 +2,8 @@
 
 A stage with `interactive: true` gets a file-based protocol for dialog with the
 user through the dashboard. The agent receives the `AFM_STAGE_DIR` env variable (the
-path to the stage directory). To ask a question, the agent writes a
+absolute path to the stage directory, even when `flow.root_dir` changes its working
+directory). To ask a question, the agent writes a
 `<phase>.q<N>.question.json` file (`<phase>` is `planning`/`implementation`/`review`;
 `N` increments: q1, q2, …), then waits for `<phase>.q<N>.answer.json` to appear via
 a bash loop. A "Dialog" section appears in the dashboard where the user answers.
