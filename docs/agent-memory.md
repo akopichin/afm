@@ -1,16 +1,17 @@
 # Agent memory
 
-Each stage runs its agent in an isolated context — whatever it learns (an API's real
-behavior, a required build flag, a rule it broke and had to correct) is lost when the
-stage finishes, and the next stage starts blind. **Agent memory** carries those
-lessons forward: after a stage that opts in completes, afm runs a small background
-pipeline that distills the stage's session into a handful of durable **project
-patterns** and merges them into a plain Markdown rules file that later stages — and
-later runs — are told to read.
+Each stage runs its agent in an isolated context. **Agent memory** carries project
+lessons across runs: an API's real behavior, a required build flag, or a rule the
+agent had to correct. After a participating stage finishes, afm captures its session
+in a background reflection step. At the end of the run, it turns those datasets into
+Markdown rules files for future runs. New rules are not passed to downstream stages
+within the same run.
 
-Memory is entirely **opt-in** and off by default. Nothing runs and nothing is written
-unless you add a `memory:` block to the flow and mark at least one stage with
-`reflect:`.
+Memory is **opt-in**: a non-empty `memory.path` enables it. Reading existing memory
+also requires `memory_use: true`; producing new memory requires at least one
+non-script stage with writable `reflect`. These switches are independent: you can
+read existing shared memory without declaring `reflect`, or collect new rules while
+reading is disabled.
 
 ## Turning it on
 
@@ -18,7 +19,7 @@ unless you add a `memory:` block to the flow and mark at least one stage with
 name: my-feature
 root_dir: .
 memory:
-  path: docs/memory        # a DIRECTORY (relative to root_dir); a non-empty value ENABLES the feature
+  path: docs/memory          # a DIRECTORY (relative to root_dir); a non-empty value ENABLES the feature
   mode: rw                  # lifecycle of the shared memory.md: r / w / rw (default rw)
   memory_use: true          # do stages READ memory at all? default false → you opt in
   max_rules: 25             # max patterns kept per file (default 25)
@@ -27,12 +28,12 @@ stages:
   - id: build
     name: build
     agents: [planning, implementation]
-    reflect: { file: build.md, mode: rw }   # this stage's own file: writes AND reads it
+    reflect: { file: build.md, mode: rw }   # reads existing rules; updates them at run end
   - id: test
     name: test
     agents: [planning, implementation]
     depends_on: [build]
-    reflect: { file: build.md, mode: r }    # reads build's file, writes nothing of its own
+    reflect: { file: build.md, mode: r }    # reads rules from earlier runs, not this build's new lessons
   - id: docs
     name: docs
     agents: [planning, implementation]
@@ -74,10 +75,13 @@ Reading and writing are two **independent** axes.
 
 **Writing (what gets distilled after the run):**
 
-- a stage's **own `reflect.file`** is written if its `reflect.mode` includes write
-  (`w`/`rw`) — independent of `memory_use`;
-- the shared **`memory.md`** is (re)written by the end-of-run pass only if
-  `memory.mode` includes write (`w`/`rw`).
+- a non-script stage participates in capture when its `reflect.mode` includes
+  write (`w`/`rw`) — independent of `memory_use`;
+- at run end, the available datasets from those stages update their
+  **`reflect.file`** targets;
+- the same datasets also update the shared **`memory.md`** if `memory.mode`
+  includes write (`w`/`rw`). Stages without writable `reflect` do not contribute
+  to this shared pass. Without captured datasets, there is nothing to finalize.
 
 So, for example: `memory.mode: r` + stages with `reflect: {mode: rw}` gives you a
 **read-only shared memory** (curated by hand, never overwritten) while each stage
@@ -92,9 +96,10 @@ Two tiers of files, both plain Markdown, all under `<memory.path>/`:
 - **`memory.md`** — the project-wide rules file. Accumulates **across runs** (keep it
   in git). Injected into a stage's prompt when the stage participates (`memory_use`)
   and `memory.mode` allows reading.
-- **`<reflect.file>`** (e.g. `build.md`) — a per-stage file, rewritten by that stage's
-  write chain, injected only into a participating stage that names it with `mode`
-  `r`/`rw`.
+- **`<reflect.file>`** (e.g. `build.md`) — a rules file updated at run end from the
+  stages that name it with write permission. Multiple stages can share one target;
+  their updates are combined in stage order. A participating stage is pointed at it
+  only when its `reflect.mode` allows reading.
 
 Both files have the same shape — a flat list of named patterns, highest-priority first
 (priority is encoded **only** by block order, never written into the file):
@@ -117,54 +122,64 @@ prompt, so prompts don't grow as memory grows.
 
 ## How a stage's session becomes patterns
 
-The distill chain runs **once per reflecting stage** (writing that stage's own file)
-and **once more at the end of the run** (aggregating every stage's session into
-`memory.md`). Four steps:
+The pipeline has **two phases**. Capture runs in the background after each eligible
+stage finishes, without blocking downstream stages. Normal run completion waits for
+pending captures, then finalizes memory once before afm exits. Finalization can
+therefore add time at the end of a run.
 
-1. **reflect** — a fresh-context agent reads the stage's session log and produces a
-   raw RL-style dataset (`reflect_dataset.yaml`). Its prompt carries a hard **exclude
-   list** for afm/agent-protocol mechanics so memory stays about **your project**, not
-   the framework.
-2. **aggregate** — turns the dataset into a mutually-exclusive numbered list of named
+The complete chain has five steps, with four agent calls:
+
+1. **reflect (capture)** — a fresh-context agent reads the stage's session logs,
+   plans/summaries and direct user input, including dialog answers, pre-notes and
+   feedback. It produces `<stageDir>/reflect_dataset.yaml`. User instructions take
+   priority; afm dialog/completion mechanics are excluded from project patterns.
+2. **aggregate (finalize)** — turns captured datasets into a numbered list of named
    patterns.
-3. **prioritize** — buckets every pattern into High / Medium / Low.
-4. afm code keeps only the **High** patterns, then **update** — merges them into the
-   target file (preferring to fold into existing patterns), caps at `max_rules`, and
-   rewrites the file.
+3. **prioritize (finalize)** — assigns High / Medium / Low priority, preserving the
+   priority of direct user input.
+4. **select High (finalize, code only)** — keeps High patterns. Empty datasets or no
+   High patterns preserve the existing target content.
+5. **update (finalize)** — merges High patterns into a staged copy of the target,
+   folds them into existing rules where possible, and enforces `max_rules`.
 
-The pipeline is **background and best-effort**: it never blocks downstream stages,
-never touches a stage's status, and never fails a stage or the run — if a step errors
-you get a `reflect_failed` notice in the dashboard and nothing else. The four prompts
-ship as embedded defaults (`reflect.md` / `aggregate.md` / `prioritize.md` /
-`update.md`) and can be overridden per project via the `prompts_dir` config.
+Finalization runs steps 2–5 for each contributing stage's target and, when enabled,
+once for the shared `memory.md` using all eligible non-empty datasets. It reuses the
+captured datasets; it does not repeat reflection. All candidate files are prepared
+before publication, under a shared memory-directory lock also used by rebuild.
+The lock remains held through the optional memory commit.
+
+Live memory is **best-effort**: capture, finalization or commit errors produce a
+`reflect_failed` dashboard notice without changing stage status or failing an
+otherwise successful run. An interrupted run can leave captured datasets without
+updated rules; rebuild can finish this work once the run satisfies its completion
+requirements. The four prompts ship as embedded defaults (`reflect.md`,
+`aggregate.md`, `prioritize.md`, `update.md`) and can be overridden via `prompts_dir`.
 
 ## Practical notes
 
-- **Cross-run is the main payoff.** Because reflection runs in the background after a
-  stage finishes, a *fast* downstream stage in the **same** run may start before the
-  previous stage's memory has been written — so in-run forward carry isn't guaranteed.
-  What *is* reliable is accumulation **across runs**: `memory.md` and the per-stage
-  files are read at the start of every run.
+- **New lessons become available on future runs.** Downstream stages in the current
+  run still see the existing rules, even if an earlier stage's capture has finished.
+  When building a participating agent's prompt, afm points it at the memory files
+  that already exist; it does not inject new reflection datasets.
 - **Commit it (or ignore it).** `memory.md` is meant to live in your repo and grow over
   time. If you'd rather not track it, add `<memory.path>/` to `.gitignore`; if you want
   afm to commit it automatically after each run, set `commit: true`.
-- **Script stages** may declare `reflect:` for reading, but their write chain is always
-  skipped — there is no agent session to reflect on.
+- **Script stages** are excluded from capture, even if they declare `reflect:` —
+  there is no agent session to reflect on.
 
 ## `afm memory rebuild` — backfilling memory from a past run
 
-The normal write chain only runs live, right after each stage finishes during
-`afm run`. `afm memory rebuild [flow.yaml]` runs the same distill pipeline **offline**,
-against the session logs of a run that already finished — for turning on
-`memory`/`reflect` on a flow you'd already been running, for regenerating memory after
-editing the prompts, or for recovering from a failed/aborted live reflection.
+`afm memory rebuild [flow.yaml]` runs the same capture/finalize pipeline **offline**
+against a completed run. Use it to enable memory for past sessions, regenerate rules
+after changing prompts, or recover from a failed live memory update. All stages of
+the selected run must be done; this command does not resume unfinished stage work.
 
 ```bash
 afm memory rebuild                       # rebuild for the flow in .afm/flows (or the only one present)
 afm memory rebuild flow.yaml             # explicit flow file
 afm memory rebuild --run my-flow-20260910-153000-ab12   # a specific historical run, not just the latest
 afm memory rebuild --worktree my-feature flow.yaml         # rebuild a run in .worktrees/my-feature
-afm memory rebuild --dry-run             # show what would change, write nothing
+afm memory rebuild --dry-run             # run the pipeline and show diffs without publishing changes
 afm memory rebuild --force-reflect       # regenerate every reflect_dataset.yaml from raw logs
 afm memory rebuild --commit              # force a git commit of changed files, overriding flow.yaml
 afm memory rebuild --no-commit           # force NO commit, overriding memory.commit: true in flow.yaml
@@ -174,8 +189,8 @@ afm memory rebuild --no-commit           # force NO commit, overriding memory.co
 |------|---------|---------|
 | `--run <id>` | latest completed run | Explicit run directory name (bare basename) to rebuild from, instead of auto-selecting the latest completed one. |
 | `--worktree <name>` | unset | Select runs prefixed by `<name>` and resolve relative `memory.path` inside `<project-root>/.worktrees/<name>`. The worktree must already exist. |
-| `--dry-run` | `false` | Compute and print the diff for every target that would change; write nothing and never commit. |
-| `--force-reflect` | `false` | Ignore any existing `reflect_dataset.yaml` and regenerate it from the stage's raw session logs. |
+| `--dry-run` | `false` | Run agents and print target diffs, writing only attempt artifacts; never publish memory/datasets or commit. |
+| `--force-reflect` | `false` | Regenerate datasets from session sources instead of reusing them; replace canonical datasets only during publication. |
 | `--commit` | — | Commit changed memory files at the end, regardless of `memory.commit`. Mutually exclusive with `--no-commit`. |
 | `--no-commit` | — | Never commit, even if `memory.commit: true`. Mutually exclusive with `--commit`. |
 
@@ -199,11 +214,21 @@ Key behaviors:
   distilled come from the past. That's what makes backfill useful.
 - **Dataset reuse.** Each stage's `reflect_dataset.yaml` is the reusable artifact of
   the reflect step. If a valid one exists, rebuild reuses it and skips re-running the
-  reflect agent; `--force-reflect` discards it and regenerates from raw logs.
-- **Never mutates the historical run.** Rebuild reads `events.jsonl`/stage directories
-  read-only; only files under the memory directory (and the attempt's own audit
-  workspace under `<runDir>/memory-rebuild/<attempt-id>/`) are written. A run held by a
-  live `afm run` is rejected immediately.
+  reflect agent; `--force-reflect` generates a replacement in the attempt workspace.
+- **Run state is unchanged.** Rebuild does not change the FSM or `events.jsonl`.
+  It writes audit artifacts under `<runDir>/memory-rebuild/<attempt-id>/` and may
+  publish regenerated datasets back to the stage directories as well as updating
+  the memory files. A run held by a live `afm run` is rejected immediately.
+- **Shared writers are serialized.** Capture happens before the memory lock; then
+  rebuild waits for exclusive access to the memory directory, rechecks commit
+  preconditions, finalizes and optionally commits. Live finalization uses the same
+  lock. A dry run still runs agents and creates logs, candidates and `manifest.json`,
+  but leaves published memory and canonical datasets unchanged.
+- **Failures are reported.** Unlike live reflection, rebuild exits with an error if
+  capture, finalization, commit or manifest persistence fails. Candidates are prepared
+  before publication, but replacement is atomic per file, not across the entire
+  set. The attempt's manifest records published files and its backups preserve old
+  memory content if publication stops partway through.
 - **Docker mode** is honored exactly like `afm run`: if Docker is enabled it re-execs
   into the container before taking any locks.
 

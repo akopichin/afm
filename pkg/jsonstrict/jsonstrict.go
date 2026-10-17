@@ -27,11 +27,11 @@ var ErrTrailingContent = errors.New("trailing content after JSON document")
 // ErrDuplicateKey is wrapped by DecodeNoDuplicates's error.
 var ErrDuplicateKey = errors.New("duplicate key in the same JSON object")
 
-// EnforceMaxBytes rejects raw if it exceeds max bytes. Callers MUST call this on the full, untrimmed input
+// EnforceMaxBytes rejects raw if it exceeds maxBytes. Callers MUST call this on the full, untrimmed input
 // before any parsing — a cap checked after decoding has already paid the cost it exists to avoid.
-func EnforceMaxBytes(raw []byte, max int) error {
-	if len(raw) > max {
-		return fmt.Errorf("%w: %d byte limit (got %d)", ErrTooLarge, max, len(raw))
+func EnforceMaxBytes(raw []byte, maxBytes int) error {
+	if len(raw) > maxBytes {
+		return fmt.Errorf("%w: %d byte limit (got %d)", ErrTooLarge, maxBytes, len(raw))
 	}
 	return nil
 }
