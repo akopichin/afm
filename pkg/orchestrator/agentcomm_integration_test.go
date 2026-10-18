@@ -233,8 +233,9 @@ func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDe
 				}
 			}
 			return executor.HelperOutcome{ProcessOK: true}, nil
+		default:
+			return passResultOutcome(), nil
 		}
-		return passResultOutcome(), nil
 	}
 
 	qaMsg := "please agree the report format with DevOps, then publish your result"
@@ -432,6 +433,8 @@ func TestAgentMesh_QADevOps_EndToEnd(t *testing.T) {
 			formatWaitReady = w.Status == agentcomm.WaitReady
 		case w.Condition.Kind == agentcomm.WaitOnBoardKey && w.Condition.Key == "qa.tests":
 			boardWaitReady = w.Status == agentcomm.WaitReady
+		default:
+			// другие mesh-waits сценарий не проверяет
 		}
 	}
 	if !formatWaitReady {

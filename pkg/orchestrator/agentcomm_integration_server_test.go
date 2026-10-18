@@ -216,8 +216,9 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 			default:
 				return passResultOutcome(), nil
 			}
+		default:
+			return passResultOutcome(), nil
 		}
-		return passResultOutcome(), nil
 	})
 
 	// DevOps is attached FIRST so its board wait is genuinely PENDING (not already-satisfied) when it
