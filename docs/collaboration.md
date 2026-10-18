@@ -105,9 +105,11 @@ recording a reason. Required tasks with `needs_changes` or `inconclusive` do not
 pass the gate; a `pass` verdict does.
 
 The **Discussion** tab shows the stage's discussion and lets you post a human
-message. Posting does not change the stage's status. Pending agent proposals
-also appear there; **Accept** confirms a supported proposal before its change
-is applied, while **Dismiss** discards it. In the Side agent, type `@` to choose a
+message; the stage agent's reply appears there too, and authors are named as in
+the Team roster. Posting does not change the stage's status. A post to a stage
+that has already finished is kept in its history but is not delivered to anyone.
+Pending agent proposals also appear there; **Accept** confirms a supported
+proposal before its change is applied, while **Dismiss** discards it. In the Side agent, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
@@ -116,27 +118,37 @@ existing task instances.
 The run-wide **Team** tab appears when Agent Mesh is available. Its roster lists
 run agents and the Side agent under **This run**, stage agents in flow order under
 **Stages** (with their live status and their helpers nested below), and existing
-threads under **Conversations**. Each row shows the `@name` used to address that
-participant. Select a person to read or send a direct message; the first send
-opens a thread, and selecting that person again returns to the existing direct
-thread. The **+** button in the conversation header creates a group thread after
-you enter a topic and choose participants. In a conversation, type `@` to address
-only some of its members; without a mention the message goes to everyone in it.
-On narrow screens the roster opens from the **☰** button.
+conversations under **Conversations**. Each row shows the `@name` used to address
+that participant and what it is doing: a stage's status, or for a run agent or
+helper whether it is **Working**, **Waiting** (for a colleague), **Idle** (between
+turns), **Paused**, or **Done**; the presence dot follows the same state.
+
+Select a person to read or send a direct message; the first send opens a
+conversation, and selecting that person again returns to it. The **+** button in
+the conversation header creates a group conversation after you enter a topic and
+choose participants; stages and helpers that have already finished are not
+offered. In a conversation, type `@` to address only some of its members; without
+a mention the message goes to everyone in it. A conversation opens at its latest
+message, and a reply quotes the message it answers. On narrow screens the roster
+opens from the **☰** button.
 
 **Add run agent** starts a standing agent from an available configured profile.
 Choose a role, enter an instruction, and optionally give it a title and a first
 message. You can add several agents with the same role; each one is addressed by
-an `@name` made from its title (or the role id when there is no title). A run agent
-is a standing role: every message addressed to it starts its next turn, and between
-turns it is idle — an idle agent never keeps the run open. An agent added without a
-first message waits until somebody writes to it. Messages to a stage or helper that
-has already finished are refused with a clear error instead of going unanswered.
-This agent belongs to the run rather than one stage. The **Board** tab shows keys
-agents have published with their status, author, version, and artifact references.
-Use **Post task** to put a task on the board for the agents: they check the board
-between steps and report on a task by publishing their own `<task key>/<name>`
-entry, shown under the task.
+an `@name` made from its title (or the role's title when there is none), and they
+work side by side. A run agent is a standing role: every message addressed to it
+starts its next turn, and between turns it is idle — an idle agent never keeps the
+run open, while one with an unread message does. An agent added without a first
+message waits until somebody writes to it. Messages to a stage or helper that has
+already finished are refused with a clear error instead of going unanswered. This
+agent belongs to the run rather than one stage.
+
+The **Board** tab (with a count of its tasks) shows keys agents have published
+with their status, author, version, and artifact references. Use **Post task** to
+put a task on the board: choose under **Notify** which working agents get a
+message about it (all of them by default), so even an idle run agent picks it up.
+Agents report on a task by publishing their own `<task key>/<name>` entry, shown
+under the task; only a key's author can update that key.
 **Activity** shows Agent Mesh events such as participants joining, messages,
 waits, and board updates. Agent messages become available at the next turn or
 when an agent reads its inbox; they are not injected into an in-progress response.
@@ -145,7 +157,9 @@ Agents talk to each other with the `afm agent` CLI. `afm agent send --to docs
 --body "..."` continues the sender's open conversation with exactly those
 recipients or opens a new one, and prints its `thread_id`; recipients can be
 `@name`s or participant ids. `afm agent reply --in-reply-to <message-id>` answers
-in that message's thread. `afm agent wait --condition addressed_message` without
+in that message's thread. `afm agent inbox` lists only messages the agent has not
+been handed yet (`--all` shows the whole history), so an agent never answers the
+same question twice. `afm agent wait --condition addressed_message` without
 `--thread-id` waits for the next message anyone sends the agent. A rejected call
 reports why (for example an unknown recipient) instead of a generic server error.
 

@@ -5,6 +5,31 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-18
 
+### Fix: run agents work side by side and answer each message once
+
+Several run agents with the same recipe (for example two reviewers, or QA and
+DevOps) now run in parallel under the run's `max_parallel` instead of strictly
+one after another. `afm agent inbox` lists only messages the agent has not been
+handed yet (`--all` shows the history), so a standing agent no longer answers an
+old question on every new turn, and a message that arrives mid-turn is neither
+lost nor marked read before the agent sees it. A queued agent with an unread
+message keeps the run open; `task_result` waits resolve on each turn's result.
+Agent Mesh checks run against the current state, so concurrent sends, waits and
+board updates cannot slip past reachability, cycle or limit checks. A board key
+can be updated only by its author, board text is redacted like messages, a
+thread's own message budget is enforced, and an agent added without a title is
+named after its role.
+
+### Improvement: Team shows who is doing what
+
+Run agents and helpers show whether they are working, waiting, idle, paused or
+done. Posting a board task can notify the agents (all working ones by default),
+and the Board tab counts its tasks. Conversations open at the latest message,
+replies quote the message they answer, group conversations show their members'
+initials, one-to-one conversations show the person, and finished stages are not
+offered for new conversations. Discussion names authors as the roster does, and a
+stage added during the run keeps its name in the rail.
+
 ### Fix: let agents start conversations and report clear errors
 
 Run agents are standing roles: each new message starts their next turn and they
