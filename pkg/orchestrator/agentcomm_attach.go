@@ -15,6 +15,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
@@ -302,7 +303,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 			}
 			msgRecipients = append(msgRecipients, string(m))
 		}
-		body := redact.String(*req.FirstMessage, secretValuesForRedaction())
+		body := redact.String(*req.FirstMessage, executor.SecretValuesForRedaction())
 		msgEff, merr := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(mid)},
 			state.MeshMessageSentPayload{Sender: string(senderID), Recipients: msgRecipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
 		if merr != nil {

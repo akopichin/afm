@@ -116,7 +116,7 @@ func TestSideAgent_CanAddressAndBeAddressed(t *testing.T) {
 	var runAgentTask assistants.TaskID
 	t.Cleanup(func() {
 		if runAgentTask != "" {
-			waitForTaskStatus(t, store, runAgentTask, assistants.StatusCompleted, 2*time.Second)
+			waitForRunAgentTurn(t, store, runAgentTask, 2*time.Second)
 		}
 	})
 	taskID := newRunningHelperForMesh(t, o, store, "op-side-helper")

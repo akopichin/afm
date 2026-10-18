@@ -17,6 +17,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
@@ -289,7 +290,7 @@ func childResultMeshEffects(rs state.RunState, parentID, childID assistants.Task
 			break
 		}
 	}
-	body = truncateMeshBody(redact.String(body, secretValuesForRedaction()))
+	body = truncateMeshBody(redact.String(body, executor.SecretValuesForRedaction()))
 
 	messageID := deriveMeshMessageID("delegate-result:" + string(childID))
 	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(messageID)},
@@ -505,7 +506,7 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 			// unconditionally for the same reason tryResumePeer above is: both conditions it checks
 			// (hasOpenMeshWaitFor, hasUndeliveredInbox) are re-derived fresh, and the resume it triggers is
 			// CAS-protected, so finding nothing to do (or racing tryResumePeer's own resume above) is a no-op.
-			o.maybeResumeAwaitingPeerQuestion(ctx, meshParticipantForTask(t.Task))
+			o.maybeResumeAwaitingPeerQuestion(ctx, meshParticipantForTask(o.opts.Store.Snapshot(), t.Task))
 		default:
 			// waiting_parent/watching/paused/terminal: nothing for a fresh process to do on its own —
 			// waiting_parent is reactivated by the stage's own startup path, paused stays paused until an

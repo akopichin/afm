@@ -193,6 +193,11 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
+	// The turn starts now: the <inbox> messages in its prompt are delivered (the executor's OnDelivered does
+	// the same at process start — idempotent per message; this also covers any helperAgentRunner).
+	if tc.markInboxDelivered != nil {
+		tc.markInboxDelivered()
+	}
 	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
@@ -272,7 +277,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// kind:"delegate" envelope, and treating its (expected) empty/absent RawText as malformed would be wrong.
 	// This task's own concurrency lease is released simply by this function returning next, exactly like
 	// runWithRetry's awaiting_peer branch releases a stage's.
-	if o.hasOpenMeshWaitFor(meshParticipantForTask(task)) {
+	if o.hasOpenMeshWaitFor(meshParticipantForTask(o.opts.Store.Snapshot(), task)) {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
 		return
 	}
@@ -342,10 +347,19 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			return
 		}
 	}
+	// A run agent is a standing role: its turn ends idle (queued, which never holds the run open — see
+	// state.RunBlocker) rather than completed, and the next message addressed to it starts its next turn
+	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away.
+	if task.Scope == assistants.ScopeRun {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, resultEff)
+		o.maybeScheduleTask(ctx, taskID)
+		return
+	}
 	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
 }
 
-// maxFailureReasonLen keeps a failure reason short enough for the task list and the event log.
+// maxFailureReasonLen (in characters, ellipsis included) keeps a failure reason short enough for the task list
+// and the event log.
 const maxFailureReasonLen = 300
 
 // helperFailureReason is the failed task's reason: the process error when there is one (secrets redacted,
@@ -355,9 +369,9 @@ func helperFailureReason(processErr error) string {
 	if processErr == nil {
 		return prefix
 	}
-	reason := prefix + ": " + redact.String(processErr.Error(), secretValuesForRedaction())
+	reason := []rune(prefix + ": " + redact.String(processErr.Error(), executor.SecretValuesForRedaction()))
 	if len(reason) > maxFailureReasonLen {
-		reason = reason[:maxFailureReasonLen] + "…"
+		return string(reason[:maxFailureReasonLen-1]) + "…"
 	}
-	return reason
+	return string(reason)
 }

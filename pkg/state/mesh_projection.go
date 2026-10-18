@@ -131,9 +131,10 @@ func (ms MeshState) MessageAnswered(id agentcomm.MessageID) bool {
 // hasMessageAddressedTo reports whether some message already in threadID names recipient among its
 // Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
 // condition is already satisfied at registration time.
-// hasUnseenMessageFor reports whether recipient has a message it has not seen yet (still only accepted, not
-// delivered to it through <inbox> or `afm agent inbox`) — what a thread-less addressed_message wait waits for.
-func (ms MeshState) hasUnseenMessageFor(recipient agentcomm.ParticipantID) bool {
+// HasUnseenMessageFor reports whether recipient has a message it has not seen yet (still only accepted, not
+// delivered to it through <inbox> or `afm agent inbox`) — what a thread-less addressed_message wait waits for,
+// and what wakes an idle run agent.
+func (ms MeshState) HasUnseenMessageFor(recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.Inbox[recipient] {
 		if ms.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
 			return true
@@ -240,13 +241,13 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 		return fmt.Errorf("decode mesh_thread_opened payload: %w", err)
 	}
 	if len(p.Members) > agentcomm.MaxThreadMembers {
-		return fmt.Errorf("mesh_thread_opened %s: %d members exceeds MaxThreadMembers %d", id, len(p.Members), agentcomm.MaxThreadMembers)
+		return meshRejected(assistants.CodeInvalidRequest, "a conversation can have at most %d members (MaxThreadMembers), got %d", agentcomm.MaxThreadMembers, len(p.Members))
 	}
 	members := make([]agentcomm.ParticipantID, 0, len(p.Members))
 	for _, m := range p.Members {
 		pid := agentcomm.ParticipantID(m)
 		if _, ok := as.Mesh.Participants[pid]; !ok {
-			return fmt.Errorf("mesh_thread_opened %s: unknown member %q", id, m)
+			return meshRejected(assistants.CodeNotFound, "unknown participant %q — `afm agent list` shows who is in this run", m)
 		}
 		members = append(members, pid)
 	}
@@ -285,10 +286,10 @@ func applyMeshThreadClosed(as *AssistantsState, c *Control, dryRun bool) error {
 	id := agentcomm.ThreadID(c.Target.ThreadID)
 	th, ok := as.Mesh.Threads[id]
 	if !ok {
-		return fmt.Errorf("mesh_thread_closed: unknown thread_id %s", id)
+		return meshRejected(assistants.CodeNotFound, "unknown thread %s", id)
 	}
 	if th.Status == agentcomm.ThreadClosed {
-		return fmt.Errorf("mesh_thread_closed: thread %s is already closed", id)
+		return meshRejected(assistants.CodeInvalidStatus, "thread %s is already closed", id)
 	}
 	if dryRun {
 		return nil
@@ -374,6 +375,10 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		known[mid] = true
 	}
 	if err := agentcomm.ValidateMessage(msg, thread.Members, known); err != nil {
+		if errors.Is(err, agentcomm.ErrSenderNotThreadMember) {
+			// Never reveal who is in a thread to someone outside it.
+			return meshRejected(assistants.CodeActorNotAllowed, "%s is not a member of thread %s", msg.Sender, threadID)
+		}
 		return meshRejected(assistants.CodeInvalidRequest, "%v (thread %s members: %v)", err, threadID, thread.Members)
 	}
 	// agentcomm.MaxThreadMessages/MaxInboxUnread: explicit rejection, never a silent truncation (T0.2). A
@@ -462,11 +467,11 @@ func applyMeshMessageReceipt(as *AssistantsState, c *Control, newStatus agentcom
 	}
 	receipts, ok := as.Mesh.Receipts[id]
 	if !ok {
-		return fmt.Errorf("%s: unknown message %s", c.Kind, id)
+		return meshRejected(assistants.CodeNotFound, "unknown message %s", id)
 	}
 	current, ok := receipts[recipient]
 	if !ok {
-		return fmt.Errorf("%s: %s is not a recipient of message %s", c.Kind, recipient, id)
+		return meshRejected(assistants.CodeInvalidRequest, "%s is not a recipient of message %s", recipient, id)
 	}
 	if dryRun {
 		return nil

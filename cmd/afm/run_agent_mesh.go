@@ -76,9 +76,17 @@ func toMeshMessagePage(p orchestrator.MessagePage) server.MeshMessagePage {
 }
 
 func (a agentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (server.MeshMessagePage, error) {
-	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: agentcomm.ParticipantID(actor), Cursor: cursor, Limit: limit, Actor: meshActor(actor)})
+	reader := agentcomm.ParticipantID(actor)
+	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: reader, Cursor: cursor, Limit: limit, Actor: meshActor(actor)})
 	if err != nil {
 		return server.MeshMessagePage{}, err
+	}
+	// Handing messages to the agent is what "delivered" means: a later thread-less addressed_message wait must
+	// not wake it again for a message it has already read. Idempotent per (message, recipient).
+	for _, m := range page.Messages {
+		if err := a.orch.MarkMessageDelivered(ctx, m.ID, reader); err != nil {
+			return server.MeshMessagePage{}, err
+		}
 	}
 	return toMeshMessagePage(page), nil
 }

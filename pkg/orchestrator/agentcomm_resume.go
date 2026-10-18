@@ -106,27 +106,13 @@ func stageIDFromMeshParticipant(p agentcomm.ParticipantID) (string, bool) {
 	return id, ok && id != ""
 }
 
-// taskIDFromMeshParticipant inverts meshHelperParticipantID and meshRunParticipantID — both carry the task id.
-// A journal written before run agents were keyed by task has "run:<profileID>" participants; for those the
-// one scope=run task of that profile is looked up instead (that build allowed only one per profile).
+// taskIDFromMeshParticipant inverts meshHelperParticipantID and meshRunParticipantID (see
+// runTaskForParticipant for the legacy "run:<profileID>" form).
 func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
 	if id, ok := strings.CutPrefix(string(p), meshHelperPrefix); ok && id != "" {
 		return assistants.TaskID(id), true
 	}
-	suffix, ok := strings.CutPrefix(string(p), meshRunPrefix)
-	if !ok || suffix == "" {
-		return "", false
-	}
-	rs := o.opts.Store.Snapshot()
-	if _, isTask := rs.Assistants.Tasks[assistants.TaskID(suffix)]; isTask {
-		return assistants.TaskID(suffix), true
-	}
-	for id, t := range rs.Assistants.Tasks {
-		if t.Scope == assistants.ScopeRun && string(t.ProfileID) == suffix {
-			return id, true
-		}
-	}
-	return "", false
+	return runTaskForParticipant(o.opts.Store.Snapshot(), p)
 }
 
 // resumeAwaitingPeerStage drives stageID out of awaiting_peer via evType (EventPeerReplied or, T5.5,
@@ -306,7 +292,7 @@ func (o *Orchestrator) resumeTaskIfWaitCleared(ctx context.Context, taskID assis
 	if !ok || t.Status != assistants.StatusWaitingPeer {
 		return
 	}
-	if o.hasOpenMeshWaitFor(meshParticipantForTask(t.Task)) {
+	if o.hasOpenMeshWaitFor(meshParticipantForTask(rs, t.Task)) {
 		return // the wait that parked this task is still genuinely pending — nothing to resume yet
 	}
 	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, reason)

@@ -96,6 +96,22 @@ func attachTestTask(ctx context.Context, t *testing.T, o *Orchestrator, opID str
 	return taskID
 }
 
+// waitForRunAgentTurn waits until a run agent finished a turn: it is back to idle (queued — a standing role
+// never completes) with that turn's result recorded.
+func waitForRunAgentTurn(t *testing.T, store *state.Store, taskID assistants.TaskID, timeout time.Duration) *state.TaskState {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if tk, ok := store.Snapshot().Assistants.Tasks[taskID]; ok && tk.Status == assistants.StatusQueued && tk.LastVerdict != "" {
+			return tk
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tk := store.Snapshot().Assistants.Tasks[taskID]
+	t.Fatalf("run agent %s did not finish a turn (status %v)", taskID, tk)
+	return nil
+}
+
 func waitForTaskStatus(t *testing.T, store *state.Store, taskID assistants.TaskID, want assistants.TaskStatus, timeout time.Duration) *state.TaskState {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

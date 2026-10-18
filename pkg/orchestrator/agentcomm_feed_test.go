@@ -138,7 +138,7 @@ func TestFeed_UserDiscussionThenQAClarification_NoRevisionNoHelperNoGate(t *test
 		t.Fatalf("Send (stage answers): %v", err)
 	}
 
-	waitForTaskStatus(t, store, qaRes.TaskID, assistants.StatusCompleted, 5*time.Second)
+	waitForRunAgentTurn(t, store, qaRes.TaskID, 5*time.Second)
 
 	// --- Negative assertions ---
 	if got := o.currentStatus(assistantsTestStageID); got != statusBeforeQA {

@@ -7,7 +7,10 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ### Fix: let agents start conversations and report clear errors
 
-Agents can now message each other without a pre-made thread: `afm agent send`
+Run agents are standing roles: each new message starts their next turn and they
+stay idle (never holding the run open) in between. You can post tasks to the Team
+board, and agents report on them under the task. Agents can now message each other
+without a pre-made thread: `afm agent send`
 reuses or opens the conversation with its recipients, accepts `@name`s, and
 returns the `thread_id`; `afm agent reply` and a thread-less `afm agent wait`
 work without thread ids. Rejected Agent Mesh requests return a 4xx with the

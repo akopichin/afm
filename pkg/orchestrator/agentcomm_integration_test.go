@@ -326,8 +326,8 @@ func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDe
 		t.Fatalf("Send (go-ahead): %v", err)
 	}
 
-	waitForTaskStatus(t, store, qaRes.TaskID, assistants.StatusCompleted, 5*time.Second)
-	waitForTaskStatus(t, store, doRes.TaskID, assistants.StatusCompleted, 5*time.Second)
+	waitForRunAgentTurn(t, store, qaRes.TaskID, 5*time.Second)
+	waitForRunAgentTurn(t, store, doRes.TaskID, 5*time.Second)
 
 	return qaDevOpsScenarioResult{
 		QATaskID: qaRes.TaskID, DevOpsTaskID: doRes.TaskID,
@@ -521,7 +521,7 @@ func TestAgentMesh_QADevOps_RestartMidScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddRunAgent (qa): %v", err)
 	}
-	waitForTaskStatus(t, store, qaRes.TaskID, assistants.StatusCompleted, 2*time.Second)
+	waitForRunAgentTurn(t, store, qaRes.TaskID, 2*time.Second)
 	// QA's own propose message just addressed DevOps a message while its board wait was still pending — T5.5's
 	// own bounded counter-question resume (now correctly reachable for a scope=run task, see
 	// meshParticipantForTask's own doc comment) fires for it asynchronously; let that settle back into
@@ -570,7 +570,7 @@ func TestAgentMesh_QADevOps_RestartMidScenario(t *testing.T) {
 
 	o2.recoverAssistants(context.Background())
 
-	waitForTaskStatus(t, store2, doRes.TaskID, assistants.StatusCompleted, 2*time.Second)
+	waitForRunAgentTurn(t, store2, doRes.TaskID, 2*time.Second)
 	if !devopsResumed {
 		t.Fatal("recovery must actually resume DevOps whose board wait resolved before the crash, not leave it stranded in waiting_peer")
 	}

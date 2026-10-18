@@ -87,7 +87,7 @@ func (as *AssistantsState) meshWaitConditionSatisfied(cond agentcomm.WaitConditi
 		return as.Mesh.MessageAnswered(cond.MessageID)
 	case agentcomm.WaitOnAddressedMessage:
 		if cond.ThreadID == "" {
-			return as.Mesh.hasUnseenMessageFor(waiter)
+			return as.Mesh.HasUnseenMessageFor(waiter)
 		}
 		return as.Mesh.hasMessageAddressedTo(cond.ThreadID, waiter)
 	case agentcomm.WaitOnTaskResult:

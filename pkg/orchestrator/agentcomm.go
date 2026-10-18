@@ -242,8 +242,9 @@ func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	participantID := meshHelperParticipantID(taskID)
 	scope := agentcomm.ScopeStage
-	if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
-		participantID = meshParticipantForTask(t.Task)
+	rs := o.opts.Store.Snapshot()
+	if t, ok := rs.Assistants.Tasks[taskID]; ok {
+		participantID = meshParticipantForTask(rs, t.Task)
 		if t.Scope == assistants.ScopeRun {
 			scope = agentcomm.ScopeRun
 		}

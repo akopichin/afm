@@ -219,8 +219,9 @@ func TestRunBarrier_AcceptedWorkHoldsRun_ShutdownBounded(t *testing.T) {
 
 	waitForFlowEvent(t, rec, lifecyclehooks.EventFlowFinished, 2*time.Second)
 	tk := store.Snapshot().Assistants.Tasks[res.TaskID]
-	if tk == nil || tk.Status != assistants.StatusCompleted {
-		t.Fatalf("task status = %+v, want completed (finished naturally, not force-failed by a premature shutdown)", tk)
+	// A run agent's finished turn leaves it idle (queued) with its result — not force-failed by a premature shutdown.
+	if tk == nil || tk.Status != assistants.StatusQueued || tk.LastVerdict == "" {
+		t.Fatalf("task status = %+v, want an idle run agent with its turn's result", tk)
 	}
 }
 

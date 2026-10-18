@@ -51,11 +51,51 @@ func meshHelperParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
 // means "this task, as a mesh participant" must go through this, not meshHelperParticipantID directly: a
 // scope=run task's own Wait/resume checks, inbox and prompt self-description, and its subprocess's MeshClient
 // identity must all resolve to its "run:" id (Agent Mesh T8.1 caught call sites assuming the stage shape).
-func meshParticipantForTask(task assistants.Task) agentcomm.ParticipantID {
-	if task.Scope == assistants.ScopeRun {
-		return meshRunParticipantID(task.ID)
+// A run task from a journal written before run agents were keyed by task keeps its legacy "run:<profileID>"
+// identity (runTaskForParticipant decides which task owns it), so its inbox and waits survive a restart.
+func meshParticipantForTask(rs state.RunState, task assistants.Task) agentcomm.ParticipantID {
+	if task.Scope != assistants.ScopeRun {
+		return meshHelperParticipantID(task.ID)
 	}
-	return meshHelperParticipantID(task.ID)
+	own := meshRunParticipantID(task.ID)
+	if _, ok := rs.Assistants.Mesh.Participants[own]; ok {
+		return own
+	}
+	legacy := agentcomm.ParticipantID(meshRunPrefix + string(task.ProfileID))
+	if owner, ok := runTaskForParticipant(rs, legacy); ok && owner == task.ID {
+		return legacy
+	}
+	return own
+}
+
+// runTaskForParticipant maps a run participant id to the task behind it: "run:<taskID>" directly; a legacy
+// "run:<profileID>" (journals from before run agents were keyed by task, when there was one per profile) to
+// that profile's run task without a "run:<taskID>" participant of its own — the lowest id if several, so the
+// answer is deterministic and never flips to a newer agent of the same profile.
+func runTaskForParticipant(rs state.RunState, id agentcomm.ParticipantID) (assistants.TaskID, bool) {
+	suffix, ok := strings.CutPrefix(string(id), meshRunPrefix)
+	if !ok || suffix == "" {
+		return "", false
+	}
+	if _, isTask := rs.Assistants.Tasks[assistants.TaskID(suffix)]; isTask {
+		return assistants.TaskID(suffix), true
+	}
+	if _, legacy := rs.Assistants.Mesh.Participants[id]; !legacy {
+		return "", false
+	}
+	var owner assistants.TaskID
+	for tid, t := range rs.Assistants.Tasks {
+		if t.Scope != assistants.ScopeRun || string(t.ProfileID) != suffix {
+			continue
+		}
+		if _, hasOwn := rs.Assistants.Mesh.Participants[meshRunParticipantID(tid)]; hasOwn {
+			continue
+		}
+		if owner == "" || tid < owner {
+			owner = tid
+		}
+	}
+	return owner, owner != ""
 }
 
 // taskMeshParticipant is meshParticipantForTask's convenience wrapper for a caller that only has the bare
@@ -63,8 +103,9 @@ func meshParticipantForTask(task assistants.Task) agentcomm.ParticipantID {
 // a fresh snapshot lookup, falling back to the ScopeStage default for an id with no task record (never
 // expected in practice; keeps this total rather than requiring every such caller to handle a lookup miss).
 func (o *Orchestrator) taskMeshParticipant(taskID assistants.TaskID) agentcomm.ParticipantID {
-	if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
-		return meshParticipantForTask(t.Task)
+	rs := o.opts.Store.Snapshot()
+	if t, ok := rs.Assistants.Tasks[taskID]; ok {
+		return meshParticipantForTask(rs, t.Task)
 	}
 	return meshHelperParticipantID(taskID)
 }
@@ -121,7 +162,7 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 	}
 	slices.Sort(runIDs)
 	for _, idStr := range runIDs {
-		out = append(out, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)])
+		out = append(out, liveRunParticipant(rs, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)]))
 	}
 
 	return out
@@ -180,8 +221,26 @@ func resolveParticipant(rs state.RunState, id agentcomm.ParticipantID) (agentcom
 		if !ok {
 			return agentcomm.Participant{}, false
 		}
-		return *p, true
+		return liveRunParticipant(rs, *p), true
 	}
+}
+
+// liveRunParticipant derives a run agent's reachability from its task, like helperParticipant does: the
+// journal's descriptor says Reachable for good, but once the agent's task is terminal nobody will read new
+// messages, so it must not look (or be addressable) as if somebody would.
+func liveRunParticipant(rs state.RunState, p agentcomm.Participant) agentcomm.Participant {
+	if p.Kind != agentcomm.KindRunAgent {
+		return p
+	}
+	taskID, ok := runTaskForParticipant(rs, p.ID)
+	if !ok {
+		return p
+	}
+	if t := rs.Assistants.Tasks[taskID]; t != nil && t.Status.Terminal() {
+		p.Reachable = false
+		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", taskID)
+	}
+	return p
 }
 
 // ensureParticipantEffects returns one mesh_participant_added Effect for every stage/helper/user id in ids —

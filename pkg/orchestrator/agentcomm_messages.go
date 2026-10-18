@@ -7,6 +7,8 @@ import (
 	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
@@ -27,7 +29,7 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		return agentcomm.Thread{}, errors.New("agentcomm: operation id is required")
 	}
 	if !req.Scope.Valid() {
-		return agentcomm.Thread{}, fmt.Errorf("agentcomm: invalid scope %q", req.Scope)
+		return agentcomm.Thread{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("invalid scope %q (want stage or run)", req.Scope)}
 	}
 
 	rs := o.opts.Store.Snapshot()
@@ -86,6 +88,22 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 	return err
 }
 
+// rejectUnreachableRecipients refuses a message to a participant whose stage or task has finished — nobody would
+// ever read it. A replay of an already-committed send is let through (it must return its original outcome).
+func rejectUnreachableRecipients(rs state.RunState, req SendRequest) error {
+	if _, committed := rs.Assistants.Mesh.Messages[deriveMeshMessageID(req.OperationID)]; committed {
+		return nil
+	}
+	for _, r := range req.Recipients {
+		if p, ok := resolveParticipant(rs, r); ok && !p.Reachable {
+			return &state.OperationRejectedError{
+				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s has finished and cannot receive messages (%s)", r, p.UnreachableReason),
+			}
+		}
+	}
+	return nil
+}
+
 // Send implements Service.Send. One ApplyRunOperation commits the message plus one accepted receipt/inbox
 // reference per recipient (applyMeshMessageSent, pkg/state/mesh_projection.go) — a recipient the thread
 // rejects (not a member, or the thread is closed) fails the WHOLE call, nothing is written. Any PENDING wait
@@ -101,6 +119,10 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		return SendReceipt{}, errors.New("agentcomm: sender is required")
 	}
 
+	if err := rejectUnreachableRecipients(o.opts.Store.Snapshot(), req); err != nil {
+		return SendReceipt{}, err
+	}
+
 	messageID := deriveMeshMessageID(req.OperationID)
 	recipients := make([]string, len(req.Recipients))
 	for i, r := range req.Recipients {
@@ -113,7 +135,7 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 	}
 	// Secrets must never reach the durable journal or a recipient's inbox verbatim — same redaction pass
 	// buildTaskContext applies to everything else a task sees (assistants_context.go).
-	body := redact.String(req.Body, secretValuesForRedaction())
+	body := redact.String(req.Body, executor.SecretValuesForRedaction())
 	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
@@ -124,19 +146,19 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 	}
 
 	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
-	runCtx := o.runContext(ctx) // a task this message starts must not die with the HTTP request.
+	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: []state.Effect{eff}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
 		}})
-		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
 		// Agent Mesh Phase 5, T5.5: a recipient parked in awaiting_peer/waiting_peer whose OWN wait this
 		// message did NOT just resolve (notifyAndResumeNewlyReadyWaits above owns that case) may still need a
 		// bounded turn to read and answer it — a genuine counter-question, not the reply it is waiting for.
 		for _, r := range req.Recipients {
-			o.maybeResumeAwaitingPeerQuestion(ctx, r)
+			o.maybeResumeAwaitingPeerQuestion(runCtx, r)
 			// A role attached with no first message sits queued until somebody writes to it: its first
 			// addressed message is what starts it. maybeScheduleTask no-ops for anything not queued.
 			if taskID, ok := o.taskIDFromMeshParticipant(r); ok {
@@ -157,10 +179,10 @@ func (o *Orchestrator) ReadThread(ctx context.Context, req ReadThreadRequest) (M
 	rs := o.opts.Store.Snapshot()
 	thread, ok := rs.Assistants.Mesh.Threads[req.ThreadID]
 	if !ok {
-		return MessagePage{}, fmt.Errorf("agentcomm: unknown thread %q", req.ThreadID)
+		return MessagePage{}, &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown thread %s", req.ThreadID)}
 	}
 	if req.Reader != meshUserParticipantID && req.Reader != "" && !threadHasMember(thread, req.Reader) {
-		return MessagePage{}, fmt.Errorf("agentcomm: %q is not a member of thread %q", req.Reader, req.ThreadID)
+		return MessagePage{}, &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: fmt.Sprintf("%s is not a member of thread %s", req.Reader, req.ThreadID)}
 	}
 	ids := rs.Assistants.Mesh.MessagesByThread[req.ThreadID]
 	return pageMessages(rs, ids, req.Cursor, req.Limit), nil

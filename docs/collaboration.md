@@ -127,10 +127,16 @@ On narrow screens the roster opens from the **☰** button.
 **Add run agent** starts a standing agent from an available configured profile.
 Choose a role, enter an instruction, and optionally give it a title and a first
 message. You can add several agents with the same role; each one is addressed by
-an `@name` made from its title (or the role id when there is no title). An agent
-added without a first message waits until somebody writes to it, then starts.
+an `@name` made from its title (or the role id when there is no title). A run agent
+is a standing role: every message addressed to it starts its next turn, and between
+turns it is idle — an idle agent never keeps the run open. An agent added without a
+first message waits until somebody writes to it. Messages to a stage or helper that
+has already finished are refused with a clear error instead of going unanswered.
 This agent belongs to the run rather than one stage. The **Board** tab shows keys
 agents have published with their status, author, version, and artifact references.
+Use **Post task** to put a task on the board for the agents: they check the board
+between steps and report on a task by publishing their own `<task key>/<name>`
+entry, shown under the task.
 **Activity** shows Agent Mesh events such as participants joining, messages,
 waits, and board updates. Agent messages become available at the next turn or
 when an agent reads its inbox; they are not injected into an in-progress response.

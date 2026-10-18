@@ -45,11 +45,12 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	}
 
 	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
+	runCtx := o.runContext(ctx) // a resumed waiter must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_publish", Actor: req.Actor, Effects: []state.Effect{publishEff}}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": req.Status}})
-		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
 	})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err

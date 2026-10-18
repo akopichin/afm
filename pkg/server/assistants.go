@@ -10,7 +10,9 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
+	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -336,7 +338,7 @@ func writeAssistantError(w http.ResponseWriter, err error) {
 		return
 	}
 	// Unexpected: never a silent 500 — the error goes to the afm log, the client is pointed there.
-	log.Printf("ERROR: assistants/mesh request failed: %v", err)
+	log.Printf("ERROR: assistants/mesh request failed: %q", redact.String(err.Error(), executor.SecretValuesForRedaction())) //nolint:gosec // G706: secrets redacted, %q escapes newlines so a value cannot forge log lines
 	writeAssistantErrMessage(w, http.StatusInternalServerError, errCodeInternal, "internal error — see the afm log for details")
 }
 

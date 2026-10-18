@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -135,5 +137,100 @@ func TestSendFromAgent_UnknownExplicitThreadIsNotFound(t *testing.T) {
 	var rej *state.OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != assistants.CodeNotFound {
 		t.Fatalf("err = %v, want not_found", err)
+	}
+}
+
+// A retry of an already-committed send replays its outcome even if the world changed in between (here the
+// conversation it went into was closed) — never a conflict or a second message.
+func TestSendFromAgent_RetryAfterThreadClosedReplaysOriginal(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	impl := string(meshStageParticipantID(assistantsTestStageID))
+	r1, err := agentSend(o, "op-r", "stage:docs", []string{impl}, "hi")
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if err := o.CloseThread(context.Background(), CloseThreadRequest{OperationID: "op-close", ThreadID: r1.ThreadID}); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	r2, err := agentSend(o, "op-r", "stage:docs", []string{impl}, "hi")
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if r2 != r1 {
+		t.Fatalf("retry = %+v, want the original %+v", r2, r1)
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Messages); n != 1 {
+		t.Fatalf("messages = %d, want 1", n)
+	}
+}
+
+// Two agents starting the same conversation at the same time end up in ONE thread.
+func TestSendFromAgent_ConcurrentStartsShareOneThread(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	impl := string(meshStageParticipantID(assistantsTestStageID))
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i, pair := range [][2]string{{"stage:docs", impl}, {impl, "stage:docs"}} {
+		wg.Go(func() {
+			_, err := agentSend(o, fmt.Sprintf("op-concurrent-%d", i), pair[0], []string{pair[1]}, "hello")
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Threads); n != 1 {
+		t.Fatalf("threads = %d, want 1 shared conversation", n)
+	}
+}
+
+// A request that cannot be sent is rejected before any thread is opened (no empty conversations left behind).
+func TestSendFromAgent_InvalidRequestOpensNothing(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	impl := string(meshStageParticipantID(assistantsTestStageID))
+	_, err := o.SendFromAgent(context.Background(), SendRequest{
+		OperationID: "op-bad", Sender: "stage:docs", Recipients: []agentcomm.ParticipantID{agentcomm.ParticipantID(impl)},
+		Kind: agentcomm.MessageKindReply, Body: "a reply to nothing", Actor: state.Actor{Kind: "agent"},
+	})
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeInvalidRequest {
+		t.Fatalf("err = %v, want invalid_request", err)
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Threads); n != 0 {
+		t.Fatalf("threads = %d, want none opened", n)
+	}
+}
+
+// Client-correctable mistakes are typed rejections (4xx with a reason), not plain errors that became a 500.
+func TestMesh_CorrectableErrorsAreTyped(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	codeOf := func(err error) assistants.ErrorCode {
+		var rej *state.OperationRejectedError
+		if errors.As(err, &rej) {
+			return rej.Code
+		}
+		return ""
+	}
+
+	_, err := o.ReadThread(ctx, ReadThreadRequest{ThreadID: "mt-nope", Reader: "stage:docs"})
+	if codeOf(err) != assistants.CodeNotFound {
+		t.Fatalf("ReadThread(unknown) = %v, want not_found", err)
+	}
+	err = o.Acknowledge(ctx, AcknowledgeRequest{OperationID: "op-ack", MessageID: "mm-nope", Participant: "stage:docs"})
+	if codeOf(err) != assistants.CodeNotFound {
+		t.Fatalf("Acknowledge(unknown) = %v, want not_found", err)
+	}
+	_, err = o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-open-x", Scope: agentcomm.ScopeRun, Members: []agentcomm.ParticipantID{"stage:docs", "stage:ghost"}})
+	if codeOf(err) != assistants.CodeNotFound {
+		t.Fatalf("OpenThread(unknown member) = %v, want not_found", err)
+	}
+	_, err = o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-open-y", Scope: "galaxy", Members: []agentcomm.ParticipantID{"stage:docs"}})
+	if codeOf(err) != assistants.CodeInvalidRequest {
+		t.Fatalf("OpenThread(bad scope) = %v, want invalid_request", err)
 	}
 }

@@ -140,7 +140,7 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 		return err
 	}
 	if waiter, won := o.meshWaitResolvedTo(req.WaitID, agentcomm.WaitCancelled); won {
-		o.resumeWaiterAfterTerminalWait(ctx, waiter)
+		o.resumeWaiterAfterTerminalWait(o.runContext(ctx), waiter) // must not die with the HTTP request
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -94,7 +95,7 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	}
 	// Secrets must never reach the durable journal verbatim — same redaction pass Send applies
 	// (agentcomm_messages.go) to every other mesh message body.
-	body := redact.String(req.Body, secretValuesForRedaction())
+	body := redact.String(req.Body, executor.SecretValuesForRedaction())
 	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: messageID},
 		state.MeshMessageSentPayload{Sender: string(sender), Recipients: recipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
 	if err != nil {

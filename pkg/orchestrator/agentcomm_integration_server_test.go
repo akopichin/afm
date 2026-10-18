@@ -241,8 +241,8 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddRunAgent (qa): %v", err)
 	}
-	waitForTaskStatus(t, store, qaRes.TaskID, assistants.StatusCompleted, 5*time.Second)
-	waitForTaskStatus(t, store, doRes.TaskID, assistants.StatusCompleted, 5*time.Second)
+	waitForRunAgentTurnExternal(t, store, qaRes.TaskID, 5*time.Second)
+	waitForRunAgentTurnExternal(t, store, doRes.TaskID, 5*time.Second)
 
 	if got := qaCalls.Load(); got != 1 {
 		t.Fatalf("qa invoked %d times, want exactly 1", got)
@@ -255,4 +255,18 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	if entry, ok := rs.Assistants.Mesh.Board["qa.tests"]; !ok || entry.Status != "ready" {
 		t.Fatalf("board entry = %+v, want ready", entry)
 	}
+}
+
+// waitForRunAgentTurnExternal waits until a run agent finished a turn: back to idle (queued — a standing role
+// never completes) with that turn's result recorded.
+func waitForRunAgentTurnExternal(t *testing.T, store *state.Store, taskID assistants.TaskID, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if tk, ok := store.Snapshot().Assistants.Tasks[taskID]; ok && tk.Status == assistants.StatusQueued && tk.LastVerdict != "" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("run agent %s did not finish a turn", taskID)
 }

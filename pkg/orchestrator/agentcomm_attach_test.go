@@ -131,7 +131,7 @@ func TestAttachAndSend_ScopeRunCreatesStandingParticipant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AttachAndSend: %v", err)
 	}
-	waitForTaskStatus(t, store, res.TaskID, assistants.StatusCompleted, 2*time.Second)
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
 
 	rs := store.Snapshot()
 	task, ok := rs.Assistants.Tasks[res.TaskID]
@@ -408,7 +408,7 @@ func TestAttachAndSend_NoFirstMessage_FirstAddressedMessageStartsTheAgent(t *tes
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	waitForTaskStatus(t, store, res.TaskID, assistants.StatusCompleted, 2*time.Second)
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
 }
 
 // A helper that fails to start reports WHY (e.g. a host binary of the wrong architecture in the container)
@@ -431,4 +431,33 @@ func TestHelperStartFailure_ReasonCarriesTheProcessError(t *testing.T) {
 	if !strings.Contains(task.StatusReason, "exec format error") {
 		t.Fatalf("reason = %q, want the process error", task.StatusReason)
 	}
+}
+
+// Work a message starts must not die with the HTTP request that carried it: the dashboard handler returns (its
+// request context is cancelled) while the agent's turn is still running.
+func TestSend_StartedWorkSurvivesTheRequestContext(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		time.Sleep(50 * time.Millisecond)
+		if ctx.Err() != nil {
+			return executor.HelperOutcome{Interrupted: true}, nil
+		}
+		return passResultOutcome(), nil
+	}
+	res, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{
+		OperationID: "op-ctx-qa", ProfileID: "qa", Title: "QA", Instruction: "answer", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	if _, err := o.Send(reqCtx, SendRequest{
+		OperationID: "op-ctx-hello", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindRequest, Body: "hi",
+		Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	cancel() // the HTTP handler returned
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
 }

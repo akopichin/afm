@@ -393,6 +393,22 @@ func (o *Orchestrator) CancelTask(ctx context.Context, taskID assistants.TaskID)
 	return nil
 }
 
+// runAgentIdleReason is the status reason of a run agent that finished a turn and waits for its next message.
+const runAgentIdleReason = "idle: waiting for a message"
+
+// idleRunAgent reports whether t is a standing run agent with nothing to do: queued because it was attached
+// without a first message or finished its last turn (not because a wait resumed it), and nobody has written
+// to it since. Such an agent only starts on a new message — never on its own after a restart or a Continue.
+func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
+	if t.Scope != assistants.ScopeRun || t.Status != assistants.StatusQueued {
+		return false
+	}
+	if t.StatusReason != "" && t.StatusReason != runAgentIdleReason {
+		return false
+	}
+	return !rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task))
+}
+
 // maybeScheduleTask attempts to move a QUEUED, not-currently-held task to running and spawn its helper
 // process. Safe to call any number of times for the same task — including from an idempotent Attach replay
 // (T2.5), where externalWork fires again even though nothing new happened — because the transition's own
@@ -407,6 +423,9 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	rs := o.opts.Store.Snapshot()
 	t, ok := rs.Assistants.Tasks[taskID]
 	if !ok || t.Status != assistants.StatusQueued {
+		return
+	}
+	if idleRunAgent(rs, t) {
 		return
 	}
 	eff, err := taskStatusEffect(taskID, assistants.StatusRunning, "")
@@ -536,6 +555,11 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 			// every stage is already terminal, and would never re-evaluate shouldExit() again — the same
 			// no-op marker WakeEventLoop already exists for (after-hooks, which also do not publish
 			// EventAgentCompleted).
+			o.concurrency.WakeEventLoop()
+		}
+		if to == assistants.StatusQueued {
+			// queued never holds the run open either (state.RunBlocker): a run agent going idle after its turn
+			// may be the last thing the run-level barrier was waiting on.
 			o.concurrency.WakeEventLoop()
 		}
 		if mirrored {
