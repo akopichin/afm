@@ -361,6 +361,9 @@ func TestAttachAndSend_IdempotentPerOperation(t *testing.T) {
 	if _, err := o.AttachAndSend(ctx, conflicting); !errors.Is(err, state.ErrOperationIDConflict) {
 		t.Fatalf("conflicting replay: err = %v, want ErrOperationIDConflict", err)
 	}
+
+	// Первое сообщение запустило задачу: дожидаемся её, иначе она допишет файлы после удаления TempDir.
+	waitForTaskStatus(t, store, r1.TaskID, assistants.StatusCompleted, 2*time.Second)
 }
 
 // TestAttachAndSend_RejectsClientSuppliedCommand documents and verifies, structurally, that

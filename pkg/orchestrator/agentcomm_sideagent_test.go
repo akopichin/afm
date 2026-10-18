@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
@@ -109,6 +110,15 @@ func TestSideAgent_CanAddressAndBeAddressed(t *testing.T) {
 
 	sideID := registerTestSideAgent(t, o).ID
 	stageID := meshStageParticipantID(assistantsTestStageID)
+	// Run agent ниже стартует с тем же блокирующим stub-ом, что и helper. Cleanup выполняется в обратном
+	// порядке, поэтому этот (зарегистрированный раньше) дожидается run agent уже после того, как cleanup
+	// newRunningHelperForMesh отпустит stub, и до удаления TempDir.
+	var runAgentTask assistants.TaskID
+	t.Cleanup(func() {
+		if runAgentTask != "" {
+			waitForTaskStatus(t, store, runAgentTask, assistants.StatusCompleted, 2*time.Second)
+		}
+	})
 	taskID := newRunningHelperForMesh(t, o, store, "op-side-helper")
 	helperID := meshHelperParticipantID(taskID)
 
@@ -121,6 +131,7 @@ func TestSideAgent_CanAddressAndBeAddressed(t *testing.T) {
 		t.Fatalf("AttachAndSend (run agent): %v", err)
 	}
 	runAgentID := runRes.ParticipantID
+	runAgentTask = runRes.TaskID
 
 	for _, to := range []agentcomm.ParticipantID{stageID, helperID, runAgentID} {
 		thread, err := o.OpenThread(ctx, OpenThreadRequest{
