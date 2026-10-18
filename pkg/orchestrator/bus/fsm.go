@@ -51,6 +51,13 @@ const (
 	// phase it was in (phaseDispatch), exactly like EvUserAnswered does for a human answer.
 	EvAwaitPeer   FSMEvent = "await_peer"
 	EvPeerReplied FSMEvent = "peer_replied"
+	// EvPeerQuestion — Agent Mesh Phase 5 (T5.5): fired instead of EvPeerReplied when the stage is resumed
+	// because a colleague asked it a counter-question while its OWN wait was still pending, not because that
+	// wait resolved. Deliberately an exact twin of EvPeerReplied's transition row (same From/To) — the
+	// resume mechanics (CAS-protected exactly-once dispatch via phaseDispatch, automatic re-park if the
+	// original wait is still open when the resumed phase next exits — see retry.go's hasOpenMeshWait check)
+	// do not need to differ at all; only the recorded EVENT differs, for observability and tests.
+	EvPeerQuestion FSMEvent = "peer_question"
 )
 
 type GuardCtx struct {
@@ -118,6 +125,9 @@ func NewFSM(store *state.Store) *FSM {
 			// EvPeerReplied — T5.1: the peer twin of EvUserAnswered. phaseDispatch resolves back to
 			// Planning/Running exactly as EvUserAnswered does, driven by the SAME ctx.Phase convention.
 			EvPeerReplied: {From: []state.StageStatus{state.StatusAwaitingPeer}, To: phaseDispatch},
+			// EvPeerQuestion — T5.5: an exact twin of EvPeerReplied's row (see its own doc comment above) used
+			// to resume a stage for a bounded counter-question turn instead of a genuine reply.
+			EvPeerQuestion: {From: []state.StageStatus{state.StatusAwaitingPeer}, To: phaseDispatch},
 			// Разрешаем retry из AwaitingUserInput/AwaitingPeer: поллер мог сменить статус до возврата
 			// ретраибельной ошибки агента.
 			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusRetrying)},

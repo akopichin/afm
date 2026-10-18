@@ -106,6 +106,13 @@ const (
 	// the peer twin of EventUserAnswered. Routed through the critical bus exactly like EventUserAnswered when
 	// the stage's own process has already exited, so onPeerReplied can respawn it.
 	EventPeerReplied EventType = "peer_replied"
+	// EventPeerQuestion (Agent Mesh Phase 5, T5.5) fires when a colleague addresses a stage a message WHILE
+	// it sits in awaiting_peer with its OWN wait still pending — a counter-question, not the reply it is
+	// actually waiting for. Dispatched through the exact same FSM shape as EventPeerReplied (EvPeerQuestion
+	// mirrors EvPeerReplied's transition row) so the resume is CAS-protected the same way; the distinct event
+	// type exists purely so onPeerQuestion/onPeerReplied, tests and the dashboard can tell the two resume
+	// reasons apart, not because the underlying mechanics differ.
+	EventPeerQuestion EventType = "peer_question"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

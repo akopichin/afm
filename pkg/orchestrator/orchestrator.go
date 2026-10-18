@@ -801,6 +801,8 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 		return o.onUserAnswered(ctx, ev)
 	case bus.EventPeerReplied:
 		return o.onPeerReplied(ctx, ev)
+	case bus.EventPeerQuestion:
+		return o.onPeerQuestion(ctx, ev)
 	}
 	return nil
 }

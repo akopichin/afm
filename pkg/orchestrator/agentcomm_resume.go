@@ -15,6 +15,21 @@ import (
 )
 
 // Agent Mesh Phase 5, T5.3: resume on reply — the peer twin of onUserAnswered/resumeAfterAnswer.
+//
+// Agent Mesh Phase 5, T5.5 (this file also): answering a counter-question while still waiting. A waiter
+// parked in awaiting_peer/waiting_peer can be addressed by a colleague who is NOT the one it is waiting on —
+// a genuine counter-question, not the reply notifyAndResumeNewlyReadyWaits already resumes it for. Left
+// alone, that message would sit undelivered until the ORIGINAL wait happens to resolve on its own, which can
+// deadlock if the sender is itself blocked on this waiter's answer. The fix reuses every primitive T5.3/T5.4
+// already built: the SAME CAS-protected "resume this phase exactly once" dispatch (EvPeerQuestion is an exact
+// FSM twin of EvPeerReplied), the SAME durable phase marker, and the SAME automatic re-park (retry.go's own
+// hasOpenMeshWait recheck on exit already re-parks whenever the ORIGINAL wait is still open, regardless of
+// why the process was resumed) — so a bounded counter-question turn requires no new status and no new
+// "is a turn in flight" marker: resuming for a question never resolves the original wait, so hasOpenMeshWait
+// is still true when it exits, and retry.go/assistants_lifecycle.go re-park it exactly as if nothing special
+// happened. The only genuinely new pieces are (1) detecting that a just-delivered message is a counter-
+// question rather than the awaited reply, and (2) the separate EvPeerQuestion/EventPeerQuestion event, kept
+// distinct from EvPeerReplied/EventPeerReplied purely for observability and tests.
 
 // resumeWaitersAfterCommit is called from Send/Publish's externalWork (after their commit) for every
 // waiter a wait just resolved for — a stage-scoped waiter resumes via resumeAfterPeerReply (T5.3), a
@@ -98,25 +113,41 @@ func taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bo
 	return assistants.TaskID(id), ok && id != ""
 }
 
-// resumeAfterPeerReply drives stageID out of awaiting_peer once its wait is ready. Unlike
-// resumeAfterAnswer's human-dialog twin, there is no "the live process is polling a file itself" case to
-// special-case: a stage in awaiting_peer has, by construction, already exited (that is what the yield in
+// resumeAwaitingPeerStage drives stageID out of awaiting_peer via evType (EventPeerReplied or, T5.5,
+// EventPeerQuestion) — the shared publish-side body behind resumeAfterPeerReply/resumeAfterPeerQuestion.
+// Unlike resumeAfterAnswer's human-dialog twin, there is no "the live process is polling a file itself" case
+// to special-case: a stage in awaiting_peer has, by construction, already exited (that is what the yield in
 // T5.2 means) — the only paths are "resume it" or "a concurrent resume already won" (o.Trigger's CAS
-// decides, never a mutex, so two replies arriving simultaneously still make exactly one continuation).
-func (o *Orchestrator) resumeAfterPeerReply(ctx context.Context, stageID string) {
+// decides, never a mutex, so two replies — or two counter-questions, or one of each — arriving simultaneously
+// still make exactly one continuation).
+func (o *Orchestrator) resumeAwaitingPeerStage(ctx context.Context, stageID string, evType bus.EventType) {
 	if o.currentStatus(stageID) != state.StatusAwaitingPeer {
 		return
 	}
-	o.publishCritical(ctx, bus.Event{Type: bus.EventPeerReplied, StageID: stageID})
+	o.publishCritical(ctx, bus.Event{Type: evType, StageID: stageID})
 }
 
-// onPeerReplied resumes a stage parked in awaiting_peer: FSM-transitions it back to the phase it was
-// running and spawns a FRESH process for that phase — mirrors onUserAnswered via the shared
-// resumeStageForPhase (orchestrator.go), including spawnKind's existing "no before-hook on resume" behavior.
-// The phase comes from prePeerPhase when this runs in-process (the normal live-reply path); popPeerWaitPhase
-// falls back to the durable marker file when prePeerPhase was never populated in THIS process — the restart
-// case recoverMeshWaits below drives.
-func (o *Orchestrator) onPeerReplied(ctx context.Context, ev bus.Event) error {
+// resumeAfterPeerReply is resumeAwaitingPeerStage's T5.3 entry point: stageID's OWN wait just became ready.
+func (o *Orchestrator) resumeAfterPeerReply(ctx context.Context, stageID string) {
+	o.resumeAwaitingPeerStage(ctx, stageID, bus.EventPeerReplied)
+}
+
+// resumeAfterPeerQuestion is resumeAwaitingPeerStage's T5.5 entry point: stageID's own wait is STILL pending,
+// but a colleague just addressed it a message anyway — see maybeResumeAwaitingPeerQuestion for the detection
+// this is called from.
+func (o *Orchestrator) resumeAfterPeerQuestion(ctx context.Context, stageID string) {
+	o.resumeAwaitingPeerStage(ctx, stageID, bus.EventPeerQuestion)
+}
+
+// resumeAwaitingPeerPhase resumes a stage parked in awaiting_peer: FSM-transitions it back to the phase it
+// was running (via fsmEv — EvPeerReplied or, T5.5, EvPeerQuestion, both an identical transition shape) and
+// spawns a FRESH process for that phase — mirrors onUserAnswered via the shared resumeStageForPhase
+// (orchestrator.go), including spawnKind's existing "no before-hook on resume" behavior. The phase comes from
+// prePeerPhase when this runs in-process (the normal live-trigger path); popPeerWaitPhase falls back to the
+// durable marker file when prePeerPhase was never populated in THIS process — the restart case recoverMeshWaits
+// below drives. Which fsmEv is passed in does not change any of this: a bounded T5.5 counter-question turn
+// needs no different spawn behavior, only a differently-labeled resume (see this file's own header comment).
+func (o *Orchestrator) resumeAwaitingPeerPhase(ctx context.Context, ev bus.Event, fsmEv bus.FSMEvent) error {
 	if o.currentStatus(ev.StageID) != state.StatusAwaitingPeer {
 		return nil
 	}
@@ -128,7 +159,20 @@ func (o *Orchestrator) onPeerReplied(ctx context.Context, ev bus.Event) error {
 	if stage == nil {
 		return nil
 	}
-	return o.resumeStageForPhase(ctx, *stage, phase, bus.EvPeerReplied)
+	return o.resumeStageForPhase(ctx, *stage, phase, fsmEv)
+}
+
+// onPeerReplied is resumeAwaitingPeerPhase's T5.3 handler, dispatched from EventPeerReplied.
+func (o *Orchestrator) onPeerReplied(ctx context.Context, ev bus.Event) error {
+	return o.resumeAwaitingPeerPhase(ctx, ev, bus.EvPeerReplied)
+}
+
+// onPeerQuestion is resumeAwaitingPeerPhase's T5.5 handler, dispatched from EventPeerQuestion: the resumed
+// turn is bounded in practice (not in code) — once it exits, retry.go's own hasOpenMeshWait recheck re-parks
+// the stage in awaiting_peer again automatically if the ORIGINAL wait this function never touches is still
+// pending, with no new wait registration.
+func (o *Orchestrator) onPeerQuestion(ctx context.Context, ev bus.Event) error {
+	return o.resumeAwaitingPeerPhase(ctx, ev, bus.EvPeerQuestion)
 }
 
 // popPeerWaitPhase returns the phase stashed when stageID parked in awaiting_peer (T5.2), preferring the
@@ -193,6 +237,62 @@ func (o *Orchestrator) tryResumePeer(ctx context.Context, taskID assistants.Task
 	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, "resumed: peer replied")
 }
 
+// tryResumePeerForQuestion is tryResumePeer's T5.5 counterpart: unlike tryResumePeer (which only ever fires
+// once the task's OWN wait has resolved), this fires while that wait is STILL pending, purely because a
+// colleague addressed the task a message it has not had a turn to read yet — "a child questions a waiting
+// parent" is exactly this, applied to a parent task sitting in waiting_peer like any other mesh participant,
+// no separate machinery needed. Shares resumeTaskViaCAS's CAS-and-requeue step with tryResumePeer/
+// tryResumeParent (dev-plan.md's own instruction for T5.4, extended here rather than duplicated): the
+// precondition (TaskStatus: waiting_peer) is what makes a redundant call (a live Send racing a recovery sweep
+// for the same task) a safe no-op, same as always.
+func (o *Orchestrator) tryResumePeerForQuestion(ctx context.Context, taskID assistants.TaskID) {
+	rs := o.opts.Store.Snapshot()
+	t, ok := rs.Assistants.Tasks[taskID]
+	if !ok || t.Status != assistants.StatusWaitingPeer {
+		return
+	}
+	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, "resumed: peer question while waiting")
+}
+
+// hasUndeliveredInbox reports whether participant has at least one inbox message still at DeliveryAccepted —
+// i.e. one that has never been included in any of its own spawned turns' <inbox> block. agentCommInboxFor's
+// OnDelivered closure (T4.4) marks every CURRENTLY pending message Delivered as soon as a fresh process for
+// that participant actually starts, unconditionally — so in practice this is only ever true for a message
+// that arrived strictly AFTER the participant's most recent turn began, exactly the "a colleague has
+// something for you that you have not had a chance to see yet" signal T5.5 needs, with no separate watermark:
+// reusing the delivery receipt the prompt-building code already maintains means there is nothing new to keep
+// consistent across a restart.
+func (o *Orchestrator) hasUndeliveredInbox(participant agentcomm.ParticipantID) bool {
+	rs := o.opts.Store.Snapshot()
+	for _, id := range rs.Assistants.Mesh.Inbox[participant] {
+		if rs.Assistants.Mesh.Receipts[id][participant] == agentcomm.DeliveryAccepted {
+			return true
+		}
+	}
+	return false
+}
+
+// maybeResumeAwaitingPeerQuestion resumes participant for a bounded T5.5 counter-question turn if, and only
+// if, it is CURRENTLY parked with its own wait still pending (hasOpenMeshWaitFor) AND has at least one
+// undelivered message (hasUndeliveredInbox) — both conditions re-derived fresh from durable state, so this is
+// safe to call redundantly from anywhere: Send's own externalWork tail (the live path, right after the
+// message that might BE a counter-question commits) and recoverMeshWaits/recoverAssistants' waiting_peer
+// branch (startup recovery, T5.5's "crash in the middle of the clarification recovers to exactly one pending
+// turn" — the resume this triggers is CAS-protected exactly like T5.3's, so a redundant call here racing a
+// live trigger, or a second recovery pass, is always a silent no-op, never a second turn).
+func (o *Orchestrator) maybeResumeAwaitingPeerQuestion(ctx context.Context, participant agentcomm.ParticipantID) {
+	if !o.hasOpenMeshWaitFor(participant) || !o.hasUndeliveredInbox(participant) {
+		return
+	}
+	if stageID, ok := stageIDFromMeshParticipant(participant); ok {
+		o.resumeAfterPeerQuestion(ctx, stageID)
+		return
+	}
+	if taskID, ok := taskIDFromMeshParticipant(participant); ok {
+		o.tryResumePeerForQuestion(ctx, taskID)
+	}
+}
+
 // recoverMeshWaits re-derives, on startup, every stage parked in awaiting_peer whose wait has ALREADY
 // become ready — e.g. a reply committed right before a crash, with the live resume never happening because
 // the process went down between the commit and the spawn. Mirrors recoverAssistants' role for
@@ -204,16 +304,41 @@ func (o *Orchestrator) tryResumePeer(ctx context.Context, taskID assistants.Task
 // journal as Ready forever (waits are never deleted). If this only checked "any Ready wait", a stage on its
 // SECOND yield — with a brand-new, still-PENDING wait — would be wrongly resumed on that stale Ready record
 // from its FIRST episode, abandoning the second wait's real condition.
+//
+// T5.5: when the current wait is STILL pending, this used to simply move on ("a future live Send/Publish will
+// wake it normally") — but a counter-question's live trigger (maybeResumeAwaitingPeerQuestion, called from
+// Send's own externalWork tail) could itself have been lost to the same crash this sweep exists to recover
+// from, exactly like an ordinary reply's live trigger can (see the doc comment above). Re-deriving the SAME
+// condition here (still-pending wait + an undelivered message) recovers that case too, to exactly one pending
+// turn: the resume it triggers is CAS-protected the same way, so finding this stage again on a second sweep —
+// after the first already resumed it — is a correct, silent no-op (status is no longer awaiting_peer).
+//
+// This calls onPeerQuestion directly, the same way the ready-wait branch below calls onPeerReplied directly,
+// rather than going through resumeAfterPeerQuestion's publishCritical: recoverMeshWaits runs BEFORE Run's own
+// event loop starts draining the critical bus (orchestrator.go), so a published-but-unprocessed event here
+// would only be picked up once that loop starts — direct dispatch makes recovery deterministic instead of
+// relying on the bus's buffer and ordering. maybeResumeAwaitingPeerQuestion stays the right call for the LIVE
+// Send path (agentcomm_messages.go) and the helper-task recovery branch below, both of which either already
+// run with the loop active or already dispatch directly (resumeTaskViaCAS never goes through the critical
+// bus at all).
 func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 	rs := o.opts.Store.Snapshot()
 	for _, s := range o.reg().Stages() {
 		if o.currentStatus(s.ID) != state.StatusAwaitingPeer {
 			continue
 		}
-		if o.hasOpenMeshWait(s.ID) {
-			continue // the current wait has not resolved yet; a future live Send/Publish will wake it
-		}
 		waiter := meshStageParticipantID(s.ID)
+		if o.hasOpenMeshWait(s.ID) {
+			// The ORIGINAL wait has not resolved — but a colleague may have asked a counter-question while the
+			// process was down; recover that as a bounded T5.5 turn instead of leaving it stranded until the
+			// original wait happens to resolve on its own.
+			if o.hasUndeliveredInbox(waiter) {
+				if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
+					log.Printf("WARN: mesh: recover awaiting_peer counter-question for stage %q: %v", s.ID, err)
+				}
+			}
+			continue
+		}
 		ready := false
 		for _, w := range rs.Assistants.Mesh.Waits {
 			if w.Waiter == waiter && w.Status == agentcomm.WaitReady {

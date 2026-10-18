@@ -309,15 +309,14 @@ func TestMesh_RecoverMeshWaits_IgnoresStaleReadyWaitFromPastEpisode(t *testing.T
 	waiter := meshStageParticipantID(assistantsTestStageID)
 	colleague := agentcomm.ParticipantID("user")
 
-	// Episode 1: a wait that resolves to ready (simulating a past, already-handled yield/resume cycle).
-	thread1, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-stale-open1", Members: []agentcomm.ParticipantID{waiter, colleague}, Scope: agentcomm.ScopeStage})
-	if err != nil {
-		t.Fatalf("OpenThread 1: %v", err)
+	// Episode 1: a wait that resolves to ready (simulating a past, already-handled yield/resume cycle). Uses
+	// Publish/WaitOnBoardKey rather than Send/WaitOnAddressedMessage deliberately: a board publish leaves no
+	// inbox trace for waiter, so it cannot ALSO be mistaken for a T5.5 counter-question still sitting
+	// undelivered — this test is specifically about a stale READY WAIT record, not about inbox delivery.
+	if _, err := o.Publish(ctx, PublishRequest{OperationID: "op-stale-pub1", Author: colleague, Key: "episode1.ready", Status: "ready"}); err != nil {
+		t.Fatalf("Publish 1: %v", err)
 	}
-	if _, err := o.Send(ctx, SendRequest{OperationID: "op-stale-send1", ThreadID: thread1.ID, Sender: colleague, Recipients: []agentcomm.ParticipantID{waiter}, Kind: agentcomm.MessageKindMessage, Body: "first"}); err != nil {
-		t.Fatalf("Send 1: %v", err)
-	}
-	if _, err := o.Wait(ctx, WaitRequest{OperationID: "op-stale-wait1", Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread1.ID}}); err != nil {
+	if _, err := o.Wait(ctx, WaitRequest{OperationID: "op-stale-wait1", Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnBoardKey, Key: "episode1.ready", Status: "ready"}}); err != nil {
 		t.Fatalf("Wait 1: %v", err)
 	}
 

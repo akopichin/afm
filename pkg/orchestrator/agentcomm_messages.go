@@ -131,6 +131,12 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
 		}})
 		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+		// Agent Mesh Phase 5, T5.5: a recipient parked in awaiting_peer/waiting_peer whose OWN wait this
+		// message did NOT just resolve (notifyAndResumeNewlyReadyWaits above owns that case) may still need a
+		// bounded turn to read and answer it — a genuine counter-question, not the reply it is waiting for.
+		for _, r := range req.Recipients {
+			o.maybeResumeAwaitingPeerQuestion(ctx, r)
+		}
 	})
 	if err != nil {
 		return SendReceipt{}, err

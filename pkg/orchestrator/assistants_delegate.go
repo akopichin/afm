@@ -500,6 +500,12 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 			// (hasOpenMeshWaitFor) makes calling it here unconditionally safe: a wait still genuinely pending
 			// leaves the task exactly where it is, untouched, for a future live Send/Publish to wake normally.
 			o.tryResumePeer(ctx, id)
+			// T5.5: that still-pending wait does not rule out a counter-question whose own live trigger was
+			// lost to the SAME crash — recover it the same way recoverMeshWaits does for a stage. Safe to call
+			// unconditionally for the same reason tryResumePeer above is: both conditions it checks
+			// (hasOpenMeshWaitFor, hasUndeliveredInbox) are re-derived fresh, and the resume it triggers is
+			// CAS-protected, so finding nothing to do (or racing tryResumePeer's own resume above) is a no-op.
+			o.maybeResumeAwaitingPeerQuestion(ctx, meshHelperParticipantID(id))
 		default:
 			// waiting_parent/watching/paused/terminal: nothing for a fresh process to do on its own —
 			// waiting_parent is reactivated by the stage's own startup path, paused stays paused until an
