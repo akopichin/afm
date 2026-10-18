@@ -93,20 +93,11 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 		return admittedTask{}, attachRejected(assistants.CodeDelegationDepthExceeded, "max_depth=%d", rs.Assistants.Policy.MaxDepth)
 	}
 
+	req = req.withDefaults(profile.Title)
 	task := admittedTask{ID: deriveTaskID(req.OperationID), Scope: scope, Title: req.Title, Trigger: req.Trigger}
-	if task.Title == "" {
-		task.Title = profile.Title // a task added without a title is named after its profile, never its bare id
-	}
-	if task.Trigger == "" {
-		task.Trigger = assistants.TriggerOneShot
-	}
-	mode := req.Mode
-	if mode == "" {
-		mode = assistants.ModeAdvisory
-	}
 	payload := state.TaskCreatedPayload{
-		ProfileID: string(req.ProfileID), ProfileSnapshot: profile, Title: task.Title, Instruction: req.Instruction,
-		Mode: string(mode), Trigger: string(task.Trigger), PolicyRev: rs.Assistants.Policy.Revision,
+		ProfileID: string(req.ProfileID), ProfileSnapshot: profile, Title: req.Title, Instruction: req.Instruction,
+		Mode: string(req.Mode), Trigger: string(req.Trigger), PolicyRev: rs.Assistants.Policy.Revision,
 		MaxDepthAtCreate: rs.Assistants.Policy.MaxDepth, CreatedBy: req.Actor.Kind,
 		RootGenerationAtCreate: rs.Assistants.RootGenerations[req.StageID],
 	}
@@ -145,20 +136,35 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	return task, nil
 }
 
+// withDefaults fills what a request may omit with what admission gives it: the profile's title, advisory mode
+// and a one_shot trigger.
+func (req topLevelTaskRequest) withDefaults(profileTitle string) topLevelTaskRequest {
+	if req.Title == "" {
+		req.Title = profileTitle // a task added without a title is named after its profile, never its bare id
+	}
+	if req.Mode == "" {
+		req.Mode = assistants.ModeAdvisory
+	}
+	if req.Trigger == "" {
+		req.Trigger = assistants.TriggerOneShot
+	}
+	return req
+}
+
 // replayedTopLevelTask answers a top-level attach whose request id already committed, from the committed
 // task_created effect: the same task is its answer; another profile, stage, scope, title, instruction, mode or
-// trigger under that id is a conflict. An empty title, mode or trigger was filled in at admission, so it
-// matches whatever was filled in.
+// trigger under that id is a conflict. An omitted title, mode or trigger is compared with the default admission
+// gave it (the title of the profile snapshot the task was created with), never treated as "any".
 func replayedTopLevelTask(op state.CommittedOperation, req topLevelTaskRequest) (assistants.TaskID, error) {
 	var p state.TaskCreatedPayload
 	target, found, err := op.Effect("task_created", &p)
 	if err != nil {
 		return "", err
 	}
+	req = req.withDefaults(p.ProfileSnapshot.Title)
 	same := found && assistants.TaskID(target.TaskID) == deriveTaskID(req.OperationID) && target.StageID == req.StageID &&
 		p.ProfileID == string(req.ProfileID) && normalizeScope(assistants.Scope(p.Scope)) == normalizeScope(req.Scope) &&
-		p.Instruction == req.Instruction && (req.Title == "" || p.Title == req.Title) &&
-		(req.Mode == "" || p.Mode == string(req.Mode)) && (req.Trigger == "" || p.Trigger == string(req.Trigger))
+		p.Instruction == req.Instruction && p.Title == req.Title && p.Mode == string(req.Mode) && p.Trigger == string(req.Trigger)
 	if !same {
 		return "", state.OperationIDConflictError(req.OperationID)
 	}

@@ -219,3 +219,42 @@ func TestReplay_RequestIDOfAnotherKindConflicts(t *testing.T) {
 	_, err = o.Publish(ctx, PublishRequest{OperationID: "op-b", Author: meshUserParticipantID, Key: "k", Status: "s", Actor: user})
 	requireConflict(t, "Publish under an Attach request id", err)
 }
+
+// TestReplay_AttachOmittedFieldsMeanTheirDefaults: an omitted title, mode or trigger is what admission gives
+// it — not "anything". A retry that omits a field committed with another value is a conflict; one that spells
+// out the default of a field committed omitted is the same request.
+func TestReplay_AttachOmittedFieldsMeanTheirDefaults(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	explicit := AttachRequest{
+		OperationID: "op-explicit", StageID: assistantsTestStageID, ProfileID: "reviewer", Title: "Security pass",
+		Instruction: "x", Mode: assistants.ModeRequired, Trigger: assistants.TriggerOneShot, Actor: state.Actor{Kind: "user"},
+	}
+	if _, err := o.Attach(ctx, explicit); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	for name, omit := range map[string]func(*AttachRequest){
+		"mode":  func(r *AttachRequest) { r.Mode = "" },
+		"title": func(r *AttachRequest) { r.Title = "" },
+	} {
+		retry := explicit
+		omit(&retry)
+		_, err := o.Attach(ctx, retry)
+		requireConflict(t, "retry without the committed "+name, err)
+	}
+
+	omitted := AttachRequest{OperationID: "op-omitted", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "x", Actor: state.Actor{Kind: "user"}}
+	first, err := o.Attach(ctx, omitted)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	spelled := omitted
+	spelled.Title, spelled.Mode, spelled.Trigger = "Reviewer", assistants.ModeAdvisory, assistants.TriggerOneShot
+	if again, err := o.Attach(ctx, spelled); err != nil || again != first {
+		t.Fatalf("retry spelling out the defaults = %q, %v; want %q", again, err, first)
+	}
+	watcher := omitted
+	watcher.Trigger = assistants.TriggerOnCompletion
+	_, err = o.Attach(ctx, watcher)
+	requireConflict(t, "retry with another trigger than the default", err)
+}
