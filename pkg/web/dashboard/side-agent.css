@@ -254,6 +254,9 @@
 }
 
 /* --- Индикатор в шапке (активная/непросмотренная беседа) --- */
+/* Кнопка держит текстовый лейбл "Side agent" на ЛЮБОЙ ширине (T7.6) — в отличие от Files, для неё
+   нет узкого (≤900px) icon-only варианта: сворачивание в иконку когда-то было здесь, но ломало
+   акцептанс "не схлопывается в иконку", поэтому убрано. */
 .gh-side-agent-btn {
   position: relative;
 }
@@ -293,15 +296,6 @@
 @keyframes side-agent-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
-}
-
-@media (max-width: 900px) {
-  .gh-side-agent-label { display: none; }
-  .header-actions .icon-btn.gh-side-agent-btn {
-    width: 38px;
-    padding: 0;
-    justify-content: center;
-  }
 }
 
 /* --- Цитата-чип (прикреплённые file-browser комменты) ---
