@@ -99,6 +99,36 @@ describe('useRetryableSubmit', () => {
     expect(result.current.error).toBeNull()
   })
 
+  test("a stale selection's late failure keeps the current selection's retry id", async () => {
+    const sendA = deferred<string>()
+    const send = vi.fn((_p: Readonly<Payload>, _id: string) => (send.mock.calls.length === 1 ? sendA.promise : Promise.reject(new Error('lost'))))
+    const { result, rerender } = renderHook(({ fence }) => useRetryableSubmit<Payload>('t', fence), { initialProps: { fence: 'a' } })
+
+    act(() => result.current.submit({ body: 'to a' }, send))
+    rerender({ fence: 'b' })
+    await act(async () => result.current.submit({ body: 'to b' }, send))
+    expect(result.current.error).toBe('lost')
+    await act(async () => sendA.reject(new Error('late')))
+
+    await act(async () => result.current.submit({ body: 'to b' }, send))
+    expect(send.mock.calls[2]?.[1]).toBe(send.mock.calls[1]?.[1])
+
+    rerender({ fence: 'a' })
+    await act(async () => result.current.submit({ body: 'to a' }, send))
+    expect(send.mock.calls[3]?.[1]).toBe(send.mock.calls[0]?.[1])
+  })
+
+  test('the same payload under another fence is a different intent', async () => {
+    const send = vi.fn((_p: Readonly<Payload>, _id: string) => Promise.reject(new Error('lost')))
+    const { result, rerender } = renderHook(({ fence }) => useRetryableSubmit<Payload>('t', fence), { initialProps: { fence: 'a' } })
+
+    await act(async () => result.current.submit({ body: 'hi' }, send))
+    rerender({ fence: 'b' })
+    await act(async () => result.current.submit({ body: 'hi' }, send))
+
+    expect(send.mock.calls[1]?.[1]).not.toBe(send.mock.calls[0]?.[1])
+  })
+
   test('no handler runs after unmount', async () => {
     const pending = deferred<string>()
     const onSuccess = vi.fn()

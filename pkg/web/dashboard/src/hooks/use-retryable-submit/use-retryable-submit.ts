@@ -14,13 +14,14 @@ export type RetryableSubmit<P> = {
   pending: boolean
   // error — why the last attempt under the current fence failed; null after a success or a fence change.
   error: string | null
-  // submit — sends `payload` with an idempotency key. A retry of the SAME payload after a failure reuses the
-  // failed attempt's key (its response may have been lost after the server committed it); a changed payload
-  // is a new intent and gets a new key. Ignored while an attempt under the same fence is in flight.
+  // submit — sends `payload` with an idempotency key. A retry of the SAME payload under the same fence after a
+  // failure reuses the failed attempt's key (its response may have been lost after the server committed it); a
+  // changed payload is a new intent and gets a new key. Ignored while an attempt under the same fence is in flight.
   submit: <R>(payload: P, send: (payload: Readonly<P>, requestId: string) => Promise<R>, handlers?: SubmitHandlers<R>) => void
 }
 
-type Attempt = { key: string; requestId: string }
+// Unsettled — the request id of the latest attempt for one fence+payload that has not succeeded yet.
+type Unsettled = { attempt: number; requestId: string }
 type Running = { attempt: number; fence: string }
 
 // errorMessage — the text a form shows for a failed request.
@@ -42,8 +43,9 @@ export function removeSubmittedText(current: string, submitted: string): string 
 // serialize equally. fence — the selection the form currently works on (e.g. the addressed participant);
 // changing it makes in-flight attempts stale. Forms that remount per selection can omit it.
 export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fence = ''): RetryableSubmit<P> {
-  // failedRef — the last attempt that failed; its key is reused only when the same payload is retried.
-  const failedRef = useRef<Attempt | null>(null)
+  // unsettledRef — per fence+payload, the request id that is in flight or failed. Keeping one entry per intent
+  // means a late failure of one selection's attempt never replaces the retry id of another selection's.
+  const unsettledRef = useRef(new Map<string, Unsettled>())
   const latestAttemptRef = useRef(0)
   // runningRef mirrors `running` for the double-submit check, which must not wait for a re-render.
   const runningRef = useRef<Running | null>(null)
@@ -68,10 +70,10 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
       const startedFence = fenceRef.current
       if (runningRef.current !== null && runningRef.current.fence === startedFence) return
       const snapshot: Readonly<P> = Object.freeze({ ...payload })
-      const key = JSON.stringify(snapshot)
-      const failed = failedRef.current
-      const requestId = failed !== null && failed.key === key ? failed.requestId : genMeshRequestId(requestIdPrefix)
+      const key = JSON.stringify([startedFence, snapshot])
+      const requestId = unsettledRef.current.get(key)?.requestId ?? genMeshRequestId(requestIdPrefix)
       const attempt = ++latestAttemptRef.current
+      unsettledRef.current.set(key, { attempt, requestId })
       const isCurrent = (): boolean => mountedRef.current && fenceRef.current === startedFence && latestAttemptRef.current === attempt
       const setRunning = (next: Running | null): void => {
         runningRef.current = next
@@ -86,12 +88,13 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
       setFailure(null)
       send(snapshot, requestId).then(
         (result) => {
-          if (failedRef.current?.requestId === requestId) failedRef.current = null
+          // Only the latest attempt for this intent forgets its id: an older one finishing must not drop the
+          // id a newer, still-unsettled retry of the same payload relies on.
+          if (unsettledRef.current.get(key)?.attempt === attempt) unsettledRef.current.delete(key)
           settle()
           if (isCurrent()) handlers.onSuccess?.(result)
         },
         (err: unknown) => {
-          failedRef.current = { key, requestId }
           settle()
           if (!isCurrent()) return
           const message = errorMessage(err)
