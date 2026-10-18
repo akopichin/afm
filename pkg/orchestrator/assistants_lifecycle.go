@@ -179,6 +179,10 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
 		return
 	}
+	if werr := o.saveTurnInbox(taskID, tc.inboxIDs); werr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist turn inbox: "+werr.Error())
+		return
+	}
 
 	logFile := filepath.Join(dir, "agent.log")
 	resultFile := filepath.Join(dir, rawResultFileName)
@@ -198,8 +202,15 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
 	// a helperAgentRunner that never calls OnDelivered — otherwise a run agent would see them as unseen forever
 	// and restart itself after every turn. A process that never started leaves them accepted for the next turn.
-	if err == nil && outcome.ProcessOK && tc.markInboxDelivered != nil {
-		tc.markInboxDelivered()
+	// Only a turn that ran to its end consumed its input: a cut-short one (run shutdown, Pause) keeps the
+	// turn-inbox record, so its retry is handed the same messages again.
+	if err == nil && outcome.ProcessOK {
+		if tc.markInboxDelivered != nil {
+			tc.markInboxDelivered()
+		}
+		if cerr := o.clearTurnInbox(taskID); cerr != nil {
+			log.Printf("assistants: task %s: forget finished turn input: %v", taskID, cerr)
+		}
 	}
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
 		// Observation only — never changes the task's verdict (mirrors verify_tree_modified exactly).

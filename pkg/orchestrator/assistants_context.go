@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
@@ -36,6 +37,9 @@ type TaskContext struct {
 	// the turn's process has run, so a message that arrives later, or a turn that never started, leaves the
 	// messages unseen and they wake the agent again.
 	markInboxDelivered func()
+	// inboxIDs are the <inbox> messages included in Prompt — this turn's input, recorded as unfinished until
+	// the turn's process has run (saveTurnInbox).
+	inboxIDs []agentcomm.MessageID
 }
 
 // buildTaskContext assembles a task's FULL context, entirely server-side (never delegated to the model
@@ -81,7 +85,7 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// fenced/escaped internally by AgentCommInboxBlock (pkg/prompts/agentcomm.go), the same "data can never
 	// act as an instruction" rule.
 	b.WriteString(o.agentCommBlockForTask(task.ID))
-	inboxBlock, markInboxDelivered := o.agentCommInboxForTask(task.ID)
+	inboxBlock, inboxIDs, markInboxDelivered := o.agentCommInboxForTask(task.ID)
 	b.WriteString(inboxBlock)
 
 	prompt := b.String()
@@ -95,7 +99,7 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// sent) or which messages are pending (the only thing that actually varies between attempts) both show
 	// up as a different ContextVersion.
 	version := computeContextVersion(stage.ID, generation, roleInstructions, instruction, plan, artifacts, prevResult, childResults, followUp, inboxBlock)
-	return TaskContext{Prompt: prompt, Version: version, markInboxDelivered: markInboxDelivered}, nil
+	return TaskContext{Prompt: prompt, Version: version, markInboxDelivered: markInboxDelivered, inboxIDs: inboxIDs}, nil
 }
 
 // outputContractBlock returns afm's own "## Output contract" section carrying the machine-answer contract

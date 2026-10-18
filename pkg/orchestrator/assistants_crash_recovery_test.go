@@ -114,6 +114,8 @@ func TestCrash_QueuedChildNeverSpawnedBeforeCrash_RecoveredOnRestart(t *testing.
 	// closed original store) before the test directory is cleaned up.
 	close(parentRelease)
 	o.concurrency.WaitAgents()
+	// The restarted process also re-ran the parent (it was running at the crash): wait for that turn too.
+	o2.concurrency.WaitAgents()
 }
 
 // TestCrash_ChildResultRecordedBeforeParentContinuation_RecoveredOnRestart — scenario 18(b).
