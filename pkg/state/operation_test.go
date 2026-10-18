@@ -503,3 +503,48 @@ func TestIdempotency_NewOperationDoesNotReadJournal(t *testing.T) {
 		t.Fatalf("journal reads = %d, want 0 for a brand-new operation_id (cache miss on a key the index has never seen must not read the journal)", reads)
 	}
 }
+
+// TestCommittedOperation_SameFromCacheAndJournal: a committed operation reads back with its own result and
+// effects — from the cache right after the commit, and from the journal after a restart — and an unknown id
+// reports nothing committed.
+func TestCommittedOperation_SameFromCacheAndJournal(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustRecordPolicy(t, store)
+	op := Operation{ID: "op-A", Kind: "create_children", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p","title":"T"}`, "tA", "a")}}
+	res, err := store.ApplyRunOperation(op, nil)
+	if err != nil {
+		t.Fatalf("ApplyRunOperation: %v", err)
+	}
+	check := func(when string, s *Store) {
+		t.Helper()
+		got, committed, err := s.CommittedOperation("op-A")
+		if err != nil || !committed {
+			t.Fatalf("%s: committed=%v err=%v", when, committed, err)
+		}
+		if got.Result.Seq != res.Seq || !got.Result.Time.Equal(res.Time) {
+			t.Fatalf("%s: result = %+v, want %+v", when, got.Result, res)
+		}
+		var p TaskCreatedPayload
+		target, found, err := got.Effect("task_created", &p)
+		if err != nil || !found || target.TaskID != "tA" || p.Title != "T" {
+			t.Fatalf("%s: task_created = %+v %+v (found=%v, err=%v)", when, target, p, found, err)
+		}
+		if _, committed, err := s.CommittedOperation("op-unknown"); committed || err != nil {
+			t.Fatalf("%s: unknown id: committed=%v err=%v", when, committed, err)
+		}
+	}
+	check("live", store)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	defer reopened.Close()
+	check("after restart", reopened)
+}

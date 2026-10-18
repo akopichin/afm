@@ -70,20 +70,15 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
-	// Redacted once, before either copy of the post (the discussion message and its mesh mirror) is built.
-	req.Body = o.RedactSecrets(req.Body)
 	messageID := deriveMessageID(req.OperationID)
-	rs := o.opts.Store.Snapshot()
 	// A retry of an already-committed post replays it, whatever changed since (the stage finished, so the
 	// mesh mirror would now be built differently).
-	if _, committed := rs.Assistants.OperationIndex[req.OperationID]; committed {
-		m, ok := rs.Assistants.Discussions.Messages[messageID]
-		if !ok || !slices.Contains(rs.Assistants.Discussions.ByStage[req.StageID], messageID) ||
-			m.Author.Kind != req.AuthorKind || m.Author.ID != req.AuthorID || m.Body != req.Body {
-			return "", state.OperationIDConflictError(req.OperationID)
-		}
-		return messageID, nil
+	if replayed, err := o.replayedDiscussionPost(messageID, req); replayed {
+		return messageID, err
 	}
+	// Redacted once, before either copy of the post (the discussion message and its mesh mirror) is built.
+	req.Body = o.RedactSecrets(req.Body)
+	rs := o.opts.Store.Snapshot()
 	st := o.reg().Stage(req.StageID)
 	if st == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
@@ -145,6 +140,28 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 		return "", err
 	}
 	return messageID, nil
+}
+
+// replayedDiscussionPost reports whether req's request id already committed a post, and whether that post is
+// exactly req (every field of its discussion message) — anything else under that id is a conflict.
+func (o *Orchestrator) replayedDiscussionPost(messageID string, req PostMessageRequest) (bool, error) {
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	if err != nil || !committed {
+		return err != nil, err // a storage error answers the request too
+	}
+	var p state.DiscussionMessagePayload
+	target, found, err := op.Effect("discussion_message", &p)
+	if err != nil {
+		return true, err
+	}
+	same := found && target.StageID == req.StageID && target.MessageID == messageID &&
+		p.AuthorKind == string(req.AuthorKind) && p.AuthorID == req.AuthorID && p.Role == req.Role && p.Round == req.Round &&
+		p.ParentMessageID == req.ParentMessageID && p.ContextVersion == req.ContextVersion &&
+		slices.Equal(p.Evidence, req.Evidence) && o.sameRedactedText(p.Body, req.Body)
+	if !same {
+		return true, state.OperationIDConflictError(req.OperationID)
+	}
+	return true, nil
 }
 
 // DiscussionMessages returns stageID's discussion log in commit order (never re-sorted by timestamp —

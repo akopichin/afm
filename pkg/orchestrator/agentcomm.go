@@ -277,6 +277,13 @@ func (o *Orchestrator) RedactSecrets(s string) string {
 	return redact.String(s, o.secretValues())
 }
 
+// sameRedactedText reports whether stored — text redacted when its operation committed — is the text requested
+// in a retry of that operation. Both sides are redacted with the CURRENT secret set, so a secret added since
+// (a newly minted mesh token) does not turn a faithful retry into a conflict.
+func (o *Orchestrator) sameRedactedText(stored, requested string) bool {
+	return o.RedactSecrets(stored) == o.RedactSecrets(requested)
+}
+
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place
 // every agentcomm_*.go file turns a typed payload into the Effect shape ApplyRunOperation expects, instead
 // of repeating json.Marshal+Effect{} at each call site (mirrors discussion.go's discussionMessageEffect,

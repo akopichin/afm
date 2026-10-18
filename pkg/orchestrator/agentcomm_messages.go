@@ -31,15 +31,11 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		return agentcomm.Thread{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("invalid scope %q (want stage or run)", req.Scope)}
 	}
 
-	rs := o.opts.Store.Snapshot()
 	threadID := deriveMeshThreadID(req.OperationID)
-	if _, committed := rs.Assistants.OperationIndex[req.OperationID]; committed {
-		th, ok := rs.Assistants.Mesh.Threads[threadID]
-		if !ok || th.Title != req.Title || th.Scope != req.Scope || th.Budgets.MaxMessages != req.MaxMessages || !slices.Equal(th.Members, req.Members) {
-			return agentcomm.Thread{}, state.OperationIDConflictError(req.OperationID)
-		}
-		return *th, nil
+	if th, replayed, err := o.replayedOpenThread(threadID, req); replayed {
+		return th, err
 	}
+	rs := o.opts.Store.Snapshot()
 	effects, err := threadOpenEffects(rs, threadID, req.Title, req.Scope, req.Members, req.MaxMessages)
 	if err != nil {
 		return agentcomm.Thread{}, err
@@ -53,10 +49,39 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		return agentcomm.Thread{}, err
 	}
 
+	return openedThread(threadID, req), nil
+}
+
+// openedThread is the receipt of the open req describes: the thread as that operation opened it.
+func openedThread(threadID agentcomm.ThreadID, req OpenThreadRequest) agentcomm.Thread {
 	return agentcomm.Thread{
 		ID: threadID, Title: req.Title, Scope: req.Scope, Members: req.Members, Status: agentcomm.ThreadOpen,
 		Budgets: agentcomm.ThreadBudgets{MaxMessages: req.MaxMessages},
-	}, nil
+	}
+}
+
+// replayedOpenThread answers an open whose request id already committed with the thread as that operation
+// opened it — never its current state (a later close does not change the original receipt). Any other request
+// under that id is a conflict. replayed=false: nothing committed.
+func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenThreadRequest) (agentcomm.Thread, bool, error) {
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	if err != nil || !committed {
+		return agentcomm.Thread{}, err != nil, err // a storage error answers the request too
+	}
+	var p state.MeshThreadOpenedPayload
+	target, found, err := op.Effect("mesh_thread_opened", &p)
+	if err != nil {
+		return agentcomm.Thread{}, true, err
+	}
+	members := make([]string, len(req.Members))
+	for i, m := range req.Members {
+		members[i] = string(m)
+	}
+	if !found || agentcomm.ThreadID(target.ThreadID) != threadID || p.Title != req.Title || p.Scope != string(req.Scope) ||
+		p.MaxMessages != req.MaxMessages || !slices.Equal(p.Members, members) {
+		return agentcomm.Thread{}, true, state.OperationIDConflictError(req.OperationID)
+	}
+	return openedThread(threadID, req), true, nil
 }
 
 // threadOpenEffects builds the effects that open threadID with members: registering every member the mesh
@@ -144,27 +169,18 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		return SendReceipt{}, errors.New("agentcomm: sender is required")
 	}
 
+	rs := o.opts.Store.Snapshot()
+	if receipt, replayed, err := o.replayedSend(rs, o.liveRoster(rs), req); replayed {
+		return receipt, err
+	}
+
 	messageID := deriveMeshMessageID(req.OperationID)
-	recipients := make([]string, len(req.Recipients))
-	for i, r := range req.Recipients {
-		recipients[i] = string(r)
-	}
-	var inReplyTo *string
-	if req.InReplyTo != nil {
-		s := string(*req.InReplyTo)
-		inReplyTo = &s
-	}
 	body := o.RedactSecrets(req.Body)
-	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
-		state.MeshMessageSentPayload{
-			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
-			InReplyTo: inReplyTo, Body: body, ArtifactRefs: req.ArtifactRefs,
-		})
+	eff, err := messageSentEffect(req, messageID, body)
 	if err != nil {
 		return SendReceipt{}, err
 	}
 
-	rs := o.opts.Store.Snapshot()
 	effects := append(slices.Clone(openThread), eff)
 	if mirror, ok, merr := discussionMirrorOfStageReply(rs, req, messageID, body); merr != nil {
 		return SendReceipt{}, merr
@@ -179,29 +195,58 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		Check: func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) },
 	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		if len(openThread) > 0 {
-			o.publishThreadOpened(req.ThreadID, "", append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...))
-		}
-		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
-			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
-		}})
+		o.announceMessage(req, messageID, len(openThread) > 0)
 		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
-		// Agent Mesh Phase 5, T5.5: a recipient parked in awaiting_peer/waiting_peer whose OWN wait this
-		// message did NOT just resolve (notifyAndResumeNewlyReadyWaits above owns that case) may still need a
-		// bounded turn to read and answer it — a genuine counter-question, not the reply it is waiting for.
-		for _, r := range req.Recipients {
-			o.maybeResumeAwaitingPeerQuestion(runCtx, r)
-			// A role attached with no first message sits queued until somebody writes to it: its first
-			// addressed message is what starts it. maybeScheduleTask no-ops for anything not queued.
-			if taskID, ok := o.taskIDFromMeshParticipant(r); ok {
-				o.maybeScheduleTask(runCtx, taskID)
-			}
-		}
+		o.wakeRecipients(runCtx, req.Recipients)
 	})
 	if err != nil {
 		return SendReceipt{}, err
 	}
 	return SendReceipt{MessageID: messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
+}
+
+// messageSentEffect builds the mesh_message_sent effect of req, with body already redacted.
+func messageSentEffect(req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, error) {
+	recipients := make([]string, len(req.Recipients))
+	for i, r := range req.Recipients {
+		recipients[i] = string(r)
+	}
+	var inReplyTo *string
+	if req.InReplyTo != nil {
+		s := string(*req.InReplyTo)
+		inReplyTo = &s
+	}
+	return marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
+		state.MeshMessageSentPayload{
+			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
+			InReplyTo: inReplyTo, Body: body, ArtifactRefs: req.ArtifactRefs,
+		})
+}
+
+// announceMessage publishes the live notices of a committed message — and of its thread, when the same
+// operation opened it.
+func (o *Orchestrator) announceMessage(req SendRequest, messageID agentcomm.MessageID, openedThread bool) {
+	if openedThread {
+		o.publishThreadOpened(req.ThreadID, "", append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...))
+	}
+	o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
+		"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
+	}})
+}
+
+// wakeRecipients gives the recipients of a committed message the turn it may need. Agent Mesh Phase 5, T5.5: a
+// recipient parked in awaiting_peer/waiting_peer whose OWN wait the message did NOT resolve
+// (notifyAndResumeNewlyReadyWaits owns that case) may still need a bounded turn to read and answer it — a
+// genuine counter-question, not the reply it is waiting for. A role attached with no first message sits
+// queued until somebody writes to it: its first addressed message starts it (maybeScheduleTask no-ops for
+// anything not queued).
+func (o *Orchestrator) wakeRecipients(runCtx context.Context, recipients []agentcomm.ParticipantID) {
+	for _, r := range recipients {
+		o.maybeResumeAwaitingPeerQuestion(runCtx, r)
+		if taskID, ok := o.taskIDFromMeshParticipant(r); ok {
+			o.maybeScheduleTask(runCtx, taskID)
+		}
+	}
 }
 
 // ReadThread implements Service.ReadThread. Membership is enforced here (not by the projection, which has

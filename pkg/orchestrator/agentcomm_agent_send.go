@@ -24,13 +24,9 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 	rs := o.opts.Store.Snapshot()
 	roster := o.liveRoster(rs)
 	// A retry of an already-committed request replays its outcome, whatever changed since (a new agent with
-	// the same alias, the conversation closed) — never re-resolving names or picking another thread. The same
-	// request id with a different message is a conflict, exactly like the store's own idempotency check.
-	if m, ok := rs.Assistants.Mesh.Messages[deriveMeshMessageID(req.OperationID)]; ok {
-		if !committedSendMatches(rs, roster, *m, req, o.RedactSecrets(req.Body)) {
-			return SendReceipt{}, state.OperationIDConflictError(req.OperationID)
-		}
-		return SendReceipt{MessageID: m.ID, Seq: m.Seq, ThreadID: m.ThreadID}, nil
+	// the same alias, the conversation closed) — never re-resolving names or picking another thread.
+	if receipt, replayed, err := o.replayedSend(rs, roster, req); replayed {
+		return receipt, err
 	}
 	recipients, err := resolveRecipients(roster, req.Recipients)
 	if err != nil {
@@ -70,12 +66,46 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 	return o.sendWithOpen(ctx, req, open)
 }
 
+// replayedSend answers a send whose request id already committed, from the committed message: the same
+// message is its receipt, any other request under that id is a conflict. replayed=false: nothing committed.
+func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Participant, req SendRequest) (SendReceipt, bool, error) {
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	if err != nil || !committed {
+		return SendReceipt{}, err != nil, err // a storage error answers the request too
+	}
+	var p state.MeshMessageSentPayload
+	target, found, err := op.Effect("mesh_message_sent", &p)
+	if err != nil {
+		return SendReceipt{}, true, err
+	}
+	if !found || !o.committedSendMatches(rs, roster, committedMessage(target, p), req) {
+		return SendReceipt{}, true, state.OperationIDConflictError(req.OperationID)
+	}
+	return SendReceipt{MessageID: agentcomm.MessageID(target.MessageID), Seq: op.Result.Seq, ThreadID: agentcomm.ThreadID(target.ThreadID)}, true, nil
+}
+
+// committedMessage is the message a committed mesh_message_sent effect recorded.
+func committedMessage(target state.Target, p state.MeshMessageSentPayload) agentcomm.Message {
+	m := agentcomm.Message{
+		ID: agentcomm.MessageID(target.MessageID), ThreadID: agentcomm.ThreadID(target.ThreadID), Sender: agentcomm.ParticipantID(p.Sender),
+		Kind: agentcomm.MessageKind(p.Kind), Body: p.Body, ArtifactRefs: p.ArtifactRefs,
+	}
+	for _, r := range p.Recipients {
+		m.Recipients = append(m.Recipients, agentcomm.ParticipantID(r))
+	}
+	if p.InReplyTo != nil {
+		id := agentcomm.MessageID(*p.InReplyTo)
+		m.InReplyTo = &id
+	}
+	return m
+}
+
 // committedSendMatches reports whether m — the message already committed under req's request id — is the
-// message req asks to send: same sender, kind, body (redactedBody: req's body as redacted at send time), reply target, artifacts,
-// thread (when req names one) and recipients. Recipient names are resolved against m's own recipients, so an
-// alias that has since become ambiguous (a new agent with the same alias) still names whom it named then.
-func committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest, redactedBody string) bool {
-	if m.Sender != req.Sender || m.Kind != req.Kind || m.Body != redactedBody ||
+// message req asks to send: same sender, kind, body, reply target, artifacts, thread (when req names one) and
+// recipients. Recipient names are resolved against m's own recipients, so an alias that has since become
+// ambiguous (a new agent with the same alias) still names whom it named then.
+func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
+	if m.Sender != req.Sender || m.Kind != req.Kind || !o.sameRedactedText(m.Body, req.Body) ||
 		!slices.Equal(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
 		return false
 	}
