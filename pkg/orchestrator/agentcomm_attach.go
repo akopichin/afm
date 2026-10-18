@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
@@ -57,12 +59,35 @@ type AttachAndSendResult struct {
 	MessageID     *agentcomm.MessageID
 }
 
-// meshRunParticipantID returns the stable, PROFILE-derived participant id for a scope=run standing role —
-// "run:<profileID>" per dev-plan.md's Vocabulary table. Keying it on the profile id (not the operation id,
-// unlike the task/thread/message ids below) is what lets AddRunAgent's "idempotent per profile" guarantee
-// (T6.2b) fall out of plain operation-id idempotency: see addRunAgentOperationID in agentcomm_runagent.go.
-func meshRunParticipantID(profileID assistants.ProfileID) agentcomm.ParticipantID {
-	return agentcomm.ParticipantID(meshRunPrefix + string(profileID))
+// meshRunParticipantID returns a scope=run role's participant id — "run:<taskID>", keyed on the task like a
+// helper's "helper:<taskID>", so several run agents of the SAME profile ("new1" and "new2", both UX experts)
+// are distinct participants. Idempotency of one "Add run agent" submission is the caller's request id.
+func meshRunParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
+	return agentcomm.ParticipantID(meshRunPrefix + string(taskID))
+}
+
+// runAgentAlias is the short @-name a run agent answers to: its title as a handle ("New QA" → "new-qa"),
+// else the profile id. Two agents may end up with the same alias; agentcomm.ResolveAlias then reports it as
+// ambiguous instead of silently picking one, and the full participant id still addresses each.
+func runAgentAlias(title string, profileID assistants.ProfileID) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-':
+			b.WriteRune(r)
+		case unicode.IsSpace(r):
+			b.WriteByte('-')
+		default:
+		}
+	}
+	alias := strings.Trim(b.String(), "-")
+	for strings.Contains(alias, "--") {
+		alias = strings.ReplaceAll(alias, "--", "-")
+	}
+	if alias != "" {
+		return alias
+	}
+	return string(profileID)
 }
 
 // meshThreadScopeFor maps an assistants.Scope onto the agentcomm.Scope the opened thread should carry. The
@@ -214,8 +239,8 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		}
 	case assistants.ScopeRun:
 		newParticipant = agentcomm.Participant{
-			ID: meshRunParticipantID(req.ProfileID), Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun,
-			Alias: string(req.ProfileID), DisplayName: req.Title, Reachable: true,
+			ID: meshRunParticipantID(taskID), Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun,
+			Alias: runAgentAlias(req.Title, req.ProfileID), DisplayName: req.Title, Reachable: true,
 		}
 	default:
 		// Unreachable (see the earlier switch's default) — leaves newParticipant zero, caught by Valid() below.

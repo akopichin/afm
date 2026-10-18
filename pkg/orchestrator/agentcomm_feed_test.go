@@ -37,7 +37,7 @@ func TestFeed_UserDiscussionThenQAClarification_NoRevisionNoHelperNoGate(t *test
 	activateStage(t, o, assistantsTestStageID)
 
 	stageParticipant := meshStageParticipantID(assistantsTestStageID)
-	qaParticipant := meshRunParticipantID(assistants.ProfileID("qa"))
+	qaParticipant := meshRunParticipantID(deriveTaskID("op-add-qa"))
 	qaThreadID := deriveMeshThreadID("op-qa-clarify-open")
 
 	// 1. The user asks the stage's own agent a question through the pre-existing discussion channel (T6.4) —
@@ -119,7 +119,7 @@ func TestFeed_UserDiscussionThenQAClarification_NoRevisionNoHelperNoGate(t *test
 	// idempotent-per-profile AttachAndSend that creates QA ONCE as a run-scoped standing role, addressable by
 	// alias from then on regardless of which stage reaches for it (asserted at the very end of this test).
 	qaMsg := "@qa please clarify the report format with the impl stage"
-	qaRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+	qaRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: "qa", Title: "QA", Instruction: "answer format questions", FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {

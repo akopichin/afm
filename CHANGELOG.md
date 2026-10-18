@@ -5,6 +5,27 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-18
 
+### Fix: let agents start conversations and report clear errors
+
+Agents can now message each other without a pre-made thread: `afm agent send`
+reuses or opens the conversation with its recipients, accepts `@name`s, and
+returns the `thread_id`; `afm agent reply` and a thread-less `afm agent wait`
+work without thread ids. Rejected Agent Mesh requests return a 4xx with the
+reason instead of a bare HTTP 500, and unexpected errors are logged. Several run
+agents can share a role, an agent added without a first message starts on its
+first message, a failed helper shows the actual process error, and in Docker a
+helper role's recipe (for example codex) runs the image's binary instead of a
+mounted host one.
+
+### Improvement: Team view and chat composers match the prototype
+
+The Team roster lists stages in flow order with live status, avatars, `@name`s
+and nested helpers; conversations show who wrote to whom and when, and the
+composer stays at the bottom. All chat composers share one send button and input
+row, `@` mentions float above the input and pick recipients in Team
+conversations, and the roster becomes a drawer on narrow screens. The header
+keeps its run metrics readable with long flow descriptions and on phones.
+
 ### Improvement: add run-wide Team conversations and agent messaging
 
 The dashboard now has a Team tab with a roster, direct and group conversations,

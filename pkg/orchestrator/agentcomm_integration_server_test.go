@@ -184,11 +184,9 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	// Deliberately never queried from here on — see this test's own doc comment.
 
 	ctx := context.Background()
-	// "run:<profileID>" is AddRunAgent's own documented participant-id vocabulary (dev-plan.md's Vocabulary
-	// table, agentcomm_attach.go's own meshRunParticipantID doc comment) — stable and public, not derived from
-	// any unexported symbol this external test package could not otherwise reach.
-	qaParticipant := agentcomm.ParticipantID("run:qa")
-	devopsParticipant := agentcomm.ParticipantID("run:devops")
+	// AddRunAgent's mesh identity for a scope=run task is "run:<taskID>", derived from the operation id.
+	qaParticipant := orchestrator.RunAgentParticipantIDForTest("op-add-qa")
+	devopsParticipant := orchestrator.RunAgentParticipantIDForTest("op-add-devops")
 
 	var qaCalls, devopsCalls atomic.Int32
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
@@ -225,14 +223,14 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	// registers — QA publishing afterwards is what actually exercises "DevOps's board wait wakes" live,
 	// instead of Wait() itself immediately returning Ready for an already-published key.
 	doMsg := "verify once ready"
-	doRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{ProfileID: "devops", Title: "DevOps", FirstMessage: &doMsg, Actor: state.Actor{Kind: "user"}})
+	doRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-devops", ProfileID: "devops", Title: "DevOps", FirstMessage: &doMsg, Actor: state.Actor{Kind: "user"}})
 	if err != nil {
 		t.Fatalf("AddRunAgent (devops): %v", err)
 	}
 	waitForTaskStatus(t, store, doRes.TaskID, assistants.StatusWaitingPeer, 5*time.Second)
 
 	qaMsg := "publish your result"
-	qaRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{ProfileID: "qa", Title: "QA", FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"}})
+	qaRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa", ProfileID: "qa", Title: "QA", FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"}})
 	if err != nil {
 		t.Fatalf("AddRunAgent (qa): %v", err)
 	}

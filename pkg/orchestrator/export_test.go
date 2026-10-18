@@ -87,3 +87,9 @@ func MeshClientForTest(o *Orchestrator, participant agentcomm.ParticipantID) *ex
 func AgentCommInboxBlockForTest(o *Orchestrator, participant agentcomm.ParticipantID) (block string, onDelivered func()) {
 	return o.agentCommInboxFor(participant)
 }
+
+// RunAgentParticipantIDForTest is the participant id AddRunAgent gives the run agent created by operationID
+// ("run:<taskID>", the task id being derived from the operation id).
+func RunAgentParticipantIDForTest(operationID string) agentcomm.ParticipantID {
+	return meshRunParticipantID(deriveTaskID(operationID))
+}

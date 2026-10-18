@@ -109,8 +109,8 @@ type qaDevOpsScenarioResult struct {
 func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDevOpsScenarioResult {
 	t.Helper()
 	ctx := context.Background()
-	qaParticipant := meshRunParticipantID(meshIntegrationQAProfile)
-	devopsParticipant := meshRunParticipantID(meshIntegrationDevOpsProfile)
+	qaParticipant := meshRunParticipantID(deriveTaskID("op-add-qa"))
+	devopsParticipant := meshRunParticipantID(deriveTaskID("op-add-devops"))
 	formatThreadID := deriveMeshThreadID("op-qa-devops-format-open")
 
 	var qaCalls, devopsCalls atomic.Int32
@@ -239,7 +239,7 @@ func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDe
 	}
 
 	qaMsg := "please agree the report format with DevOps, then publish your result"
-	qaRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+	qaRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: meshIntegrationQAProfile, Title: "QA", Instruction: "watch for regressions",
 		FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"},
 	})
@@ -254,7 +254,7 @@ func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDe
 	waitForTaskStatus(t, store, qaRes.TaskID, assistants.StatusWaitingPeer, 5*time.Second)
 
 	doMsg := "verify tests once QA reports ready"
-	doRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+	doRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-add-devops",
 		ProfileID: meshIntegrationDevOpsProfile, Title: "DevOps", Instruction: "verify the pipeline",
 		FirstMessage: &doMsg, Actor: state.Actor{Kind: "user"},
 	})
@@ -378,8 +378,8 @@ func messagesInThread(rs state.RunState, threadID agentcomm.ThreadID) []agentcom
 // deterministically" requirement.
 func TestAgentMesh_QADevOps_EndToEnd(t *testing.T) {
 	o, store := newMeshIntegrationOrchestrator(t)
-	qaParticipant := meshRunParticipantID(meshIntegrationQAProfile)
-	devopsParticipant := meshRunParticipantID(meshIntegrationDevOpsProfile)
+	qaParticipant := meshRunParticipantID(deriveTaskID("op-add-qa"))
+	devopsParticipant := meshRunParticipantID(deriveTaskID("op-add-devops"))
 
 	result := runQADevOpsScenario(t, o, store)
 
@@ -458,8 +458,8 @@ func TestAgentMesh_QADevOps_RestartMidScenario(t *testing.T) {
 	o, store := newMeshIntegrationOrchestrator(t)
 	ctx := context.Background()
 	runDir := o.opts.RunDir
-	qaParticipant := meshRunParticipantID(meshIntegrationQAProfile)
-	devopsParticipant := meshRunParticipantID(meshIntegrationDevOpsProfile)
+	qaParticipant := meshRunParticipantID(deriveTaskID("op-add-qa"))
+	devopsParticipant := meshRunParticipantID(deriveTaskID("op-add-devops"))
 	formatThreadID := deriveMeshThreadID("op-restart-format-open")
 
 	var devopsCalls atomic.Int32
@@ -506,7 +506,7 @@ func TestAgentMesh_QADevOps_RestartMidScenario(t *testing.T) {
 	}
 
 	doMsg := "verify once QA reports ready"
-	doRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+	doRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-add-devops",
 		ProfileID: meshIntegrationDevOpsProfile, Title: "DevOps", FirstMessage: &doMsg, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {
@@ -515,7 +515,7 @@ func TestAgentMesh_QADevOps_RestartMidScenario(t *testing.T) {
 	waitForTaskStatus(t, store, doRes.TaskID, assistants.StatusWaitingPeer, 2*time.Second)
 
 	qaMsg := "propose the format, then you're done"
-	qaRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+	qaRes, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: meshIntegrationQAProfile, Title: "QA", FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {

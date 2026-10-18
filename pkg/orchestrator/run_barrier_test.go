@@ -113,7 +113,7 @@ func TestRunBarrier_IdleRoleDoesNotHoldRun(t *testing.T) {
 
 	waitForStatus(t, stateFile, runBarrierStageID, state.StatusRunning, 10*time.Second)
 
-	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{
+	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {
@@ -182,7 +182,7 @@ func TestRunBarrier_AcceptedWorkHoldsRun_ShutdownBounded(t *testing.T) {
 	waitForStatus(t, stateFile, runBarrierStageID, state.StatusRunning, 10*time.Second)
 
 	msg := "go"
-	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{
+	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {
@@ -241,12 +241,8 @@ func TestRunBarrier_RegisteredWaitHoldsRun_WakesOnCancel(t *testing.T) {
 
 	registered := make(chan struct{})
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		// "run:<profileID>" is AddRunAgent's own real mesh identity for a scope=run task (dev-plan.md's
-		// Vocabulary table) — NOT "helper:<taskID>" (a stage-scoped helper's identity): Agent Mesh Phase 8's
-		// own QA/DevOps acceptance test (T8.1) found this task's own Wait/resume classification previously
-		// used the wrong id unconditionally, which this test's own (now corrected) waiter used to coincidentally
-		// match before that fix.
-		waiter := agentcomm.ParticipantID("run:qa")
+		// AddRunAgent's real mesh identity for this scope=run task is "run:<taskID>".
+		waiter := orchestrator.RunAgentParticipantIDForTest("op-add-qa")
 		if _, err := orch.Wait(ctx, orchestrator.WaitRequest{
 			OperationID:      "wait-" + taskID,
 			Waiter:           waiter,
@@ -277,7 +273,7 @@ func TestRunBarrier_RegisteredWaitHoldsRun_WakesOnCancel(t *testing.T) {
 	waitForStatus(t, stateFile, runBarrierStageID, state.StatusRunning, 10*time.Second)
 
 	msg := "go"
-	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{
+	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {

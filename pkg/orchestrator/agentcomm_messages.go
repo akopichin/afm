@@ -124,6 +124,7 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 	}
 
 	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
+	runCtx := o.runContext(ctx) // a task this message starts must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: []state.Effect{eff}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
@@ -136,6 +137,11 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		// bounded turn to read and answer it — a genuine counter-question, not the reply it is waiting for.
 		for _, r := range req.Recipients {
 			o.maybeResumeAwaitingPeerQuestion(ctx, r)
+			// A role attached with no first message sits queued until somebody writes to it: its first
+			// addressed message is what starts it. maybeScheduleTask no-ops for anything not queued.
+			if taskID, ok := o.taskIDFromMeshParticipant(r); ok {
+				o.maybeScheduleTask(runCtx, taskID)
+			}
 		}
 	})
 	if err != nil {

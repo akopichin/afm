@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -151,8 +152,8 @@ func TestAttachAndSend_ScopeRunCreatesStandingParticipant(t *testing.T) {
 	if p.Kind != agentcomm.KindRunAgent || p.Scope != agentcomm.ScopeRun {
 		t.Fatalf("participant kind/scope = %s/%s, want run_agent/run", p.Kind, p.Scope)
 	}
-	if res.ParticipantID != meshRunParticipantID("qa") {
-		t.Fatalf("participant id = %s, want the standard run:<profileID> form", res.ParticipantID)
+	if res.ParticipantID != meshRunParticipantID(res.TaskID) {
+		t.Fatalf("participant id = %s, want the run:<taskID> form", res.ParticipantID)
 	}
 	if p.StageID != "" {
 		t.Fatalf("a scope=run participant must not be bound to a stage, got %q", p.StageID)
@@ -381,5 +382,53 @@ func TestAttachAndSend_RejectsClientSuppliedCommand(t *testing.T) {
 				t.Fatalf("AttachAndSendRequest has a %q field — the executor must be resolved server-side from ProfileID alone", f)
 			}
 		}
+	}
+}
+
+// A role attached with no first message stays queued — until somebody actually writes to it: its first
+// addressed message starts it (before, it stayed queued forever and never answered).
+func TestAttachAndSend_NoFirstMessage_FirstAddressedMessageStartsTheAgent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	stubPassingHelper(o)
+
+	res, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+		OperationID: "op-idle-qa", ProfileID: "qa", Title: "Idle QA", Instruction: "answer questions", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	if st := store.Snapshot().Assistants.Tasks[res.TaskID].Status; st != assistants.StatusQueued {
+		t.Fatalf("status = %s, want queued before any message", st)
+	}
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "op-idle-hello", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindRequest, Body: "are you there?",
+		Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForTaskStatus(t, store, res.TaskID, assistants.StatusCompleted, 2*time.Second)
+}
+
+// A helper that fails to start reports WHY (e.g. a host binary of the wrong architecture in the container)
+// instead of a bare "helper execution failed".
+func TestHelperStartFailure_ReasonCarriesTheProcessError(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessErr: errors.New("agent start failed: codex: fork/exec /usr/local/bin/codex: exec format error")}, nil
+	}
+	msg := "check the api"
+	res, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+		OperationID: "op-broken", ProfileID: "reviewer", Title: "Reviewer", Instruction: "review", FirstMessage: &msg,
+		Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	task := waitForTaskStatus(t, store, res.TaskID, assistants.StatusFailed, 2*time.Second)
+	if !strings.Contains(task.StatusReason, "exec format error") {
+		t.Fatalf("reason = %q, want the process error", task.StatusReason)
 	}
 }

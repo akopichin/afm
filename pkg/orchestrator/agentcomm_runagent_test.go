@@ -12,62 +12,90 @@ import (
 
 // Agent Mesh Phase 6, T6.2b: AddRunAgent, the scope=run caller of AttachAndSend.
 
-// TestAddRunAgent_IdempotentPerProfile: two "Add run agent" submissions for the SAME profile — e.g. a
-// double-click, or two browser tabs each minting their own request id — must resolve to the SAME participant,
-// task and thread, never a second standing role for that profile. AddRunAgentRequest carries no OperationID
-// of its own (see addRunAgentOperationID's doc comment); this test is what proves that design choice actually
-// delivers "idempotent per profile", not just "idempotent per operation id".
-func TestAddRunAgent_IdempotentPerProfile(t *testing.T) {
+// TestAddRunAgent_IdempotentPerRequest: replaying the SAME "Add run agent" request (a double-click, a retry
+// after a lost response — the dashboard reuses one request id per dialog) resolves to the same participant,
+// task and thread, never a second agent.
+func TestAddRunAgent_IdempotentPerRequest(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()
 	stubPassingHelper(o)
 
 	msg := "hello QA"
 	req := AddRunAgentRequest{
-		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
+		OperationID: "op-add-qa", ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg,
+		Actor: state.Actor{Kind: "user"},
 	}
-
 	r1, err := o.AddRunAgent(ctx, req)
 	if err != nil {
 		t.Fatalf("AddRunAgent (first): %v", err)
 	}
 	r2, err := o.AddRunAgent(ctx, req)
 	if err != nil {
-		t.Fatalf("AddRunAgent (repeat submit): %v", err)
-	}
-	if r1.TaskID != r2.TaskID || r1.ParticipantID != r2.ParticipantID || r1.ThreadID != r2.ThreadID {
-		t.Fatalf("repeat submit for the same profile created a different result: first=%+v repeat=%+v", r1, r2)
+		t.Fatalf("AddRunAgent (replay): %v", err)
 	}
 	waitForTaskStatus(t, store, r1.TaskID, assistants.StatusCompleted, 2*time.Second)
-
-	rs := store.Snapshot()
-	if len(rs.Assistants.Tasks) != 1 {
-		t.Fatalf("Tasks = %d, want exactly 1 (no duplicate task from the repeat submit)", len(rs.Assistants.Tasks))
+	if r1.TaskID != r2.TaskID || r1.ParticipantID != r2.ParticipantID || r1.ThreadID != r2.ThreadID || *r1.MessageID != *r2.MessageID {
+		t.Fatalf("replay created a different result: first=%+v replay=%+v", r1, r2)
 	}
-	runAgentCount := 0
-	for _, p := range rs.Assistants.Mesh.Participants {
-		// Kind, not Scope: the human "user" participant is ALSO durably registered with Scope==ScopeRun (a
-		// standing role of its own, agentcomm_roster.go) — KindRunAgent is what actually identifies a
-		// scope=run STANDING ROLE created by AttachAndSend/AddRunAgent.
-		if p.Kind == agentcomm.KindRunAgent {
-			runAgentCount++
+	if n := len(store.Snapshot().Assistants.Tasks); n != 1 {
+		t.Fatalf("Tasks = %d, want exactly 1", n)
+	}
+}
+
+// TestAddRunAgent_SeveralAgentsOfOneProfile: two separate requests for the SAME profile add two agents —
+// distinct participants (keyed by task, not by profile), each addressable by an alias made from its title.
+// Before, the second one collided on the profile-keyed participant id and failed with a bare 500.
+func TestAddRunAgent_SeveralAgentsOfOneProfile(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	stubPassingHelper(o)
+
+	add := func(opID, title string) AttachAndSendResult {
+		t.Helper()
+		msg := "start"
+		r, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+			OperationID: opID, ProfileID: "qa", Title: title, Instruction: "review", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
+		})
+		if err != nil {
+			t.Fatalf("AddRunAgent %q: %v", title, err)
 		}
+		return r
 	}
-	if runAgentCount != 1 {
-		t.Fatalf("want exactly one run_agent participant, got %d", runAgentCount)
-	}
+	r1 := add("op-new1", "New One")
+	r2 := add("op-new2", "new2")
+	waitForTaskStatus(t, store, r1.TaskID, assistants.StatusCompleted, 2*time.Second)
+	waitForTaskStatus(t, store, r2.TaskID, assistants.StatusCompleted, 2*time.Second)
 
-	// Addressable afterwards, independent of any one stage — resolveParticipant (agentcomm_roster.go) is what
-	// ListThread/OpenThread from a DIFFERENT stage would use to find it.
-	p, ok := rs.Assistants.Mesh.Participants[r1.ParticipantID]
-	if !ok {
-		t.Fatal("run participant not found after the repeat submit")
+	if r1.ParticipantID == r2.ParticipantID || r1.TaskID == r2.TaskID {
+		t.Fatalf("two agents of one profile share an identity: %+v vs %+v", r1, r2)
 	}
-	if !p.Reachable {
-		t.Fatal("standing run-scoped role must remain reachable")
+	rs := store.Snapshot()
+	p1, p2 := rs.Assistants.Mesh.Participants[r1.ParticipantID], rs.Assistants.Mesh.Participants[r2.ParticipantID]
+	if p1 == nil || p2 == nil || p1.Kind != agentcomm.KindRunAgent || p2.Kind != agentcomm.KindRunAgent {
+		t.Fatalf("participants = %+v / %+v, want two run agents", p1, p2)
 	}
-	if p.Alias != "qa" {
-		t.Fatalf("participant alias = %q, want the profile id %q", p.Alias, "qa")
+	if p1.Alias != "new-one" || p2.Alias != "new2" {
+		t.Fatalf("aliases = %q / %q, want slugs of the titles", p1.Alias, p2.Alias)
+	}
+	if p1.DisplayName != "New One" || p2.DisplayName != "new2" {
+		t.Fatalf("display names = %q / %q", p1.DisplayName, p2.DisplayName)
+	}
+	// Each one is its own task's mesh identity (inbox, waits, resume).
+	if got := meshParticipantForTask(rs.Assistants.Tasks[r2.TaskID].Task); got != r2.ParticipantID {
+		t.Fatalf("meshParticipantForTask(second) = %s, want %s", got, r2.ParticipantID)
+	}
+	if id, ok := o.taskIDFromMeshParticipant(r2.ParticipantID); !ok || id != r2.TaskID {
+		t.Fatalf("taskIDFromMeshParticipant(%s) = %s,%v, want %s", r2.ParticipantID, id, ok, r2.TaskID)
+	}
+}
+
+// A run agent without a title is addressable by its profile id.
+func TestRunAgentAlias_FallsBackToProfile(t *testing.T) {
+	if got := runAgentAlias("", "qa"); got != "qa" {
+		t.Fatalf("runAgentAlias(\"\", qa) = %q, want qa", got)
+	}
+	if got := runAgentAlias("  Release QA #2 ", "qa"); got != "release-qa-2" {
+		t.Fatalf("runAgentAlias = %q, want release-qa-2", got)
 	}
 }
 
@@ -85,7 +113,7 @@ func TestAddRunAgent_RejectedWhenRunFinalizing(t *testing.T) {
 
 	msg := "hi"
 	if _, err := o.AddRunAgent(ctx, AddRunAgentRequest{
-		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
+		OperationID: "op-finalizing", ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
 	}); err == nil {
 		t.Fatal("AddRunAgent after the run started finalizing: want error, got nil")
 	}

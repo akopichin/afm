@@ -106,26 +106,23 @@ func stageIDFromMeshParticipant(p agentcomm.ParticipantID) (string, bool) {
 	return id, ok && id != ""
 }
 
-// taskIDFromMeshParticipant inverts meshHelperParticipantID (T5.4) AND meshRunParticipantID (T6.2b) —
-// resumeWaitersAfterCommit's task-scoped twin of stageIDFromMeshParticipant above. A "run:<profileID>" id (a
-// standing role, AddRunAgent) carries no task id in its own string form the way a helper's "helper:<taskID>"
-// does, so resolving it needs an actual snapshot lookup for the one scope=run task currently registered under
-// that profile — AddRunAgent's own "idempotent per profile" guarantee (addRunAgentOperationID's doc comment)
-// is what makes that lookup unambiguous. This is a method (not a free function) purely for that snapshot
-// access; Agent Mesh Phase 8's own QA/DevOps acceptance test (T8.1) is what caught every caller of the old
-// free function silently treating a run-scoped participant as neither a stage nor a task, so none of
-// resumeWaitersAfterCommit/resumeWaiterAfterTerminalWait/maybeResumeAwaitingPeerQuestion ever resumed one.
+// taskIDFromMeshParticipant inverts meshHelperParticipantID and meshRunParticipantID — both carry the task id.
+// A journal written before run agents were keyed by task has "run:<profileID>" participants; for those the
+// one scope=run task of that profile is looked up instead (that build allowed only one per profile).
 func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
 	if id, ok := strings.CutPrefix(string(p), meshHelperPrefix); ok && id != "" {
 		return assistants.TaskID(id), true
 	}
-	profileID, ok := strings.CutPrefix(string(p), meshRunPrefix)
-	if !ok || profileID == "" {
+	suffix, ok := strings.CutPrefix(string(p), meshRunPrefix)
+	if !ok || suffix == "" {
 		return "", false
 	}
 	rs := o.opts.Store.Snapshot()
+	if _, isTask := rs.Assistants.Tasks[assistants.TaskID(suffix)]; isTask {
+		return assistants.TaskID(suffix), true
+	}
 	for id, t := range rs.Assistants.Tasks {
-		if t.Scope == assistants.ScopeRun && string(t.ProfileID) == profileID {
+		if t.Scope == assistants.ScopeRun && string(t.ProfileID) == suffix {
 			return id, true
 		}
 	}

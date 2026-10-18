@@ -46,20 +46,14 @@ func meshHelperParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
 	return agentcomm.ParticipantID(meshHelperPrefix + string(taskID))
 }
 
-// meshParticipantForTask resolves task's OWN mesh participant identity: meshRunParticipantID(profile) for a
-// scope=run standing role (AttachAndSend/AddRunAgent, T6.2/T6.2b) — whose real mesh identity is keyed by
-// profile, not by task id, see meshRunParticipantID's own doc comment — meshHelperParticipantID(task.ID) for
-// every other (stage-rooted) task. Every call site that means "this task, as a mesh participant" (not some
-// OTHER, specifically-named task) must go through this, not meshHelperParticipantID directly: Agent Mesh
-// Phase 8's own QA/DevOps acceptance test (T8.1) is what caught several call sites still assuming the
-// ScopeStage shape unconditionally — a scope=run task's own Wait/resume checks, inbox and prompt
-// self-description, and its real subprocess's MeshClient identity were all silently resolving to the WRONG
-// participant (a "helper:<taskID>" nobody ever registered a wait or sent a message under, instead of its
-// actual "run:<profileID>"), which made a run-scoped role's own cooperative yield indistinguishable from a
-// protocol error.
+// meshParticipantForTask resolves task's OWN mesh participant identity: meshRunParticipantID(task.ID) for a
+// scope=run role, meshHelperParticipantID(task.ID) for every other (stage-rooted) task. Every call site that
+// means "this task, as a mesh participant" must go through this, not meshHelperParticipantID directly: a
+// scope=run task's own Wait/resume checks, inbox and prompt self-description, and its subprocess's MeshClient
+// identity must all resolve to its "run:" id (Agent Mesh T8.1 caught call sites assuming the stage shape).
 func meshParticipantForTask(task assistants.Task) agentcomm.ParticipantID {
 	if task.Scope == assistants.ScopeRun {
-		return meshRunParticipantID(task.ProfileID)
+		return meshRunParticipantID(task.ID)
 	}
 	return meshHelperParticipantID(task.ID)
 }

@@ -49,7 +49,9 @@ func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, work
 	if err := cfg.Docker.ValidateAgents(); err != nil {
 		return env, err
 	}
-	env.GeneratedAgents = docker.UsedRecipeCommands(f, cfg.Client.Command, cfg.Docker.Agents)
+	// Helper-profile commands count too: a recipe used only by a helper (reviewer → codex) still needs its
+	// wrapper here, matching the host side's UsedRecipes below.
+	env.GeneratedAgents = docker.UsedRecipeCommands(f, cfg.Client.Command, cfg.Docker.Agents, assistantProfileCommands(cfg, f)...)
 	specs := make([]docker.WrapperSpec, 0, len(env.GeneratedAgents))
 	for cmd := range env.GeneratedAgents {
 		specs = append(specs, buildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
@@ -92,7 +94,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 			return err
 		}
 		// Mount discovery and secret resolution use the same set of used recipes.
-		recipes = docker.UsedRecipes(f, cfg.Client.Command, cfg.Docker.Agents)
+		recipes = docker.UsedRecipes(f, cfg.Client.Command, cfg.Docker.Agents, assistantProfileCommands(cfg, f)...)
 		generatedForMount = make(map[string]bool, len(recipes))
 		for cmd := range recipes {
 			generatedForMount[cmd] = true
