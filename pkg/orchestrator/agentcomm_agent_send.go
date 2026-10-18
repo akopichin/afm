@@ -21,12 +21,16 @@ import (
 //     retried request finds the same thread and replays the same send.
 func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (SendReceipt, error) {
 	rs := o.opts.Store.Snapshot()
+	roster := o.liveRoster(rs)
 	// A retry of an already-committed request replays its outcome, whatever changed since (a new agent with
-	// the same alias, the conversation closed) — never re-resolving names or picking another thread.
+	// the same alias, the conversation closed) — never re-resolving names or picking another thread. The same
+	// request id with a different message is a conflict, exactly like the store's own idempotency check.
 	if m, ok := rs.Assistants.Mesh.Messages[deriveMeshMessageID(req.OperationID)]; ok {
+		if !committedSendMatches(rs, roster, *m, req) {
+			return SendReceipt{}, state.OperationIDConflictError(req.OperationID)
+		}
 		return SendReceipt{MessageID: m.ID, Seq: m.Seq, ThreadID: m.ThreadID}, nil
 	}
-	roster := o.liveRoster(rs)
 	recipients, err := resolveRecipients(roster, req.Recipients)
 	if err != nil {
 		return SendReceipt{}, err
@@ -51,10 +55,18 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 			return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "no recipients — pass --to (see `afm agent list`)"}
 		}
 		members := append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...)
-		// Check the message itself before opening anything, so a request that cannot be sent leaves no thread.
+		// Check everything the send itself would reject before opening anything, so a request that cannot be
+		// sent leaves no empty conversation behind: the message's shape, the recipients' reachability and their
+		// inbox limits — the same validators Send and its projection apply (Send re-checks them at commit).
 		draft := agentcomm.Message{Sender: req.Sender, Recipients: req.Recipients, Kind: req.Kind, InReplyTo: req.InReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs}
 		if err := agentcomm.ValidateMessage(draft, members, nil); err != nil {
 			return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: err.Error()}
+		}
+		if err := rejectUnreachableRecipients(rs, req.Recipients); err != nil {
+			return SendReceipt{}, err
+		}
+		if err := rs.Assistants.Mesh.CheckInboxCapacity(req.Recipients); err != nil {
+			return SendReceipt{}, err
 		}
 		if th := openThreadWithMembers(rs, members); th != "" {
 			req.ThreadID = th
@@ -72,6 +84,37 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 		}
 	}
 	return o.Send(ctx, req)
+}
+
+// committedSendMatches reports whether m — the message already committed under req's request id — is the
+// message req asks to send: same sender, kind, body (as redacted at send time), reply target, artifacts,
+// thread (when req names one) and recipients. Recipient names are resolved against m's own recipients, so an
+// alias that has since become ambiguous (a new agent with the same alias) still names whom it named then.
+func committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
+	if m.Sender != req.Sender || m.Kind != req.Kind || m.Body != redactMeshText(req.Body) ||
+		!slices.Equal(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
+		return false
+	}
+	if req.ThreadID != "" && req.ThreadID != m.ThreadID {
+		return false
+	}
+	want := req.Recipients
+	if len(want) == 0 && req.InReplyTo != nil {
+		// A reply without recipients went back to the sender of the message it answers.
+		if answered, ok := rs.Assistants.Mesh.Messages[*req.InReplyTo]; ok {
+			want = []agentcomm.ParticipantID{answered.Sender}
+		}
+	}
+	committed := slices.DeleteFunc(slices.Clone(roster), func(p agentcomm.Participant) bool { return !slices.Contains(m.Recipients, p.ID) })
+	resolved, err := resolveRecipients(committed, want)
+	return err == nil && slices.Equal(sortedMemberSet(resolved), sortedMemberSet(m.Recipients))
+}
+
+func sameMessageRef(a, b *agentcomm.MessageID) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // resolveRecipients maps each recipient — a participant id or an alias, optionally "@"-prefixed — to its

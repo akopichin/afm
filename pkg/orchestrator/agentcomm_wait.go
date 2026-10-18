@@ -58,29 +58,6 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 		return WaitReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: waitConditionHint(req.Condition.Kind)}
 	}
 
-	rs := o.opts.Store.Snapshot()
-
-	if req.Condition.Kind == agentcomm.WaitOnBoardKey {
-		if _, published := rs.Assistants.Mesh.Board[req.Condition.Key]; !published && req.Deadline == nil {
-			return WaitReceipt{}, &state.OperationRejectedError{
-				Code: assistants.CodeInvalidRequest, Reason: ErrWaitRequiresDeadline.Error() + " (pass --deadline-seconds)", Cause: ErrWaitRequiresDeadline,
-			}
-		}
-	}
-
-	graph := buildMeshWaitGraph(rs)
-	for _, target := range meshWaitTargets(rs, req.Condition) {
-		if target == req.Waiter {
-			continue
-		}
-		if meshWaitReachable(graph, target, req.Waiter) {
-			return WaitReceipt{}, &state.OperationRejectedError{
-				Code:   agentcomm.CodeWaitCycle,
-				Reason: fmt.Sprintf("%q already (transitively) waits on %q", target, req.Waiter),
-			}
-		}
-	}
-
 	waitID := deriveMeshWaitID(req.OperationID)
 	eff, err := marshalEffect("mesh_wait_registered", state.Target{WaitID: string(waitID)}, state.MeshWaitRegisteredPayload{
 		Waiter: string(req.Waiter), Condition: req.Condition, Deadline: req.Deadline, ContinuationNote: req.ContinuationNote,
@@ -88,7 +65,11 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if err != nil {
 		return WaitReceipt{}, err
 	}
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_wait", Actor: req.Actor, Effects: []state.Effect{eff}}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_wait", Actor: req.Actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{
+		// Decided under the commit's lock: two waits registered at the same time must not both pass the cycle
+		// check against a snapshot that has neither of them.
+		Check: func(rs *state.RunState) error { return validateWaitAdmission(*rs, req) },
+	}}
 	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "waiter_id": string(req.Waiter)}})
 	}); err != nil {
@@ -109,6 +90,32 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 		o.armMeshWaitDeadline(waitID, *req.Deadline)
 	}
 	return WaitReceipt{WaitID: waitID, Status: status}, nil
+}
+
+// validateWaitAdmission rejects a wait that could never end on its own: a board_key wait on a key nobody has
+// published, without a deadline, or a wait that would close a cycle — its target already (transitively)
+// waits on the waiter.
+func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
+	if req.Condition.Kind == agentcomm.WaitOnBoardKey {
+		if _, published := rs.Assistants.Mesh.Board[req.Condition.Key]; !published && req.Deadline == nil {
+			return &state.OperationRejectedError{
+				Code: assistants.CodeInvalidRequest, Reason: ErrWaitRequiresDeadline.Error() + " (pass --deadline-seconds)", Cause: ErrWaitRequiresDeadline,
+			}
+		}
+	}
+	graph := buildMeshWaitGraph(rs)
+	for _, target := range meshWaitTargets(rs, req.Condition) {
+		if target == req.Waiter {
+			continue
+		}
+		if meshWaitReachable(graph, target, req.Waiter) {
+			return &state.OperationRejectedError{
+				Code:   agentcomm.CodeWaitCycle,
+				Reason: fmt.Sprintf("%q already (transitively) waits on %q", target, req.Waiter),
+			}
+		}
+	}
+	return nil
 }
 
 // CancelWait implements Service.CancelWait. Idempotent: cancelling an already-resolved wait is a no-op,
@@ -332,7 +339,11 @@ func meshWaitTargets(rs state.RunState, cond agentcomm.WaitCondition) []agentcom
 			return th.Members
 		}
 	case agentcomm.WaitOnTaskResult:
-		return []agentcomm.ParticipantID{meshHelperParticipantID(assistants.TaskID(cond.TaskID))}
+		taskID := assistants.TaskID(cond.TaskID)
+		if t, ok := rs.Assistants.Tasks[taskID]; ok {
+			return []agentcomm.ParticipantID{meshParticipantForTask(rs, t.Task)}
+		}
+		return []agentcomm.ParticipantID{meshHelperParticipantID(taskID)}
 	case agentcomm.WaitOnStageStatus:
 		return []agentcomm.ParticipantID{meshStageParticipantID(cond.StageID)}
 	case agentcomm.WaitOnBoardKey:

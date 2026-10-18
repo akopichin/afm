@@ -143,6 +143,28 @@ func (ms MeshState) HasUnseenMessageFor(recipient agentcomm.ParticipantID) bool 
 	return false
 }
 
+// CheckInboxCapacity rejects a message to recipients when one of them already has agentcomm.MaxInboxUnread
+// unread messages — explicit rejection, never a silent truncation (T0.2). A recipient's UNREAD count —
+// accepted or delivered, not yet acknowledged — is what the limit bounds; an already-acknowledged message no
+// longer occupies that budget. Exported so a caller can check it before taking a step it would otherwise
+// leave behind (e.g. opening a conversation for a message that cannot be sent).
+func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID) error {
+	for _, r := range recipients {
+		unread := 0
+		for _, mid := range ms.Inbox[r] {
+			switch ms.Receipts[mid][r] {
+			case agentcomm.DeliveryAccepted, agentcomm.DeliveryDelivered:
+				unread++
+			default:
+			}
+		}
+		if unread >= agentcomm.MaxInboxUnread {
+			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d unread messages (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
+		}
+	}
+	return nil
+}
+
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]
@@ -381,24 +403,12 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		}
 		return meshRejected(assistants.CodeInvalidRequest, "%v (thread %s members: %v)", err, threadID, thread.Members)
 	}
-	// agentcomm.MaxThreadMessages/MaxInboxUnread: explicit rejection, never a silent truncation (T0.2). A
-	// recipient's UNREAD count — accepted or delivered, not yet acknowledged — is what the limit bounds; an
-	// already-acknowledged message no longer occupies that budget.
+	// agentcomm.MaxThreadMessages/MaxInboxUnread: explicit rejection, never a silent truncation (T0.2).
 	if n := len(as.Mesh.MessagesByThread[threadID]); n >= agentcomm.MaxThreadMessages {
 		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages (MaxThreadMessages)", threadID, agentcomm.MaxThreadMessages)
 	}
-	for _, r := range recipients {
-		unread := 0
-		for _, mid := range as.Mesh.Inbox[r] {
-			switch as.Mesh.Receipts[mid][r] {
-			case agentcomm.DeliveryAccepted, agentcomm.DeliveryDelivered:
-				unread++
-			default:
-			}
-		}
-		if unread >= agentcomm.MaxInboxUnread {
-			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d unread messages (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
-		}
+	if err := as.Mesh.CheckInboxCapacity(recipients); err != nil {
+		return err
 	}
 
 	if dryRun {

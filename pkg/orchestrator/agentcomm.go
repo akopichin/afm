@@ -15,8 +15,10 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/prompts"
+	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -251,6 +253,13 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
 	})
+}
+
+// redactMeshText removes known secret values from text an agent or the human writes into the mesh (a message
+// body, a board status): it must never reach the durable journal, a recipient's inbox or a notice verbatim —
+// the same redaction pass buildTaskContext applies to everything else a task sees (assistants_context.go).
+func redactMeshText(s string) string {
+	return redact.String(s, executor.SecretValuesForRedaction())
 }
 
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place

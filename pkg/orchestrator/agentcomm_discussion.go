@@ -16,8 +16,6 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/executor"
-	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -93,15 +91,28 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 			recipients = append(recipients, string(m))
 		}
 	}
-	// Secrets must never reach the durable journal verbatim — same redaction pass Send applies
-	// (agentcomm_messages.go) to every other mesh message body.
-	body := redact.String(req.Body, executor.SecretValuesForRedaction())
+	body := redactMeshText(req.Body)
 	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: messageID},
 		state.MeshMessageSentPayload{Sender: string(sender), Recipients: recipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
 	if err != nil {
 		return nil, err
 	}
 	effects = append(effects, msgEff)
+
+	// A post to a stage that has already finished keeps its place in the thread's history, but nobody will
+	// ever read it: its receipt is undeliverable from the start, so it never counts as an unread message.
+	for _, r := range recipients {
+		p, ok := resolveParticipant(rs, agentcomm.ParticipantID(r))
+		if !ok || p.Reachable {
+			continue
+		}
+		undeliverable, err := marshalEffect("mesh_message_undeliverable", state.Target{MessageID: messageID, ParticipantID: r},
+			state.MeshMessageReceiptPayload{Reason: p.UnreachableReason})
+		if err != nil {
+			return nil, err
+		}
+		effects = append(effects, undeliverable)
+	}
 	return effects, nil
 }
 

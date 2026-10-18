@@ -15,9 +15,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -303,7 +301,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 			}
 			msgRecipients = append(msgRecipients, string(m))
 		}
-		body := redact.String(*req.FirstMessage, executor.SecretValuesForRedaction())
+		body := redactMeshText(*req.FirstMessage)
 		msgEff, merr := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(mid)},
 			state.MeshMessageSentPayload{Sender: string(senderID), Recipients: msgRecipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
 		if merr != nil {
@@ -325,6 +323,10 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	expect := state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, MaxQuota: maxQuota}
 	if scope == assistants.ScopeStage {
 		expect.StageNotTerminal = []string{req.StageID}
+	}
+	if req.FirstMessage != nil {
+		// The first message also goes to every extra member — the same reachability rule as Send.
+		expect.Check = func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) }
 	}
 
 	op := state.Operation{ID: req.OperationID, Kind: "attach_and_send", Actor: req.Actor, Expect: expect, Effects: effects}

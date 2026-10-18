@@ -35,6 +35,17 @@ func (e *OperationRejectedError) Unwrap() error { return e.Cause }
 // CodeInvalidStatus already names.
 var ErrOperationIDConflict = errors.New("assistants: operation_id already used with different content")
 
+// OperationIDConflictError is the typed rejection for a request id that was already used with different
+// content — what both the store's idempotency check and a caller-level replay check (e.g. the agent send's
+// own replay of an already-committed message) return, so the API answers 409, not 500.
+func OperationIDConflictError(opID string) error {
+	return &OperationRejectedError{
+		Code:   assistants.CodeInvalidStatus,
+		Reason: fmt.Sprintf("request id %s was already used for a different request — retry with a new request id", opID),
+		Cause:  ErrOperationIDConflict,
+	}
+}
+
 // Effect is one state mutation bundled into an Operation. Reuses the SAME per-kind payload shapes as
 // standalone control records (task_created, task_status_changed, policy_set, quota_reserved, ...) — see
 // controlKinds in record.go and dispatchControlKind in assistants_projection.go.
@@ -80,6 +91,11 @@ type Preconditions struct {
 	// (TestAttachRequiredRacesWithComplete). Checked under the SAME lock as the write, like every other
 	// precondition here.
 	StageNotTerminal []string
+	// Check, if non-nil, is a caller-supplied admission check run against the CURRENT projection under the
+	// SAME lock as the write — for a rule that needs the caller's own knowledge of the run (e.g. whether a
+	// message recipient has finished) but must not be decided from an earlier snapshot. It must only read rs.
+	// Like every precondition, it is skipped for an idempotent repeat of an already-committed operation.
+	Check func(rs *RunState) error
 }
 
 // Operation is a single caller-intent: ApplyRunOperation either durably commits ALL of its Effects as one
@@ -237,6 +253,9 @@ func (s *Store) checkPreconditionsLocked(rs *RunState, op Operation) error {
 			return &OperationRejectedError{Code: assistants.CodeBudgetExceeded, Reason: fmt.Sprintf("quota %d + %d exceeds max %d", rs.Assistants.QuotaReserved, requested, *exp.MaxQuota)}
 		}
 	}
+	if exp.Check != nil {
+		return exp.Check(rs)
+	}
 	return nil
 }
 
@@ -246,7 +265,7 @@ func (s *Store) checkPreconditionsLocked(rs *RunState, op Operation) error {
 func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayload []byte) (OperationResult, error) {
 	if e, ok := s.opCache.get(opID); ok {
 		if !bytes.Equal(e.payloadJSON, newPayload) {
-			return OperationResult{}, fmt.Errorf("%w: %s", ErrOperationIDConflict, opID)
+			return OperationResult{}, OperationIDConflictError(opID)
 		}
 		return OperationResult{OperationID: opID, Seq: e.seq}, nil
 	}
@@ -256,7 +275,7 @@ func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayl
 		return OperationResult{}, &StorageError{Inner: fmt.Errorf("re-read committed operation %s at seq %d: %w", opID, seq, err)}
 	}
 	if !bytes.Equal(payload, newPayload) {
-		return OperationResult{}, fmt.Errorf("%w: %s", ErrOperationIDConflict, opID)
+		return OperationResult{}, OperationIDConflictError(opID)
 	}
 	// Repopulate the cache so a THIRD repeat of the same operation_id hits the fast path again.
 	s.opCache.put(opID, opCacheEntry{seq: seq, payloadJSON: payload})

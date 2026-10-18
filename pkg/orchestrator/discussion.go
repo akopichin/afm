@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -91,9 +92,23 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	}
 	effects = append(effects, meshEffects...)
 	beforeReady := readyWaitSet(rs)
+	runCtx := o.runContext(ctx) // a resumed waiter must not die with the HTTP request.
 
 	threadID := deriveDiscussionThreadID(req.StageID)
-	op := state.Operation{ID: req.OperationID, Kind: "post_discussion_message", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: "post_discussion_message", Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+		// The mirror was built from a snapshot; whether its recipient stage is still reachable is decided again
+		// under the commit's lock, so a stage finishing in between cannot get a deliverable receipt.
+		Check: func(cur *state.RunState) error {
+			again, err := discussionMeshEffects(*cur, req.StageID, messageID, req)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(again, meshEffects) {
+				return &state.OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("stage %s changed status while posting — post again", req.StageID)}
+			}
+			return nil
+		},
+	}}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventDiscussionMessage, StageID: req.StageID, Data: map[string]any{
 			"message_id": messageID, "author_kind": string(req.AuthorKind), "author_id": req.AuthorID, "round": req.Round,
@@ -111,7 +126,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 		// A discussion reply can be exactly what a stage agent parked on a mesh wait (e.g. an
 		// addressed_message wait on this very thread) is waiting for — resume it the SAME way Send/Publish do
 		// (agentcomm_resume.go), rather than leaving it stranded until something else happens to wake it.
-		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
 	})
 	if err != nil {
 		return "", err

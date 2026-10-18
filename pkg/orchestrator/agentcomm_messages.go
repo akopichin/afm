@@ -8,9 +8,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -89,12 +87,11 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 }
 
 // rejectUnreachableRecipients refuses a message to a participant whose stage or task has finished — nobody would
-// ever read it. A replay of an already-committed send is let through (it must return its original outcome).
-func rejectUnreachableRecipients(rs state.RunState, req SendRequest) error {
-	if _, committed := rs.Assistants.Mesh.Messages[deriveMeshMessageID(req.OperationID)]; committed {
-		return nil
-	}
-	for _, r := range req.Recipients {
+// ever read it. Senders run it as their operation's Preconditions.Check, against the state under the commit's
+// own lock (a recipient can finish between any earlier snapshot and the commit); an idempotent replay of an
+// already-committed send skips it, like every precondition, and returns its original outcome.
+func rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.ParticipantID) error {
+	for _, r := range recipients {
 		if p, ok := resolveParticipant(rs, r); ok && !p.Reachable {
 			return &state.OperationRejectedError{
 				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s has finished and cannot receive messages (%s)", r, p.UnreachableReason),
@@ -119,10 +116,6 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		return SendReceipt{}, errors.New("agentcomm: sender is required")
 	}
 
-	if err := rejectUnreachableRecipients(o.opts.Store.Snapshot(), req); err != nil {
-		return SendReceipt{}, err
-	}
-
 	messageID := deriveMeshMessageID(req.OperationID)
 	recipients := make([]string, len(req.Recipients))
 	for i, r := range req.Recipients {
@@ -133,9 +126,7 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		s := string(*req.InReplyTo)
 		inReplyTo = &s
 	}
-	// Secrets must never reach the durable journal or a recipient's inbox verbatim — same redaction pass
-	// buildTaskContext applies to everything else a task sees (assistants_context.go).
-	body := redact.String(req.Body, executor.SecretValuesForRedaction())
+	body := redactMeshText(req.Body)
 	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
@@ -155,7 +146,9 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+		Check: func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) },
+	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
