@@ -521,7 +521,7 @@ func TestCommittedOperation_SameFromCacheAndJournal(t *testing.T) {
 	}
 	check := func(when string, s *Store) {
 		t.Helper()
-		got, committed, err := s.CommittedOperation("op-A")
+		got, committed, err := s.CommittedOperation("op-A", "create_children")
 		if err != nil || !committed {
 			t.Fatalf("%s: committed=%v err=%v", when, committed, err)
 		}
@@ -533,7 +533,7 @@ func TestCommittedOperation_SameFromCacheAndJournal(t *testing.T) {
 		if err != nil || !found || target.TaskID != "tA" || p.Title != "T" {
 			t.Fatalf("%s: task_created = %+v %+v (found=%v, err=%v)", when, target, p, found, err)
 		}
-		if _, committed, err := s.CommittedOperation("op-unknown"); committed || err != nil {
+		if _, committed, err := s.CommittedOperation("op-unknown", "create_children"); committed || err != nil {
 			t.Fatalf("%s: unknown id: committed=%v err=%v", when, committed, err)
 		}
 	}
@@ -547,4 +547,26 @@ func TestCommittedOperation_SameFromCacheAndJournal(t *testing.T) {
 	}
 	defer reopened.Close()
 	check("after restart", reopened)
+}
+
+// TestCommittedOperation_AnotherKindConflicts: an operation read back as another kind than it was committed as
+// is a request id conflict.
+func TestCommittedOperation_AnotherKindConflicts(t *testing.T) {
+	store, err := Open(t.TempDir(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	mustRecordPolicy(t, store)
+	op := Operation{ID: "op-A", Kind: "create_children", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p","title":"T"}`, "tA", "a")}}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil {
+		t.Fatalf("ApplyRunOperation: %v", err)
+	}
+	got, committed, err := store.CommittedOperation("op-A", "create_children")
+	if err != nil || !committed || got.Kind != "create_children" {
+		t.Fatalf("same kind: kind=%q committed=%v err=%v", got.Kind, committed, err)
+	}
+	if _, _, err := store.CommittedOperation("op-A", "attach_task"); !errors.Is(err, ErrOperationIDConflict) {
+		t.Fatalf("another kind: err = %v, want a request id conflict", err)
+	}
 }

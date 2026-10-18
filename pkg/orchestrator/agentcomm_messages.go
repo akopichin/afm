@@ -41,7 +41,7 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		return agentcomm.Thread{}, err
 	}
 
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_open_thread", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshOpenThread, Actor: req.Actor, Effects: effects}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishThreadOpened(threadID, req.Title, req.Members)
 	})
@@ -64,7 +64,7 @@ func openedThread(threadID agentcomm.ThreadID, req OpenThreadRequest) agentcomm.
 // opened it — never its current state (a later close does not change the original receipt). Any other request
 // under that id is a conflict. replayed=false: nothing committed.
 func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenThreadRequest) (agentcomm.Thread, bool, error) {
-	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshOpenThread)
 	if err != nil || !committed {
 		return agentcomm.Thread{}, err != nil, err // a storage error answers the request too
 	}
@@ -191,7 +191,7 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 	beforeReady := readyWaitSet(rs)
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
 		Check: func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) },
 	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {

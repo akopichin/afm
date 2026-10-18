@@ -76,7 +76,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 			recipients = append(recipients, n.send.Recipients...)
 		}
 		beforeReady := readyWaitSet(rs)
-		op := state.Operation{ID: req.OperationID, Kind: "mesh_publish", Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+		op := state.Operation{ID: req.OperationID, Kind: opKindMeshPublish, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
 			Check: func(cur *state.RunState) error { return rejectUnreachableRecipients(*cur, recipients) },
 		}}
 		res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
@@ -121,7 +121,7 @@ func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status str
 // conflict. A record written before the notify list was stored has none to compare: its retry is answered
 // from the record whatever notify list it carries. replayed=false: nothing committed.
 func (o *Orchestrator) replayedPublish(req PublishRequest, notify []string) (agentcomm.BoardEntry, bool, error) {
-	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshPublish)
 	if err != nil || !committed {
 		return agentcomm.BoardEntry{}, err != nil, err // a storage error answers the request too
 	}

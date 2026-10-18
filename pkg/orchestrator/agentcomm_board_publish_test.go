@@ -165,7 +165,7 @@ func TestPublish_NoticeIsCommittedWithTheRevision(t *testing.T) {
 	if _, err := publishAsUser(o, "op-task", "task/report", "write the report", 0, agent.ParticipantID); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	op, committed, err := store.CommittedOperation("op-task")
+	op, committed, err := store.CommittedOperation("op-task", "mesh_publish")
 	if err != nil || !committed {
 		t.Fatalf("CommittedOperation: committed=%v err=%v", committed, err)
 	}
@@ -255,7 +255,7 @@ func TestPublish_NotifyListIsCapped(t *testing.T) {
 	if _, err := publishAsUser(o, "op-other", "task/other", "evicts op-big from the cache", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CommittedOperation("op-big"); err != nil {
+	if _, _, err := store.CommittedOperation("op-big", "mesh_publish"); err != nil {
 		t.Fatalf("read the largest allowed publish back from the journal: %v", err)
 	}
 	retry, err := publishAsUser(o, "op-big", key, status, 0, notify...)

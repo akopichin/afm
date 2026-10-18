@@ -103,7 +103,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	runCtx := o.runContext(ctx) // a resumed waiter must not die with the HTTP request.
 
 	threadID := deriveDiscussionThreadID(req.StageID)
-	op := state.Operation{ID: req.OperationID, Kind: "post_discussion_message", Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+	op := state.Operation{ID: req.OperationID, Kind: opKindPostDiscussionMessage, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
 		// The mirror was built from a snapshot; whether its recipient stage is still reachable is decided again
 		// under the commit's lock, so a stage finishing in between cannot get a deliverable receipt.
 		Check: func(cur *state.RunState) error {
@@ -145,7 +145,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 // replayedDiscussionPost reports whether req's request id already committed a post, and whether that post is
 // exactly req (every field of its discussion message) — anything else under that id is a conflict.
 func (o *Orchestrator) replayedDiscussionPost(messageID string, req PostMessageRequest) (bool, error) {
-	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindPostDiscussionMessage)
 	if err != nil || !committed {
 		return err != nil, err // a storage error answers the request too
 	}

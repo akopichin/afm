@@ -290,7 +290,10 @@ func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayl
 // CommittedOperation is an already committed operation exactly as its journal record holds it — what a retry
 // of the same request id is answered from, never from the current projection, which may have moved on.
 type CommittedOperation struct {
-	Result  OperationResult
+	Result OperationResult
+	// Kind is the committed operation's kind (Operation.Kind); "" for a legacy single control record, which
+	// carries no operation kind.
+	Kind    string
 	Effects []Effect
 }
 
@@ -309,9 +312,22 @@ func (c CommittedOperation) Effect(kind string, payload any) (target Target, ok 
 	return Target{}, false, nil
 }
 
-// CommittedOperation returns the operation committed under opID; ok=false when none was. It reads the bounded
-// cache or, on a miss, the one journal record at the operation's seq.
-func (s *Store) CommittedOperation(opID string) (CommittedOperation, bool, error) {
+// CommittedOperation returns the operation committed under opID; ok=false when none was. kind is the kind of
+// operation the caller retries: an operation of another kind committed under the same id is a request id
+// conflict (ErrOperationIDConflict), even when its effects look alike. It reads the bounded cache or, on a
+// miss, the one journal record at the operation's seq.
+func (s *Store) CommittedOperation(opID, kind string) (CommittedOperation, bool, error) {
+	op, ok, err := s.readCommittedOperation(opID)
+	if err != nil || !ok {
+		return op, ok, err
+	}
+	if op.Kind != "" && op.Kind != kind {
+		return CommittedOperation{}, true, OperationIDConflictError(opID)
+	}
+	return op, true, nil
+}
+
+func (s *Store) readCommittedOperation(opID string) (CommittedOperation, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	seq, known := s.snapshot.Assistants.OperationIndex[opID]
@@ -323,7 +339,7 @@ func (s *Store) CommittedOperation(opID string) (CommittedOperation, bool, error
 		if err := json.Unmarshal(e.payloadJSON, &p); err != nil {
 			return CommittedOperation{}, false, fmt.Errorf("decode committed operation %s: %w", opID, err)
 		}
-		return CommittedOperation{Result: OperationResult{OperationID: opID, Seq: e.seq, Time: e.time}, Effects: p.Effects}, true, nil
+		return CommittedOperation{Result: OperationResult{OperationID: opID, Seq: e.seq, Time: e.time}, Kind: p.OpKind, Effects: p.Effects}, true, nil
 	}
 	c, err := s.readControlAtSeq(seq)
 	if err != nil {
@@ -338,7 +354,7 @@ func (s *Store) CommittedOperation(opID string) (CommittedOperation, bool, error
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return CommittedOperation{}, false, fmt.Errorf("decode committed operation %s: %w", opID, err)
 	}
-	op.Effects = p.Effects
+	op.Kind, op.Effects = p.OpKind, p.Effects
 	return op, true, nil
 }
 

@@ -69,7 +69,7 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 // replayedSend answers a send whose request id already committed, from the committed message: the same
 // message is its receipt, any other request under that id is a conflict. replayed=false: nothing committed.
 func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Participant, req SendRequest) (SendReceipt, bool, error) {
-	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshSend)
 	if err != nil || !committed {
 		return SendReceipt{}, err != nil, err // a storage error answers the request too
 	}

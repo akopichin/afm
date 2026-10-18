@@ -229,7 +229,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
 		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Actor: req.Actor,
 	}
-	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID); err != nil || committed {
+	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachAndSend); err != nil || committed {
 		if err != nil {
 			return AttachAndSendResult{}, err
 		}
@@ -327,7 +327,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		return nil
 	}
 
-	op := state.Operation{ID: req.OperationID, Kind: "attach_and_send", Actor: req.Actor, Expect: expect, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: opKindAttachAndSend, Actor: req.Actor, Expect: expect, Effects: effects}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: targetStageID, Data: map[string]any{

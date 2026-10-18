@@ -213,7 +213,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	}
 	// A retry of an already-committed attach replays it, whatever changed since (the stage finished, the
 	// profile went away).
-	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID); err != nil || committed {
+	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachTask); err != nil || committed {
 		if err != nil {
 			return "", err
 		}
@@ -224,7 +224,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if err != nil {
 		return "", err
 	}
-	op := state.Operation{ID: req.OperationID, Kind: "attach_task", Actor: req.Actor, Expect: task.Expect, Effects: task.Effects}
+	op := state.Operation{ID: req.OperationID, Kind: opKindAttachTask, Actor: req.Actor, Expect: task.Expect, Effects: task.Effects}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: req.StageID, Data: map[string]any{

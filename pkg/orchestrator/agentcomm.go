@@ -284,6 +284,18 @@ func (o *Orchestrator) sameRedactedText(stored, requested string) bool {
 	return o.RedactSecrets(stored) == o.RedactSecrets(requested)
 }
 
+// Kinds of the operations a client retries under its own request id: each one is committed under its kind,
+// and a retry reads it back as that kind (state.Store.CommittedOperation), so one request id can never answer
+// a request of another kind.
+const (
+	opKindAttachTask            = "attach_task"
+	opKindAttachAndSend         = "attach_and_send"
+	opKindMeshSend              = "mesh_send"
+	opKindMeshPublish           = "mesh_publish"
+	opKindMeshOpenThread        = "mesh_open_thread"
+	opKindPostDiscussionMessage = "post_discussion_message"
+)
+
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place
 // every agentcomm_*.go file turns a typed payload into the Effect shape ApplyRunOperation expects, instead
 // of repeating json.Marshal+Effect{} at each call site (mirrors discussion.go's discussionMessageEffect,

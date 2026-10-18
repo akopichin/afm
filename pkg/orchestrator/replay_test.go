@@ -193,3 +193,29 @@ func TestAdmission_SharedByBothAttachEntryPoints(t *testing.T) {
 		}
 	}
 }
+
+// TestReplay_RequestIDOfAnotherKindConflicts: a request id committed by one kind of request never answers a
+// request of another kind, even when their effects look alike (both attaches create a task).
+func TestReplay_RequestIDOfAnotherKindConflicts(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	user := state.Actor{Kind: "user"}
+	attach := AttachRequest{OperationID: "op-a", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "x", Actor: user}
+	attachAndSend := AttachAndSendRequest{OperationID: "op-a", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "x", Actor: user}
+
+	if _, err := o.AttachAndSend(ctx, attachAndSend); err != nil {
+		t.Fatalf("AttachAndSend: %v", err)
+	}
+	_, err := o.Attach(ctx, attach)
+	requireConflict(t, "Attach under an AttachAndSend request id", err)
+
+	attach.OperationID, attachAndSend.OperationID = "op-b", "op-b"
+	if _, err := o.Attach(ctx, attach); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	_, err = o.AttachAndSend(ctx, attachAndSend)
+	requireConflict(t, "AttachAndSend under an Attach request id", err)
+
+	_, err = o.Publish(ctx, PublishRequest{OperationID: "op-b", Author: meshUserParticipantID, Key: "k", Status: "s", Actor: user})
+	requireConflict(t, "Publish under an Attach request id", err)
+}
