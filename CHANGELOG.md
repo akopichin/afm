@@ -3,6 +3,25 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-18
+
+### Improvement: add run-wide Team conversations and agent messaging
+
+The dashboard now has a Team tab with a roster, direct and group conversations,
+a shared board, and an activity view. Operators can add a standing run agent from
+a configured role. A running stage's Feed composer can send a message to an
+existing participant or attach a helper through a preview; its Revise mode keeps
+the existing stage-feedback behavior. Agents can read their inbox, send messages,
+and wait for replies through the shared Agent Mesh service.
+
+### Fix: keep Team conversations usable across switches and send failures
+
+Switching conversations sends to the selected thread, long conversations load
+all message pages, and reselecting a person reuses the existing direct thread.
+If the first send fails, the draft and error remain visible for retry; a
+successful retry registers the conversation. Team styling now loads correctly,
+and incoming message bubbles align to the left.
+
 ## 2026-10-17
 
 ### Fix: retry agent transport failures with bounded backoff

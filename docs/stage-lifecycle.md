@@ -11,6 +11,9 @@ pending → planning → awaiting_approval → ready → running → done
 
 # autonomous track (agents: [auto]):
 pending → running(autonomous_execution) → done
+
+# agent-to-agent wait:
+running → awaiting_peer → running
 ```
 
 - `pending` — not started yet; planning starts once all `depends_on` are complete
@@ -22,6 +25,8 @@ pending → running(autonomous_execution) → done
 - `awaiting_assistants` — the stage's own work is finished, but a
   [required helper](collaboration.md) has not passed or been waived; the stage
   completes when the required helper gate closes
+- `awaiting_peer` — the stage agent yielded while waiting for an Agent Mesh reply;
+  it resumes when that wait resolves (see [Team conversations](collaboration.md#team-conversations))
 - `awaiting_user_input` — an [interactive stage](interactive-stages.md) is waiting for
   a user answer; once answered, it returns to the phase where the question was asked
 - `revising` — feedback was sent and the AI is reworking: either the plan (from
@@ -49,6 +54,8 @@ On a repeated `afm run`, the tool automatically:
 - Preserves stages awaiting approval (`awaiting_approval`)
 - Rechecks the required-helper gate for stages in `awaiting_assistants`, without
   rerunning their completed main agent
+- Restores pending Agent Mesh waits for stages in `awaiting_peer` and resumes the
+  stage when its wait resolves
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
 - Preserves stages in `awaiting_user_input`: question/answer files survive the

@@ -111,6 +111,30 @@ is applied, while **Dismiss** discards it. In the Side agent, type `@` to choose
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
+## Team conversations
+
+The run-wide **Team** tab appears when Agent Mesh is available. Its roster groups
+run agents and the Side agent under **This run**, stage agents and helpers under
+their stages, and existing threads under **Conversations**. Select a person to
+read or send a direct message; the first send opens a thread, and selecting that
+person again returns to the existing direct thread. **Create conversation** opens
+a group thread after you enter a topic and choose participants. Conversations
+show their full message history, including older pages.
+
+**Add run agent** starts a standing agent from an available configured profile.
+Choose a role, enter an instruction, and optionally give it a title. This agent
+belongs to the run rather than one stage. The **Board** tab shows keys agents have
+published with their status, author, version, and artifact references. **Activity**
+shows Agent Mesh events such as participants joining, messages, waits, and board
+updates. Agent messages become available at the next turn or when an agent reads
+its inbox; they are not injected into an in-progress response.
+
+A running stage's [Feed composer](dashboard.md#sending-a-note-to-a-running-stage)
+can send a **Message** to an existing participant or attach a configured helper
+through a preview. Its **Revise** mode continues to send stage feedback through
+the existing revision path. In the Side agent, an `@` mention records a role with
+the chat message; it still does not attach a helper by itself.
+
 ## Helper answers and protocol errors
 
 Helpers must return one JSON object with `schema_version: 1` and either

@@ -24,7 +24,9 @@ right (there is no three-column layout or bottom progress bar).
   *selected stage's own* event history, capped at its last 200 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
   plan or Q&A history to reopen — and, when collaboration is enabled, a
-  **Discussion** tab. The workspace also has a permanent
+  **Discussion** tab. When Agent Mesh is available, a run-wide **Team** tab
+  opens the participant roster and conversations (see
+  [Team conversations](collaboration.md#team-conversations)). The workspace also has a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
   flow's last 1000 events across every stage. Feed always reflects whichever
   stage is selected — including an old, already-completed one, which used to
@@ -79,10 +81,11 @@ project, or run a quick command-style exchange *without* touching the run.
 - **One conversation per run, one request at a time.** The chat keeps a single
   conversation tied to the run; you can't fire a second message while one is still
   working — send it after the current reply lands (or **Stop** the current one).
-- **Fully isolated from the flow.** The side chat has its own journal and its own
+- **Independent execution.** The side chat has its own journal and its own
   cost accounting; it is *not* part of any stage. It never appears in a stage's Feed,
   never changes a stage's status, and never triggers stage timers or lifecycle hooks.
-  An error in the chat cannot fail a stage.
+  An error in the chat cannot fail a stage. When Agent Mesh is available, the Side
+  agent also appears in Team and can exchange messages with other participants.
 - **The agent outlives the HTTP request.** Once a message is accepted the agent runs
   under afm's own lifetime, not the browser request — closing the window or reloading
   the page does **not** interrupt it. Only **Stop**, `Ctrl+C`, or afm shutting down
@@ -190,12 +193,14 @@ Criteria` sections are collapsible. The same per-element commenting works on an 
 ## Sending a note to a running stage
 
 While a stage is actively `running`, a messenger-style composer is pinned to the
-bottom of its **Feed** — the same input you'd expect in a chat app:
+bottom of its **Feed**. With Agent Mesh available it has **Revise** and **Message**
+modes; **Revise** is selected by default and keeps the existing note behavior:
 
 1. Select the `running` stage and open its **Feed** tab. A note input sits at the
-   bottom: a growing textarea, an **Attach** button, and a round send button. It
+   bottom: a growing textarea, an **Attach** button, and a send button. It
    appears only for a `running`, non-script stage.
-2. Type your note and send it — click the send button or press **Cmd/Ctrl+Enter**
+2. Type your note and send it — click **Apply Revise** when Agent Mesh is
+   available (otherwise the send button), or press **Cmd/Ctrl+Enter**
    (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file.
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
@@ -204,6 +209,13 @@ bottom of its **Feed** — the same input you'd expect in a chat app:
    context, then continues toward `done`.
 4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
    the agent's own messages (it is not clickable — it's a record of what you sent).
+
+Choose **Message** to contact a Team participant without revising the stage. Type
+`@` and pick someone under **This run** or **This stage**; sending uses an existing
+direct conversation or opens one on the first message. **Attach to stage** lists
+available configured roles and opens an attach preview before sending. The message
+view shows its conversation and delivery status. A failed send leaves the draft
+available to retry. See [Team conversations](collaboration.md#team-conversations).
 
 ### Hold the agent while you type
 
