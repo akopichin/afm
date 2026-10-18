@@ -15,8 +15,10 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -230,6 +232,92 @@ func currentChildren(rs state.RunState, parentID assistants.TaskID, currentParen
 		}
 	}
 	return out
+}
+
+// childResultMeshEffects mirrors a terminal, CURRENT-generation child's outcome into a dedicated mesh thread
+// between it and its delegating parent — bundled into finishTaskFrom's SAME ApplyRunOperation as the child's
+// own task_status_changed/task_result effects (T6.5: "a child's result reaching its parent is one durable
+// operation that both records the result and wakes the parent"). The wake itself (tryResumeParent) stays its
+// own follow-on, CAS-guarded resume — see that function's doc comment for why it cannot be folded into THIS
+// same commit: the parent's readiness can only be decided by re-reading state AFTER this commit lands, since
+// a sibling may finish in the very same instant (TestContinuation_TwoChildrenFinishSimultaneously_OneResume).
+// What THIS function folds in is making the result observable through the mesh's one delivery primitive
+// (agentCommInboxFor/Service.ReadInbox — the SAME read a reply from a peer helper already uses), instead of
+// ONLY through the bespoke collectChildResultsJSON read (assistants_context.go) — so there is exactly one "a
+// participant learns it has new input" mechanism, not two independent ones (dev-plan.md's T6.5 single-inbox
+// requirement). collectChildResultsJSON itself is left untouched and stays what buildTaskContext renders for
+// a resumed parent's own "Results from the children you delegated to" section — no existing delegation
+// test's expected prompt text changes because of this mirror.
+//
+// Returns (nil, nil) — no error, no effects — for a task with no parent, or for a STALE child (currentChildren's
+// own rule: one from a generation the parent has since superseded via RetryTask/BumpRootGeneration) — a dead
+// branch's outcome must never be injected into the parent's LIVE inbox after it has already moved on.
+func childResultMeshEffects(rs state.RunState, parentID, childID assistants.TaskID, reason string, extra []state.Effect) ([]state.Effect, error) {
+	child, ok := rs.Assistants.Tasks[childID]
+	if !ok {
+		return nil, nil
+	}
+	parent, ok := rs.Assistants.Tasks[parentID]
+	if !ok || child.ParentGeneration != parent.TaskGeneration {
+		return nil, nil
+	}
+
+	members := []agentcomm.ParticipantID{meshHelperParticipantID(parentID), meshHelperParticipantID(childID)}
+	effects, err := ensureParticipantEffects(rs, members)
+	if err != nil {
+		return nil, fmt.Errorf("child result mesh mirror: %w", err)
+	}
+
+	memberStrs := []string{string(members[0]), string(members[1])}
+	threadID := deriveMeshThreadID("delegate-thread:" + string(parentID) + ":" + string(childID))
+	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
+		state.MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: memberStrs})
+	if err != nil {
+		return nil, err
+	}
+	effects = append(effects, threadEff)
+
+	// The message body carries the SAME content collectChildResultsJSON would show for this child: its
+	// decoded task_result payload when one exists (located by Kind among extra — finishTaskFrom's success
+	// path bundles it as a SECOND effect of the very same operation, see taskResultEffect's doc comment), or
+	// finishTaskFrom's own reason text for a terminal child that never produced one (a failed/cancelled child
+	// never has a task_result — TestLifecycle_FailurePathHasNoResultEvent/TestCancel_HasNoResultEvent).
+	body := reason
+	for _, e := range extra {
+		if e.Kind == taskResultEffectKind {
+			body = string(e.Payload)
+			break
+		}
+	}
+	body = truncateMeshBody(redact.String(body, secretValuesForRedaction()))
+
+	messageID := deriveMeshMessageID("delegate-result:" + string(childID))
+	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(messageID)},
+		state.MeshMessageSentPayload{
+			Sender: string(members[1]), Recipients: []string{string(members[0])},
+			Kind: string(agentcomm.MessageKindMessage), Body: body,
+		})
+	if err != nil {
+		return nil, err
+	}
+	effects = append(effects, msgEff)
+	return effects, nil
+}
+
+// childResultMeshBodyLimit caps a mirrored mesh message body well under agentcomm.MaxBodyBytes. A child's
+// full result JSON (findings/evidence included) could in principle be large enough to trip
+// agentcomm.ValidateMessage's own limit — and that rejection would fail childResultMeshEffects' CALLER's
+// whole ApplyRunOperation, since the mirror effects are bundled into the same commit as the child's own
+// terminal status transition. A large result must never be able to block a task from finishing. The
+// untruncated result stays available exactly as before, via the task's own result.json/
+// collectChildResultsJSON — this mirror is an ADDITIONAL read path, not the only one.
+const childResultMeshBodyLimit = 4000
+
+func truncateMeshBody(body string) string {
+	if len(body) <= childResultMeshBodyLimit {
+		return body
+	}
+	return body[:childResultMeshBodyLimit] + "\n... (truncated — see the task's own result for the full record)"
 }
 
 // delegateOperationID derives a stable, per-turn idempotency key for the admission group a task's own

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -75,6 +76,11 @@ func taskHoldEffect(kind string, taskID assistants.TaskID, owner, reason string)
 	return state.Effect{Kind: kind, Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
 }
 
+// taskResultEffectKind is the task_result effect's Kind string — a named constant (not a repeated literal)
+// so childResultMeshEffects (assistants_delegate.go) can recognize the SAME effect this function builds
+// among finishTaskFrom's extra effects without hand-duplicating the string (goconst).
+const taskResultEffectKind = "task_result"
+
 // taskResultEffect carries a completed task's decoded assistants.Result as a "task_result" effect's Payload —
 // bundled into the SAME ApplyRunOperation call as the task_status_changed-to-"completed" effect (see
 // finishTaskFrom's extra parameter and runHelperTask's call site) so both commit in one atomic control
@@ -87,7 +93,7 @@ func taskResultEffect(taskID assistants.TaskID, result assistants.Result) (state
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_result payload: %w", err)
 	}
-	return state.Effect{Kind: "task_result", Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
+	return state.Effect{Kind: taskResultEffectKind, Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
 }
 
 // deriveTaskID computes a deterministic, path-safe task id from an Attach operation id: the SAME
@@ -478,14 +484,33 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 		return
 	}
 	effects := append([]state.Effect{eff}, extra...)
+	rootStage := o.taskRootStage(taskID)
+	parentID, hasParent := o.taskParent(taskID)
+
+	// Agent Mesh T6.5: fold the result-delivery-to-parent mirror into THIS SAME commit as the status/result
+	// effects above — see childResultMeshEffects' own doc comment. A build failure here is not expected in
+	// practice (both ids already name known, just-read tasks) and must never block the task's own terminal
+	// transition from landing, so it is logged and the finish proceeds without the mirror rather than failing
+	// the whole operation.
+	var beforeReady map[agentcomm.WaitID]bool
+	mirrored := false
+	if to.Terminal() && hasParent {
+		rs := o.opts.Store.Snapshot()
+		if mirror, merr := childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
+			log.Printf("WARN: assistants: child result mesh mirror (task=%s parent=%s): %v", taskID, parentID, merr)
+		} else if len(mirror) > 0 {
+			effects = append(effects, mirror...)
+			beforeReady = readyWaitSet(rs)
+			mirrored = true
+		}
+	}
+
 	op := state.Operation{
 		ID:      "task-finish:" + string(taskID) + ":" + string(to) + ":" + randomOpSuffix(),
 		Kind:    "finish_task",
 		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}},
 		Effects: effects,
 	}
-	rootStage := o.taskRootStage(taskID)
-	parentID, hasParent := o.taskParent(taskID)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 			"task_id": string(taskID), "status": string(to), "reason": reason,
@@ -512,6 +537,12 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 			// no-op marker WakeEventLoop already exists for (after-hooks, which also do not publish
 			// EventAgentCompleted).
 			o.concurrency.WakeEventLoop()
+		}
+		if mirrored {
+			// Mirrors Send/PostDiscussionMessage's own tail: the mirrored message can be exactly what a
+			// pending mesh Wait (e.g. an addressed_message wait the parent registered on this very delegate
+			// thread) needed to become ready — resume it the same way any other mesh write does.
+			o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
 		}
 	})
 	o.handleTaskOperationErr(err)
