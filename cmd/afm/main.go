@@ -126,6 +126,7 @@ func newRootCmd() *cobra.Command {
 		newInstallSkillsCmd(),
 		newMemoryCmd(),
 		newBrowserCmd(),
+		newAgentCmd(),
 	)
 	return root
 }
