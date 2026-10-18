@@ -62,7 +62,7 @@ type AttachAndSendResult struct {
 // unlike the task/thread/message ids below) is what lets AddRunAgent's "idempotent per profile" guarantee
 // (T6.2b) fall out of plain operation-id idempotency: see addRunAgentOperationID in agentcomm_runagent.go.
 func meshRunParticipantID(profileID assistants.ProfileID) agentcomm.ParticipantID {
-	return agentcomm.ParticipantID("run:" + string(profileID))
+	return agentcomm.ParticipantID(meshRunPrefix + string(profileID))
 }
 
 // meshThreadScopeFor maps an assistants.Scope onto the agentcomm.Scope the opened thread should carry. The

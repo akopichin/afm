@@ -42,7 +42,7 @@ func (o *Orchestrator) resumeWaitersAfterCommit(ctx context.Context, waiters []a
 			o.resumeAfterPeerReply(ctx, stageID)
 			continue
 		}
-		if taskID, ok := taskIDFromMeshParticipant(w); ok {
+		if taskID, ok := o.taskIDFromMeshParticipant(w); ok {
 			o.tryResumePeer(ctx, taskID)
 		}
 	}
@@ -106,11 +106,30 @@ func stageIDFromMeshParticipant(p agentcomm.ParticipantID) (string, bool) {
 	return id, ok && id != ""
 }
 
-// taskIDFromMeshParticipant inverts meshHelperParticipantID (T5.4) — resumeWaitersAfterCommit's helper-scoped
-// twin of stageIDFromMeshParticipant above.
-func taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
-	id, ok := strings.CutPrefix(string(p), meshHelperPrefix)
-	return assistants.TaskID(id), ok && id != ""
+// taskIDFromMeshParticipant inverts meshHelperParticipantID (T5.4) AND meshRunParticipantID (T6.2b) —
+// resumeWaitersAfterCommit's task-scoped twin of stageIDFromMeshParticipant above. A "run:<profileID>" id (a
+// standing role, AddRunAgent) carries no task id in its own string form the way a helper's "helper:<taskID>"
+// does, so resolving it needs an actual snapshot lookup for the one scope=run task currently registered under
+// that profile — AddRunAgent's own "idempotent per profile" guarantee (addRunAgentOperationID's doc comment)
+// is what makes that lookup unambiguous. This is a method (not a free function) purely for that snapshot
+// access; Agent Mesh Phase 8's own QA/DevOps acceptance test (T8.1) is what caught every caller of the old
+// free function silently treating a run-scoped participant as neither a stage nor a task, so none of
+// resumeWaitersAfterCommit/resumeWaiterAfterTerminalWait/maybeResumeAwaitingPeerQuestion ever resumed one.
+func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
+	if id, ok := strings.CutPrefix(string(p), meshHelperPrefix); ok && id != "" {
+		return assistants.TaskID(id), true
+	}
+	profileID, ok := strings.CutPrefix(string(p), meshRunPrefix)
+	if !ok || profileID == "" {
+		return "", false
+	}
+	rs := o.opts.Store.Snapshot()
+	for id, t := range rs.Assistants.Tasks {
+		if t.Scope == assistants.ScopeRun && string(t.ProfileID) == profileID {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // resumeAwaitingPeerStage drives stageID out of awaiting_peer via evType (EventPeerReplied or, T5.5,
@@ -202,7 +221,7 @@ func (o *Orchestrator) resumeWaiterAfterTerminalWait(ctx context.Context, waiter
 		o.resumeAfterPeerWaitEnded(ctx, stageID)
 		return
 	}
-	if taskID, ok := taskIDFromMeshParticipant(waiter); ok {
+	if taskID, ok := o.taskIDFromMeshParticipant(waiter); ok {
 		o.tryResumePeerForTerminalWait(ctx, taskID)
 	}
 }
@@ -219,7 +238,7 @@ func (o *Orchestrator) resumeWaiterAfterTerminalWaitAtStartup(ctx context.Contex
 		}
 		return
 	}
-	if taskID, ok := taskIDFromMeshParticipant(waiter); ok {
+	if taskID, ok := o.taskIDFromMeshParticipant(waiter); ok {
 		o.tryResumePeerForTerminalWait(ctx, taskID)
 	}
 }
@@ -290,7 +309,7 @@ func (o *Orchestrator) resumeTaskIfWaitCleared(ctx context.Context, taskID assis
 	if !ok || t.Status != assistants.StatusWaitingPeer {
 		return
 	}
-	if o.hasOpenMeshWaitFor(meshHelperParticipantID(taskID)) {
+	if o.hasOpenMeshWaitFor(meshParticipantForTask(t.Task)) {
 		return // the wait that parked this task is still genuinely pending — nothing to resume yet
 	}
 	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, reason)
@@ -354,7 +373,7 @@ func (o *Orchestrator) maybeResumeAwaitingPeerQuestion(ctx context.Context, part
 		o.resumeAfterPeerQuestion(ctx, stageID)
 		return
 	}
-	if taskID, ok := taskIDFromMeshParticipant(participant); ok {
+	if taskID, ok := o.taskIDFromMeshParticipant(participant); ok {
 		o.tryResumePeerForQuestion(ctx, taskID)
 	}
 }

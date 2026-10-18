@@ -234,10 +234,20 @@ func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 
 // agentCommBlockForTask renders helper task taskID's <agent_communication> block — the SAME
 // AgentCommunicationBlock source as agentCommBlockFor, T4.3's "identical for stage agents and helpers, one
-// source" requirement.
+// source" requirement. A scope=run task (AddRunAgent, T6.2b) gets its OWN real identity/scope here too
+// (meshParticipantForTask's own doc comment) — otherwise a standing role's own prompt would announce itself
+// as a stage-scoped helper it never registered a wait or message under.
 func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
+	participantID := meshHelperParticipantID(taskID)
+	scope := agentcomm.ScopeStage
+	if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
+		participantID = meshParticipantForTask(t.Task)
+		if t.Scope == assistants.ScopeRun {
+			scope = agentcomm.ScopeRun
+		}
+	}
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
-		ParticipantID: string(meshHelperParticipantID(taskID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
+		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
 	})
 }
 

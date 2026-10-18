@@ -616,6 +616,78 @@ describe('mesh_* — Agent Mesh notice events (T7.2): real presentation rows, no
   })
 })
 
+// Agent Mesh Phase 8, T8.2 ("the Feed scenario"): the backend companion
+// (pkg/orchestrator/agentcomm_feed_test.go's TestFeed_UserDiscussionThenQAClarification_NoRevisionNoHelperNoGate)
+// drives an existing run-scoped QA asking the "impl" stage a clarification mid-exchange — this fixture feeds
+// the exact mesh_* notice sequence that chain durably publishes (participants join, a thread opens between
+// QA and the stage, QA's question, the stage's reply, the reply's delivery receipt) through the SAME
+// toFeedItems/groupFeedItems this file's own T7.2 unit tests already cover one event at a time, proving the
+// WHOLE story reads correctly together: both sides of the exchange are distinguishable, nothing collapses
+// into the untyped fallback, and a reload replay (the identical events arriving a second time, exactly like
+// re-deriving the feed from events.jsonl on refresh) never duplicates a row.
+describe('T8.2 — the Feed scenario: QA clarifying with a stage renders as one coherent exchange', () => {
+  const qaClarifiesWithStage = (): AfmEvent[] => [
+    ev('mesh_participant', { participant_id: 'run:qa' }, '', '2026-10-18T10:00:00Z'),
+    ev('mesh_participant', { participant_id: 'stage:impl' }, '', '2026-10-18T10:00:00Z'),
+    ev('mesh_thread', { thread_id: 't-clarify', title: '' }, '', '2026-10-18T10:00:01Z'),
+    ev('mesh_message', { message_id: 'm-ask', thread_id: 't-clarify', sender_id: 'run:qa', kind: 'message' }, '', '2026-10-18T10:00:02Z'),
+    ev('mesh_message', { message_id: 'm-answer', thread_id: 't-clarify', sender_id: 'stage:impl', kind: 'message' }, '', '2026-10-18T10:00:03Z'),
+    ev('mesh_receipt', { message_id: 'm-answer', participant_id: 'run:qa', status: 'delivered' }, '', '2026-10-18T10:00:04Z'),
+  ]
+
+  it('renders every step with real text, never the raw-type fallback', () => {
+    const items = toFeedItems(qaClarifiesWithStage())
+    expect(items).toHaveLength(6)
+    for (const item of items) {
+      expect(item.text).not.toBe('mesh_participant')
+      expect(item.text).not.toBe('mesh_thread')
+      expect(item.text).not.toBe('mesh_message')
+      expect(item.text).not.toBe('mesh_receipt')
+    }
+  })
+
+  it("QA's question and the stage's reply are both real message rows naming the thread and their own sender", () => {
+    const items = toFeedItems(qaClarifiesWithStage())
+    const ask = items[3]
+    const answer = items[4]
+    expect(ask?.kind).toBe('message')
+    expect(ask?.text).toContain('run:qa')
+    expect(ask?.text).toContain('t-clarify')
+    expect(answer?.kind).toBe('message')
+    expect(answer?.text).toContain('stage:impl')
+    expect(answer?.text).toContain('t-clarify')
+    // Neither sender is the fixed human "user" id, so the mapping's own user/agent split (mesh_message's own
+    // doc comment) correctly sides BOTH on 'agent' — distinct messages, same side, exactly like two colleagues
+    // talking to each other with no human in the exchange.
+    expect(ask).toMatchObject({ actor: 'agent', side: 'left' })
+    expect(answer).toMatchObject({ actor: 'agent', side: 'left' })
+  })
+
+  it('the delivery receipt names the recipient and the delivered status', () => {
+    const items = toFeedItems(qaClarifiesWithStage())
+    const receipt = items[5]
+    expect(receipt?.text).toContain('run:qa')
+    expect(receipt?.text.toLowerCase()).toContain('delivered')
+  })
+
+  it('a reload replay (the same events arriving again) keys every row identically — no duplicate rows', () => {
+    const events = qaClarifiesWithStage()
+    const first = toFeedItems(events)
+    const replayed = toFeedItems(events)
+    expect(replayed.map((i) => i.key)).toEqual(first.map((i) => i.key))
+  })
+
+  it('groups into one exchange: the roster/thread chatter and the two-message conversation are each their own bubble', () => {
+    const groups = groupFeedItems(toFeedItems(qaClarifiesWithStage()))
+    // mesh_participant x2 + mesh_thread are all actor:'system' → one bubble; the two mesh_message rows are
+    // actor:'agent' → a second bubble (groupFeedItems groups by side+stageId+actor only, not by sender
+    // identity — so QA's question and the stage's reply land in the SAME visual bubble, exactly like any other
+    // pair of consecutive agent-side feed rows); the trailing receipt is actor:'system' again → a third bubble.
+    expect(groups.map((g) => `${g.side}:${g.actor}`)).toEqual(['left:system', 'left:agent', 'left:system'])
+    expect(groups[1]?.items).toHaveLength(2)
+  })
+})
+
 describe('formatEventGap', () => {
   it('formats seconds/minutes/hours/days and em-dash for invalid', () => {
     expect(formatEventGap(5000, 0)).toBe('5s')

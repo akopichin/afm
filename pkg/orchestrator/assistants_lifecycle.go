@@ -38,7 +38,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
-		MeshClient:     o.meshClientFor(meshHelperParticipantID(taskID)),
+		MeshClient:     o.meshClientFor(o.taskMeshParticipant(taskID)),
 		OnDelivered:    onDelivered,
 	}
 }
@@ -271,7 +271,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// kind:"delegate" envelope, and treating its (expected) empty/absent RawText as malformed would be wrong.
 	// This task's own concurrency lease is released simply by this function returning next, exactly like
 	// runWithRetry's awaiting_peer branch releases a stage's.
-	if o.hasOpenMeshWaitFor(meshHelperParticipantID(taskID)) {
+	if o.hasOpenMeshWaitFor(meshParticipantForTask(task)) {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
 		return
 	}

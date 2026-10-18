@@ -24,6 +24,10 @@ const (
 	meshUserParticipantID = agentcomm.ParticipantID("user")
 	meshStagePrefix       = "stage:"
 	meshHelperPrefix      = "helper:"
+	// meshRunPrefix is meshRunParticipantID's own prefix (agentcomm_attach.go) — named here, next to its
+	// stage/helper siblings, so taskIDFromMeshParticipant's reverse lookup (agentcomm_resume.go) can recognize
+	// it without a second, drifting copy of the literal.
+	meshRunPrefix = "run:"
 
 	// actorKindUser is state.Actor.Kind's value for the human operator — the only actor kind that may send an
 	// AttachAndSend first message or register a mesh Wait today. The Side agent's own mesh identity
@@ -40,6 +44,35 @@ func meshStageParticipantID(stageID string) agentcomm.ParticipantID {
 
 func meshHelperParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
 	return agentcomm.ParticipantID(meshHelperPrefix + string(taskID))
+}
+
+// meshParticipantForTask resolves task's OWN mesh participant identity: meshRunParticipantID(profile) for a
+// scope=run standing role (AttachAndSend/AddRunAgent, T6.2/T6.2b) — whose real mesh identity is keyed by
+// profile, not by task id, see meshRunParticipantID's own doc comment — meshHelperParticipantID(task.ID) for
+// every other (stage-rooted) task. Every call site that means "this task, as a mesh participant" (not some
+// OTHER, specifically-named task) must go through this, not meshHelperParticipantID directly: Agent Mesh
+// Phase 8's own QA/DevOps acceptance test (T8.1) is what caught several call sites still assuming the
+// ScopeStage shape unconditionally — a scope=run task's own Wait/resume checks, inbox and prompt
+// self-description, and its real subprocess's MeshClient identity were all silently resolving to the WRONG
+// participant (a "helper:<taskID>" nobody ever registered a wait or sent a message under, instead of its
+// actual "run:<profileID>"), which made a run-scoped role's own cooperative yield indistinguishable from a
+// protocol error.
+func meshParticipantForTask(task assistants.Task) agentcomm.ParticipantID {
+	if task.Scope == assistants.ScopeRun {
+		return meshRunParticipantID(task.ProfileID)
+	}
+	return meshHelperParticipantID(task.ID)
+}
+
+// taskMeshParticipant is meshParticipantForTask's convenience wrapper for a caller that only has the bare
+// task id in hand (e.g. execHelperAgent, constrained to the helperAgentRunner seam's string-only signature) —
+// a fresh snapshot lookup, falling back to the ScopeStage default for an id with no task record (never
+// expected in practice; keeps this total rather than requiring every such caller to handle a lookup miss).
+func (o *Orchestrator) taskMeshParticipant(taskID assistants.TaskID) agentcomm.ParticipantID {
+	if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
+		return meshParticipantForTask(t.Task)
+	}
+	return meshHelperParticipantID(taskID)
 }
 
 // ListParticipants implements Service.ListParticipants (T2.1).
@@ -76,7 +109,14 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 	slices.Sort(taskIDs)
 	for _, idStr := range taskIDs {
 		id := assistants.TaskID(idStr)
-		out = append(out, helperParticipant(id, rs.Assistants.Tasks[id]))
+		t := rs.Assistants.Tasks[id]
+		if t.Scope == assistants.ScopeRun {
+			// A scope=run task's real mesh identity is "run:<profileID>", already synthesized below from
+			// Mesh.Participants — listing it again here as "helper:<taskID>" would be a second, bogus roster
+			// entry for the same standing role (meshParticipantForTask's own doc comment).
+			continue
+		}
+		out = append(out, helperParticipant(id, t))
 	}
 
 	runIDs := make([]string, 0, len(rs.Assistants.Mesh.Participants))

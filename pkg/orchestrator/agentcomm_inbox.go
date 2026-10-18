@@ -61,5 +61,5 @@ func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (b
 // agentCommInboxForTask is agentCommInboxFor's helper-task-scoped wrapper, used by buildTaskContext (T4.3)
 // and helperExecutorConfig's OnDelivered wiring.
 func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, onDelivered func()) {
-	return o.agentCommInboxFor(meshHelperParticipantID(taskID))
+	return o.agentCommInboxFor(o.taskMeshParticipant(taskID))
 }

@@ -505,7 +505,7 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 			// unconditionally for the same reason tryResumePeer above is: both conditions it checks
 			// (hasOpenMeshWaitFor, hasUndeliveredInbox) are re-derived fresh, and the resume it triggers is
 			// CAS-protected, so finding nothing to do (or racing tryResumePeer's own resume above) is a no-op.
-			o.maybeResumeAwaitingPeerQuestion(ctx, meshHelperParticipantID(id))
+			o.maybeResumeAwaitingPeerQuestion(ctx, meshParticipantForTask(t.Task))
 		default:
 			// waiting_parent/watching/paused/terminal: nothing for a fresh process to do on its own —
 			// waiting_parent is reactivated by the stage's own startup path, paused stays paused until an
