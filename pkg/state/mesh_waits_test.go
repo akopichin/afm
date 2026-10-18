@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // ---- T1.3: waits ----
@@ -203,5 +204,59 @@ func TestMesh_StageStatusWaitResolvesOnTransition(t *testing.T) {
 	}
 	if got := rs.Assistants.Mesh.Waits["w2"].Status; got != agentcomm.WaitReady {
 		t.Fatalf("wait on the status the stage already has = %s, want ready at once", got)
+	}
+}
+
+// TestMesh_TaskResultWaitReplaysLegacySemantics: in a journal written before result baselines, a task_result
+// wait on a run agent that already had a result was ready at once — replay must keep it ready. A new wait
+// (FreshResultOnly) on the same task waits for the next result, live and after replay alike.
+func TestMesh_TaskResultWaitReplaysLegacySemantics(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustRecordPolicy(t, store)
+	created := taskCreatedControl("op-run", "t-run", "", nil)
+	created.Payload = mustMarshal(t, TaskCreatedPayload{Scope: string(assistants.ScopeRun), ProfileID: "qa", Mode: "advisory"})
+	result := &Control{Kind: "task_result", SchemaVersion: ControlSchemaVersion,
+		Target: Target{TaskID: "t-run"}, Payload: mustMarshal(t, assistants.Result{Verdict: assistants.VerdictPass, Summary: "turn 1"})}
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: "t-run"}
+	legacy := meshWaitRegisteredControl("w-legacy", "user", cond, "", "", 0)
+	fresh := meshWaitRegisteredControl("w-fresh", "user", cond, "", "", 0)
+	fresh.Payload = mustMarshal(t, MeshWaitRegisteredPayload{Waiter: "user", Condition: cond, FreshResultOnly: true})
+	for _, c := range []*Control{created, result, legacy, fresh} {
+		if err := store.AppendControl(c); err != nil {
+			t.Fatalf("AppendControl(%s): %v", c.Kind, err)
+		}
+	}
+	check := func(when string, rs RunState) {
+		t.Helper()
+		if got := rs.Assistants.Mesh.Waits["w-legacy"].Status; got != agentcomm.WaitReady {
+			t.Fatalf("%s: legacy wait = %s, want ready (an earlier result answered it)", when, got)
+		}
+		if got := rs.Assistants.Mesh.Waits["w-fresh"].Status; got != agentcomm.WaitPending {
+			t.Fatalf("%s: fresh wait = %s, want pending until the next result", when, got)
+		}
+	}
+	check("live", store.Snapshot())
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	defer reopened.Close()
+	check("replay", reopened.Snapshot())
+
+	next := &Control{Kind: "task_result", SchemaVersion: ControlSchemaVersion,
+		Target: Target{TaskID: "t-run"}, Payload: mustMarshal(t, assistants.Result{Verdict: assistants.VerdictPass, Summary: "turn 2"})}
+	if err := reopened.AppendControl(next); err != nil {
+		t.Fatalf("AppendControl(next result): %v", err)
+	}
+	if got := reopened.Snapshot().Assistants.Mesh.Waits["w-fresh"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("fresh wait after the next result = %s, want ready", got)
 	}
 }

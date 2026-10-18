@@ -62,6 +62,7 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	waitID := deriveMeshWaitID(req.OperationID)
 	eff, err := marshalEffect("mesh_wait_registered", state.Target{WaitID: string(waitID)}, state.MeshWaitRegisteredPayload{
 		Waiter: string(req.Waiter), Condition: req.Condition, Deadline: req.Deadline, ContinuationNote: req.ContinuationNote,
+		FreshResultOnly: req.Condition.Kind == agentcomm.WaitOnTaskResult,
 	})
 	if err != nil {
 		return WaitReceipt{}, err

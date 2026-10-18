@@ -24,9 +24,11 @@ type MeshWait struct {
 	TargetTaskID  string `json:"target_task_id,omitempty"`
 	TargetStageID string `json:"target_stage_id,omitempty"`
 	Generation    uint64 `json:"generation,omitempty"`
-	// ResultBaseline is, for a task_result wait, the awaited task's ResultSeq when the wait was registered: a
-	// run agent never becomes terminal, so only a result recorded after that point answers the wait.
-	ResultBaseline uint64 `json:"result_baseline,omitempty"`
+	// FreshResultOnly marks a task_result wait registered with MeshWaitRegisteredPayload.FreshResultOnly: on a
+	// run agent, only a result recorded after ResultBaseline (the task's ResultSeq when the wait was registered)
+	// answers it. A wait journaled before that rule keeps the old meaning — any recorded result answers it.
+	FreshResultOnly bool   `json:"fresh_result_only,omitempty"`
+	ResultBaseline  uint64 `json:"result_baseline,omitempty"`
 }
 
 // MeshWaitRegisteredPayload is the mesh_wait_registered control record's payload — decoded here by
@@ -39,6 +41,11 @@ type MeshWaitRegisteredPayload struct {
 	Deadline         *time.Time              `json:"deadline,omitempty"`
 	ContinuationNote string                  `json:"continuation_note,omitempty"`
 	Generation       uint64                  `json:"generation,omitempty"`
+	// FreshResultOnly (set on every new wait) asks a task_result wait for a result recorded after the wait
+	// itself; the baseline is the awaited task's ResultSeq at this record's own commit, so it is identical live
+	// and on replay, and a retried request rebuilds the same payload. Absent in older journals: there any
+	// recorded run-agent result answered the wait, and replay keeps that.
+	FreshResultOnly bool `json:"fresh_result_only,omitempty"`
 }
 
 // applyMeshWaitRegistered projects one mesh_wait_registered control record. If the condition is ALREADY
@@ -68,8 +75,8 @@ func applyMeshWaitRegistered(as *AssistantsState, c *Control, dryRun bool) error
 		return nil
 	}
 
-	mw := &MeshWait{Wait: w, TargetTaskID: c.Target.TaskID, TargetStageID: c.Target.StageID, Generation: p.Generation}
-	if w.Condition.Kind == agentcomm.WaitOnTaskResult {
+	mw := &MeshWait{Wait: w, TargetTaskID: c.Target.TaskID, TargetStageID: c.Target.StageID, Generation: p.Generation, FreshResultOnly: p.FreshResultOnly}
+	if p.FreshResultOnly && w.Condition.Kind == agentcomm.WaitOnTaskResult {
 		if t, ok := as.Tasks[assistants.TaskID(w.Condition.TaskID)]; ok {
 			mw.ResultBaseline = t.ResultSeq
 		}
@@ -98,9 +105,21 @@ func (as *AssistantsState) meshWaitSatisfied(w *MeshWait) bool {
 	case agentcomm.WaitOnTaskResult:
 		// A task's result is final once it is terminal. A run agent never becomes terminal: it returns to
 		// queued after every turn with that turn's result recorded — only a result recorded after the wait was
-		// registered answers it, never an earlier turn's.
+		// registered answers it, never an earlier turn's. A legacy wait accepts any recorded result.
 		t, ok := as.Tasks[assistants.TaskID(cond.TaskID)]
-		return ok && (t.Status.Terminal() || (t.Scope == assistants.ScopeRun && t.ResultSeq > w.ResultBaseline))
+		if !ok {
+			return false
+		}
+		if t.Status.Terminal() {
+			return true
+		}
+		if t.Scope != assistants.ScopeRun {
+			return false
+		}
+		if w.FreshResultOnly {
+			return t.ResultSeq > w.ResultBaseline
+		}
+		return t.LastVerdict != ""
 	case agentcomm.WaitOnBoardKey:
 		e, ok := as.Mesh.Board[cond.Key]
 		return ok && e.Status == cond.Status
