@@ -416,6 +416,51 @@ describe('FeedComposer', () => {
       expect(openSpy).not.toHaveBeenCalled()
     })
 
+    it('a reply target picked while a send is in flight survives that send finishing', async () => {
+      const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+        messages: [
+          { id: 'm0', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'first question', seq: 1, created_at: '2026-10-18T00:00:00Z' },
+          { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'second question', seq: 2, created_at: '2026-10-18T00:00:01Z' },
+        ],
+        next_cursor: 2,
+      })
+      let resolveSend!: (v: { message_id: string; seq: number }) => void
+      vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
+
+      openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
+      selectMention('@run:qa')
+      await waitFor(() => expect(screen.getByText('second question')).toBeInTheDocument())
+      const [replyToFirst, replyToSecond] = screen.getAllByRole('button', { name: 'Reply' })
+      fireEvent.click(replyToFirst as HTMLElement)
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa answer one' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-1', expect.objectContaining({ inReplyTo: 'm0' })))
+
+      fireEvent.click(replyToSecond as HTMLElement)
+      await act(async () => resolveSend({ message_id: 'm2', seq: 3 }))
+
+      expect(document.querySelector('.feed-reply-chip-src')).toHaveTextContent('second question')
+    })
+
+    it('a successful send clears the reply target it was sent with', async () => {
+      const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+        messages: [{ id: 'm0', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'original question', seq: 1, created_at: '2026-10-18T00:00:00Z' }],
+        next_cursor: 1,
+      })
+      vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 2 })
+
+      openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
+      selectMention('@run:qa')
+      await waitFor(() => expect(screen.getByText('original question')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa answer' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+      await waitFor(() => expect(document.querySelector('.feed-reply-chip')).toBeNull())
+    })
+
     // --- Agent Mesh Phase 7, T7.5: attach preview for a profile with no instance ---
     describe('"Attach to stage" opens a preview before anything is created (T7.5)', () => {
       function openPreview(): void {

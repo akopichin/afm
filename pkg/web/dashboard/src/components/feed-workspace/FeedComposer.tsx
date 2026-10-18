@@ -358,8 +358,9 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
     const recipient = target
     // Re-check at send time: the roster poll may have learned about a direct thread after the mention was picked.
     const knownThreadId = openedThreadId ?? findExistingDirectThread(knownThreads, recipient.id)?.id ?? null
+    const submittedReplyTo = replyTo?.messageId
     submitter.submit(
-      { recipientId: recipient.id, inReplyTo: replyTo?.messageId, body: text },
+      { recipientId: recipient.id, inReplyTo: submittedReplyTo, body: text },
       async (p, requestId) => {
         let threadId = knownThreadId
         if (threadId === null) {
@@ -380,7 +381,8 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
           setOpenedThreadId(threadId)
           setLastSend({ participantId: recipient.id, threadId, messageId })
           setDraft((cur) => removeSubmittedText(cur, submitted))
-          setReplyTo(null)
+          // A reply target picked while this message was sending belongs to the next message: keep it.
+          setReplyTo((cur) => (cur?.messageId === submittedReplyTo ? null : cur))
         },
         onFailure: () => setLastSend(null),
       },
