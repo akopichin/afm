@@ -22,15 +22,7 @@ without downloading modules. After changing `go.mod` or `go.sum`, run
 `make vendor` and commit the resulting `vendor/` changes with the manifests.
 Building the dashboard still requires npm dependencies from its lockfile.
 
-Before your first commit, enable the pre-commit hook — it runs lint + build + test on
-every commit:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-`core.hooksPath` is local git config, so it must be set once per clone. To skip the
-hook for a single commit: `git commit --no-verify`.
+Before committing, run `make lint build test`.
 
 ## Documentation
 

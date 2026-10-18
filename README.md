@@ -139,16 +139,6 @@ Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github
 
 ## Development
 
-Once after cloning, enable the pre-commit hook (lint + build + test before every
-commit):
-
-```bash
-git config core.hooksPath .githooks
-```
-
-The hook is versioned in `.githooks/pre-commit`, but `core.hooksPath` is local git
-config, so it must be set in each clone. Skip it once with `git commit --no-verify`.
-
 ```bash
 make build        # build (bin/afm)
 make test         # tests (with -race)
