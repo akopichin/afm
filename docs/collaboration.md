@@ -183,6 +183,14 @@ stay pending and their deadlines keep running after `afm run` resumes it; only a
 run that finishes closes them. A rejected call reports why
 (for example an unknown recipient) instead of a generic server error.
 
+Secret values are replaced before message bodies, board statuses and discussion
+posts are stored or shown: every value of the global and project `secrets.env`
+and of `docker.secrets_file`, the values recipe and lifecycle-hook references
+resolve to (including from the environment), provider credentials in afm's
+environment, and the agents' mesh tokens. Values shorter than 4 characters are
+left as they are: they cannot be meaningful credentials, and replacing them would
+garble ordinary text.
+
 A running stage's [Feed composer](dashboard.md#sending-a-note-to-a-running-stage)
 can send a **Message** to an existing participant or attach a configured helper
 through a preview. Its **Revise** mode continues to send stage feedback through
