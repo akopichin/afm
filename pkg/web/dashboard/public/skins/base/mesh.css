@@ -905,3 +905,11 @@
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
+
+/* Shown when more agents are ticked than one task may notify. */
+.team-board-notify-limit {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--attention);
+}

@@ -6,6 +6,7 @@ import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/
 import type { RunTeamListStage } from './RunTeamList'
 
 const TASK_PREFIX = 'task/'
+const MAX_BOARD_NOTIFY = 16
 
 export type BoardPanelProps = {
   // board — the shared board, polled by the Team view (which also counts its tasks on the tab).
@@ -54,18 +55,21 @@ export function BoardPanel({ board, participants, stages }: BoardPanelProps): Re
   const submitter = useRetryableSubmit<{ key: string; status: string; notify: string[] }>('mesh-board')
 
   const candidates = boardNotifyCandidates(participants, stages)
+  const notifyIds = candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id)
+  // A task notifies at most MAX_BOARD_NOTIFY agents (the server's agentcomm.MaxBoardNotify).
+  const tooManyNotified = notifyIds.length > MAX_BOARD_NOTIFY
 
   function post(): void {
     const submittedTitle = title
     const submittedDetails = details
     const name = submittedTitle.trim()
-    if (name === '') return
+    if (name === '' || tooManyNotified) return
     const text = submittedDetails.trim()
     submitter.submit(
       {
         key: taskKey(name),
         status: text !== '' ? `${name} — ${text}` : name,
-        notify: candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id),
+        notify: notifyIds,
       },
       (p, requestId) => publishMeshBoard({ requestId, key: p.key, status: p.status, notify: [...p.notify] }),
       {
@@ -115,11 +119,16 @@ export function BoardPanel({ board, participants, stages }: BoardPanelProps): Re
                 {participantLabel(p)}
               </label>
             ))}
+            {tooManyNotified && (
+              <p className="team-board-notify-limit" role="status">
+                A task can notify at most {MAX_BOARD_NOTIFY} agents — untick {notifyIds.length - MAX_BOARD_NOTIFY}.
+              </p>
+            )}
           </fieldset>
         )}
         <div className="team-board-form-actions">
           <span className="team-board-hint">Agents check the board between steps and report under the task.</span>
-          <button type="submit" className="btn btn-send" disabled={submitter.pending || title.trim() === ''}>
+          <button type="submit" className="btn btn-send" disabled={submitter.pending || title.trim() === '' || tooManyNotified}>
             {submitter.pending ? 'Posting…' : 'Post task'}
           </button>
         </div>

@@ -142,4 +142,13 @@ describe('boardTaskCount', () => {
       ]),
     ).toBe(1)
   })
+
+  test('more ticked agents than a task may notify blocks posting and says how many to untick', async () => {
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    const many = Array.from({ length: 18 }, (_, i) => ({ id: `run:a${i}`, kind: 'run_agent', scope: 'run', display_name: `Agent ${i}`, reachable: true, activity: 'idle' }))
+    render(<BoardWithPoll participants={many} stages={[]} />)
+    fireEvent.change(screen.getByPlaceholderText('e.g. CSV export'), { target: { value: 'Big task' } })
+    expect(screen.getByText(/untick 2/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Post task' })).toBeDisabled()
+  })
 })
