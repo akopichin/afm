@@ -3,7 +3,10 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/flow"
@@ -41,7 +44,8 @@ func TestMesh_HasOpenMeshWait(t *testing.T) {
 func TestMesh_HasOpenMeshWaitIgnoresResolvedWaits(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	waitID := registerTestStageWait(t, o, "s1", "op-yield-2")
-	if err := o.CancelWait(context.Background(), CancelWaitRequest{OperationID: "op-yield-2-cancel", WaitID: waitID}); err != nil {
+	cancel := CancelWaitRequest{OperationID: "op-yield-2-cancel", WaitID: waitID, Actor: state.Actor{Kind: "agent", ID: string(meshStageParticipantID("s1"))}}
+	if err := o.CancelWait(context.Background(), cancel); err != nil {
 		t.Fatalf("CancelWait: %v", err)
 	}
 	if o.hasOpenMeshWait("s1") {
@@ -53,7 +57,16 @@ func TestMesh_HasOpenMeshWaitIgnoresResolvedWaits(t *testing.T) {
 // registers a wait and exits does NOT get an IncompleteWorkError retry loop, is NOT reported done, and is
 // NOT turned into a user question.
 func TestRunWithRetry_MeshWaitParksAwaitingPeerNotFalseCompletion(t *testing.T) {
-	o, _ := setupHookOrch(t, "s1")
+	o, runDir := setupHookOrch(t, "s1")
+	// setupHookOrch builds a bare Orchestrator literal (absRunDir is never set by New()); the yield branch
+	// under test durably persists the peer-wait phase via o.stageDir(s.ID) = filepath.Join(o.absRunDir, ...),
+	// so this test needs a real, writable stage directory — otherwise saveMeshPeerWaitPhase resolves a
+	// relative path and pollutes the package's OWN source directory instead of a temp dir.
+	o.absRunDir = runDir
+	stageDir := filepath.Join(runDir, "s1")
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	registerTestStageWait(t, o, "s1", "op-yield-3")
 
 	completionCheckCalled := false
@@ -71,6 +84,9 @@ func TestRunWithRetry_MeshWaitParksAwaitingPeerNotFalseCompletion(t *testing.T) 
 	}
 	if got := o.opts.Store.Get("s1"); got != state.StatusAwaitingPeer {
 		t.Errorf("status = %v, want awaiting_peer", got)
+	}
+	if got := loadMeshPeerWaitPhase(stageDir); got != phaseImplementation {
+		t.Errorf("durable peer-wait phase marker = %q, want %q (needed for crash recovery, T5.3)", got, phaseImplementation)
 	}
 }
 
@@ -205,5 +221,119 @@ func TestMesh_SendWakesStageWaitAndPublishesPeerReplied(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+// Agent Mesh Phase 5 (follow-up to the 5-agent review): recoverMeshWaits re-derives a stage parked in
+// awaiting_peer whose wait resolved while the orchestrator process was down — the durable phase marker
+// (saveMeshPeerWaitPhase) is what makes this possible across a restart, since prePeerPhase itself is
+// in-memory only.
+
+func parkStageAwaitingPeer(t *testing.T, o *Orchestrator, stageID string) {
+	t.Helper()
+	o.absRunDir = o.opts.RunDir // mirrors what New() does in production; these test harnesses build Orchestrator{} literals
+	stageDir := filepath.Join(o.absRunDir, stageID)
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := o.Trigger(stageID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phaseImplementation}, ""); !ok {
+		t.Fatalf("EvAwaitPeer failed for %s", stageID)
+	}
+	saveMeshPeerWaitPhase(stageDir, phaseImplementation)
+}
+
+func TestMesh_RecoverMeshWaits_ResumesAlreadyReadyWait(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	parkStageAwaitingPeer(t, o, assistantsTestStageID)
+
+	waiter := meshStageParticipantID(assistantsTestStageID)
+	// Simulate "the reply already committed, resolving the wait, before the process restarted": register a
+	// wait whose condition is already true at registration time (WaitOnAddressedMessage against a thread
+	// that already contains a message addressed to the waiter).
+	colleague := agentcomm.ParticipantID("user")
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-rec-1-open", Members: []agentcomm.ParticipantID{waiter, colleague}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	if _, err := o.Send(ctx, SendRequest{OperationID: "op-rec-1-send", ThreadID: thread.ID, Sender: colleague, Recipients: []agentcomm.ParticipantID{waiter}, Kind: agentcomm.MessageKindMessage, Body: "already here"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	receipt, err := o.Wait(ctx, WaitRequest{OperationID: "op-rec-1-wait", Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread.ID}})
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if receipt.Status != agentcomm.WaitReady {
+		t.Fatalf("wait status = %q, want ready (message already present)", receipt.Status)
+	}
+
+	o.recoverMeshWaits(ctx)
+
+	if got := o.currentStatus(assistantsTestStageID); got == state.StatusAwaitingPeer {
+		t.Error("recoverMeshWaits must resume a stage whose wait is already ready, not leave it stranded")
+	}
+	_ = store
+}
+
+func TestMesh_RecoverMeshWaits_LeavesStillPendingWaitAlone(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	parkStageAwaitingPeer(t, o, assistantsTestStageID)
+
+	waiter := meshStageParticipantID(assistantsTestStageID)
+	deadline := time.Now().Add(time.Hour)
+	if _, err := o.Wait(ctx, WaitRequest{
+		OperationID: "op-rec-2-wait", Waiter: waiter, Deadline: &deadline,
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnBoardKey, Key: "qa.tests", Status: "ready"},
+	}); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	o.recoverMeshWaits(ctx)
+
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingPeer {
+		t.Errorf("status = %v, want unchanged awaiting_peer (wait is still pending)", got)
+	}
+}
+
+// TestMesh_RecoverMeshWaits_IgnoresStaleReadyWaitFromPastEpisode is a follow-up to a self-caught bug: a
+// stage on its SECOND awaiting_peer episode has a brand-new PENDING wait, while its FIRST episode's wait
+// still sits in the journal as Ready (waits are never deleted). recoverMeshWaits must not mistake that old
+// Ready record for "the current wait resolved."
+func TestMesh_RecoverMeshWaits_IgnoresStaleReadyWaitFromPastEpisode(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	waiter := meshStageParticipantID(assistantsTestStageID)
+	colleague := agentcomm.ParticipantID("user")
+
+	// Episode 1: a wait that resolves to ready (simulating a past, already-handled yield/resume cycle).
+	thread1, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-stale-open1", Members: []agentcomm.ParticipantID{waiter, colleague}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread 1: %v", err)
+	}
+	if _, err := o.Send(ctx, SendRequest{OperationID: "op-stale-send1", ThreadID: thread1.ID, Sender: colleague, Recipients: []agentcomm.ParticipantID{waiter}, Kind: agentcomm.MessageKindMessage, Body: "first"}); err != nil {
+		t.Fatalf("Send 1: %v", err)
+	}
+	if _, err := o.Wait(ctx, WaitRequest{OperationID: "op-stale-wait1", Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread1.ID}}); err != nil {
+		t.Fatalf("Wait 1: %v", err)
+	}
+
+	// Episode 2: park awaiting_peer again with a brand-new, still-PENDING wait.
+	parkStageAwaitingPeer(t, o, assistantsTestStageID)
+	thread2, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-stale-open2", Members: []agentcomm.ParticipantID{waiter, colleague}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread 2: %v", err)
+	}
+	if _, err := o.Wait(ctx, WaitRequest{OperationID: "op-stale-wait2", Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread2.ID}}); err != nil {
+		t.Fatalf("Wait 2: %v", err)
+	}
+
+	o.recoverMeshWaits(ctx)
+
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingPeer {
+		t.Errorf("status = %v, want still awaiting_peer (episode 2's wait is genuinely pending; the old episode 1 Ready record must not trigger a resume)", got)
 	}
 }

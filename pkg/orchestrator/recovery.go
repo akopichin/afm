@@ -112,7 +112,14 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			continue // Continue already owns this stage's restart in this process
 		}
 		switch current {
-		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused:
+		// StatusAwaitingPeer (Agent Mesh Phase 5, T5.3): nothing for THIS loop to do — unlike
+		// AwaitingUserInput, a stage here is correctly parked until its wait resolves. Re-deriving "is it
+		// already ready" (a reply committed right before a crash) is recoverMeshWaits' job, called alongside
+		// recoverAssistants/recoverFeedbackIntents below — falling through to `default` here would wrongly
+		// treat it as needing a fresh planning spawn (EvStartPlanning is not even a legal transition from
+		// awaiting_peer, but default unconditionally calls spawnKind regardless of whether the preceding
+		// Trigger succeeded).
+		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused, state.StatusAwaitingPeer:
 			continue
 		case state.StatusAwaitingAssistants:
 			// Этап 7 (T7.2/T7.3): without this case the stage would fall into `default` below and be

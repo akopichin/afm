@@ -16,6 +16,7 @@ var (
 	ErrDuplicateRecipient       = errors.New("agentcomm: duplicate recipient")
 	ErrSenderInRecipients       = errors.New("agentcomm: sender cannot be its own recipient")
 	ErrRecipientNotThreadMember = errors.New("agentcomm: recipient is not a member of the thread")
+	ErrSenderNotThreadMember    = errors.New("agentcomm: sender is not a member of the thread")
 	ErrReplyMissingInReplyTo    = errors.New("agentcomm: reply message is missing in_reply_to")
 	ErrInReplyToUnknown         = errors.New("agentcomm: in_reply_to does not name a message in this thread")
 	ErrBodyTooLarge             = errors.New("agentcomm: message body exceeds MaxBodyBytes")
@@ -47,6 +48,9 @@ func ValidateMessage(msg Message, threadMemberIDs []ParticipantID, knownMessageI
 	members := make(map[ParticipantID]bool, len(threadMemberIDs))
 	for _, id := range threadMemberIDs {
 		members[id] = true
+	}
+	if len(members) > 0 && !members[msg.Sender] {
+		return fmt.Errorf("%w: %q", ErrSenderNotThreadMember, msg.Sender)
 	}
 
 	seen := make(map[ParticipantID]bool, len(msg.Recipients))

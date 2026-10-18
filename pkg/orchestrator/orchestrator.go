@@ -701,6 +701,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		o.startPlanningForPending(ctx)
 		o.recoverAssistants(ctx)
 		o.recoverFeedbackIntents(ctx)
+		o.recoverMeshWaits(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
 	if o.opts.AssistantsEnabled {
@@ -959,19 +960,28 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 
 	// Agent exited before the user answered. Restart it so it can read
 	// answer.json (bash loop exits immediately since the file now exists).
+	return o.resumeStageForPhase(ctx, *stage, phase, bus.EvUserAnswered)
+}
+
+// resumeStageForPhase triggers ev (dispatching, via phaseDispatch, to the FSM status that phase implies)
+// and spawns the matching fresh agent for it — the one "resume a parked stage by phase" primitive shared by
+// onUserAnswered (human answered) and onPeerReplied (Agent Mesh Phase 5, T5.3: a colleague replied). Each
+// caller is responsible for its own precondition checks (current status, that a phase was actually
+// stashed) before calling this.
+func (o *Orchestrator) resumeStageForPhase(ctx context.Context, stage flow.Stage, phase string, ev bus.FSMEvent) error {
 	switch phase {
 	case phasePlanning:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "")
-		o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
+		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phasePlanning}, "")
+		o.spawnKind(ctx, stage, kindPlanning, o.runPlanningAgent)
 	case phaseImplementation:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "")
-		o.spawnKind(ctx, *stage, kindImplementation, o.runImplementationAgent)
+		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseImplementation}, "")
+		o.spawnKind(ctx, stage, kindImplementation, o.runImplementationAgent)
 	case phaseReview:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseReview}, "")
-		o.spawnKind(ctx, *stage, kindReview, o.runReviewAgent)
+		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseReview}, "")
+		o.spawnKind(ctx, stage, kindReview, o.runReviewAgent)
 	case phaseAutonomous:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseAutonomous}, "")
-		o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousAgent)
+		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseAutonomous}, "")
+		o.spawnKind(ctx, stage, kindAutonomous, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)
 	}

@@ -115,7 +115,7 @@ func (c *agentMeshClient) do(method, path string, body, out any) error {
 		if code == "" {
 			code = "http_" + fmt.Sprint(resp.StatusCode)
 		}
-		return newAgentCLIError(code, "mesh request failed: %s", code)
+		return newAgentCLIError(code, "mesh request failed: %s %s -> HTTP %d (%s)", method, path, resp.StatusCode, code)
 	}
 	if out == nil || len(raw) == 0 {
 		return nil

@@ -143,6 +143,17 @@ func TestValidateMessage_RecipientNotThreadMemberRejected(t *testing.T) {
 	}
 }
 
+func TestValidateMessage_SenderNotThreadMemberRejected(t *testing.T) {
+	msg := baseMessage()
+	// "user" (the default Sender) is deliberately excluded from this thread's member list.
+	members := []ParticipantID{"stage:build", "helper:qa"}
+	msg.Recipients = []ParticipantID{"helper:qa"}
+	err := ValidateMessage(msg, members, noKnownMessages)
+	if !errors.Is(err, ErrSenderNotThreadMember) {
+		t.Fatalf("ValidateMessage(sender not thread member) = %v, want ErrSenderNotThreadMember", err)
+	}
+}
+
 func TestValidateMessage_RecipientThreadMemberAccepted(t *testing.T) {
 	msg := baseMessage()
 	members := []ParticipantID{"user", "stage:build"}
@@ -162,6 +173,7 @@ func TestValidateMessage_EachRejectionIsDistinguishable(t *testing.T) {
 		ErrDuplicateRecipient,
 		ErrSenderInRecipients,
 		ErrRecipientNotThreadMember,
+		ErrSenderNotThreadMember,
 		ErrReplyMissingInReplyTo,
 		ErrInReplyToUnknown,
 		ErrBodyTooLarge,

@@ -32,6 +32,6 @@ func TestMesh_CapabilityOnNeverClaimsUnprovenGuarantees(t *testing.T) {
 		t.Fatal("CanReceiveBetweenTurns must stay false — no afm-owned MCP tool server exists yet")
 	}
 	if capability.CanYieldResume {
-		t.Fatal("CanYieldResume must stay false until Phase 5's awaiting_peer FSM lands")
+		t.Fatal("CanYieldResume must stay false: no per-participant-kind differentiation yet, no helper yield path (T5.4), and stage waits still lack generation-fencing")
 	}
 }

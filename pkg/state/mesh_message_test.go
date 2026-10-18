@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -198,5 +199,61 @@ func TestMesh_MessageSentDryRunMutatesNothing(t *testing.T) {
 	}
 	if len(as.Mesh.MessagesByThread["th-1"]) != 0 {
 		t.Fatalf("dryRun appended to MessagesByThread: %v", as.Mesh.MessagesByThread["th-1"])
+	}
+}
+
+// TestMesh_MessageSentRejectsAtMaxThreadMessages (follow-up to the 5-agent review): MaxThreadMessages is an
+// explicit rejection, never a silent truncation.
+func TestMesh_MessageSentRejectsAtMaxThreadMessages(t *testing.T) {
+	as := setupMeshThread(t, "a", "b")
+	var seq uint64
+	for i := 0; i < agentcomm.MaxThreadMessages; i++ {
+		seq++
+		mustApply(t, &as, meshMessageSentControl(seq, fmt.Sprintf("m%d", i), "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "q"))
+	}
+	if got := len(as.Mesh.MessagesByThread["th-1"]); got != agentcomm.MaxThreadMessages {
+		t.Fatalf("thread has %d messages, want exactly %d before the rejection", got, agentcomm.MaxThreadMessages)
+	}
+
+	seq++
+	err := dispatchControlKind(&as, meshMessageSentControl(seq, "m-overflow", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
+	if err == nil {
+		t.Fatal("thread already at MaxThreadMessages: want an explicit rejection, got nil error")
+	}
+	if got := len(as.Mesh.MessagesByThread["th-1"]); got != agentcomm.MaxThreadMessages {
+		t.Fatalf("the rejected message was still appended: thread now has %d messages", got)
+	}
+}
+
+// TestMesh_MessageSentRejectsAtMaxInboxUnread spreads messages to the SAME recipient across many different
+// threads (so no single thread's MaxThreadMessages is anywhere near its own limit) to isolate the
+// cross-thread per-recipient MaxInboxUnread check.
+func TestMesh_MessageSentRejectsAtMaxInboxUnread(t *testing.T) {
+	as := newAssistantsState()
+	mustApply(t, &as, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	mustApply(t, &as, meshParticipantAddedControl("qa", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+
+	var seq uint64
+	for i := 0; i < agentcomm.MaxInboxUnread; i++ {
+		threadID := fmt.Sprintf("th-%d", i)
+		seq++
+		mustApply(t, &as, meshThreadOpenedControl(threadID, []string{"a", "qa"}))
+		seq++
+		mustApply(t, &as, meshMessageSentControl(seq, fmt.Sprintf("m%d", i), threadID, "a", []string{"qa"}, string(agentcomm.MessageKindMessage), nil, "q"))
+	}
+	if got := len(as.Mesh.Inbox["qa"]); got != agentcomm.MaxInboxUnread {
+		t.Fatalf("qa's inbox has %d entries, want exactly %d before the rejection", got, agentcomm.MaxInboxUnread)
+	}
+
+	overflowThread := "th-overflow"
+	seq++
+	mustApply(t, &as, meshThreadOpenedControl(overflowThread, []string{"a", "qa"}))
+	seq++
+	err := dispatchControlKind(&as, meshMessageSentControl(seq, "m-overflow", overflowThread, "a", []string{"qa"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
+	if err == nil {
+		t.Fatal("qa already at MaxInboxUnread: want an explicit rejection, got nil error")
+	}
+	if got := len(as.Mesh.Inbox["qa"]); got != agentcomm.MaxInboxUnread {
+		t.Fatalf("the rejected message was still added to qa's inbox: now has %d entries", got)
 	}
 }

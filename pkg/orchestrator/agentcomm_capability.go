@@ -16,8 +16,12 @@ type Capability struct {
 	// or an explicit `afm agent inbox` call — never injected into an already-running generation.
 	CanReceiveBetweenTurns bool
 	// CanYieldResume reports whether registering a mesh Wait and ending the turn actually gets the
-	// participant resumed with the reply. False until Phase 5's awaiting_peer FSM exists — reporting true
-	// before that would be exactly the dishonest capability flag §6.2.2 forbids.
+	// participant resumed with the reply. ALWAYS false today, even though Phase 5 (T5.1-T5.3) delivers a
+	// real, crash-recovering yield/resume loop for STAGE agents: this field is not yet participant-kind-
+	// aware, helpers have no yield path at all (T5.4), and stage-level waits still lack generation-fencing
+	// (a stale reply after Revise/Retry could wake the wrong generation — see dev-plan.md's Review
+	// decisions). Reporting true before ALL of that is closed would be exactly the dishonest capability flag
+	// §6.2.2 forbids.
 	CanYieldResume bool
 	// Reason explains why CanSend is false. Empty when CanSend is true.
 	Reason string
@@ -25,6 +29,10 @@ type Capability struct {
 
 // CapabilityFor computes participant's mesh capability — read by the roster/UI (never a single global flag)
 // and consulted before Send treats an executor as mesh-supported (CodeMessagingUnsupported otherwise).
+// Today every participant gets the same CanSend/Reason regardless of kind (the `participant` argument is
+// not yet consulted) — true per-participant differentiation (e.g. a kind that genuinely cannot run `afm
+// agent`) is not needed by anything built so far; the parameter exists so adding it later is not a signature
+// change for every caller.
 func (o *Orchestrator) CapabilityFor(participant agentcomm.ParticipantID) Capability {
 	if o.MeshBaseURL() == "" {
 		return Capability{Reason: "messaging is disabled: the dashboard HTTP server is off (server.port: 0)"}

@@ -319,6 +319,25 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	if err := agentcomm.ValidateMessage(msg, thread.Members, known); err != nil {
 		return fmt.Errorf("mesh_message_sent %s: %w", id, err)
 	}
+	// agentcomm.MaxThreadMessages/MaxInboxUnread: explicit rejection, never a silent truncation (T0.2). A
+	// recipient's UNREAD count — accepted or delivered, not yet acknowledged — is what the limit bounds; an
+	// already-acknowledged message no longer occupies that budget.
+	if n := len(as.Mesh.MessagesByThread[threadID]); n >= agentcomm.MaxThreadMessages {
+		return fmt.Errorf("mesh_message_sent %s: thread %s has reached MaxThreadMessages (%d)", id, threadID, agentcomm.MaxThreadMessages)
+	}
+	for _, r := range recipients {
+		unread := 0
+		for _, mid := range as.Mesh.Inbox[r] {
+			switch as.Mesh.Receipts[mid][r] {
+			case agentcomm.DeliveryAccepted, agentcomm.DeliveryDelivered:
+				unread++
+			default:
+			}
+		}
+		if unread >= agentcomm.MaxInboxUnread {
+			return fmt.Errorf("mesh_message_sent %s: recipient %s has reached MaxInboxUnread (%d)", id, r, agentcomm.MaxInboxUnread)
+		}
+	}
 
 	if dryRun {
 		return nil
@@ -336,7 +355,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 }
 
 // deliveryRank orders DeliveryStatus so receipt transitions can be checked for monotonicity: a status may
-// only move to a STRICTLY higher rank (agentcomm-mesh.md §6.1 — "no status alone proves ..." plus the
+// only move to a STRICTLY higher rank (tmp/agent-mesh.md §6.1 — "no status alone proves ..." plus the
 // durability rule that a receipt can never silently regress). "answered" never appears here as a STORED
 // value (see MessageAnswered), but is still ranked for completeness/documentation.
 func deliveryRank(s agentcomm.DeliveryStatus) int {
@@ -370,19 +389,19 @@ type MeshMessageReceiptPayload struct {
 func applyMeshMessageReceipt(as *AssistantsState, c *Control, newStatus agentcomm.DeliveryStatus, dryRun bool) error {
 	id := agentcomm.MessageID(c.Target.MessageID)
 	if id == "" {
-		return errors.New("mesh message receipt: empty target message_id")
+		return fmt.Errorf("%s: empty target message_id", c.Kind)
 	}
 	recipient := agentcomm.ParticipantID(c.Target.ParticipantID)
 	if recipient == "" {
-		return errors.New("mesh message receipt: empty target participant_id")
+		return fmt.Errorf("%s: empty target participant_id", c.Kind)
 	}
 	receipts, ok := as.Mesh.Receipts[id]
 	if !ok {
-		return fmt.Errorf("mesh message receipt: unknown message %s", id)
+		return fmt.Errorf("%s: unknown message %s", c.Kind, id)
 	}
 	current, ok := receipts[recipient]
 	if !ok {
-		return fmt.Errorf("mesh message receipt: %s is not a recipient of message %s", recipient, id)
+		return fmt.Errorf("%s: %s is not a recipient of message %s", c.Kind, recipient, id)
 	}
 	if dryRun {
 		return nil

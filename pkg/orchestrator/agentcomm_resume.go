@@ -2,10 +2,13 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -58,40 +61,101 @@ func (o *Orchestrator) resumeAfterPeerReply(ctx context.Context, stageID string)
 }
 
 // onPeerReplied resumes a stage parked in awaiting_peer: FSM-transitions it back to the phase it was
-// running (phaseDispatch, keyed on the phase stashed in prePeerPhase when it yielded) and spawns a FRESH
-// process for that phase — mirrors onUserAnswered exactly, including spawnKind's existing "no before-hook on
-// resume" behavior.
+// running and spawns a FRESH process for that phase — mirrors onUserAnswered via the shared
+// resumeStageForPhase (orchestrator.go), including spawnKind's existing "no before-hook on resume" behavior.
+// The phase comes from prePeerPhase when this runs in-process (the normal live-reply path); popPeerWaitPhase
+// falls back to the durable marker file when prePeerPhase was never populated in THIS process — the restart
+// case recoverMeshWaits below drives.
 func (o *Orchestrator) onPeerReplied(ctx context.Context, ev bus.Event) error {
 	if o.currentStatus(ev.StageID) != state.StatusAwaitingPeer {
 		return nil
 	}
-
-	phase, ok := o.prePeerPhase.LoadAndDelete(ev.StageID)
+	phase, ok := o.popPeerWaitPhase(ev.StageID)
 	if !ok {
 		return nil
 	}
-	phaseStr, _ := phase.(string)
-
 	stage := o.reg().Stage(ev.StageID)
 	if stage == nil {
 		return nil
 	}
+	return o.resumeStageForPhase(ctx, *stage, phase, bus.EvPeerReplied)
+}
 
-	switch phaseStr {
-	case phasePlanning:
-		o.Trigger(ev.StageID, bus.EvPeerReplied, bus.GuardCtx{Phase: phasePlanning}, "")
-		o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
-	case phaseImplementation:
-		o.Trigger(ev.StageID, bus.EvPeerReplied, bus.GuardCtx{Phase: phaseImplementation}, "")
-		o.spawnKind(ctx, *stage, kindImplementation, o.runImplementationAgent)
-	case phaseReview:
-		o.Trigger(ev.StageID, bus.EvPeerReplied, bus.GuardCtx{Phase: phaseReview}, "")
-		o.spawnKind(ctx, *stage, kindReview, o.runReviewAgent)
-	case phaseAutonomous:
-		o.Trigger(ev.StageID, bus.EvPeerReplied, bus.GuardCtx{Phase: phaseAutonomous}, "")
-		o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousAgent)
-	default:
-		return fmt.Errorf("unexpected phase: %q", phaseStr)
+// popPeerWaitPhase returns the phase stashed when stageID parked in awaiting_peer (T5.2), preferring the
+// in-memory prePeerPhase (set by THIS process when it yielded) and falling back to the durable marker file
+// (set by ANY process, read back after a restart — prePeerPhase itself does not survive one).
+func (o *Orchestrator) popPeerWaitPhase(stageID string) (string, bool) {
+	if v, ok := o.prePeerPhase.LoadAndDelete(stageID); ok {
+		if phase, ok := v.(string); ok && phase != "" {
+			return phase, true
+		}
 	}
-	return nil
+	if phase := loadMeshPeerWaitPhase(o.stageDir(stageID)); phase != "" {
+		return phase, true
+	}
+	return "", false
+}
+
+// meshPeerWaitPhaseFile is the durable marker retry.go writes right before parking a stage in awaiting_peer
+// (T5.2) — prePeerPhase alone is a sync.Map, lost on restart, which would otherwise strand a stage whose
+// wait resolved while the orchestrator process was down (recoverMeshWaits below needs this to know which
+// kind of agent to respawn).
+const meshPeerWaitPhaseFile = "mesh_peer_wait.phase"
+
+func meshPeerWaitPhasePath(stageDir string) string {
+	return filepath.Join(stageDir, meshPeerWaitPhaseFile)
+}
+
+// saveMeshPeerWaitPhase persists phase for stageDir. Best-effort: a write failure here degrades recovery
+// after a crash (resumeStageForPhase would then be unreachable until a human intervenes) but must never
+// fail the yield itself — the in-memory prePeerPhase already covers the live, same-process resume path.
+func saveMeshPeerWaitPhase(stageDir, phase string) {
+	if err := memory.AtomicWrite(meshPeerWaitPhasePath(stageDir), []byte(phase)); err != nil {
+		log.Printf("WARN: mesh: persist peer-wait phase for stage dir %q: %v", stageDir, err)
+	}
+}
+
+func loadMeshPeerWaitPhase(stageDir string) string {
+	data, err := os.ReadFile(meshPeerWaitPhasePath(stageDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// recoverMeshWaits re-derives, on startup, every stage parked in awaiting_peer whose wait has ALREADY
+// become ready — e.g. a reply committed right before a crash, with the live resume never happening because
+// the process went down between the commit and the spawn. Mirrors recoverAssistants' role for
+// waiting_children: a wait STILL pending is untouched here (a future live Send/Publish will wake it
+// normally, through the same path a running orchestrator already uses).
+//
+// The condition is deliberately "no PENDING wait remains" (hasOpenMeshWait is false), not merely "some Ready
+// wait exists": a waiter's OLDER wait from a past, already-resumed awaiting_peer episode stays in the
+// journal as Ready forever (waits are never deleted). If this only checked "any Ready wait", a stage on its
+// SECOND yield — with a brand-new, still-PENDING wait — would be wrongly resumed on that stale Ready record
+// from its FIRST episode, abandoning the second wait's real condition.
+func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
+	rs := o.opts.Store.Snapshot()
+	for _, s := range o.reg().Stages() {
+		if o.currentStatus(s.ID) != state.StatusAwaitingPeer {
+			continue
+		}
+		if o.hasOpenMeshWait(s.ID) {
+			continue // the current wait has not resolved yet; a future live Send/Publish will wake it
+		}
+		waiter := meshStageParticipantID(s.ID)
+		ready := false
+		for _, w := range rs.Assistants.Mesh.Waits {
+			if w.Waiter == waiter && w.Status == agentcomm.WaitReady {
+				ready = true
+				break
+			}
+		}
+		if !ready {
+			continue
+		}
+		if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
+			log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
+		}
+	}
 }

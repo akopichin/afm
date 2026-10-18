@@ -283,6 +283,12 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			if o.hasOpenMeshWait(s.ID) {
 				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingPeer {
 					o.prePeerPhase.Store(s.ID, phase)
+					// prePeerPhase is in-memory only (sync.Map) — a restart loses it exactly like
+					// preAskPhase. Persist the phase durably too, so recoverMeshWaits (orchestrator.go) can
+					// resume into the right phase after a crash, mirroring detectInterruptedPhase's role for
+					// awaiting_user_input but without depending on a session file that non-interactive stages
+					// never create.
+					saveMeshPeerWaitPhase(o.stageDir(s.ID), phase)
 					o.Trigger(s.ID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase}, "")
 					return
 				}

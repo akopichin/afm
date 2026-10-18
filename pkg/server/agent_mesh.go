@@ -92,6 +92,12 @@ func (s *Server) authenticateAgentMesh(w http.ResponseWriter, r *http.Request) (
 	return participant, true
 }
 
+// routeAgentMesh deliberately does NOT check sameOriginOK, unlike every other mutating POST route in this
+// package (assistants.go, discussion.go, proposals.go, graph.go, side_agent.go all do): the `afm agent` CLI
+// is not a browser and never sends an Origin header, so requiring one would 403 every real agent request.
+// The bearer token (authenticateAgentMesh) is this surface's actual CSRF-equivalent defense — a same-origin
+// check would add nothing a browser-originated request could exploit anyway, since no browser ever holds a
+// valid per-invocation mesh token.
 func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 	if s.agentMesh == nil {
 		http.NotFound(w, r)

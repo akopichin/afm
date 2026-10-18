@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -75,7 +76,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	after := o.opts.Store.Snapshot()
 	entry, ok := after.Assistants.Mesh.Board[req.Key]
 	if !ok {
-		return agentcomm.BoardEntry{}, errors.New("agentcomm: board entry missing immediately after publish")
+		return agentcomm.BoardEntry{}, fmt.Errorf("agentcomm: board entry %q missing immediately after publish", req.Key)
 	}
 	return entry.BoardEntry, nil
 }

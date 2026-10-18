@@ -77,10 +77,19 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 }
 
 // CancelWait implements Service.CancelWait. Idempotent: cancelling an already-resolved wait is a no-op,
-// never an error (applyMeshWaitResolved).
+// never an error (applyMeshWaitResolved). Only the wait's own waiter or the human (the run owner) may
+// cancel it — otherwise one participant could permanently livelock another's awaiting_peer resume by
+// cancelling a WaitID it merely learned about (it is never exposed to callers other than the waiter today,
+// but ownership is still enforced at the single admission point, not by obscurity).
 func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) error {
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
+	}
+	if req.Actor.Kind != "user" {
+		rs := o.opts.Store.Snapshot()
+		if w, ok := rs.Assistants.Mesh.Waits[req.WaitID]; ok && string(w.Waiter) != req.Actor.ID {
+			return &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only the wait's own waiter or the human may cancel it"}
+		}
 	}
 	reason := req.Reason
 	if reason == "" {

@@ -119,6 +119,11 @@ type AcknowledgeRequest struct {
 	Actor       state.Actor
 }
 
+// WaitRequest.Waiter is trusted as given — Wait does not itself cross-check it against Actor. Every current
+// caller (cmd/afm/run_agent_mesh.go's HTTP adapter) sets Waiter to the SAME token-resolved identity it uses
+// for Actor, so a participant cannot register a wait as someone else today; any FUTURE direct caller of this
+// Service method must preserve that invariant itself — CancelWait's ownership check (agentcomm_wait.go)
+// relies on Waiter having been set honestly at registration time.
 type WaitRequest struct {
 	OperationID      string
 	Waiter           agentcomm.ParticipantID

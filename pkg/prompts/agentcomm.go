@@ -51,7 +51,7 @@ func AgentCommunicationBlock(in AgentCommInputs) string {
 	return sb.String()
 }
 
-// AgentCommInboxInputs describes the messages already addressed to a participant that belong in its NEXT
+// AgentCommInboxMessage describes one message already addressed to a participant that belongs in its NEXT
 // turn's prompt package (T4.4). Injecting them here — rather than relying on the participant to call
 // `afm agent inbox` itself — is what makes "delivered" actually happen for messages that arrived before this
 // turn started.

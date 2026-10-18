@@ -109,14 +109,51 @@ func TestMesh_CancelWaitIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if err := o.CancelWait(ctx, CancelWaitRequest{OperationID: "op-w-4-cancel1", WaitID: receipt.WaitID}); err != nil {
+	cancelByWaiter := CancelWaitRequest{WaitID: receipt.WaitID, Actor: state.Actor{Kind: "agent", ID: string(h1)}}
+	cancelByWaiter.OperationID = "op-w-4-cancel1"
+	if err := o.CancelWait(ctx, cancelByWaiter); err != nil {
 		t.Fatalf("CancelWait #1: %v", err)
 	}
-	if err := o.CancelWait(ctx, CancelWaitRequest{OperationID: "op-w-4-cancel2", WaitID: receipt.WaitID}); err != nil {
+	cancelByWaiter.OperationID = "op-w-4-cancel2"
+	if err := o.CancelWait(ctx, cancelByWaiter); err != nil {
 		t.Fatalf("CancelWait #2 (already cancelled): %v", err)
 	}
 	rs := store.Snapshot()
 	if got := rs.Assistants.Mesh.Waits[receipt.WaitID].Status; got != agentcomm.WaitCancelled {
 		t.Fatalf("wait status = %q, want cancelled", got)
+	}
+}
+
+// TestMesh_CancelWaitRejectsNonOwner is a follow-up to the security review round: only the wait's own
+// waiter (or the human) may cancel it — otherwise a different participant that merely learns a WaitID could
+// permanently livelock someone else's awaiting_peer resume.
+func TestMesh_CancelWaitRejectsNonOwner(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	h1 := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-w-5a"))
+	h2 := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-w-5b"))
+
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-w-5-open", Members: []agentcomm.ParticipantID{h1, h2}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	receipt, err := o.Wait(ctx, WaitRequest{OperationID: "op-w-5-wait", Waiter: h1, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread.ID}})
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	err = o.CancelWait(ctx, CancelWaitRequest{OperationID: "op-w-5-cancel", WaitID: receipt.WaitID, Actor: state.Actor{Kind: "agent", ID: string(h2)}})
+	if err == nil {
+		t.Fatal("h2 cancelling h1's wait: want rejection, got nil error")
+	}
+	rs := store.Snapshot()
+	if got := rs.Assistants.Mesh.Waits[receipt.WaitID].Status; got != agentcomm.WaitPending {
+		t.Fatalf("wait status after a rejected cancel = %q, want still pending", got)
+	}
+
+	// The human (run owner) may cancel any wait.
+	if err := o.CancelWait(ctx, CancelWaitRequest{OperationID: "op-w-5-cancel-human", WaitID: receipt.WaitID, Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatalf("CancelWait by the human: %v", err)
 	}
 }
