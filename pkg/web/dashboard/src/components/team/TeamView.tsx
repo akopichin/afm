@@ -28,6 +28,39 @@ function findDirectThread(threads: MeshThread[], participantId: string): MeshThr
   return threads.find((t) => t.status === 'open' && t.members.length === 2 && t.members.includes(participantId) && t.members.includes('user')) ?? null
 }
 
+// participantLabel — the human-facing name: display_name, else alias, else id.
+function participantLabel(p: MeshParticipant): string {
+  return (p.display_name && p.display_name !== '' ? p.display_name : null) ?? (p.alias && p.alias !== '' ? p.alias : null) ?? p.id
+}
+
+// participantInitials — up to two letters for the avatar square. Prefers the name's own capitals
+// (e.g. "QA reviewer" → "QA", "DevOps" → "DO") so acronyms read naturally, else the first letters of
+// the first words.
+function participantInitials(name: string): string {
+  const caps = name.replace(/[^A-Z]/g, '')
+  if (caps.length >= 2) return caps.slice(0, 2)
+  const words = name.split(/\s+/).filter(Boolean)
+  const letters = words.map((w) => w[0]).join('')
+  return (letters !== '' ? letters : name).slice(0, 2).toUpperCase()
+}
+
+// participantRole — a short role subtitle derived from the participant kind (the only role signal the
+// roster carries today); keeps the create-conversation rows legible without a richer per-agent description.
+function participantRole(kind: string): string {
+  switch (kind) {
+    case 'run_agent':
+      return 'Run agent'
+    case 'stage_agent':
+      return 'Stage executor'
+    case 'helper':
+      return 'Assistant'
+    case 'side_agent':
+      return 'Side agent'
+    default:
+      return kind
+  }
+}
+
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
 // use-workspace-view/workspace-view.ts's openTeam — the same "manual read-only-ish view owns its own detail
@@ -156,16 +189,25 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
                     {addressable.length === 0 ? (
                       <p className="empty-hint">No one to add yet</p>
                     ) : (
-                      addressable.map((p) => (
-                        <label key={p.id} className="team-create-conversation-participant">
-                          <input
-                            type="checkbox"
-                            checked={createSelected.has(p.id)}
-                            onChange={() => toggleCreateParticipant(p.id)}
-                          />
-                          <span>{(p.display_name && p.display_name !== '' ? p.display_name : null) ?? (p.alias && p.alias !== '' ? p.alias : null) ?? p.id}</span>
-                        </label>
-                      ))
+                      addressable.map((p) => {
+                        const name = participantLabel(p)
+                        return (
+                          <label key={p.id} className="team-create-conversation-participant">
+                            <span className="team-create-conversation-participant-avatar" aria-hidden="true">
+                              {participantInitials(name)}
+                            </span>
+                            <span className="team-create-conversation-participant-text">
+                              <span className="team-create-conversation-participant-name">{name}</span>
+                              <span className="team-create-conversation-participant-role">{participantRole(p.kind)}</span>
+                            </span>
+                            <input
+                              type="checkbox"
+                              checked={createSelected.has(p.id)}
+                              onChange={() => toggleCreateParticipant(p.id)}
+                            />
+                          </label>
+                        )
+                      })
                     )}
                   </fieldset>
                   {createError !== null && (
