@@ -5,6 +5,18 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: an interrupted run keeps its team's coordination
+
+Stopping `afm run` (Ctrl+C) no longer fails a run agent or helper that was in the
+middle of a turn — it is retried when the run resumes — and no longer closes the
+agents' pending waits: they stay open and their deadlines keep running after
+`afm run` resumes. Ctrl+C prints one line instead of the command's usage text and
+exits with code 130. A board task's notices are committed together with the task,
+retried requests are answered from what was originally committed, impossible
+waits (on a stage that already finished differently, or on the waiter itself)
+are refused, every active secret source is redacted, and the human's inbox keeps
+the newest 1000 messages.
+
 ### Fix: Agent Mesh keeps old runs loadable and accepted work safe
 
 Runs written before a board key was owned by its author alone, or before a
