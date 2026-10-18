@@ -1,8 +1,12 @@
-import { useRef, useState, type ReactElement } from 'react'
+import { useCallback, useRef, useState, type ReactElement } from 'react'
 import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
-import { findExistingDirectThread, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { useCaretInsert } from '../../hooks/use-caret-insert'
+import { MentionMenu } from '../assistants/AssistantMentionMenu'
+import { filterMentionProfiles } from '../assistants/mention-match'
+import { useMentionMenu } from '../assistants/use-mention-menu'
+import { findExistingDirectThread, mentionHandle, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
 
@@ -70,6 +74,21 @@ function recipientsFor(target: ThreadConversationTarget, opened: MeshThread | nu
   return thread.members.filter((m) => m !== 'user')
 }
 
+type MemberMention = { id: string; handle: string; title: string; unavailable: boolean }
+
+// otherMembers — everyone in the conversation except the operator, as roster participants.
+function otherMembers(target: ThreadConversationTarget, opened: MeshThread | null, participants: MeshParticipant[]): MeshParticipant[] {
+  if (target.kind === 'direct') return [target.participant]
+  return recipientsFor(target, opened)
+    .map((id) => participants.find((p) => p.id === id))
+    .filter((p): p is MeshParticipant => p !== undefined)
+}
+
+// routeAll — the default recipient line: the person in a direct conversation, everyone in a thread.
+function routeAll(target: ThreadConversationTarget, label: string): string {
+  return target.kind === 'direct' ? label : 'Everyone in this conversation'
+}
+
 export function ThreadConversation({ target, onThreadOpened, participants = [], threads = [] }: ThreadConversationProps): ReactElement {
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [draft, setDraft] = useState('')
@@ -85,7 +104,30 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
   // from the failed attempt already, so a plain "did this call just open it" check misses the retry).
   const notifiedRef = useRef<boolean>(target?.kind === 'thread')
 
+  // mentioned — recipients picked with `@`; empty means everyone else in the conversation.
+  const [mentioned, setMentioned] = useState<string[]>([])
+
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_INPUT_HEIGHT)
+  const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
+  const setInputRef = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      caretNodeRef.current = node
+      autoGrowRef(node)
+    },
+    [autoGrowRef, caretNodeRef],
+  )
+  // Mention candidates — the other members of this conversation, addressed by their short @handle.
+  const members = target === null ? [] : otherMembers(target, openedThread, participants)
+  const mention = useMentionMenu<MemberMention>({
+    matchesFor: (query) =>
+      filterMentionProfiles(
+        members.map((p) => ({ id: p.id, handle: mentionHandle(p), title: participantLabel(p), unavailable: !p.reachable })),
+        query,
+      ),
+    textFor: (item) => item.handle,
+    replaceRange,
+    onPicked: (item) => setMentioned((prev) => (prev.includes(item.id) ? prev : [...prev, item.id])),
+  })
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
 
@@ -114,11 +156,12 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
       setOpenedThread(thread)
       await sendMeshMessage(thread.id, {
         requestId: requestIdRef.current,
-        recipientIds: recipientsFor(target, thread),
+        recipientIds: mentioned.length > 0 ? mentioned : recipientsFor(target, thread),
         body: text,
       })
       requestIdRef.current = genMeshRequestId('mesh-send')
       setDraft('')
+      setMentioned([])
       // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
       // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
       // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
@@ -151,14 +194,23 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
         )}
       </div>
       {notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
+      <div className="team-conversation-route">
+        <span>From you →</span>
+        <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label)}</strong>
+        <span className="team-conversation-route-hint">@ to address someone</span>
+      </div>
       <div className="chat-composer-row">
         <textarea
-          ref={autoGrowRef}
+          ref={setInputRef}
           className="chat-composer-input"
           placeholder={`Message ${label}…`}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            mention.onInput(e.target.value, e.target.selectionStart ?? e.target.value.length)
+          }}
           onKeyDown={(e) => {
+            if (mention.onKeyDown(e)) return
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
               void send()
@@ -166,6 +218,15 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
           }}
           rows={1}
         />
+        {mention.open && (
+          <MentionMenu
+            groups={[{ label: '', items: mention.matches }]}
+            highlightIndex={mention.highlightIndex}
+            onHover={mention.setHighlightIndex}
+            onSelect={mention.pick}
+            ariaLabel="Mention someone in this conversation"
+          />
+        )}
         <ChatSendButton label="Send" disabled={sending || draft.trim() === ''} onClick={() => void send()} />
       </div>
       {error !== null && <div className="team-conversation-error" role="alert">{error}</div>}

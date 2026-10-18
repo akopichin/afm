@@ -6,7 +6,8 @@ import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
 import { MentionMenu, mentionText } from '../assistants/AssistantMentionMenu'
-import { detectMentionTrigger, filterMentionGroups } from '../assistants/mention-match'
+import { filterMentionGroups } from '../assistants/mention-match'
+import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
 import {
   genMeshRequestId,
@@ -261,8 +262,6 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
   const [lastSend, setLastSend] = useState<{ participantId: string; threadId: string; messageId: string | null } | null>(null)
   const [sending, setSending] = useState(false)
 
-  const [mention, setMention] = useState<ReturnType<typeof detectMentionTrigger>>(null)
-  const [highlightIndex, setHighlightIndex] = useState(0)
 
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_MESSAGE_TEXTAREA_HEIGHT)
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
@@ -280,9 +279,13 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     () => buildMeshMentionGroups(mesh.roster.participants, mesh.profiles, stageId),
     [mesh.roster.participants, mesh.profiles, stageId],
   )
-  const matchGroups = mention !== null ? filterMentionGroups(groups, mention.query) : []
-  const flatMatches = useMemo(() => matchGroups.flatMap((g) => g.items), [matchGroups])
-  const menuOpen = flatMatches.length > 0
+  const mention = useMentionMenu<MeshMentionItem>({
+    matchesFor: (query) => filterMentionGroups(groups, query).flatMap((g) => g.items),
+    textFor: mentionText,
+    replaceRange,
+    onPicked: (item) => setTarget(item.target),
+  })
+  const matchGroups = mention.query !== null ? filterMentionGroups(groups, mention.query) : []
 
   // Switching target drops whatever thread/reply context the previous one carried — addressing someone new
   // never inherits an unrelated open conversation.
@@ -301,47 +304,14 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
 
   const threadMessages = useMeshThread(openedThreadId)
 
-  function selectMention(item: MeshMentionItem): void {
-    if (mention === null) return
-    const end = mention.start + 1 + mention.query.length
-    replaceRange(mention.start, end, `@${mentionText(item)} `)
-    setTarget(item.target)
-    setMention(null)
-  }
-
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
     const v = e.target.value
     setDraft(v)
-    const caret = e.target.selectionStart ?? v.length
-    setMention(detectMentionTrigger(v, caret))
-    setHighlightIndex(0)
+    mention.onInput(v, e.target.selectionStart ?? v.length)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (menuOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setHighlightIndex((i) => (i + 1) % flatMatches.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setHighlightIndex((i) => (i - 1 + flatMatches.length) % flatMatches.length)
-        return
-      }
-      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-        e.preventDefault()
-        const item = flatMatches[highlightIndex]
-        if (item !== undefined) selectMention(item)
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        setMention(null)
-        return
-      }
-    }
+    if (mention.onKeyDown(e)) return
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
       e.preventDefault()
       void submit()
@@ -469,12 +439,12 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
           aria-label="Message the mesh"
           rows={1}
         />
-        {menuOpen && (
+        {mention.open && (
           <MentionMenu
             groups={matchGroups}
-            highlightIndex={highlightIndex}
-            onHover={setHighlightIndex}
-            onSelect={selectMention}
+            highlightIndex={mention.highlightIndex}
+            onHover={mention.setHighlightIndex}
+            onSelect={mention.pick}
             ariaLabel="Mention a mesh participant or profile"
           />
         )}

@@ -83,6 +83,30 @@ describe('ThreadConversation', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  test('@ in a group conversation lists its members; picking one addresses only them', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API: due dates', stage_id: 'api', reachable: true }
+    const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
+    expect(screen.getByText('Everyone in this conversation')).toBeInTheDocument()
+
+    const input = screen.getByPlaceholderText('Message Due dates…') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } })
+    const menu = screen.getByRole('listbox', { name: 'Mention someone in this conversation' })
+    expect(menu).toHaveTextContent('@api')
+    expect(menu).toHaveTextContent('QA reviewer')
+
+    fireEvent.change(input, { target: { value: '@ap', selectionStart: 3 } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(input.value).toBe('@api '))
+    expect(screen.getByText('API: due dates')).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: '@api what does a bad dueDate return?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['stage:api'] })))
+  })
+
   test('sending the first message to a direct target opens a thread then sends into it', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)

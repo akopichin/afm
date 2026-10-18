@@ -7,6 +7,7 @@ import sideAgentCss from '../../public/side-agent.css?raw'
 import assistantsCss from '../../skins/base/assistants.css?raw'
 import meshCss from '../../skins/base/mesh.css?raw'
 import chatComposerCss from '../../public/chat-composer.css?raw'
+import headerCss from '../../skins/base/header.css?raw'
 import graphiteIndexCss from '../../skins/graphite/index.css?raw'
 import gogaIndexCss from '../../skins/goga/index.css?raw'
 import novacorpsIndexCss from '../../skins/novacorps/index.css?raw'
@@ -193,6 +194,13 @@ describe('skins CSS contract — shared chat composer (feed, discussion, Team, s
     const withoutComments = chatComposerCss.replace(/\/\*[\s\S]*?\*\//g, '')
     expect(withoutComments.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).toEqual([])
     expect(withoutComments.match(/\b(?:rgb|hsl)a?\(\s*[0-9]/g) ?? []).toEqual([])
+  })
+})
+
+describe('skins CSS contract — global header', () => {
+  it('a long flow description shrinks (ellipsis) instead of squeezing the run metrics into each other', () => {
+    const r = rule(headerCss, '.global-header')
+    expect(r).toMatch(/grid-template-columns:\s*minmax\(0, max-content\) minmax\(max-content, 1fr\) auto/)
   })
 })
 

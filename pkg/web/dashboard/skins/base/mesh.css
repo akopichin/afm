@@ -533,6 +533,28 @@
   border-color: rgba(var(--accent-primary-rgb), 0.16);
 }
 
+/* "From you → <recipients>" above the composer; `@` narrows the recipients. */
+.team-conversation-route {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-conversation-route strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.team-conversation-route-hint {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 /* Nobody left who can answer (their stage/task finished). */
 .team-conversation-notice {
   margin: 0;
