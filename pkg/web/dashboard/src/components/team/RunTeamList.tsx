@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
-import { mentionHandle, participantLabel, participantRole, stagePresence, type Presence } from '../../lib/mesh-roster'
+import { participantLabel, participantRole, stagePresence, type Presence } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { STAGE_STATUS_LABELS, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
@@ -19,6 +19,8 @@ export type RunTeamListProps = {
   onSelectParticipant: (participant: MeshParticipant) => void
   onSelectThread: (thread: MeshThread) => void
   onAddRunAgent: () => void
+  // open — on a narrow screen the roster is a drawer; open slides it in (ignored on wide screens).
+  open?: boolean
 }
 
 function stageStatusLabel(status: string): string {
@@ -58,7 +60,7 @@ function stageOrder(stageParticipants: MeshParticipant[], stages: RunTeamListSta
 // "Conversations" (every thread the operator belongs to). The human operator itself ("user") is never listed.
 export function RunTeamList({
   participants, threads, stages, selectedParticipantId = null, selectedThreadId = null,
-  onSelectParticipant, onSelectThread, onAddRunAgent,
+  onSelectParticipant, onSelectThread, onAddRunAgent, open = false,
 }: RunTeamListProps): ReactElement {
   const runParticipants = participants.filter((p) => p.scope === 'run' && p.kind !== 'user')
   const stageParticipants = participants.filter((p) => p.scope === 'stage' && p.stage_id !== undefined && p.stage_id !== '')
@@ -80,7 +82,7 @@ export function RunTeamList({
           <span className="team-person-text">
             <span className="team-person-name" title={name}>{name}</span>
             <span className="team-person-detail" title={detail ?? undefined}>
-              <span className="team-person-handle">@{mentionHandle(p)}</span>
+              {p.alias !== undefined && p.alias !== '' && <span className="team-person-handle">@{p.alias}</span>}
               {detail !== null && <span className="team-person-status">{detail}</span>}
             </span>
           </span>
@@ -99,7 +101,7 @@ export function RunTeamList({
   }
 
   return (
-    <nav className="team-roster" aria-label="Team roster">
+    <nav id="team-roster" className={`team-roster${open ? ' open' : ''}`} aria-label="Team roster">
       <div className="team-roster-top">
         <h2 className="team-roster-title">Run team</h2>
         <button type="button" className="btn btn-send team-add-run-agent" onClick={onAddRunAgent}>

@@ -83,3 +83,17 @@
   background: var(--surface-hover);
   color: var(--text-primary);
 }
+
+/* The @-mention menu floats ABOVE the composer row, from its left edge (the row is position: relative).
+   Without this it became a flex item of the row, stretched the input and ran into the send button. Its
+   max-height is capped at runtime to the room left above the row (MentionMenu). */
+.assistant-mention-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: min(360px, 100%);
+  max-height: 280px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}

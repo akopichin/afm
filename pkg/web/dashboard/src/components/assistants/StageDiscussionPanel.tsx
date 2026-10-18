@@ -100,7 +100,7 @@ export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): Re
           }}
           rows={1}
         />
-        <ChatSendButton label="Send" disabled={sending || draft.trim() === ''} onClick={send} />
+        <ChatSendButton label="Send" disabled={draft.trim() === ''} sending={sending} onClick={send} />
       </div>
       {error !== null && <div className="stage-discussion-error" role="alert">{error}</div>}
     </div>

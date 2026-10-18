@@ -5,7 +5,8 @@ import { visibleFocusables } from '../../lib/focus-trap'
 
 export type AddRunAgentDialogProps = {
   profiles: AssistantProfile[]
-  onAttached: (result: MeshAttachAndSendResult) => void
+  // onAttached — name is how the new agent should be shown: its title, else the role's title.
+  onAttached: (result: MeshAttachAndSendResult, name: string) => void
   onCancel: () => void
 }
 
@@ -76,7 +77,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
       instruction: instruction.trim(),
       ...(firstMessage.trim() !== '' ? { firstMessage: firstMessage.trim() } : {}),
     })
-      .then((result) => onAttached(result))
+      .then((result) => onAttached(result, title.trim() !== '' ? title.trim() : (selected?.title ?? profileId)))
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'request failed')
         setSubmitting(false)

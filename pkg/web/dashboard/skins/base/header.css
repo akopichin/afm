@@ -220,7 +220,17 @@
    right-hand actions to icons only so they never crowd out the center metrics. */
 @media (max-width: 900px) {
   .gh-flow-desc { display: none; }
-  .global-header { gap: 12px; }
+  /* Narrow: brand + actions on the first row, the metrics on their own full-width row below (they wrap
+     there, run-metrics.css) — sharing one row, they overlapped the brand and the action buttons. */
+  .global-header {
+    gap: 8px 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .gh-left { grid-column: 1; grid-row: 1; }
+  .gh-right { grid-column: 2; grid-row: 1; }
+  .gh-center { grid-column: 1 / -1; grid-row: 2; }
   /* Files → icon-only square (the label is redundant once space is tight). */
   .gh-files-label { display: none; }
   .gh-files-btn { width: 38px; padding: 0; justify-content: center; }

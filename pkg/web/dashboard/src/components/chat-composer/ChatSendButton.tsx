@@ -7,18 +7,22 @@ export type ChatSendButtonProps = {
   onClick: () => void
   // paused — стадия на паузе: кнопка янтарная, как и рамка строки ввода.
   paused?: boolean
+  // sending — запрос в полёте: кнопка недоступна и называется «Sending…» (видно и экранному диктору).
+  sending?: boolean
 }
 
 // ChatSendButton — круглая кнопка отправки с самолётиком. Одна на все чат-композеры (лента, обсуждение,
 // Team, боковой агент) и живёт внутри строки ввода .chat-composer-row.
-export function ChatSendButton({ label, disabled, onClick, paused = false }: ChatSendButtonProps): ReactElement {
+export function ChatSendButton({ label, disabled, onClick, paused = false, sending = false }: ChatSendButtonProps): ReactElement {
+  const name = sending ? 'Sending…' : label
   return (
     <button
       type="button"
       className={`chat-send${paused ? ' paused' : ''}`}
-      aria-label={label}
-      title={label}
-      disabled={disabled}
+      aria-label={name}
+      aria-busy={sending}
+      title={name}
+      disabled={disabled || sending}
       onClick={onClick}
     >
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

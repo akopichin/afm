@@ -6,7 +6,7 @@ import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
 import { MentionMenu, mentionText } from '../assistants/AssistantMentionMenu'
-import { filterMentionGroups } from '../assistants/mention-match'
+import { draftMentions, filterMentionGroups } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
 import {
@@ -15,6 +15,7 @@ import {
   sendMeshMessage,
   type MeshAttachAndSendResult,
   type MeshMessage,
+  type MeshThread,
 } from '../../api/mesh-client'
 import { buildMeshMentionGroups, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
 import { findExistingDirectThread, senderLabel } from '../../lib/mesh-roster'
@@ -91,6 +92,9 @@ export function FeedComposer({
   mesh,
 }: FeedComposerProps): ReactElement {
   const [mode, setMode] = useState<ComposerMode>('revise')
+  // localThreads — direct threads Message mode opened that the roster poll has not reported yet. Kept here
+  // (not in MeshMessageComposer) so switching to Revise and back does not forget them and open a duplicate.
+  const [localThreads, setLocalThreads] = useState<MeshThread[]>([])
   const [value, setValue] = useState('')
   const [sending, setSending] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -152,7 +156,12 @@ export function FeedComposer({
       )}
 
       {mesh !== undefined && mode === 'message' ? (
-        <MeshMessageComposer stageId={stageId} mesh={mesh} />
+        <MeshMessageComposer
+          stageId={stageId}
+          mesh={mesh}
+          knownThreads={[...mesh.roster.threads, ...localThreads.filter((l) => !mesh.roster.threads.some((t) => t.id === l.id))]}
+          onThreadCreated={(thread) => setLocalThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))}
+        />
       ) : (
         <>
           {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
@@ -213,7 +222,8 @@ export function FeedComposer({
             />
             <ChatSendButton
               label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
-              disabled={empty || sending}
+              disabled={empty}
+              sending={sending}
               paused={paused}
               onClick={() => void submit()}
             />
@@ -229,6 +239,9 @@ const MAX_MESSAGE_TEXTAREA_HEIGHT = 200
 type MeshMessageComposerProps = {
   stageId: string
   mesh: FeedComposerMeshProps
+  // knownThreads — the roster's threads plus ones opened here that the poll has not reported yet.
+  knownThreads: MeshThread[]
+  onThreadCreated: (thread: MeshThread) => void
 }
 
 // targetKey — a stable string identity for a MeshMentionTarget, used as a dependency/reset key: switching
@@ -245,9 +258,14 @@ function targetKey(target: MeshMentionTarget | null): string {
 // per findExistingDirectThread's own "never widen a private thread" rule) or, for an "Attach to stage" pick,
 // the T6.2 attachAndSendMesh composite. Free text here NEVER reaches the Revise/onSend path above — the two
 // modes share a stageId and nothing else.
-function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): ReactElement {
+function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: MeshMessageComposerProps): ReactElement {
   const [draft, setDraft] = useState('')
   const [target, setTarget] = useState<MeshMentionTarget | null>(null)
+  // targetHandle — the `@handle` that picked target; deleting it from the draft un-addresses the target.
+  const [targetHandle, setTargetHandle] = useState('')
+  // openRequestIdRef — one id for opening the target's thread, reused by retries: a lost response must not
+  // open a second thread. A new target gets a new id.
+  const openRequestIdRef = useRef(genMeshRequestId('mesh-feed-open'))
   const [openedThreadId, setOpenedThreadId] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<{ messageId: string; preview: string } | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
@@ -283,7 +301,10 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     matchesFor: (query) => filterMentionGroups(groups, query).flatMap((g) => g.items),
     textFor: mentionText,
     replaceRange,
-    onPicked: (item) => setTarget(item.target),
+    onPicked: (item) => {
+      setTarget(item.target)
+      setTargetHandle(mentionText(item))
+    },
   })
   const matchGroups = mention.query !== null ? filterMentionGroups(groups, mention.query) : []
 
@@ -292,13 +313,14 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
   const key = targetKey(target)
   useEffect(() => {
     if (target?.kind === 'participant') {
-      setOpenedThreadId(findExistingDirectThread(mesh.roster.threads, target.id)?.id ?? null)
+      setOpenedThreadId(findExistingDirectThread(knownThreads, target.id)?.id ?? null)
     } else {
       setOpenedThreadId(null)
     }
     setReplyTo(null)
     setSendError(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- key IS the target identity; mesh.roster.threads
+    openRequestIdRef.current = genMeshRequestId('mesh-feed-open')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key IS the target identity; knownThreads
     // intentionally excluded so a later poll tick doesn't silently re-pick a thread mid-compose.
   }, [key])
 
@@ -308,6 +330,7 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     const v = e.target.value
     setDraft(v)
     mention.onInput(v, e.target.selectionStart ?? v.length)
+    if (target !== null && !draftMentions(v, targetHandle)) setTarget(null)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
@@ -332,15 +355,16 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     setSendError(null)
     try {
       // Re-check at send time: the roster poll may have learned about a direct thread after the mention was picked.
-      let threadId = openedThreadId ?? findExistingDirectThread(mesh.roster.threads, target.id)?.id ?? null
+      let threadId = openedThreadId ?? findExistingDirectThread(knownThreads, target.id)?.id ?? null
       setLastSend({ participantId: target.id, threadId: threadId ?? '', messageId: null })
       if (threadId === null) {
         const thread = await openMeshThread({
-          requestId: genMeshRequestId('mesh-feed-open'),
+          requestId: openRequestIdRef.current,
           title: '',
           scope: target.scope,
           memberIds: [target.id],
         })
+        onThreadCreated(thread)
         threadId = thread.id
       }
       setOpenedThreadId(threadId)
@@ -448,7 +472,7 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
             ariaLabel="Mention a mesh participant or profile"
           />
         )}
-        <ChatSendButton label="Send message" disabled={empty || sending} onClick={() => void submit()} />
+        <ChatSendButton label="Send message" disabled={empty} sending={sending} onClick={() => void submit()} />
       </div>
 
       {sendError !== null && (

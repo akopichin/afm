@@ -107,6 +107,34 @@ describe('ThreadConversation', () => {
     await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['stage:api'] })))
   })
 
+  test('deleting an @mention from the draft sends to everyone again', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true }
+    const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
+    const input = screen.getByPlaceholderText('Message Due dates…') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '@api please check' } })
+    expect(screen.getByText('API')).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: 'please check' } })
+    expect(screen.getByText('Everyone in this conversation')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['run:qa', 'stage:api'] })))
+  })
+
+  test('a retry after a lost open response re-uses the same open request id (no second thread)', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce(thread)
+    vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    render(<ThreadConversation target={{ kind: 'direct', participant: qa }} />)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('network'))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2))
+    expect(openSpy.mock.calls[1]?.[0].requestId).toBe(openSpy.mock.calls[0]?.[0].requestId)
+  })
+
   test('sending the first message to a direct target opens a thread then sends into it', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)

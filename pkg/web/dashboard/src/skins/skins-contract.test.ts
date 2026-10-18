@@ -176,8 +176,8 @@ describe('skins CSS contract — shared chat composer (feed, discussion, Team, s
   it('the composer row is the positioning anchor for the @-mention menu', () => {
     expect(rule(chatComposerCss, '.chat-composer-row')).toMatch(/position:\s*relative/)
   })
-  it('the @-mention menu floats above the input instead of joining the flex row', () => {
-    const r = rule(assistantsCss, '.assistant-mention-menu')
+  it('the @-mention menu floats above the input instead of joining the flex row (in the skin-proof stylesheet)', () => {
+    const r = rule(chatComposerCss, '.assistant-mention-menu')
     expect(r).toMatch(/position:\s*absolute/)
     expect(r).toMatch(/bottom:\s*calc\(100% \+ 6px\)/)
     expect(r).toMatch(/left:\s*0/)
@@ -197,10 +197,24 @@ describe('skins CSS contract — shared chat composer (feed, discussion, Team, s
   })
 })
 
+describe('skins CSS contract — Team on narrow screens', () => {
+  it('turns the roster into a drawer below 760px instead of squeezing the conversation', () => {
+    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 760px)'))
+    expect(narrow).toMatch(/\.team-roster \{[^}]*position:\s*absolute/)
+    expect(narrow).toMatch(/\.team-roster\.open \{[^}]*visibility:\s*visible/)
+    expect(narrow).toMatch(/\.team-roster-toggle \{[^}]*display:\s*grid/)
+  })
+})
+
 describe('skins CSS contract — global header', () => {
   it('a long flow description shrinks (ellipsis) instead of squeezing the run metrics into each other', () => {
     const r = rule(headerCss, '.global-header')
     expect(r).toMatch(/grid-template-columns:\s*minmax\(0, max-content\) minmax\(max-content, 1fr\) auto/)
+  })
+  it('on narrow screens the metrics get their own full-width row instead of overlapping the brand and actions', () => {
+    const narrow = headerCss.slice(headerCss.indexOf('@media (max-width: 900px)'))
+    expect(narrow).toMatch(/\.global-header \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/)
+    expect(narrow).toMatch(/\.gh-center \{[^}]*grid-column:\s*1 \/ -1;[^}]*grid-row:\s*2/)
   })
 })
 

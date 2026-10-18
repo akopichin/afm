@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { genMeshRequestId, openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
@@ -23,6 +23,12 @@ export type TeamViewProps = {
 
 type TeamTab = 'messages' | 'board' | 'activity'
 
+// mergeById — the roster's list plus local items it does not know yet (the roster wins once it has them).
+function mergeById<T extends { id: string }>(fromRoster: T[], local: T[]): T[] {
+  const missing = local.filter((l) => !fromRoster.some((r) => r.id === l.id))
+  return missing.length === 0 ? fromRoster : [...fromRoster, ...missing]
+}
+
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
 // use-workspace-view/workspace-view.ts's openTeam — the same "manual read-only-ish view owns its own detail
@@ -31,12 +37,15 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const [tab, setTab] = useState<TeamTab>('messages')
   const [activeConversation, setActiveConversation] = useState<ThreadConversationTarget | null>(null)
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
-  // pendingThreads — direct threads opened via ThreadConversation's onThreadOpened that the next roster poll
-  // (every 3s, see useMeshRoster) hasn't reported yet. Without this, re-selecting the same person row between
-  // a successful first send and that poll finds nothing in roster.threads, falls back to a fresh 'direct'
-  // target, and the next send mints a SECOND thread via openMeshThread. Filtered against roster.threads below
-  // rather than pruned on poll, so it never needs an effect and stays correct the instant the roster catches up.
-  const [pendingThreads, setPendingThreads] = useState<MeshThread[]>([])
+  // rosterOpen — the roster drawer on a narrow screen (CSS shows the toggle only there).
+  const [rosterOpen, setRosterOpen] = useState(false)
+  // localThreads / localParticipants — threads and run agents this dashboard just created that the next
+  // roster poll (every 3s, see useMeshRoster) has not reported yet. Every lookup and the roster UI use the
+  // merged lists, so a person clicked before that poll lands in the thread that already exists (no second
+  // direct thread) and a new agent shows its name, not its id. Filtered against the roster rather than pruned
+  // on poll, so this needs no effect and is correct the instant the roster catches up.
+  const [localThreads, setLocalThreads] = useState<MeshThread[]>([])
+  const [localParticipants, setLocalParticipants] = useState<MeshParticipant[]>([])
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createTopic, setCreateTopic] = useState('')
@@ -44,22 +53,32 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const [createError, setCreateError] = useState<string | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)
 
-  const unconfirmedThreads = pendingThreads.filter((p) => !roster.threads.some((t) => t.id === p.id))
-  const searchableThreads = unconfirmedThreads.length === 0 ? roster.threads : [...roster.threads, ...unconfirmedThreads]
+  // createRequestIdRef — one id per "Create conversation" form, reused by retries (a lost response must not
+  // produce a second thread); a new form gets a new id.
+  const createRequestIdRef = useRef(genMeshRequestId('mesh-conversation'))
+
+  const threads = mergeById(roster.threads, localThreads)
+  const participants = mergeById(roster.participants, localParticipants)
 
   function handleSelectParticipant(p: MeshParticipant): void {
+    setRosterOpen(false)
     setCreateOpen(false)
-    const existing = findExistingDirectThread(searchableThreads, p.id)
+    const existing = findExistingDirectThread(threads, p.id)
     setActiveConversation(existing ? { kind: 'thread', thread: existing } : { kind: 'direct', participant: p })
     setTab('messages')
   }
 
+  function rememberThread(thread: MeshThread): void {
+    setLocalThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))
+  }
+
   function handleThreadOpened(thread: MeshThread): void {
+    rememberThread(thread)
     setActiveConversation({ kind: 'thread', thread })
-    setPendingThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))
   }
 
   function handleSelectThread(t: MeshThread): void {
+    setRosterOpen(false)
     setCreateOpen(false)
     setActiveConversation({ kind: 'thread', thread: t })
     setTab('messages')
@@ -75,6 +94,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   }
 
   function resetCreateForm(): void {
+    createRequestIdRef.current = genMeshRequestId('mesh-conversation')
     setCreateOpen(false)
     setCreateTopic('')
     setCreateSelected(new Set())
@@ -89,9 +109,9 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
     }
     setCreateError(null)
     setCreateSubmitting(true)
-    openMeshThread({ requestId: genMeshRequestId('mesh-conversation'), title: topic, scope: 'run', memberIds: [...createSelected] })
+    openMeshThread({ requestId: createRequestIdRef.current, title: topic, scope: 'run', memberIds: [...createSelected] })
       .then((thread) => {
-        setActiveConversation({ kind: 'thread', thread })
+        handleThreadOpened(thread)
         resetCreateForm()
       })
       .catch((err: unknown) => setCreateError(err instanceof Error ? err.message : 'request failed'))
@@ -102,25 +122,40 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
     return <div className="team-view-disabled empty-hint">Team is not available for this run</div>
   }
 
-  const addressable = roster.participants.filter((p) => p.kind !== 'user')
+  const addressable = participants.filter((p) => p.kind !== 'user')
   const teamStages = stages.map((s) => ({ id: s.id, title: s.name !== '' ? s.name : s.id, status: s.status }))
 
   return (
     <div className="team-view">
       <RunTeamList
-        participants={roster.participants}
-        threads={roster.threads}
+        participants={participants}
+        threads={threads}
         stages={teamStages}
         selectedParticipantId={activeConversation?.kind === 'direct' ? activeConversation.participant.id : null}
         selectedThreadId={activeConversation?.kind === 'thread' ? activeConversation.thread.id : null}
         onSelectParticipant={handleSelectParticipant}
         onSelectThread={handleSelectThread}
-        onAddRunAgent={() => setAddRunAgentOpen(true)}
+        onAddRunAgent={() => {
+          setRosterOpen(false)
+          setAddRunAgentOpen(true)
+        }}
+        open={rosterOpen}
       />
+      {rosterOpen && <button type="button" className="team-roster-scrim" aria-label="Close team roster" onClick={() => setRosterOpen(false)} />}
       <div className="team-main">
         <header className="team-conversation-header">
+          <button
+            type="button"
+            className="team-icon-btn team-roster-toggle"
+            aria-label="Show team roster"
+            aria-controls="team-roster"
+            aria-expanded={rosterOpen}
+            onClick={() => setRosterOpen((v) => !v)}
+          >
+            ☰
+          </button>
           {activeConversation?.kind === 'direct' ? (
-            <MeshAvatar name={conversationTitle(activeConversation, roster.participants)} kind={activeConversation.participant.kind} size="large" />
+            <MeshAvatar name={conversationTitle(activeConversation, participants)} kind={activeConversation.participant.kind} size="large" />
           ) : (
             <span className="team-thread-symbol" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -131,7 +166,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             </span>
           )}
           <div className="team-conversation-heading">
-            <h3>{activeConversation === null ? 'Team' : conversationTitle(activeConversation, roster.participants)}</h3>
+            <h3>{activeConversation === null ? 'Team' : conversationTitle(activeConversation, participants)}</h3>
             <p>{activeConversation === null ? 'Select a person or a conversation' : conversationSubtitle(activeConversation)}</p>
           </div>
           {!createOpen && (
@@ -220,9 +255,10 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             <ThreadConversation
               key={targetKey(activeConversation)}
               target={activeConversation}
-              participants={roster.participants}
-              threads={searchableThreads}
+              participants={participants}
+              threads={threads}
               onThreadOpened={handleThreadOpened}
+              onThreadCreated={rememberThread}
             />
           </div>
         )}
@@ -232,10 +268,14 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
       {addRunAgentOpen && (
         <AddRunAgentDialog
           profiles={profiles}
-          onAttached={(result) => {
+          onAttached={(result, name) => {
             setAddRunAgentOpen(false)
-            // Open the new agent's conversation right away (the next roster poll confirms it).
-            handleThreadOpened({ id: result.thread_id, scope: 'run', members: ['user', result.participant_id], status: 'open' })
+            // Show the new agent by name and open its conversation right away (the next poll confirms both).
+            setLocalParticipants((prev) => [
+              ...prev,
+              { id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true },
+            ])
+            handleThreadOpened({ id: result.thread_id, title: name, scope: 'run', members: ['user', result.participant_id], status: 'open' })
             setTab('messages')
           }}
           onCancel={() => setAddRunAgentOpen(false)}

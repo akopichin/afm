@@ -67,11 +67,15 @@ export function participantRole(kind: string): string {
   }
 }
 
-// senderLabel — имя автора сообщения: «You» для оператора, имя участника, если он известен, иначе id.
+// senderLabel — имя автора сообщения: «You» для оператора, имя участника, если он известен. Неизвестный
+// (ещё не пришедший в ростер) участник называется по своему id без префикса, а id задачи — просто «Agent»:
+// внутренние `run:t-…` в интерфейс не попадают.
 export function senderLabel(senderId: string, participants: MeshParticipant[]): string {
   if (senderId === USER_ID) return 'You'
   const p = participants.find((x) => x.id === senderId)
-  return p !== undefined ? participantLabel(p) : senderId
+  if (p !== undefined) return participantLabel(p)
+  const bare = senderId.includes(':') ? senderId.slice(senderId.indexOf(':') + 1) : senderId
+  return bare === '' || /^t-[0-9a-f]+$/.test(bare) ? 'Agent' : bare
 }
 
 // threadLabel — название треда, а у личного треда без названия — имена собеседников (кроме оператора).

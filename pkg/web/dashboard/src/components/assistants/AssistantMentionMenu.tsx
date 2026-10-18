@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useLayoutEffect, useRef, type ReactElement } from 'react'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
 // MentionItem — the minimum shape the shared popup (MentionMenu) needs to render one option: an id/title pair
@@ -33,6 +33,19 @@ export type MentionMenuProps<T extends MentionItem> = {
   ariaLabel: string
 }
 
+const MENU_GAP = 6
+const MIN_MENU_HEIGHT = 96
+const MAX_MENU_HEIGHT = 280
+
+// clippingAncestor — the nearest ancestor that clips its overflow (the menu cannot extend past it).
+function clippingAncestor(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node !== null; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node)
+    if (overflowY !== 'visible') return node
+  }
+  return null
+}
+
 // mentionText — the text written after `@` for an item: its handle, else its id.
 export function mentionText(item: MentionItem): string {
   return item.handle !== undefined && item.handle !== '' ? item.handle : item.id
@@ -43,12 +56,23 @@ export function mentionText(item: MentionItem): string {
 // composer's mesh mention menu (mesh-recipients.ts) passes several labeled groups straight through. Rendering
 // lives here ONCE — no second popup component.
 export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onHover, onSelect, ariaLabel }: MentionMenuProps<T>): ReactElement | null {
+  const listRef = useRef<HTMLUListElement | null>(null)
+  // The menu opens upward from the composer row; cap its height to the room actually left above the row
+  // inside the nearest clipping ancestor (panels use overflow: hidden), so its top options never get cut off.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const anchor = list?.parentElement
+    if (list === null || anchor === null || anchor === undefined) return
+    const clip = clippingAncestor(anchor)
+    const room = anchor.getBoundingClientRect().top - (clip?.getBoundingClientRect().top ?? 0) - MENU_GAP
+    list.style.maxHeight = `${Math.max(MIN_MENU_HEIGHT, Math.min(MAX_MENU_HEIGHT, room))}px`
+  })
   const total = groups.reduce((n, g) => n + g.items.length, 0)
   if (total === 0) return null
 
   let cursor = -1
   return (
-    <ul className="assistant-mention-menu" role="listbox" aria-label={ariaLabel}>
+    <ul ref={listRef} className="assistant-mention-menu" role="listbox" aria-label={ariaLabel}>
       {groups.flatMap((group) => {
         const rows: ReactElement[] = []
         if (group.label !== '') {
@@ -72,13 +96,10 @@ export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onH
                 type="button"
                 className="assistant-mention-option"
                 onMouseEnter={() => onHover(index)}
-                // onMouseDown (not onClick): the textarea's blur would otherwise fire first on a click
-                // sequence in some browsers, but preventDefault here keeps focus in the textarea so the caret
-                // position this selection relies on stays valid.
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  onSelect(item)
-                }}
+                // preventDefault on mousedown keeps focus (and the caret this selection relies on) in the
+                // textarea; the selection itself happens on click, so Tab → Enter/Space works too.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onSelect(item)}
               >
                 <span className="assistant-mention-id">@{mentionText(item)}</span>
                 <span className="assistant-mention-title">{item.title}</span>

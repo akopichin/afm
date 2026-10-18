@@ -25,4 +25,12 @@ describe('ChatSendButton', () => {
     render(<ChatSendButton label="Send" disabled={false} onClick={() => {}} paused />)
     expect(screen.getByRole('button', { name: 'Send' })).toHaveClass('paused')
   })
+
+  test('while sending it is disabled and named "Sending…"', () => {
+    const onClick = vi.fn()
+    render(<ChatSendButton label="Send" disabled={false} onClick={onClick} sending />)
+    const btn = screen.getByRole('button', { name: 'Sending…' })
+    expect(btn).toBeDisabled()
+    expect(btn).toHaveAttribute('aria-busy', 'true')
+  })
 })

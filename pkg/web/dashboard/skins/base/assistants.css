@@ -703,16 +703,7 @@
 /* === `@`-mention menu (T4.2) — side-agent composer's profile suggestion popup; lifted into a shared
    primitive (MentionMenu) by T7.4, also used by the feed composer's grouped mesh mention menu === */
 .assistant-mention-menu {
-  /* Всплывает НАД строкой ввода, от её левого края: родитель (.chat-composer-row) — position: relative.
-     Без этого меню становилось flex-элементом строки, растягивало поле и наезжало на кнопку отправки. */
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  z-index: 20;
-  width: min(360px, 100%);
-  max-height: 280px;
-  overflow-y: auto;
-  box-sizing: border-box;
+  /* Positioning (above the composer row) lives in public/chat-composer.css — it must survive a skin_dir. */
   list-style: none;
   margin: 0;
   padding: 4px;

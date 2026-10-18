@@ -183,13 +183,81 @@ describe('TeamView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    // The thread now also shows under Conversations right away; click the PERSON row again.
+    fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'again' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-9', expect.objectContaining({ body: 'again' })))
     expect(openSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('a thread that opened but whose first send failed is still re-used when the person is clicked again', async () => {
+    mockThreadAndBoardFetches()
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-9', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+    vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ message_id: 'm1', seq: 1 })
+    renderTeamView()
+    const runRegion = () => screen.getByRole('region', { name: 'This run' })
+
+    fireEvent.click(within(runRegion()).getByRole('button', { name: /^QA reviewer/ }))
+    fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'first' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
+
+    // Leave and come back before any roster poll: the thread opened by the failed attempt must be reused.
+    fireEvent.click(within(screen.getByRole('region', { name: 'Stages' })).getByRole('button', { name: /^Implement agent/ }))
+    fireEvent.click(within(runRegion()).getByRole('button', { name: /^QA reviewer/ }))
+    fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'second' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenLastCalledWith('mt-9', expect.objectContaining({ body: 'second' })))
+    expect(openSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('a conversation created with the form shows up in Conversations at once and is reused for that person', async () => {
+    mockThreadAndBoardFetches()
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-7', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+    vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    renderTeamView()
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Release' } })
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Release')).toBeInTheDocument())
+
+    fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
+    fireEvent.change(await screen.findByPlaceholderText('Message Release…'), { target: { value: 'hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-7', expect.objectContaining({ body: 'hi' })))
+    expect(openSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('a new run agent is shown by name right away, never by its participant id', async () => {
+    mockThreadAndBoardFetches()
+    vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't1', participant_id: 'run:t-1', thread_id: 'mt-5' })
+    renderTeamView()
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    const dialog = screen.getByRole('dialog', { name: 'Add run agent' })
+    fireEvent.change(within(dialog).getByPlaceholderText('What should this run agent do?'), { target: { value: 'watch tests' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add run agent' }))
+    expect(await screen.findByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(screen.queryByText(/run:t-1/)).toBeNull()
+    expect(within(screen.getByRole('region', { name: 'This run' })).getAllByText('QA reviewer').length).toBeGreaterThan(0)
+  })
+
+  test('the roster drawer toggle (narrow screens) opens the roster and picking someone closes it', async () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+    const toggle = screen.getByRole('button', { name: 'Show team roster' })
+    const roster = screen.getByRole('navigation', { name: 'Team roster' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(roster).not.toHaveClass('open')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(roster).toHaveClass('open')
+    fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
+    expect(roster).not.toHaveClass('open')
+    expect(await screen.findByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
   })
 
   test('renders the disabled empty state when the mesh capability is off', () => {

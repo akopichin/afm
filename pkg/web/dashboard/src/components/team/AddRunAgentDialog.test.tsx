@@ -52,7 +52,7 @@ describe('AddRunAgentDialog', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('transient'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
-    await waitFor(() => expect(onAttached).toHaveBeenCalledWith({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' }))
+    await waitFor(() => expect(onAttached).toHaveBeenCalledWith({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' }, 'QA reviewer'))
 
     expect(attachSpy).toHaveBeenCalledTimes(2)
     const [firstCall, secondCall] = attachSpy.mock.calls

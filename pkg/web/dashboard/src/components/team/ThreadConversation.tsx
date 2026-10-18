@@ -4,7 +4,7 @@ import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { MentionMenu } from '../assistants/AssistantMentionMenu'
-import { filterMentionProfiles } from '../assistants/mention-match'
+import { draftMentions, filterMentionProfiles } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { findExistingDirectThread, mentionHandle, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
@@ -23,6 +23,9 @@ export type ThreadConversationProps = {
   // (TeamView) can fold this conversation into the roster's "Conversations" group instead of treating the NEXT
   // click on the same person row as yet another fresh direct target (which would open a second thread).
   onThreadOpened?: (thread: MeshThread) => void
+  // onThreadCreated — fired as soon as a thread is opened, even if the message that follows fails to send,
+  // so the parent knows about it right away (a later click on the same person must not open another one).
+  onThreadCreated?: (thread: MeshThread) => void
   // participants — the roster, to name an untitled thread and each message's sender instead of showing ids.
   participants?: MeshParticipant[]
   // threads — the latest known threads. A direct target re-checks them when SENDING, not only when the person
@@ -89,7 +92,7 @@ function routeAll(target: ThreadConversationTarget, label: string): string {
   return target.kind === 'direct' ? label : 'Everyone in this conversation'
 }
 
-export function ThreadConversation({ target, onThreadOpened, participants = [], threads = [] }: ThreadConversationProps): ReactElement {
+export function ThreadConversation({ target, onThreadOpened, onThreadCreated, participants = [], threads = [] }: ThreadConversationProps): ReactElement {
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -104,8 +107,9 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
   // from the failed attempt already, so a plain "did this call just open it" check misses the retry).
   const notifiedRef = useRef<boolean>(target?.kind === 'thread')
 
-  // mentioned — recipients picked with `@`; empty means everyone else in the conversation.
-  const [mentioned, setMentioned] = useState<string[]>([])
+  // openRequestIdRef — one id for opening this conversation's thread, reused by every retry: if the server
+  // created the thread but the response was lost, the retry gets that same thread back instead of a second one.
+  const openRequestIdRef = useRef<string>(genMeshRequestId('mesh-open'))
 
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_INPUT_HEIGHT)
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
@@ -126,8 +130,10 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
       ),
     textFor: (item) => item.handle,
     replaceRange,
-    onPicked: (item) => setMentioned((prev) => (prev.includes(item.id) ? prev : [...prev, item.id])),
   })
+  // mentioned — recipients addressed with `@` in the draft right now; none means everyone else. Derived from
+  // the text, so deleting a mention from the draft also un-addresses that member.
+  const mentioned = members.filter((p) => draftMentions(draft, mentionHandle(p))).map((p) => p.id)
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
 
@@ -147,11 +153,12 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
       let thread = openedThread ?? (target.kind === 'direct' ? findExistingDirectThread(threads, target.participant.id) : null)
       if (thread === null) {
         thread = await openMeshThread({
-          requestId: genMeshRequestId('mesh-open'),
+          requestId: openRequestIdRef.current,
           title: '',
           scope: 'run',
           memberIds: target.kind === 'direct' ? [target.participant.id] : [],
         })
+        onThreadCreated?.(thread)
       }
       setOpenedThread(thread)
       await sendMeshMessage(thread.id, {
@@ -161,7 +168,6 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
       })
       requestIdRef.current = genMeshRequestId('mesh-send')
       setDraft('')
-      setMentioned([])
       // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
       // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
       // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
@@ -227,7 +233,7 @@ export function ThreadConversation({ target, onThreadOpened, participants = [], 
             ariaLabel="Mention someone in this conversation"
           />
         )}
-        <ChatSendButton label="Send" disabled={sending || draft.trim() === ''} onClick={() => void send()} />
+        <ChatSendButton label="Send" disabled={draft.trim() === ''} sending={sending} onClick={() => void send()} />
       </div>
       {error !== null && <div className="team-conversation-error" role="alert">{error}</div>}
     </div>

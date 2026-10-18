@@ -21,7 +21,8 @@ describe('mesh-roster', () => {
   test('senderLabel names the operator "You" and known participants by name', () => {
     expect(senderLabel('user', [side])).toBe('You')
     expect(senderLabel(side.id, [side])).toBe('claude')
-    expect(senderLabel('stage:gone', [side])).toBe('stage:gone')
+    expect(senderLabel('stage:gone', [side])).toBe('gone')
+    expect(senderLabel('run:t-b28cb0b807dbb957913e', [])).toBe('Agent')
   })
 
   test('threadLabel keeps an explicit title', () => {

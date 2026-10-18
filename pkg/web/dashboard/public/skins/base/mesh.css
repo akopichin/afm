@@ -13,6 +13,7 @@
    registry. */
 
 .team-view {
+  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
@@ -155,12 +156,18 @@
 }
 /* The @handle is what you type in a mention — shown so you know how to address this agent. */
 .team-person-handle {
-  flex: 0 0 auto;
+  /* Shrinks first (with an ellipsis) so a long alias never hides the status/role after it. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--accent-primary);
 }
 .team-person-status {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -680,4 +687,49 @@
 .add-run-agent-error {
   color: var(--danger);
   font-size: 12px;
+}
+
+/* === Narrow screens: the roster becomes a drawer opened from the conversation header (as in the prototype). */
+.team-roster-toggle,
+.team-roster-scrim {
+  display: none;
+}
+@media (max-width: 760px) {
+  .team-roster {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: min(300px, 85%);
+    flex-basis: auto;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform var(--motion-fast, 120ms) ease, visibility var(--motion-fast, 120ms);
+  }
+  .team-roster.open {
+    transform: none;
+    visibility: visible;
+  }
+  .team-roster-toggle {
+    display: grid;
+  }
+  .team-roster-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    border: 0;
+    padding: 0;
+    background: color-mix(in srgb, var(--surface-canvas) 60%, transparent);
+    cursor: pointer;
+  }
+  .team-conversation-header,
+  .team-tabs,
+  .team-messages {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }

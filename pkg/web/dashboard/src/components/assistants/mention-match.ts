@@ -51,3 +51,11 @@ export function filterMentionGroups<T extends { id: string; title: string }>(
     .map((g) => ({ label: g.label, items: filterMentionProfiles(g.items, query) }))
     .filter((g) => g.items.length > 0)
 }
+
+// draftMentions reports whether the draft still contains `@handle` as a whole token. Recipients picked with
+// `@` are derived from the text at send time, so deleting the mention from the draft also un-addresses it.
+export function draftMentions(draft: string, handle: string): boolean {
+  if (handle === '') return false
+  const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,;:!?)])`, 'i').test(draft)
+}
