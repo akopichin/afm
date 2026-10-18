@@ -48,7 +48,10 @@ type fakeMeshActions struct {
 
 	inboxPage MeshMessagePage
 	boardErr  error
-	board     []agentcomm.BoardEntry
+
+	lastPublish    MeshPublishRequest
+	lastPublishReq string
+	board          []agentcomm.BoardEntry
 
 	attachByReq map[string]MeshAttachAndSendResult
 	attachCalls int
@@ -129,6 +132,13 @@ func (f *fakeMeshActions) Thread(ctx context.Context, threadID string, cursor ui
 
 func (f *fakeMeshActions) Inbox(ctx context.Context, cursor uint64, limit int) (MeshMessagePage, error) {
 	return f.inboxPage, nil
+}
+
+func (f *fakeMeshActions) PublishBoard(ctx context.Context, requestID string, req MeshPublishRequest) (agentcomm.BoardEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastPublish, f.lastPublishReq = req, requestID
+	return agentcomm.BoardEntry{AuthorID: "user", Key: req.Key, Version: 1, Status: req.Status}, nil
 }
 
 func (f *fakeMeshActions) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
@@ -544,5 +554,30 @@ func TestMesh_AttachAndSend_DuplicateRequestIDNoSecondHelper(t *testing.T) {
 	}
 	if len(fake.attachByReq) != 1 {
 		t.Fatalf("attachByReq has %d distinct results, want exactly 1 (no second helper created)", len(fake.attachByReq))
+	}
+}
+
+// The human posts a task to the shared board from the dashboard (same-origin, idempotent by request_id).
+func TestMesh_PublishBoard(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+
+	w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/board", map[string]any{"request_id": "req-b1", "key": "task/csv-export", "status": "Add GET /todos.csv"}, false)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("no Origin: HTTP %d, want 403", w.Code)
+	}
+	w, _ = doMeshJSON(t, srv, http.MethodPost, "/api/mesh/board", map[string]any{"key": "task/csv-export"}, true)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("no request_id: HTTP %d, want 400", w.Code)
+	}
+	w, resp := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/board", map[string]any{"request_id": "req-b1", "key": "task/csv-export", "status": "Add GET /todos.csv"}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.lastPublishReq != "req-b1" || fake.lastPublish.Key != "task/csv-export" || fake.lastPublish.Status != "Add GET /todos.csv" {
+		t.Fatalf("Service got %q %+v", fake.lastPublishReq, fake.lastPublish)
+	}
+	if resp["key"] != "task/csv-export" {
+		t.Fatalf("response = %v, want the published entry", resp)
 	}
 }

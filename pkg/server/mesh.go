@@ -34,6 +34,8 @@ type MeshActions interface {
 	Thread(ctx context.Context, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Inbox(ctx context.Context, cursor uint64, limit int) (MeshMessagePage, error)
 	Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error)
+	// PublishBoard posts an entry to the shared board as the human operator (e.g. a task for the agents).
+	PublishBoard(ctx context.Context, requestID string, req MeshPublishRequest) (agentcomm.BoardEntry, error)
 	AttachAndSend(ctx context.Context, requestID string, req MeshAttachAndSendRequest) (MeshAttachAndSendResult, error)
 }
 
@@ -101,6 +103,8 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshParticipants(w, r)
 	case path == meshSegBoard && r.Method == http.MethodGet:
 		s.handleMeshBoard(w, r)
+	case path == meshSegBoard && r.Method == http.MethodPost:
+		s.handleMeshPublishBoard(w, r)
 	case path == meshSegInbox && r.Method == http.MethodGet:
 		s.handleMeshInbox(w, r)
 	case path == meshSegThreads && r.Method == http.MethodGet:
@@ -261,6 +265,32 @@ func (s *Server) handleMeshCloseThread(w http.ResponseWriter, r *http.Request, t
 
 // handleMeshAttachAndSend decodes into MeshAttachAndSendRequest ONLY — there is no command/model/executor
 // field in that struct for a client to supply, mirroring handleAttachAssistant's own comment.
+// handleMeshPublishBoard — POST /api/mesh/board: the human operator publishes a board entry (a task for the
+// agents, a decision). Same-origin and request_id rules as every other dashboard mutation.
+func (s *Server) handleMeshPublishBoard(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOK(r) {
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	var body struct {
+		RequestID string `json:"request_id"`
+		MeshPublishRequest
+	}
+	if !decodeAgentMeshBody(w, r, &body) {
+		return
+	}
+	if body.RequestID == "" {
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
+		return
+	}
+	entry, err := s.mesh.PublishBoard(r.Context(), body.RequestID, body.MeshPublishRequest)
+	if err != nil {
+		writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, entry)
+}
+
 func (s *Server) handleMeshAttachAndSend(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")

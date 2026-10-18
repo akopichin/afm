@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -27,7 +28,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		return agentcomm.BoardEntry{}, errors.New("agentcomm: operation id is required")
 	}
 	if req.Key == "" || req.Author == "" {
-		return agentcomm.BoardEntry{}, errors.New("agentcomm: key and author are required")
+		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board entry needs a key"}
 	}
 
 	authorizedBy := make([]string, len(req.AuthorizedBy))

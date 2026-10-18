@@ -100,6 +100,9 @@ func (s *Server) authenticateAgentMesh(w http.ResponseWriter, r *http.Request) (
 // The bearer token (authenticateAgentMesh) is this surface's actual CSRF-equivalent defense — a same-origin
 // check would add nothing a browser-originated request could exploit anyway, since no browser ever holds a
 // valid per-invocation mesh token.
+// agentMeshActionReply is the /api/agent-mesh/reply route segment.
+const agentMeshActionReply = "reply"
+
 func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 	if s.agentMesh == nil {
 		http.NotFound(w, r)
@@ -128,7 +131,7 @@ func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentMeshBoard(w, r)
 	case action == "send" && r.Method == http.MethodPost:
 		s.handleAgentMeshSend(w, r, actor, "")
-	case action == "reply" && r.Method == http.MethodPost:
+	case action == agentMeshActionReply && r.Method == http.MethodPost:
 		s.handleAgentMeshSend(w, r, actor, string(agentcomm.MessageKindReply))
 	case action == "ack" && r.Method == http.MethodPost:
 		s.handleAgentMeshAck(w, r, actor)

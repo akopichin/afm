@@ -154,6 +154,11 @@ export async function getMeshThread(threadId: string, cursor = 0, limit = 0): Pr
   return { messages: body.messages ?? [], next_cursor: body.next_cursor ?? cursor }
 }
 
+// publishMeshBoard posts a board entry as the human operator — POST /api/mesh/board (e.g. a task for the agents).
+export async function publishMeshBoard(req: { requestId: string; key: string; status: string }): Promise<MeshBoardEntry> {
+  return meshPost<MeshBoardEntry>('/api/mesh/board', { request_id: req.requestId, key: req.key, status: req.status })
+}
+
 // getMeshBoard reads the shared board — GET /api/mesh/board. An empty/omitted key returns every entry
 // (orchestrator.ReadBoard's own "empty Key returns every entry" contract).
 export async function getMeshBoard(key = ''): Promise<{ entries: MeshBoardEntry[] }> {

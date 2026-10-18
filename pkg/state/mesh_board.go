@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // MeshBoardEntry wraps agentcomm.BoardEntry with the minimal republish-authorization bookkeeping this
@@ -30,6 +31,11 @@ var ErrBoardNotAuthorized = errors.New("mesh: board publisher is not authorized 
 
 // ErrBoardArtifactRefOutsideRun — an ArtifactRef does not start with boardArtifactRefPrefix.
 var ErrBoardArtifactRefOutsideRun = errors.New("mesh: board artifact ref is outside the run's artifact namespace")
+
+// boardRejected is a typed, fixable board rejection (4xx with the reason) that still errors.Is its sentinel.
+func boardRejected(code assistants.ErrorCode, sentinel error, format string, args ...any) error {
+	return &OperationRejectedError{Code: code, Reason: fmt.Sprintf(format, args...), Cause: sentinel}
+}
 
 // boardArtifactRefPrefix is the only prefix mesh_board_published's ArtifactRefs may start with. pkg/state has
 // no notion of "the run's artifact store" (that lives in pkg/executor/pkg/server) — this is a cheap
@@ -79,7 +85,7 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 	}
 	for _, ref := range p.ArtifactRefs {
 		if !strings.HasPrefix(ref, boardArtifactRefPrefix) {
-			return fmt.Errorf("mesh_board_published %s: %w: %q", key, ErrBoardArtifactRefOutsideRun, ref)
+			return boardRejected(assistants.CodeInvalidRequest, ErrBoardArtifactRefOutsideRun, "artifact ref %q of board key %s is outside this run's artifacts", ref, key)
 		}
 	}
 
@@ -87,14 +93,14 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 	version := 1
 	if !exists {
 		if p.ExpectedVersion != 0 {
-			return fmt.Errorf("mesh_board_published %s: %w (no prior publish, expected_version must be 0, got %d)", key, ErrBoardStaleRevision, p.ExpectedVersion)
+			return boardRejected(assistants.CodeStaleRevision, ErrBoardStaleRevision, "board key %s is not published yet: expected_version must be 0, got %d", key, p.ExpectedVersion)
 		}
 	} else {
 		if p.ExpectedVersion != existing.Version {
-			return fmt.Errorf("mesh_board_published %s: %w (expected %d, current %d)", key, ErrBoardStaleRevision, p.ExpectedVersion, existing.Version)
+			return boardRejected(assistants.CodeStaleRevision, ErrBoardStaleRevision, "board key %s is at version %d, not %d — read it again (afm agent board get)", key, existing.Version, p.ExpectedVersion)
 		}
 		if author != existing.AuthorID && !slices.Contains(existing.AuthorizedBy, author) {
-			return fmt.Errorf("mesh_board_published %s: %w: %q", key, ErrBoardNotAuthorized, author)
+			return boardRejected(assistants.CodeActorNotAllowed, ErrBoardNotAuthorized, "%s may not update board key %s (published by %s) — publish your own key, e.g. %s/<your alias>", author, key, existing.AuthorID, key)
 		}
 		version = existing.Version + 1
 	}

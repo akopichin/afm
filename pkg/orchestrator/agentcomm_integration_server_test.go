@@ -106,6 +106,13 @@ func (a meshServerActionsForTest) Inbox(ctx context.Context, cursor uint64, limi
 	return server.MeshMessagePage{Messages: page.Messages, NextCursor: page.NextCursor}, nil
 }
 
+func (a meshServerActionsForTest) PublishBoard(ctx context.Context, requestID string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {
+	return a.orch.Publish(ctx, orchestrator.PublishRequest{
+		OperationID: requestID, Author: "user", Key: req.Key, Status: req.Status, ExpectedVersion: req.ExpectedVersion,
+		Actor: state.Actor{Kind: "user"},
+	})
+}
+
 func (a meshServerActionsForTest) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
 	page, err := a.orch.ReadBoard(ctx, orchestrator.ReadBoardRequest{Key: key})
 	if err != nil {
