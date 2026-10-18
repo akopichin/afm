@@ -172,8 +172,13 @@ same question twice. `afm agent wait --condition addressed_message` without
 `--thread-id` waits for the next message anyone sends the agent. A `task_result`
 wait on a run agent resolves on the first result after the wait was registered,
 and a `stage_status` wait resolves as soon as the stage is at that status. A wait
-on an unknown message, task or stage, on a closed thread, or one that would close
-a cycle of agents waiting on each other is refused. A rejected call reports why
+on an unknown message, task or stage, on a closed thread, on a stage that already
+finished in another status, one only the waiter itself could satisfy, or one that
+would close a cycle of agents waiting on each other is refused. A wait whose
+producer is not known yet (a board key nobody has published, a thread not opened
+yet) needs `--deadline-seconds`. When a run is interrupted (Ctrl+C), pending waits
+stay pending and their deadlines keep running after `afm run` resumes it; only a
+run that finishes closes them. A rejected call reports why
 (for example an unknown recipient) instead of a generic server error.
 
 A running stage's [Feed composer](dashboard.md#sending-a-note-to-a-running-stage)

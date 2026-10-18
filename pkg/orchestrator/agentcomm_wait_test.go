@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/state"
@@ -312,5 +313,53 @@ func TestMesh_WaitCycleCheckAnyGroupMemberMayAnswer(t *testing.T) {
 	var rej *state.OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != agentcomm.CodeWaitCycle {
 		t.Fatalf("every other member waits on a: err = %v, want wait_cycle", err)
+	}
+}
+
+// testFarDeadline is a deadline that never fires in a test — for a wait whose thread is not open yet, which
+// needs one to be admitted.
+func testFarDeadline() *time.Time {
+	d := time.Now().Add(time.Hour)
+	return &d
+}
+
+// TestMesh_WaitAdmissionRejectsTerminallyImpossibleWaits: a stage already finished in another status, a wait
+// only the waiter itself could satisfy, and a wait on a thread not opened yet without a deadline are refused;
+// a condition that already holds is admitted (it is ready at once).
+func TestMesh_WaitAdmissionRejectsTerminallyImpossibleWaits(t *testing.T) {
+	rs := *state.NewRunState([]string{"build", "docs"})
+	rs.Stages["build"] = state.StageState{Status: state.StatusDone}
+	rs.Stages["docs"] = state.StageState{Status: state.StatusRunning}
+	self := meshStageParticipantID("docs")
+	other := meshStageParticipantID("build")
+
+	cases := []struct {
+		name     string
+		waiter   agentcomm.ParticipantID
+		cond     agentcomm.WaitCondition
+		deadline *time.Time
+		want     string // "" = admitted
+	}{
+		{"finished stage, other status", other, agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: "build", Status: "failed"}, nil, "invalid_status"},
+		{"finished stage, its own status", other, agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: "build", Status: "done"}, nil, ""},
+		{"stage waits for its own done", self, agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: "docs", Status: "done"}, nil, string(agentcomm.CodeWaitCycle)},
+		{"stage at the status it waits for", self, agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: "docs", Status: "running"}, nil, ""},
+		{"thread not open, no deadline", self, agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "mt-later"}, nil, "invalid_request"},
+		{"thread not open, with deadline", self, agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "mt-later"}, testFarDeadline(), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWaitAdmission(rs, WaitRequest{Waiter: tc.waiter, Condition: tc.cond, Deadline: tc.deadline})
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("admission: %v, want admitted", err)
+				}
+				return
+			}
+			var rej *state.OperationRejectedError
+			if !errors.As(err, &rej) || string(rej.Code) != tc.want {
+				t.Fatalf("admission: err = %v, want a %s rejection", err, tc.want)
+			}
+		})
 	}
 }

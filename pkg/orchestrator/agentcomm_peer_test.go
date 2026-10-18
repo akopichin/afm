@@ -33,7 +33,7 @@ func TestHelperYield_ParksWaitingPeerNotProtocolError(t *testing.T) {
 	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-peer-1-wait", Waiter: helperID,
-			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 		}); err != nil {
 			t.Errorf("Wait: %v", err)
 		}
@@ -66,7 +66,7 @@ func TestHelperYield_ReleasesSlotForQueuedPeer(t *testing.T) {
 		if tid == string(firstTaskID) {
 			if _, err := o.Wait(context.Background(), WaitRequest{
 				OperationID: "op-peer-slot-wait", Waiter: meshHelperParticipantID(assistants.TaskID(tid)),
-				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 			}); err != nil {
 				t.Errorf("Wait: %v", err)
 			}
@@ -113,7 +113,7 @@ func TestHelperWait_ResumesOnReplyAndCompletes(t *testing.T) {
 		if calls.Add(1) == 1 {
 			if _, err := o.Wait(context.Background(), WaitRequest{
 				OperationID: "op-peer-resume-wait", Waiter: helperID,
-				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID},
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID}, Deadline: testFarDeadline(),
 			}); err != nil {
 				t.Errorf("Wait: %v", err)
 			}
@@ -165,7 +165,7 @@ func TestTryResumePeer_ConcurrentCallsResumeExactlyOnce(t *testing.T) {
 		if calls.Add(1) == 1 {
 			receipt, err := o.Wait(context.Background(), WaitRequest{
 				OperationID: "op-peer-race-wait", Waiter: helperID,
-				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 			})
 			if err != nil {
 				t.Errorf("Wait: %v", err)
@@ -218,7 +218,7 @@ func TestRequiredChildOpen_WaitingPeerChildKeepsGateOpen(t *testing.T) {
 		// The required child itself yields on a mesh wait instead of ever reporting a result.
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-reqgate-wait", Waiter: meshHelperParticipantID(assistants.TaskID(tid)),
-			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 		}); err != nil {
 			t.Errorf("Wait: %v", err)
 		}
@@ -262,7 +262,7 @@ func TestPauseTask_HeldWaitingPeerDoesNotResumeUntilContinue(t *testing.T) {
 		if calls.Add(1) == 1 {
 			if _, err := o.Wait(context.Background(), WaitRequest{
 				OperationID: "op-peer-pause-wait", Waiter: helperID,
-				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID},
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID}, Deadline: testFarDeadline(),
 			}); err != nil {
 				t.Errorf("Wait: %v", err)
 			}
@@ -317,7 +317,7 @@ func TestCancelTask_CancelsTaskParkedInWaitingPeer(t *testing.T) {
 	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-peer-cancel-wait", Waiter: meshHelperParticipantID(assistants.TaskID(tid)),
-			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 		}); err != nil {
 			t.Errorf("Wait: %v", err)
 		}

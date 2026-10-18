@@ -135,7 +135,7 @@ func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDe
 				// use) and yields.
 				if _, err := o.Wait(context.Background(), WaitRequest{
 					OperationID: "op-qa-wait-format", Waiter: qaParticipant,
-					Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: formatThreadID},
+					Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: formatThreadID}, Deadline: testFarDeadline(),
 				}); err != nil {
 					t.Errorf("Wait (format): %v", err)
 				}
@@ -153,7 +153,7 @@ func runQADevOpsScenario(t *testing.T, o *Orchestrator, store *state.Store) qaDe
 				}
 				if _, err := o.Wait(context.Background(), WaitRequest{
 					OperationID: "op-qa-wait-go-ahead", Waiter: qaParticipant,
-					Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: goAheadThreadID},
+					Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: goAheadThreadID}, Deadline: testFarDeadline(),
 				}); err != nil {
 					t.Errorf("Wait (go-ahead): %v", err)
 				}

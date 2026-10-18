@@ -26,10 +26,20 @@ const (
 // pkg/state/mesh_waits.go) — a reply that arrived before Wait was called still resolves the wait on the
 // very first read after commit, with no separate catch-up pass.
 
-// ErrWaitRequiresDeadline is returned when a board_key condition names a key the board has never seen
-// published and the caller did not set a Deadline — an unreachable producer must not be allowed to wait
-// forever with no visible way out (tmp/agent-mesh.md §6.3).
-var ErrWaitRequiresDeadline = errors.New("agentcomm: board_key wait with no known producer requires a deadline")
+// ErrWaitRequiresDeadline is returned when a wait has no known producer yet — a board_key never published, or
+// a thread not opened yet — and the caller did not set a Deadline: an unreachable producer must not be allowed
+// to wait forever with no visible way out (tmp/agent-mesh.md §6.3).
+var ErrWaitRequiresDeadline = errors.New("agentcomm: a wait with no known producer requires a deadline")
+
+// requireDeadline rejects a speculative wait (its producer may never appear) that has no deadline.
+func requireDeadline(req WaitRequest, what string) error {
+	if req.Deadline != nil {
+		return nil
+	}
+	return &state.OperationRejectedError{
+		Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("%s: %v (pass --deadline-seconds)", what, ErrWaitRequiresDeadline), Cause: ErrWaitRequiresDeadline,
+	}
+}
 
 // waitConditionHint explains what an invalid wait condition is missing, so the agent can fix the call.
 func waitConditionHint(kind agentcomm.WaitConditionKind) string {
@@ -95,14 +105,25 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 }
 
 // validateWaitAdmission rejects a wait that could never end on its own: one on a message, task or stage that
-// does not exist, on a closed thread, a board_key wait on a key nobody has published without a deadline, or a
-// wait that would close a cycle — every participant that could satisfy it already
-// (transitively) waits on the waiter. Run under the commit's lock.
+// does not exist, on a closed thread, on a stage already finished in another status, a speculative wait (a key
+// nobody has published, a thread not opened yet) without a deadline, a wait only the waiter itself could
+// satisfy, or a wait that would close a cycle — every participant that could satisfy it already
+// (transitively) waits on the waiter. A condition that already holds is always admitted: it is ready at once.
+// Run under the commit's lock.
 func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
 	if err := validateWaitTarget(rs, req); err != nil {
 		return err
 	}
-	targets := slices.DeleteFunc(meshWaitTargets(rs, req.Condition), func(p agentcomm.ParticipantID) bool { return p == req.Waiter })
+	if waitConditionHolds(rs, req.Condition) {
+		return nil
+	}
+	all := meshWaitTargets(rs, req.Condition)
+	targets := slices.DeleteFunc(slices.Clone(all), func(p agentcomm.ParticipantID) bool { return p == req.Waiter })
+	if len(all) > 0 && len(targets) == 0 {
+		return &state.OperationRejectedError{
+			Code: agentcomm.CodeWaitCycle, Reason: fmt.Sprintf("only %s itself could satisfy this wait — it would wait on itself forever", req.Waiter),
+		}
+	}
 	if len(targets) == 0 {
 		return nil
 	}
@@ -145,26 +166,53 @@ func validateWaitTarget(rs state.RunState, req WaitRequest) error {
 		if cond.ThreadID == "" {
 			return nil
 		}
-		// A thread not opened yet is allowed: thread ids are derived from request ids, so a colleague may still
-		// open it. A closed one never gets another message.
+		// A thread not opened yet may still be opened (thread ids are derived from request ids), but nobody is
+		// known to do it — such a wait needs a deadline. A closed thread never gets another message.
+		if _, opened := rs.Assistants.Mesh.Threads[cond.ThreadID]; !opened {
+			return requireDeadline(req, fmt.Sprintf("thread %s is not open yet", cond.ThreadID))
+		}
 		return closedThread(cond.ThreadID)
 	case agentcomm.WaitOnTaskResult:
 		if _, ok := rs.Assistants.Tasks[assistants.TaskID(cond.TaskID)]; !ok {
 			return notFound("unknown task %s", cond.TaskID)
 		}
 	case agentcomm.WaitOnStageStatus:
-		if _, ok := rs.Stages[cond.StageID]; !ok {
+		st, ok := rs.Stages[cond.StageID]
+		if !ok {
 			return notFound("unknown stage %s", cond.StageID)
 		}
-	case agentcomm.WaitOnBoardKey:
-		if _, published := rs.Assistants.Mesh.Board[cond.Key]; !published && req.Deadline == nil {
+		if (st.Status == state.StatusDone || st.Status == state.StatusFailed) && string(st.Status) != cond.Status {
 			return &state.OperationRejectedError{
-				Code: assistants.CodeInvalidRequest, Reason: ErrWaitRequiresDeadline.Error() + " (pass --deadline-seconds)", Cause: ErrWaitRequiresDeadline,
+				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %s already finished as %s — it will not become %s", cond.StageID, st.Status, cond.Status),
 			}
+		}
+	case agentcomm.WaitOnBoardKey:
+		if _, published := rs.Assistants.Mesh.Board[cond.Key]; !published {
+			return requireDeadline(req, fmt.Sprintf("board key %s was never published", cond.Key))
 		}
 	default:
 	}
 	return nil
+}
+
+// waitConditionHolds reports whether cond is already satisfied for kinds whose answer does not depend on the
+// waiter: such a wait is ready at once, whoever its producer is.
+func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
+	switch cond.Kind {
+	case agentcomm.WaitOnReplyTo:
+		return rs.Assistants.Mesh.MessageAnswered(cond.MessageID)
+	case agentcomm.WaitOnStageStatus:
+		st, ok := rs.Stages[cond.StageID]
+		return ok && string(st.Status) == cond.Status
+	case agentcomm.WaitOnBoardKey:
+		e, ok := rs.Assistants.Mesh.Board[cond.Key]
+		return ok && e.Status == cond.Status
+	case agentcomm.WaitOnTaskResult:
+		t, ok := rs.Assistants.Tasks[assistants.TaskID(cond.TaskID)]
+		return ok && t.Status.Terminal()
+	default:
+		return false
+	}
 }
 
 // CancelWait implements Service.CancelWait. Idempotent: cancelling an already-resolved wait is a no-op,

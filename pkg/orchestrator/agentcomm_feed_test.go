@@ -93,7 +93,7 @@ func TestFeed_UserDiscussionThenQAClarification_NoRevisionNoHelperNoGate(t *test
 			}
 			if _, err := o.Wait(context.Background(), WaitRequest{
 				OperationID: "op-qa-clarify-wait", Waiter: qaParticipant,
-				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: qaThreadID},
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: qaThreadID}, Deadline: testFarDeadline(),
 			}); err != nil {
 				t.Errorf("Wait: %v", err)
 			}
