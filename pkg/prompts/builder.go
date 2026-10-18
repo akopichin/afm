@@ -43,6 +43,16 @@ type Inputs struct {
 	// BrowserRuntime, если non-nil, добавляет блок <browser_tools> — короткая подсказка агенту, что у него
 	// есть managed-браузер и как им пользоваться.
 	BrowserRuntime *BrowserRuntime
+	// AgentComm is the pre-rendered <agent_communication> block (Agent Mesh Phase 4, T4.1/T4.2) — built by
+	// AgentCommunicationBlock and passed in whole, exactly like CompletionContract is folded into
+	// RetryContext: Build() appends it unconditionally, so a custom prompts_dir template can never make the
+	// mesh contract silently disappear. Empty means "do not render the block at all" — every production call
+	// site always sets it, even when mesh is unavailable, via AgentCommunicationBlock's own Available=false
+	// branch; empty is only exercised by tests that build Inputs directly.
+	AgentComm string
+	// AgentCommInbox is the pre-rendered <inbox> block (T4.4) — built by AgentCommInboxBlock. Empty means no
+	// messages were already addressed to this participant; nothing is rendered.
+	AgentCommInbox string
 }
 
 // BrowserRuntime describes the live managed-browser capability for the prompt.
@@ -138,6 +148,13 @@ func Build(in Inputs) string {
 		sb.WriteString("- Save screenshots / console logs / network captures into $AFM_STAGE_DIR/artifacts so they appear in the run.\n")
 		sb.WriteString("- If the browser is unavailable or the scenario fails, treat it as a FAILED check — do not claim success.\n")
 		sb.WriteString("</browser_tools>\n")
+	}
+
+	if in.AgentComm != "" {
+		sb.WriteString(in.AgentComm)
+	}
+	if in.AgentCommInbox != "" {
+		sb.WriteString(in.AgentCommInbox)
 	}
 
 	sb.WriteString("\n</system_rules>\n\n")
@@ -239,6 +256,10 @@ var tagReplacer = strings.NewReplacer(
 	"<global_prompt>", "<\u200bglobal_prompt>",
 	"</project_memory>", "</\u200bproject_memory>",
 	"<project_memory>", "<\u200bproject_memory>",
+	"</inbox>", "</\u200binbox>",
+	"<inbox>", "<\u200binbox>",
+	"</agent_communication>", "</\u200bagent_communication>",
+	"<agent_communication>", "<\u200bagent_communication>",
 )
 
 func escapeTags(s string) string {

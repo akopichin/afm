@@ -128,6 +128,12 @@ type Config struct {
 	// non-secret AFM_MESH_DESCRIPTOR env var. nil means this invocation gets no mesh descriptor at all
 	// (verify agents, JSON-fix agents, memory-pipeline agents and lifecycle hooks never set it).
 	MeshClient *MeshClient
+	// OnDelivered, if set, is called exactly once, right after cmd.Start() SUCCEEDS — the one moment a
+	// prepared prompt package (Agent Mesh Phase 4, T4.4: the <inbox> block) has actually been handed to a
+	// live process, as opposed to merely assembled. A caller uses this to mark queued mesh messages
+	// "delivered" — never earlier, so a crash between building the prompt and spawning the process leaves
+	// them at "accepted" and they are re-injected on the next attempt.
+	OnDelivered func()
 	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
 	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
 	runMode RunMode
@@ -1005,6 +1011,9 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
+	}
+	if e.cfg.OnDelivered != nil {
+		e.cfg.OnDelivered()
 	}
 
 	idleTimer := e.clk().NewTimer(e.cfg.IdleTimeout)

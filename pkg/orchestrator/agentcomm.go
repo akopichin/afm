@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -176,6 +179,41 @@ func deriveMeshMessageID(operationID string) agentcomm.MessageID {
 
 func deriveMeshWaitID(operationID string) agentcomm.WaitID {
 	return agentcomm.WaitID("mw-" + deriveMeshID("mesh-wait", operationID))
+}
+
+// agentCommInboxBlock renders stage s's <inbox> block (T4.4) — the prompt-text half of
+// agentCommInboxFor; runner_factory.go's agentCommOnDeliveredForStage wires the matching OnDelivered
+// callback into the SAME stage's executor.Config.
+func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
+	block, _ := o.agentCommInboxFor(meshStageParticipantID(s.ID))
+	return block
+}
+
+// agentCommOnDeliveredForStage returns the OnDelivered callback for stage s's executor.Config — see
+// agentCommInboxFor's doc comment for why marking delivery is deferred to cmd.Start() succeeding, not to
+// prompt assembly.
+func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
+	_, onDelivered := o.agentCommInboxFor(meshStageParticipantID(s.ID))
+	return onDelivered
+}
+
+// agentCommBlockFor renders stage s's <agent_communication> block (Agent Mesh Phase 4, T4.2) — called from
+// every prompts.Inputs construction site in agents.go, mirroring browserRuntimeFor's role for BrowserRuntime.
+// Available tracks the SAME gate meshClientFor uses (o.MeshBaseURL() != ""), so the prompt's claim and the
+// actual descriptor a spawned process receives never disagree.
+func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
+	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
+		ParticipantID: string(meshStageParticipantID(s.ID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
+	})
+}
+
+// agentCommBlockForTask renders helper task taskID's <agent_communication> block — the SAME
+// AgentCommunicationBlock source as agentCommBlockFor, T4.3's "identical for stage agents and helpers, one
+// source" requirement.
+func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
+	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
+		ParticipantID: string(meshHelperParticipantID(taskID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
+	})
 }
 
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place

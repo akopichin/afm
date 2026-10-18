@@ -26,6 +26,7 @@ type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt,
 // everything it is entitled to read as inline TEXT (plan/artifacts), so it needs no live write access to the
 // project tree — scratch/ is the only directory it can write to.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
+	_, onDelivered := o.agentCommInboxForTask(taskID)
 	return executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
@@ -37,6 +38,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
 		MeshClient:     o.meshClientFor(meshHelperParticipantID(taskID)),
+		OnDelivered:    onDelivered,
 	}
 }
 

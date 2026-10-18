@@ -179,6 +179,8 @@ func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, sta
 			GlobalPrompt:     o.opts.GlobalPrompt,
 			MemoryBlock:      o.memoryBlockForStage(s),
 			BrowserRuntime:   o.browserRuntimeFor(s),
+			AgentComm:        o.agentCommBlockFor(s),
+			AgentCommInbox:   o.agentCommInboxBlock(s),
 		}
 		if err := fillInputs(retryContext, &in); err != nil {
 			return err
@@ -264,6 +266,8 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 		MemoryBlock:     o.memoryBlockForStage(s),
 		RetryContext:    verifyNote + contract,
 		BrowserRuntime:  o.browserRuntimeFor(s),
+		AgentComm:       o.agentCommBlockFor(s),
+		AgentCommInbox:  o.agentCommInboxBlock(s),
 	})
 	reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 	rr := o.runnerFor(s, phaseReview)
@@ -318,6 +322,8 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			BrowserRuntime:  o.browserRuntimeFor(s),
+			AgentComm:       o.agentCommBlockFor(s),
+			AgentCommInbox:  o.agentCommInboxBlock(s),
 		})
 		logFile := filepath.Join(stageDir, logFileName)
 
@@ -373,6 +379,8 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			BrowserRuntime:  o.browserRuntimeFor(s),
+			AgentComm:       o.agentCommBlockFor(s),
+			AgentCommInbox:  o.agentCommInboxBlock(s),
 		})
 		reviewLog := filepath.Join(stageDir, logFileName)
 		rr := o.runnerFor(s, phaseReview)
@@ -421,6 +429,8 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 			MemoryBlock:     o.memoryBlockForStage(s),
 			RetryContext:    retryContext + note + verifyNote + contract,
 			BrowserRuntime:  o.browserRuntimeFor(s),
+			AgentComm:       o.agentCommBlockFor(s),
+			AgentCommInbox:  o.agentCommInboxBlock(s),
 		})
 		logFile := filepath.Join(stageDir, logFileName)
 		r := o.runnerFor(s, phaseAutonomous)

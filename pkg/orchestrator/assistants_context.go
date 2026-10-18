@@ -73,6 +73,14 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// reads last of all — a user-supplied follow-up can never override afm's answer format by recency.
 	writeFencedSection(&b, "Follow-up instruction from the user for this task", followUp)
 	b.WriteString(o.outputContractBlock(task))
+	// Agent Mesh Phase 4, T4.3: the SAME agent_communication source stage agents get (agentCommBlockFor),
+	// sitting with the output contract as afm's own instruction (unfenced) — unlike the sections above,
+	// which are all incoming DATA fenced with writeFencedSection. The <inbox> block's own messages are
+	// fenced/escaped internally by AgentCommInboxBlock (pkg/prompts/agentcomm.go), the same "data can never
+	// act as an instruction" rule.
+	b.WriteString(o.agentCommBlockForTask(task.ID))
+	inboxBlock, _ := o.agentCommInboxForTask(task.ID)
+	b.WriteString(inboxBlock)
 
 	prompt := b.String()
 	if len(prompt) > maxTaskContextBytes {
@@ -80,7 +88,11 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	}
 
 	generation := o.stageGeneration(stage.ID)
-	version := computeContextVersion(stage.ID, generation, roleInstructions, instruction, plan, artifacts, prevResult, childResults, followUp)
+	// inboxBlock is folded into the version hash so it already carries the injected message ids (T4.4: "the
+	// same turn is reproducible") — the message TEXT changing (impossible — messages are immutable once
+	// sent) or which messages are pending (the only thing that actually varies between attempts) both show
+	// up as a different ContextVersion.
+	version := computeContextVersion(stage.ID, generation, roleInstructions, instruction, plan, artifacts, prevResult, childResults, followUp, inboxBlock)
 	return TaskContext{Prompt: prompt, Version: version}, nil
 }
 
