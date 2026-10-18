@@ -9,6 +9,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -96,5 +97,44 @@ func TestPublish_RedactsSecretsInStatus(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no board notice published")
+	}
+}
+
+// TestPublish_NotifyNeverFailsThePublish: once a task is on the board, telling people about it cannot undo
+// or fail the publish. A finished stage or an unknown name is skipped, a long status is quoted only in part,
+// and every reachable recipient gets its own message.
+func TestPublish_NotifyNeverFailsThePublish(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	stubPassingHelper(o)
+	t.Cleanup(o.concurrency.WaitAgents) // the notified agents take a turn; let it end before TempDir cleanup
+	activateStage(t, o, assistantsTestStageID)
+	if _, ok := o.Trigger(assistantsTestStageID, bus.EvComplete, bus.GuardCtx{}, ""); !ok {
+		t.Fatal("EvComplete failed")
+	}
+	first := addTestRunAgent(t, o, "op-add-1", nil)
+	second := addTestRunAgent(t, o, "op-add-2", nil)
+	status := strings.Repeat("long task description ", 1000) // ~22 KB, more than one message may carry
+
+	entry, err := publishAsUser(o, "op-task", "task/big", status, 0,
+		meshStageParticipantID(assistantsTestStageID), "nobody-by-this-name", first.ParticipantID, second.ParticipantID)
+	if err != nil {
+		t.Fatalf("Publish with unreachable and unknown recipients: %v", err)
+	}
+	if entry.Version != 1 || store.Snapshot().Assistants.Mesh.Board["task/big"] == nil {
+		t.Fatalf("the task was not published: %+v", entry)
+	}
+
+	rs := store.Snapshot()
+	for _, p := range []agentcomm.ParticipantID{first.ParticipantID, second.ParticipantID} {
+		inbox := rs.Assistants.Mesh.Inbox[p]
+		if len(inbox) != 1 {
+			t.Fatalf("%s got %d messages, want its own notice", p, len(inbox))
+		}
+		if m := rs.Assistants.Mesh.Messages[inbox[0]]; len(m.Recipients) != 1 || !strings.HasPrefix(m.Body, "New task on the board: task/big") {
+			t.Fatalf("notice to %s = %+v, want one message to it alone", p, m)
+		}
+	}
+	if got := rs.Assistants.Mesh.Inbox[meshStageParticipantID(assistantsTestStageID)]; len(got) != 0 {
+		t.Fatalf("the finished stage got %d messages, want none", len(got))
 	}
 }

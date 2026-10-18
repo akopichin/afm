@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -69,12 +70,23 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
+	messageID := deriveMessageID(req.OperationID)
+	rs := o.opts.Store.Snapshot()
+	// A retry of an already-committed post replays it, whatever changed since (the stage finished, so the
+	// mesh mirror would now be built differently).
+	if _, committed := rs.Assistants.OperationIndex[req.OperationID]; committed {
+		m, ok := rs.Assistants.Discussions.Messages[messageID]
+		if !ok || !slices.Contains(rs.Assistants.Discussions.ByStage[req.StageID], messageID) ||
+			m.Author.Kind != req.AuthorKind || m.Author.ID != req.AuthorID || m.Body != req.Body {
+			return "", state.OperationIDConflictError(req.OperationID)
+		}
+		return messageID, nil
+	}
 	st := o.reg().Stage(req.StageID)
 	if st == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
 	}
 
-	messageID := deriveMessageID(req.OperationID)
 	eff, err := discussionMessageEffect(req.StageID, messageID, state.DiscussionMessagePayload{
 		AuthorKind: string(req.AuthorKind), AuthorID: req.AuthorID, Role: req.Role,
 		Round: req.Round, ParentMessageID: req.ParentMessageID, ContextVersion: req.ContextVersion,
@@ -85,7 +97,6 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	}
 	effects := []state.Effect{eff}
 
-	rs := o.opts.Store.Snapshot()
 	meshEffects, err := discussionMeshEffects(rs, req.StageID, messageID, req)
 	if err != nil {
 		return "", err

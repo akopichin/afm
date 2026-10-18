@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
@@ -57,24 +59,47 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		AuthorID: req.Author, Key: req.Key, Version: req.ExpectedVersion + 1, Status: status, ArtifactRefs: req.ArtifactRefs,
 		Seq: res.Seq, Ts: res.Time,
 	}
-	if len(req.Notify) > 0 {
-		if err := o.notifyAboutBoardEntry(ctx, req, entry); err != nil {
-			return agentcomm.BoardEntry{}, err
-		}
-	}
+	o.notifyAboutBoardEntry(ctx, req, entry)
 	return entry, nil
 }
 
-// notifyAboutBoardEntry tells req.Notify about the just-published entry with one message from its author —
-// through SendFromAgent, so it lands in the conversation of exactly those participants (opening it if
-// needed). Its request id is derived from the publish's, so a retried publish replays the same message.
-func (o *Orchestrator) notifyAboutBoardEntry(ctx context.Context, req PublishRequest, entry agentcomm.BoardEntry) error {
-	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", entry.Key, entry.Status, entry.Key)
-	_, err := o.SendFromAgent(ctx, SendRequest{
-		OperationID: req.OperationID + ":notify", Sender: req.Author, Recipients: req.Notify,
-		Kind: agentcomm.MessageKindRequest, Body: body, Actor: req.Actor,
-	})
-	return err
+// boardNoticeStatusLimit bounds how much of an entry's status a notice quotes; the board holds the rest.
+const boardNoticeStatusLimit = 1000
+
+// notifyAboutBoardEntry tells every reachable participant in req.Notify about the just-published entry, with
+// one message from its author per recipient — so no recipient or conversation-size limit can refuse the notice
+// as a whole, and one finished or unknown recipient does not keep the others from hearing about it. The publish
+// is already committed: a notice that cannot be sent is logged, never turned into a failed publish. Each
+// message's request id is derived from the publish's and its recipient, so a retried publish replays the same
+// messages instead of sending them twice.
+func (o *Orchestrator) notifyAboutBoardEntry(ctx context.Context, req PublishRequest, entry agentcomm.BoardEntry) {
+	if len(req.Notify) == 0 {
+		return
+	}
+	status := entry.Status
+	if len(status) > boardNoticeStatusLimit {
+		status = strings.ToValidUTF8(status[:boardNoticeStatusLimit], "") + "…"
+	}
+	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", entry.Key, status, entry.Key)
+	rs := o.opts.Store.Snapshot()
+	roster := o.liveRoster(rs)
+	for _, name := range req.Notify {
+		ids, err := resolveRecipients(roster, []agentcomm.ParticipantID{name})
+		if err != nil {
+			log.Printf("WARN: mesh: board key %s: not notifying %q: %v", entry.Key, name, err)
+			continue
+		}
+		recipient := ids[0]
+		if p, ok := resolveParticipant(rs, recipient); recipient == req.Author || !ok || !p.Reachable {
+			continue
+		}
+		if _, err := o.SendFromAgent(ctx, SendRequest{
+			OperationID: req.OperationID + ":notify:" + string(recipient), Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient},
+			Kind: agentcomm.MessageKindRequest, Body: body, Actor: req.Actor,
+		}); err != nil {
+			log.Printf("WARN: mesh: board key %s: notify %s: %v", entry.Key, recipient, err)
+		}
+	}
 }
 
 // ReadBoard implements Service.ReadBoard. An empty Key returns every entry, sorted for a deterministic

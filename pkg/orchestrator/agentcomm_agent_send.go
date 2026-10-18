@@ -17,8 +17,9 @@ import (
 //   - a reply without a thread goes into the thread of the message it answers (and, without recipients,
 //     back to that message's sender);
 //   - any other send without a thread goes into the open conversation with exactly the sender and those
-//     recipients, or opens one. The open is its own idempotent operation derived from req.OperationID, so a
-//     retried request finds the same thread and replays the same send.
+//     recipients, or opens one IN THE SAME operation as the message, so a send that is rejected leaves no
+//     empty conversation behind. The new thread's id is derived from the member set, so two agents starting
+//     the same conversation at once open the same thread.
 func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (SendReceipt, error) {
 	rs := o.opts.Store.Snapshot()
 	roster := o.liveRoster(rs)
@@ -49,41 +50,24 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 			req.Recipients = []agentcomm.ParticipantID{answered.Sender}
 		}
 	}
-
-	if req.ThreadID == "" {
-		if len(req.Recipients) == 0 {
-			return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "no recipients — pass --to (see `afm agent list`)"}
-		}
-		members := append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...)
-		// Check everything the send itself would reject before opening anything, so a request that cannot be
-		// sent leaves no empty conversation behind: the message's shape, the recipients' reachability and their
-		// inbox limits — the same validators Send and its projection apply (Send re-checks them at commit).
-		draft := agentcomm.Message{Sender: req.Sender, Recipients: req.Recipients, Kind: req.Kind, InReplyTo: req.InReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs}
-		if err := agentcomm.ValidateMessage(draft, members, nil); err != nil {
-			return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: err.Error()}
-		}
-		if err := rejectUnreachableRecipients(rs, req.Recipients); err != nil {
-			return SendReceipt{}, err
-		}
-		if err := rs.Assistants.Mesh.CheckInboxCapacity(req.Recipients); err != nil {
-			return SendReceipt{}, err
-		}
-		if th := openThreadWithMembers(rs, members); th != "" {
-			req.ThreadID = th
-		} else {
-			// The open's operation id is derived from the member set (and how many conversations they already
-			// had), not from this request: two agents starting the same conversation at once commit the SAME
-			// operation, and the second one is an idempotent replay returning the same thread.
-			opened, err := o.OpenThread(ctx, OpenThreadRequest{
-				OperationID: conversationOpenID(rs, members), Scope: agentcomm.ScopeRun, Members: sortedMemberSet(members), Actor: req.Actor,
-			})
-			if err != nil {
-				return SendReceipt{}, err
-			}
-			req.ThreadID = opened.ID
-		}
+	if req.ThreadID != "" {
+		return o.Send(ctx, req)
 	}
-	return o.Send(ctx, req)
+
+	if len(req.Recipients) == 0 {
+		return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "no recipients — pass --to (see `afm agent list`)"}
+	}
+	members := append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...)
+	if th := openThreadWithMembers(rs, members); th != "" {
+		req.ThreadID = th
+		return o.Send(ctx, req)
+	}
+	req.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
+	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, sortedMemberSet(members), 0)
+	if err != nil {
+		return SendReceipt{}, err
+	}
+	return o.sendWithOpen(ctx, req, open)
 }
 
 // committedSendMatches reports whether m — the message already committed under req's request id — is the
@@ -145,9 +129,9 @@ func resolveRecipients(roster []agentcomm.Participant, names []agentcomm.Partici
 	return out, nil
 }
 
-// conversationOpenID is the operation id for opening the conversation of exactly members: the sorted member
-// set plus how many threads with that exact set exist already (so a conversation opened after an earlier one
-// was closed gets a fresh id).
+// conversationOpenID is the key a new conversation of exactly members derives its thread id from: the sorted
+// member set plus how many threads with that exact set exist already (so a conversation opened after an
+// earlier one was closed gets a fresh id).
 func conversationOpenID(rs state.RunState, members []agentcomm.ParticipantID) string {
 	set := sortedMemberSet(members)
 	n := 0

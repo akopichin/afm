@@ -264,3 +264,36 @@ func TestStageAgentReplyInDiscussionThreadIsMirroredToDiscussion(t *testing.T) {
 		t.Fatalf("mirrored answer = %+v", last)
 	}
 }
+
+// The Team view can write straight into a stage's discussion thread; that message exists only in the mesh.
+// The stage agent's reply to it is still mirrored into the Discussion — without a parent the Discussion does
+// not have — instead of the whole reply being refused.
+func TestStageAgentReplyToTeamMessageInDiscussionThread(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	if _, err := o.PostDiscussionMessage(ctx, PostMessageRequest{
+		OperationID: "op-disc-open", StageID: assistantsTestStageID, AuthorKind: assistants.AuthorHuman,
+		Round: assistants.RoundFreeform, Body: "first question", Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("PostDiscussionMessage: %v", err)
+	}
+	stageAgent := meshStageParticipantID(assistantsTestStageID)
+	fromTeam, err := o.Send(ctx, SendRequest{
+		OperationID: "op-team-q", ThreadID: deriveDiscussionThreadID(assistantsTestStageID), Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{stageAgent}, Kind: agentcomm.MessageKindRequest, Body: "asked from Team", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("Send from Team: %v", err)
+	}
+	if _, err := o.SendFromAgent(ctx, SendRequest{
+		OperationID: "op-team-a", Sender: stageAgent, Kind: agentcomm.MessageKindReply, InReplyTo: &fromTeam.MessageID,
+		Body: "answered", Actor: state.Actor{Kind: "agent", ID: string(stageAgent)},
+	}); err != nil {
+		t.Fatalf("reply to a Team message in the discussion thread: %v", err)
+	}
+	msgs := o.DiscussionMessages(assistantsTestStageID)
+	last := msgs[len(msgs)-1]
+	if last.Body != "answered" || last.ParentMessageID != "" {
+		t.Fatalf("mirrored reply = %+v, want the answer without a parent outside the Discussion", last)
+	}
+}

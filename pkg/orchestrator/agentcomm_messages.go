@@ -21,7 +21,8 @@ const defaultMeshPageLimit = 50
 
 // OpenThread implements Service.OpenThread. Members not yet known to the mesh (a stage agent or helper
 // addressed for the first time) are lazily registered in the SAME operation via ensureParticipantEffects —
-// see that function's doc comment for why Phase 1 never pre-populates them.
+// see that function's doc comment for why Phase 1 never pre-populates them. A retry of an already-committed
+// request returns the thread it opened, whatever changed since (a member finished, the thread was closed).
 func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (agentcomm.Thread, error) {
 	if req.OperationID == "" {
 		return agentcomm.Thread{}, errors.New("agentcomm: operation id is required")
@@ -31,29 +32,22 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 	}
 
 	rs := o.opts.Store.Snapshot()
-	participantEffects, err := ensureParticipantEffects(rs, req.Members)
-	if err != nil {
-		return agentcomm.Thread{}, err
-	}
-
 	threadID := deriveMeshThreadID(req.OperationID)
-	members := make([]string, len(req.Members))
-	for i, m := range req.Members {
-		members[i] = string(m)
+	if _, committed := rs.Assistants.OperationIndex[req.OperationID]; committed {
+		th, ok := rs.Assistants.Mesh.Threads[threadID]
+		if !ok || th.Title != req.Title || th.Scope != req.Scope || th.Budgets.MaxMessages != req.MaxMessages || !slices.Equal(th.Members, req.Members) {
+			return agentcomm.Thread{}, state.OperationIDConflictError(req.OperationID)
+		}
+		return *th, nil
 	}
-	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: req.Title, Scope: string(req.Scope), Members: members, MaxMessages: req.MaxMessages})
+	effects, err := threadOpenEffects(rs, threadID, req.Title, req.Scope, req.Members, req.MaxMessages)
 	if err != nil {
 		return agentcomm.Thread{}, err
 	}
 
-	effects := append(participantEffects, threadEff)
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_open_thread", Actor: req.Actor, Effects: effects}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		for _, m := range req.Members {
-			o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
-		}
-		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": req.Title}})
+		o.publishThreadOpened(threadID, req.Title, req.Members)
 	})
 	if err != nil {
 		return agentcomm.Thread{}, err
@@ -63,6 +57,33 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		ID: threadID, Title: req.Title, Scope: req.Scope, Members: req.Members, Status: agentcomm.ThreadOpen,
 		Budgets: agentcomm.ThreadBudgets{MaxMessages: req.MaxMessages},
 	}, nil
+}
+
+// threadOpenEffects builds the effects that open threadID with members: registering every member the mesh
+// roster does not hold yet, then the thread itself — shared by OpenThread and SendFromAgent, which opens a
+// conversation in the same operation as its first message.
+func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title string, scope agentcomm.Scope, members []agentcomm.ParticipantID, maxMessages int) ([]state.Effect, error) {
+	effects, err := ensureParticipantEffects(rs, members)
+	if err != nil {
+		return nil, err
+	}
+	memberIDs := make([]string, len(members))
+	for i, m := range members {
+		memberIDs[i] = string(m)
+	}
+	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(scope), Members: memberIDs, MaxMessages: maxMessages})
+	if err != nil {
+		return nil, err
+	}
+	return append(effects, threadEff), nil
+}
+
+func (o *Orchestrator) publishThreadOpened(threadID agentcomm.ThreadID, title string, members []agentcomm.ParticipantID) {
+	for _, m := range members {
+		o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
+	}
+	o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": title}})
 }
 
 // CloseThread implements Service.CloseThread. Every still-pending wait whose condition names this thread (an
@@ -109,6 +130,13 @@ func rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.Parti
 // applyMeshMessageSent itself, in the SAME commit; beforeReady below only tells notifyAndResumeNewlyReadyWaits
 // which waits to skip because they were already ready before this call.
 func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, error) {
+	return o.sendWithOpen(ctx, req, nil)
+}
+
+// sendWithOpen is Send with openThread — the effects opening req.ThreadID when SendFromAgent starts a new
+// conversation — committed in the SAME operation as the message: a send that is rejected leaves no empty
+// conversation behind.
+func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openThread []state.Effect) (SendReceipt, error) {
 	if req.OperationID == "" {
 		return SendReceipt{}, errors.New("agentcomm: operation id is required")
 	}
@@ -136,20 +164,24 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		return SendReceipt{}, err
 	}
 
-	effects := []state.Effect{eff}
-	if mirror, ok, merr := discussionMirrorOfStageReply(req, messageID, body); merr != nil {
+	rs := o.opts.Store.Snapshot()
+	effects := append(slices.Clone(openThread), eff)
+	if mirror, ok, merr := discussionMirrorOfStageReply(rs, req, messageID, body); merr != nil {
 		return SendReceipt{}, merr
 	} else if ok {
 		effects = append(effects, mirror)
 	}
 
-	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
+	beforeReady := readyWaitSet(rs)
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
 		Check: func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) },
 	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		if len(openThread) > 0 {
+			o.publishThreadOpened(req.ThreadID, "", append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...))
+		}
 		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
 		}})

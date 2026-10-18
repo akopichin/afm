@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -65,9 +66,8 @@ func meshRunParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
 	return agentcomm.ParticipantID(meshRunPrefix + string(taskID))
 }
 
-// runAgentAlias is the short @-name a run agent answers to: its title as a handle ("New QA" → "new-qa"),
-// else the profile id. Two agents may end up with the same alias; agentcomm.ResolveAlias then reports it as
-// ambiguous instead of silently picking one, and the full participant id still addresses each.
+// runAgentAlias is the base of the short @-name a run agent answers to: its title as a handle ("New QA" →
+// "new-qa"), else the profile id. uniqueAlias makes it unique within the run.
 func runAgentAlias(title string, profileID assistants.ProfileID) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
@@ -87,6 +87,87 @@ func runAgentAlias(title string, profileID assistants.ProfileID) string {
 		return alias
 	}
 	return string(profileID)
+}
+
+// uniqueAlias returns base, or base-2, base-3, … — the first that no participant in roster answers to, so
+// an @name always names exactly one participant.
+func uniqueAlias(roster []agentcomm.Participant, base string) string {
+	taken := func(alias string) bool {
+		return slices.ContainsFunc(roster, func(p agentcomm.Participant) bool { return strings.EqualFold(p.Alias, alias) })
+	}
+	alias := base
+	for n := 2; taken(alias); n++ {
+		alias = fmt.Sprintf("%s-%d", base, n)
+	}
+	return alias
+}
+
+// aliasTaken is the admission check for a new participant's alias, run under the commit's lock: two agents
+// added at the same moment must not both get the same @name.
+func aliasTaken(rs state.RunState, alias string) error {
+	for _, p := range rs.Assistants.Mesh.Participants {
+		if strings.EqualFold(p.Alias, alias) {
+			return attachRejected(assistants.CodeStaleRevision, "the name @%s was just taken by another participant — add the agent again", alias)
+		}
+	}
+	return nil
+}
+
+// committedTask returns the task a request id already created through a top-level attach, if it committed.
+// Callers resolve it before any validation that depends on state which may have changed since (the profile,
+// the stage's status, the roster), so a retry after a lost response replays the original outcome; they
+// compare it with the request to tell a retry from a request id reused for something else.
+func committedTask(rs state.RunState, opID string) (*state.TaskState, bool) {
+	if _, committed := rs.Assistants.OperationIndex[opID]; !committed {
+		return nil, false
+	}
+	return rs.Assistants.Tasks[deriveTaskID(opID)], true
+}
+
+// sameAttach reports whether the committed task t is the attach described by these request fields. An empty
+// title or mode was filled in at attach time, so it matches whatever was filled in.
+func sameAttach(t *state.TaskState, profileID assistants.ProfileID, scope assistants.Scope, stageID, title, instruction string, mode assistants.Mode) bool {
+	return t != nil && t.ProfileID == profileID && normalizeScope(t.Scope) == normalizeScope(scope) && t.RootStageID == stageID &&
+		(title == "" || t.Title == title) && t.Instruction == instruction && (mode == "" || t.Mode == mode)
+}
+
+func normalizeScope(s assistants.Scope) assistants.Scope {
+	if s == "" {
+		return assistants.ScopeStage
+	}
+	return s
+}
+
+// replayedAttachAndSend rebuilds the result of an AttachAndSend that already committed under req's id, or
+// reports a conflict when req is not that attach (another profile, title, first message, members).
+func replayedAttachAndSend(rs state.RunState, t *state.TaskState, req AttachAndSendRequest) (AttachAndSendResult, error) {
+	threadID := deriveMeshThreadID(req.OperationID)
+	th := rs.Assistants.Mesh.Threads[threadID]
+	if !sameAttach(t, req.ProfileID, req.Scope, req.StageID, req.Title, req.Instruction, req.Mode) || th == nil {
+		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
+	}
+	for _, r := range req.Recipients {
+		if !slices.Contains(th.Members, r) {
+			return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
+		}
+	}
+	res := AttachAndSendResult{TaskID: t.ID, ParticipantID: meshParticipantForTask(rs, t.Task), ThreadID: threadID}
+	mid := deriveMeshMessageID(req.OperationID)
+	m := rs.Assistants.Mesh.Messages[mid]
+	if (m != nil) != (req.FirstMessage != nil) || (m != nil && m.Body != redactMeshText(*req.FirstMessage)) {
+		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
+	}
+	if m != nil {
+		res.MessageID = &mid
+	}
+	return res, nil
+}
+
+// topLevelQuota is the quota admission every top-level attach shares (Attach, AttachAndSend): one unit
+// reserved against collaboration.limits.max_tasks, checked under the commit's lock with its reservation.
+func (o *Orchestrator) topLevelQuota() (state.Effect, *int, error) {
+	eff, err := quotaReservedEffect(1)
+	return eff, o.opts.Config.Collaboration.Limits.MaxTasks, err
 }
 
 // meshThreadScopeFor maps an assistants.Scope onto the agentcomm.Scope the opened thread should carry. The
@@ -131,18 +212,20 @@ func attachRejected(code assistants.ErrorCode, format string, args ...any) error
 //     for a run-scoped role — one registration convention, not two. ensureParticipantEffects IS reused for
 //     every member this call does NOT invent (the human "user" and any extra Recipients), because those ARE
 //     resolvable from the current snapshot.
-//   - MaxTasks quota: Attach (assistants.go) does not reserve against AssistantsState.QuotaReserved today —
-//     only admitChildren's nested-delegation path does. CollaborationLimits.MaxTasks's own doc comment
-//     ("top-level attaches plus every delegated descendant") already says a top-level attach SHOULD count;
-//     AttachAndSend is the new composite dev-plan.md's own Implement line names an explicit
-//     Expect{StageNotTerminal, MaxQuota} for, so it reserves 1 unit here — using the SAME existing
-//     quotaReservedEffect/Preconditions.MaxQuota machinery admitChildren already established, not a new one.
+//   - MaxTasks quota: every top-level attach — this one and Attach (assistants.go) — reserves one unit through
+//     the shared topLevelQuota, the same quotaReservedEffect/Preconditions.MaxQuota machinery admitChildren
+//     uses for delegated children (CollaborationLimits.MaxTasks: "top-level attaches plus every delegated
+//     descendant").
 func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendRequest) (AttachAndSendResult, error) {
 	if !o.opts.AssistantsEnabled {
 		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
 	}
 	if req.OperationID == "" {
 		return AttachAndSendResult{}, errors.New("agentcomm: operation id is required")
+	}
+	rs := o.opts.Store.Snapshot()
+	if t, committed := committedTask(rs, req.OperationID); committed {
+		return replayedAttachAndSend(rs, t, req)
 	}
 
 	scope := req.Scope
@@ -199,7 +282,6 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		title = profile.Title
 	}
 
-	rs := o.opts.Store.Snapshot()
 	depth := assistants.ComputeDepth(nil) // top-level: AttachAndSend never has a parent task
 	if rs.Assistants.Policy.Blocks(depth) {
 		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeDelegationDepthExceeded, Reason: fmt.Sprintf("max_depth=%d", rs.Assistants.Policy.MaxDepth)}
@@ -250,7 +332,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	case assistants.ScopeRun:
 		newParticipant = agentcomm.Participant{
 			ID: meshRunParticipantID(taskID), Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun,
-			Alias: runAgentAlias(title, req.ProfileID), DisplayName: title, Reachable: true,
+			Alias: uniqueAlias(o.liveRoster(rs), runAgentAlias(title, req.ProfileID)), DisplayName: title, Reachable: true,
 		}
 	default:
 		// Unreachable (see the earlier switch's default) — leaves newParticipant zero, caught by Valid() below.
@@ -321,23 +403,27 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		effects = append(effects, msgEff)
 	}
 
-	quotaEff, err := quotaReservedEffect(1)
+	quotaEff, maxQuota, err := o.topLevelQuota()
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}
 	effects = append(effects, quotaEff)
 
-	var maxQuota *int
-	if mt := o.opts.Config.Collaboration.Limits.MaxTasks; mt != nil {
-		maxQuota = mt
-	}
 	expect := state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, MaxQuota: maxQuota}
 	if scope == assistants.ScopeStage {
 		expect.StageNotTerminal = []string{req.StageID}
 	}
-	if req.FirstMessage != nil {
-		// The first message also goes to every extra member — the same reachability rule as Send.
-		expect.Check = func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) }
+	expect.Check = func(cur *state.RunState) error {
+		if scope == assistants.ScopeRun {
+			if err := aliasTaken(*cur, newParticipant.Alias); err != nil {
+				return err
+			}
+		}
+		if req.FirstMessage != nil {
+			// The first message also goes to every extra member — the same reachability rule as Send.
+			return rejectUnreachableRecipients(*cur, req.Recipients)
+		}
+		return nil
 	}
 
 	op := state.Operation{ID: req.OperationID, Kind: "attach_and_send", Actor: req.Actor, Expect: expect, Effects: effects}

@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -460,4 +461,94 @@ func TestSend_StartedWorkSurvivesTheRequestContext(t *testing.T) {
 	}
 	cancel() // the HTTP handler returned
 	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
+}
+
+// TestAddRunAgent_AliasIsUniqueInTheRun: two run agents with the same title get distinct @names, so an @name
+// always names exactly one participant.
+func TestAddRunAgent_AliasIsUniqueInTheRun(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	first := addTestRunAgent(t, o, "op-qa-1", nil)
+	second := addTestRunAgent(t, o, "op-qa-2", nil)
+
+	rs := store.Snapshot()
+	a, b := rs.Assistants.Mesh.Participants[first.ParticipantID].Alias, rs.Assistants.Mesh.Participants[second.ParticipantID].Alias
+	if a != "qa" || b != "qa-2" {
+		t.Fatalf("aliases = %q, %q, want qa and qa-2", a, b)
+	}
+	roster := o.liveRoster(rs)
+	for alias, want := range map[string]agentcomm.ParticipantID{"@qa": first.ParticipantID, "@qa-2": second.ParticipantID} {
+		if got, err := agentcomm.ResolveAlias(alias, roster); err != nil || got != want {
+			t.Fatalf("ResolveAlias(%s) = %s, %v, want %s", alias, got, err, want)
+		}
+	}
+}
+
+// TestTopLevelAttach_SharesOneQuota: Attach and AttachAndSend admit top-level tasks against the same
+// max_tasks — one of each cannot exceed a limit of one.
+func TestTopLevelAttach_SharesOneQuota(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	one := 1
+	o.opts.Config.Collaboration.Limits.MaxTasks = &one
+
+	if _, err := o.Attach(context.Background(), AttachRequest{OperationID: "op-helper", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "look", Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	_, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{OperationID: "op-run", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "user"}})
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeBudgetExceeded {
+		t.Fatalf("a second top-level task over max_tasks=1: err = %v, want budget_exceeded", err)
+	}
+	if got := store.Snapshot().Assistants.QuotaReserved; got != 1 {
+		t.Fatalf("QuotaReserved = %d, want 1", got)
+	}
+}
+
+// TestCommittedRequestReplaysAfterStateChange: a retry of a request whose response was lost replays the
+// committed outcome even when the state it was validated against has changed since — here the stage
+// finished, which a fresh attach, discussion post or thread open would be refused or built differently for.
+func TestCommittedRequestReplaysAfterStateChange(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+
+	attach := AttachRequest{OperationID: "op-attach", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "look", Actor: state.Actor{Kind: "user"}}
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+	taskID, err := o.Attach(ctx, attach)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+	post := PostMessageRequest{OperationID: "op-post", StageID: assistantsTestStageID, AuthorKind: assistants.AuthorHuman, Round: assistants.RoundFreeform, Body: "hello", Actor: state.Actor{Kind: "user"}}
+	postID, err := o.PostDiscussionMessage(ctx, post)
+	if err != nil {
+		t.Fatalf("PostDiscussionMessage: %v", err)
+	}
+	open := OpenThreadRequest{OperationID: "op-open", Scope: agentcomm.ScopeStage, Members: []agentcomm.ParticipantID{meshUserParticipantID, stage}}
+	thread, err := o.OpenThread(ctx, open)
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+
+	if _, ok := o.Trigger(assistantsTestStageID, bus.EvComplete, bus.GuardCtx{}, ""); !ok {
+		t.Fatal("EvComplete failed")
+	}
+
+	if again, err := o.Attach(ctx, attach); err != nil || again != taskID {
+		t.Fatalf("Attach retry after the stage finished = %s, %v, want %s", again, err, taskID)
+	}
+	if again, err := o.PostDiscussionMessage(ctx, post); err != nil || again != postID {
+		t.Fatalf("discussion post retry after the stage finished = %s, %v, want %s", again, err, postID)
+	}
+	if again, err := o.OpenThread(ctx, open); err != nil || again.ID != thread.ID {
+		t.Fatalf("thread open retry after the stage finished = %+v, %v, want %s", again, err, thread.ID)
+	}
+
+	changed := attach
+	changed.Instruction = "something else"
+	if _, err := o.Attach(ctx, changed); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("the same request id for a different attach: err = %v, want a conflict", err)
+	}
 }

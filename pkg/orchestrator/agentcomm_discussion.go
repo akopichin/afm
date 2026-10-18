@@ -120,14 +120,20 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 // stage's discussion thread (typically answering the human's discussion post), the same message — same id, in
 // the same operation — is also recorded as the stage's discussion message, so the Discussion tab shows the
 // answer and not only the question. Anything else is not mirrored (ok=false).
-func discussionMirrorOfStageReply(req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, bool, error) {
+//
+// The reply keeps its parent only when the parent is itself a discussion message: the Team view can write into
+// this thread directly, and such a message exists only in the mesh — naming it as the discussion parent would
+// make the discussion projection reject the agent's whole reply.
+func discussionMirrorOfStageReply(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, bool, error) {
 	stageID, ok := stageIDFromMeshParticipant(req.Sender)
 	if !ok || req.ThreadID != deriveDiscussionThreadID(stageID) {
 		return state.Effect{}, false, nil
 	}
 	var parent string
 	if req.InReplyTo != nil {
-		parent = string(*req.InReplyTo)
+		if _, inDiscussion := rs.Assistants.Discussions.Messages[string(*req.InReplyTo)]; inDiscussion {
+			parent = string(*req.InReplyTo)
+		}
 	}
 	eff, err := discussionMessageEffect(stageID, string(messageID), state.DiscussionMessagePayload{
 		AuthorKind: string(assistants.AuthorMainAgent), AuthorID: string(req.Sender), Role: string(assistants.AuthorMainAgent),

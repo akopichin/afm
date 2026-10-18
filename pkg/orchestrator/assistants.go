@@ -207,6 +207,14 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
+	// A retry of an already-committed attach replays it, whatever changed since (the stage finished, the
+	// profile went away).
+	if t, committed := committedTask(o.opts.Store.Snapshot(), req.OperationID); committed {
+		if !sameAttach(t, req.ProfileID, assistants.ScopeStage, req.StageID, req.Title, req.Instruction, req.Mode) || (req.Trigger != "" && t.Trigger != req.Trigger) {
+			return "", state.OperationIDConflictError(req.OperationID)
+		}
+		return t.ID, nil
+	}
 	st := o.reg().Stage(req.StageID)
 	if st == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
@@ -293,6 +301,12 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		effects = append(effects, statusEffect)
 	}
 
+	quotaEff, maxQuota, err := o.topLevelQuota()
+	if err != nil {
+		return "", err
+	}
+	effects = append(effects, quotaEff)
+
 	op := state.Operation{
 		ID:    req.OperationID,
 		Kind:  "attach_task",
@@ -301,7 +315,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		// commit: if the stage reaches done/failed (e.g. a concurrent completeStage) in between, THIS CAS
 		// rejects atomically under the same lock as the write, rather than racing to admit a requirement
 		// nothing will ever check again (TestAttachRequiredRacesWithComplete).
-		Expect:  state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, StageNotTerminal: []string{req.StageID}},
+		Expect:  state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, StageNotTerminal: []string{req.StageID}, MaxQuota: maxQuota},
 		Effects: effects,
 	}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
