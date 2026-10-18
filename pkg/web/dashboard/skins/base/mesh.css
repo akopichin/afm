@@ -29,6 +29,9 @@
   flex: 0 0 240px;
   min-width: 0;
   overflow-y: auto;
+  /* Long names are clipped with an ellipsis, never scrolled sideways (a horizontally scrolled roster
+     used to hide its own left edge). */
+  overflow-x: hidden;
   border-right: 1px solid var(--separator-subtle);
   padding: 12px 10px;
   display: flex;
@@ -37,6 +40,9 @@
 }
 
 .team-roster-group h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0 0 6px;
   font-size: 11px;
   font-weight: 600;
@@ -50,12 +56,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 .team-roster-group-header h3 {
   margin: 0;
 }
 
 .team-add-run-agent {
+  flex: 0 0 auto;
   font-size: 11px;
   padding: 3px 8px;
 }
@@ -106,18 +114,59 @@
   outline-offset: 1px;
 }
 
+.team-person-row,
+.team-thread-item {
+  min-width: 0;
+}
+
+/* Name over an optional role subtitle; the column shrinks so the status keeps its place. */
+.team-person-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .team-person-name,
+.team-person-role,
 .team-thread-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.team-person-status,
-.team-thread-closed {
-  flex: 0 0 auto;
+.team-person-role {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* A stage's helpers sit right under it, indented. */
+.team-person-row.nested {
+  padding-left: 22px;
+}
+
+.team-person-status,
+.team-thread-closed {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Live stage status on stage rows: the active one stands out, a failed one is red, a stage that has not
+   started yet is dimmed. Semantic tokens only — no per-status --c-* mapping here. */
+.team-person-row[data-status="running"] .team-person-status {
+  color: var(--accent-primary);
+}
+.team-person-row[data-status="failed"] .team-person-status,
+.team-person-row[data-status="hook_failed"] .team-person-status {
+  color: var(--danger);
+}
+.team-person-row[data-status="pending"]:not(.active) {
+  opacity: 0.6;
 }
 
 .team-thread-list-empty {
@@ -307,16 +356,23 @@
   color: var(--text-primary);
 }
 
+/* The messages area takes all free height in BOTH states (messages or the "No messages yet" hint), so the
+   composer below it stays pinned to the bottom instead of jumping down after the first message. */
 .team-conversation-messages {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+.team-conversation-message-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.team-conversation-empty-messages {
+  margin: 0;
 }
 
 .team-conversation-message {
@@ -345,22 +401,6 @@
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.team-conversation-composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-.team-conversation-input {
-  flex: 1 1 auto;
-  font: inherit;
-  resize: vertical;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--separator-subtle);
-  background: var(--surface-canvas);
-  color: var(--text-primary);
 }
 
 .team-conversation-error {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshMentionGroups, findExistingDirectThread, participantLabel } from './mesh-recipients'
+import { buildMeshMentionGroups } from './mesh-recipients'
+import { findExistingDirectThread, participantLabel } from '../../lib/mesh-roster'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
 

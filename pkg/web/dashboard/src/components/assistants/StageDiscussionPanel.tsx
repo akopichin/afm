@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { listStageDiscussion, postStageDiscussionMessage, type DiscussionMessageWire } from '../../api/run-client'
 import { StageDiscussion, type DiscussionMessage } from './StageDiscussion'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -29,11 +31,14 @@ export type StageDiscussionPanelProps = {
 // same posture as useStageAssistants) and lets the operator append a human message. Posting never touches the
 // stage FSM (the message is observational), so the only feedback needed is the message appearing on the next
 // poll.
+const MAX_INPUT_HEIGHT = 200
+
 export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): ReactElement {
   const [messages, setMessages] = useState<DiscussionMessage[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const autoGrowRef = useAutoGrowTextarea(draft, MAX_INPUT_HEIGHT)
   const cursorRef = useRef(0)
 
   useEffect(() => {
@@ -77,9 +82,10 @@ export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): Re
   return (
     <div className="stage-discussion-panel">
       <StageDiscussion messages={messages} />
-      <div className="stage-discussion-composer">
+      <div className="chat-composer-row">
         <textarea
-          className="stage-discussion-input"
+          ref={autoGrowRef}
+          className="chat-composer-input"
           placeholder="Add a message to this stage's discussion…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -89,11 +95,9 @@ export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): Re
               send()
             }
           }}
-          rows={2}
+          rows={1}
         />
-        <button type="button" className="btn btn-send" disabled={sending || draft.trim() === ''} onClick={send}>
-          {sending ? 'Sending…' : 'Send'}
-        </button>
+        <ChatSendButton label="Send" disabled={sending || draft.trim() === ''} onClick={send} />
       </div>
       {error !== null && <div className="stage-discussion-error" role="alert">{error}</div>}
     </div>

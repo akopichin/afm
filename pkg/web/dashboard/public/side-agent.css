@@ -211,46 +211,16 @@
   text-align: center;
 }
 
-/* --- Композер (закреплён) --- */
+/* --- Композер (закреплён) --- Строка ввода — общая .chat-composer-row (public/chat-composer.css); здесь
+   только место композера в модалке: опциональный чип цитаты сверху, под ним строка. */
 .side-agent-composer {
   flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--separator-subtle);
   background: var(--surface-raised);
-}
-/* side-agent-textarea-wrap — positioning context for the @mention menu (T4.2), which anchors above the
-   textarea via `position: absolute`. Takes over the flex slot the textarea used to occupy directly in
-   .side-agent-composer's row. */
-.side-agent-textarea-wrap {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.side-agent-textarea {
-  display: block;
-  width: 100%;
-  resize: none;
-  min-height: 38px;
-  padding: 9px 12px;
-  font-family: var(--font-ui);
-  font-size: 14px;
-  color: var(--text-primary);
-  background: var(--surface-canvas);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-md);
-}
-.side-agent-textarea:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
-.side-agent-composer-actions {
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
 }
 
 /* --- Индикатор в шапке (активная/непросмотренная беседа) --- */
@@ -306,7 +276,7 @@
    flex-wrap), иначе длинный коммент съедал бы ширину строки и сплющивал textarea. */
 .side-agent-quote-chip {
   position: relative;
-  flex: 0 0 100%;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 4px;

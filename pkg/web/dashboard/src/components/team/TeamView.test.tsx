@@ -44,12 +44,12 @@ describe('TeamView', () => {
     vi.restoreAllMocks()
   })
 
-  test('roster groups participants under "This run", "Stage · …" and "Conversations"', () => {
+  test('roster groups participants under "This run", "Stages" and "Conversations"', () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    expect(screen.getByText('This run')).toBeInTheDocument()
-    expect(screen.getByText('Stage · Implement feature')).toBeInTheDocument()
-    expect(screen.getByText('Conversations')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'This run' })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Stages' })).getByText('Implement agent')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Conversations' })).toBeInTheDocument()
   })
 
   test('tabs are "Messages", "Board", "Activity"', () => {
@@ -64,7 +64,7 @@ describe('TeamView', () => {
   test('a direct conversation opens from a person row', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
+    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
   })
 
@@ -139,7 +139,7 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('boom'))
     renderTeamView()
 
-    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
+    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
 
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
@@ -159,13 +159,13 @@ describe('TeamView', () => {
     // the send below opens, which is exactly the window the duplicate-thread bug lived in.
     renderTeamView()
 
-    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
+    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
+    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'again' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))

@@ -1,6 +1,9 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
+import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
+import { participantLabel, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
 
 // ThreadConversationTarget — what the Messages pane is currently pointed at: an ALREADY open thread (picked
 // from the roster's "Conversations" group), or a person row with no thread yet ("direct" — opening one is
@@ -15,6 +18,8 @@ export type ThreadConversationProps = {
   // (TeamView) can fold this conversation into the roster's "Conversations" group instead of treating the NEXT
   // click on the same person row as yet another fresh direct target (which would open a second thread).
   onThreadOpened?: (thread: MeshThread) => void
+  // participants — the roster, to name an untitled thread and each message's sender instead of showing ids.
+  participants?: MeshParticipant[]
 }
 
 // targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
@@ -27,15 +32,10 @@ export function targetKey(target: ThreadConversationTarget | null): string {
   return target.kind === 'direct' ? `direct:${target.participant.id}` : `thread:${target.thread.id}`
 }
 
-function targetLabel(target: ThreadConversationTarget): string {
-  if (target.kind === 'direct') {
-    const p = target.participant
-    if (p.display_name && p.display_name !== '') return p.display_name
-    if (p.alias && p.alias !== '') return p.alias
-    return p.id
-  }
-  const title = target.thread.title
-  return title && title !== '' ? title : target.thread.id
+const MAX_INPUT_HEIGHT = 200
+
+function targetLabel(target: ThreadConversationTarget, participants: MeshParticipant[]): string {
+  return target.kind === 'direct' ? participantLabel(target.participant) : threadLabel(target.thread, participants)
 }
 
 // recipientsFor — every OTHER member of the conversation: a direct target has exactly one (the person
@@ -46,7 +46,7 @@ function recipientsFor(target: ThreadConversationTarget, opened: MeshThread | nu
   return thread.members.filter((m) => m !== 'user')
 }
 
-export function ThreadConversation({ target, onThreadOpened }: ThreadConversationProps): ReactElement {
+export function ThreadConversation({ target, onThreadOpened, participants = [] }: ThreadConversationProps): ReactElement {
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -61,6 +61,7 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
   // from the failed attempt already, so a plain "did this call just open it" check misses the retry).
   const notifiedRef = useRef<boolean>(target?.kind === 'thread')
 
+  const autoGrowRef = useAutoGrowTextarea(draft, MAX_INPUT_HEIGHT)
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
 
@@ -68,7 +69,7 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
     return <div className="team-conversation-empty empty-hint">Select a person or a conversation to see its messages</div>
   }
 
-  const label = targetLabel(target)
+  const label = targetLabel(target, participants)
 
   async function send(): Promise<void> {
     const text = draft.trim()
@@ -112,21 +113,26 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
   return (
     <div className="team-conversation">
       <h3 className="team-conversation-title">{label}</h3>
-      {messages.length === 0 ? (
-        <p className="team-conversation-empty-messages empty-hint">No messages yet</p>
-      ) : (
-        <ul className="team-conversation-messages">
-          {messages.map((m) => (
-            <li key={m.id} className="team-conversation-message" data-sender={m.sender_id}>
-              <span className="team-conversation-message-sender">{m.sender_id === 'user' ? 'You' : m.sender_id}</span>
-              <span className="team-conversation-message-body">{m.body}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="team-conversation-composer">
+      {/* One messages area in both states: the empty hint takes the same flex slot the list does, so the
+          composer stays pinned to the bottom instead of jumping down after the first message. */}
+      <div className="team-conversation-messages" role="log" aria-label="Messages">
+        {messages.length === 0 ? (
+          <p className="team-conversation-empty-messages empty-hint">No messages yet</p>
+        ) : (
+          <ul className="team-conversation-message-list">
+            {messages.map((m) => (
+              <li key={m.id} className="team-conversation-message" data-sender={m.sender_id}>
+                <span className="team-conversation-message-sender">{senderLabel(m.sender_id, participants)}</span>
+                <span className="team-conversation-message-body">{m.body}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="chat-composer-row">
         <textarea
-          className="team-conversation-input"
+          ref={autoGrowRef}
+          className="chat-composer-input"
           placeholder={`Message ${label}…`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -136,11 +142,9 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
               void send()
             }
           }}
-          rows={2}
+          rows={1}
         />
-        <button type="button" className="btn btn-send" disabled={sending || draft.trim() === ''} onClick={() => void send()}>
-          {sending ? 'Sending…' : 'Send'}
-        </button>
+        <ChatSendButton label="Send" disabled={sending || draft.trim() === ''} onClick={() => void send()} />
       </div>
       {error !== null && <div className="team-conversation-error" role="alert">{error}</div>}
     </div>

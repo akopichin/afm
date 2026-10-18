@@ -24,10 +24,12 @@ export function detectMentionTrigger(value: string, caret: number): MentionTrigg
 
 // filterMentionProfiles matches a typed query against a profile's id or title, case-insensitively. An empty
 // query (just typed '@') matches everything, so the menu opens showing every configured role.
-export function filterMentionProfiles<T extends { id: string; title: string }>(profiles: T[], query: string): T[] {
+export function filterMentionProfiles<T extends { id: string; title: string; handle?: string }>(profiles: T[], query: string): T[] {
   if (query === '') return profiles
   const q = query.toLowerCase()
-  return profiles.filter((p) => p.id.toLowerCase().includes(q) || p.title.toLowerCase().includes(q))
+  return profiles.filter(
+    (p) => p.id.toLowerCase().includes(q) || p.title.toLowerCase().includes(q) || (p.handle?.toLowerCase().includes(q) ?? false),
+  )
 }
 
 // MentionGroup — a labeled section of mention candidates. The feed composer's `@` menu (dev-plan.md T7.4)

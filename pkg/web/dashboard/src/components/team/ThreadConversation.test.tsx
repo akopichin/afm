@@ -24,6 +24,37 @@ describe('ThreadConversation', () => {
     expect(screen.getByText('No messages yet')).toBeInTheDocument()
   })
 
+  test('the empty state sits in the same messages area as messages do, so the composer never jumps', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    render(<ThreadConversation target={{ kind: 'direct', participant: qa }} />)
+    const log = screen.getByRole('log', { name: 'Messages' })
+    expect(log).toHaveTextContent('No messages yet')
+  })
+
+  test('an untitled direct thread is named after the other member, never its mt- id', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const untitled: MeshThread = { id: 'mt-e95e00425b9b4640a0bc', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: untitled }} participants={[qa]} />)
+    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
+    expect(screen.queryByText(/mt-e95e/)).toBeNull()
+  })
+
+  test('messages are signed with the sender name, not the participant id', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+      messages: [
+        { id: 'm0', thread_id: 'mt-1', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message', body: 'hi', seq: 1, created_at: '2026-10-18T00:00:00Z' },
+        { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'hello', seq: 2, created_at: '2026-10-18T00:00:01Z' },
+      ],
+      next_cursor: 2,
+    })
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    await waitFor(() => expect(screen.getByText('hello')).toBeInTheDocument())
+    expect(screen.getByText('You')).toBeInTheDocument()
+    expect(screen.getAllByText('QA reviewer').length).toBeGreaterThan(0)
+    expect(screen.queryByText('run:qa')).toBeNull()
+  })
+
   test('sending the first message to a direct target opens a thread then sends into it', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)

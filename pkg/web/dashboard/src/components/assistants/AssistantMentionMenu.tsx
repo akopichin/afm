@@ -7,6 +7,9 @@ import type { AssistantProfile } from '../../types/assistant-profile'
 // filterMentionGroups into this component without a second adapter layer.
 export type MentionItem = {
   id: string
+  // handle — what follows `@` on screen and in the inserted text when it differs from id (a mesh
+  // participant's short alias, e.g. `side` instead of `side:<run-id>`).
+  handle?: string
   title: string
   unavailable?: boolean
   unavailableReason?: string
@@ -28,6 +31,11 @@ export type MentionMenuProps<T extends MentionItem> = {
   onHover: (index: number) => void
   onSelect: (item: T) => void
   ariaLabel: string
+}
+
+// mentionText — the text written after `@` for an item: its handle, else its id.
+export function mentionText(item: MentionItem): string {
+  return item.handle !== undefined && item.handle !== '' ? item.handle : item.id
 }
 
 // MentionMenu — the ONE `@mention` suggestion popup (dev-plan.md T4.2, lifted into a shared primitive by
@@ -72,7 +80,7 @@ export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onH
                   onSelect(item)
                 }}
               >
-                <span className="assistant-mention-id">@{item.id}</span>
+                <span className="assistant-mention-id">@{mentionText(item)}</span>
                 <span className="assistant-mention-title">{item.title}</span>
                 {item.unavailable === true && (
                   <span className="assistant-mention-unavailable" title={item.unavailableReason}>

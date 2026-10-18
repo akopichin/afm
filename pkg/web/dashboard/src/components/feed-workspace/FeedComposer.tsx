@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
 import { buildReplyBody } from '../../lib/quote'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
-import { MentionMenu } from '../assistants/AssistantMentionMenu'
+import { MentionMenu, mentionText } from '../assistants/AssistantMentionMenu'
 import { detectMentionTrigger, filterMentionGroups } from '../assistants/mention-match'
 import { AttachAssistantDialog } from '../assistants'
 import {
@@ -14,7 +15,8 @@ import {
   type MeshAttachAndSendResult,
   type MeshMessage,
 } from '../../api/mesh-client'
-import { buildMeshMentionGroups, findExistingDirectThread, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
+import { buildMeshMentionGroups, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
+import { findExistingDirectThread, senderLabel } from '../../lib/mesh-roster'
 import { computeReceiptPhase, RECEIPT_LABEL } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
@@ -98,7 +100,7 @@ export function FeedComposer({
   // лишнего клика в textarea.
   useEffect(() => {
     if (replyKey === undefined) return
-    rootRef.current?.querySelector<HTMLTextAreaElement>('.feed-composer-textarea')?.focus()
+    rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-composer-input')?.focus()
   }, [replyKey])
 
   async function submit(): Promise<void> {
@@ -193,10 +195,10 @@ export function FeedComposer({
               </button>
             </div>
           )}
-          <div className={`feed-composer-row${paused ? ' focused' : ''}`}>
+          <div className={`chat-composer-row${paused ? ' paused' : ''}`}>
             <PasteableTextarea
               stageId={stageId}
-              className="feed-composer-textarea"
+              className="chat-composer-input"
               value={value}
               onChange={setValue}
               placeholder="Note to agent…"
@@ -208,22 +210,12 @@ export function FeedComposer({
               onBlur={() => onBlur?.(value.trim() !== '')}
               maxHeight={200}
             />
-            <button
-              type="button"
-              className={`feed-composer-send${paused ? ' paused' : ''}`}
-              aria-label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
+            <ChatSendButton
+              label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
               disabled={empty || sending}
+              paused={paused}
               onClick={() => void submit()}
-            >
-              {mesh !== undefined ? (
-                <span className="feed-composer-send-label">Apply Revise</span>
-              ) : (
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M22 2 11 13" />
-                  <path d="M22 2 15 22l-4-9-9-4 20-7Z" />
-                </svg>
-              )}
-            </button>
+            />
           </div>
         </>
       )}
@@ -312,7 +304,7 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
   function selectMention(item: MeshMentionItem): void {
     if (mention === null) return
     const end = mention.start + 1 + mention.query.length
-    replaceRange(mention.start, end, `@${item.id} `)
+    replaceRange(mention.start, end, `@${mentionText(item)} `)
     setTarget(item.target)
     setMention(null)
   }
@@ -441,7 +433,7 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
         <ul className="mesh-message-thread" aria-label="Conversation">
           {threadMessages.map((m: MeshMessage) => (
             <li key={m.id} className="mesh-message-thread-item">
-              <span className="mesh-message-thread-sender">{m.sender_id === 'user' ? 'You' : m.sender_id}</span>
+              <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
               <span className="mesh-message-thread-body">{m.body}</span>
               <button
                 type="button"
@@ -465,10 +457,10 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
         </div>
       )}
 
-      <div className="feed-composer-row mesh-message-row">
+      <div className="chat-composer-row">
         <textarea
           ref={setRefs}
-          className="feed-composer-textarea mesh-message-textarea"
+          className="chat-composer-input"
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
@@ -485,9 +477,7 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
             ariaLabel="Mention a mesh participant or profile"
           />
         )}
-        <button type="button" className="feed-composer-send" aria-label="Send message" disabled={empty || sending} onClick={() => void submit()}>
-          <span className="feed-composer-send-label">Send</span>
-        </button>
+        <ChatSendButton label="Send message" disabled={empty || sending} onClick={() => void submit()} />
       </div>
 
       {sendError !== null && (

@@ -3,6 +3,7 @@ import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { genMeshRequestId, openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import type { MeshRoster } from '../../hooks/use-mesh'
+import { findExistingDirectThread, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { RunTeamList } from './RunTeamList'
 import { targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
 import { BoardPanel } from './BoardPanel'
@@ -21,18 +22,6 @@ export type TeamViewProps = {
 
 type TeamTab = 'messages' | 'board' | 'activity'
 
-// findDirectThread — an already-open, exactly-two-member thread naming this participant, if one exists.
-// Re-clicking the same person row must land on THAT conversation, never open a second one (OpenThread mints a
-// brand-new thread id on every call — there is no server-side dedup by membership to lean on).
-function findDirectThread(threads: MeshThread[], participantId: string): MeshThread | null {
-  return threads.find((t) => t.status === 'open' && t.members.length === 2 && t.members.includes(participantId) && t.members.includes('user')) ?? null
-}
-
-// participantLabel — the human-facing name: display_name, else alias, else id.
-function participantLabel(p: MeshParticipant): string {
-  return (p.display_name && p.display_name !== '' ? p.display_name : null) ?? (p.alias && p.alias !== '' ? p.alias : null) ?? p.id
-}
-
 // participantInitials — up to two letters for the avatar square. Prefers the name's own capitals
 // (e.g. "QA reviewer" → "QA", "DevOps" → "DO") so acronyms read naturally, else the first letters of
 // the first words.
@@ -42,23 +31,6 @@ function participantInitials(name: string): string {
   const words = name.split(/\s+/).filter(Boolean)
   const letters = words.map((w) => w[0]).join('')
   return (letters !== '' ? letters : name).slice(0, 2).toUpperCase()
-}
-
-// participantRole — a short role subtitle derived from the participant kind (the only role signal the
-// roster carries today); keeps the create-conversation rows legible without a richer per-agent description.
-function participantRole(kind: string): string {
-  switch (kind) {
-    case 'run_agent':
-      return 'Run agent'
-    case 'stage_agent':
-      return 'Stage executor'
-    case 'helper':
-      return 'Assistant'
-    case 'side_agent':
-      return 'Side agent'
-    default:
-      return kind
-  }
 }
 
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
@@ -87,7 +59,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
 
   function handleSelectParticipant(p: MeshParticipant): void {
     setCreateOpen(false)
-    const existing = findDirectThread(searchableThreads, p.id)
+    const existing = findExistingDirectThread(searchableThreads, p.id)
     setActiveConversation(existing ? { kind: 'thread', thread: existing } : { kind: 'direct', participant: p })
     setTab('messages')
   }
@@ -233,6 +205,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             <ThreadConversation
               key={targetKey(activeConversation)}
               target={activeConversation}
+              participants={roster.participants}
               onThreadOpened={handleThreadOpened}
             />
           </div>

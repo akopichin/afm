@@ -3,7 +3,8 @@
 // isolation, FeedComposer just calls these.
 
 import type { AssistantProfile } from '../../types/assistant-profile'
-import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
+import type { MeshParticipant } from '../../api/mesh-client'
+import { mentionHandle, participantLabel } from '../../lib/mesh-roster'
 import type { MentionGroup, MentionItem } from '../assistants/AssistantMentionMenu'
 
 // MeshMentionTarget — what a selected feed-composer mention resolves to for Send: either an EXISTING mesh
@@ -18,17 +19,10 @@ export type MeshMentionTarget =
 
 export type MeshMentionItem = MentionItem & { target: MeshMentionTarget }
 
-// participantLabel — "display_name, else alias, else id" fallback for a mesh participant. The feed composer's
-// own copy of the same fallback ThreadConversation/TeamView already use inline for their one-off labels.
-export function participantLabel(p: MeshParticipant): string {
-  if (p.display_name !== undefined && p.display_name !== '') return p.display_name
-  if (p.alias !== undefined && p.alias !== '') return p.alias
-  return p.id
-}
-
 function toParticipantItem(p: MeshParticipant): MeshMentionItem {
   return {
     id: p.id,
+    handle: mentionHandle(p),
     title: participantLabel(p),
     unavailable: !p.reachable,
     unavailableReason: p.unreachable_reason,
@@ -57,16 +51,4 @@ export function buildMeshMentionGroups(
     { label: 'This stage', items: thisStage },
     { label: 'Attach to stage', items: attach },
   ]
-}
-
-// findExistingDirectThread — an already-open, exactly-two-member (human + participant) thread, if one
-// exists. Re-addressing the same participant must land back in THAT conversation; a participant with no such
-// thread yet gets a NEW one on send — a larger group thread that happens to include them is deliberately NOT
-// matched here, so sending never widens an existing private conversation into a group one.
-export function findExistingDirectThread(threads: MeshThread[], participantId: string): MeshThread | null {
-  return (
-    threads.find(
-      (t) => t.status === 'open' && t.members.length === 2 && t.members.includes(participantId) && t.members.includes('user'),
-    ) ?? null
-  )
 }

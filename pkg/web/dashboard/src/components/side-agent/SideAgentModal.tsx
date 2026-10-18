@@ -71,7 +71,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
     const el = overlayRef.current
     if (el !== null) el.inert = phase !== 'open'
     if (phase === 'open') {
-      modalRef.current?.querySelector<HTMLTextAreaElement>('.side-agent-textarea')?.focus()
+      modalRef.current?.querySelector<HTMLTextAreaElement>('.side-agent-composer .chat-composer-input')?.focus()
     } else if (phase === 'closed') {
       openerRef.current?.focus?.()
     }

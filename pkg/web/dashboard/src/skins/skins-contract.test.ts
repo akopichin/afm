@@ -6,6 +6,7 @@ import planPanelCss from '../../skins/base/plan-panel.css?raw'
 import sideAgentCss from '../../public/side-agent.css?raw'
 import assistantsCss from '../../skins/base/assistants.css?raw'
 import meshCss from '../../skins/base/mesh.css?raw'
+import chatComposerCss from '../../public/chat-composer.css?raw'
 import graphiteIndexCss from '../../skins/graphite/index.css?raw'
 import gogaIndexCss from '../../skins/goga/index.css?raw'
 import novacorpsIndexCss from '../../skins/novacorps/index.css?raw'
@@ -161,12 +162,36 @@ describe('skins CSS contract — Team view leans ONLY on the semantic token laye
     ['selected person/thread row', '.team-person-row.active'],
     ['conversations list', '.team-thread-list'],
     ['tabs (Messages/Board/Activity)', '.team-tabs'],
-    ['conversation composer', '.team-conversation-composer'],
     ['board entry', '.team-board-entry'],
     ['create-conversation form', '.team-create-conversation-form'],
     ['Add run agent — read-only Configured executor', '.add-run-agent-executor'],
   ])('%s (%s) has a real rule in mesh.css', (_label, selector) => {
     expect(meshCss.includes(selector), `expected a rule for ${selector}`).toBe(true)
+  })
+})
+
+describe('skins CSS contract — shared chat composer (feed, discussion, Team, side agent)', () => {
+  it('the composer row is the positioning anchor for the @-mention menu', () => {
+    expect(rule(chatComposerCss, '.chat-composer-row')).toMatch(/position:\s*relative/)
+  })
+  it('the @-mention menu floats above the input instead of joining the flex row', () => {
+    const r = rule(assistantsCss, '.assistant-mention-menu')
+    expect(r).toMatch(/position:\s*absolute/)
+    expect(r).toMatch(/bottom:\s*calc\(100% \+ 6px\)/)
+    expect(r).toMatch(/left:\s*0/)
+  })
+  it('the send button is a round icon button', () => {
+    const r = rule(chatComposerCss, '.chat-send,\n.chat-stop')
+    expect(r).toMatch(/border-radius:\s*50%/)
+    expect(r).toMatch(/width:\s*38px/)
+  })
+  it('chat-composer.css only uses declared semantic tokens and no color literals (it ships under any skin)', () => {
+    const declared = new Set([...tokensCss.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]))
+    const used = [...chatComposerCss.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1])
+    expect(used.filter((name) => !declared.has(name))).toEqual([])
+    const withoutComments = chatComposerCss.replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(withoutComments.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).toEqual([])
+    expect(withoutComments.match(/\b(?:rgb|hsl)a?\(\s*[0-9]/g) ?? []).toEqual([])
   })
 })
 

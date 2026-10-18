@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type ChangeEvent, type KeyboardEvent, ty
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { AssistantMentionMenu } from '../assistants/AssistantMentionMenu'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
 import { detectMentionTrigger, filterMentionProfiles, type MentionTrigger } from '../assistants/mention-match'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
@@ -131,10 +132,10 @@ export function SideAgentComposer({
           <pre className="side-agent-quote-chip-body">{quote}</pre>
         </div>
       )}
-      <div className="side-agent-textarea-wrap">
+      <div className="chat-composer-row">
         <textarea
           ref={setRefs}
-          className="side-agent-textarea"
+          className="chat-composer-input"
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
@@ -150,16 +151,14 @@ export function SideAgentComposer({
             onSelect={selectMention}
           />
         )}
-      </div>
-      <div className="side-agent-composer-actions">
         {running && (
-          <button type="button" className="btn btn-cancel side-agent-stop" onClick={onStop}>
-            Stop
+          <button type="button" className="chat-stop" aria-label="Stop" title="Stop" onClick={onStop}>
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
+            </svg>
           </button>
         )}
-        <button type="button" className="btn btn-send side-agent-send" disabled={!canSend} onClick={submit}>
-          Send
-        </button>
+        <ChatSendButton label="Send" disabled={!canSend} onClick={submit} />
       </div>
     </div>
   )
