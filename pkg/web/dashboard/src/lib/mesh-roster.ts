@@ -31,6 +31,40 @@ export function participantInitials(name: string): string {
 // Presence — точка присутствия в ростере: работает, ждёт (пауза/ответ/коллега), упал или неактивен.
 export type Presence = 'working' | 'waiting' | 'failed' | 'idle'
 
+// activityLabel — что делает run-агент или помощник сейчас, словами для строки ростера.
+export function activityLabel(activity: string | undefined): string | null {
+  switch (activity) {
+    case 'working':
+      return 'Working'
+    case 'waiting':
+      return 'Waiting'
+    case 'idle':
+      return 'Idle'
+    case 'paused':
+      return 'Paused'
+    case 'done':
+      return 'Done'
+    default:
+      return null
+  }
+}
+
+// activityPresence — точка присутствия run-агента или помощника по его активности.
+export function activityPresence(activity: string | undefined, reachable: boolean): Presence {
+  switch (activity) {
+    case 'working':
+      return 'working'
+    case 'waiting':
+    case 'paused':
+      return 'waiting'
+    case 'idle':
+    case 'done':
+      return 'idle'
+    default:
+      return reachable ? 'working' : 'idle'
+  }
+}
+
 // stagePresence — присутствие агента стадии по её живому статусу.
 export function stagePresence(status: string): Presence {
   switch (status) {

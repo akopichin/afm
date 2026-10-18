@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
-import { participantLabel, participantRole, stagePresence, type Presence } from '../../lib/mesh-roster'
+import { activityLabel, activityPresence, participantLabel, participantRole, stagePresence, type Presence } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { STAGE_STATUS_LABELS, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
@@ -31,8 +31,11 @@ function stageStatusLabel(status: string): string {
 // agent shows its stage's live status. Any other participant shows "Paused" when its stage is paused
 // (Reachable never distinguishes "paused" from "running"), else its unreachable reason.
 function participantStatus(p: MeshParticipant, stage: RunTeamListStage | undefined): string | null {
-  if (p.kind === 'stage_agent' && stage !== undefined) return stageStatusLabel(stage.status)
+  // "Awaiting colleague" is the rail's wording; the narrow roster row says it shorter.
+  if (p.kind === 'stage_agent' && stage !== undefined) return stage.status === 'awaiting_peer' ? 'Waiting' : stageStatusLabel(stage.status)
   if (stage?.status === 'paused') return 'Paused'
+  const activity = activityLabel(p.activity)
+  if (activity !== null) return activity
   if (!p.reachable) return p.unreachable_reason && p.unreachable_reason !== '' ? p.unreachable_reason : 'Unreachable'
   return null
 }
@@ -41,7 +44,7 @@ function participantStatus(p: MeshParticipant, stage: RunTeamListStage | undefin
 // "working" while reachable and "idle" once its stage/task is terminal.
 function participantPresence(p: MeshParticipant, stage: RunTeamListStage | undefined): Presence {
   if (stage !== undefined && (p.kind === 'stage_agent' || stage.status === 'paused')) return stagePresence(stage.status)
-  return p.reachable ? 'working' : 'idle'
+  return activityPresence(p.activity, p.reachable)
 }
 
 // stageOrder — stage ids in flow order; stages the roster knows but /api/status doesn't (yet) go last, in

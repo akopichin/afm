@@ -190,11 +190,29 @@ func helperParticipant(id assistants.TaskID, t *state.TaskState) agentcomm.Parti
 	p := agentcomm.Participant{
 		ID: meshHelperParticipantID(id), Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage,
 		Alias: string(id), DisplayName: t.Title, StageID: t.RootStageID, Reachable: reachable,
+		Activity: taskActivity(t, false),
 	}
 	if !reachable {
 		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", id)
 	}
 	return p
+}
+
+// taskActivity says what a task's participant is doing now. idle — a queued run agent with nothing to read
+// (idleRunAgent); any other queued task is about to start, so it counts as working.
+func taskActivity(t *state.TaskState, idle bool) agentcomm.Activity {
+	switch {
+	case t.Status.Terminal():
+		return agentcomm.ActivityDone
+	case t.Status == assistants.StatusPaused || len(t.Holds) > 0:
+		return agentcomm.ActivityPaused
+	case idle:
+		return agentcomm.ActivityIdle
+	case t.Status == assistants.StatusWaitingPeer, t.Status == assistants.StatusWaitingChildren, t.Status == assistants.StatusWaitingParent:
+		return agentcomm.ActivityWaiting
+	default:
+		return agentcomm.ActivityWorking
+	}
 }
 
 // resolveParticipant looks up id in the live roster — the same assembly ListParticipants uses — without
@@ -237,7 +255,12 @@ func liveRunParticipant(rs state.RunState, p agentcomm.Participant) agentcomm.Pa
 	if !ok {
 		return p
 	}
-	if t := rs.Assistants.Tasks[taskID]; t != nil && t.Status.Terminal() {
+	t := rs.Assistants.Tasks[taskID]
+	if t == nil {
+		return p
+	}
+	p.Activity = taskActivity(t, idleRunAgent(rs, t))
+	if t.Status.Terminal() {
 		p.Reachable = false
 		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", taskID)
 	}

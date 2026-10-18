@@ -84,6 +84,28 @@ describe('RunTeamList', () => {
     expect(within(implementRow).getByText('Running')).toBeInTheDocument()
   })
 
+  test('a stage waiting for a colleague says "Waiting" — short enough to keep its @name readable', () => {
+    renderList({ stages: [stages[0], { id: 'implement', title: 'Implement feature', status: 'awaiting_peer' }, stages[2]] as typeof stages })
+    const row = screen.getByText('Implement feature').closest('button') as HTMLElement
+    expect(within(row).getByText('Waiting')).toBeInTheDocument()
+  })
+
+  test('a run agent or helper row says what it is doing now, and its presence dot follows', () => {
+    renderList({
+      participants: [
+        ...participants.filter((p) => p.id !== 'run:qa' && p.id !== 'helper:h1'),
+        { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true, activity: 'waiting' },
+        { id: 'helper:h1', kind: 'helper', scope: 'stage', stage_id: 'implement', display_name: 'Correctness helper', reachable: false, activity: 'done' },
+      ],
+    })
+    const qa = screen.getByText('QA reviewer').closest('button') as HTMLElement
+    expect(within(qa).getByText('Waiting')).toBeInTheDocument()
+    expect(qa.querySelector('.team-presence')).toHaveAttribute('data-presence', 'waiting')
+    const helper = screen.getByText('Correctness helper').closest('button') as HTMLElement
+    expect(within(helper).getByText('Done')).toBeInTheDocument()
+    expect(helper.querySelector('.team-presence')).toHaveAttribute('data-presence', 'idle')
+  })
+
   test("a stage's helpers are listed right under that stage", () => {
     renderList()
     const names = within(screen.getByRole('region', { name: 'Stages' }))

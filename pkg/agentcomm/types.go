@@ -76,7 +76,22 @@ type Participant struct {
 	Reachable bool `json:"reachable"`
 	// UnreachableReason explains why Reachable is false. Empty when Reachable is true.
 	UnreachableReason string `json:"unreachable_reason,omitempty"`
+	// Activity is what a task-backed participant (run agent, helper) is doing right now, derived from its
+	// task on every roster read and never journaled; empty for stage agents (their stage status says it), the
+	// user and the Side agent.
+	Activity Activity `json:"activity,omitempty"`
 }
+
+// Activity — what a run agent or helper is doing now, for the Team roster.
+type Activity string
+
+const (
+	ActivityWorking Activity = "working" // its turn is running
+	ActivityWaiting Activity = "waiting" // it is waiting for a colleague, its children or its parent
+	ActivityIdle    Activity = "idle"    // a run agent between turns, with nothing to read
+	ActivityPaused  Activity = "paused"
+	ActivityDone    Activity = "done" // its task has finished
+)
 
 // Valid reports whether p has the minimum identity a Participant needs: a non-empty ID and a
 // recognized Kind and Scope. The zero Participant is never valid.

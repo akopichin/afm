@@ -59,6 +59,8 @@ export type MeshParticipant = {
   stage_id?: string
   reachable: boolean
   unreachable_reason?: string
+  // activity — what a run agent or helper is doing now (working, waiting, idle, paused, done).
+  activity?: string
 }
 
 export type MeshThreadBudgets = {

@@ -8,11 +8,12 @@ export type MeshAvatarProps = {
   size?: 'small' | 'large'
 }
 
-// MeshAvatar — квадратный аватар участника с инициалами (ростер, сообщения, шапка разговора, форма).
+// MeshAvatar — квадратный аватар участника с инициалами (ростер, сообщения, шапка разговора, форма); у
+// оператора («You») — одна буква.
 export function MeshAvatar({ name, kind, size }: MeshAvatarProps): ReactElement {
   return (
     <span className={`mesh-avatar${size !== undefined ? ` ${size}` : ''}`} data-kind={kind} aria-hidden="true">
-      {participantInitials(name)}
+      {kind === 'user' ? name.slice(0, 1).toUpperCase() : participantInitials(name)}
     </span>
   )
 }

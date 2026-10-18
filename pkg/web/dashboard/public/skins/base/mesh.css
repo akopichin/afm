@@ -156,10 +156,11 @@
 }
 /* The @handle is what you type in a mention — shown so you know how to address this agent. */
 .team-person-handle {
-  /* Shrinks first (with an ellipsis) so a long alias never hides the status/role after it. */
-  flex: 0 1 auto;
+  /* The alias is what you type in a mention, so it keeps its room; the status after it is the one clipped
+     (the full text is in the row's tooltip). Only a very long alias is clipped too. */
+  flex: 0 0 auto;
   min-width: 0;
-  max-width: 55%;
+  max-width: 65%;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-mono);
