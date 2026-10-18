@@ -19,6 +19,16 @@ unique in the run. Secrets from `secrets.env` and live mesh tokens are redacted
 like environment secrets, `max_tasks` counts every attached task, and one turn's
 inbox is bounded.
 
+### Fix: Team and chat composers never send twice or lose a draft
+
+Resending after a lost response reuses the same request, so it is not duplicated;
+editing the text first sends it as a new message. Only the text that was sent is
+cleared, a late response never switches you back to a conversation you left, and
+polls can no longer show an older state over a newer one. A conversation's default
+route skips members who have finished and says so, `@` mentions always address
+exactly one participant, the Board badge counts tasks only, and the Team and
+composer tabs work with the keyboard.
+
 ## 2026-10-18
 
 ### Fix: run agents work side by side and answer each message once
