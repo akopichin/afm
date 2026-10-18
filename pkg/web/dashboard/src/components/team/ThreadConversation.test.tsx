@@ -86,4 +86,23 @@ describe('ThreadConversation', () => {
     expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('please review')
     expect(onThreadOpened).not.toHaveBeenCalled()
   })
+
+  test('a successful retry after a failed send still notifies the parent of the opened thread', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ message_id: 'm1', seq: 1 })
+    const onThreadOpened = vi.fn()
+
+    render(<ThreadConversation target={{ kind: 'direct', participant: qa }} onThreadOpened={onThreadOpened} />)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
+    expect(onThreadOpened).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(onThreadOpened).toHaveBeenCalledWith(thread))
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledTimes(2)
+  })
 })

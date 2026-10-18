@@ -54,6 +54,12 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
   // requestIdRef — the SAME send's retry reuses this id; a NEW, successfully-sent message mints its own id
   // next time (each message is its own idempotent operation, unlike AddRunAgentDialog's single durable attach).
   const requestIdRef = useRef<string>(genMeshRequestId('mesh-send'))
+  // notifiedRef — whether the parent has already been told about openedThread. A 'thread' target starts
+  // already known to the parent (it IS activeConversation), so it starts true. A 'direct' target starts
+  // false: once its first message opens a real thread, the parent must hear about it exactly once — even if
+  // that happens on a RETRY after the open succeeded but an earlier send attempt failed (openedThread is set
+  // from the failed attempt already, so a plain "did this call just open it" check misses the retry).
+  const notifiedRef = useRef<boolean>(target?.kind === 'thread')
 
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
@@ -71,7 +77,6 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
     setError(null)
     try {
       let thread = openedThread
-      let justOpened = false
       if (thread === null) {
         thread = await openMeshThread({
           requestId: genMeshRequestId('mesh-open'),
@@ -80,7 +85,6 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
           memberIds: target.kind === 'direct' ? [target.participant.id] : [],
         })
         setOpenedThread(thread)
-        justOpened = true
       }
       await sendMeshMessage(thread.id, {
         requestId: requestIdRef.current,
@@ -92,7 +96,12 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
       // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
       // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
       // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
-      if (justOpened) onThreadOpened?.(thread)
+      // Guarded by notifiedRef, not a per-call local, so a retry whose EARLIER attempt already opened the
+      // thread (and then failed to send) still notifies the parent once this attempt's send succeeds.
+      if (!notifiedRef.current) {
+        notifiedRef.current = true
+        onThreadOpened?.(thread)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'request failed')
     } finally {
