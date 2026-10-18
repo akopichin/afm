@@ -262,6 +262,71 @@ function mapEvent(event: AfmEvent): Mapped | null {
     }
     case 'context_warning':
       return { actor: 'system', tone: 'warning', kind: 'status', text: `context warning: ${str(data)}`, mono: false }
+    case 'mesh_participant':
+      // Agent Mesh (T7.2): a participant (stage/helper/user/side-agent) became a member of the mesh roster —
+      // observational only, fires every time a thread opens naming them, not just on first add.
+      return { actor: 'system', tone: 'neutral', kind: 'status', text: `${str(obj.participant_id)} joined the mesh`, mono: false }
+    case 'mesh_thread': {
+      // 'closed' comes with status:"closed" and no title; opening always carries a title (possibly empty).
+      if (str(obj.status) === 'closed') {
+        return { actor: 'system', tone: 'neutral', kind: 'status', text: `thread ${str(obj.thread_id)} closed`, mono: false }
+      }
+      const title = str(obj.title)
+      const text = title !== '' ? `thread opened: ${title}` : `thread ${str(obj.thread_id)} opened`
+      return { actor: 'system', tone: 'neutral', kind: 'status', text, mono: false }
+    }
+    case 'mesh_message': {
+      // sender_id is the fixed human participant id ("user") for a human-authored message — everything else
+      // (a stage, a helper, a side agent) renders on the agent side, same convention as agent_action/agent_note.
+      const senderId = str(obj.sender_id)
+      const actor: FeedActor = senderId === 'user' ? 'user' : 'agent'
+      return {
+        actor,
+        tone: 'neutral',
+        kind: 'message',
+        text: `${senderId} sent a ${str(obj.kind)} in thread ${str(obj.thread_id)}`,
+        mono: false,
+        dedupeId: `mesh:message:${str(obj.message_id)}`,
+      }
+    }
+    case 'mesh_receipt': {
+      // status is agentcomm.DeliveryAcknowledged ("acknowledged") or DeliveryDelivered ("delivered") —
+      // MarkMessageDelivered can legitimately re-fire for the same (message, recipient) pair on retry, hence
+      // the composite dedupeId below instead of relying on timestamp.
+      const status = str(obj.status)
+      const text =
+        status === 'acknowledged'
+          ? `${str(obj.participant_id)} acknowledged message ${str(obj.message_id)}`
+          : `message ${str(obj.message_id)} delivered to ${str(obj.participant_id)}`
+      return {
+        actor: 'system',
+        tone: 'neutral',
+        kind: 'status',
+        text,
+        mono: false,
+        dedupeId: `mesh:receipt:${str(obj.message_id)}:${str(obj.participant_id)}:${status}`,
+      }
+    }
+    case 'mesh_wait': {
+      // Registration carries waiter_id (no status yet); resolution/cancellation carries status (agentcomm
+      // WaitReady "ready" or WaitCancelled "cancelled") and no waiter_id.
+      if (obj.waiter_id !== undefined) {
+        return { actor: 'system', tone: 'neutral', kind: 'status', text: `${str(obj.waiter_id)} is waiting`, mono: false }
+      }
+      const status = str(obj.status)
+      const tone: FeedTone = status === 'cancelled' ? 'warning' : 'neutral'
+      const outcome = status === 'ready' ? 'resolved' : status
+      return { actor: 'system', tone, kind: 'status', text: `wait ${str(obj.wait_id)} ${outcome}`, mono: false }
+    }
+    case 'mesh_board':
+      // Publish() payload: key, author_id, status — a free-form board status string (e.g. "ready").
+      return {
+        actor: 'system',
+        tone: 'neutral',
+        kind: 'status',
+        text: `${str(obj.author_id)} published ${str(obj.key)}: ${str(obj.status)}`,
+        mono: false,
+      }
     default:
       return { actor: 'system', tone: 'neutral', kind: 'status', text: event.type, mono: false }
   }

@@ -908,4 +908,39 @@ describe('useEventFeed', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(result.current.events.filter((e) => e.type === 'discussion_message')).toHaveLength(1)
   })
+
+  // Agent Mesh (T7.2): mesh_* notices (pkg/orchestrator/bus.go's EventMesh*) never carry a stable `seq`
+  // either — the SAME content-based fallback this file already proves for discussion_message above must
+  // dedupe them too, with no mesh-specific code in use-event-feed.ts (dev-plan.md T7.2's explicit
+  // instruction to extend this exact test pattern to a mesh event).
+  test('TestHistory_NoDuplicatesAfterReconnect_MeshEvent', async () => {
+    vi.useFakeTimers()
+    const msg = { type: 'mesh_message', stage_id: '', data: { message_id: 'm1', thread_id: 't1', sender_id: 'qa', kind: 'message' } }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) }) // initial mount: not durable yet
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve([{ ...msg, timestamp: '2026-10-18T10:00:00.000Z' }]) }) // reconnect: now durable
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useEventFeed('/ws'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    act(() => {
+      FakeWebSocket.last().emitMessage(msg) // delivered live first
+    })
+    expect(result.current.events.filter((e) => e.type === 'mesh_message')).toHaveLength(1)
+
+    act(() => {
+      FakeWebSocket.last().emitClose()
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    act(() => {
+      FakeWebSocket.last().emitOpen() // reconnect re-fetches the SAME mesh notice from history
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result.current.events.filter((e) => e.type === 'mesh_message')).toHaveLength(1)
+  })
 })

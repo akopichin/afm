@@ -530,6 +530,92 @@ describe('script_output stream / script_failed / hook_failed stderr tail (Task 7
   })
 })
 
+describe('mesh_* — Agent Mesh notice events (T7.2): real presentation rows, not the raw-type fallback', () => {
+  it('mesh_participant renders a system row naming who joined', () => {
+    const items = toFeedItems([ev('mesh_participant', { participant_id: 'qa' }, '', '2026-10-18T10:00:00Z')])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'neutral', kind: 'status' })
+    expect(items[0]?.text).toContain('qa')
+    expect(items[0]?.text).not.toBe('mesh_participant') // не падает в дефолтный fallback с сырым типом
+  })
+
+  it('mesh_thread (opened) names the thread title', () => {
+    const items = toFeedItems([ev('mesh_thread', { thread_id: 't1', title: 'Report format' }, '', '2026-10-18T10:00:00Z')])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', kind: 'status' })
+    expect(items[0]?.text).toContain('Report format')
+  })
+
+  it('mesh_thread (closed) names the thread id and says it closed', () => {
+    const items = toFeedItems([ev('mesh_thread', { thread_id: 't1', status: 'closed' }, '', '2026-10-18T10:00:00Z')])
+    expect(items).toHaveLength(1)
+    expect(items[0]?.text).toContain('t1')
+    expect(items[0]?.text.toLowerCase()).toContain('closed')
+  })
+
+  it('mesh_message names sender, kind and thread, and sides on the sender (user vs agent)', () => {
+    const items = toFeedItems([
+      ev('mesh_message', { message_id: 'm1', thread_id: 't1', sender_id: 'qa', kind: 'message' }, '', '2026-10-18T10:00:00Z'),
+      ev('mesh_message', { message_id: 'm2', thread_id: 't1', sender_id: 'user', kind: 'reply' }, '', '2026-10-18T10:00:01Z'),
+    ])
+    expect(items).toHaveLength(2)
+    expect(items[0]).toMatchObject({ actor: 'agent', side: 'left' })
+    expect(items[0]?.text).toContain('qa')
+    expect(items[0]?.text).toContain('t1')
+    expect(items[1]).toMatchObject({ actor: 'user', side: 'right' })
+    expect(items[1]?.text).toContain('reply')
+  })
+
+  it('keys a mesh_message row by message_id so a reload replay never duplicates it', () => {
+    const msg = ev('mesh_message', { message_id: 'm1', thread_id: 't1', sender_id: 'qa', kind: 'message' }, '', '2026-10-18T10:00:00Z')
+    const first = toFeedItems([msg])
+    const again = toFeedItems([msg])
+    expect(first[0]?.key).toBe('mesh:message:m1')
+    expect(again.map((i) => i.key)).toEqual(first.map((i) => i.key))
+  })
+
+  it('mesh_receipt distinguishes acknowledged from delivered', () => {
+    const items = toFeedItems([
+      ev('mesh_receipt', { message_id: 'm1', participant_id: 'qa', status: 'acknowledged' }, '', '2026-10-18T10:00:00Z'),
+      ev('mesh_receipt', { message_id: 'm1', participant_id: 'devops', status: 'delivered' }, '', '2026-10-18T10:00:01Z'),
+    ])
+    expect(items).toHaveLength(2)
+    expect(items[0]?.text).toContain('qa')
+    expect(items[0]?.text.toLowerCase()).toContain('acknowledged')
+    expect(items[1]?.text).toContain('devops')
+    expect(items[1]?.text.toLowerCase()).toContain('delivered')
+  })
+
+  it('keys a mesh_receipt row by message_id+participant_id+status so a redelivered receipt never duplicates it', () => {
+    const receipt = ev('mesh_receipt', { message_id: 'm1', participant_id: 'qa', status: 'delivered' }, '', '2026-10-18T10:00:00Z')
+    const first = toFeedItems([receipt])
+    const again = toFeedItems([receipt])
+    expect(first[0]?.key).toBe('mesh:receipt:m1:qa:delivered')
+    expect(again.map((i) => i.key)).toEqual(first.map((i) => i.key))
+  })
+
+  it('mesh_wait names the waiter when registered, and the outcome when resolved', () => {
+    const items = toFeedItems([
+      ev('mesh_wait', { wait_id: 'w1', waiter_id: 'devops' }, '', '2026-10-18T10:00:00Z'),
+      ev('mesh_wait', { wait_id: 'w1', status: 'ready' }, '', '2026-10-18T10:00:01Z'),
+      ev('mesh_wait', { wait_id: 'w2', status: 'cancelled' }, '', '2026-10-18T10:00:02Z'),
+    ])
+    expect(items).toHaveLength(3)
+    expect(items[0]?.text).toContain('devops')
+    expect(items[1]?.text.toLowerCase()).toContain('resolved')
+    expect(items[2]?.text.toLowerCase()).toContain('cancelled')
+    expect(items[2]?.tone).toBe('warning')
+  })
+
+  it('mesh_board names the author, key and status', () => {
+    const items = toFeedItems([ev('mesh_board', { key: 'qa.tests', author_id: 'qa', status: 'ready' }, '', '2026-10-18T10:00:00Z')])
+    expect(items).toHaveLength(1)
+    expect(items[0]?.text).toContain('qa')
+    expect(items[0]?.text).toContain('qa.tests')
+    expect(items[0]?.text).toContain('ready')
+  })
+})
+
 describe('formatEventGap', () => {
   it('formats seconds/minutes/hours/days and em-dash for invalid', () => {
     expect(formatEventGap(5000, 0)).toBe('5s')
