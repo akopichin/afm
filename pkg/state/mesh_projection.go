@@ -158,13 +158,17 @@ type MeshParticipantAddedPayload struct {
 // applyMeshParticipantAdded projects one mesh_participant_added control record. A participant is always
 // created Reachable (UnreachableReason empty) — this phase adds no kind that later flips it, so nothing
 // mutates a Participant in place after creation.
+//
+// A record naming an id that already exists with the SAME descriptor is a no-op, not an error: OpenThread
+// (pkg/orchestrator/agentcomm_roster.go, ensureParticipantEffects) re-derives a stage/helper/user member's
+// added-effect from live run state on EVERY call rather than gating it on "already known", so that a retry of
+// the exact same operation id produces the exact same effects (required for ApplyRunOperation's idempotency
+// check) and so that naming an already-registered member in a later, different thread-open is harmless. Only
+// a genuinely conflicting descriptor for the same id is rejected.
 func applyMeshParticipantAdded(as *AssistantsState, c *Control, dryRun bool) error {
 	id := agentcomm.ParticipantID(c.Target.ParticipantID)
 	if id == "" {
 		return errors.New("mesh_participant_added: empty target participant_id")
-	}
-	if _, exists := as.Mesh.Participants[id]; exists {
-		return fmt.Errorf("mesh_participant_added: id %s already exists", id)
 	}
 	var p MeshParticipantAddedPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
@@ -176,6 +180,13 @@ func applyMeshParticipantAdded(as *AssistantsState, c *Control, dryRun bool) err
 	}
 	if !participant.Valid() {
 		return fmt.Errorf("mesh_participant_added %s: invalid participant", id)
+	}
+	if existing, exists := as.Mesh.Participants[id]; exists {
+		if existing.Kind != participant.Kind || existing.Scope != participant.Scope || existing.Alias != participant.Alias ||
+			existing.DisplayName != participant.DisplayName || existing.StageID != participant.StageID {
+			return fmt.Errorf("mesh_participant_added: id %s already exists with a different descriptor", id)
+		}
+		return nil
 	}
 	if dryRun {
 		return nil

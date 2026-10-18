@@ -60,6 +60,38 @@ func TestMesh_OpenThreadRegistersUnknownMembersLazily(t *testing.T) {
 	}
 }
 
+// TestMesh_OpenThreadRetryAfterLazyRegistrationIsIdempotent is the regression test for a bug where retrying
+// the EXACT SAME OpenThread call (same operation id) after it already lazily registered a member failed with
+// ErrOperationIDConflict: ensureParticipantEffects used to skip members already present in Mesh.Participants,
+// so the second call built a SHORTER effects list than the first — and ApplyRunOperation's idempotency check
+// compares effects byte-for-byte. A client retrying a dropped response (the whole point of operation ids)
+// must get back the ORIGINAL result, not a conflict.
+func TestMesh_OpenThreadRetryAfterLazyRegistrationIsIdempotent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	taskID := newRunningHelperForMesh(t, o, store, "op-mt-retry")
+	helperID := meshHelperParticipantID(taskID)
+
+	req := OpenThreadRequest{
+		OperationID: "op-open-retry", Title: "chat", Scope: agentcomm.ScopeStage,
+		Members: []agentcomm.ParticipantID{meshUserParticipantID, helperID}, Actor: state.Actor{Kind: "user"},
+	}
+
+	first, err := o.OpenThread(ctx, req)
+	if err != nil {
+		t.Fatalf("OpenThread (first): %v", err)
+	}
+
+	retry, err := o.OpenThread(ctx, req)
+	if err != nil {
+		t.Fatalf("OpenThread (retry of the same operation id): %v", err)
+	}
+	if retry.ID != first.ID {
+		t.Fatalf("retry returned a different thread: first=%s retry=%s", first.ID, retry.ID)
+	}
+}
+
 func TestMesh_SendRejectsNonMemberRecipientAndWritesNothing(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()

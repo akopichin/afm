@@ -142,12 +142,20 @@ func resolveParticipant(rs state.RunState, id agentcomm.ParticipantID) (agentcom
 	}
 }
 
-// ensureParticipantEffects returns one mesh_participant_added Effect for every id in ids that is not
-// already a known participant of rs — the lazy registration OpenThread needs before it can name a stage
-// agent or helper as a thread member, since Phase 1's MeshState never auto-populates those (see this file's
-// package doc comment). Run-scoped ids (run:.../side:...) are NEVER synthesized here: those are only ever
-// created by the attach composite (Phase 6, T6.2/T6.7) which snapshots a real profile — a thread opened
-// against one that does not exist yet is a caller error, not something to paper over.
+// ensureParticipantEffects returns one mesh_participant_added Effect for every stage/helper/user id in ids —
+// the lazy registration OpenThread needs before it can name a stage agent or helper as a thread member, since
+// Phase 1's MeshState never auto-populates those (see this file's package doc comment). Run-scoped ids
+// (run:.../side:...) are NEVER synthesized here: those are only ever created by the attach composite (Phase
+// 6, T6.2/T6.7) which snapshots a real profile — a thread opened against one that does not exist yet is a
+// caller error, not something to paper over.
+//
+// Deliberately NOT gated on "already a known participant of rs": a stage/helper/user member's descriptor
+// (Kind/Scope/Alias/DisplayName/StageID) is re-derived from live run state on EVERY call, so a retry of the
+// exact same OpenThread operation id always rebuilds the exact same effects list — required for
+// ApplyRunOperation's idempotency check, which compares the marshaled effects byte-for-byte
+// (pkg/state/operation.go). Naming an already-registered member again in a later, different OpenThread is
+// equally harmless: applyMeshParticipantAdded (pkg/state/mesh_projection.go) treats a byte-identical re-add
+// as a no-op.
 func ensureParticipantEffects(rs state.RunState, ids []agentcomm.ParticipantID) ([]state.Effect, error) {
 	seen := map[agentcomm.ParticipantID]bool{}
 	var effects []state.Effect
@@ -156,18 +164,14 @@ func ensureParticipantEffects(rs state.RunState, ids []agentcomm.ParticipantID) 
 			continue
 		}
 		seen[id] = true
-		if _, known := rs.Assistants.Mesh.Participants[id]; known {
-			continue
-		}
 		p, ok := resolveParticipant(rs, id)
 		if !ok {
 			return nil, fmt.Errorf("agentcomm: unknown participant %q", id)
 		}
 		if p.Kind == agentcomm.KindRunAgent || p.Kind == agentcomm.KindSideAgent {
-			// Never reached today (resolveParticipant's default branch already requires these to be in
-			// Mesh.Participants, i.e. "known" above), kept as an explicit guard against a future
-			// resolveParticipant change silently starting to synthesize them.
-			return nil, fmt.Errorf("agentcomm: run-scoped participant %q must be attached before it can be addressed", id)
+			// resolveParticipant's default branch only returned ok=true because id is ALREADY in
+			// Mesh.Participants (the attach composite is the only thing that creates these) — nothing to add.
+			continue
 		}
 		eff, err := meshParticipantAddedEffect(p)
 		if err != nil {
