@@ -1,0 +1,431 @@
+/* pkg/web/dashboard/skins/base/mesh.css — Agent Mesh Team view (Phase 7, T7.3): run-wide roster
+   (RunTeamList/ThreadList) + Messages/Board/Activity panes (ThreadConversation/BoardPanel/ActivityPanel) +
+   the "Add run agent" dialog. Structural stylesheet, same posture as assistants.css: must render sanely
+   under a skin_dir override that has never heard of this feature (§15.3) — ONLY the semantic tokens every
+   skin already provides (--surface-*/--text-*/--accent-primary/--attention/--danger/--focus-ring/--radius-*),
+   no new --c-* status-color mapping and no hardcoded hex/rgb() literals (see skins-contract.test.ts). Modal
+   chrome (.modal-overlay/.modal-content/.modal-actions) and .btn/.btn-send/.btn-cancel/.empty-hint are
+   DELIBERATELY NOT redefined here — AddRunAgentDialog reuses agent-note-modal.css's/plan-panel.css's own
+   rules, the same way AttachHelperDialog does, rather than a second modal/button stylesheet.
+
+   No new CSS animation is introduced here — a static roster/panel/dialog needs none (T7.3's own "don't
+   invent motion that isn't required"), so there is nothing to add to skins-contract.test.ts's animation
+   registry. */
+
+.team-view {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: 0;
+}
+
+.team-view-disabled {
+  padding: 16px;
+}
+
+/* === Roster (RunTeamList) === */
+.team-roster {
+  width: 240px;
+  flex: 0 0 240px;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--separator-subtle);
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.team-roster-group h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.team-roster-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.team-roster-group-header h3 {
+  margin: 0;
+}
+
+.team-add-run-agent {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.team-roster-empty {
+  font-size: 12px;
+  margin: 0;
+}
+
+.team-roster-list,
+.team-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.team-person-row,
+.team-thread-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.team-person-row:hover,
+.team-thread-item:hover {
+  background: var(--surface-hover);
+}
+.team-person-row.active,
+.team-thread-item.active {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.team-person-row:focus-visible,
+.team-thread-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.team-person-name,
+.team-thread-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-person-status,
+.team-thread-closed {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.team-thread-list-empty {
+  font-size: 12px;
+  margin: 0;
+}
+
+/* === Main pane: tabs + Messages/Board/Activity === */
+.team-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.team-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--separator-subtle);
+}
+
+.team-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.team-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+.team-tab.active {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.team-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.team-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+/* === Create conversation === */
+.team-create-conversation-toggle {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.team-create-conversation-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.team-create-conversation-topic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.team-create-conversation-topic input {
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+.team-create-conversation-participants {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.team-create-conversation-participants legend {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 0;
+}
+.team-create-conversation-participant {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.team-create-conversation-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.team-create-conversation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* === Conversation (ThreadConversation) === */
+.team-conversation {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-conversation-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.team-conversation-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-conversation-message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-agent-message);
+}
+.team-conversation-message[data-sender="user"] {
+  background: var(--surface-user-message);
+  align-self: flex-end;
+}
+
+.team-conversation-message-sender {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-conversation-message-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.team-conversation-composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.team-conversation-input {
+  flex: 1 1 auto;
+  font: inherit;
+  resize: vertical;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+.team-conversation-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* === Board (BoardPanel) === */
+.team-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.team-board-entry {
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.team-board-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.team-board-entry-key {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.team-board-entry-status {
+  font-size: 11px;
+  color: var(--accent-primary);
+}
+
+.team-board-entry-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.team-board-entry-artifacts {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* === Add run agent dialog === */
+.add-run-agent-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.add-run-agent-heading {
+  margin: 0;
+  font-size: 15px;
+}
+
+.add-run-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.add-run-agent-field select,
+.add-run-agent-field input,
+.add-run-agent-field textarea {
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
+/* Read-only "Configured executor" — the executor name is decided by the profile's own configuration, never
+   a per-request choice (there is no model <select> anywhere in this dialog). */
+.add-run-agent-executor {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+.add-run-agent-executor dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.add-run-agent-executor dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.add-run-agent-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.add-run-agent-error {
+  color: var(--danger);
+  font-size: 12px;
+}

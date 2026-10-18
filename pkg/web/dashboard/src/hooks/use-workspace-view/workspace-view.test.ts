@@ -512,6 +512,17 @@ describe("workspaceReducer — 'discussion' view (Этап 6)", () => {
   })
 })
 
+// 'team' (Agent Mesh, T7.3) — the Team view: same manual, non-attention posture as 'discussion' above, but
+// run-wide rather than tied to a selected stage.
+describe("workspaceReducer — 'team' view (Agent Mesh, T7.3)", () => {
+  it('is reachable via openTeam and does not alter returnView', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const team = workspaceReducer(cost, { type: 'openTeam' })
+    expect(team.view).toBe('team')
+    expect(team.returnView).toBe('cost')
+  })
+})
+
 describe("workspaceReducer — 'assistant' view (T3.10)", () => {
   it('is a valid WorkspaceView union member reachable via openAssistant', () => {
     const s = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })

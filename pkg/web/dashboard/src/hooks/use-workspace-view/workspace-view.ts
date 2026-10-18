@@ -3,7 +3,10 @@ import type { Stage } from '../../types'
 // WorkspaceView — какой единственный рабочий воркспейс показан справа от рейла стадий. 'assistant' — лента
 // одной выбранной задачи помощника (Этап 3, T3.10); как и history-виды, это read-only ручной выбор, а не
 // часть attention-очереди — завершение/появление помощника никогда не открывает его автоматически.
-export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'discussion'
+// 'team' (Agent Mesh, T7.3) — the Team view: run-wide roster (participants + conversations), gated behind
+// the mesh capability. Same manual, read-only-ish posture as 'discussion': entered only via openTeam, never
+// part of the attention auto-open queue.
+export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'discussion' | 'team'
 
 // AttentionKind — вид элемента, требующего действия пользователя. 'assistants' (Этап 7, T7.9) — стадия в
 // awaiting_assistants, чей required-гейт требует решения человека (см. attentionKindForStatus ниже). NB: это
@@ -94,6 +97,9 @@ export type WorkspaceAction =
   // openDiscussion — пользователь открыл вкладку обсуждения выбранной стадии (Этап 6); ручной read-only-ish
   // вид (есть композер для своего сообщения), не часть attention-очереди, как и openAssistant/openHistory.
   | { type: 'openDiscussion' }
+  // openTeam — пользователь открыл вкладку Team (Agent Mesh, T7.3): run-wide ручной read-only-ish вид (свой
+  // композер на беседу), как и openDiscussion — не часть attention-очереди, НЕ привязан к выбранной стадии.
+  | { type: 'openTeam' }
 
 // activeItem возвращает элемент, на котором сейчас сфокусирован attention, либо
 // null. Учитывает и view: в history/feed активного attention-элемента нет.
@@ -219,6 +225,8 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: 'assistant' }
     case 'openDiscussion':
       return { ...state, view: 'discussion' }
+    case 'openTeam':
+      return { ...state, view: 'team' }
     default:
       return state
   }

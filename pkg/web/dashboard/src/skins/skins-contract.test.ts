@@ -5,6 +5,7 @@ import feedWorkspaceCss from '../../skins/base/feed-workspace.css?raw'
 import planPanelCss from '../../skins/base/plan-panel.css?raw'
 import sideAgentCss from '../../public/side-agent.css?raw'
 import assistantsCss from '../../skins/base/assistants.css?raw'
+import meshCss from '../../skins/base/mesh.css?raw'
 import graphiteIndexCss from '../../skins/graphite/index.css?raw'
 import gogaIndexCss from '../../skins/goga/index.css?raw'
 import novacorpsIndexCss from '../../skins/novacorps/index.css?raw'
@@ -118,6 +119,55 @@ describe('skins CSS contract — assistants.css is imported by every skin (T3.10
   it('goga imports assistants.css', () => expect(gogaIndexCss).toContain(IMPORT_LINE))
   it('novacorps imports assistants.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
   it('coffee imports assistants.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
+})
+
+// mesh.css (Agent Mesh Phase 7, T7.3's Team view) is a structural, skin-agnostic stylesheet, same posture as
+// assistants.css above — every skin must import it explicitly, checked by exact string per skin.
+describe('skins CSS contract — mesh.css is imported by every skin (T7.3)', () => {
+  const IMPORT_LINE = '@import url("../base/mesh.css");'
+
+  it('graphite imports mesh.css', () => expect(graphiteIndexCss).toContain(IMPORT_LINE))
+  it('goga imports mesh.css', () => expect(gogaIndexCss).toContain(IMPORT_LINE))
+  it('novacorps imports mesh.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
+  it('coffee imports mesh.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
+})
+
+describe('skins CSS contract — Team view leans ONLY on the semantic token layer (T7.3)', () => {
+  function allVarNames(css: string): Set<string> {
+    return new Set([...css.matchAll(/var\((--[a-zA-Z0-9-]+)/g)].map((m) => m[1] as string))
+  }
+  function declaredVarNames(css: string): Set<string> {
+    return new Set([...css.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)].map((m) => m[1] as string))
+  }
+
+  it('every var(--x) mesh.css references is declared in tokens.css\'s shared semantic layer', () => {
+    const declared = declaredVarNames(tokensCss)
+    const used = allVarNames(meshCss)
+    const undeclared = [...used].filter((name) => !declared.has(name))
+    expect(undeclared, `mesh.css references undeclared custom properties: ${undeclared.join(', ')}`).toEqual([])
+  })
+
+  it('mesh.css never hardcodes a color literal (hex/rgb/hsl) outside of its token references', () => {
+    const withoutComments = meshCss.replace(/\/\*[\s\S]*?\*\//g, '')
+    const hexLiterals = withoutComments.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []
+    const rawColorFns = withoutComments.match(/\b(?:rgb|rgba|hsl|hsla)\(\s*[0-9]/g) ?? []
+    expect(hexLiterals, `hardcoded hex colors found: ${hexLiterals.join(', ')}`).toEqual([])
+    expect(rawColorFns, `hardcoded rgb()/hsl() colors found: ${rawColorFns.join(', ')}`).toEqual([])
+  })
+
+  it.each([
+    ['roster', '.team-roster'],
+    ['person row', '.team-person-row'],
+    ['selected person/thread row', '.team-person-row.active'],
+    ['conversations list', '.team-thread-list'],
+    ['tabs (Messages/Board/Activity)', '.team-tabs'],
+    ['conversation composer', '.team-conversation-composer'],
+    ['board entry', '.team-board-entry'],
+    ['create-conversation form', '.team-create-conversation-form'],
+    ['Add run agent — read-only Configured executor', '.add-run-agent-executor'],
+  ])('%s (%s) has a real rule in mesh.css', (_label, selector) => {
+    expect(meshCss.includes(selector), `expected a rule for ${selector}`).toBe(true)
+  })
 })
 
 describe('skins CSS contract — composer options bar', () => {

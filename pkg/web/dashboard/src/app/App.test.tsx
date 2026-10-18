@@ -73,6 +73,11 @@ function mockFetchForStatus(statusPayload: () => unknown, onStatusCall?: () => v
 
     if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
     if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+    // /api/mesh/* — capability off by default in this harness (no test here stands up a mesh-enabled
+    // server), same nil-Service 404 convention pkg/server/mesh.go itself uses. Without this, the generic
+    // catch-all below (ok:true for anything unmatched) would make useMeshRoster's own capability probe
+    // misread every App test as mesh-enabled and leak a "Team" tab into exact tab-label assertions.
+    if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
 
     return { ok: true, json: async () => [] } as Response
   })
@@ -1925,5 +1930,54 @@ describe('App', () => {
       expect(screen.getByRole('button', { name: /open project files/i })).toBeInTheDocument()
     })
     expect(screen.getByRole('button', { name: /open side agent/i })).toBeInTheDocument()
+  })
+
+  // Agent Mesh, T7.3 — there is no status.capabilities.mesh field (unlike file_browser/side_agent above):
+  // useMeshRoster's own first-fetch probe IS the capability signal the Team tab gates on. These two tests
+  // are the end-to-end proof both directions of that probe actually drive the tab.
+  test('Agent Mesh T7.3: Team tab appears once the mesh probe succeeds, and opens the Team view', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', 'running')],
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({ participants: [{ id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true }] }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Team' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
+
+    await waitFor(() => expect(screen.getByText('This run')).toBeInTheDocument())
+    expect(screen.getByText('QA reviewer')).toBeInTheDocument()
+  })
+
+  test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [stageView('s1', 'Propose', 'running')],
+    }))
+
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull())
   })
 })

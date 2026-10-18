@@ -3,6 +3,7 @@ import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, trig
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
 import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, StageProposals, AddStageDialog } from '../components/assistants'
+import { TeamView } from '../components/team'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -19,6 +20,7 @@ import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
 import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
+import { useMeshRoster } from '../hooks/use-mesh'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
@@ -134,7 +136,13 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openDiscussion } = useWorkspaceView(stages, editing, ownedHandledSigs)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openDiscussion, openTeam } = useWorkspaceView(stages, editing, ownedHandledSigs)
+
+  // meshRoster (Agent Mesh, T7.3) — the ONE useMeshRoster poll for the whole dashboard; there is no
+  // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
+  // probe-the-first-fetch result IS the capability signal the Team tab gates on (see use-mesh-roster.ts's own
+  // comment). TeamView receives the SAME roster as a prop rather than polling it a second time.
+  const meshRoster = useMeshRoster()
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
@@ -171,6 +179,13 @@ export function App(): ReactElement {
   useEffect(() => {
     if (!capabilities.collaboration && (wsState.view === 'assistant' || wsState.view === 'discussion')) openFeed()
   }, [capabilities.collaboration, wsState.view])
+
+  // Защита: мэш-капабилити определяется пробным запросом (meshRoster.enabled), а не статическим полем
+  // статуса — тот же паттерн, что и у collaboration/accounting выше: застрявший на 'team' вид (капабилити
+  // отключили на бэкенде между опросами) уводим в Feed.
+  useEffect(() => {
+    if (meshRoster.probed && !meshRoster.enabled && wsState.view === 'team') openFeed()
+  }, [meshRoster.probed, meshRoster.enabled, wsState.view])
 
   // Клик по строке помощника в рейле: выбираем задачу и открываем её ленту.
   function handleSelectAssistantTask(stageId: string, taskId: string): void {
@@ -218,7 +233,7 @@ export function App(): ReactElement {
       return
     }
     // Нет ожидающего действия.
-    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed') return
+    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team') return
     if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
     else if (stage?.showDialog === true) openHistory('dialog-history')
     else if (stage?.showPlan === true) openHistory('plan-history')
@@ -332,7 +347,7 @@ export function App(): ReactElement {
     : null
 
   // Вкладки: Feed + контекстная detail-вкладка + отдельный маяк ожидания.
-  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed'
+  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team'
   // В глобальном виде detail-таб выбранной стадии дублирует glow-маяк, если оба ведут в ОДНО и то же
   // ожидание — т.е. у стадии есть своё ожидание и маяк указывает на неё же.
   const duplicatesBeacon =
@@ -378,6 +393,12 @@ export function App(): ReactElement {
   if (workspaceStage !== null && capabilities.collaboration) {
     tabs.push({ id: 'discussion', label: 'Discussion' })
   }
+  // Team — ГЛОБАЛЬНАЯ вкладка ростера/бесед Agent Mesh (T7.3), не привязана к выбранной стадии (как Cost
+  // ниже), видна когда meshRoster.enabled (пробный запрос — см. его комментарий, у мэша нет своего поля в
+  // status.capabilities).
+  if (meshRoster.enabled) {
+    tabs.push({ id: 'team', label: 'Team' })
+  }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.
   if (accounting.supported) {
     tabs.push({ id: 'cost', label: 'Cost' })
@@ -385,12 +406,13 @@ export function App(): ReactElement {
   // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка, читает весь событийный поток флоу. Всегда ПОСЛЕДНЯЯ в
   // списке — правее Cost, а не второй сразу после Feed (тот же порядок, что и у Cost выше).
   tabs.push({ id: 'full-feed', label: 'Full feed' })
-  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'discussion' ? 'discussion' : 'detail'
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'discussion' ? 'discussion' : wsState.view === 'team' ? 'team' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
     if (id === 'cost') { openCost(); return }
     if (id === 'full-feed') { openFullFeed(); return }
     if (id === 'discussion') { openDiscussion(); return }
+    if (id === 'team') { openTeam(); return }
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
       if (attentionTabItem !== null) {
@@ -499,10 +521,10 @@ export function App(): ReactElement {
               <>
                 {/* Контекст стадии воркспейса (имя + статус) — общая шапка и для
                     Feed, и для деталей (мокап показывает контекст стадии над
-                    лентой). Cost — глобальный отчёт, не привязанный к стадии:
-                    оставлять над ним имя/статус последней выбранной стадии
+                    лентой). Cost/Team — глобальные виды, не привязанные к стадии:
+                    оставлять над ними имя/статус последней выбранной стадии
                     подразумевало бы несуществующий пер-стейдж фильтр. */}
-                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'full-feed' && (
+                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'full-feed' && wsState.view !== 'team' && (
                   <WorkspaceHeader
                     stage={workspaceStage}
                     connected={connected}
@@ -530,6 +552,11 @@ export function App(): ReactElement {
                     onOpenDialog={handleOpenDialogFromFeed}
                     emptyHint="No events yet"
                   />
+                ) : wsState.view === 'team' ? (
+                  // Team (T7.3) — global, like Cost/Full feed above: must be checked BEFORE the
+                  // `workspaceStage === null` Feed fallback below, since Team has no selected-stage
+                  // dependency at all (a never-selected stage must still show Team, not Feed).
+                  <TeamView roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
                   <FeedWorkspace
                     events={stageEvents}
