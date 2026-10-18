@@ -64,10 +64,11 @@ type AgentCommInboxMessage struct {
 	Body       string
 }
 
-// AgentCommInboxBlock renders the <inbox> block: every already-addressed message, oldest first (seq order),
-// bounded by the caller (the orchestrator decides how many fit the context budget — this function only
-// renders what it is given). An empty slice renders nothing at all, not an empty tag.
-func AgentCommInboxBlock(messages []AgentCommInboxMessage) string {
+// AgentCommInboxBlock renders the <inbox> block: the already-addressed messages the caller selected, oldest
+// first (seq order), and — when more > 0 — a note that more messages are waiting. The caller bounds the
+// selection (the orchestrator keeps it within its byte budget); this function only renders what it is given.
+// No messages renders nothing at all, not an empty tag.
+func AgentCommInboxBlock(messages []AgentCommInboxMessage, more int) string {
 	if len(messages) == 0 {
 		return ""
 	}
@@ -84,6 +85,9 @@ func AgentCommInboxBlock(messages []AgentCommInboxMessage) string {
 		}
 		fmt.Fprintf(&sb, " in thread %s:\n", m.ThreadID)
 		fmt.Fprintf(&sb, "  %s\n", escapeTags(m.Body))
+	}
+	if more > 0 {
+		fmt.Fprintf(&sb, "%d more messages are waiting — read them with `afm agent inbox` after these.\n", more)
 	}
 	sb.WriteString("</inbox>\n")
 	return sb.String()

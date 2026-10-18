@@ -301,3 +301,36 @@ func TestMesh_MessageSentRejectsAtMaxInboxUnread(t *testing.T) {
 		t.Fatalf("the rejected message was still added to qa's inbox: now has %d entries", got)
 	}
 }
+
+// TestMesh_InboxCapacityCountsOnlyMessagesWaitingForHandover: the inbox limit bounds messages not yet handed
+// over. Delivered messages free their place, and the human — who reads threads in the dashboard, never
+// through a handover — is never blocked by messages addressed to them.
+func TestMesh_InboxCapacityCountsOnlyMessagesWaitingForHandover(t *testing.T) {
+	as := newAssistantsState()
+	mustApply(t, &as, meshParticipantAddedControl("user", string(agentcomm.KindUser), string(agentcomm.ScopeRun)))
+	mustApply(t, &as, meshParticipantAddedControl("qa", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+
+	var seq uint64
+	send := func(id, thread, from, to string) error {
+		seq++
+		return dispatchControlKind(&as, meshMessageSentControl(seq, id, thread, from, []string{to}, string(agentcomm.MessageKindMessage), nil, "q"), false)
+	}
+	for i := range agentcomm.MaxInboxUnread {
+		thread := fmt.Sprintf("th-%d", i)
+		mustApply(t, &as, meshThreadOpenedControl(thread, []string{"user", "qa"}))
+		if err := send(fmt.Sprintf("to-qa-%d", i), thread, "user", "qa"); err != nil {
+			t.Fatalf("send to qa %d: %v", i, err)
+		}
+		mustApply(t, &as, meshMessageReceiptControl(kindMeshMessageDelivered, fmt.Sprintf("to-qa-%d", i), "qa"))
+		if err := send(fmt.Sprintf("to-user-%d", i), thread, "qa", "user"); err != nil {
+			t.Fatalf("send to the human %d: %v", i, err)
+		}
+	}
+	mustApply(t, &as, meshThreadOpenedControl("th-more", []string{"user", "qa"}))
+	if err := send("to-qa-more", "th-more", "user", "qa"); err != nil {
+		t.Fatalf("qa has read every message, a new one must be accepted: %v", err)
+	}
+	if err := send("to-user-more", "th-more", "qa", "user"); err != nil {
+		t.Fatalf("messages to the human must never hit the inbox limit: %v", err)
+	}
+}

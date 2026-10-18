@@ -144,22 +144,24 @@ func (ms MeshState) HasUnseenMessageFor(recipient agentcomm.ParticipantID) bool 
 }
 
 // CheckInboxCapacity rejects a message to recipients when one of them already has agentcomm.MaxInboxUnread
-// unread messages — explicit rejection, never a silent truncation (T0.2). A recipient's UNREAD count —
-// accepted or delivered, not yet acknowledged — is what the limit bounds; an already-acknowledged message no
-// longer occupies that budget. Exported so a caller can check it before taking a step it would otherwise
-// leave behind (e.g. opening a conversation for a message that cannot be sent).
+// messages it has not been handed yet (still accepted) — explicit rejection, never a silent truncation (T0.2).
+// The limit bounds what is still waiting to reach the recipient: a message handed over in a turn's <inbox> or
+// by `afm agent inbox` (delivered) no longer occupies it, so a recipient that keeps reading never fills up.
+// The human is not limited: the dashboard shows every thread in full, there is no queue to hand over. Exported
+// so a caller can check it before taking a step it would otherwise leave behind.
 func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID) error {
 	for _, r := range recipients {
-		unread := 0
+		if p, ok := ms.Participants[r]; ok && p.Kind == agentcomm.KindUser {
+			continue
+		}
+		waiting := 0
 		for _, mid := range ms.Inbox[r] {
-			switch ms.Receipts[mid][r] {
-			case agentcomm.DeliveryAccepted, agentcomm.DeliveryDelivered:
-				unread++
-			default:
+			if ms.Receipts[mid][r] == agentcomm.DeliveryAccepted {
+				waiting++
 			}
 		}
-		if unread >= agentcomm.MaxInboxUnread {
-			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d unread messages (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
+		if waiting >= agentcomm.MaxInboxUnread {
+			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d messages waiting to be read (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
 		}
 	}
 	return nil

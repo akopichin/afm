@@ -13,8 +13,8 @@ const (
 	MaxThreadMembers = 8
 	// MaxArtifactRefs is the most artifact references a single Message or BoardEntry may carry.
 	MaxArtifactRefs = 8
-	// MaxInboxUnread is the most unread inbox references a single participant may accumulate
-	// before new messages are rejected rather than queued without bound.
+	// MaxInboxUnread is the most messages a single participant may have waiting to be handed to it
+	// (accepted, not yet delivered) before new messages are rejected rather than queued without bound.
 	MaxInboxUnread = 200
 	// MaxThreadMessages is the most messages a single Thread may ever hold — Thread.Budgets'
 	// effective cap when ThreadBudgets.MaxMessages is left zero.

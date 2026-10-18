@@ -12,12 +12,20 @@ import (
 // messages marked delivered for it come from ONE read of the state (agentCommInboxFor): a message that
 // arrives after the prompt was built is not in it, so it must stay unseen and reach the next turn.
 
-// agentCommInboxFor renders participant's pending (not-yet-delivered) inbox messages and returns a closure
-// that marks exactly those messages delivered. The same set is remembered as the participant's rendered inbox
-// for deliverRenderedInbox — executor.Config.OnDelivered, called only after cmd.Start() succeeds
-// (pkg/executor/executor.go). Marking never happens at prompt-assembly time, so a crash or a failed start
-// between building this prompt and spawning the process leaves the messages at "accepted" and they are
-// re-injected, unchanged, on the next attempt.
+// inboxBlockByteBudget bounds how much message text one turn's <inbox> block carries; inboxMessageOverhead
+// approximates each message's header line. Messages past the budget stay accepted for the next turn (or an
+// `afm agent inbox` call), and the block says how many are still waiting.
+const (
+	inboxBlockByteBudget = 64 * 1024
+	inboxMessageOverhead = 256
+)
+
+// agentCommInboxFor renders participant's pending (not-yet-delivered) inbox messages, oldest first and within
+// inboxBlockByteBudget, and returns a closure that marks exactly those messages delivered. The same set is
+// remembered as the participant's rendered inbox for deliverRenderedInbox — executor.Config.OnDelivered,
+// called only after cmd.Start() succeeds (pkg/executor/executor.go). Marking never happens at
+// prompt-assembly time, so a crash or a failed start between building this prompt and spawning the process
+// leaves the messages at "accepted" and they are re-injected, unchanged, on the next attempt.
 func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (block string, markDelivered func()) {
 	if o.opts.Store == nil {
 		// Some tests build a bare Orchestrator literal to exercise a single concern (e.g. browser/mesh Config
@@ -25,35 +33,41 @@ func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (b
 		return "", func() {}
 	}
 	rs := o.opts.Store.Snapshot()
-	ids := rs.Assistants.Mesh.Inbox[participant]
 
 	var pending []agentcomm.MessageID
 	var msgs []prompts.AgentCommInboxMessage
-	for _, id := range ids {
-		if rs.Assistants.Mesh.Receipts[id][participant] != agentcomm.DeliveryAccepted {
+	size, more := 0, 0
+	for _, id := range rs.Assistants.Mesh.Inbox[participant] {
+		m := rs.Assistants.Mesh.Messages[id]
+		if m == nil || rs.Assistants.Mesh.Receipts[id][participant] != agentcomm.DeliveryAccepted {
 			continue
 		}
-		m := rs.Assistants.Mesh.Messages[id]
-		if m == nil {
+		size += len(m.Body) + inboxMessageOverhead
+		if len(msgs) > 0 && size > inboxBlockByteBudget {
+			more++
 			continue
 		}
 		pending = append(pending, id)
-		var inReplyTo string
-		if m.InReplyTo != nil {
-			inReplyTo = string(*m.InReplyTo)
-		}
-		recipients := make([]string, len(m.Recipients))
-		for i, r := range m.Recipients {
-			recipients[i] = string(r)
-		}
-		msgs = append(msgs, prompts.AgentCommInboxMessage{
-			MessageID: string(m.ID), ThreadID: string(m.ThreadID), From: string(m.Sender),
-			Recipients: recipients, InReplyTo: inReplyTo, Body: m.Body,
-		})
+		msgs = append(msgs, inboxMessageView(m))
 	}
 
 	o.renderedInbox.Store(participant, pending)
-	return prompts.AgentCommInboxBlock(msgs), func() { o.markInboxDelivered(participant, pending) }
+	return prompts.AgentCommInboxBlock(msgs, more), func() { o.markInboxDelivered(participant, pending) }
+}
+
+func inboxMessageView(m *agentcomm.Message) prompts.AgentCommInboxMessage {
+	var inReplyTo string
+	if m.InReplyTo != nil {
+		inReplyTo = string(*m.InReplyTo)
+	}
+	recipients := make([]string, len(m.Recipients))
+	for i, r := range m.Recipients {
+		recipients[i] = string(r)
+	}
+	return prompts.AgentCommInboxMessage{
+		MessageID: string(m.ID), ThreadID: string(m.ThreadID), From: string(m.Sender),
+		Recipients: recipients, InReplyTo: inReplyTo, Body: m.Body,
+	}
 }
 
 // deliverRenderedInbox returns the executor.Config.OnDelivered callback for participant: it marks the
@@ -67,9 +81,15 @@ func (o *Orchestrator) deliverRenderedInbox(participant agentcomm.ParticipantID)
 	}
 }
 
+// markInboxDelivered records the handover of ids to participant. A failed journal write is storage-fatal and
+// ends the run (handleTaskOperationErr): the messages are already in the agent's prompt, and leaving them
+// accepted would hand them over again on another turn. A rejection (the run is finalizing) changes nothing.
 func (o *Orchestrator) markInboxDelivered(participant agentcomm.ParticipantID, ids []agentcomm.MessageID) {
 	for _, id := range ids {
-		_ = o.MarkMessageDelivered(context.Background(), id, participant)
+		if err := o.MarkMessageDelivered(context.Background(), id, participant); err != nil {
+			o.handleTaskOperationErr(err)
+			return
+		}
 	}
 }
 
