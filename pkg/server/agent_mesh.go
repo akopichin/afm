@@ -25,7 +25,9 @@ type AgentMeshActions interface {
 	ResolveToken(token string) (participantID string, ok bool)
 	ListParticipants(ctx context.Context, actor string) ([]agentcomm.Participant, error)
 	Send(ctx context.Context, requestID, actor string, req MeshSendRequest) (MeshSendReceipt, error)
-	Inbox(ctx context.Context, actor string, cursor uint64, limit int) (MeshMessagePage, error)
+	// Inbox returns the messages addressed to actor that it has not been handed yet, or with all its whole
+	// inbox history.
+	Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (MeshMessagePage, error)
 	Thread(ctx context.Context, actor, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Ack(ctx context.Context, requestID, actor, messageID string) error
 	Wait(ctx context.Context, requestID, actor string, req MeshWaitRequest) (MeshWaitReceipt, error)
@@ -175,7 +177,8 @@ func (s *Server) handleAgentMeshParticipants(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleAgentMeshInbox(w http.ResponseWriter, r *http.Request, actor string) {
 	cursor, limit := parseCursorLimit(r)
-	page, err := s.agentMesh.Inbox(r.Context(), actor, cursor, limit)
+	all := r.URL.Query().Get("all") == "1"
+	page, err := s.agentMesh.Inbox(r.Context(), actor, cursor, limit, all)
 	if err != nil {
 		writeAssistantError(w, err)
 		return

@@ -190,3 +190,61 @@ func TestTaskResultWait_RunAgentTurn(t *testing.T) {
 		t.Fatalf("wait registered after the turn = %s, want ready", after.Status)
 	}
 }
+
+// A run agent starts every turn with a fresh session: the inbox it reads must not offer a message it was
+// already handed in an earlier turn, only new ones — the whole history stays available on request.
+func TestReadInbox_OnlyNewSkipsMessagesHandedInEarlierTurns(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	res := addTestRunAgent(t, o, "op-add", nil)
+
+	// Messages are committed directly, so no turn runs on its own; delivery is marked the way a turn's
+	// <inbox> (OnDelivered) or `afm agent inbox` marks it.
+	commit := func(id, body string) {
+		t.Helper()
+		eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(res.ThreadID), MessageID: id},
+			state.MeshMessageSentPayload{Sender: string(meshUserParticipantID), Recipients: []string{string(res.ParticipantID)}, Kind: string(agentcomm.MessageKindMessage), Body: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ApplyRunOperation(state.Operation{ID: "op-" + id, Kind: "mesh_send", Effects: []state.Effect{eff}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliver := func(id agentcomm.MessageID) {
+		t.Helper()
+		if err := o.MarkMessageDelivered(ctx, id, res.ParticipantID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(onlyNew bool) []agentcomm.MessageID {
+		t.Helper()
+		page, err := o.ReadInbox(ctx, ReadInboxRequest{Participant: res.ParticipantID, OnlyNew: onlyNew})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []agentcomm.MessageID
+		for _, m := range page.Messages {
+			ids = append(ids, m.ID)
+		}
+		return ids
+	}
+
+	commit("mm-one", "question one")
+	deliver("mm-one") // turn 1 had it in its <inbox>
+	if got := read(true); len(got) != 0 {
+		t.Fatalf("new messages on turn 2 = %v, want none — turn 1 already handled mm-one", got)
+	}
+
+	commit("mm-two", "question two")
+	if got := read(true); len(got) != 1 || got[0] != "mm-two" {
+		t.Fatalf("new messages = %v, want only mm-two", got)
+	}
+	if got := read(false); len(got) != 2 {
+		t.Fatalf("whole inbox = %v, want both messages", got)
+	}
+	deliver("mm-two") // what `afm agent inbox` does with what it returned
+	if got := read(true); len(got) != 0 {
+		t.Fatalf("new messages after reading them = %v, want none", got)
+	}
+}

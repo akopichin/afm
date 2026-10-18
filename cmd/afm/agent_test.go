@@ -24,6 +24,7 @@ type fakeCLIAgentMesh struct {
 	participant string
 	lastSend    server.MeshSendRequest
 	sendErr     error
+	inboxAll    []bool
 }
 
 func (f *fakeCLIAgentMesh) ResolveToken(token string) (string, bool) {
@@ -45,7 +46,8 @@ func (f *fakeCLIAgentMesh) Send(ctx context.Context, requestID, actor string, re
 	return server.MeshSendReceipt{MessageID: "msg-1", Seq: 1}, nil
 }
 
-func (f *fakeCLIAgentMesh) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (server.MeshMessagePage, error) {
+func (f *fakeCLIAgentMesh) Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (server.MeshMessagePage, error) {
+	f.inboxAll = append(f.inboxAll, all)
 	return server.MeshMessagePage{}, nil
 }
 
@@ -222,5 +224,28 @@ func TestAgentCLI_Send_RejectionPrintsServerReason(t *testing.T) {
 	}
 	if payload["error"] != "not_found" || !strings.Contains(payload["message"], "send without a thread") {
 		t.Fatalf("stderr = %v, want not_found with the server's reason", payload)
+	}
+}
+
+// `afm agent inbox` asks for new messages only; --all asks for the whole history.
+func TestAgentCLI_Inbox_NewOnlyUnlessAll(t *testing.T) {
+	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "run:t-1"}
+	srv := server.New(server.Config{AgentMesh: fake})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	writeTestMeshDescriptor(t, httpSrv, "tok-X", "run:t-1")
+
+	for _, args := range [][]string{nil, {"--all"}} {
+		cmd := newAgentInboxCmd()
+		var out, errOut bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&errOut)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute %v: %v (stderr=%s)", args, err, errOut.String())
+		}
+	}
+	if len(fake.inboxAll) != 2 || fake.inboxAll[0] || !fake.inboxAll[1] {
+		t.Fatalf("Service got all = %v, want [false true]", fake.inboxAll)
 	}
 }

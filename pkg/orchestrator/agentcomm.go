@@ -118,7 +118,10 @@ type ReadInboxRequest struct {
 	Participant agentcomm.ParticipantID
 	Cursor      uint64
 	Limit       int
-	Actor       state.Actor
+	// OnlyNew limits the page to messages not yet handed to Participant (receipt still accepted) — neither in
+	// a turn's <inbox> block nor returned by an earlier inbox read. False returns the whole history.
+	OnlyNew bool
+	Actor   state.Actor
 }
 
 type ReadThreadRequest struct {

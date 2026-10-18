@@ -162,7 +162,7 @@ func (a smokeMeshActions) Send(ctx context.Context, requestID, actor string, req
 	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq}, nil
 }
 
-func (a smokeMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (server.MeshMessagePage, error) {
+func (a smokeMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (server.MeshMessagePage, error) {
 	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: agentcomm.ParticipantID(actor), Cursor: cursor, Limit: limit, Actor: smokeMeshActor(actor)})
 	if err != nil {
 		return server.MeshMessagePage{}, err

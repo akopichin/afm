@@ -75,9 +75,12 @@ func toMeshMessagePage(p orchestrator.MessagePage) server.MeshMessagePage {
 	return server.MeshMessagePage{Messages: p.Messages, NextCursor: p.NextCursor}
 }
 
-func (a agentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (server.MeshMessagePage, error) {
+// Inbox returns only messages the agent has not been handed yet unless all is set: a run agent gets a fresh
+// session every turn, and showing it messages it already handled (in an earlier turn's <inbox> or inbox read)
+// makes it answer them again.
+func (a agentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (server.MeshMessagePage, error) {
 	reader := agentcomm.ParticipantID(actor)
-	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: reader, Cursor: cursor, Limit: limit, Actor: meshActor(actor)})
+	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: reader, Cursor: cursor, Limit: limit, OnlyNew: !all, Actor: meshActor(actor)})
 	if err != nil {
 		return server.MeshMessagePage{}, err
 	}

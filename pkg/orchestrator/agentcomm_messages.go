@@ -212,13 +212,18 @@ func (o *Orchestrator) ListThreads(ctx context.Context, req ListThreadsRequest) 
 	return page, nil
 }
 
-// ReadInbox implements Service.ReadInbox: every message ever addressed to Participant, newest additions
-// last. It does NOT transition any receipt to delivered — "delivered" is earned only at the actual handoff
+// ReadInbox implements Service.ReadInbox: every message ever addressed to Participant (or, with OnlyNew, only
+// those not yet handed to it), newest additions last. It does NOT transition any receipt to delivered — "delivered" is earned only at the actual handoff
 // point (a turn's prompt package, or an explicit MarkMessageDelivered call from the `afm agent inbox`
 // handler), never by this read alone ("неявного ack при чтении нет", tmp/agent-mesh.md §6.1).
 func (o *Orchestrator) ReadInbox(ctx context.Context, req ReadInboxRequest) (MessagePage, error) {
 	rs := o.opts.Store.Snapshot()
 	ids := rs.Assistants.Mesh.Inbox[req.Participant]
+	if req.OnlyNew {
+		ids = slices.DeleteFunc(slices.Clone(ids), func(id agentcomm.MessageID) bool {
+			return rs.Assistants.Mesh.Receipts[id][req.Participant] != agentcomm.DeliveryAccepted
+		})
+	}
 	return pageMessages(rs, ids, req.Cursor, req.Limit), nil
 }
 

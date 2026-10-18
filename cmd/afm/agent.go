@@ -168,13 +168,20 @@ func newAgentReplyCmd() *cobra.Command {
 func newAgentInboxCmd() *cobra.Command {
 	var cursor uint64
 	var limit int
+	var all bool
 	c := &cobra.Command{
-		Use:          "inbox",
-		Short:        "Read messages addressed to this participant",
+		Use:   "inbox",
+		Short: "Read NEW messages addressed to this participant (--all for the whole history)",
+		Long: "Read the messages addressed to this participant that it has not seen yet — neither in its prompt's <inbox> block " +
+			"nor returned by an earlier `afm agent inbox`. Each message is returned once. --all returns every message ever " +
+			"addressed to it.",
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				path := "inbox?cursor=" + strconv.FormatUint(cursor, 10) + "&limit=" + strconv.Itoa(limit)
+				if all {
+					path += "&all=1"
+				}
 				var out map[string]any
 				if err := c2.do("GET", path, nil, &out); err != nil {
 					return nil, err
@@ -185,6 +192,7 @@ func newAgentInboxCmd() *cobra.Command {
 	}
 	c.Flags().Uint64Var(&cursor, "cursor", 0, "only messages after this seq")
 	c.Flags().IntVar(&limit, "limit", 0, "max messages to return (0 = server default)")
+	c.Flags().BoolVar(&all, "all", false, "every message ever addressed to you, including ones already seen")
 	return c
 }
 
