@@ -85,7 +85,7 @@ project, or run a quick command-style exchange *without* touching the run.
   cost accounting; it is *not* part of any stage. It never appears in a stage's Feed,
   never changes a stage's status, and never triggers stage timers or lifecycle hooks.
   An error in the chat cannot fail a stage. When Agent Mesh is available, the Side
-  agent also appears in Team and can exchange messages with other participants.
+  agent also appears in Team.
 - **The agent outlives the HTTP request.** Once a message is accepted the agent runs
   under afm's own lifetime, not the browser request — closing the window or reloading
   the page does **not** interrupt it. Only **Stop**, `Ctrl+C`, or afm shutting down
