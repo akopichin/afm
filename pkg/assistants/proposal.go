@@ -92,6 +92,11 @@ type Proposal struct {
 	Authors          []MessageAuthor `json:"authors,omitempty"`
 	SourceMessageIDs []string        `json:"source_message_ids,omitempty"`
 	SourceFindingIDs []string        `json:"source_finding_ids,omitempty"`
+	// ThreadID is the mesh thread SourceMessageIDs live in (Agent Mesh Phase 6, T6.6) — today always the
+	// target stage's one discussion thread (see pkg/orchestrator's deriveDiscussionThreadID), computed
+	// deterministically from StageID whether or not that thread has actually been opened yet. A client can
+	// use this to jump straight to the grounding conversation instead of re-deriving the thread id itself.
+	ThreadID string `json:"thread_id,omitempty"`
 	// ExpectedStageGeneration/ExpectedGraphRevision — the context version this proposal was computed against.
 	// A stage generation that has since moved on makes the proposal stale (CheckGeneration) before it is ever
 	// accepted. ExpectedGraphRevision is reserved for Этап 10 (flow-graph-changing proposals); Этап 6 never

@@ -114,10 +114,16 @@ func (o *Orchestrator) CreateProposal(ctx context.Context, req CreateProposalReq
 			return "", &state.OperationRejectedError{Code: assistants.CodeBudgetExceeded, Reason: fmt.Sprintf("%d pending self-proposals already outstanding (max %d)", n, maxPendingSelfProposals)}
 		}
 	}
+	// ThreadID (T6.6): the mesh thread req.SourceMessageIDs are grounded in. Every proposal targets exactly
+	// one stage, and that stage's discussion thread id is deterministic (deriveDiscussionThreadID,
+	// agentcomm_discussion.go) — computing it here never forces the thread into existence; a proposal for a
+	// stage with no discussion yet still gets a stable, correct id it can reference once one starts.
+	threadID := deriveDiscussionThreadID(req.StageID)
 	eff, err := proposalCreatedEffect(req.StageID, proposalID, state.ProposalCreatedPayload{
 		TaskID: req.TaskID, Type: string(req.Type), Title: req.Title, Rationale: req.Rationale,
 		Payload: req.Payload, Authors: req.Authors, SourceMessageIDs: req.SourceMessageIDs,
-		SourceFindingIDs: req.SourceFindingIDs, ExpectedStageGeneration: req.ExpectedStageGeneration,
+		SourceFindingIDs: req.SourceFindingIDs, ThreadID: string(threadID),
+		ExpectedStageGeneration: req.ExpectedStageGeneration,
 	})
 	if err != nil {
 		return "", err

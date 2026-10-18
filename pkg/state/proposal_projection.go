@@ -19,6 +19,7 @@ type ProposalCreatedPayload struct {
 	Authors                 []assistants.MessageAuthor `json:"authors,omitempty"`
 	SourceMessageIDs        []string                   `json:"source_message_ids,omitempty"`
 	SourceFindingIDs        []string                   `json:"source_finding_ids,omitempty"`
+	ThreadID                string                     `json:"thread_id,omitempty"`
 	ExpectedStageGeneration uint64                     `json:"expected_stage_generation"`
 	ExpectedGraphRevision   string                     `json:"expected_graph_revision,omitempty"`
 }
@@ -72,6 +73,7 @@ func applyProposalCreated(as *AssistantsState, c *Control, dryRun bool) error {
 		Authors:                 p.Authors,
 		SourceMessageIDs:        p.SourceMessageIDs,
 		SourceFindingIDs:        p.SourceFindingIDs,
+		ThreadID:                p.ThreadID,
 		ExpectedStageGeneration: p.ExpectedStageGeneration,
 		ExpectedGraphRevision:   p.ExpectedGraphRevision,
 		Status:                  assistants.ProposalPending,
