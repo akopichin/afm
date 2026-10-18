@@ -144,6 +144,8 @@ func (s *Server) stageConfig(id string) StageConfig {
 // StageConfig is the immutable, per-stage configuration used by the dashboard.
 // Runtime status and filesystem-derived flags belong to StageView.
 type StageConfig struct {
+	// Name is the stage's display name from the runtime registry, so a stage added during the run has one too.
+	Name        string
 	Interactive bool
 	AutoApprove bool
 	IsScript    bool

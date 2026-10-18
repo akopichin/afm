@@ -261,6 +261,26 @@ func TestBuildStageViews_IncludesButtons(t *testing.T) {
 	}
 }
 
+// A stage added during the run is missing from the start-time StageNames; its name comes from the runtime
+// registry's StageConfig, and a flow stage without a registry name keeps its StageNames entry.
+func TestBuildStageViews_NameFromRuntimeConfig(t *testing.T) {
+	runDir := t.TempDir()
+	rs := state.RunState{
+		StageOrder: []string{"flow", "added"},
+		StageNames: map[string]string{"flow": "From flow"},
+		Stages: map[string]state.StageState{
+			"flow":  {Status: state.StatusDone},
+			"added": {Status: state.StatusRunning},
+		},
+	}
+
+	views := buildStageViews(rs, runDir, map[string]StageConfig{"added": {Name: "Hardening"}}, nil)
+
+	if views[0].Name != "From flow" || views[1].Name != "Hardening" {
+		t.Errorf("names = %q, %q; want From flow, Hardening", views[0].Name, views[1].Name)
+	}
+}
+
 func TestBuildStageViews_SetsCostFromBundle(t *testing.T) {
 	runDir := t.TempDir()
 	for _, id := range []string{"a", "b"} {

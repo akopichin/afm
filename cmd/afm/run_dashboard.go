@@ -25,6 +25,7 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 	configs := make(map[string]server.StageConfig, len(stages))
 	for _, s := range stages {
 		configs[s.ID] = server.StageConfig{
+			Name:        s.Name,
 			Interactive: s.Interactive,
 			AutoApprove: s.AutoApprove,
 			IsScript:    s.IsScript(),
