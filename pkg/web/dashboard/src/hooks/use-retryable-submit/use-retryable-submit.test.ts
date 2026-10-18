@@ -48,6 +48,23 @@ describe('useRetryableSubmit', () => {
     expect(send.mock.calls[1]?.[1]).not.toBe(send.mock.calls[0]?.[1])
   })
 
+  test('a success under a fence retires its older failed intents: resending an old text gets a new id', async () => {
+    const send = vi.fn((p: Readonly<Payload>, _id: string) => (p.body === 'B' ? Promise.resolve('ok') : Promise.reject(new Error('lost'))))
+    const { result, rerender } = renderHook(({ fence }) => useRetryableSubmit<Payload>('t', fence), { initialProps: { fence: 'a' } })
+
+    await act(async () => result.current.submit({ body: 'A' }, send))
+    rerender({ fence: 'b' })
+    await act(async () => result.current.submit({ body: 'other' }, send))
+    rerender({ fence: 'a' })
+    await act(async () => result.current.submit({ body: 'B' }, send))
+    await act(async () => result.current.submit({ body: 'A' }, send))
+    expect(send.mock.calls[3]?.[1]).not.toBe(send.mock.calls[0]?.[1])
+
+    rerender({ fence: 'b' })
+    await act(async () => result.current.submit({ body: 'other' }, send))
+    expect(send.mock.calls[4]?.[1]).toBe(send.mock.calls[1]?.[1])
+  })
+
   test('sends an immutable snapshot of the payload', async () => {
     const send = vi.fn((p: Readonly<Payload>, _id: string) => Promise.resolve(p))
     const { result } = renderHook(() => useRetryableSubmit<Payload>('t'))

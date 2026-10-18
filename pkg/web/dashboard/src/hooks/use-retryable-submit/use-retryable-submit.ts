@@ -21,7 +21,7 @@ export type RetryableSubmit<P> = {
 }
 
 // Unsettled — the request id of the latest attempt for one fence+payload that has not succeeded yet.
-type Unsettled = { attempt: number; requestId: string }
+type Unsettled = { attempt: number; fence: string; requestId: string }
 type Running = { attempt: number; fence: string }
 
 // errorMessage — the text a form shows for a failed request.
@@ -44,7 +44,9 @@ export function removeSubmittedText(current: string, submitted: string): string 
 // changing it makes in-flight attempts stale. Forms that remount per selection can omit it.
 export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fence = ''): RetryableSubmit<P> {
   // unsettledRef — per fence+payload, the request id that is in flight or failed. Keeping one entry per intent
-  // means a late failure of one selection's attempt never replaces the retry id of another selection's.
+  // means a late failure of one selection's attempt never replaces the retry id of another selection's. A
+  // success under a fence retires that fence's older intents: the user moved on, so sending an old text again
+  // later is a new message, not a retry the server would answer with the old receipt.
   const unsettledRef = useRef(new Map<string, Unsettled>())
   const latestAttemptRef = useRef(0)
   // runningRef mirrors `running` for the double-submit check, which must not wait for a re-render.
@@ -73,7 +75,7 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
       const key = JSON.stringify([startedFence, snapshot])
       const requestId = unsettledRef.current.get(key)?.requestId ?? genMeshRequestId(requestIdPrefix)
       const attempt = ++latestAttemptRef.current
-      unsettledRef.current.set(key, { attempt, requestId })
+      unsettledRef.current.set(key, { attempt, fence: startedFence, requestId })
       const isCurrent = (): boolean => mountedRef.current && fenceRef.current === startedFence && latestAttemptRef.current === attempt
       const setRunning = (next: Running | null): void => {
         runningRef.current = next
@@ -89,8 +91,12 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
       send(snapshot, requestId).then(
         (result) => {
           // Only the latest attempt for this intent forgets its id: an older one finishing must not drop the
-          // id a newer, still-unsettled retry of the same payload relies on.
+          // id a newer, still-unsettled retry of the same payload relies on. For the same reason only older
+          // intents of this fence are retired, never a newer one that may still be in flight.
           if (unsettledRef.current.get(key)?.attempt === attempt) unsettledRef.current.delete(key)
+          for (const [other, entry] of unsettledRef.current) {
+            if (entry.fence === startedFence && entry.attempt < attempt) unsettledRef.current.delete(other)
+          }
           settle()
           if (isCurrent()) handlers.onSuccess?.(result)
         },
