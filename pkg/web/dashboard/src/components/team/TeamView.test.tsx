@@ -111,6 +111,26 @@ describe('TeamView', () => {
     expect(screen.getByText('Paused')).toBeInTheDocument()
   })
 
+  test('switching to a different conversation sends into the newly selected thread, not the previous one', async () => {
+    mockThreadAndBoardFetches()
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const threadA: meshClient.MeshThread = { id: 'mt-a', title: 'With QA', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const threadB: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [threadA, threadB] }))
+
+    fireEvent.click(screen.getByText('With QA'))
+    await waitFor(() => expect(screen.getByPlaceholderText('Message With QA…')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('With Implement agent'))
+    await waitFor(() => expect(screen.getByPlaceholderText('Message With Implement agent…')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByPlaceholderText('Message With Implement agent…'), { target: { value: 'for B' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(sendSpy).toHaveBeenCalled())
+    expect(sendSpy).toHaveBeenCalledWith('mt-b', expect.objectContaining({ body: 'for B' }))
+  })
+
   test('renders the disabled empty state when the mesh capability is off', () => {
     renderTeamView([makeStage()], [], { enabled: false, probed: true, participants: [], threads: [] })
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()

@@ -3,6 +3,25 @@ import { getMeshThread, type MeshMessage } from '../../api/mesh-client'
 
 const POLL_INTERVAL_MS = 3000
 
+// PAGE_LIMIT — passed explicitly on every request so "the page came back full" is a deterministic signal we
+// control, rather than relying on whatever page size the server defaults to today.
+const PAGE_LIMIT = 50
+
+// loadAllMessages walks every page of a thread from cursor 0 forward, since a thread can hold up to
+// agentcomm.MaxThreadMessages (200) — well beyond one page — and the UI must show the whole conversation, not
+// just its first PAGE_LIMIT messages.
+async function loadAllMessages(threadId: string): Promise<MeshMessage[]> {
+  const all: MeshMessage[] = []
+  let cursor = 0
+  for (;;) {
+    const page = await getMeshThread(threadId, cursor, PAGE_LIMIT)
+    all.push(...page.messages)
+    if (page.messages.length < PAGE_LIMIT || page.next_cursor <= cursor) break
+    cursor = page.next_cursor
+  }
+  return all
+}
+
 // useMeshThread polls one conversation's messages — GET /api/mesh/threads/{id}, paged forward from cursor 0
 // each tick (threads are short-lived and budget-capped, so re-reading the whole thread per tick is cheap —
 // same "just re-fetch everything" posture discussion/board polling already use elsewhere in this app;
@@ -23,9 +42,9 @@ export function useMeshThread(threadId: string | null): MeshMessage[] {
     }
     let cancelled = false
     const load = (): void => {
-      getMeshThread(threadId)
-        .then((page) => {
-          if (!cancelled) setMessages(page.messages)
+      loadAllMessages(threadId)
+        .then((all) => {
+          if (!cancelled) setMessages(all)
         })
         .catch(() => {
           /* transient — keep whatever we had, same posture as useStageAssistants */

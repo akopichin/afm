@@ -41,6 +41,32 @@ describe('useMeshThread', () => {
     getMeshThreadSpy.mockResolvedValueOnce({ messages: [], next_cursor: 0 })
     rerender({ id: 'mt-2' })
     expect(result.current).toEqual([])
-    await waitFor(() => expect(getMeshThreadSpy).toHaveBeenCalledWith('mt-2'))
+    await waitFor(() => expect(getMeshThreadSpy).toHaveBeenCalledWith('mt-2', 0, 50))
+  })
+
+  test('follows next_cursor across a full page to return every message, not just the first page', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => ({
+      id: `m${i + 1}`,
+      thread_id: 'mt-1',
+      sender_id: 'run:qa',
+      recipient_ids: ['user'],
+      kind: 'message',
+      body: `msg-${i + 1}`,
+      seq: i + 1,
+      created_at: '2026-10-18T00:00:00Z',
+    }))
+    const page2 = [
+      { id: 'm51', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'msg-51', seq: 51, created_at: '2026-10-18T00:00:00Z' },
+    ]
+    const getMeshThreadSpy = vi.spyOn(meshClient, 'getMeshThread')
+    getMeshThreadSpy.mockResolvedValueOnce({ messages: page1, next_cursor: 50 })
+    getMeshThreadSpy.mockResolvedValueOnce({ messages: page2, next_cursor: 51 })
+
+    const { result } = renderHook(() => useMeshThread('mt-1'))
+
+    await waitFor(() => expect(result.current).toHaveLength(51))
+    expect(getMeshThreadSpy).toHaveBeenNthCalledWith(1, 'mt-1', 0, 50)
+    expect(getMeshThreadSpy).toHaveBeenNthCalledWith(2, 'mt-1', 50, 50)
+    expect(result.current[50]?.body).toBe('msg-51')
   })
 })

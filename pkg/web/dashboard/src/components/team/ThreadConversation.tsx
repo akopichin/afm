@@ -17,6 +17,16 @@ export type ThreadConversationProps = {
   onThreadOpened?: (thread: MeshThread) => void
 }
 
+// targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
+// component's open-thread/draft/error state is only ever correct for the target it was MOUNTED with (see
+// the openedThread useState below), so the parent must remount on every selection change rather than
+// re-rendering the same instance with a new `target` prop — otherwise a stale `openedThread` from the
+// previous selection keeps receiving sends after the user switches conversations.
+export function targetKey(target: ThreadConversationTarget | null): string {
+  if (target === null) return 'none'
+  return target.kind === 'direct' ? `direct:${target.participant.id}` : `thread:${target.thread.id}`
+}
+
 function targetLabel(target: ThreadConversationTarget): string {
   if (target.kind === 'direct') {
     const p = target.participant

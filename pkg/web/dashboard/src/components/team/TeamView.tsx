@@ -4,7 +4,7 @@ import type { AssistantProfile } from '../../types/assistant-profile'
 import { genMeshRequestId, openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import type { MeshRoster } from '../../hooks/use-mesh'
 import { RunTeamList } from './RunTeamList'
-import { ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
+import { targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
 import { BoardPanel } from './BoardPanel'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
@@ -175,6 +175,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
               )}
             </div>
             <ThreadConversation
+              key={targetKey(activeConversation)}
               target={activeConversation}
               onThreadOpened={(thread) => setActiveConversation({ kind: 'thread', thread })}
             />
