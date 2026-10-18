@@ -167,6 +167,17 @@ func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID) err
 	return nil
 }
 
+// appendToInbox adds id to recipient's inbox index. The human's index keeps only its newest
+// agentcomm.MaxHumanInbox messages — its sends are not capacity-checked, so without this bound a long run would
+// grow the index, and every snapshot copy of it, without limit. Decided the same way live and on replay.
+func (ms *MeshState) appendToInbox(recipient agentcomm.ParticipantID, id agentcomm.MessageID) {
+	ids := append(ms.Inbox[recipient], id)
+	if p, ok := ms.Participants[recipient]; ok && p.Kind == agentcomm.KindUser && len(ids) > agentcomm.MaxHumanInbox {
+		ids = slices.Clone(ids[len(ids)-agentcomm.MaxHumanInbox:])
+	}
+	ms.Inbox[recipient] = ids
+}
+
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]
@@ -428,7 +439,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	receipts := make(map[agentcomm.ParticipantID]agentcomm.DeliveryStatus, len(recipients))
 	for _, r := range recipients {
 		receipts[r] = agentcomm.DeliveryAccepted
-		as.Mesh.Inbox[r] = append(as.Mesh.Inbox[r], id)
+		as.Mesh.appendToInbox(r, id)
 	}
 	as.Mesh.Receipts[id] = receipts
 

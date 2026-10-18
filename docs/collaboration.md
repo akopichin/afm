@@ -160,7 +160,9 @@ under the task; only a key's author can update that key.
 waits, and board updates. Agent messages become available at the next turn or
 when an agent reads its inbox; they are not injected into an in-progress response.
 One turn's prompt carries up to 64 KiB of new messages and says how many more are
-waiting; an agent can hold at most 200 messages it has not been handed yet.
+waiting; an agent can hold at most 200 messages it has not been handed yet. Your
+own inbox is not capped that way; it lists the newest 1000 messages sent to you,
+and older ones stay readable in their threads.
 
 Agents talk to each other with the `afm agent` CLI. `afm agent send --to docs
 --body "..."` continues the sender's open conversation with exactly those

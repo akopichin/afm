@@ -334,3 +334,24 @@ func TestMesh_InboxCapacityCountsOnlyMessagesWaitingForHandover(t *testing.T) {
 		t.Fatalf("messages to the human must never hit the inbox limit: %v", err)
 	}
 }
+
+// TestMesh_HumanInboxKeepsNewestMessages: the human's inbox index is bounded by agentcomm.MaxHumanInbox and
+// keeps the newest messages; an agent's inbox is bounded by capacity instead, never trimmed.
+func TestMesh_HumanInboxKeepsNewestMessages(t *testing.T) {
+	ms := newMeshState()
+	ms.Participants["user"] = &agentcomm.Participant{ID: "user", Kind: agentcomm.KindUser, Scope: agentcomm.ScopeRun}
+	ms.Participants["helper:t1"] = &agentcomm.Participant{ID: "helper:t1", Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage}
+	total := agentcomm.MaxHumanInbox + 5
+	for i := range total {
+		id := agentcomm.MessageID(fmt.Sprintf("m%d", i))
+		ms.appendToInbox("user", id)
+		ms.appendToInbox("helper:t1", id)
+	}
+	human := ms.Inbox["user"]
+	if len(human) != agentcomm.MaxHumanInbox || human[0] != "m5" || human[len(human)-1] != agentcomm.MessageID(fmt.Sprintf("m%d", total-1)) {
+		t.Fatalf("human inbox = %d entries from %s to %s, want the newest %d", len(human), human[0], human[len(human)-1], agentcomm.MaxHumanInbox)
+	}
+	if got := len(ms.Inbox["helper:t1"]); got != total {
+		t.Fatalf("agent inbox = %d entries, want all %d", got, total)
+	}
+}
