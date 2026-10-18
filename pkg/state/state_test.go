@@ -12,7 +12,7 @@ func TestAllStatuses_MatchesConsts(t *testing.T) {
 	want := []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
-		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants,
+		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants, StatusAwaitingPeer,
 	}
 	got := AllStatuses()
 	if len(got) != len(want) {

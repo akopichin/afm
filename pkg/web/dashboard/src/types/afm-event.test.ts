@@ -60,6 +60,7 @@ describe('STAGE_STATUS_LABELS', () => {
       paused: 'Paused',
       awaiting_user_input: 'Awaiting reply',
       hook_failed: 'Hook failed',
+      awaiting_peer: 'Awaiting colleague',
     })
   })
 })
@@ -77,6 +78,7 @@ describe('ACTIVE_STAGE_STATUSES', () => {
         'awaiting_approval',
         'awaiting_assistants',
         'hook_failed',
+        'awaiting_peer',
       ]),
     )
   })

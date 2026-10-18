@@ -66,6 +66,9 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   // помощник закроет свой гейт. Сам по себе ярлык не различает «помощник ещё работает» и «нужно решение
   // человека» — это несёт stage.awaitingAssistantsBlocked (см. use-attention/attentionKindFor).
   awaiting_assistants: 'Awaiting assistants',
+  // awaiting_peer (Agent Mesh Phase 5, T5.1) — the stage's executor registered a wait on a colleague and
+  // exited; it resumes automatically once the colleague replies. Machine work, not a human decision.
+  awaiting_peer: 'Awaiting colleague',
 }
 
 // Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует прогресс флоу и ждёт решения
@@ -80,5 +83,6 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'awaiting_approval',
   'hook_failed',
   'awaiting_assistants',
+  'awaiting_peer',
 ])
 

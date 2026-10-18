@@ -57,6 +57,14 @@ const (
 	// main-executor completion; the process that was running the stage has already exited (see
 	// AGENTS.md "Durable completion barrier"). Non-terminal; exits to done/failed/revising/paused.
 	StatusAwaitingAssistants StageStatus = "awaiting_assistants"
+	// StatusAwaitingPeer — Agent Mesh Phase 5 (T5.1): the stage's main executor registered a mesh Wait on a
+	// colleague and exited cooperatively — the peer twin of StatusAwaitingUserInput, generalising the same
+	// "park non-terminal, free the max_parallel lease, respawn the phase runner on an external event"
+	// mechanism (onUserAnswered) to a reply from another participant instead of a human answer. Non-terminal;
+	// exits back to the phase it was in (EvPeerReplied's phaseDispatch) or to paused/failed like any other
+	// running work. Classified as ACTIVITY, not human-idle (isIdle below): a colleague working on a reply is
+	// machine work, exactly like awaiting_assistants.
+	StatusAwaitingPeer StageStatus = "awaiting_peer"
 )
 
 // AllStatuses returns every StageStatus in declaration order.
@@ -64,7 +72,7 @@ func AllStatuses() []StageStatus {
 	return []StageStatus{
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
-		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants,
+		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants, StatusAwaitingPeer,
 	}
 }
 
@@ -167,7 +175,7 @@ func isIdle(rs *RunState) bool {
 			anyActive = true // машинная работа помощника — как running/planning/revising
 		case StatusFailed:
 			hasFailed = true
-		case StatusRunning, StatusPlanning, StatusRevising:
+		case StatusRunning, StatusPlanning, StatusRevising, StatusAwaitingPeer:
 			anyActive = true
 		default:
 			// pending/ready/retrying/done/hook_failed — не влияют на isIdle.

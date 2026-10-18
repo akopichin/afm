@@ -46,6 +46,11 @@ const (
 	// которой реально стартует completeStage (Running/Retrying/AwaitingUserInput) — Planning/AwaitingApproval
 	// принадлежат planning-only завершению, которое барьер не трогает (TestPlanningOnlyStageUnaffected).
 	EvAwaitAssistants FSMEvent = "await_assistants"
+	// EvAwaitPeer/EvPeerReplied — Agent Mesh Phase 5 (T5.1): the peer twin of EvAskUser/EvUserAnswered. The
+	// stage's executor registered a mesh Wait on a colleague and exited; EvPeerReplied dispatches back to the
+	// phase it was in (phaseDispatch), exactly like EvUserAnswered does for a human answer.
+	EvAwaitPeer   FSMEvent = "await_peer"
+	EvPeerReplied FSMEvent = "peer_replied"
 )
 
 type GuardCtx struct {
@@ -96,29 +101,36 @@ func NewFSM(store *state.Store) *FSM {
 			// Разрешаем completion из AwaitingUserInput: поллер мог обнаружить брошенный вопрос до завершения
 			// живого агента. AwaitingAssistants добавлен для T7.2: единственный путь ТУДА — через EvAwaitAssistants
 			// ниже, единственный путь ОБРАТНО в Done — сюда, после того как барьер подтвердит гейт закрытым.
-			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingAssistants}, To: to(state.StatusDone)},
+			EvComplete: {From: []state.StageStatus{state.StatusRunning, state.StatusPlanning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingAssistants, state.StatusAwaitingPeer}, To: to(state.StatusDone)},
 			EvFail:     {From: nil, To: to(state.StatusFailed)},
 			// EvAwaitAssistants мирно повторяет подмножество From у EvComplete, из которого реально стартует
 			// completeStage (orchestrator.go) — см. его собственный doc comment.
 			EvAwaitAssistants: {From: []state.StageStatus{state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingAssistants)},
 			// EvVerifyFail — намеренно ЗЕРКАЛИТ From-набор EvComplete, но НЕ включает Paused/Revising: если стадия
 			// уже там, её владеет конкурентный Pause/Revise, а не устаревший verify-исход.
-			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusFailed)},
+			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusFailed)},
 			// EvAskUser must be reachable from any state the question poller scans.
 			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
 			EvUserAnswered: {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
-			// Разрешаем retry из AwaitingUserInput: поллер мог сменить статус до возврата ретраибельной ошибки
-			// агента.
-			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput}, To: to(state.StatusRetrying)},
+			// EvAwaitPeer — T5.1: the peer twin of EvAskUser, reachable from the same set of live-executor
+			// statuses (the executor registers a mesh Wait and exits from whatever phase it was running).
+			EvAwaitPeer: {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingPeer)},
+			// EvPeerReplied — T5.1: the peer twin of EvUserAnswered. phaseDispatch resolves back to
+			// Planning/Running exactly as EvUserAnswered does, driven by the SAME ctx.Phase convention.
+			EvPeerReplied: {From: []state.StageStatus{state.StatusAwaitingPeer}, To: phaseDispatch},
+			// Разрешаем retry из AwaitingUserInput/AwaitingPeer: поллер мог сменить статус до возврата
+			// ретраибельной ошибки агента.
+			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusRetrying)},
 			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying, state.StatusAwaitingUserInput}, To: phaseDispatch},
 			EvManualRetry:      {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending)},
 			EvBlockedByDep:     {From: []state.StageStatus{state.StatusPending}, To: to(state.StatusFailed)},
 			EvReady:            {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
 			EvHookFailed:       {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
 			EvHookResolved:     {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
-			// awaiting_assistants добавлен в T7.1's чеклист (выход в paused допустим: пользователь может
-			// вручную поставить на паузу стадию, пока она ждёт помощников).
-			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants}, To: to(state.StatusPaused)},
+			// awaiting_assistants/awaiting_peer допускают выход в paused: пользователь может вручную
+			// поставить на паузу стадию, пока она ждёт помощников/коллегу по mesh (T5.1: "awaiting_peer...
+			// is pausable").
+			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer}, To: to(state.StatusPaused)},
 			EvContinue: {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}
