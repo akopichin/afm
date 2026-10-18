@@ -100,6 +100,18 @@ type AssistantsState struct {
 	// participants, threads, messages+receipts, waits and the shared board. See mesh_projection.go/
 	// mesh_waits.go/mesh_board.go.
 	Mesh MeshState `json:"mesh,omitempty"`
+
+	// admitting is true only on the scratch copy that validates a NEW record before it is written
+	// (applyOperationCommitted with dryRun). Never persisted. See admittingNewRecord.
+	admitting bool
+}
+
+// admittingNewRecord reports whether a handler is deciding admission of a record being written NOW, as opposed
+// to applying it after a successful validation or replaying it from the journal. A rule added after records
+// were already journaled (a key's sole ownership, a thread's own message budget) is enforced only here, so a
+// journal written under the older, looser rule still replays.
+func (as *AssistantsState) admittingNewRecord(dryRun bool) bool {
+	return dryRun || as.admitting
 }
 
 // DiscussionState is the normalized, replay-restored discussion-log projection for one run (T6.1). Messages
@@ -286,6 +298,7 @@ func applyOperationCommitted(as *AssistantsState, c *Control, dryRun bool) error
 	}
 
 	scratch := as.deepClone()
+	scratch.admitting = dryRun
 	for i, e := range p.Effects {
 		if e.Kind == kindOperationCommitted {
 			return fmt.Errorf("operation effect %d: nested operation_committed is not allowed", i)

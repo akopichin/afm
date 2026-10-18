@@ -238,13 +238,34 @@ func TestMesh_MessageSentRejectsAtThreadBudget(t *testing.T) {
 	for i := range 3 {
 		mustApply(t, &as, meshMessageSentControl(uint64(i+1), fmt.Sprintf("m%d", i), "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "q"))
 	}
-	err := dispatchControlKind(&as, meshMessageSentControl(4, "m-over", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
+	err := dispatchControlKind(&as, meshMessageSentControl(4, "m-over", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), true)
 	var rej *OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != assistants.CodeBudgetExceeded {
 		t.Fatalf("4th message in a 3-message thread: err = %v, want budget_exceeded", err)
 	}
 	if got := len(as.Mesh.MessagesByThread["th-small"]); got != 3 {
 		t.Fatalf("thread has %d messages, want 3", got)
+	}
+}
+
+// TestMesh_ReplayKeepsThreadFilledPastItsBudget: journals written before a thread's own budget was enforced
+// hold threads filled past it (only the global limit applied). Replaying one must not fail at the first
+// message above the budget.
+func TestMesh_ReplayKeepsThreadFilledPastItsBudget(t *testing.T) {
+	payload, _ := json.Marshal(MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: []string{"a", "b"}, MaxMessages: 1})
+	controls := []*Control{
+		meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)),
+		meshParticipantAddedControl("b", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)),
+		{Kind: kindMeshThreadOpened, SchemaVersion: ControlSchemaVersion, Target: Target{ThreadID: "th-small"}, Payload: payload},
+		meshMessageSentControl(0, "m1", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "first"),
+		meshMessageSentControl(0, "m2", "th-small", "b", []string{"a"}, string(agentcomm.MessageKindMessage), nil, "second, past the budget"),
+	}
+	rs := NewRunState(nil)
+	if res := parseEventLog(journalOf(t, controls), rs); res.corrupted || res.unsupported != nil {
+		t.Fatalf("an old journal with a thread past its own budget must replay: corrupted=%v unsupported=%v", res.corrupted, res.unsupported)
+	}
+	if got := len(rs.Assistants.Mesh.MessagesByThread["th-small"]); got != 2 {
+		t.Fatalf("replayed thread has %d messages, want 2", got)
 	}
 }
 

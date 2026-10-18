@@ -403,9 +403,14 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		}
 		return meshRejected(assistants.CodeInvalidRequest, "%v (thread %s members: %v)", err, threadID, thread.Members)
 	}
-	// The thread's message limit (its own budget when set, never above MaxThreadMessages) and MaxInboxUnread:
-	// explicit rejection, never a silent truncation (T0.2).
-	if limit := threadMessageLimit(thread); len(as.Mesh.MessagesByThread[threadID]) >= limit {
+	// The thread's message limit and MaxInboxUnread: explicit rejection, never a silent truncation (T0.2). A
+	// thread's own budget binds new messages only — older journals hold threads filled past it up to the global
+	// limit, and they must still replay.
+	limit := agentcomm.MaxThreadMessages
+	if as.admittingNewRecord(dryRun) {
+		limit = threadMessageLimit(thread)
+	}
+	if len(as.Mesh.MessagesByThread[threadID]) >= limit {
 		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages", threadID, limit)
 	}
 	if err := as.Mesh.CheckInboxCapacity(recipients); err != nil {

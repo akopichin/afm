@@ -9,9 +9,8 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 )
 
-// MeshBoardEntry is the projection's board entry. A key belongs to its first publisher: only that author ever
-// publishes its next revisions (see applyMeshBoardPublished). An `authorized_by` list in records written
-// before this rule is ignored.
+// MeshBoardEntry is the projection's board entry. A key belongs to its first publisher: only that author
+// publishes its next revisions (see applyMeshBoardPublished).
 type MeshBoardEntry struct {
 	agentcomm.BoardEntry
 }
@@ -59,6 +58,8 @@ type MeshBoardPublishedPayload struct {
 //
 // Ownership: a key belongs to its author — every later revision must come from that same author. Anyone
 // else reports under a key of their own (e.g. "<task key>/<alias>" for a report on a task the human posted).
+// The rule applies to NEW publishes only: older journals may hold a revision by a participant the author
+// granted it to through `authorized_by`, and such a journal must still replay.
 func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error {
 	key := c.Target.BoardKey
 	if key == "" {
@@ -89,7 +90,7 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 		if p.ExpectedVersion != existing.Version {
 			return boardRejected(assistants.CodeStaleRevision, ErrBoardStaleRevision, "board key %s is at version %d, not %d — read it again (afm agent board get)", key, existing.Version, p.ExpectedVersion)
 		}
-		if author != existing.AuthorID {
+		if author != existing.AuthorID && as.admittingNewRecord(dryRun) {
 			return boardRejected(assistants.CodeActorNotAllowed, ErrBoardNotAuthorized, "%s may not update board key %s (published by %s) — publish your own key, e.g. %s/<your alias>", author, key, existing.AuthorID, key)
 		}
 		version = existing.Version + 1
