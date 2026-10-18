@@ -13,10 +13,9 @@
 // store.ApplyRunOperation(op, nil) idiom, only reachable from inside this package.
 //
 // max_parallel: 1 (dev-plan.md's own wording for this task): newMeshIntegrationOrchestrator's Manager is
-// built with globalMaxParallel=1, and in any case QA/DevOps's shared "helper-cmd" profile command is never
-// declared by any stage, so concurrency.Manager's own semForCmd would give it a conservative single-flight
-// semaphore regardless (see concurrency.go's own doc comment) — either way, QA and DevOps can never actually
-// run concurrently, proving the scenario's two colleagues cooperate correctly even serialized onto one slot
+// built with globalMaxParallel=1, and QA/DevOps's shared "helper-cmd" profile command is never declared by
+// any stage, so concurrency.Manager's semForCmd caps it by that same global limit (see concurrency.go's doc
+// comment) — QA and DevOps can never actually run concurrently here, proving the scenario's two colleagues cooperate correctly even serialized onto one slot
 // (a waiting participant's own goroutine exits and releases its slot, T5.4's own invariant).
 package orchestrator
 

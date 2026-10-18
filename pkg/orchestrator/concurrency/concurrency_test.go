@@ -352,6 +352,45 @@ func TestSpawnOwned_UnknownCommandDoesNotGetNoopSemaphore(t *testing.T) {
 	}
 }
 
+// Two run agents with one undeclared profile command (QA and DevOps on one recipe) work side by side under
+// the run's limit, instead of strictly one after another; a global max_parallel still caps them.
+func TestSpawnOwned_UnknownCommandSharesTheRunLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		maxParallel  int
+		wantParallel bool
+	}{
+		{"no global limit", 0, true},
+		{"global limit 2", 2, true},
+		{"global limit 1", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(bus.NewCriticalBus(16), nil, "", tc.maxParallel, nil)
+			release := make(chan struct{})
+			started := make(chan struct{}, 2)
+			for _, id := range []string{"qa", "devops"} {
+				m.SpawnOwned(context.Background(), TaskOwnerKey(id), "developer", nil, func(ctx context.Context, lease *Lease) {
+					started <- struct{}{}
+					<-release
+				})
+			}
+			<-started
+			select {
+			case <-started:
+				if !tc.wantParallel {
+					t.Error("the second agent started while the first held the only slot")
+				}
+			case <-time.After(100 * time.Millisecond):
+				if tc.wantParallel {
+					t.Error("the second agent did not start while the first was still running")
+				}
+			}
+			close(release)
+			m.WaitAgents()
+		})
+	}
+}
+
 func TestIsActive_StageSemanticsUnchanged(t *testing.T) {
 	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
 	done := make(chan struct{})

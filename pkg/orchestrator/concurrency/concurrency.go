@@ -82,6 +82,10 @@ type Manager struct {
 	// back to an unlimited noopSemaphore (§7.2 — "an unknown command must not get an unbounded run").
 	dynMu   sync.Mutex
 	dynSems map[string]Semaphore
+	// dynCap — how many agents may run at once on one such command: the run's global max_parallel, or
+	// defaultDynamicCap when the run sets no global limit. Several run agents of one role (two reviewers, QA
+	// and DevOps on one recipe) must work side by side, not strictly one after another.
+	dynCap int
 
 	// Clock — часы WaitAgents' drain таймаута. nil (не задан конструктором — New/NewWithSemaphores его не
 	// принимают, чтобы не трогать ~40 call sites) означает clock.Real(). orchestrator.New НАМЕРЕННО не
@@ -144,8 +148,16 @@ func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, 
 			sems[cmd] = noopSemaphore{}
 		}
 	}
-	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand, shouldRun: shouldRun}
+	dynCap := globalMaxParallel
+	if dynCap <= 0 {
+		dynCap = defaultDynamicCap
+	}
+	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand, shouldRun: shouldRun, dynCap: dynCap}
 }
+
+// defaultDynamicCap — the limit for a command no stage declared when the run sets no global max_parallel:
+// bounded (§7.2), but wide enough for a small team of agents sharing one recipe.
+const defaultDynamicCap = 4
 
 // NewWithSemaphores строит Manager с готовой картой семафоров — используется
 // тестами, которым нужен прямой контроль над блокировкой (см. ChannelSemaphore).
@@ -177,7 +189,8 @@ func (m *Manager) resolveCmd(cmd string) string {
 // semForCmd выбирает семафор команды для Lease. Известная (зарегистрированная в New/NewWithSemaphores)
 // команда — её собственный семафор (возможно noopSemaphore, если у неё явно нет лимита). Команда, которую
 // Manager никогда не видел (ни одна стадия её не объявляла) — НЕ unlimited noop: лениво заводим для неё
-// консервативный single-flight семафор (capacity 1), кешируем в dynSems под dynMu, и дальше отдаём тот же
+// семафор ёмкостью dynCap (глобальный max_parallel или defaultDynamicCap; у NewWithSemaphores — 1),
+// кешируем в dynSems под dynMu, и дальше отдаём тот же
 // инстанс каждому вызову с тем же именем команды — иначе два конкурентных помощника с одним и тем же
 // неизвестным profile-командой получили бы КАЖДЫЙ свой независимый лимит=1 вместо общего.
 func (m *Manager) semForCmd(cmd string) Semaphore {
@@ -197,7 +210,7 @@ func (m *Manager) dynamicSemForCmd(cmd string) Semaphore {
 	if m.dynSems == nil {
 		m.dynSems = map[string]Semaphore{}
 	}
-	sem := ChannelSemaphore(make(chan struct{}, 1))
+	sem := ChannelSemaphore(make(chan struct{}, max(m.dynCap, 1)))
 	m.dynSems[cmd] = sem
 	return sem
 }
