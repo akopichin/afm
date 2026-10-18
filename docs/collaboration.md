@@ -44,7 +44,8 @@ collaboration:
 
 Depth 1 is a helper attached directly to a stage; deeper tasks are its children.
 `delegate: true` permits a role to create children, subject to the depth and
-whole-run `limits.max_tasks` limits. A flow cannot re-enable collaboration when
+whole-run `limits.max_tasks` limits. `max_tasks` counts every task of the run:
+helpers and run agents you attach as well as their children. A flow cannot re-enable collaboration when
 config or the environment disables it.
 
 ## Attach helpers from flow.yaml
@@ -139,8 +140,8 @@ opens from the **☰** button.
 **Add run agent** starts a standing agent from an available configured profile.
 Choose a role, enter an instruction, and optionally give it a title and a first
 message. You can add several agents with the same role; each one is addressed by
-an `@name` made from its title (or the role's title when there is none), and they
-work side by side. A run agent is a standing role: every message addressed to it
+an `@name` made from its title (or the role's title when there is none) — unique
+in the run, so a second "QA" becomes `@qa-2` — and they work side by side. A run agent is a standing role: every message addressed to it
 starts its next turn, and between turns it is idle — an idle agent never keeps the
 run open, while one with an unread message does. An agent added without a first
 message waits until somebody writes to it. Messages to a stage or helper that has
@@ -151,11 +152,15 @@ The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to
 put a task on the board: choose under **Notify** which working agents get a
 message about it (all of them by default), so even an idle run agent picks it up.
+Each one gets its own message; a recipient that has finished is skipped, and the
+task is posted even if a notice cannot be delivered.
 Agents report on a task by publishing their own `<task key>/<name>` entry, shown
 under the task; only a key's author can update that key.
 **Activity** shows Agent Mesh events such as participants joining, messages,
 waits, and board updates. Agent messages become available at the next turn or
 when an agent reads its inbox; they are not injected into an in-progress response.
+One turn's prompt carries up to 64 KiB of new messages and says how many more are
+waiting; an agent can hold at most 200 messages it has not been handed yet.
 
 Agents talk to each other with the `afm agent` CLI. `afm agent send --to docs
 --body "..."` continues the sender's open conversation with exactly those
@@ -164,8 +169,12 @@ recipients or opens a new one, and prints its `thread_id`; recipients can be
 in that message's thread. `afm agent inbox` lists only messages the agent has not
 been handed yet (`--all` shows the whole history), so an agent never answers the
 same question twice. `afm agent wait --condition addressed_message` without
-`--thread-id` waits for the next message anyone sends the agent. A rejected call
-reports why (for example an unknown recipient) instead of a generic server error.
+`--thread-id` waits for the next message anyone sends the agent. A `task_result`
+wait on a run agent resolves on the first result after the wait was registered,
+and a `stage_status` wait resolves as soon as the stage is at that status. A wait
+on an unknown message, task or stage, on a closed thread, or one that would close
+a cycle of agents waiting on each other is refused. A rejected call reports why
+(for example an unknown recipient) instead of a generic server error.
 
 A running stage's [Feed composer](dashboard.md#sending-a-note-to-a-running-stage)
 can send a **Message** to an existing participant or attach a configured helper

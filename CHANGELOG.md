@@ -3,6 +3,22 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-19
+
+### Fix: Agent Mesh keeps old runs loadable and accepted work safe
+
+Runs written before a board key was owned by its author alone, or before a
+conversation's own message limit applied, load again. A message, attach or
+dynamic stage is either accepted before the run decides to finish, and then
+handled, or refused with `run_finalizing` — never accepted and dropped. A
+`task_result` wait on a run agent resolves on the first result after the wait,
+`stage_status` waits resolve, and waits that could never end are refused.
+Retrying a request whose response was lost returns its original result. Posting
+a board task never fails because of its notices, and a run agent's `@name` is
+unique in the run. Secrets from `secrets.env` and live mesh tokens are redacted
+like environment secrets, `max_tasks` counts every attached task, and one turn's
+inbox is bounded.
+
 ## 2026-10-18
 
 ### Fix: run agents work side by side and answer each message once
@@ -13,7 +29,7 @@ one after another. `afm agent inbox` lists only messages the agent has not been
 handed yet (`--all` shows the history), so a standing agent no longer answers an
 old question on every new turn, and a message that arrives mid-turn is neither
 lost nor marked read before the agent sees it. A queued agent with an unread
-message keeps the run open; `task_result` waits resolve on each turn's result.
+message keeps the run open; `task_result` waits resolve on a turn's result.
 Agent Mesh checks run against the current state, so concurrent sends, waits and
 board updates cannot slip past reachability, cycle or limit checks. A board key
 can be updated only by its author, board text is redacted like messages, a
