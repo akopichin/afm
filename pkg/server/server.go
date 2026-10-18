@@ -100,6 +100,7 @@ type Server struct {
 	proposalActions   ProposalActions           // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
 	graphActions      GraphActions              // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
 	agentMesh         AgentMeshActions          // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
+	mesh              MeshActions               // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
 	theme             string                    // "goga" или "" (default graphite)
 	version           string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
 	indexBytes        []byte                    // предподготовленный index.html (с заменами скина/favicon)
@@ -205,7 +206,9 @@ type Config struct {
 	GraphActions GraphActions
 	// AgentMesh — Agent Mesh Phase 3 (T3.1) agent-facing adapter; nil = capability off (/api/agent-mesh/* 404).
 	AgentMesh AgentMeshActions
-	Theme     string
+	// Mesh — Agent Mesh Phase 7 (T7.1) UI-facing adapter; nil = capability off (/api/mesh/* 404).
+	Mesh  MeshActions
+	Theme string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
 	SkinDir string
@@ -251,6 +254,7 @@ func New(cfg Config) *Server {
 		proposalActions:   cfg.ProposalActions,
 		graphActions:      cfg.GraphActions,
 		agentMesh:         cfg.AgentMesh,
+		mesh:              cfg.Mesh,
 		theme:             cfg.Theme,
 		version:           cfg.Version,
 		wsPongWait:        pongWait,
@@ -350,6 +354,10 @@ func New(cfg Config) *Server {
 	// /api/agent-mesh/* (Agent Mesh Phase 3, T3.1) — same conditional-registration convention as above.
 	if s.agentMesh != nil {
 		mux.HandleFunc("/api/agent-mesh/", s.routeAgentMesh)
+	}
+	// /api/mesh/* (Agent Mesh Phase 7, T7.1) — UI-facing surface, same conditional-registration convention.
+	if s.mesh != nil {
+		mux.HandleFunc("/api/mesh/", s.routeMesh)
 	}
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	if s.customSkinServer != nil {
