@@ -55,6 +55,32 @@ describe('ThreadConversation', () => {
     expect(screen.queryByText(/run:qa/)).toBeNull()
   })
 
+  test('a reply quotes the message it answers, inside its bubble', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+      messages: [
+        { id: 'm0', thread_id: 'mt-1', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message', body: 'Prepare checkout tests', seq: 1, created_at: '2026-10-18T00:00:00Z' },
+        { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', in_reply_to: 'm0', body: 'Got it', seq: 2, created_at: '2026-10-18T00:00:01Z' },
+      ],
+      next_cursor: 2,
+    })
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    await waitFor(() => expect(screen.getByText('Replying to You')).toBeInTheDocument())
+    const quote = screen.getByText('Replying to You').closest('blockquote') as HTMLElement
+    expect(quote).toHaveTextContent('Prepare checkout tests')
+    expect(quote.closest('.team-conversation-message-body')).toHaveTextContent('Got it')
+  })
+
+  test('a conversation opens at its latest message, not at the top', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+      messages: [{ id: 'm0', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'latest', seq: 1, created_at: '2026-10-18T00:00:00Z' }],
+      next_cursor: 1,
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(900)
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    await waitFor(() => expect(screen.getByText('latest')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('log', { name: 'Messages' }).scrollTop).toBe(900))
+  })
+
   test('a direct target reuses a direct thread the roster learned about after the click instead of opening a second one', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const openSpy = vi.spyOn(meshClient, 'openMeshThread')

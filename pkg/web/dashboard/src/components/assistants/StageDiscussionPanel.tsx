@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { listStageDiscussion, postStageDiscussionMessage, type DiscussionMessageWire } from '../../api/run-client'
 import { StageDiscussion, type DiscussionMessage } from './StageDiscussion'
+import type { MeshParticipant } from '../../api/mesh-client'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
+import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -24,6 +26,8 @@ function toMessage(w: DiscussionMessageWire): DiscussionMessage {
 
 export type StageDiscussionPanelProps = {
   stageId: string
+  // participants — the Agent Mesh roster, so authors are shown by name.
+  participants?: MeshParticipant[]
 }
 
 // StageDiscussionPanel is the mounted, stateful wrapper around the presentational StageDiscussion: it polls
@@ -33,11 +37,13 @@ export type StageDiscussionPanelProps = {
 // poll.
 const MAX_INPUT_HEIGHT = 200
 
-export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): ReactElement {
+export function StageDiscussionPanel({ stageId, participants }: StageDiscussionPanelProps): ReactElement {
   const [messages, setMessages] = useState<DiscussionMessage[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // log — opens at the latest message and follows new ones, unless the reader scrolled up.
+  const log = useStickToBottom<HTMLDivElement>()
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_INPUT_HEIGHT)
   const cursorRef = useRef(0)
 
@@ -82,8 +88,8 @@ export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): Re
   return (
     <div className="stage-discussion-panel">
       {/* Takes all free height (and scrolls), so the composer stays pinned to the bottom with or without messages. */}
-      <div className="stage-discussion-scroll" role="log" aria-label="Discussion">
-        <StageDiscussion messages={messages} />
+      <div className="stage-discussion-scroll" role="log" aria-label="Discussion" ref={log.ref}>
+        <StageDiscussion messages={messages} participants={participants} />
       </div>
       <div className="chat-composer-row">
         <textarea

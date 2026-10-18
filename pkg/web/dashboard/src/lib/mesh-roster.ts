@@ -22,8 +22,10 @@ export function mentionHandle(p: MeshParticipant): string {
 export function participantInitials(name: string): string {
   const caps = name.replace(/[^A-Z]/g, '')
   if (caps.length >= 2) return caps.slice(0, 2)
-  const letters = name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('')
-  return (letters !== '' ? letters : name).slice(0, 2).toUpperCase()
+  const words = name.split(/\s+/).filter(Boolean)
+  // One word ("Persistence") gives its first two letters, not a lone "P".
+  const letters = words.length > 1 ? words.map((w) => w[0]).join('') : (words[0] ?? name)
+  return letters.slice(0, 2).toUpperCase()
 }
 
 // Presence — точка присутствия в ростере: работает, ждёт (пауза/ответ/коллега), упал или неактивен.
@@ -109,4 +111,20 @@ export function findExistingDirectThread(threads: MeshThread[], participantId: s
       (t) => t.status === 'open' && t.members.length === 2 && t.members.includes(participantId) && t.members.includes(USER_ID),
     ) ?? null
   )
+}
+
+// directPeer — the other person of a one-to-one conversation (the operator and exactly one participant), so it
+// is shown like a direct message — that person's avatar and role — and not as a group.
+export function directPeer(thread: MeshThread, participants: MeshParticipant[]): MeshParticipant | undefined {
+  if (thread.members.length !== 2 || !thread.members.includes(USER_ID)) return undefined
+  const other = thread.members.find((m) => m !== USER_ID)
+  return participants.find((p) => p.id === other)
+}
+
+// threadMembersLine — who is in a conversation, by initials ("QA · DO · FE"), for its row in the roster.
+export function threadMembersLine(thread: MeshThread, participants: MeshParticipant[]): string {
+  return thread.members
+    .filter((m) => m !== USER_ID)
+    .map((m) => participantInitials(senderLabel(m, participants)))
+    .join(' · ')
 }

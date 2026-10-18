@@ -1,12 +1,20 @@
 import { describe, expect, test } from 'vitest'
 import type { MeshParticipant, MeshThread } from '../api/mesh-client'
-import { boardNotifyCandidates, mentionHandle, participantLabel, senderLabel, threadLabel } from './mesh-roster'
+import { boardNotifyCandidates, mentionHandle, participantInitials, participantLabel, senderLabel, threadLabel } from './mesh-roster'
 
 const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'claude', reachable: true }
 const commit: MeshParticipant = { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', alias: 'commit', display_name: 'Commit & cleanup', stage_id: 'commit', reachable: true }
 const bare: MeshParticipant = { id: 'stage:x', kind: 'stage_agent', scope: 'stage', reachable: true }
 
 describe('mesh-roster', () => {
+  test('initials are two letters: capitals, word starts, or the start of a single word', () => {
+    expect(participantInitials('QA Engineer')).toBe('QA')
+    expect(participantInitials('API reviewer')).toBe('AP')
+    expect(participantInitials('Stats endpoint')).toBe('SE')
+    expect(participantInitials('Persistence')).toBe('PE')
+    expect(participantInitials('claude')).toBe('CL')
+  })
+
   test('participantLabel prefers display_name, then alias, then id', () => {
     expect(participantLabel(side)).toBe('claude')
     expect(participantLabel({ ...side, display_name: '' })).toBe('side')

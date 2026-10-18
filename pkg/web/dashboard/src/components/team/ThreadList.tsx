@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
-import { threadLabel } from '../../lib/mesh-roster'
+import { directPeer, participantLabel, participantRole, threadLabel, threadMembersLine } from '../../lib/mesh-roster'
+import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
 
 export type ThreadListProps = {
   threads: MeshThread[]
@@ -21,6 +22,7 @@ export function ThreadList({ threads, participants, selectedThreadId = null, onS
     <ul className="team-thread-list">
       {threads.map((t) => {
         const label = threadLabel(t, participants)
+        const peer = directPeer(t, participants)
         return (
           <li key={t.id}>
             <button
@@ -28,7 +30,11 @@ export function ThreadList({ threads, participants, selectedThreadId = null, onS
               className={`team-thread-item${t.id === selectedThreadId ? ' active' : ''}`}
               onClick={() => onSelect(t)}
             >
-              <span className="team-thread-title" title={label}>{label}</span>
+              {peer !== undefined ? <MeshAvatar name={participantLabel(peer)} kind={peer.kind} size="small" /> : <ThreadSymbol size="small" />}
+              <span className="team-person-text">
+                <span className="team-thread-title" title={label}>{label}</span>
+                <span className="team-person-detail">{peer !== undefined ? participantRole(peer.kind) : threadMembersLine(t, participants)}</span>
+              </span>
               {t.status === 'closed' && <span className="team-thread-closed">Closed</span>}
             </button>
           </li>

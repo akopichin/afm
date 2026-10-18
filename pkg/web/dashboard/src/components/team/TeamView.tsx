@@ -2,12 +2,12 @@ import { useRef, useState, type ReactElement } from 'react'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { genMeshRequestId, openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
-import type { MeshRoster } from '../../hooks/use-mesh'
-import { findExistingDirectThread, participantLabel, participantRole } from '../../lib/mesh-roster'
+import { useMeshBoard, type MeshRoster } from '../../hooks/use-mesh'
+import { directPeer, findExistingDirectThread, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { RunTeamList } from './RunTeamList'
 import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
-import { MeshAvatar } from './MeshAvatar'
-import { BoardPanel } from './BoardPanel'
+import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
+import { BoardPanel, boardTopLevel } from './BoardPanel'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 
@@ -35,6 +35,7 @@ function mergeById<T extends { id: string }>(fromRoster: T[], local: T[]): T[] {
 // state" posture 'discussion' already established for StageDiscussionPanel/StageProposals).
 export function TeamView({ roster, stages, events, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
+  const board = useMeshBoard()
   const [activeConversation, setActiveConversation] = useState<ThreadConversationTarget | null>(null)
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
   // rosterOpen — the roster drawer on a narrow screen (CSS shows the toggle only there).
@@ -122,7 +123,8 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
     return <div className="team-view-disabled empty-hint">Team is not available for this run</div>
   }
 
-  const addressable = participants.filter((p) => p.kind !== 'user')
+  // addressable — who a new conversation can include: a finished stage or helper cannot answer any more.
+  const addressable = participants.filter((p) => p.kind !== 'user' && p.reachable)
   const teamStages = stages.map((s) => ({ id: s.id, title: s.name !== '' ? s.name : s.id, status: s.status }))
 
   return (
@@ -154,20 +156,10 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
           >
             ☰
           </button>
-          {activeConversation?.kind === 'direct' ? (
-            <MeshAvatar name={conversationTitle(activeConversation, participants)} kind={activeConversation.participant.kind} size="large" />
-          ) : (
-            <span className="team-thread-symbol" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-            </span>
-          )}
+          <ConversationSymbol target={activeConversation} participants={participants} />
           <div className="team-conversation-heading">
             <h3>{activeConversation === null ? 'Team' : conversationTitle(activeConversation, participants)}</h3>
-            <p>{activeConversation === null ? 'Select a person or a conversation' : conversationSubtitle(activeConversation)}</p>
+            <p>{activeConversation === null ? 'Select a person or a conversation' : conversationSubtitle(activeConversation, participants)}</p>
           </div>
           {!createOpen && (
             <button
@@ -195,6 +187,11 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
               onClick={() => setTab(t)}
             >
               {t === 'messages' ? 'Messages' : t === 'board' ? 'Board' : 'Activity'}
+              {t === 'board' && (
+                <span className="team-tab-count" aria-hidden="true">
+                  {boardTopLevel(board.entries).length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -262,7 +259,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             />
           </div>
         )}
-        {tab === 'board' && <BoardPanel participants={participants} stages={teamStages} />}
+        {tab === 'board' && <BoardPanel board={board} participants={participants} stages={teamStages} />}
         {tab === 'activity' && <ActivityPanel events={events} />}
       </div>
       {addRunAgentOpen && (
@@ -283,4 +280,12 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
       )}
     </div>
   )
+}
+
+// ConversationSymbol — the conversation header's picture: the person's avatar for a one-to-one conversation
+// (picked from the roster or opened from the list), the group symbol otherwise.
+function ConversationSymbol({ target, participants }: { target: ThreadConversationTarget | null; participants: MeshParticipant[] }): ReactElement {
+  const person = target?.kind === 'direct' ? target.participant : target?.kind === 'thread' ? directPeer(target.thread, participants) : undefined
+  if (person !== undefined) return <MeshAvatar name={participantLabel(person)} kind={person.kind} size="large" />
+  return <ThreadSymbol />
 }

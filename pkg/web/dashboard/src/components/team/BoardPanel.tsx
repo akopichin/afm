@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { genMeshRequestId, getMeshBoard, publishMeshBoard, type MeshBoardEntry, type MeshParticipant } from '../../api/mesh-client'
+import { useRef, useState, type ReactElement } from 'react'
+import { genMeshRequestId, publishMeshBoard, type MeshBoardEntry, type MeshParticipant } from '../../api/mesh-client'
+import type { MeshBoard } from '../../hooks/use-mesh'
 import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
 import type { RunTeamListStage } from './RunTeamList'
 
-const POLL_INTERVAL_MS = 5000
 const TASK_PREFIX = 'task/'
 
 export type BoardPanelProps = {
+  // board — the shared board, polled by the Team view (which also counts its tasks on the tab).
+  board: MeshBoard
   // participants — to show who published an entry by name.
   participants: MeshParticipant[]
   // stages — live stage statuses: only agents of working stages are offered for notification.
@@ -29,10 +31,15 @@ function reportOf(entry: MeshBoardEntry, entries: MeshBoardEntry[]): MeshBoardEn
   return entries.find((t) => t.key !== entry.key && entry.key.startsWith(t.key + '/'))
 }
 
-// BoardPanel — the Team view's "Board" tab: the shared board (GET /api/mesh/board, own poll). The operator
+// boardTopLevel — the board's own entries (tasks and facts), without the reports filed under them.
+export function boardTopLevel(entries: MeshBoardEntry[]): MeshBoardEntry[] {
+  return entries.filter((e) => reportOf(e, entries) === undefined)
+}
+
+// BoardPanel — the Team view's "Board" tab: the shared board. The operator
 // posts tasks for the agents here; agents publish facts and report on tasks under "<task key>/<alias>".
-export function BoardPanel({ participants, stages }: BoardPanelProps): ReactElement {
-  const [entries, setEntries] = useState<MeshBoardEntry[]>([])
+export function BoardPanel({ board, participants, stages }: BoardPanelProps): ReactElement {
+  const { entries } = board
   const [title, setTitle] = useState('')
   const [details, setDetails] = useState('')
   const [posting, setPosting] = useState(false)
@@ -41,30 +48,6 @@ export function BoardPanel({ participants, stages }: BoardPanelProps): ReactElem
   const [uncheckedIds, setUncheckedIds] = useState<ReadonlySet<string>>(new Set())
   // requestIdRef — one id per task being posted, reused by retries; a new task gets a new id.
   const requestIdRef = useRef(genMeshRequestId('mesh-board'))
-
-  const load = (): Promise<void> =>
-    getMeshBoard()
-      .then((res) => setEntries(res.entries))
-      .catch(() => {
-        /* transient — keep whatever we had, same posture as the other mesh polls */
-      })
-
-  useEffect(() => {
-    let cancelled = false
-    const tick = (): void => {
-      getMeshBoard()
-        .then((res) => {
-          if (!cancelled) setEntries(res.entries)
-        })
-        .catch(() => {})
-    }
-    tick()
-    const timer = setInterval(tick, POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [])
 
   const candidates = boardNotifyCandidates(participants, stages)
 
@@ -84,7 +67,7 @@ export function BoardPanel({ participants, stages }: BoardPanelProps): ReactElem
         requestIdRef.current = genMeshRequestId('mesh-board')
         setTitle('')
         setDetails('')
-        return load()
+        return board.reload()
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'request failed'))
       .finally(() => setPosting(false))
@@ -99,7 +82,7 @@ export function BoardPanel({ participants, stages }: BoardPanelProps): ReactElem
     })
   }
 
-  const topLevel = entries.filter((e) => reportOf(e, entries) === undefined)
+  const topLevel = boardTopLevel(entries)
 
   return (
     <div className="team-board">

@@ -1,5 +1,7 @@
 import type { ReactElement } from 'react'
 import { MarkdownRenderer } from '../plan-panel'
+import type { MeshParticipant } from '../../api/mesh-client'
+import { senderLabel } from '../../lib/mesh-roster'
 
 // DiscussionMessage mirrors the server's DiscussionMessageView (pkg/server/discussion.go) one field at a
 // time — see GET /api/stages/{id}/discussion.
@@ -19,8 +21,8 @@ export type DiscussionMessage = {
 
 // authorLabel renders a stable, honest attribution for one message — never defaults an unnamed author to
 // looking like "the user".
-function authorLabel(m: DiscussionMessage): string {
-  if (m.authorId) return `@${m.authorId}`
+function authorLabel(m: DiscussionMessage, participants: MeshParticipant[]): string {
+  if (m.authorId) return senderLabel(m.authorId, participants)
   switch (m.authorKind) {
     case 'human':
       return 'You'
@@ -33,10 +35,24 @@ function authorLabel(m: DiscussionMessage): string {
   }
 }
 
+// roleLabel — the author's role in words; the wire values (main_agent, assistant) are not for people.
+function roleLabel(role: string): string {
+  switch (role) {
+    case 'main_agent':
+      return 'Stage agent'
+    case 'assistant':
+      return 'Helper'
+    default:
+      return role
+  }
+}
+
 type StageDiscussionProps = {
   // messages — already in commit/append order (pkg/assistants.RestoreOrder's contract); this component never
   // re-sorts by createdAt (TestRound_OrderRestoredFromIdsNotTimestamps's UI-facing half).
   messages: DiscussionMessage[]
+  // participants — the run's Agent Mesh roster, to name an author by its display name instead of its id.
+  participants?: MeshParticipant[]
 }
 
 // StageDiscussion renders one stage's discussion log: every message carries its author, role and evidence
@@ -45,7 +61,7 @@ type StageDiscussionProps = {
 // (TestRound_SilentParticipantNotShownAsAgreeing). Message bodies render through the SAME safe markdown
 // renderer the plan panel/helper task view use — no second dangerouslySetInnerHTML surface
 // (TestDiscussion_MarkdownViaSafeRenderer).
-export function StageDiscussion({ messages }: StageDiscussionProps): ReactElement {
+export function StageDiscussion({ messages, participants = [] }: StageDiscussionProps): ReactElement {
   if (messages.length === 0) {
     return <div className="stage-discussion-empty empty-hint">No discussion yet</div>
   }
@@ -54,8 +70,8 @@ export function StageDiscussion({ messages }: StageDiscussionProps): ReactElemen
       {messages.map((m) => (
         <li key={m.id} className="stage-discussion-message" data-author-kind={m.authorKind} data-round={m.round}>
           <div className="stage-discussion-message-header">
-            <span className="stage-discussion-message-author">{authorLabel(m)}</span>
-            {m.role && <span className="stage-discussion-message-role">{m.role}</span>}
+            <span className="stage-discussion-message-author">{authorLabel(m, participants)}</span>
+            {m.role && <span className="stage-discussion-message-role">{roleLabel(m.role)}</span>}
           </div>
           <MarkdownRenderer source={m.body} />
           {m.evidence && m.evidence.length > 0 && (

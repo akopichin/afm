@@ -79,6 +79,20 @@ describe('TeamView', () => {
     expect(within(tablist).getByRole('tab', { name: 'Activity' })).toBeInTheDocument()
   })
 
+  test('the Board tab counts the tasks on the board, not the reports filed under them', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [
+        { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1 },
+        { key: 'task/health/qa', status: 'checked', author_id: 'run:qa', version: 1 },
+        { key: 'api/ready', status: 'yes', author_id: 'stage:implement', version: 1 },
+      ],
+    } as Awaited<ReturnType<typeof meshClient.getMeshBoard>>)
+    renderTeamView()
+    const tab = screen.getByRole('tab', { name: 'Board' })
+    await waitFor(() => expect(tab).toHaveTextContent('Board2'))
+  })
+
   test('a direct conversation opens from a person row', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
@@ -106,6 +120,16 @@ describe('TeamView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
     await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Hand-off', scope: 'run', memberIds: ['run:qa'] })))
     await waitFor(() => expect(screen.getByPlaceholderText('Message Hand-off…')).toBeInTheDocument())
+  })
+
+  test('a new conversation cannot include a participant that can no longer answer (a finished stage)', () => {
+    mockThreadAndBoardFetches()
+    const done: meshClient.MeshParticipant = { id: 'stage:plan', kind: 'stage_agent', scope: 'stage', stage_id: 'plan', display_name: 'Plan agent', reachable: false }
+    renderTeamView([makeStage(), makeStage({ id: 'plan', name: 'Plan', status: 'done' })], [], enabledRoster({ participants: [...participants, done] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    const form = document.querySelector('.team-create-conversation-participants') as HTMLElement
+    expect(within(form).getByText('QA reviewer')).toBeInTheDocument()
+    expect(within(form).queryByText('Plan agent')).toBeNull()
   })
 
   test('"Add run agent" shows a read-only "Configured executor" with no model selector, and "Cancel" creates nothing', () => {

@@ -3,10 +3,11 @@ import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshMessage, ty
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
+import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { MentionMenu } from '../assistants/AssistantMentionMenu'
 import { draftMentions, filterMentionProfiles } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
-import { findExistingDirectThread, mentionHandle, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { directPeer, findExistingDirectThread, mentionHandle, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
 
@@ -52,8 +53,10 @@ export function conversationTitle(target: ThreadConversationTarget, participants
 }
 
 // conversationSubtitle — the line under the title: who this is for a direct target, the head count for a thread.
-export function conversationSubtitle(target: ThreadConversationTarget): string {
+export function conversationSubtitle(target: ThreadConversationTarget, participants: MeshParticipant[]): string {
   if (target.kind === 'direct') return `Direct conversation · ${participantRole(target.participant.kind)}`
+  const peer = directPeer(target.thread, participants)
+  if (peer !== undefined) return `Direct conversation · ${participantRole(peer.kind)}`
   const agents = target.thread.members.filter((m) => m !== 'user').length
   return `${target.thread.members.length} participants · you and ${agents} ${agents === 1 ? 'agent' : 'agents'}`
 }
@@ -97,6 +100,8 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // log — opens at the latest message and follows new ones, unless the reader scrolled up.
+  const log = useStickToBottom<HTMLDivElement>()
   // requestIdRef — the SAME send's retry reuses this id; a NEW, successfully-sent message mints its own id
   // next time (each message is its own idempotent operation, unlike AddRunAgentDialog's single durable attach).
   const requestIdRef = useRef<string>(genMeshRequestId('mesh-send'))
@@ -188,13 +193,13 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
     <div className="team-conversation">
       {/* One messages area in both states: the empty hint takes the same flex slot the list does, so the
           composer stays pinned to the bottom instead of jumping down after the first message. */}
-      <div className="team-conversation-messages" role="log" aria-label="Messages">
+      <div className="team-conversation-messages" role="log" aria-label="Messages" ref={log.ref}>
         {messages.length === 0 ? (
           <p className="team-conversation-empty-messages empty-hint">No messages yet</p>
         ) : (
           <ul className="team-conversation-message-list">
             {messages.map((m) => (
-              <MessageRow key={m.id} message={m} participants={participants} />
+              <MessageRow key={m.id} message={m} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} />
             ))}
           </ul>
         )}
@@ -246,7 +251,8 @@ function messageTime(createdAt: string): string {
 }
 
 // MessageRow — one message: avatar, author, "→ recipients", time, then the text bubble.
-function MessageRow({ message, participants }: { message: MeshMessage; participants: MeshParticipant[] }): ReactElement {
+// MessageRow — one message; a reply quotes the start of the message it answers ("Replying to …").
+function MessageRow({ message, participants, answered }: { message: MeshMessage; participants: MeshParticipant[]; answered?: MeshMessage }): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const kind = participants.find((p) => p.id === message.sender_id)?.kind ?? (message.sender_id === 'user' ? 'user' : '')
   const recipients = message.recipient_ids.map((id) => senderLabel(id, participants)).join(', ')
@@ -260,7 +266,15 @@ function MessageRow({ message, participants }: { message: MeshMessage; participa
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
           <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
         </div>
-        <div className="team-conversation-message-body">{message.body}</div>
+        <div className="team-conversation-message-body">
+          {answered !== undefined && (
+            <blockquote className="team-conversation-reply-quote">
+              <span className="team-conversation-reply-quote-author">Replying to {senderLabel(answered.sender_id, participants)}</span>
+              <span className="team-conversation-reply-quote-text">{answered.body}</span>
+            </blockquote>
+          )}
+          {message.body}
+        </div>
       </div>
     </li>
   )
