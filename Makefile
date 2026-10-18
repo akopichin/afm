@@ -152,3 +152,14 @@ sdk-test-integration: build
 
 sdk-lint: $(GOLANGCI_BIN)
 	cd sdk && $(GOLANGCI_BIN) run ./...
+
+.PHONY: mesh-smoke
+
+# mesh-smoke runs Agent Mesh T9.1's gated real-adapter smoke test (pkg/orchestrator/agentcomm_adapter_smoke_test.go)
+# against a real, credentialed executor adapter named by AFM_MESH_SMOKE_COMMAND (e.g. claude, codex, or a
+# configured recipe wrapper, with its own credentials already in this shell's environment). Builds afm first
+# (mirrors sdk-test-integration's own AFM_SDK_TEST_BINARY wiring) so the adapter's own `afm agent` CLI calls
+# resolve to the binary this target just built, not a stale one elsewhere on PATH. Skips cleanly when
+# AFM_MESH_SMOKE_COMMAND is unset.
+mesh-smoke: build
+	AFM_MESH_SMOKE_AFM_BIN=$(LOCAL_BIN)/$(PROJECT_NAME) go test -run TestAdapterSmoke_SendReadReplyYieldResume ./pkg/orchestrator/... -v

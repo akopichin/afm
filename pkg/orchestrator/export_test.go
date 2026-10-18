@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
@@ -66,4 +67,23 @@ func SetCommitAddStageBarrierForTest(o *Orchestrator, fn func()) {
 // с управляемой по времени "подпроцессом" mesh-задачей, а не продакшн-экзекьютор.
 func SetRunHelperAgentForTest(o *Orchestrator, fn func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error)) {
 	o.runHelperAgent = fn
+}
+
+// MeshClientForTest mints a usable *executor.MeshClient for participant through the SAME unexported
+// meshClientFor the production run() path calls for every real stage/helper invocation (Agent Mesh Phase 3,
+// T3.3) — exposed for Phase 9's T9.1 real-adapter smoke test
+// (pkg/orchestrator/agentcomm_adapter_smoke_test.go). That test must also stand up a real *server.Server,
+// and pkg/server already imports pkg/orchestrator (see agentcomm_integration_server_test.go's own doc
+// comment on why that forces it into the external orchestrator_test package), so it cannot reach
+// meshClientFor directly the way an internal-package test could.
+func MeshClientForTest(o *Orchestrator, participant agentcomm.ParticipantID) *executor.MeshClient {
+	return o.meshClientFor(participant)
+}
+
+// AgentCommInboxBlockForTest renders participant's pending inbox exactly as the unexported agentCommInboxFor
+// does for a real resumed stage/helper invocation — exposed for the same T9.1 smoke test above, which must
+// hand a REAL adapter process the SAME <inbox> block production code builds on resume, not a test-local
+// reimplementation of its formatting.
+func AgentCommInboxBlockForTest(o *Orchestrator, participant agentcomm.ParticipantID) (block string, onDelivered func()) {
+	return o.agentCommInboxFor(participant)
 }

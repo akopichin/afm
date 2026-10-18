@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+#
+# Agent Mesh Phase 9, T9.1 live-run fixture. NOT run by any Go test — pkg/orchestrator/agentcomm_adapter_smoke_test.go
+# drives a real adapter directly (no orchestrator bootstrap, see dev-plan.md's Execution rule). This flow is
+# for the pipeline's dedicated `live-run` stage to run for real (once on the host, once with docker.enabled:
+# true, both with max_parallel: 1), observing the same four afm agent primitives (list/send/inbox/wait) a
+# real dashboard operator would drive through Feed/Team, and recording per-environment which Capability flags
+# the adapter actually earned (dev-plan.md §6.2.2/§10: one MCP present must not mark the whole matrix
+# supported).
+#
+# Kept to two minimal stages on purpose: both are real mesh participants ("stage:alpha", "stage:beta"); no
+# agent-facing route can open a thread between them on its own (routeAgentMesh exposes no such call), so the
+# live-run stage opens one via the dashboard the same way a human would (Feed "@" / Team "Add run agent"),
+# then exercises send/inbox/wait end to end against that thread.
+
+name: mesh-smoke
+description: "Agent Mesh T9.1/T9.2 live-run fixture: two mesh participants for a real send/inbox/wait round trip"
+
+max_parallel: 1
+
+stages:
+  - id: alpha
+    name: "Alpha (adapter under test)"
+    description: |
+      You are "alpha", one of two participants in an Agent Mesh smoke scenario (afm's own dev-plan.md T9.1).
+      A CLI named `afm` is on your PATH. Wait for the live-run operator to open a thread with you and send
+      the first message; once you see it (`afm agent inbox`), reply to it (`afm agent send`), then register
+      a wait (`afm agent wait`) on the next message in that thread and end your turn — do not loop forever.
+      Do not modify any files in this project; this stage only exercises messaging.
+    agents: [planning, implementation]
+
+  - id: beta
+    name: "Beta (peer)"
+    description: |
+      You are "beta", the second participant in the same Agent Mesh smoke scenario as "alpha" (afm's own
+      dev-plan.md T9.1). A CLI named `afm` is on your PATH. Wait for the live-run operator to open a thread
+      with you and "alpha"; once "alpha" has replied, read it (`afm agent inbox`), send one more message
+      back, then end your turn.
+      Do not modify any files in this project; this stage only exercises messaging.
+    agents: [planning, implementation]
