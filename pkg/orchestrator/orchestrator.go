@@ -687,10 +687,10 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 			runErr = errors.Join(runErr, fmt.Errorf("persist run completion: %w", err))
 		}
 	}()
-	// closeRemainingMeshWaits (T5.6) runs AFTER agents have drained (WaitAgents) but BEFORE EndRun persists the
+	// closeMeshWaitsIfFinalized (T5.6) runs AFTER agents have drained (WaitAgents) but BEFORE EndRun persists the
 	// terminal status — registered here, between the two, so LIFO gives exactly that order (cancel, drain,
 	// close remaining waits, persist, lifecycle hooks).
-	defer o.closeRemainingMeshWaits()
+	defer o.closeMeshWaitsIfFinalized()
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 	if err := o.opts.Store.BeginRun(); err != nil {

@@ -314,6 +314,15 @@ func (o *Orchestrator) recoverMeshWaitDeadlines(ctx context.Context) {
 	}
 }
 
+// closeMeshWaitsIfFinalized closes the remaining waits only when the run has really finished (FinalizeIf
+// decided it). An interrupted run (Ctrl+C, a fatal error) is resumed later: its waits stay pending, and their
+// deadlines are re-armed by recoverMeshWaitDeadlines on the next start.
+func (o *Orchestrator) closeMeshWaitsIfFinalized() {
+	if o.finalizing.Load() {
+		o.closeRemainingMeshWaits()
+	}
+}
+
 // closeRemainingMeshWaits resolves every still-WaitPending mesh wait to WaitRunClosed as Run winds down
 // (T5.6): a wait nobody will ever revisit again (the whole run is ending) must not dangle in the journal
 // forever with no visible terminal outcome. Called from Run's own defer chain AFTER WaitAgents has drained

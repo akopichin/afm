@@ -375,7 +375,7 @@ func TestRetryTask_RejectsNonFailedTask(t *testing.T) {
 
 // TestRunEnd_AdvisoryTasksDoNotBlockForever: an advisory task still "running" when the run's own context is
 // cancelled must observe that cancellation promptly and let WaitAgents' bounded drain return quickly — not
-// hang until the drain timeout, and never block run shutdown.
+// hang until the drain timeout, and never block run shutdown. The cut-short turn is not recorded as a failure.
 func TestRunEnd_AdvisoryTasksDoNotBlockForever(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
@@ -411,8 +411,10 @@ func TestRunEnd_AdvisoryTasksDoNotBlockForever(t *testing.T) {
 	if !sawCancel.Load() {
 		t.Fatal("the advisory task's own ctx must have observed the run-wide cancellation")
 	}
+	// An interrupted run did not fail the task: it stays running and is re-queued when the run resumes
+	// (recoverAssistants), see TestInterruptedRun_TaskMidTurnIsRetriedOnResume.
 	rs := store.Snapshot()
-	if tk := rs.Assistants.Tasks[taskID]; !tk.Status.Terminal() {
-		t.Fatalf("task status = %s after a bounded drain, want a terminal status (never left hanging as running)", tk.Status)
+	if tk := rs.Assistants.Tasks[taskID]; tk.Status != assistants.StatusRunning {
+		t.Fatalf("task status = %s after the run was interrupted, want running (retried on resume, not failed)", tk.Status)
 	}
 }

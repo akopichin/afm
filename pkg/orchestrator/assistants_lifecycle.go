@@ -222,6 +222,14 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// result.json + task_result event to a task the caller already told to stop.
 	finalizedByOther := o.taskTerminal(taskID)
 
+	// The run itself is shutting down (Ctrl+C): an invocation it cut short did not fail. The task stays
+	// running, exactly like an interrupted stage, and recoverAssistants re-queues it when the run is resumed.
+	// A turn that still finished with a result is recorded as usual below.
+	if ctx.Err() != nil && (err != nil || !outcome.ProcessOK) {
+		log.Printf("assistants: task %s interrupted by run shutdown — it is retried when the run resumes", taskID)
+		return
+	}
+
 	if err != nil {
 		if finalizedByOther {
 			return
