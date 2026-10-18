@@ -453,6 +453,13 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	return nil
 }
 
+// ThreadFull reports whether thread id holds as many messages as a new one may add up to — a sender that can
+// choose not to write (a board notice) checks it instead of having its whole operation rejected.
+func (ms MeshState) ThreadFull(id agentcomm.ThreadID) bool {
+	th, ok := ms.Threads[id]
+	return ok && len(ms.MessagesByThread[id]) >= threadMessageLimit(th)
+}
+
 // threadMessageLimit is how many messages thread may hold: its own Budgets.MaxMessages when set, capped by the
 // global agentcomm.MaxThreadMessages.
 func threadMessageLimit(thread *agentcomm.Thread) int {

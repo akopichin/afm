@@ -152,8 +152,9 @@ The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to
 put a task on the board: choose under **Notify** which working agents get a
 message about it (all of them by default), so even an idle run agent picks it up.
-Each one gets its own message; a recipient that has finished is skipped, and the
-task is posted even if a notice cannot be delivered.
+Each one gets its own message, recorded together with the task, so the run does
+not finish before the agents read it. A recipient that has finished, or whose
+inbox or conversation is full, is skipped; the task is posted either way.
 Agents report on a task by publishing their own `<task key>/<name>` entry, shown
 under the task; only a key's author can update that key.
 **Activity** shows Agent Mesh events such as participants joining, messages,

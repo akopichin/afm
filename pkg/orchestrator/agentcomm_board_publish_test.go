@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -136,5 +137,54 @@ func TestPublish_NotifyNeverFailsThePublish(t *testing.T) {
 	}
 	if got := rs.Assistants.Mesh.Inbox[meshStageParticipantID(assistantsTestStageID)]; len(got) != 0 {
 		t.Fatalf("the finished stage got %d messages, want none", len(got))
+	}
+}
+
+// TestPublish_NoticeIsCommittedWithTheRevision: the notice is part of the publish's own operation, so a run
+// that finishes right after it sees the notice unread and keeps going — the revision and its notices are
+// never separated.
+func TestPublish_NoticeIsCommittedWithTheRevision(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	release := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		<-release
+		return passResultOutcome(), nil
+	}
+	t.Cleanup(func() { close(release); o.concurrency.WaitAgents() })
+	activateStage(t, o, assistantsTestStageID)
+	if _, ok := o.Trigger(assistantsTestStageID, bus.EvComplete, bus.GuardCtx{}, ""); !ok {
+		t.Fatal("EvComplete failed")
+	}
+	agent := addTestRunAgent(t, o, "op-add", nil)
+
+	if _, err := publishAsUser(o, "op-task", "task/report", "write the report", 0, agent.ParticipantID); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	op, committed, err := store.CommittedOperation("op-task")
+	if err != nil || !committed {
+		t.Fatalf("CommittedOperation: committed=%v err=%v", committed, err)
+	}
+	var board state.MeshBoardPublishedPayload
+	var msg state.MeshMessageSentPayload
+	_, hasBoard, _ := op.Effect("mesh_board_published", &board)
+	_, hasMsg, _ := op.Effect("mesh_message_sent", &msg)
+	if !hasBoard || !hasMsg || len(msg.Recipients) != 1 || msg.Recipients[0] != string(agent.ParticipantID) {
+		t.Fatalf("publish operation effects = %+v, want the revision and the notice to %s together", op.Effects, agent.ParticipantID)
+	}
+	rs := store.Snapshot()
+	if o.runStateAllowsExit(&rs) {
+		t.Fatal("the run may finish with the notice unread, want it kept open until the agent reads it")
+	}
+}
+
+// TestPublish_RetryWithAnotherNotifyListConflicts: a retry is compared with the committed request in full,
+// the notify list included.
+func TestPublish_RetryWithAnotherNotifyListConflicts(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	if _, err := publishAsUser(o, "op-task", "task/x", "do x", 0, "nobody"); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if _, err := publishAsUser(o, "op-task", "task/x", "do x", 0); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("retry without the notify list: err = %v, want a request id conflict", err)
 	}
 }

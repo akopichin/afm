@@ -47,6 +47,10 @@ type MeshBoardPublishedPayload struct {
 	Status          string   `json:"status"`
 	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
 	ExpectedVersion int      `json:"expected_version"`
+	// Notify is the publish request's own list of participants to tell about the entry, kept so a retry of the
+	// same request is compared with it in full. The notices themselves are separate effects of the same
+	// operation; the projection does not read this field.
+	Notify []string `json:"notify,omitempty"`
 }
 
 // applyMeshBoardPublished projects one mesh_board_published control record.
