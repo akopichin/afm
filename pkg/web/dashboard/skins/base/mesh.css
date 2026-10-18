@@ -611,6 +611,29 @@
   color: var(--text-primary);
   resize: vertical;
 }
+.team-board-notify {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.team-board-notify legend {
+  float: left;
+  margin-right: 4px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-board-notify-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
 .team-board-form-actions {
   display: flex;
   align-items: center;

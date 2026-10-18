@@ -147,12 +147,12 @@ func TestMesh_RoundTripDecodeEveryKind(t *testing.T) {
 			kind:   kindMeshBoardPublished,
 			target: Target{BoardKey: "k", ParticipantID: "a"},
 			payload: mustMarshal(t, MeshBoardPublishedPayload{
-				Status: "final", ExpectedVersion: 2, ArtifactRefs: []string{"artifacts/x"}, AuthorizedBy: []string{"b"},
+				Status: "final", ExpectedVersion: 2, ArtifactRefs: []string{"artifacts/x"},
 			}),
 			check: func(t *testing.T, raw json.RawMessage) {
 				var p MeshBoardPublishedPayload
 				mustUnmarshal(t, raw, &p)
-				if p.ExpectedVersion != 2 || len(p.ArtifactRefs) != 1 || p.ArtifactRefs[0] != "artifacts/x" || len(p.AuthorizedBy) != 1 || p.AuthorizedBy[0] != "b" {
+				if p.ExpectedVersion != 2 || len(p.ArtifactRefs) != 1 || p.ArtifactRefs[0] != "artifacts/x" {
 					t.Fatalf("payload = %+v", p)
 				}
 			},
@@ -219,7 +219,7 @@ func meshJournalFixture(t *testing.T) []byte {
 		meshMessageSentControl(0, "m1", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "hi"),
 		meshMessageReceiptControl(kindMeshMessageDelivered, "m1", "b"),
 		meshWaitRegisteredControl("w1", "b", agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "th-1"}, "", "", 0),
-		meshBoardPublishedControl("k", "a", "draft", 0, nil, nil),
+		meshBoardPublishedControl("k", "a", "draft", 0, nil),
 		taskCreatedControl("op-1", "t1", "stage-a", nil),
 	}
 
@@ -355,7 +355,7 @@ func TestMesh_AllKindsRegisteredAndDispatchable(t *testing.T) {
 			return meshWaitResolvedControl("reg-wait2", string(agentcomm.WaitReady), "ok")
 		},
 		kindMeshBoardPublished: func(t *testing.T, as *AssistantsState) *Control {
-			return meshBoardPublishedControl("reg-key", "reg-author", "draft", 0, nil, nil)
+			return meshBoardPublishedControl("reg-key", "reg-author", "draft", 0, nil)
 		},
 	}
 

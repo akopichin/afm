@@ -73,7 +73,6 @@ type MeshPublishRequest struct {
 	Status          string   `json:"status"`
 	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
 	ExpectedVersion int      `json:"expected_version"`
-	AuthorizedBy    []string `json:"authorized_by,omitempty"`
 }
 
 // authenticateAgentMesh resolves the bearer token from r's Authorization header. A missing, malformed or

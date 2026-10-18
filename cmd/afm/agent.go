@@ -291,7 +291,7 @@ func newAgentBoardGetCmd() *cobra.Command {
 }
 
 func newAgentBoardPublishCmd() *cobra.Command {
-	var key, status, artifacts, authorizedBy string
+	var key, status, artifacts string
 	var expectedVersion int
 	c := &cobra.Command{
 		Use:          "publish",
@@ -301,7 +301,7 @@ func newAgentBoardPublishCmd() *cobra.Command {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				reqBody := map[string]any{
 					"request_id": newAgentRequestID(), "key": key, "status": status,
-					"artifact_refs": splitCSV(artifacts), "expected_version": expectedVersion, "authorized_by": splitCSV(authorizedBy),
+					"artifact_refs": splitCSV(artifacts), "expected_version": expectedVersion,
 				}
 				var out agentcomm.BoardEntry
 				if err := c2.do("POST", "publish", reqBody, &out); err != nil {
@@ -315,6 +315,5 @@ func newAgentBoardPublishCmd() *cobra.Command {
 	c.Flags().StringVar(&status, "status", "", "the published status value (required)")
 	c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
 	c.Flags().IntVar(&expectedVersion, "expected-version", 0, "0 for a first publish; otherwise the key's current version")
-	c.Flags().StringVar(&authorizedBy, "authorized-by", "", "comma-separated participant ids allowed to publish the NEXT revision")
 	return c
 }

@@ -262,7 +262,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             />
           </div>
         )}
-        {tab === 'board' && <BoardPanel participants={participants} />}
+        {tab === 'board' && <BoardPanel participants={participants} stages={teamStages} />}
         {tab === 'activity' && <ActivityPanel events={events} />}
       </div>
       {addRunAgentOpen && (

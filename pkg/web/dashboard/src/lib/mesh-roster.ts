@@ -51,6 +51,20 @@ export function stagePresence(status: string): Presence {
   }
 }
 
+// boardNotifyCandidates — кого можно уведомить о новой задаче на доске: доступные агенты рана и агенты
+// стадий, которые сейчас работают. Ждущий, упавший или завершившийся агент сообщение не прочитает.
+export function boardNotifyCandidates(
+  participants: MeshParticipant[],
+  stages: { id: string; status: string }[],
+): MeshParticipant[] {
+  return participants.filter((p) => {
+    if (p.kind === 'run_agent') return p.reachable
+    if (p.kind !== 'stage_agent') return false
+    const stage = stages.find((s) => s.id === p.stage_id)
+    return stage !== undefined && stagePresence(stage.status) === 'working'
+  })
+}
+
 // participantRole — подпись роли по kind участника.
 export function participantRole(kind: string): string {
   switch (kind) {

@@ -34,8 +34,9 @@ type MeshActions interface {
 	Thread(ctx context.Context, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Inbox(ctx context.Context, cursor uint64, limit int) (MeshMessagePage, error)
 	Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error)
-	// PublishBoard posts an entry to the shared board as the human operator (e.g. a task for the agents).
-	PublishBoard(ctx context.Context, requestID string, req MeshPublishRequest) (agentcomm.BoardEntry, error)
+	// PublishBoard posts an entry to the shared board as the human operator (e.g. a task for the agents) and
+	// tells req.Notify about it with one message.
+	PublishBoard(ctx context.Context, requestID string, req MeshBoardPublishRequest) (agentcomm.BoardEntry, error)
 	AttachAndSend(ctx context.Context, requestID string, req MeshAttachAndSendRequest) (MeshAttachAndSendResult, error)
 }
 
@@ -47,6 +48,14 @@ type MeshOpenThreadRequest struct {
 	Scope       string   `json:"scope"` // "stage" or "run" — required, no default (agentcomm.Scope has none)
 	Members     []string `json:"member_ids"`
 	MaxMessages int      `json:"max_messages,omitempty"`
+}
+
+// MeshBoardPublishRequest is POST /api/mesh/board's body: the entry the human publishes (a key is only ever
+// revised by its own author, so there is no field to hand it to someone else) plus Notify — participant ids
+// that get one message from the human about the new entry, so an idle agent learns about the task.
+type MeshBoardPublishRequest struct {
+	MeshPublishRequest
+	Notify []string `json:"notify,omitempty"`
 }
 
 // MeshAttachAndSendRequest is POST /api/mesh/attach-and-send's body — the T6.2 composite
@@ -266,7 +275,8 @@ func (s *Server) handleMeshCloseThread(w http.ResponseWriter, r *http.Request, t
 // handleMeshAttachAndSend decodes into MeshAttachAndSendRequest ONLY — there is no command/model/executor
 // field in that struct for a client to supply, mirroring handleAttachAssistant's own comment.
 // handleMeshPublishBoard — POST /api/mesh/board: the human operator publishes a board entry (a task for the
-// agents, a decision). Same-origin and request_id rules as every other dashboard mutation.
+// agents, a decision) and notifies the participants named in `notify`. Same-origin and request_id rules as
+// every other dashboard mutation.
 func (s *Server) handleMeshPublishBoard(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
@@ -274,7 +284,7 @@ func (s *Server) handleMeshPublishBoard(w http.ResponseWriter, r *http.Request) 
 	}
 	var body struct {
 		RequestID string `json:"request_id"`
-		MeshPublishRequest
+		MeshBoardPublishRequest
 	}
 	if !decodeAgentMeshBody(w, r, &body) {
 		return
@@ -283,7 +293,7 @@ func (s *Server) handleMeshPublishBoard(w http.ResponseWriter, r *http.Request) 
 		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
 		return
 	}
-	entry, err := s.mesh.PublishBoard(r.Context(), body.RequestID, body.MeshPublishRequest)
+	entry, err := s.mesh.PublishBoard(r.Context(), body.RequestID, body.MeshBoardPublishRequest)
 	if err != nil {
 		writeAssistantError(w, err)
 		return

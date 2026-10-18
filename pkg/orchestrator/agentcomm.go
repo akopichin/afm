@@ -176,8 +176,10 @@ type PublishRequest struct {
 	Status          string
 	ArtifactRefs    []string
 	ExpectedVersion int
-	AuthorizedBy    []agentcomm.ParticipantID
-	Actor           state.Actor
+	// Notify, if set, names participants told about the new entry by one message from Author, sent right after
+	// the publish (e.g. the agents the human hands a board task to).
+	Notify []agentcomm.ParticipantID
+	Actor  state.Actor
 }
 
 // ReadBoardRequest's Key, when empty, returns every entry on the board.

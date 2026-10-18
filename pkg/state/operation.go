@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
 )
@@ -116,6 +117,8 @@ type Operation struct {
 type OperationResult struct {
 	OperationID string
 	Seq         uint64
+	// Time is the commit's own timestamp (the record's Time) — also the ORIGINAL one on a replay.
+	Time time.Time
 }
 
 // ApplyRunOperation is the single mutation path for new (assistants/task) state (§6.3, dev-plan T2.4). The
@@ -196,8 +199,10 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 		return OperationResult{}, err
 	}
 
-	res := OperationResult{OperationID: op.ID, Seq: c.Seq}
-	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, payloadJSON: payload})
+	// Round(0) drops the monotonic clock reading: a replay (decoded from the journal) carries none, and the
+	// result must be identical either way.
+	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: c.Time.Round(0)}
+	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, time: res.Time, payloadJSON: payload})
 
 	// Step 6: publish a notice. pkg/state has no notice bus (that lives in pkg/orchestrator) — left as the
 	// caller's responsibility; ApplyRunOperation's return value (and the durable record itself) is what a
@@ -267,19 +272,19 @@ func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayl
 		if !bytes.Equal(e.payloadJSON, newPayload) {
 			return OperationResult{}, OperationIDConflictError(opID)
 		}
-		return OperationResult{OperationID: opID, Seq: e.seq}, nil
+		return OperationResult{OperationID: opID, Seq: e.seq, Time: e.time}, nil
 	}
 
-	payload, err := s.readControlPayloadAtSeq(seq)
+	c, err := s.readControlAtSeq(seq)
 	if err != nil {
 		return OperationResult{}, &StorageError{Inner: fmt.Errorf("re-read committed operation %s at seq %d: %w", opID, seq, err)}
 	}
-	if !bytes.Equal(payload, newPayload) {
+	if !bytes.Equal(c.Payload, newPayload) {
 		return OperationResult{}, OperationIDConflictError(opID)
 	}
 	// Repopulate the cache so a THIRD repeat of the same operation_id hits the fast path again.
-	s.opCache.put(opID, opCacheEntry{seq: seq, payloadJSON: payload})
-	return OperationResult{OperationID: opID, Seq: seq}, nil
+	s.opCache.put(opID, opCacheEntry{seq: seq, time: c.Time, payloadJSON: c.Payload})
+	return OperationResult{OperationID: opID, Seq: seq, Time: c.Time}, nil
 }
 
 // ---- T2.5: bounded response-body cache ----
@@ -311,6 +316,7 @@ func opResultCacheCapacity() int {
 
 type opCacheEntry struct {
 	seq         uint64
+	time        time.Time
 	payloadJSON []byte
 }
 

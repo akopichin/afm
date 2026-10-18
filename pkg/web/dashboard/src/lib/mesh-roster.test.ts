@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { MeshParticipant, MeshThread } from '../api/mesh-client'
-import { mentionHandle, participantLabel, senderLabel, threadLabel } from './mesh-roster'
+import { boardNotifyCandidates, mentionHandle, participantLabel, senderLabel, threadLabel } from './mesh-roster'
 
 const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'claude', reachable: true }
 const commit: MeshParticipant = { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', alias: 'commit', display_name: 'Commit & cleanup', stage_id: 'commit', reachable: true }
@@ -40,5 +40,17 @@ describe('mesh-roster', () => {
   test('an untitled thread with no other members falls back to its id', () => {
     const lonely: MeshThread = { id: 'mt-3', scope: 'run', members: ['user'], status: 'open' }
     expect(threadLabel(lonely, [])).toBe('mt-3')
+  })
+
+  test('boardNotifyCandidates keeps reachable run agents and stage agents of working stages', () => {
+    const runAgent: MeshParticipant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', reachable: true }
+    const goneRunAgent: MeshParticipant = { ...runAgent, id: 'run:t-2', reachable: false }
+    const waitingStage: MeshParticipant = { ...commit, id: 'stage:plan', stage_id: 'plan' }
+    const unknownStage: MeshParticipant = { ...commit, id: 'stage:ghost', stage_id: 'ghost' }
+    const stages = [
+      { id: 'commit', status: 'running' },
+      { id: 'plan', status: 'awaiting_approval' },
+    ]
+    expect(boardNotifyCandidates([runAgent, goneRunAgent, commit, waitingStage, unknownStage, side], stages)).toEqual([runAgent, commit])
   })
 })

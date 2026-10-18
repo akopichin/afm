@@ -211,7 +211,7 @@ func (a smokeMeshActions) CancelWait(ctx context.Context, requestID, actor, wait
 func (a smokeMeshActions) PublishBoard(ctx context.Context, requestID, actor string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {
 	return a.orch.Publish(ctx, orchestrator.PublishRequest{
 		OperationID: requestID, Author: agentcomm.ParticipantID(actor), Key: req.Key, Status: req.Status,
-		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, AuthorizedBy: smokeParticipantIDs(req.AuthorizedBy),
+		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion,
 		Actor: smokeMeshActor(actor),
 	})
 }

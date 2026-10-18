@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { genMeshRequestId, getMeshBoard, publishMeshBoard, type MeshBoardEntry, type MeshParticipant } from '../../api/mesh-client'
-import { senderLabel } from '../../lib/mesh-roster'
+import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
+import type { RunTeamListStage } from './RunTeamList'
 
 const POLL_INTERVAL_MS = 5000
 const TASK_PREFIX = 'task/'
@@ -8,6 +9,8 @@ const TASK_PREFIX = 'task/'
 export type BoardPanelProps = {
   // participants — to show who published an entry by name.
   participants: MeshParticipant[]
+  // stages — live stage statuses: only agents of working stages are offered for notification.
+  stages: RunTeamListStage[]
 }
 
 // taskKey — "task/<slug>" for a task title ("CSV export" → "task/csv-export").
@@ -28,12 +31,14 @@ function reportOf(entry: MeshBoardEntry, entries: MeshBoardEntry[]): MeshBoardEn
 
 // BoardPanel — the Team view's "Board" tab: the shared board (GET /api/mesh/board, own poll). The operator
 // posts tasks for the agents here; agents publish facts and report on tasks under "<task key>/<alias>".
-export function BoardPanel({ participants }: BoardPanelProps): ReactElement {
+export function BoardPanel({ participants, stages }: BoardPanelProps): ReactElement {
   const [entries, setEntries] = useState<MeshBoardEntry[]>([])
   const [title, setTitle] = useState('')
   const [details, setDetails] = useState('')
   const [posting, setPosting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // uncheckedIds — candidates the operator opted out of; everyone else (incl. agents that appear later) is notified.
+  const [uncheckedIds, setUncheckedIds] = useState<ReadonlySet<string>>(new Set())
   // requestIdRef — one id per task being posted, reused by retries; a new task gets a new id.
   const requestIdRef = useRef(genMeshRequestId('mesh-board'))
 
@@ -61,13 +66,20 @@ export function BoardPanel({ participants }: BoardPanelProps): ReactElement {
     }
   }, [])
 
+  const candidates = boardNotifyCandidates(participants, stages)
+
   function post(): void {
     const name = title.trim()
     if (name === '' || posting) return
     setPosting(true)
     setError(null)
     const text = details.trim()
-    publishMeshBoard({ requestId: requestIdRef.current, key: taskKey(name), status: text !== '' ? `${name} — ${text}` : name })
+    publishMeshBoard({
+      requestId: requestIdRef.current,
+      key: taskKey(name),
+      status: text !== '' ? `${name} — ${text}` : name,
+      notify: candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id),
+    })
       .then(() => {
         requestIdRef.current = genMeshRequestId('mesh-board')
         setTitle('')
@@ -76,6 +88,15 @@ export function BoardPanel({ participants }: BoardPanelProps): ReactElement {
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'request failed'))
       .finally(() => setPosting(false))
+  }
+
+  function toggleNotify(id: string): void {
+    setUncheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const topLevel = entries.filter((e) => reportOf(e, entries) === undefined)
@@ -97,6 +118,17 @@ export function BoardPanel({ participants }: BoardPanelProps): ReactElement {
           <span>Details</span>
           <textarea value={details} onChange={(e) => setDetails(e.target.value)} placeholder="What should the agents do?" rows={2} />
         </label>
+        {candidates.length > 0 && (
+          <fieldset className="team-board-notify">
+            <legend>Notify</legend>
+            {candidates.map((p) => (
+              <label key={p.id} className="team-board-notify-option">
+                <input type="checkbox" checked={!uncheckedIds.has(p.id)} onChange={() => toggleNotify(p.id)} />
+                {participantLabel(p)}
+              </label>
+            ))}
+          </fieldset>
+        )}
         <div className="team-board-form-actions">
           <span className="team-board-hint">Agents check the board between steps and report under the task.</span>
           <button type="submit" className="btn btn-send" disabled={posting || title.trim() === ''}>

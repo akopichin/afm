@@ -8,10 +8,8 @@ import (
 
 // ---- T1.4: board ----
 
-func meshBoardPublishedControl(key, author, status string, expectedVersion int, artifactRefs, authorizedBy []string) *Control {
-	payload, _ := json.Marshal(MeshBoardPublishedPayload{
-		Status: status, ArtifactRefs: artifactRefs, ExpectedVersion: expectedVersion, AuthorizedBy: authorizedBy,
-	})
+func meshBoardPublishedControl(key, author, status string, expectedVersion int, artifactRefs []string) *Control {
+	payload, _ := json.Marshal(MeshBoardPublishedPayload{Status: status, ArtifactRefs: artifactRefs, ExpectedVersion: expectedVersion})
 	return &Control{
 		Kind: kindMeshBoardPublished, SchemaVersion: ControlSchemaVersion,
 		Target: Target{BoardKey: key, ParticipantID: author}, Payload: payload,
@@ -20,7 +18,7 @@ func meshBoardPublishedControl(key, author, status string, expectedVersion int, 
 
 func TestMesh_BoardFirstPublishGetsVersion1(t *testing.T) {
 	as := newAssistantsState()
-	mustApply(t, &as, meshBoardPublishedControl("design-doc", "a", "draft", 0, nil, nil))
+	mustApply(t, &as, meshBoardPublishedControl("design-doc", "a", "draft", 0, nil))
 
 	e, ok := as.Mesh.Board["design-doc"]
 	if !ok {
@@ -36,10 +34,10 @@ func TestMesh_BoardFirstPublishGetsVersion1(t *testing.T) {
 
 func TestMesh_BoardStaleExpectedVersionRejected(t *testing.T) {
 	as := newAssistantsState()
-	mustApply(t, &as, meshBoardPublishedControl("k", "a", "draft", 0, nil, nil)) // -> version 1
+	mustApply(t, &as, meshBoardPublishedControl("k", "a", "draft", 0, nil)) // -> version 1
 
 	// Publishing again with expected_version 0 is now stale: the key's current version is 1.
-	c := meshBoardPublishedControl("k", "a", "final", 0, nil, nil)
+	c := meshBoardPublishedControl("k", "a", "final", 0, nil)
 	if err := dispatchControlKind(&as, c, false); !errors.Is(err, ErrBoardStaleRevision) {
 		t.Fatalf("err = %v, want ErrBoardStaleRevision", err)
 	}
@@ -48,14 +46,13 @@ func TestMesh_BoardStaleExpectedVersionRejected(t *testing.T) {
 	}
 }
 
-// TestMesh_BoardNonAuthorizedRepublishRejected tests the exact authorization rule applyMeshBoardPublished
-// implements: a publish is accepted iff its author is either the key's CURRENT AuthorID, or was named in
-// that entry's AuthorizedBy list by whoever published it. A third participant, named by nobody, is rejected.
+// TestMesh_BoardNonAuthorizedRepublishRejected: a key belongs to its author — only that author publishes its
+// next revisions. A record naming someone else in a legacy authorized_by list grants nothing.
 func TestMesh_BoardNonAuthorizedRepublishRejected(t *testing.T) {
 	as := newAssistantsState()
-	mustApply(t, &as, meshBoardPublishedControl("k", "a", "draft", 0, nil, nil)) // version 1, author a, no AuthorizedBy
+	mustApply(t, &as, meshBoardPublishedControl("k", "a", "draft", 0, nil)) // version 1, author a
 
-	c := meshBoardPublishedControl("k", "stranger", "final", 1, nil, nil)
+	c := meshBoardPublishedControl("k", "stranger", "final", 1, nil)
 	if err := dispatchControlKind(&as, c, false); !errors.Is(err, ErrBoardNotAuthorized) {
 		t.Fatalf("err = %v, want ErrBoardNotAuthorized", err)
 	}
@@ -63,23 +60,25 @@ func TestMesh_BoardNonAuthorizedRepublishRejected(t *testing.T) {
 		t.Fatalf("Version mutated by a rejected unauthorized publish: %d", as.Mesh.Board["k"].Version)
 	}
 
-	// A participant explicitly named in AuthorizedBy by the CURRENT author IS allowed to republish.
-	mustApply(t, &as, meshBoardPublishedControl("k2", "a", "draft", 0, nil, []string{"b"}))
-	mustApply(t, &as, meshBoardPublishedControl("k2", "b", "final", 1, nil, nil))
-	if as.Mesh.Board["k2"].Version != 2 || as.Mesh.Board["k2"].AuthorID != "b" {
-		t.Fatalf("authorized republish not accepted: %+v", as.Mesh.Board["k2"])
+	legacy := &Control{
+		Kind: kindMeshBoardPublished, SchemaVersion: ControlSchemaVersion, Target: Target{BoardKey: "k2", ParticipantID: "a"},
+		Payload: json.RawMessage(`{"status":"draft","expected_version":0,"authorized_by":["b"]}`),
+	}
+	mustApply(t, &as, legacy)
+	if err := dispatchControlKind(&as, meshBoardPublishedControl("k2", "b", "final", 1, nil), false); !errors.Is(err, ErrBoardNotAuthorized) {
+		t.Fatalf("publish by a participant named in authorized_by: err = %v, want ErrBoardNotAuthorized", err)
 	}
 
-	// The key's own current author may always republish, with no AuthorizedBy entry needed.
-	mustApply(t, &as, meshBoardPublishedControl("k2", "b", "final-2", 2, nil, nil))
-	if as.Mesh.Board["k2"].Version != 3 {
-		t.Fatalf("current-author republish not accepted: %+v", as.Mesh.Board["k2"])
+	// The key's own author may always republish.
+	mustApply(t, &as, meshBoardPublishedControl("k2", "a", "final", 1, nil))
+	if as.Mesh.Board["k2"].Version != 2 || as.Mesh.Board["k2"].AuthorID != "a" {
+		t.Fatalf("author republish not accepted: %+v", as.Mesh.Board["k2"])
 	}
 }
 
 func TestMesh_BoardArtifactRefOutsidePrefixRejected(t *testing.T) {
 	as := newAssistantsState()
-	c := meshBoardPublishedControl("k", "a", "draft", 0, []string{"/etc/passwd"}, nil)
+	c := meshBoardPublishedControl("k", "a", "draft", 0, []string{"/etc/passwd"})
 	if err := dispatchControlKind(&as, c, false); !errors.Is(err, ErrBoardArtifactRefOutsideRun) {
 		t.Fatalf("err = %v, want ErrBoardArtifactRefOutsideRun", err)
 	}
@@ -87,7 +86,7 @@ func TestMesh_BoardArtifactRefOutsidePrefixRejected(t *testing.T) {
 		t.Fatal("board entry must not be projected when an artifact ref fails the allowed-prefix check")
 	}
 
-	mustApply(t, &as, meshBoardPublishedControl("k2", "a", "draft", 0, []string{"artifacts/out.txt"}, nil))
+	mustApply(t, &as, meshBoardPublishedControl("k2", "a", "draft", 0, []string{"artifacts/out.txt"}))
 	if got := as.Mesh.Board["k2"].ArtifactRefs; len(got) != 1 || got[0] != "artifacts/out.txt" {
 		t.Fatalf("valid artifact ref (within artifacts/ prefix) rejected: %+v", got)
 	}

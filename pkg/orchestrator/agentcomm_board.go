@@ -23,6 +23,9 @@ import (
 // precomputed here from a snapshot, which could race a concurrent Wait registration or break idempotent
 // replay. beforeReady only tells notifyAndResumeNewlyReadyWaits which waits to skip because they were already
 // ready before this call.
+//
+// The returned entry is the revision THIS operation committed — rebuilt from the request and the commit's own
+// seq/time, never read back from the board, which may already hold a newer revision (or, on a replay, does).
 func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentcomm.BoardEntry, error) {
 	if req.OperationID == "" {
 		return agentcomm.BoardEntry{}, errors.New("agentcomm: operation id is required")
@@ -31,15 +34,10 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board entry needs a key"}
 	}
 
-	authorizedBy := make([]string, len(req.AuthorizedBy))
-	for i, a := range req.AuthorizedBy {
-		authorizedBy[i] = string(a)
-	}
+	status := redactMeshText(req.Status)
 	publishEff, err := marshalEffect("mesh_board_published",
 		state.Target{BoardKey: req.Key, ParticipantID: string(req.Author)},
-		state.MeshBoardPublishedPayload{
-			Status: req.Status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, AuthorizedBy: authorizedBy,
-		})
+		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
 	}
@@ -48,20 +46,35 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	runCtx := o.runContext(ctx) // a resumed waiter must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_publish", Actor: req.Actor, Effects: []state.Effect{publishEff}}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": req.Status}})
+	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": status}})
 		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
 	})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
 	}
-
-	after := o.opts.Store.Snapshot()
-	entry, ok := after.Assistants.Mesh.Board[req.Key]
-	if !ok {
-		return agentcomm.BoardEntry{}, fmt.Errorf("agentcomm: board entry %q missing immediately after publish", req.Key)
+	entry := agentcomm.BoardEntry{
+		AuthorID: req.Author, Key: req.Key, Version: req.ExpectedVersion + 1, Status: status, ArtifactRefs: req.ArtifactRefs,
+		Seq: res.Seq, Ts: res.Time,
 	}
-	return entry.BoardEntry, nil
+	if len(req.Notify) > 0 {
+		if err := o.notifyAboutBoardEntry(ctx, req, entry); err != nil {
+			return agentcomm.BoardEntry{}, err
+		}
+	}
+	return entry, nil
+}
+
+// notifyAboutBoardEntry tells req.Notify about the just-published entry with one message from its author —
+// through SendFromAgent, so it lands in the conversation of exactly those participants (opening it if
+// needed). Its request id is derived from the publish's, so a retried publish replays the same message.
+func (o *Orchestrator) notifyAboutBoardEntry(ctx context.Context, req PublishRequest, entry agentcomm.BoardEntry) error {
+	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", entry.Key, entry.Status, entry.Key)
+	_, err := o.SendFromAgent(ctx, SendRequest{
+		OperationID: req.OperationID + ":notify", Sender: req.Author, Recipients: req.Notify,
+		Kind: agentcomm.MessageKindRequest, Body: body, Actor: req.Actor,
+	})
+	return err
 }
 
 // ReadBoard implements Service.ReadBoard. An empty Key returns every entry, sorted for a deterministic

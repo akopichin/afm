@@ -106,10 +106,10 @@ func (a meshServerActionsForTest) Inbox(ctx context.Context, cursor uint64, limi
 	return server.MeshMessagePage{Messages: page.Messages, NextCursor: page.NextCursor}, nil
 }
 
-func (a meshServerActionsForTest) PublishBoard(ctx context.Context, requestID string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {
+func (a meshServerActionsForTest) PublishBoard(ctx context.Context, requestID string, req server.MeshBoardPublishRequest) (agentcomm.BoardEntry, error) {
 	return a.orch.Publish(ctx, orchestrator.PublishRequest{
 		OperationID: requestID, Author: "user", Key: req.Key, Status: req.Status, ExpectedVersion: req.ExpectedVersion,
-		Actor: state.Actor{Kind: "user"},
+		Notify: smokeParticipantIDs(req.Notify), Actor: state.Actor{Kind: "user"},
 	})
 }
 

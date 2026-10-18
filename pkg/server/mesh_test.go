@@ -49,7 +49,7 @@ type fakeMeshActions struct {
 	inboxPage MeshMessagePage
 	boardErr  error
 
-	lastPublish    MeshPublishRequest
+	lastPublish    MeshBoardPublishRequest
 	lastPublishReq string
 	board          []agentcomm.BoardEntry
 
@@ -134,7 +134,7 @@ func (f *fakeMeshActions) Inbox(ctx context.Context, cursor uint64, limit int) (
 	return f.inboxPage, nil
 }
 
-func (f *fakeMeshActions) PublishBoard(ctx context.Context, requestID string, req MeshPublishRequest) (agentcomm.BoardEntry, error) {
+func (f *fakeMeshActions) PublishBoard(ctx context.Context, requestID string, req MeshBoardPublishRequest) (agentcomm.BoardEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastPublish, f.lastPublishReq = req, requestID
@@ -579,5 +579,16 @@ func TestMesh_PublishBoard(t *testing.T) {
 	}
 	if resp["key"] != "task/csv-export" {
 		t.Fatalf("response = %v, want the published entry", resp)
+	}
+
+	// notify names whom to tell; authorized_by is not part of the human API (a key belongs to its author).
+	w, _ = doMeshJSON(t, srv, http.MethodPost, "/api/mesh/board", map[string]any{
+		"request_id": "req-b2", "key": "task/docs", "status": "Write docs", "notify": []string{"run:t-1", "stage:api"}, "authorized_by": []string{"run:t-1"},
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("with notify: HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if got := fake.lastPublish.Notify; len(got) != 2 || got[0] != "run:t-1" || got[1] != "stage:api" {
+		t.Fatalf("Service got notify %v, want both participants", got)
 	}
 }

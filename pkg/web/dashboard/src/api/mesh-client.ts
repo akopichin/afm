@@ -155,8 +155,11 @@ export async function getMeshThread(threadId: string, cursor = 0, limit = 0): Pr
 }
 
 // publishMeshBoard posts a board entry as the human operator — POST /api/mesh/board (e.g. a task for the agents).
-export async function publishMeshBoard(req: { requestId: string; key: string; status: string }): Promise<MeshBoardEntry> {
-  return meshPost<MeshBoardEntry>('/api/mesh/board', { request_id: req.requestId, key: req.key, status: req.status })
+// notify — participant ids the server messages about the new entry; sent only when non-empty.
+export async function publishMeshBoard(req: { requestId: string; key: string; status: string; notify?: string[] }): Promise<MeshBoardEntry> {
+  const body: Record<string, unknown> = { request_id: req.requestId, key: req.key, status: req.status }
+  if (req.notify !== undefined && req.notify.length > 0) body.notify = req.notify
+  return meshPost<MeshBoardEntry>('/api/mesh/board', body)
 }
 
 // getMeshBoard reads the shared board — GET /api/mesh/board. An empty/omitted key returns every entry
