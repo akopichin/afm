@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 )
@@ -209,13 +210,18 @@ type MeshThreadOpenedPayload struct {
 // applyMeshThreadOpened projects one mesh_thread_opened control record. Every named member must already be a
 // known participant — a thread naming a nonexistent member is rejected before anything is mutated, the same
 // fail-closed posture applyDiscussionMessage uses for an unknown parent_message_id.
+//
+// A record naming an id that already exists with the SAME descriptor (Title/Scope/Members/MaxMessages — NOT
+// Status, which a later mesh_thread_closed may have changed independently) is a no-op, not an error — the
+// SAME "re-derive from scratch on every call, let the projection dedupe" discipline
+// applyMeshParticipantAdded already documents. Agent Mesh Phase 6, T6.4 relies on exactly this: a stage's
+// discussion thread uses one FIXED id+descriptor derived from the stage id alone (not the posting operation's
+// id), so every post after the first re-submits the identical mesh_thread_opened effect. Only a genuinely
+// conflicting descriptor for the same id is rejected.
 func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	id := agentcomm.ThreadID(c.Target.ThreadID)
 	if id == "" {
 		return errors.New("mesh_thread_opened: empty target thread_id")
-	}
-	if _, exists := as.Mesh.Threads[id]; exists {
-		return fmt.Errorf("mesh_thread_opened: id %s already exists", id)
 	}
 	var p MeshThreadOpenedPayload
 	if err := decodePayload(c.Payload, &p); err != nil {
@@ -238,6 +244,13 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	}
 	if !thread.Valid() {
 		return fmt.Errorf("mesh_thread_opened %s: invalid thread", id)
+	}
+	if existing, exists := as.Mesh.Threads[id]; exists {
+		if existing.Title != thread.Title || existing.Scope != thread.Scope || existing.Budgets != thread.Budgets ||
+			!slices.Equal(existing.Members, thread.Members) {
+			return fmt.Errorf("mesh_thread_opened: id %s already exists with a different descriptor", id)
+		}
+		return nil
 	}
 	if dryRun {
 		return nil

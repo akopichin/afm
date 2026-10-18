@@ -53,6 +53,14 @@ func discussionMessageEffect(stageID, messageID string, p state.DiscussionMessag
 // PostDiscussionMessage durably appends one message to stageID's discussion — a human reply, a forwarded
 // note, or (internally) a participant's independent-round result. It NEVER triggers an FSM transition: the
 // stage's status is completely unaffected by discussion traffic (TestDiscussion_UserMessageIsNotAutoRevise).
+//
+// Agent Mesh Phase 6, T6.4: the SAME ApplyRunOperation call also mirrors this message into stageID's mesh
+// thread (agentcomm_discussion.go's discussionMeshEffects) whenever the author resolves to a mesh identity —
+// one durable record, one operation, the SAME message id readable through both DiscussionMessages and
+// Service.ReadThread. Round-limit enforcement (ComputeRoundUsage/Allow, inside applyDiscussionMessage) runs
+// as part of the SAME operation's pre-write validation (Store.ApplyRunOperation dry-runs every bundled effect
+// before any of them is journaled — pkg/state/assistants_projection.go's applyOperationCommitted), so an
+// over-limit post is rejected with NOTHING written at all, mesh included.
 func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessageRequest) (string, error) {
 	if !o.opts.AssistantsEnabled {
 		return "", &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
@@ -74,12 +82,36 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	if err != nil {
 		return "", err
 	}
+	effects := []state.Effect{eff}
 
-	op := state.Operation{ID: req.OperationID, Kind: "post_discussion_message", Actor: req.Actor, Effects: []state.Effect{eff}}
+	rs := o.opts.Store.Snapshot()
+	meshEffects, err := discussionMeshEffects(rs, req.StageID, messageID, req)
+	if err != nil {
+		return "", err
+	}
+	effects = append(effects, meshEffects...)
+	beforeReady := readyWaitSet(rs)
+
+	threadID := deriveDiscussionThreadID(req.StageID)
+	op := state.Operation{ID: req.OperationID, Kind: "post_discussion_message", Actor: req.Actor, Effects: effects}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventDiscussionMessage, StageID: req.StageID, Data: map[string]any{
 			"message_id": messageID, "author_kind": string(req.AuthorKind), "author_id": req.AuthorID, "round": req.Round,
 		}})
+		if len(meshEffects) == 0 {
+			return
+		}
+		for _, m := range discussionThreadMembers(req.StageID) {
+			o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
+		}
+		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID)}})
+		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
+			"message_id": messageID, "thread_id": string(threadID), "round": req.Round,
+		}})
+		// A discussion reply can be exactly what a stage agent parked on a mesh wait (e.g. an
+		// addressed_message wait on this very thread) is waiting for — resume it the SAME way Send/Publish do
+		// (agentcomm_resume.go), rather than leaving it stranded until something else happens to wake it.
+		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
 	})
 	if err != nil {
 		return "", err
