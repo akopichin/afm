@@ -41,6 +41,23 @@ func TestTrigger_Valid(t *testing.T) {
 	}
 }
 
+func TestScope_Valid(t *testing.T) {
+	cases := []struct {
+		s    Scope
+		want bool
+	}{
+		{"", true}, // empty means ScopeStage — backward compat for pre-T6.1 journals
+		{ScopeStage, true},
+		{ScopeRun, true},
+		{"bogus", false},
+	}
+	for _, tc := range cases {
+		if got := tc.s.Valid(); got != tc.want {
+			t.Errorf("Scope(%q).Valid() = %v, want %v", tc.s, got, tc.want)
+		}
+	}
+}
+
 // TestNoForbiddenImports фиксирует архитектурную границу: pkg/assistants —
 // нейтральный словарь, на который ссылаются и state, и orchestrator. Если он
 // сам начнёт импортировать любой из них (даже подпакет), образуется цикл

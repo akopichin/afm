@@ -87,6 +87,33 @@ func TestChain_LoweredMaxDepthDoesNotMarkHeldBranchDone(t *testing.T) {
 	}
 }
 
+// TestRequiredBlocker_RunScopedTaskNeverBlocksAnyStage (Agent Mesh, T6.1) verifies the claim the
+// plan asks to confirm rather than assume: a Scope==ScopeRun task (RootStageID == "") is indexed
+// under as.ByRootStage[""] by addTask/applyTaskCreated, and currentRootChildren(stageID) only ever
+// reads as.ByRootStage[stageID] for the REAL stageID passed in — so a run-scoped required task,
+// even an unresolved one, can never surface as any real stage's blocker. If this test ever fails,
+// RequiredBlocker's indexing has stopped being the thing that excludes run-scoped tasks from the
+// completion barrier, and T6.2's AttachAndSend would need an explicit guard instead.
+func TestRequiredBlocker_RunScopedTaskNeverBlocksAnyStage(t *testing.T) {
+	f := newBarrierFixture()
+	// An unresolved required run-scoped role — if it were visible to ANY stage's barrier, every one
+	// of these stages would wrongly report a blocker.
+	f.addTask(assistants.Task{ID: "qa", Scope: assistants.ScopeRun, RootStageID: "", Mode: assistants.ModeRequired, Status: assistants.StatusRunning})
+	f.addTask(assistants.Task{ID: "a", RootStageID: "s1", Mode: assistants.ModeAdvisory, Status: assistants.StatusRunning})
+
+	if _, ok := f.as.RequiredBlocker("s1"); ok {
+		t.Fatal("RequiredBlocker(s1) ok=true, want false — the run-scoped task must not block an unrelated stage")
+	}
+	// Even a stage id that was never otherwise attached to must not accidentally resolve the
+	// run-scoped bucket (ByRootStage[""]) as "its" children.
+	if _, ok := f.as.RequiredBlocker("never-attached"); ok {
+		t.Fatal("RequiredBlocker(never-attached) ok=true, want false — the run-scoped task must not leak into an arbitrary stage's barrier")
+	}
+	if _, ok := f.as.RequiredBlocker(""); !ok {
+		t.Fatal("RequiredBlocker(\"\") ok=false, want true — querying the empty-string bucket directly DOES surface the run-scoped task (proving it lives there, not that it's unreachable); no real stage id is ever empty")
+	}
+}
+
 func TestRequiredBlocker_NoRequiredTasksGateSatisfied(t *testing.T) {
 	f := newBarrierFixture()
 	f.addTask(assistants.Task{ID: "a", RootStageID: "s1", Mode: assistants.ModeAdvisory, Status: assistants.StatusRunning})

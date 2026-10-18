@@ -85,6 +85,34 @@ func (t Trigger) Valid() bool {
 	}
 }
 
+// Scope says whether a task lives and dies with one stage (RootStageID is a real, non-empty stage
+// id) or stands for the whole run (RootStageID is empty) — a standing role like "my QA" that any
+// stage can address and that survives its originating stage finishing (Agent Mesh, T6.1). Mirrors
+// the naming of agentcomm.Scope, but is a SEPARATE type: pkg/assistants must not gain a new
+// dependency on pkg/agentcomm just for this (see TestNoForbiddenImports).
+type Scope string
+
+const (
+	// ScopeStage — the default/zero value: the task is rooted at RootStageID and does not outlive
+	// it. Every task_created record written before T6.1 has no "scope" field at all, so this MUST
+	// be what an absent/empty value means — see applyTaskCreated in pkg/state.
+	ScopeStage Scope = "stage"
+	// ScopeRun — a run-scoped standing role with no RootStageID (never created by today's Attach,
+	// which always requires a real stage — see T6.2's AttachAndSend).
+	ScopeRun Scope = "run"
+)
+
+// Valid reports whether s is a recognized Scope, including the zero value (empty string), which is
+// valid and means ScopeStage — backward compatibility for journals written before Scope existed.
+func (s Scope) Valid() bool {
+	switch s {
+	case "", ScopeStage, ScopeRun:
+		return true
+	default:
+		return false
+	}
+}
+
 // TaskStatus — состояние задачи помощника в её собственном, отдельном от
 // stage-FSM жизненном цикле.
 type TaskStatus string
@@ -143,8 +171,13 @@ const (
 
 // Task — одна задача помощника в дереве задач стадии.
 type Task struct {
-	ID               TaskID
-	RunID            string
+	ID    TaskID
+	RunID string
+	// Scope — ScopeStage (default) or ScopeRun. A ScopeRun task has an empty RootStageID (Agent
+	// Mesh, T6.1): it is a standing run-scoped role, not rooted at any one stage.
+	Scope Scope
+	// RootStageID — empty when Scope == ScopeRun; otherwise the real, non-script stage this task is
+	// rooted at.
 	RootStageID      string
 	ParentTaskID     *TaskID // nil для первого уровня (прямой потомок стадии)
 	Depth            int     // вычисляет сервер через ComputeDepth; 1 для первого уровня

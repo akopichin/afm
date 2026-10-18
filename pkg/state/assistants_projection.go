@@ -385,7 +385,11 @@ func (as AssistantsState) EffectivelyHeld(id assistants.TaskID) (bool, []Hold) {
 // TaskCreatedPayload is the task_created control record's payload — decoded here by applyTaskCreated,
 // encoded by pkg/orchestrator's taskCreatedEffect.
 type TaskCreatedPayload struct {
-	ParentTaskID     *string            `json:"parent_task_id,omitempty"`
+	ParentTaskID *string `json:"parent_task_id,omitempty"`
+	// Scope (Agent Mesh, T6.1) — "stage" or "run"; omitted/empty means assistants.ScopeStage
+	// (every task_created record written before T6.1 has no "scope" field at all, and must keep
+	// decoding to stage-scoped with its original RootStageID — see applyTaskCreated below).
+	Scope            string             `json:"scope,omitempty"`
 	ProfileID        string             `json:"profile_id"`
 	ProfileSnapshot  assistants.Profile `json:"profile_snapshot"`
 	Title            string             `json:"title"`
@@ -549,8 +553,19 @@ func applyTaskCreated(as *AssistantsState, c *Control, dryRun bool) error {
 		return fmt.Errorf("task %s: task_created for an id that already exists", id)
 	}
 
+	// Scope normalizes the empty/absent payload value to ScopeStage (Agent Mesh, T6.1) — this is
+	// what makes a pre-T6.1 journal (no "scope" key at all) replay byte-identically: p.Scope decodes
+	// to "", which means exactly the same thing as an explicit "stage". RootStageID is taken
+	// verbatim from c.Target.StageID either way — empty for a ScopeRun task, unchanged for every
+	// existing stage-scoped record.
+	scope := assistants.Scope(p.Scope)
+	if scope == "" {
+		scope = assistants.ScopeStage
+	}
+
 	t := assistants.Task{
 		ID:               id,
+		Scope:            scope,
 		RootStageID:      c.Target.StageID,
 		ProfileID:        assistants.ProfileID(p.ProfileID),
 		ProfileSnapshot:  p.ProfileSnapshot,

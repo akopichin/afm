@@ -280,6 +280,75 @@ func TestReplay_ContinuationRestored(t *testing.T) {
 // TestReplay_IdempotencyIndexRestored: the operation_id index is restored for EVERY record in the log, not
 // just the tail — write records spread across the log (not clustered at the end) and confirm the very first
 // one is still recognized after a restart.
+// TestReplay_RunScopedTaskHasEmptyRootStage (Agent Mesh, T6.1): a task_created record with an
+// explicit scope:"run" payload and an empty Target.StageID projects into a Task with Scope ==
+// ScopeRun and RootStageID == "" — the shape T6.2's AttachAndSend will produce for a standing,
+// run-scoped role (e.g. "my QA") that is never rooted at any one stage.
+func TestReplay_RunScopedTaskHasEmptyRootStage(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	created := taskCreatedControl("op-1", "qa", "", nil)
+	created.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "reviewer", Title: "My QA", Scope: "run"})
+	if err := store.AppendControl(created); err != nil {
+		t.Fatalf("AppendControl(created): %v", err)
+	}
+	store.Close()
+
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	task, ok := rs.Assistants.Tasks["qa"]
+	if !ok {
+		t.Fatal("task qa not found after replay")
+	}
+	if task.Scope != assistants.ScopeRun {
+		t.Errorf("Scope = %q, want %q", task.Scope, assistants.ScopeRun)
+	}
+	if task.RootStageID != "" {
+		t.Errorf("RootStageID = %q, want empty", task.RootStageID)
+	}
+}
+
+// TestReplay_PreT61TaskCreatedPayloadDefaultsToStageScope (Agent Mesh, T6.1): a task_created payload
+// with NO "scope" key at all — exactly the shape every journal written before T6.1 contains — must
+// replay byte-identically into a Task with Scope == ScopeStage and the SAME RootStageID it always
+// had. The payload JSON below is hand-written (not built from today's TaskCreatedPayload struct) so
+// this test keeps pinning the historical, pre-T6.1 wire shape even if that struct is renamed later.
+func TestReplay_PreT61TaskCreatedPayloadDefaultsToStageScope(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	created := taskCreatedControl("op-1", "t1", "a", nil)
+	created.Payload = json.RawMessage(`{"profile_id":"reviewer","title":"Review"}`)
+	if err := store.AppendControl(created); err != nil {
+		t.Fatalf("AppendControl(created): %v", err)
+	}
+	store.Close()
+
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	task, ok := rs.Assistants.Tasks["t1"]
+	if !ok {
+		t.Fatal("task t1 not found after replay")
+	}
+	if task.Scope != assistants.ScopeStage {
+		t.Errorf("Scope = %q, want %q (absent scope key must default to stage-scoped)", task.Scope, assistants.ScopeStage)
+	}
+	if task.RootStageID != "a" {
+		t.Errorf("RootStageID = %q, want %q (unchanged by the T6.1 Scope field)", task.RootStageID, "a")
+	}
+}
+
 func TestReplay_IdempotencyIndexRestored(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, []string{"a"})

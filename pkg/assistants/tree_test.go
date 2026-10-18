@@ -63,6 +63,31 @@ func TestValidateTree_RejectsCrossRunParent(t *testing.T) {
 	}
 }
 
+// TestValidateParent_RunScopedTaskWithNoParentIsValid (Agent Mesh, T6.1): a run-scoped task has no
+// RootStageID and, per the plan (T6.2/T6.2b never give a run-scoped role a parent — AttachAndSend's
+// run-scope path is a flat, top-level Attach-equivalent), no ParentTaskID either. ValidateParent
+// must accept it exactly like any other first-level task — RootStageID being empty is never
+// consulted on the no-parent path.
+func TestValidateParent_RunScopedTaskWithNoParentIsValid(t *testing.T) {
+	role := Task{ID: "qa", RunID: "run-1", Scope: ScopeRun, RootStageID: ""}
+	if err := ValidateParent(&role, nil, "run-1"); err != nil {
+		t.Fatalf("ValidateParent(run-scoped, no parent) = %v, want nil", err)
+	}
+}
+
+// TestValidateTree_RunScopedTaskValidatesAlongsideStageScopedTasks (Agent Mesh, T6.1): a run-scoped
+// role coexists in the same candidate slice as ordinary stage-scoped tasks (e.g. during the
+// whole-tree replay check in applyTaskCreated) without tripping ErrCrossStageParent/ErrCycle/etc. —
+// it never appears as anyone's parent and never looks at a parent itself.
+func TestValidateTree_RunScopedTaskValidatesAlongsideStageScopedTasks(t *testing.T) {
+	stageTask := Task{ID: "a", RunID: "run-1", RootStageID: "stage-1"}
+	runRole := Task{ID: "qa", RunID: "run-1", Scope: ScopeRun, RootStageID: ""}
+
+	if err := ValidateTree([]Task{stageTask, runRole}, "run-1"); err != nil {
+		t.Fatalf("ValidateTree(stage task + run-scoped role) = %v, want nil", err)
+	}
+}
+
 func TestBlocksRootCompletion_RequiredChain(t *testing.T) {
 	aID := TaskID("a")
 
@@ -99,6 +124,29 @@ func TestBlocksRootCompletion_RequiredChain(t *testing.T) {
 			t.Fatal("BlocksRootCompletion(A) = true, want false (A itself is advisory)")
 		}
 	})
+}
+
+// TestBlocksRootCompletion_RunScopedTaskDoesNotPanic (Agent Mesh, T6.1): BlocksRootCompletion is a
+// pure tree-walk with no concept of "root stage" beyond the ParentTaskID chain — calling it directly
+// on a parentless, empty-RootStageID run-scoped task must not panic regardless of Mode. The actual
+// exclusion from any STAGE's barrier is structural one level up: pkg/state.RequiredBlocker only ever
+// builds its roots from as.ByRootStage[stageID] for a real stageID, and a run-scoped task is indexed
+// under as.ByRootStage[""] — see TestRequiredBlocker_RunScopedTaskNeverBlocksAnyStage in
+// pkg/state for that proof; this test only pins down that the pure function itself is safe to call.
+func TestBlocksRootCompletion_RunScopedTaskDoesNotPanic(t *testing.T) {
+	lookup := func(TaskID) (Task, bool) { return Task{}, false }
+
+	advisory := Task{ID: "qa", Scope: ScopeRun, RootStageID: "", Mode: ModeAdvisory}
+	if BlocksRootCompletion(advisory, lookup) {
+		t.Fatal("BlocksRootCompletion(advisory run-scoped role) = true, want false")
+	}
+
+	// A required, parentless task trivially "blocks completion of its own (nonexistent) root" — true,
+	// but inert: nothing ever reaches this task through a real stage's RootStageID bucket (see above).
+	required := Task{ID: "qa", Scope: ScopeRun, RootStageID: "", Mode: ModeRequired}
+	if !BlocksRootCompletion(required, lookup) {
+		t.Fatal("BlocksRootCompletion(required run-scoped role) = false, want true (parentless chain always resolves true; isolation happens one layer up)")
+	}
 }
 
 func TestTaskStatus_TerminalSet(t *testing.T) {
