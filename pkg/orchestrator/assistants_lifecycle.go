@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
@@ -154,12 +155,22 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	}
 	o.persistTaskCache(dir, task)
 
-	stage := o.reg().Stage(task.RootStageID)
-	if stage == nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: root stage no longer exists")
-		return
+	// A scope=run task (Agent Mesh T6.1/T6.2) has no RootStageID at all — a standing role is not rooted at any
+	// stage, so there is no stage to resolve or to fail on. buildTaskContext already degrades gracefully for a
+	// zero-value flow.Stage (empty stage.ID short-circuits CollectArtifacts/stageGeneration/plan.md reads to
+	// nothing, see its own callees) — this is the one place that previously assumed EVERY task has a real root
+	// stage and must be taught the ScopeRun exception, otherwise AttachAndSend's own "always starts queued"
+	// scope=run task (agentcomm_attach.go) would fail its very first turn before doing any work at all.
+	var stage flow.Stage
+	if task.RootStageID != "" {
+		st := o.reg().Stage(task.RootStageID)
+		if st == nil {
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: root stage no longer exists")
+			return
+		}
+		stage = *st
 	}
-	tc, cerr := o.buildTaskContext(task, *stage)
+	tc, cerr := o.buildTaskContext(task, stage)
 	if cerr != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: build context: "+cerr.Error())
 		return
