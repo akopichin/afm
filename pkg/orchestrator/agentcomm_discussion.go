@@ -104,3 +104,23 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	effects = append(effects, msgEff)
 	return effects, nil
 }
+
+// discussionMirrorOfStageReply is the way back of the discussion mirror: when a stage agent writes in its own
+// stage's discussion thread (typically answering the human's discussion post), the same message — same id, in
+// the same operation — is also recorded as the stage's discussion message, so the Discussion tab shows the
+// answer and not only the question. Anything else is not mirrored (ok=false).
+func discussionMirrorOfStageReply(req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, bool, error) {
+	stageID, ok := stageIDFromMeshParticipant(req.Sender)
+	if !ok || req.ThreadID != deriveDiscussionThreadID(stageID) {
+		return state.Effect{}, false, nil
+	}
+	var parent string
+	if req.InReplyTo != nil {
+		parent = string(*req.InReplyTo)
+	}
+	eff, err := discussionMessageEffect(stageID, string(messageID), state.DiscussionMessagePayload{
+		AuthorKind: string(assistants.AuthorMainAgent), AuthorID: string(req.Sender), Role: string(assistants.AuthorMainAgent),
+		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body,
+	})
+	return eff, err == nil, err
+}

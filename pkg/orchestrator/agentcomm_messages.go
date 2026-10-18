@@ -145,10 +145,17 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		return SendReceipt{}, err
 	}
 
+	effects := []state.Effect{eff}
+	if mirror, ok, merr := discussionMirrorOfStageReply(req, messageID, body); merr != nil {
+		return SendReceipt{}, merr
+	} else if ok {
+		effects = append(effects, mirror)
+	}
+
 	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: []state.Effect{eff}}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: effects}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),

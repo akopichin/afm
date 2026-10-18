@@ -234,3 +234,33 @@ func TestMesh_CorrectableErrorsAreTyped(t *testing.T) {
 		t.Fatalf("OpenThread(bad scope) = %v, want invalid_request", err)
 	}
 }
+
+// The stage agent's answer in its stage's discussion thread also shows up in the stage's Discussion (it used to
+// stay only in the mesh, so the Discussion tab showed the human's question and never the answer).
+func TestStageAgentReplyInDiscussionThreadIsMirroredToDiscussion(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	qID, err := o.PostDiscussionMessage(ctx, PostMessageRequest{
+		OperationID: "op-disc-q", StageID: assistantsTestStageID, AuthorKind: assistants.AuthorHuman,
+		Round: assistants.RoundFreeform, Body: "which status code for a bad dueDate?", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("PostDiscussionMessage: %v", err)
+	}
+	stageAgent := meshStageParticipantID(assistantsTestStageID)
+	in := agentcomm.MessageID(qID)
+	if _, err := o.SendFromAgent(ctx, SendRequest{
+		OperationID: "op-disc-a", Sender: stageAgent, Kind: agentcomm.MessageKindReply, InReplyTo: &in,
+		Body: "400 with a clear error", Actor: state.Actor{Kind: "agent", ID: string(stageAgent)},
+	}); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	msgs := o.DiscussionMessages(assistantsTestStageID)
+	if len(msgs) != 2 {
+		t.Fatalf("discussion = %+v, want the question and the stage agent's answer", msgs)
+	}
+	last := msgs[1]
+	if last.Author.Kind != assistants.AuthorMainAgent || last.Body != "400 with a clear error" || last.ParentMessageID != qID {
+		t.Fatalf("mirrored answer = %+v", last)
+	}
+}
