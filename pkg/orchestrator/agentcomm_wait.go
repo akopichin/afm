@@ -85,7 +85,7 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
 	}
-	if req.Actor.Kind != "user" {
+	if req.Actor.Kind != actorKindUser {
 		rs := o.opts.Store.Snapshot()
 		if w, ok := rs.Assistants.Mesh.Waits[req.WaitID]; ok && string(w.Waiter) != req.Actor.ID {
 			return &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only the wait's own waiter or the human may cancel it"}

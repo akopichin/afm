@@ -24,6 +24,10 @@ const (
 	meshUserParticipantID = agentcomm.ParticipantID("user")
 	meshStagePrefix       = "stage:"
 	meshHelperPrefix      = "helper:"
+
+	// actorKindUser is state.Actor.Kind's value for the human operator — the only actor kind that may send an
+	// AttachAndSend first message or register a mesh Wait today (the Side agent's own identity lands in T6.7).
+	actorKindUser = "user"
 )
 
 func meshStageParticipantID(stageID string) agentcomm.ParticipantID {

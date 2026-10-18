@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,11 +159,21 @@ func TestAttachAndSend_ScopeRunCreatesStandingParticipant(t *testing.T) {
 	}
 }
 
+// TestAttachAndSend_NoFirstMessageStartsNoMessageEffects is T6.2's "a role attached with no first message is
+// addressable and starts no work" guarantee: the committed effects (task, participant, thread) are identical
+// to the first-message case, but the executor must never be spawned — codex's verify finding on this task
+// caught that an earlier version scheduled (and the old test waited for completion of) a task with no work to
+// do at all.
 func TestAttachAndSend_NoFirstMessageStartsNoMessageEffects(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()
 	activateStage(t, o, assistantsTestStageID)
-	stubPassingHelper(o)
+
+	var calls atomic.Int32
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		calls.Add(1)
+		return passResultOutcome(), nil
+	}
 
 	res, err := o.AttachAndSend(ctx, AttachAndSendRequest{
 		OperationID: "op-as-nomsg", ProfileID: "reviewer", Scope: assistants.ScopeStage, StageID: assistantsTestStageID,
@@ -174,9 +185,15 @@ func TestAttachAndSend_NoFirstMessageStartsNoMessageEffects(t *testing.T) {
 	if res.MessageID != nil {
 		t.Fatalf("MessageID = %v, want nil when FirstMessage is nil", res.MessageID)
 	}
-	waitForTaskStatus(t, store, res.TaskID, assistants.StatusCompleted, 2*time.Second)
 
 	rs := store.Snapshot()
+	task, ok := rs.Assistants.Tasks[res.TaskID]
+	if !ok {
+		t.Fatal("task not found in projection")
+	}
+	if task.Status != assistants.StatusQueued {
+		t.Fatalf("task.Status = %q, want queued — no first message must start no work", task.Status)
+	}
 	if len(rs.Assistants.Mesh.Messages) != 0 {
 		t.Fatalf("Mesh.Messages = %d, want 0 — no message effects without a FirstMessage", len(rs.Assistants.Mesh.Messages))
 	}
@@ -186,6 +203,9 @@ func TestAttachAndSend_NoFirstMessageStartsNoMessageEffects(t *testing.T) {
 	}
 	if _, ok := rs.Assistants.Mesh.Threads[res.ThreadID]; !ok {
 		t.Fatal("thread must still be opened even with no first message")
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("runHelperAgent invoked %d times, want 0 — attach with no first message must not spawn the executor", got)
 	}
 }
 

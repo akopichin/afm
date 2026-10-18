@@ -353,7 +353,7 @@ func TestMesh_SendRetryAfterResolvingWaitStaysIdempotent(t *testing.T) {
 // redacts the body the same way buildTaskContext redacts everything else a task sees
 // (assistants_context.go's secretValuesForRedaction + pkg/redact).
 func TestMesh_SendRedactsSecretsInBody(t *testing.T) {
-	const secretValue = "sk-test-supersecret-token-12345"
+	const secretValue = "sk-test-supersecret-token-12345" //nolint:gosec // test fixture value, not a real credential
 	t.Setenv("ANTHROPIC_API_KEY", secretValue)
 
 	o, store := newAssistantsTestOrchestrator(t, true)

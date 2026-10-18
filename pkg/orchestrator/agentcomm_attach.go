@@ -80,7 +80,7 @@ func meshThreadScopeFor(s assistants.Scope) agentcomm.Scope {
 // is only ever the human (Actor.Kind == "user") — the Side agent's own mesh identity lands in T6.7, out of
 // scope here — so any other actor kind is an explicit, honest error rather than a guess.
 func meshActorSenderID(actor state.Actor) (agentcomm.ParticipantID, error) {
-	if actor.Kind == "user" {
+	if actor.Kind == actorKindUser {
 		return meshUserParticipantID, nil
 	}
 	return "", fmt.Errorf("agentcomm: attach-and-send cannot send a first message for actor kind %q (only the human sends one today; the Side agent's own identity lands in T6.7)", actor.Kind)
@@ -316,7 +316,11 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 				"message_id": string(*messageID), "thread_id": string(threadID), "sender_id": string(senderID), "kind": string(agentcomm.MessageKindMessage),
 			}})
 		}
-		if startQueued {
+		// Scheduling (and so spawning the executor) only happens when there is actual work to do: a role
+		// attached with no FirstMessage must stay queued and addressable, never start its process — the
+		// committed effects are identical either way (see startQueued above), only this externalWork step
+		// differs on whether a message was sent.
+		if startQueued && messageID != nil {
 			o.maybeScheduleTask(runCtx, taskID)
 		}
 	})
