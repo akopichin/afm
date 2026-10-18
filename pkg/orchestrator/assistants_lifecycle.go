@@ -28,7 +28,7 @@ type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt,
 // everything it is entitled to read as inline TEXT (plan/artifacts), so it needs no live write access to the
 // project tree — scratch/ is the only directory it can write to.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
-	_, onDelivered := o.agentCommInboxForTask(taskID)
+	participant := o.taskMeshParticipant(taskID)
 	return executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
@@ -39,8 +39,8 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
-		MeshClient:     o.meshClientFor(o.taskMeshParticipant(taskID)),
-		OnDelivered:    onDelivered,
+		MeshClient:     o.meshClientFor(participant),
+		OnDelivered:    o.deliverRenderedInbox(participant),
 	}
 }
 
@@ -193,13 +193,15 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
-	// The turn starts now: the <inbox> messages in its prompt are delivered (the executor's OnDelivered does
-	// the same at process start — idempotent per message; this also covers any helperAgentRunner).
-	if tc.markInboxDelivered != nil {
-		tc.markInboxDelivered()
-	}
 	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
+	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
+	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
+	// a helperAgentRunner that never calls OnDelivered — otherwise a run agent would see them as unseen forever
+	// and restart itself after every turn. A process that never started leaves them accepted for the next turn.
+	if err == nil && outcome.ProcessOK && tc.markInboxDelivered != nil {
+		tc.markInboxDelivered()
+	}
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
 		// Observation only — never changes the task's verdict (mirrors verify_tree_modified exactly).
 		o.publishNotice(bus.Event{Type: bus.EventHelperTreeModified, StageID: task.RootStageID, Data: map[string]any{

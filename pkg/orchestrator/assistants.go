@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -409,6 +408,21 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 	return !rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task))
 }
 
+// runAgentHasUnseenMessages reports whether some queued run agent has a message it has not seen yet: its next
+// turn is due (the message's Send, or its previous turn's own tail, schedules it), so the run must not finish
+// under it. state.RunBlocker deliberately ignores queued tasks — an idle run agent with nothing to read never
+// holds the run open — but without this check a message accepted during an agent's last turn could lose the
+// race to the run loop: the turn's running→queued commit wakes the loop before the next turn is scheduled.
+func runAgentHasUnseenMessages(rs state.RunState) bool {
+	for _, t := range rs.Assistants.Tasks {
+		if t.Scope == assistants.ScopeRun && t.Status == assistants.StatusQueued &&
+			rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task)) {
+			return true
+		}
+	}
+	return false
+}
+
 // maybeScheduleTask attempts to move a QUEUED, not-currently-held task to running and spawn its helper
 // process. Safe to call any number of times for the same task — including from an idempotent Attach replay
 // (T2.5), where externalWork fires again even though nothing new happened — because the transition's own
@@ -511,16 +525,13 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 	// practice (both ids already name known, just-read tasks) and must never block the task's own terminal
 	// transition from landing, so it is logged and the finish proceeds without the mirror rather than failing
 	// the whole operation.
-	var beforeReady map[agentcomm.WaitID]bool
-	mirrored := false
+	rs := o.opts.Store.Snapshot()
+	beforeReady := readyWaitSet(rs)
 	if to.Terminal() && hasParent {
-		rs := o.opts.Store.Snapshot()
 		if mirror, merr := childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
 			log.Printf("WARN: assistants: child result mesh mirror (task=%s parent=%s): %v", taskID, parentID, merr)
 		} else if len(mirror) > 0 {
 			effects = append(effects, mirror...)
-			beforeReady = readyWaitSet(rs)
-			mirrored = true
 		}
 	}
 
@@ -562,12 +573,11 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 			// may be the last thing the run-level barrier was waiting on.
 			o.concurrency.WakeEventLoop()
 		}
-		if mirrored {
-			// Mirrors Send/PostDiscussionMessage's own tail: the mirrored message can be exactly what a
-			// pending mesh Wait (e.g. an addressed_message wait the parent registered on this very delegate
-			// thread) needed to become ready — resume it the same way any other mesh write does.
-			o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
-		}
+		// Mirrors Send/PostDiscussionMessage's own tail: this commit can be exactly what a pending mesh Wait
+		// needed — a task_result wait on this task (its terminal status, or a run agent's recorded turn
+		// result), or an addressed_message wait on the delegate thread the result was mirrored into — resume
+		// it the same way any other mesh write does.
+		o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
 	})
 	o.handleTaskOperationErr(err)
 }

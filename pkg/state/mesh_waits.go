@@ -91,8 +91,11 @@ func (as *AssistantsState) meshWaitConditionSatisfied(cond agentcomm.WaitConditi
 		}
 		return as.Mesh.hasMessageAddressedTo(cond.ThreadID, waiter)
 	case agentcomm.WaitOnTaskResult:
+		// A task's result is final once it is terminal. A run agent never becomes terminal: it returns to
+		// queued after every turn, with that turn's result recorded (LastVerdict) — that recorded result is
+		// what a task_result wait on it observes.
 		t, ok := as.Tasks[assistants.TaskID(cond.TaskID)]
-		return ok && t.Status.Terminal()
+		return ok && (t.Status.Terminal() || (t.Scope == assistants.ScopeRun && t.LastVerdict != ""))
 	case agentcomm.WaitOnBoardKey:
 		e, ok := as.Mesh.Board[cond.Key]
 		return ok && e.Status == cond.Status
@@ -115,6 +118,16 @@ func (as *AssistantsState) resolvePendingWaits(newStatus agentcomm.WaitStatus, m
 		}
 		w.Status = newStatus
 	}
+}
+
+// resolveTaskResultWaits resolves every pending task_result wait on taskID its CURRENT state satisfies —
+// called by the task_status_changed/task_result handlers in the SAME commit as the change, like
+// applyMeshMessageSent/applyMeshBoardPublished do for their own wait kinds.
+func (as *AssistantsState) resolveTaskResultWaits(taskID assistants.TaskID) {
+	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
+		return w.Condition.Kind == agentcomm.WaitOnTaskResult && w.Condition.TaskID == string(taskID) &&
+			as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+	})
 }
 
 // MeshWaitResolvedPayload is the mesh_wait_resolved control record's payload — decoded here by

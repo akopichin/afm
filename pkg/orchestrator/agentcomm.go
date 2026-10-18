@@ -216,12 +216,11 @@ func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 	return block
 }
 
-// agentCommOnDeliveredForStage returns the OnDelivered callback for stage s's executor.Config — see
-// agentCommInboxFor's doc comment for why marking delivery is deferred to cmd.Start() succeeding, not to
-// prompt assembly.
+// agentCommOnDeliveredForStage returns the OnDelivered callback for stage s's executor.Config: it marks the
+// messages of the stage's latest rendered <inbox> block delivered (deliverRenderedInbox) — see
+// agentCommInboxFor's doc comment for why marking is deferred to cmd.Start() succeeding.
 func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
-	_, onDelivered := o.agentCommInboxFor(meshStageParticipantID(s.ID))
-	return onDelivered
+	return o.deliverRenderedInbox(meshStageParticipantID(s.ID))
 }
 
 // agentCommBlockFor renders stage s's <agent_communication> block (Agent Mesh Phase 4, T4.2) — called from

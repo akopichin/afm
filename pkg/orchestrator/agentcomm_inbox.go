@@ -8,16 +8,17 @@ import (
 	"github.com/akopichin/afm/pkg/prompts"
 )
 
-// Agent Mesh Phase 4, T4.4: the <inbox> block and its delivery-marking callback. Both halves are derived
-// from the SAME read of CURRENT state (only messages still at DeliveryAccepted for this participant), so the
-// prompt text and the set of messages OnDelivered marks delivered always agree.
+// Agent Mesh Phase 4, T4.4: the <inbox> block and its delivery marking. A turn's prompt and the set of
+// messages marked delivered for it come from ONE read of the state (agentCommInboxFor): a message that
+// arrives after the prompt was built is not in it, so it must stay unseen and reach the next turn.
 
 // agentCommInboxFor renders participant's pending (not-yet-delivered) inbox messages and returns a closure
-// that marks exactly those messages delivered. The closure is meant for executor.Config.OnDelivered, called
-// ONLY after cmd.Start() actually succeeds (pkg/executor/executor.go) — never at context-assembly time,
-// so a crash between building this prompt and spawning the process leaves the messages at "accepted" and
-// they are re-injected, unchanged, on the next attempt.
-func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (block string, onDelivered func()) {
+// that marks exactly those messages delivered. The same set is remembered as the participant's rendered inbox
+// for deliverRenderedInbox — executor.Config.OnDelivered, called only after cmd.Start() succeeds
+// (pkg/executor/executor.go). Marking never happens at prompt-assembly time, so a crash or a failed start
+// between building this prompt and spawning the process leaves the messages at "accepted" and they are
+// re-injected, unchanged, on the next attempt.
+func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (block string, markDelivered func()) {
 	if o.opts.Store == nil {
 		// Some tests build a bare Orchestrator literal to exercise a single concern (e.g. browser/mesh Config
 		// wiring) without a real Store — nothing to read, so there is nothing pending and nothing to deliver.
@@ -51,15 +52,28 @@ func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (b
 		})
 	}
 
-	return prompts.AgentCommInboxBlock(msgs), func() {
-		for _, id := range pending {
-			_ = o.MarkMessageDelivered(context.Background(), id, participant)
+	o.renderedInbox.Store(participant, pending)
+	return prompts.AgentCommInboxBlock(msgs), func() { o.markInboxDelivered(participant, pending) }
+}
+
+// deliverRenderedInbox returns the executor.Config.OnDelivered callback for participant: it marks the
+// messages of participant's latest rendered <inbox> block delivered — never a fresh read of the inbox, which
+// could include a message that arrived after the prompt was built.
+func (o *Orchestrator) deliverRenderedInbox(participant agentcomm.ParticipantID) func() {
+	return func() {
+		if v, ok := o.renderedInbox.LoadAndDelete(participant); ok {
+			o.markInboxDelivered(participant, v.([]agentcomm.MessageID))
 		}
 	}
 }
 
-// agentCommInboxForTask is agentCommInboxFor's helper-task-scoped wrapper, used by buildTaskContext (T4.3)
-// and helperExecutorConfig's OnDelivered wiring.
-func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, onDelivered func()) {
+func (o *Orchestrator) markInboxDelivered(participant agentcomm.ParticipantID, ids []agentcomm.MessageID) {
+	for _, id := range ids {
+		_ = o.MarkMessageDelivered(context.Background(), id, participant)
+	}
+}
+
+// agentCommInboxForTask is agentCommInboxFor's helper-task-scoped wrapper, used by buildTaskContext (T4.3).
+func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, markDelivered func()) {
 	return o.agentCommInboxFor(o.taskMeshParticipant(taskID))
 }

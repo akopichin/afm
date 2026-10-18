@@ -345,7 +345,8 @@ func (o *Orchestrator) shouldExit() bool {
 	// state.AssistantsState.RunBlocker's doc comment for why this is a separate, wider check than the
 	// per-stage RequiredBlocker gate.
 	if o.opts.AssistantsEnabled {
-		if _, blocked := o.opts.Store.Snapshot().Assistants.RunBlocker(); blocked {
+		rs := o.opts.Store.Snapshot()
+		if _, blocked := rs.Assistants.RunBlocker(); blocked || runAgentHasUnseenMessages(rs) {
 			return false
 		}
 	}

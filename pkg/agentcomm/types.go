@@ -219,7 +219,7 @@ const (
 	// WaitOnAddressedMessage is satisfied by any new message addressed to the waiter in ThreadID.
 	WaitOnAddressedMessage WaitConditionKind = "addressed_message"
 	// WaitOnTaskResult is satisfied when the assistants task named by TaskID reaches a terminal
-	// status.
+	// status, or — for a run agent, which never becomes terminal — once a turn's result is recorded.
 	WaitOnTaskResult WaitConditionKind = "task_result"
 	// WaitOnBoardKey is satisfied when the board entry named Key reaches Status.
 	WaitOnBoardKey WaitConditionKind = "board_key"
@@ -249,7 +249,7 @@ type WaitCondition struct {
 	// ThreadID is set for WaitOnAddressedMessage: the thread to watch for a new message
 	// addressed to the waiter. Empty means any thread: a message the waiter has not seen yet.
 	ThreadID ThreadID `json:"thread_id,omitempty"`
-	// TaskID is set for WaitOnTaskResult: the assistants task whose terminal result is awaited.
+	// TaskID is set for WaitOnTaskResult: the assistants task whose result is awaited.
 	// Kept as a plain string (not assistants.TaskID) so this field costs agentcomm no import of
 	// pkg/assistants.
 	TaskID string `json:"task_id,omitempty"`

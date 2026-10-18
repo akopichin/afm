@@ -654,6 +654,7 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	if status.Terminal() {
 		t.FinishedAt = c.Time
 	}
+	as.resolveTaskResultWaits(id)
 	return nil
 }
 
@@ -718,6 +719,7 @@ func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	t.LastVerdict = p.Verdict
+	as.resolveTaskResultWaits(id)
 	return nil
 }
 

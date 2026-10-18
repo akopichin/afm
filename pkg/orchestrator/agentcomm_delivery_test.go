@@ -1,0 +1,192 @@
+package orchestrator
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/state"
+)
+
+// Delivery of a run agent's inbox, the run barrier for its unread messages and task_result waits on it.
+
+func addTestRunAgent(t *testing.T, o *Orchestrator, opID string, firstMessage *string) AttachAndSendResult {
+	t.Helper()
+	res, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{
+		OperationID: opID, ProfileID: "qa", Title: "QA", Instruction: "review", FirstMessage: firstMessage, Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	return res
+}
+
+func receiptOf(store *state.Store, messageID agentcomm.MessageID, recipient agentcomm.ParticipantID) agentcomm.DeliveryStatus {
+	return store.Snapshot().Assistants.Mesh.Receipts[messageID][recipient]
+}
+
+// A turn whose process never started has delivered nothing: the prompt's messages stay unseen.
+func TestInboxDelivery_FailedStartKeepsMessagesUnseen(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessErr: fmt.Errorf("%w: helper-cmd: not found", executor.ErrAgentStart)}, nil
+	}
+	msg := "hello"
+	res := addTestRunAgent(t, o, "op-add", &msg)
+	waitForTaskStatus(t, store, res.TaskID, assistants.StatusFailed, 2*time.Second)
+
+	if got := receiptOf(store, *res.MessageID, res.ParticipantID); got != agentcomm.DeliveryAccepted {
+		t.Fatalf("receipt after a failed start = %s, want accepted", got)
+	}
+}
+
+// OnDelivered marks exactly the messages of the prompt it belongs to: a message that arrives after the prompt
+// was built stays unseen and reaches the agent's next turn.
+func TestInboxDelivery_MessageArrivingAfterPromptIsNotMarked(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	var (
+		calls          atomic.Int32
+		res            AttachAndSendResult
+		lateID         agentcomm.MessageID
+		firstAtStart   agentcomm.DeliveryStatus
+		lateAtStart    agentcomm.DeliveryStatus
+		secondPromptOK atomic.Bool
+	)
+	ready := make(chan struct{})
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		<-ready
+		if calls.Add(1) == 1 {
+			receipt, err := o.Send(ctx, SendRequest{
+				OperationID: "op-late", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+				Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindMessage, Body: "late note",
+				Actor: state.Actor{Kind: "user"},
+			})
+			if err != nil {
+				t.Errorf("Send: %v", err)
+			}
+			lateID = receipt.MessageID
+			o.helperExecutorConfig(assistants.TaskID(taskID), cmd).OnDelivered() // what the executor does at process start
+			firstAtStart = receiptOf(store, *res.MessageID, res.ParticipantID)
+			lateAtStart = receiptOf(store, lateID, res.ParticipantID)
+		} else {
+			secondPromptOK.Store(strings.Contains(prompt, "late note"))
+		}
+		return passResultOutcome(), nil
+	}
+	msg := "first note"
+	res = addTestRunAgent(t, o, "op-add", &msg)
+	close(ready)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
+
+	if firstAtStart != agentcomm.DeliveryDelivered {
+		t.Fatalf("prompt message at process start = %s, want delivered", firstAtStart)
+	}
+	if lateAtStart != agentcomm.DeliveryAccepted {
+		t.Fatalf("message that arrived after the prompt = %s at process start, want still accepted", lateAtStart)
+	}
+	if calls.Load() != 2 || !secondPromptOK.Load() {
+		t.Fatalf("turns = %d, late note in the second prompt = %v; want a second turn that reads it", calls.Load(), secondPromptOK.Load())
+	}
+	if got := receiptOf(store, lateID, res.ParticipantID); got != agentcomm.DeliveryDelivered {
+		t.Fatalf("late message after the second turn = %s, want delivered", got)
+	}
+}
+
+// A runner that never calls OnDelivered (a stub, or any helperAgentRunner) still has its turn's messages
+// delivered once the turn ran — otherwise a run agent would restart itself forever.
+func TestInboxDelivery_RunnerWithoutOnDeliveredRunsOnce(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	var calls atomic.Int32
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		calls.Add(1)
+		return passResultOutcome(), nil
+	}
+	msg := "hello"
+	res := addTestRunAgent(t, o, "op-add", &msg)
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
+	time.Sleep(50 * time.Millisecond)
+
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("turns = %d, want 1", n)
+	}
+	if got := receiptOf(store, *res.MessageID, res.ParticipantID); got != agentcomm.DeliveryDelivered {
+		t.Fatalf("receipt = %s, want delivered", got)
+	}
+}
+
+// A queued run agent with an unread message holds the run open — its next turn is due — while an idle one
+// with nothing to read does not.
+func TestShouldExit_QueuedRunAgentWithUnreadMessageHoldsRun(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	if _, ok := o.Trigger(assistantsTestStageID, bus.EvComplete, bus.GuardCtx{}, ""); !ok {
+		t.Fatal("EvComplete failed")
+	}
+	res := addTestRunAgent(t, o, "op-add", nil)
+	if !o.shouldExit() {
+		t.Fatal("an idle run agent with nothing to read must not hold the run open")
+	}
+
+	// The message is committed but the agent's next turn is not scheduled yet — the window between a turn's
+	// running→queued commit and its follow-up scheduling.
+	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(res.ThreadID), MessageID: "mm-direct"},
+		state.MeshMessageSentPayload{Sender: string(meshUserParticipantID), Recipients: []string{string(res.ParticipantID)}, Kind: string(agentcomm.MessageKindMessage), Body: "one more"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyRunOperation(state.Operation{ID: "op-direct", Kind: "mesh_send", Effects: []state.Effect{eff}}, nil); err != nil {
+		t.Fatalf("commit message: %v", err)
+	}
+	if o.shouldExit() {
+		t.Fatal("a queued run agent with an unread message must hold the run open")
+	}
+}
+
+// A task_result wait on a run agent resolves when a turn's result is committed — whether the wait was
+// registered before that turn or after it.
+func TestTaskResultWait_RunAgentTurn(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	stubPassingHelper(o)
+	res := addTestRunAgent(t, o, "op-add", nil)
+
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: string(res.TaskID)}
+	before, err := o.Wait(ctx, WaitRequest{OperationID: "op-wait-before", Waiter: meshUserParticipantID, Condition: cond, Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatalf("Wait (before the turn): %v", err)
+	}
+	if before.Status != agentcomm.WaitPending {
+		t.Fatalf("wait before any turn = %s, want pending", before.Status)
+	}
+
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "op-go", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindMessage, Body: "go", Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
+
+	if got := store.Snapshot().Assistants.Mesh.Waits[before.WaitID].Status; got != agentcomm.WaitReady {
+		t.Fatalf("wait registered before the turn = %s after it, want ready", got)
+	}
+	after, err := o.Wait(ctx, WaitRequest{OperationID: "op-wait-after", Waiter: meshUserParticipantID, Condition: cond, Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatalf("Wait (after the turn): %v", err)
+	}
+	if after.Status != agentcomm.WaitReady {
+		t.Fatalf("wait registered after the turn = %s, want ready", after.Status)
+	}
+}

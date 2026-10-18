@@ -33,8 +33,9 @@ const maxTaskContextBytes = 200 * 1024
 type TaskContext struct {
 	Prompt  string
 	Version assistants.ContextVersion
-	// markInboxDelivered marks exactly the <inbox> messages included in Prompt as delivered — called once
-	// the turn actually starts, so a message that arrives later still counts as unseen and wakes the agent.
+	// markInboxDelivered marks exactly the <inbox> messages included in Prompt as delivered — called only once
+	// the turn's process has run, so a message that arrives later, or a turn that never started, leaves the
+	// messages unseen and they wake the agent again.
 	markInboxDelivered func()
 }
 

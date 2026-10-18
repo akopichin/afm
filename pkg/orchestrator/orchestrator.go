@@ -359,6 +359,10 @@ type Orchestrator struct {
 	// instead of the resting "watching" one — consumed exactly once (LoadAndDelete) by runHelperTask's success
 	// tail, mirroring taskPausePending/taskClarifyPending's one-shot signal pattern above.
 	taskFinalPass sync.Map
+	// renderedInbox maps a mesh participant to the message ids its most recently built prompt put into the
+	// <inbox> block — what that turn's OnDelivered marks delivered once its process has started (see
+	// agentCommInboxFor). One agent per participant runs at a time, so the latest prompt is that turn's prompt.
+	renderedInbox sync.Map
 	// watchClock — injectable Clock for watch.NewCollector (test seam, mirrors fingerprintFn); nil = real time.
 	watchClock watch.Clock
 	// watchPollInterval overrides the watcher poll ticker period in tests; 0 = production default.
