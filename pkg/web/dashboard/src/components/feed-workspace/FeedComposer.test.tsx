@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import * as meshClient from '../../api/mesh-client'
@@ -387,19 +387,103 @@ describe('FeedComposer', () => {
       expect(openSpy).not.toHaveBeenCalled()
     })
 
-    it('picking an "Attach to stage" profile sends via attachAndSendMesh, never sendMeshMessage', async () => {
-      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
-      const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't1', participant_id: 'helper:t1', thread_id: 'mt-attach', message_id: 'm1' })
-      const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage')
+    // --- Agent Mesh Phase 7, T7.5: attach preview for a profile with no instance ---
+    describe('"Attach to stage" opens a preview before anything is created (T7.5)', () => {
+      function openPreview(): void {
+        openMessageMode()
+        selectMention('@frontendDeveloper')
+        fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@frontendDeveloper please take a look' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      }
 
-      openMessageMode()
-      selectMention('@frontendDeveloper')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@frontendDeveloper please take a look' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      it('Send opens a preview showing the assignment, Configured executor, stage binding and mode — issues no request', () => {
+        const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
+        openPreview()
 
-      await waitFor(() => expect(attachSpy).toHaveBeenCalled())
-      expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'frontendDeveloper', scope: 'stage', stageId: 's1' }))
-      expect(sendSpy).not.toHaveBeenCalled()
+        const dialog = screen.getByRole('dialog', { name: /attach assistant/i })
+        expect(within(dialog).getByText('@frontendDeveloper please take a look')).toBeInTheDocument()
+        expect(within(dialog).getByText('Configured executor')).toBeInTheDocument()
+        expect(within(dialog).getByText('claude')).toBeInTheDocument()
+        expect(within(dialog).getByText('Backend')).toBeInTheDocument()
+        expect(within(dialog).getByText(/advisory/i)).toBeInTheDocument()
+        expect(attachSpy).not.toHaveBeenCalled()
+      })
+
+      it('"Attach and send" issues exactly one POST carrying the assignment text and the stage id, and renders the resulting thread', async () => {
+        vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+          messages: [{ id: 'm1', thread_id: 'mt-attach', sender_id: 'user', recipient_ids: ['helper:t1'], kind: 'message', body: '@frontendDeveloper please take a look', seq: 1, created_at: '2026-10-18T00:00:00Z' }],
+          next_cursor: 1,
+        })
+        const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't1', participant_id: 'helper:t1', thread_id: 'mt-attach', message_id: 'm1' })
+        const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage')
+
+        openPreview()
+        fireEvent.click(screen.getByRole('button', { name: /attach and send/i }))
+
+        await waitFor(() => expect(attachSpy).toHaveBeenCalledTimes(1))
+        expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({
+          profileId: 'frontendDeveloper', scope: 'stage', stageId: 's1',
+          instruction: '@frontendDeveloper please take a look', firstMessage: '@frontendDeveloper please take a look',
+        }))
+        expect(sendSpy).not.toHaveBeenCalled()
+        await waitFor(() => expect(screen.getByText('@frontendDeveloper please take a look')).toBeInTheDocument())
+        expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull()
+      })
+
+      it('Cancel creates neither task nor message and issues no request at all, leaving the draft untouched', () => {
+        const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
+        const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage')
+        openPreview()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+        expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull()
+        expect(attachSpy).not.toHaveBeenCalled()
+        expect(sendSpy).not.toHaveBeenCalled()
+        expect(screen.getByRole('textbox', { name: /message the mesh/i })).toHaveValue('@frontendDeveloper please take a look')
+      })
+
+      it('a server error (unavailable profile / exceeded quota) renders in-dialog with no partial attach', async () => {
+        vi.spyOn(meshClient, 'attachAndSendMesh').mockRejectedValue(new Error('quota exceeded'))
+        openPreview()
+
+        fireEvent.click(screen.getByRole('button', { name: /attach and send/i }))
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/quota exceeded/i))
+        // No partial attach: the dialog stays open, and nothing optimistic reached the feed/roster.
+        expect(screen.getByRole('dialog', { name: /attach assistant/i })).toBeInTheDocument()
+        expect(screen.queryByRole('status')).toBeNull()
+      })
+
+      it('a double confirm (double click) reuses the same request_id and does not duplicate the helper', async () => {
+        const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't1', participant_id: 'helper:t1', thread_id: 'mt-attach' })
+        vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+        openPreview()
+
+        const confirmBtn = screen.getByRole('button', { name: /attach and send/i })
+        fireEvent.click(confirmBtn)
+        fireEvent.click(confirmBtn)
+
+        await waitFor(() => expect(attachSpy).toHaveBeenCalledTimes(1))
+      })
+
+      it('a re-submit after a slow response reuses the same request_id', async () => {
+        const attachSpy = vi
+          .spyOn(meshClient, 'attachAndSendMesh')
+          .mockRejectedValueOnce(new Error('transient'))
+          .mockResolvedValueOnce({ task_id: 't1', participant_id: 'helper:t1', thread_id: 'mt-attach' })
+        vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+        openPreview()
+
+        const confirmBtn = screen.getByRole('button', { name: /attach and send/i })
+        fireEvent.click(confirmBtn)
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/transient/i))
+        fireEvent.click(confirmBtn)
+
+        await waitFor(() => expect(attachSpy).toHaveBeenCalledTimes(2))
+        const [firstCall, secondCall] = attachSpy.mock.calls
+        expect(firstCall?.[0].requestId).toBe(secondCall?.[0].requestId)
+      })
     })
 
     it('receipts: shows "Awaiting delivery" while the send is in flight, then "Delivered" once resolved', async () => {

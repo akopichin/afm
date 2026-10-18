@@ -1,39 +1,54 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { ActionCard } from './ActionCard'
-import { confirmActionDraft } from '../../api/run-client'
+import { attachAndSendMesh, genMeshRequestId, type MeshAttachAndSendResult } from '../../api/mesh-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { visibleFocusables } from '../../lib/focus-trap'
 
 export type AttachAssistantDialogProps = {
-  turnId: string
-  index: number
   profileId: string
   stageId: string
-  title: string
+  // title — optional task title; an empty/omitted value falls back to the profile's own title for display,
+  // and is left out of the request so the server picks its own default (mirrors AddRunAgentDialog's own
+  // "optional, trimmed" title field).
+  title?: string
+  // instruction — the assignment text the human typed. Sent as BOTH the task's Instruction and its
+  // FirstMessage: this is a single free-form message, not two separate inputs, so one string drives both.
   instruction: string
+  mode?: 'advisory' | 'required'
   profiles: AssistantProfile[]
   stages: { id: string; title: string }[]
-  // maxDepth — effective_max_depth from GET /api/assistant-profiles. Этап 4 has no recursion (Этап 4a):
-  // this is always a top-level attach (depth=1), so remaining depth after it is maxDepth - 1.
-  maxDepth: number
-  onConfirmed: (taskId: string) => void
+  // maxDepth — effective_max_depth from GET /api/assistant-profiles, when the caller has it (dev-plan.md
+  // T4.6, §12.4). Optional: the Feed's attach preview (T7.5) does not thread this through yet, and ActionCard
+  // simply omits the depth row rather than showing a misleading value.
+  maxDepth?: number
+  onConfirmed: (result: MeshAttachAndSendResult) => void
   onCancel: () => void
 }
 
-// AttachAssistantDialog — the modal wrapper around ActionCard: confirms (or cancels) one action draft a
-// side-agent turn proposed (dev-plan.md T4.6). Mirrors FileBrowserModal's Escape/Tab-wrap focus-trap
-// (visibleFocusables) rather than reinventing one.
+// AttachAssistantDialog — the modal wrapper around ActionCard: previews, then confirms (or cancels), one
+// attach-and-send to a configured profile (dev-plan.md T4.6/T7.5). "Attach and send" calls the T6.2-backed
+// composite (attachAndSendMesh → POST /api/mesh/attach-and-send) directly — NOT confirmActionDraft, which was
+// this dialog's original Side-agent-draft-confirm path (Этап 4a) and has no other live caller today (T7.5's
+// job folds that unmounted flow into the mesh composite rather than keeping two). Mirrors FileBrowserModal's
+// Escape/Tab-wrap focus-trap (visibleFocusables) rather than reinventing one.
 export function AttachAssistantDialog({
-  turnId, index, profileId, stageId, title, instruction, profiles, stages, maxDepth, onConfirmed, onCancel,
+  profileId, stageId, title, instruction, mode, profiles, stages, maxDepth, onConfirmed, onCancel,
 }: AttachAssistantDialogProps): ReactElement {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
+  // requestIdRef — minted ONCE when the dialog opens (mount) and reused on every retry within this same
+  // preview session, same pattern as AddRunAgentDialog's own requestIdRef: a slow response followed by a
+  // second click (or a retry after a server error) must not mint a second durable attach.
+  const requestIdRef = useRef(genMeshRequestId('mesh-attach-preview'))
 
-  const roleTitle = profiles.find((p) => p.id === profileId)?.title ?? profileId
+  const profile = profiles.find((p) => p.id === profileId)
+  const roleTitle = profile?.title ?? profileId
+  const executor = profile?.command ?? '—'
   const stageTitle = stages.find((s) => s.id === stageId)?.title ?? stageId
-  const remainingDepth = maxDepth - 1
-  const atDepthLimit = remainingDepth < 0
+  const displayTitle = title !== undefined && title.trim() !== '' ? title : roleTitle
+  const remainingDepth = maxDepth === undefined ? undefined : maxDepth - 1
+  const atDepthLimit = remainingDepth !== undefined && remainingDepth < 0
 
   useEffect(() => {
     const modal = modalRef.current
@@ -69,8 +84,17 @@ export function AttachAssistantDialog({
     if (submitting || atDepthLimit) return
     setSubmitting(true)
     setError(null)
-    confirmActionDraft(turnId, index)
-      .then(({ taskId }) => onConfirmed(taskId))
+    attachAndSendMesh({
+      requestId: requestIdRef.current,
+      profileId,
+      scope: 'stage',
+      stageId,
+      ...(title !== undefined && title.trim() !== '' ? { title: title.trim() } : {}),
+      ...(mode !== undefined ? { mode } : {}),
+      instruction,
+      firstMessage: instruction,
+    })
+      .then((result) => onConfirmed(result))
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'request failed')
         setSubmitting(false)
@@ -83,8 +107,10 @@ export function AttachAssistantDialog({
         <ActionCard
           roleTitle={roleTitle}
           stageTitle={stageTitle}
-          title={title}
+          title={displayTitle}
           instruction={instruction}
+          executor={executor}
+          mode={mode}
           maxDepth={maxDepth}
           remainingDepth={remainingDepth}
           atDepthLimit={atDepthLimit}
@@ -104,7 +130,7 @@ export function AttachAssistantDialog({
             disabled={submitting || atDepthLimit}
             onClick={handleConfirm}
           >
-            {submitting ? 'Attaching…' : 'Attach assistant'}
+            {submitting ? 'Attaching…' : 'Attach and send'}
           </button>
         </div>
       </div>

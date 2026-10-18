@@ -6,11 +6,12 @@ import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
 import { MentionMenu } from '../assistants/AssistantMentionMenu'
 import { detectMentionTrigger, filterMentionGroups } from '../assistants/mention-match'
+import { AttachAssistantDialog } from '../assistants'
 import {
-  attachAndSendMesh,
   genMeshRequestId,
   openMeshThread,
   sendMeshMessage,
+  type MeshAttachAndSendResult,
   type MeshMessage,
 } from '../../api/mesh-client'
 import { buildMeshMentionGroups, findExistingDirectThread, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
@@ -257,6 +258,10 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
   const [openedThreadId, setOpenedThreadId] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<{ messageId: string; preview: string } | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
+  // attachPreview — an "Attach to stage" pick is never sent straight away (T7.5): Send opens this preview
+  // instead, and only the dialog's OWN "Attach and send" click actually calls attachAndSendMesh. Cancel clears
+  // this with zero requests and leaves `draft` untouched so the user can edit and retry.
+  const [attachPreview, setAttachPreview] = useState<{ profileId: string; instruction: string } | null>(null)
   // lastSend — the most recent send's receipt-tracking state: set (messageId: null) the instant Send fires,
   // filled in once the request resolves. null participantId before resolution (an "Attach to stage" pick only
   // learns the real participant id from the response) is fine — computeReceiptPhase's inFlight branch never
@@ -354,41 +359,35 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
   async function submit(): Promise<void> {
     const text = draft.trim()
     if (text === '' || sending || target === null) return
+    // "Attach to stage" never sends straight away — Send opens the preview dialog below instead, and only
+    // its OWN confirm click (handleAttachConfirmed) issues the attachAndSendMesh request. No network call,
+    // no roster/feed mutation, happens on this path.
+    if (target.kind === 'profile') {
+      setAttachPreview({ profileId: target.profileId, instruction: text })
+      return
+    }
     setSending(true)
     setSendError(null)
     try {
-      if (target.kind === 'profile') {
-        setLastSend({ participantId: '', threadId: openedThreadId ?? '', messageId: null })
-        const result = await attachAndSendMesh({
-          requestId: genMeshRequestId('mesh-feed-attach'),
-          profileId: target.profileId,
-          scope: 'stage',
-          stageId,
-          firstMessage: text,
+      let threadId = openedThreadId
+      setLastSend({ participantId: target.id, threadId: threadId ?? '', messageId: null })
+      if (threadId === null) {
+        const thread = await openMeshThread({
+          requestId: genMeshRequestId('mesh-feed-open'),
+          title: '',
+          scope: target.scope,
+          memberIds: [target.id],
         })
-        setOpenedThreadId(result.thread_id)
-        setLastSend({ participantId: result.participant_id, threadId: result.thread_id, messageId: result.message_id ?? null })
-      } else {
-        let threadId = openedThreadId
-        setLastSend({ participantId: target.id, threadId: threadId ?? '', messageId: null })
-        if (threadId === null) {
-          const thread = await openMeshThread({
-            requestId: genMeshRequestId('mesh-feed-open'),
-            title: '',
-            scope: target.scope,
-            memberIds: [target.id],
-          })
-          threadId = thread.id
-          setOpenedThreadId(thread.id)
-        }
-        const receipt = await sendMeshMessage(threadId, {
-          requestId: genMeshRequestId('mesh-feed-send'),
-          recipientIds: [target.id],
-          inReplyTo: replyTo?.messageId,
-          body: text,
-        })
-        setLastSend({ participantId: target.id, threadId, messageId: receipt.message_id })
+        threadId = thread.id
+        setOpenedThreadId(thread.id)
       }
+      const receipt = await sendMeshMessage(threadId, {
+        requestId: genMeshRequestId('mesh-feed-send'),
+        recipientIds: [target.id],
+        inReplyTo: replyTo?.messageId,
+        body: text,
+      })
+      setLastSend({ participantId: target.id, threadId, messageId: receipt.message_id })
       setDraft('')
       setReplyTo(null)
     } catch (err) {
@@ -397,6 +396,16 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     } finally {
       setSending(false)
     }
+  }
+
+  // handleAttachConfirmed — the attach preview's "Attach and send" resolved: this is the ONLY place the
+  // composite's result is applied, so nothing optimistic ever lands in the roster/feed before a real success.
+  function handleAttachConfirmed(result: MeshAttachAndSendResult): void {
+    setAttachPreview(null)
+    setOpenedThreadId(result.thread_id)
+    setLastSend({ participantId: result.participant_id, threadId: result.thread_id, messageId: result.message_id ?? null })
+    setDraft('')
+    setReplyTo(null)
   }
 
   const liveParticipant = lastSend === null ? undefined : mesh.roster.participants.find((p) => p.id === lastSend.participantId)
@@ -417,6 +426,17 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
 
   return (
     <div className="mesh-message-composer">
+      {attachPreview !== null && (
+        <AttachAssistantDialog
+          profileId={attachPreview.profileId}
+          stageId={stageId}
+          instruction={attachPreview.instruction}
+          profiles={mesh.profiles}
+          stages={mesh.stages.map((s) => ({ id: s.id, title: s.name }))}
+          onCancel={() => setAttachPreview(null)}
+          onConfirmed={handleAttachConfirmed}
+        />
+      )}
       {openedThreadId !== null && threadMessages.length > 0 && (
         <ul className="mesh-message-thread" aria-label="Conversation">
           {threadMessages.map((m: MeshMessage) => (
