@@ -70,6 +70,9 @@ type Manager struct {
 	defaultCmd   string
 	activeAgents sync.Map
 	agentWG      sync.WaitGroup
+	// owners maps an owner key to a channel closed once that owner's goroutine has completely finished — its
+	// run returned and its lease is released. SpawnOwned for a key that is still running waits for it.
+	owners sync.Map // OwnerKey -> chan struct{}
 
 	// shouldRun — единая точка входа для пред-запускной проверки стадии. nil означает "всегда запускать"
 	// (используется тестами, которым эта проверка не нужна).
@@ -221,10 +224,20 @@ func (m *Manager) dynamicSemForCmd(cmd string) Semaphore {
 // shouldRun IMMEDIATELY AFTER acquiring the semaphore (the goroutine may have queued for an arbitrary amount
 // of time, during which the owner could have been paused/cancelled) — same ordering as SpawnAgentLease used
 // to inline before this extraction. shouldRun==nil means "always run".
+//
+// One owner key runs one goroutine at a time: a spawn for an owner whose previous goroutine is still running
+// (a run agent's next turn scheduled from its previous turn's tail, or by a message arriving just then) starts
+// only after that goroutine has finished, deferred cleanup included — so the old turn can never release
+// state, a lease or an activity marker that already belongs to the new one.
 func (m *Manager) SpawnOwned(ctx context.Context, owner OwnerKey, cmd string, shouldRun func() bool, run func(context.Context, *Lease)) {
 	m.agentWG.Add(1)
 	go func() {
 		defer m.agentWG.Done()
+		done, ok := m.claimOwner(ctx, owner)
+		if !ok {
+			return
+		}
+		defer m.releaseOwner(owner, done)
 		lease, err := m.AcquireLease(ctx, cmd)
 		if err != nil {
 			return
@@ -239,6 +252,29 @@ func (m *Manager) SpawnOwned(ctx context.Context, owner OwnerKey, cmd string, sh
 		}
 		run(ctx, lease)
 	}()
+}
+
+// claimOwner makes the calling goroutine owner's only running goroutine, waiting for a previous one to
+// finish. It fails only when ctx is cancelled while waiting.
+func (m *Manager) claimOwner(ctx context.Context, owner OwnerKey) (chan struct{}, bool) {
+	done := make(chan struct{})
+	for {
+		prev, running := m.owners.LoadOrStore(owner, done)
+		if !running {
+			return done, true
+		}
+		select {
+		case <-prev.(chan struct{}):
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+// releaseOwner ends the claim taken by claimOwner and wakes a spawn waiting for owner.
+func (m *Manager) releaseOwner(owner OwnerKey, done chan struct{}) {
+	m.owners.CompareAndDelete(owner, done)
+	close(done)
 }
 
 // SpawnAgentLease runs an agent with one transferable command-slot lease. Cancellation while waiting

@@ -391,6 +391,39 @@ func TestSpawnOwned_UnknownCommandSharesTheRunLimit(t *testing.T) {
 	}
 }
 
+// One owner never runs two goroutines at once: a second spawn for the same owner starts only after the first
+// has finished completely, its lease released — even with free slots. A different owner is not held up.
+func TestSpawnOwned_SameOwnerRunsOneAtATime(t *testing.T) {
+	m := New(bus.NewCriticalBus(16), nil, "", 4, nil)
+	release := make(chan struct{})
+	started := make(chan string, 3)
+	spawn := func(owner, name string) {
+		m.SpawnOwned(context.Background(), TaskOwnerKey(owner), "developer", nil, func(ctx context.Context, lease *Lease) {
+			started <- name
+			<-release
+		})
+	}
+	spawn("qa", "first turn")
+	if got := <-started; got != "first turn" {
+		t.Fatalf("started %q, want the first turn", got)
+	}
+	spawn("qa", "second turn")
+	spawn("devops", "other agent")
+	if got := <-started; got != "other agent" {
+		t.Fatalf("started %q while the first turn runs, want only the other agent", got)
+	}
+	select {
+	case got := <-started:
+		t.Fatalf("%q started while the same owner's first turn was still running", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if got := <-started; got != "second turn" {
+		t.Fatalf("started %q, want the second turn after the first finished", got)
+	}
+	m.WaitAgents()
+}
+
 func TestIsActive_StageSemanticsUnchanged(t *testing.T) {
 	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
 	done := make(chan struct{})

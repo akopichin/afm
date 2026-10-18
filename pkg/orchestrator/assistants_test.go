@@ -625,30 +625,22 @@ func TestPause_ImmediateContinueBeforeClassificationStillRequeues(t *testing.T) 
 // The real trigger (mirroring TestPause_ImmediateContinueBeforeClassificationStillRequeues) is an IMMEDIATE
 // ContinueTask that races ahead of classification and clears the hold before the switch below reads it: that
 // makes runHelperTask's own requeue branch SYNCHRONOUSLY (same goroutine, before this attempt's own defer
-// runs) reschedule a NEW attempt via maybeScheduleTask → spawnTask → SpawnOwned. With a command semaphore
-// that allows two concurrent attempts (e.g. max_parallel >= 2), the NEW attempt's runHelperTask can acquire
-// its lease and store ITS OWN entry in o.taskCancels before the OLD attempt's defer runs — a blind
-// "taskCancels.Delete(taskID)" would then erase the NEW attempt's entry, leaving a later PauseTask with
-// nothing to cancel even though a process is still actually running. The fix: o.taskCancels stores a
-// per-attempt *taskCancelEntry, and the defer does CompareAndDelete(taskID, its own entry) — a no-op once a
-// newer attempt has already overwritten it.
+// runs) reschedule a NEW attempt via maybeScheduleTask → spawnTask → SpawnOwned. Even with free command slots
+// (max_parallel >= 2) the NEW attempt must not start until the OLD attempt has finished, deferred cleanup
+// included (SpawnOwned runs one goroutine per owner): otherwise the OLD attempt's cleanup could act on the NEW
+// attempt's cancel entry, pause marker or activity marker, and a later PauseTask would find nothing to cancel.
 //
-// The exact interleaving is forced deterministically via o.taskRequeuePreDeferHook (test-only seam): the OLD
-// attempt blocks right after scheduling the NEW attempt and right before its own defer runs, and is only
-// released once the NEW attempt's runHelperTask has already stored its own entry.
+// The interleaving is forced via o.taskRequeuePreDeferHook (test-only seam): the OLD attempt blocks right
+// after scheduling the NEW attempt and right before its own defer runs.
 func TestPauseTask_SurvivesImmediateRequeueRace(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
 
-	// Two concurrent slots for "helper-cmd" — the NEW (requeued) attempt must be able to acquire its lease
-	// WITHOUT waiting for the OLD attempt to release its own (see this test's doc comment).
+	// Two concurrent slots for "helper-cmd": a free slot alone must not let the NEW attempt overlap the OLD.
 	o.concurrency = concurrency.NewWithSemaphores(bus.NewCriticalBus(16), map[string]concurrency.Semaphore{"helper-cmd": concurrency.ChannelSemaphore(make(chan struct{}, 2))}, "claude")
 
 	var calls atomic.Int32
 	oldStarted := make(chan struct{}, 1)
-	// attempt2Started is CLOSED (not sent-once) so both the hook below and this test's main goroutine can each
-	// observe it independently — by the time it closes, the NEW attempt has already stored its OWN entry in
-	// o.taskCancels (Store happens before runHelperTask ever calls o.runHelperAgent).
 	attempt2Started := make(chan struct{})
 	newCtxDone := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
@@ -658,8 +650,7 @@ func TestPauseTask_SurvivesImmediateRequeueRace(t *testing.T) {
 			<-ctx.Done()
 			// Forces ContinueTask to race ahead of this goroutine's own classification, clearing the hold
 			// BEFORE the switch below reads o.taskHeld — the precondition for its "!taskHeld" branch to
-			// actually call maybeScheduleTask synchronously, in THIS goroutine (same trick as
-			// TestPause_ImmediateContinueBeforeClassificationStillRequeues).
+			// actually call maybeScheduleTask synchronously, in THIS goroutine.
 			if err := o.ContinueTask(context.Background(), assistants.TaskID(taskID)); err != nil {
 				t.Errorf("ContinueTask: %v", err)
 			}
@@ -675,10 +666,7 @@ func TestPauseTask_SurvivesImmediateRequeueRace(t *testing.T) {
 	}
 
 	releaseOld := make(chan struct{})
-	o.taskRequeuePreDeferHook = func(assistants.TaskID) {
-		<-attempt2Started
-		<-releaseOld
-	}
+	o.taskRequeuePreDeferHook = func(assistants.TaskID) { <-releaseOld }
 
 	taskID := attachTestTask(context.Background(), t, o, "op-1")
 	<-oldStarted
@@ -688,24 +676,23 @@ func TestPauseTask_SurvivesImmediateRequeueRace(t *testing.T) {
 		t.Fatalf("PauseTask: %v", err)
 	}
 
-	// Wait for the NEW attempt to have actually started (and thus stored its own entry) BEFORE letting the OLD
-	// attempt's defer run — otherwise a plain "entry present" check could trivially pass on the OLD attempt's
-	// own (not-yet-cleaned-up) entry instead of exercising the race at all.
+	select {
+	case <-attempt2Started:
+		t.Fatal("the NEW attempt started while the OLD attempt had not finished its cleanup")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(releaseOld) // the OLD attempt finishes; only now may the NEW one start
 	select {
 	case <-attempt2Started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the NEW (requeued) attempt never started — maybeScheduleTask did not reschedule it")
+		t.Fatal("the NEW (requeued) attempt never started after the OLD attempt finished")
 	}
-	close(releaseOld) // let the OLD attempt's defer run now that the NEW attempt's entry is already in place
 
-	// The NEW attempt's entry must have survived the OLD attempt's defer.
+	// The NEW attempt's cancel entry is in place, and a second PauseTask reaches its subprocess.
 	waitForTrue(t, func() bool {
 		_, ok := o.taskCancels.Load(taskID)
 		return ok
-	}, 2*time.Second, "the NEW attempt's cancel entry must survive the OLD attempt's defer")
-
-	// A second PauseTask must actually reach the NEW (requeued) attempt's subprocess, not silently find
-	// nothing to cancel.
+	}, 2*time.Second, "the NEW attempt must have its cancel entry")
 	if err := o.PauseTask(context.Background(), taskID); err != nil {
 		t.Fatalf("second PauseTask: %v", err)
 	}
