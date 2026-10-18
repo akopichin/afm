@@ -17,6 +17,40 @@ export function mentionHandle(p: MeshParticipant): string {
   return p.alias !== undefined && p.alias !== '' ? p.alias : p.id
 }
 
+// participantInitials — до двух букв для квадратного аватара. Предпочитает заглавные из имени
+// ("QA reviewer" → "QA", "DevOps" → "DO"), иначе первые буквы первых слов.
+export function participantInitials(name: string): string {
+  const caps = name.replace(/[^A-Z]/g, '')
+  if (caps.length >= 2) return caps.slice(0, 2)
+  const letters = name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('')
+  return (letters !== '' ? letters : name).slice(0, 2).toUpperCase()
+}
+
+// Presence — точка присутствия в ростере: работает, ждёт (пауза/ответ/коллега), упал или неактивен.
+export type Presence = 'working' | 'waiting' | 'failed' | 'idle'
+
+// stagePresence — присутствие агента стадии по её живому статусу.
+export function stagePresence(status: string): Presence {
+  switch (status) {
+    case 'running':
+    case 'planning':
+    case 'revising':
+    case 'retrying':
+      return 'working'
+    case 'paused':
+    case 'awaiting_user_input':
+    case 'awaiting_approval':
+    case 'awaiting_assistants':
+    case 'awaiting_peer':
+      return 'waiting'
+    case 'failed':
+    case 'hook_failed':
+      return 'failed'
+    default:
+      return 'idle'
+  }
+}
+
 // participantRole — подпись роли по kind участника.
 export function participantRole(kind: string): string {
   switch (kind) {

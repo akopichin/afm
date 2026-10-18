@@ -141,8 +141,9 @@ describe('skins CSS contract — Team view leans ONLY on the semantic token laye
     return new Set([...css.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)].map((m) => m[1] as string))
   }
 
-  it('every var(--x) mesh.css references is declared in tokens.css\'s shared semantic layer', () => {
-    const declared = declaredVarNames(tokensCss)
+  it('every var(--x) mesh.css references is declared in tokens.css\'s shared semantic layer (or locally in mesh.css)', () => {
+    // A custom property mesh.css declares itself (e.g. the avatar's --agent-color) needs nothing from a skin.
+    const declared = new Set([...declaredVarNames(tokensCss), ...declaredVarNames(meshCss)])
     const used = allVarNames(meshCss)
     const undeclared = [...used].filter((name) => !declared.has(name))
     expect(undeclared, `mesh.css references undeclared custom properties: ${undeclared.join(', ')}`).toEqual([])

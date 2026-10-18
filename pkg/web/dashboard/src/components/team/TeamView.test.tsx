@@ -52,6 +52,24 @@ describe('TeamView', () => {
     expect(screen.getByRole('region', { name: 'Conversations' })).toBeInTheDocument()
   })
 
+  test('the conversation header names the selected person and what they are', async () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+    expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    expect(await screen.findByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(screen.getByText('Direct conversation · Run agent')).toBeInTheDocument()
+  })
+
+  test('a thread header counts its participants', () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-9', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa', 'stage:implement'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Hand-off'))
+    expect(screen.getByRole('heading', { name: 'Hand-off' })).toBeInTheDocument()
+    expect(screen.getByText('3 participants · you and 2 agents')).toBeInTheDocument()
+  })
+
   test('tabs are "Messages", "Board", "Activity"', () => {
     mockThreadAndBoardFetches()
     renderTeamView()

@@ -81,7 +81,10 @@ export function StageDiscussionPanel({ stageId }: StageDiscussionPanelProps): Re
 
   return (
     <div className="stage-discussion-panel">
-      <StageDiscussion messages={messages} />
+      {/* Takes all free height (and scrolls), so the composer stays pinned to the bottom with or without messages. */}
+      <div className="stage-discussion-scroll" role="log" aria-label="Discussion">
+        <StageDiscussion messages={messages} />
+      </div>
       <div className="chat-composer-row">
         <textarea
           ref={autoGrowRef}

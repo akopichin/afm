@@ -61,6 +61,29 @@ describe('AddRunAgentDialog', () => {
     expect(secondCall?.[0].requestId).toBe(firstCall?.[0].requestId)
   })
 
+  test('an optional first message is sent so the agent starts right away', async () => {
+    const attachSpy = vi
+      .spyOn(meshClient, 'attachAndSendMesh')
+      .mockResolvedValue({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1', message_id: 'm1' })
+    renderDialog()
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review everything' } })
+    fireEvent.change(screen.getByLabelText('First message (optional)'), { target: { value: '  start with the API  ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalled())
+    expect(attachSpy.mock.calls[0]?.[0]).toMatchObject({ firstMessage: 'start with the API' })
+  })
+
+  test('without a first message none is sent', async () => {
+    const attachSpy = vi
+      .spyOn(meshClient, 'attachAndSendMesh')
+      .mockResolvedValue({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' })
+    renderDialog()
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review everything' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalled())
+    expect(attachSpy.mock.calls[0]?.[0]).not.toHaveProperty('firstMessage')
+  })
+
   test('only available profiles are offered', () => {
     renderDialog()
     expect(screen.queryByText('Ghost')).toBeNull()

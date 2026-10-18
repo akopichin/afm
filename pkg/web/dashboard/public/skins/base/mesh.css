@@ -23,54 +23,65 @@
   padding: 16px;
 }
 
-/* === Roster (RunTeamList) === */
+/* === Roster (RunTeamList) — "Run team" rail: title + full-width "Add run agent", then This run / Stages /
+   Conversations groups. Rows: avatar, name over "@handle · status/role", presence dot. === */
 .team-roster {
-  width: 240px;
-  flex: 0 0 240px;
+  width: 260px;
+  flex: 0 0 260px;
   min-width: 0;
   overflow-y: auto;
   /* Long names are clipped with an ellipsis, never scrolled sideways (a horizontally scrolled roster
      used to hide its own left edge). */
   overflow-x: hidden;
   border-right: 1px solid var(--separator-subtle);
-  padding: 12px 10px;
+  padding: 16px 8px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 4px;
+  font-family: var(--font-ui);
+}
+
+.team-roster-top {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 8px 4px;
+}
+.team-roster-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.team-add-run-agent {
+  width: 100%;
+  justify-content: center;
+  min-height: 34px;
 }
 
 .team-roster-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 17px 8px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
+}
+.team-roster-count {
+  margin-left: auto;
+  letter-spacing: 0;
 }
 
-.team-roster-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-.team-roster-group-header h3 {
-  margin: 0;
-}
-
-.team-add-run-agent {
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 3px 8px;
-}
-
-.team-roster-empty {
+.team-roster-empty,
+.team-thread-list-empty {
   font-size: 12px;
-  margin: 0;
+  margin: 0 8px;
 }
 
 .team-roster-list,
@@ -85,18 +96,19 @@
 
 .team-person-row,
 .team-thread-item {
+  position: relative;
   width: 100%;
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
   text-align: left;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  padding: 9px;
+  border-radius: 8px;
   cursor: pointer;
 }
 .team-person-row:hover,
@@ -105,8 +117,10 @@
 }
 .team-person-row.active,
 .team-thread-item.active {
-  background: var(--surface-hover);
-  color: var(--text-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+}
+.team-thread-item.active {
+  box-shadow: inset 2px 0 var(--accent-primary);
 }
 .team-person-row:focus-visible,
 .team-thread-item:focus-visible {
@@ -114,52 +128,75 @@
   outline-offset: 1px;
 }
 
-.team-person-row,
-.team-thread-item {
-  min-width: 0;
-}
-
-/* Name over an optional role subtitle; the column shrinks so the status keeps its place. */
 .team-person-text {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  gap: 3px;
 }
-
 .team-person-name,
-.team-person-role,
 .team-thread-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.team-person-role {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-/* A stage's helpers sit right under it, indented. */
-.team-person-row.nested {
-  padding-left: 22px;
-}
-
-.team-person-status,
-.team-thread-closed {
-  flex: 0 1 auto;
+.team-person-detail {
+  display: flex;
+  gap: 6px;
   min-width: 0;
-  max-width: 45%;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* The @handle is what you type in a mention — shown so you know how to address this agent. */
+.team-person-handle {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent-primary);
+}
+.team-person-status {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.team-person-status::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--text-muted);
+}
+.team-thread-closed {
+  flex: 0 0 auto;
+  margin-left: auto;
   font-size: 11px;
   color: var(--text-muted);
 }
 
-/* Live stage status on stage rows: the active one stands out, a failed one is red, a stage that has not
-   started yet is dimmed. Semantic tokens only — no per-status --c-* mapping here. */
+/* A stage's helpers sit right under it, indented, with a small tree branch. */
+.team-person-row.nested {
+  padding-left: 26px;
+}
+.team-person-row.nested::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  left: 13px;
+  width: 8px;
+  height: 16px;
+  border-left: 1px solid var(--separator-subtle);
+  border-bottom: 1px solid var(--separator-subtle);
+  border-bottom-left-radius: 3px;
+}
+
+/* Live stage status: the running stage stands out, a failed one is red, one not started yet is dimmed.
+   Semantic tokens only — no per-status --c-* mapping here. */
 .team-person-row[data-status="running"] .team-person-status {
-  color: var(--accent-primary);
+  color: var(--success);
 }
 .team-person-row[data-status="failed"] .team-person-status,
 .team-person-row[data-status="hook_failed"] .team-person-status {
@@ -169,49 +206,150 @@
   opacity: 0.6;
 }
 
-.team-thread-list-empty {
-  font-size: 12px;
-  margin: 0;
+/* Presence dot: working / waiting (paused, awaiting a reply or a colleague) / failed / idle. */
+.team-presence {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.team-presence[data-presence="working"] {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(var(--success-rgb), 0.12);
+}
+.team-presence[data-presence="waiting"] {
+  background: var(--attention);
+}
+.team-presence[data-presence="failed"] {
+  background: var(--danger);
 }
 
-/* === Main pane: tabs + Messages/Board/Activity === */
+/* Square avatar with initials, tinted by participant kind. */
+.mesh-avatar {
+  --agent-color: var(--accent-primary);
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--agent-color);
+  background: color-mix(in srgb, var(--agent-color) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--agent-color) 24%, transparent);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+}
+.mesh-avatar[data-kind="run_agent"] { --agent-color: var(--success); }
+.mesh-avatar[data-kind="helper"] { --agent-color: var(--attention); }
+.mesh-avatar[data-kind="side_agent"] { --agent-color: var(--text-secondary); }
+.mesh-avatar[data-kind="user"] { --agent-color: var(--text-secondary); }
+.mesh-avatar.large {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  font-size: 12px;
+}
+
+/* === Main pane: conversation header, then Messages/Board/Activity tabs === */
 .team-main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  font-family: var(--font-ui);
+}
+
+.team-conversation-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px 14px;
+}
+.team-thread-symbol {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  color: var(--accent-primary);
+}
+.team-conversation-heading {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.team-conversation-heading h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-conversation-heading p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-icon-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.team-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.team-icon-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .team-tabs {
+  flex: 0 0 auto;
   display: flex;
-  gap: 4px;
-  padding: 8px 12px;
+  gap: 22px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--separator-subtle);
 }
-
 .team-tab {
   border: 0;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 13px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
+  font-size: 12px;
+  padding: 0 0 11px;
   cursor: pointer;
 }
 .team-tab:hover {
-  background: var(--surface-hover);
   color: var(--text-secondary);
 }
 .team-tab.active {
-  background: var(--surface-hover);
   color: var(--text-primary);
-  font-weight: 600;
+  border-bottom-color: var(--accent-primary);
 }
 .team-tab:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .team-messages {
@@ -219,17 +357,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 12px;
-  gap: 10px;
-  overflow-y: auto;
+  gap: 12px;
+  padding: 16px 24px;
 }
 
 /* === Create conversation === */
-.team-create-conversation-toggle {
-  align-self: flex-start;
-  font-size: 12px;
-  padding: 4px 10px;
-}
 
 .team-create-conversation-form {
   display: flex;
@@ -294,19 +426,6 @@
 .team-create-conversation-participant:hover {
   background: var(--surface-hover);
 }
-.team-create-conversation-participant-avatar {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent-primary);
-  background: var(--surface-agent-message);
-}
 .team-create-conversation-participant-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -340,20 +459,13 @@
   gap: 8px;
 }
 
-/* === Conversation (ThreadConversation) === */
+/* === Conversation (ThreadConversation) — messages with avatar, author, "→ recipients", time and a bubble. === */
 .team-conversation {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.team-conversation-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+  gap: 10px;
 }
 
 /* The messages area takes all free height in BOTH states (messages or the "No messages yet" hint), so the
@@ -369,7 +481,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 18px;
 }
 .team-conversation-empty-messages {
   margin: 0;
@@ -377,30 +489,55 @@
 
 .team-conversation-message {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
-  background: var(--surface-agent-message);
-  /* Incoming (agent) messages: a left-aligned, content-width bubble — without an explicit
-     align-self a column flex item stretches to full width (the defect this fixes). */
-  align-self: flex-start;
-  max-width: 72%;
+  gap: 10px;
 }
-.team-conversation-message[data-sender="user"] {
-  background: var(--surface-user-message);
-  align-self: flex-end;
+.team-conversation-message-content {
+  min-width: 0;
+  flex: 1 1 auto;
 }
-
+.team-conversation-message-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
 .team-conversation-message-sender {
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.team-conversation-message-route {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.team-conversation-message-header time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--text-muted);
 }
 .team-conversation-message-body {
+  padding: 10px 14px;
+  background: var(--surface-agent-message);
+  border: 1px solid var(--separator-subtle);
+  border-radius: 0 10px 10px 10px;
   font-size: 13px;
+  line-height: 1.6;
   color: var(--text-secondary);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.team-conversation-message.from-you .team-conversation-message-body {
+  background: color-mix(in srgb, var(--accent-primary) 9%, var(--surface-canvas));
+  border-color: rgba(var(--accent-primary-rgb), 0.16);
+}
+
+/* Nobody left who can answer (their stage/task finished). */
+.team-conversation-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--attention);
 }
 
 .team-conversation-error {

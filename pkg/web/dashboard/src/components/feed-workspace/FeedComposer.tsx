@@ -361,7 +361,8 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     setSending(true)
     setSendError(null)
     try {
-      let threadId = openedThreadId
+      // Re-check at send time: the roster poll may have learned about a direct thread after the mention was picked.
+      let threadId = openedThreadId ?? findExistingDirectThread(mesh.roster.threads, target.id)?.id ?? null
       setLastSend({ participantId: target.id, threadId: threadId ?? '', messageId: null })
       if (threadId === null) {
         const thread = await openMeshThread({
@@ -371,8 +372,8 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
           memberIds: [target.id],
         })
         threadId = thread.id
-        setOpenedThreadId(thread.id)
       }
+      setOpenedThreadId(threadId)
       const receipt = await sendMeshMessage(threadId, {
         requestId: genMeshRequestId('mesh-feed-send'),
         recipientIds: [target.id],

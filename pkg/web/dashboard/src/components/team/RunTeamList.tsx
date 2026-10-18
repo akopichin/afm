@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
-import { participantLabel, participantRole } from '../../lib/mesh-roster'
+import { mentionHandle, participantLabel, participantRole, stagePresence, type Presence } from '../../lib/mesh-roster'
+import { MeshAvatar } from './MeshAvatar'
 import { STAGE_STATUS_LABELS, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
 
@@ -24,14 +25,21 @@ function stageStatusLabel(status: string): string {
   return STAGE_STATUS_LABELS[status as StageStatus] ?? status
 }
 
-// participantStatus — the status label shown next to a row, or null for "nothing to say". A stage agent
-// shows its stage's live status. Any other participant shows "Paused" when its stage is paused (Reachable
-// never distinguishes "paused" from "running"), else its unreachable reason.
+// participantStatus — the status label shown under a row's name, or null for "nothing to say". A stage
+// agent shows its stage's live status. Any other participant shows "Paused" when its stage is paused
+// (Reachable never distinguishes "paused" from "running"), else its unreachable reason.
 function participantStatus(p: MeshParticipant, stage: RunTeamListStage | undefined): string | null {
   if (p.kind === 'stage_agent' && stage !== undefined) return stageStatusLabel(stage.status)
   if (stage?.status === 'paused') return 'Paused'
   if (!p.reachable) return p.unreachable_reason && p.unreachable_reason !== '' ? p.unreachable_reason : 'Unreachable'
   return null
+}
+
+// participantPresence — the row's presence dot: a stage agent follows its stage's status, anyone else is
+// "working" while reachable and "idle" once its stage/task is terminal.
+function participantPresence(p: MeshParticipant, stage: RunTeamListStage | undefined): Presence {
+  if (stage !== undefined && (p.kind === 'stage_agent' || stage.status === 'paused')) return stagePresence(stage.status)
+  return p.reachable ? 'working' : 'idle'
 }
 
 // stageOrder — stage ids in flow order; stages the roster knows but /api/status doesn't (yet) go last, in
@@ -57,9 +65,8 @@ export function RunTeamList({
 
   function renderRow(p: MeshParticipant, nested = false): ReactElement {
     const stage = stages.find((s) => s.id === p.stage_id)
-    const status = participantStatus(p, stage)
     const name = participantLabel(p)
-    const role = p.scope === 'run' ? participantRole(p.kind) : null
+    const detail = participantStatus(p, stage) ?? (p.scope === 'run' ? participantRole(p.kind) : null)
     return (
       <li key={p.id}>
         <button
@@ -69,11 +76,15 @@ export function RunTeamList({
           data-status={p.kind === 'stage_agent' ? stage?.status : undefined}
           onClick={() => onSelectParticipant(p)}
         >
+          <MeshAvatar name={name} kind={p.kind} />
           <span className="team-person-text">
             <span className="team-person-name" title={name}>{name}</span>
-            {role !== null && <span className="team-person-role">{role}</span>}
+            <span className="team-person-detail" title={detail ?? undefined}>
+              <span className="team-person-handle">@{mentionHandle(p)}</span>
+              {detail !== null && <span className="team-person-status">{detail}</span>}
+            </span>
           </span>
-          {status !== null && <span className="team-person-status" title={status}>{status}</span>}
+          <span className="team-presence" data-presence={participantPresence(p, stage)} aria-hidden="true" />
         </button>
       </li>
     )
@@ -89,13 +100,15 @@ export function RunTeamList({
 
   return (
     <nav className="team-roster" aria-label="Team roster">
+      <div className="team-roster-top">
+        <h2 className="team-roster-title">Run team</h2>
+        <button type="button" className="btn btn-send team-add-run-agent" onClick={onAddRunAgent}>
+          <span aria-hidden="true">+</span> Add run agent
+        </button>
+      </div>
+
       <section className="team-roster-group" aria-labelledby="team-roster-run">
-        <div className="team-roster-group-header">
-          <h3 id="team-roster-run">This run</h3>
-          <button type="button" className="btn team-add-run-agent" onClick={onAddRunAgent}>
-            Add run agent
-          </button>
-        </div>
+        <h3 id="team-roster-run">This run</h3>
         {runParticipants.length === 0 ? (
           <p className="team-roster-empty empty-hint">No run-scoped agents yet</p>
         ) : (
@@ -111,7 +124,10 @@ export function RunTeamList({
       )}
 
       <section className="team-roster-group" aria-labelledby="team-roster-conversations">
-        <h3 id="team-roster-conversations">Conversations</h3>
+        <h3 id="team-roster-conversations">
+          Conversations
+          {threads.length > 0 && <span className="team-roster-count" aria-hidden="true">{threads.length}</span>}
+        </h3>
         <ThreadList threads={threads} participants={participants} selectedThreadId={selectedThreadId} onSelect={onSelectThread} />
       </section>
     </nav>

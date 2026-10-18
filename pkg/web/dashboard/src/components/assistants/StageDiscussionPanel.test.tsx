@@ -23,6 +23,13 @@ describe('StageDiscussionPanel', () => {
     expect(screen.getByText('You')).toBeInTheDocument()
   })
 
+  test('messages (and the empty state) live in one scrolling area above the composer, so the composer never jumps', async () => {
+    render(<StageDiscussionPanel stageId="implement" />)
+    const log = screen.getByRole('log', { name: 'Discussion' })
+    await waitFor(() => expect(log).toHaveTextContent(/can the reviewer re-check/i))
+    expect(log.nextElementSibling).toHaveClass('chat-composer-row')
+  })
+
   test('posts a human message and clears the input', async () => {
     const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'm2' })
     render(<StageDiscussionPanel stageId="implement" />)

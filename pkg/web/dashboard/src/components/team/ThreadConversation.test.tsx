@@ -20,7 +20,7 @@ describe('ThreadConversation', () => {
   test('a direct target with no thread yet shows the person label and no messages', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     render(<ThreadConversation target={{ kind: 'direct', participant: qa }} />)
-    expect(screen.getByText('QA reviewer')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
     expect(screen.getByText('No messages yet')).toBeInTheDocument()
   })
 
@@ -35,7 +35,6 @@ describe('ThreadConversation', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const untitled: MeshThread = { id: 'mt-e95e00425b9b4640a0bc', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: untitled }} participants={[qa]} />)
-    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
     expect(screen.queryByText(/mt-e95e/)).toBeNull()
   })
@@ -52,7 +51,36 @@ describe('ThreadConversation', () => {
     await waitFor(() => expect(screen.getByText('hello')).toBeInTheDocument())
     expect(screen.getByText('You')).toBeInTheDocument()
     expect(screen.getAllByText('QA reviewer').length).toBeGreaterThan(0)
-    expect(screen.queryByText('run:qa')).toBeNull()
+    expect(screen.getByText('→ QA reviewer')).toBeInTheDocument()
+    expect(screen.queryByText(/run:qa/)).toBeNull()
+  })
+
+  test('a direct target reuses a direct thread the roster learned about after the click instead of opening a second one', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread')
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const onThreadOpened = vi.fn()
+    const { rerender } = render(<ThreadConversation target={{ kind: 'direct', participant: qa }} onThreadOpened={onThreadOpened} />)
+    // The roster poll catches up with a direct thread opened elsewhere (e.g. from the feed).
+    rerender(<ThreadConversation target={{ kind: 'direct', participant: qa }} threads={[thread]} onThreadOpened={onThreadOpened} />)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-1', expect.objectContaining({ body: 'hi' })))
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(onThreadOpened).toHaveBeenCalledWith(thread)
+  })
+
+  test('says so when the only other member has finished and cannot reply', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const done = { ...qa, reachable: false, unreachable_reason: 'stage qa has reached a terminal status' }
+    render(<ThreadConversation target={{ kind: 'direct', participant: done }} participants={[done]} />)
+    expect(screen.getByRole('status')).toHaveTextContent("QA reviewer has finished and can't reply any more.")
+  })
+
+  test('a reachable member gets no finished notice', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    render(<ThreadConversation target={{ kind: 'direct', participant: qa }} participants={[qa]} />)
+    expect(screen.queryByRole('status')).toBeNull()
   })
 
   test('sending the first message to a direct target opens a thread then sends into it', async () => {

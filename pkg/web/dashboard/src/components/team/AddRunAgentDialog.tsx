@@ -20,6 +20,8 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
   const [profileId, setProfileId] = useState(available[0]?.id ?? '')
   const [title, setTitle] = useState('')
   const [instruction, setInstruction] = useState('')
+  // firstMessage — optional; without one the agent is only registered and starts no work until it is sent one.
+  const [firstMessage, setFirstMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
@@ -72,6 +74,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
       scope: 'run',
       title: title.trim(),
       instruction: instruction.trim(),
+      ...(firstMessage.trim() !== '' ? { firstMessage: firstMessage.trim() } : {}),
     })
       .then((result) => onAttached(result))
       .catch((err: unknown) => {
@@ -116,6 +119,15 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
                 onChange={(e) => setInstruction(e.target.value)}
                 placeholder="What should this run agent do?"
                 rows={4}
+              />
+            </label>
+            <label className="add-run-agent-field">
+              <span>First message (optional)</span>
+              <textarea
+                value={firstMessage}
+                onChange={(e) => setFirstMessage(e.target.value)}
+                placeholder="Starts the agent right away — e.g. what to look at first"
+                rows={2}
               />
             </label>
           </>

@@ -1,8 +1,9 @@
 import { useRef, useState, type ReactElement } from 'react'
-import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
+import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
-import { participantLabel, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { findExistingDirectThread, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { MeshAvatar } from './MeshAvatar'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
 
 // ThreadConversationTarget — what the Messages pane is currently pointed at: an ALREADY open thread (picked
@@ -20,6 +21,9 @@ export type ThreadConversationProps = {
   onThreadOpened?: (thread: MeshThread) => void
   // participants — the roster, to name an untitled thread and each message's sender instead of showing ids.
   participants?: MeshParticipant[]
+  // threads — the latest known threads. A direct target re-checks them when SENDING, not only when the person
+  // was clicked: the roster poll may learn about an existing direct thread after the click.
+  threads?: MeshThread[]
 }
 
 // targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
@@ -34,8 +38,28 @@ export function targetKey(target: ThreadConversationTarget | null): string {
 
 const MAX_INPUT_HEIGHT = 200
 
-function targetLabel(target: ThreadConversationTarget, participants: MeshParticipant[]): string {
+// conversationTitle — the conversation's name: the person for a direct target, else the thread's title or,
+// for an untitled thread, its other members' names.
+export function conversationTitle(target: ThreadConversationTarget, participants: MeshParticipant[]): string {
   return target.kind === 'direct' ? participantLabel(target.participant) : threadLabel(target.thread, participants)
+}
+
+// conversationSubtitle — the line under the title: who this is for a direct target, the head count for a thread.
+export function conversationSubtitle(target: ThreadConversationTarget): string {
+  if (target.kind === 'direct') return `Direct conversation · ${participantRole(target.participant.kind)}`
+  const agents = target.thread.members.filter((m) => m !== 'user').length
+  return `${target.thread.members.length} participants · you and ${agents} ${agents === 1 ? 'agent' : 'agents'}`
+}
+
+// unreachableNotice — when nobody else in the conversation can answer any more (their stage or task has
+// finished), say so above the composer instead of letting messages silently go unanswered.
+function unreachableNotice(target: ThreadConversationTarget, participants: MeshParticipant[]): string | null {
+  const others = target.kind === 'direct' ? [target.participant.id] : target.thread.members.filter((m) => m !== 'user')
+  const live = others.map((id) => participants.find((p) => p.id === id)).filter((p) => p !== undefined)
+  if (live.length === 0 || live.some((p) => p.reachable)) return null
+  return live.length === 1
+    ? `${participantLabel(live[0] as MeshParticipant)} has finished and can't reply any more.`
+    : 'Everyone in this conversation has finished and can\'t reply any more.'
 }
 
 // recipientsFor — every OTHER member of the conversation: a direct target has exactly one (the person
@@ -46,7 +70,7 @@ function recipientsFor(target: ThreadConversationTarget, opened: MeshThread | nu
   return thread.members.filter((m) => m !== 'user')
 }
 
-export function ThreadConversation({ target, onThreadOpened, participants = [] }: ThreadConversationProps): ReactElement {
+export function ThreadConversation({ target, onThreadOpened, participants = [], threads = [] }: ThreadConversationProps): ReactElement {
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -69,7 +93,8 @@ export function ThreadConversation({ target, onThreadOpened, participants = [] }
     return <div className="team-conversation-empty empty-hint">Select a person or a conversation to see its messages</div>
   }
 
-  const label = targetLabel(target, participants)
+  const label = conversationTitle(target, participants)
+  const notice = unreachableNotice(target, participants)
 
   async function send(): Promise<void> {
     const text = draft.trim()
@@ -77,7 +102,7 @@ export function ThreadConversation({ target, onThreadOpened, participants = [] }
     setSending(true)
     setError(null)
     try {
-      let thread = openedThread
+      let thread = openedThread ?? (target.kind === 'direct' ? findExistingDirectThread(threads, target.participant.id) : null)
       if (thread === null) {
         thread = await openMeshThread({
           requestId: genMeshRequestId('mesh-open'),
@@ -85,8 +110,8 @@ export function ThreadConversation({ target, onThreadOpened, participants = [] }
           scope: 'run',
           memberIds: target.kind === 'direct' ? [target.participant.id] : [],
         })
-        setOpenedThread(thread)
       }
+      setOpenedThread(thread)
       await sendMeshMessage(thread.id, {
         requestId: requestIdRef.current,
         recipientIds: recipientsFor(target, thread),
@@ -112,7 +137,6 @@ export function ThreadConversation({ target, onThreadOpened, participants = [] }
 
   return (
     <div className="team-conversation">
-      <h3 className="team-conversation-title">{label}</h3>
       {/* One messages area in both states: the empty hint takes the same flex slot the list does, so the
           composer stays pinned to the bottom instead of jumping down after the first message. */}
       <div className="team-conversation-messages" role="log" aria-label="Messages">
@@ -121,14 +145,12 @@ export function ThreadConversation({ target, onThreadOpened, participants = [] }
         ) : (
           <ul className="team-conversation-message-list">
             {messages.map((m) => (
-              <li key={m.id} className="team-conversation-message" data-sender={m.sender_id}>
-                <span className="team-conversation-message-sender">{senderLabel(m.sender_id, participants)}</span>
-                <span className="team-conversation-message-body">{m.body}</span>
-              </li>
+              <MessageRow key={m.id} message={m} participants={participants} />
             ))}
           </ul>
         )}
       </div>
+      {notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
       <div className="chat-composer-row">
         <textarea
           ref={autoGrowRef}
@@ -148,5 +170,31 @@ export function ThreadConversation({ target, onThreadOpened, participants = [] }
       </div>
       {error !== null && <div className="team-conversation-error" role="alert">{error}</div>}
     </div>
+  )
+}
+
+function messageTime(createdAt: string): string {
+  const d = new Date(createdAt)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// MessageRow — one message: avatar, author, "→ recipients", time, then the text bubble.
+function MessageRow({ message, participants }: { message: MeshMessage; participants: MeshParticipant[] }): ReactElement {
+  const author = senderLabel(message.sender_id, participants)
+  const kind = participants.find((p) => p.id === message.sender_id)?.kind ?? (message.sender_id === 'user' ? 'user' : '')
+  const recipients = message.recipient_ids.map((id) => senderLabel(id, participants)).join(', ')
+  const fromYou = message.sender_id === 'user'
+  return (
+    <li className={`team-conversation-message${fromYou ? ' from-you' : ''}`} data-sender={message.sender_id}>
+      <MeshAvatar name={author} kind={kind} />
+      <div className="team-conversation-message-content">
+        <div className="team-conversation-message-header">
+          <span className="team-conversation-message-sender">{author}</span>
+          {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
+          <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
+        </div>
+        <div className="team-conversation-message-body">{message.body}</div>
+      </div>
+    </li>
   )
 }

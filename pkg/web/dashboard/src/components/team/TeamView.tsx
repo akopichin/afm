@@ -5,7 +5,8 @@ import { genMeshRequestId, openMeshThread, type MeshParticipant, type MeshThread
 import type { MeshRoster } from '../../hooks/use-mesh'
 import { findExistingDirectThread, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { RunTeamList } from './RunTeamList'
-import { targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
+import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
+import { MeshAvatar } from './MeshAvatar'
 import { BoardPanel } from './BoardPanel'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
@@ -21,17 +22,6 @@ export type TeamViewProps = {
 }
 
 type TeamTab = 'messages' | 'board' | 'activity'
-
-// participantInitials — up to two letters for the avatar square. Prefers the name's own capitals
-// (e.g. "QA reviewer" → "QA", "DevOps" → "DO") so acronyms read naturally, else the first letters of
-// the first words.
-function participantInitials(name: string): string {
-  const caps = name.replace(/[^A-Z]/g, '')
-  if (caps.length >= 2) return caps.slice(0, 2)
-  const words = name.split(/\s+/).filter(Boolean)
-  const letters = words.map((w) => w[0]).join('')
-  return (letters !== '' ? letters : name).slice(0, 2).toUpperCase()
-}
 
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
@@ -128,6 +118,37 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
         onAddRunAgent={() => setAddRunAgentOpen(true)}
       />
       <div className="team-main">
+        <header className="team-conversation-header">
+          {activeConversation?.kind === 'direct' ? (
+            <MeshAvatar name={conversationTitle(activeConversation, roster.participants)} kind={activeConversation.participant.kind} size="large" />
+          ) : (
+            <span className="team-thread-symbol" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+            </span>
+          )}
+          <div className="team-conversation-heading">
+            <h3>{activeConversation === null ? 'Team' : conversationTitle(activeConversation, roster.participants)}</h3>
+            <p>{activeConversation === null ? 'Select a person or a conversation' : conversationSubtitle(activeConversation)}</p>
+          </div>
+          {!createOpen && (
+            <button
+              type="button"
+              className="team-icon-btn"
+              aria-label="Create conversation"
+              title="Create conversation"
+              onClick={() => {
+                setTab('messages')
+                setCreateOpen(true)
+              }}
+            >
+              +
+            </button>
+          )}
+        </header>
         <div className="team-tabs" role="tablist" aria-label="Team">
           {(['messages', 'board', 'activity'] as const).map((t) => (
             <button
@@ -144,8 +165,8 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
         </div>
         {tab === 'messages' && (
           <div className="team-messages">
-            <div className="team-create-conversation">
-              {createOpen ? (
+            {createOpen && (
+              <div className="team-create-conversation">
                 <div className="team-create-conversation-form">
                   <label className="team-create-conversation-topic">
                     <span>Topic</span>
@@ -165,9 +186,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
                         const name = participantLabel(p)
                         return (
                           <label key={p.id} className="team-create-conversation-participant">
-                            <span className="team-create-conversation-participant-avatar" aria-hidden="true">
-                              {participantInitials(name)}
-                            </span>
+                            <MeshAvatar name={name} kind={p.kind} />
                             <span className="team-create-conversation-participant-text">
                               <span className="team-create-conversation-participant-name">{name}</span>
                               <span className="team-create-conversation-participant-role">{participantRole(p.kind)}</span>
@@ -196,16 +215,13 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
                     </button>
                   </div>
                 </div>
-              ) : (
-                <button type="button" className="btn team-create-conversation-toggle" onClick={() => setCreateOpen(true)}>
-                  Create conversation
-                </button>
-              )}
-            </div>
+              </div>
+            )}
             <ThreadConversation
               key={targetKey(activeConversation)}
               target={activeConversation}
               participants={roster.participants}
+              threads={searchableThreads}
               onThreadOpened={handleThreadOpened}
             />
           </div>
@@ -216,7 +232,12 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
       {addRunAgentOpen && (
         <AddRunAgentDialog
           profiles={profiles}
-          onAttached={() => setAddRunAgentOpen(false)}
+          onAttached={(result) => {
+            setAddRunAgentOpen(false)
+            // Open the new agent's conversation right away (the next roster poll confirms it).
+            handleThreadOpened({ id: result.thread_id, scope: 'run', members: ['user', result.participant_id], status: 'open' })
+            setTab('messages')
+          }}
           onCancel={() => setAddRunAgentOpen(false)}
         />
       )}
