@@ -115,5 +115,12 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 		AuthorizedBy: authorizedBy,
 	}
 	as.Mesh.Board[key] = entry
+
+	// Resolve every PENDING WaitOnBoardKey wait this publish satisfies in the SAME commit — decided here,
+	// against the live Mesh state, not by the orchestrator from a pre-publish snapshot. See
+	// resolvePendingWaits's doc comment (pkg/state/mesh_waits.go) for why.
+	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
+		return as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+	})
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -64,45 +65,21 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 	}, nil
 }
 
-// CloseThread implements Service.CloseThread. Every still-pending wait whose condition names this thread
-// (an addressed-message wait on it, or a reply-to wait on one of its messages) is resolved in the SAME
-// operation with reason "thread_closed" — closure is never passed off as the answer those waits were
-// registered for (tmp/agent-mesh.md §5.4/§6.6).
+// CloseThread implements Service.CloseThread. Every still-pending wait whose condition names this thread (an
+// addressed-message wait on it, or a reply-to wait on one of its messages) is resolved in the SAME commit —
+// decided by applyMeshThreadClosed itself (pkg/state/mesh_projection.go), not precomputed here from a
+// snapshot, so the resolution can never race a concurrent Wait registration nor break idempotent replay.
 func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) error {
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
 	}
-	rs := o.opts.Store.Snapshot()
 
 	closeEff, err := marshalEffect("mesh_thread_closed", state.Target{ThreadID: string(req.ThreadID)}, struct{}{})
 	if err != nil {
 		return err
 	}
-	effects := []state.Effect{closeEff}
 
-	threadMessages := map[agentcomm.MessageID]bool{}
-	for _, id := range rs.Assistants.Mesh.MessagesByThread[req.ThreadID] {
-		threadMessages[id] = true
-	}
-	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
-		w := rs.Assistants.Mesh.Waits[id]
-		if w.Status != agentcomm.WaitPending {
-			continue
-		}
-		affected := (w.Condition.Kind == agentcomm.WaitOnAddressedMessage && w.Condition.ThreadID == req.ThreadID) ||
-			(w.Condition.Kind == agentcomm.WaitOnReplyTo && threadMessages[w.Condition.MessageID])
-		if !affected {
-			continue
-		}
-		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)},
-			state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: "thread_closed"})
-		if err != nil {
-			return err
-		}
-		effects = append(effects, eff)
-	}
-
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_close_thread", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_close_thread", Actor: req.Actor, Effects: []state.Effect{closeEff}}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(req.ThreadID), "status": "closed"}})
 	})
@@ -111,7 +88,11 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 
 // Send implements Service.Send. One ApplyRunOperation commits the message plus one accepted receipt/inbox
 // reference per recipient (applyMeshMessageSent, pkg/state/mesh_projection.go) — a recipient the thread
-// rejects (not a member, or the thread is closed) fails the WHOLE call, nothing is written.
+// rejects (not a member, or the thread is closed) fails the WHOLE call, nothing is written. Any PENDING wait
+// this message satisfies (reply_to the message it answers, or addressed_message in its thread for one of its
+// recipients — Agent Mesh Phase 5, T5.3: "a reply arriving makes exactly one continuation") is resolved by
+// applyMeshMessageSent itself, in the SAME commit; beforeReady below only tells notifyAndResumeNewlyReadyWaits
+// which waits to skip because they were already ready before this call.
 func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, error) {
 	if req.OperationID == "" {
 		return SendReceipt{}, errors.New("agentcomm: operation id is required")
@@ -130,87 +111,31 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 		s := string(*req.InReplyTo)
 		inReplyTo = &s
 	}
+	// Secrets must never reach the durable journal or a recipient's inbox verbatim — same redaction pass
+	// buildTaskContext applies to everything else a task sees (assistants_context.go).
+	body := redact.String(req.Body, secretValuesForRedaction())
 	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
-			InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs,
+			InReplyTo: inReplyTo, Body: body, ArtifactRefs: req.ArtifactRefs,
 		})
 	if err != nil {
 		return SendReceipt{}, err
 	}
-	effects := []state.Effect{eff}
 
-	// Agent Mesh Phase 5, T5.3: "a reply arriving makes exactly one continuation" — this Send resolves any
-	// PENDING wait it satisfies (reply_to the message it answers, or addressed_message in its thread for one
-	// of its recipients) in the SAME operation, mirroring Publish's board_key wakeup (agentcomm_board.go).
-	// Without this, a wait registered before this reply would stay pending forever: Phase 1 only evaluates
-	// "already satisfied" AT REGISTRATION time (applyMeshWaitRegistered), never retroactively.
-	rs := o.opts.Store.Snapshot()
-	resolvedWaits, err := meshWaitResolutionEffects(rs, req.ThreadID, req.InReplyTo, req.Recipients)
-	if err != nil {
-		return SendReceipt{}, err
-	}
-	effects = append(effects, resolvedWaits.effects...)
+	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
 
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_send", Actor: req.Actor, Effects: []state.Effect{eff}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 			"message_id": string(messageID), "thread_id": string(req.ThreadID), "sender_id": string(req.Sender), "kind": string(req.Kind),
 		}})
-		for _, id := range resolvedWaits.ids {
-			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(id), "status": string(agentcomm.WaitReady)}})
-		}
-		o.resumeWaitersAfterCommit(ctx, resolvedWaits.waiters)
+		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
 	})
 	if err != nil {
 		return SendReceipt{}, err
 	}
 	return SendReceipt{MessageID: messageID, Seq: res.Seq}, nil
-}
-
-// meshWaitResolution bundles the resolve effects a Send/Publish must commit atomically with the ids/waiters
-// needed afterward for notices and resume (T5.3).
-type meshWaitResolution struct {
-	effects []state.Effect
-	ids     []agentcomm.WaitID
-	waiters []agentcomm.ParticipantID
-}
-
-// meshWaitResolutionEffects finds every PENDING wait this new message satisfies: a reply_to wait on the
-// message being answered, or an addressed_message wait on this thread held by one of the recipients.
-func meshWaitResolutionEffects(rs state.RunState, threadID agentcomm.ThreadID, inReplyTo *agentcomm.MessageID, recipients []agentcomm.ParticipantID) (meshWaitResolution, error) {
-	recipientSet := make(map[agentcomm.ParticipantID]bool, len(recipients))
-	for _, r := range recipients {
-		recipientSet[r] = true
-	}
-
-	var out meshWaitResolution
-	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
-		w := rs.Assistants.Mesh.Waits[id]
-		if w.Status != agentcomm.WaitPending {
-			continue
-		}
-		satisfied := false
-		switch w.Condition.Kind {
-		case agentcomm.WaitOnReplyTo:
-			satisfied = inReplyTo != nil && w.Condition.MessageID == *inReplyTo
-		case agentcomm.WaitOnAddressedMessage:
-			satisfied = w.Condition.ThreadID == threadID && recipientSet[w.Waiter]
-		default:
-			satisfied = false
-		}
-		if !satisfied {
-			continue
-		}
-		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)}, state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitReady)})
-		if err != nil {
-			return meshWaitResolution{}, err
-		}
-		out.effects = append(out.effects, eff)
-		out.ids = append(out.ids, id)
-		out.waiters = append(out.waiters, w.Waiter)
-	}
-	return out, nil
 }
 
 // ReadThread implements Service.ReadThread. Membership is enforced here (not by the projection, which has

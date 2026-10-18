@@ -239,6 +239,12 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 // applyMeshThreadClosed projects one mesh_thread_closed control record. Closing an already-closed thread is
 // REJECTED, not a silent no-op: a second close is always a caller bug (there is exactly one legitimate closer
 // per thread in the design this phase supports), and silently swallowing it would hide that bug.
+//
+// Every still-pending wait whose condition names this thread (an addressed_message wait on it, or a
+// reply_to wait on one of its messages) is cancelled in the SAME commit — decided here, against the live
+// Mesh state, rather than by the orchestrator from a pre-close snapshot (same race/idempotency reasoning as
+// resolvePendingWaits's doc comment): closure is never passed off as the answer those waits were registered
+// for (tmp/agent-mesh.md §5.4/§6.6).
 func applyMeshThreadClosed(as *AssistantsState, c *Control, dryRun bool) error {
 	id := agentcomm.ThreadID(c.Target.ThreadID)
 	th, ok := as.Mesh.Threads[id]
@@ -252,6 +258,15 @@ func applyMeshThreadClosed(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	th.Status = agentcomm.ThreadClosed
+
+	threadMessages := make(map[agentcomm.MessageID]bool, len(as.Mesh.MessagesByThread[id]))
+	for _, mid := range as.Mesh.MessagesByThread[id] {
+		threadMessages[mid] = true
+	}
+	as.resolvePendingWaits(agentcomm.WaitCancelled, func(w *MeshWait) bool {
+		return (w.Condition.Kind == agentcomm.WaitOnAddressedMessage && w.Condition.ThreadID == id) ||
+			(w.Condition.Kind == agentcomm.WaitOnReplyTo && threadMessages[w.Condition.MessageID])
+	})
 	return nil
 }
 
@@ -351,6 +366,14 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		as.Mesh.Inbox[r] = append(as.Mesh.Inbox[r], id)
 	}
 	as.Mesh.Receipts[id] = receipts
+
+	// A reply arriving makes exactly one continuation (Agent Mesh Phase 5, T5.3): resolve every PENDING wait
+	// this message satisfies — reply_to the message it answers, or addressed_message in its thread for one of
+	// its recipients — in the SAME commit as the message itself. See resolvePendingWaits's doc comment for why
+	// this cannot be decided by the orchestrator from a pre-commit snapshot.
+	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
+		return as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+	})
 	return nil
 }
 

@@ -17,7 +17,11 @@ import (
 // already Ready, so replay reproduces it with no second pass over notices.jsonl (tmp/agent-mesh.md §6.5's
 // "после рестарта уже выполненное условие замечается без повторной публикации события в live-bus").
 
-// Publish implements Service.Publish.
+// Publish implements Service.Publish. Any PENDING WaitOnBoardKey wait this publish satisfies is resolved by
+// applyMeshBoardPublished itself (pkg/state/mesh_board.go), in the SAME commit as the publish — not
+// precomputed here from a snapshot, which could race a concurrent Wait registration or break idempotent
+// replay. beforeReady only tells notifyAndResumeNewlyReadyWaits which waits to skip because they were already
+// ready before this call.
 func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentcomm.BoardEntry, error) {
 	if req.OperationID == "" {
 		return agentcomm.BoardEntry{}, errors.New("agentcomm: operation id is required")
@@ -26,7 +30,6 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		return agentcomm.BoardEntry{}, errors.New("agentcomm: key and author are required")
 	}
 
-	rs := o.opts.Store.Snapshot()
 	authorizedBy := make([]string, len(req.AuthorizedBy))
 	for i, a := range req.AuthorizedBy {
 		authorizedBy[i] = string(a)
@@ -39,35 +42,13 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
 	}
-	effects := []state.Effect{publishEff}
 
-	var resolvedIDs []agentcomm.WaitID
-	var resolvedWaiters []agentcomm.ParticipantID
-	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
-		w := rs.Assistants.Mesh.Waits[id]
-		if w.Status != agentcomm.WaitPending {
-			continue
-		}
-		if w.Condition.Kind != agentcomm.WaitOnBoardKey || w.Condition.Key != req.Key || w.Condition.Status != req.Status {
-			continue
-		}
-		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)},
-			state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitReady)})
-		if err != nil {
-			return agentcomm.BoardEntry{}, err
-		}
-		effects = append(effects, eff)
-		resolvedIDs = append(resolvedIDs, id)
-		resolvedWaiters = append(resolvedWaiters, w.Waiter)
-	}
+	beforeReady := readyWaitSet(o.opts.Store.Snapshot())
 
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_publish", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_publish", Actor: req.Actor, Effects: []state.Effect{publishEff}}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": req.Status}})
-		for _, id := range resolvedIDs {
-			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(id), "status": string(agentcomm.WaitReady)}})
-		}
-		o.resumeWaitersAfterCommit(ctx, resolvedWaiters)
+		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
 	})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err

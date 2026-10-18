@@ -77,6 +77,42 @@ func TestMesh_PublishWakesPendingBoardWait(t *testing.T) {
 	}
 }
 
+// TestMesh_PublishRetryAfterResolvingWaitStaysIdempotent is Publish's twin of
+// TestMesh_SendRetryAfterResolvingWaitStaysIdempotent: Publish used to bundle a mesh_wait_resolved effect for
+// every WaitOnBoardKey wait it resolved into the SAME operation as the publish itself, so an identical retry
+// (same operation_id), issued after that wait is no longer Pending, would recompute a shorter effects list
+// and get rejected as a conflicting replay instead of returning the original result.
+func TestMesh_PublishRetryAfterResolvingWaitStaysIdempotent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	qa := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-b-4a"))
+	devops := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-b-4b"))
+
+	deadline := time.Now().Add(time.Hour)
+	if _, err := o.Wait(ctx, WaitRequest{
+		OperationID: "op-b-4-wait", Waiter: devops, Deadline: &deadline,
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnBoardKey, Key: "qa.tests", Status: "ready"},
+	}); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	req := PublishRequest{OperationID: "op-b-4-pub", Author: qa, Key: "qa.tests", Status: "ready", ExpectedVersion: 0}
+	e1, err := o.Publish(ctx, req)
+	if err != nil {
+		t.Fatalf("Publish #1 (resolves the pending wait): %v", err)
+	}
+
+	// By now the wait this Publish resolved is Ready, not Pending.
+	e2, err := o.Publish(ctx, req)
+	if err != nil {
+		t.Fatalf("Publish #2 (identical retry): %v", err)
+	}
+	if e1.Version != e2.Version || e1.Seq != e2.Seq {
+		t.Fatalf("retry of an already-committed Publish produced a different result: %+v vs %+v", e1, e2)
+	}
+}
+
 func TestMesh_PublishRejectsUnauthorizedNonOwner(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()

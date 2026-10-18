@@ -99,6 +99,21 @@ func (as *AssistantsState) meshWaitConditionSatisfied(cond agentcomm.WaitConditi
 	}
 }
 
+// resolvePendingWaits flips every currently WaitPending wait matching match to newStatus, in place. Called
+// from the fact-recording projection handlers themselves (applyMeshMessageSent, applyMeshBoardPublished,
+// applyMeshThreadClosed) so a wait's resolution is decided against the SAME live Mesh state the fact is being
+// committed into, under the SAME lock as that commit — never from a snapshot an orchestrator-level caller read
+// before the commit, which could miss a Wait registered in the gap, or recompute differently on an idempotent
+// replay (the operation's OWN effects must stay fixed; this mutation is not one of them).
+func (as *AssistantsState) resolvePendingWaits(newStatus agentcomm.WaitStatus, match func(w *MeshWait) bool) {
+	for _, w := range as.Mesh.Waits {
+		if w.Status != agentcomm.WaitPending || !match(w) {
+			continue
+		}
+		w.Status = newStatus
+	}
+}
+
 // MeshWaitResolvedPayload is the mesh_wait_resolved control record's payload — decoded here by
 // applyMeshWaitResolved. Status is one of agentcomm's non-Pending WaitStatus values: WaitReady (the
 // orchestrator observed the condition become true, e.g. a WaitOnStageStatus it alone can evaluate),

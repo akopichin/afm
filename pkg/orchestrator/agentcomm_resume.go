@@ -26,6 +26,36 @@ func (o *Orchestrator) resumeWaitersAfterCommit(ctx context.Context, waiters []a
 	}
 }
 
+// readyWaitSet snapshots which wait ids are CURRENTLY WaitReady — used by Send/Publish as the "before" side
+// of a before/after diff (see notifyAndResumeNewlyReadyWaits): the resolution itself happens inside
+// applyMeshMessageSent/applyMeshBoardPublished under the commit's own lock, so this snapshot's only job is
+// telling that diff which waits were ALREADY ready and must not be re-notified/re-resumed.
+func readyWaitSet(rs state.RunState) map[agentcomm.WaitID]bool {
+	out := make(map[agentcomm.WaitID]bool, len(rs.Assistants.Mesh.Waits))
+	for id, w := range rs.Assistants.Mesh.Waits {
+		if w.Status == agentcomm.WaitReady {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// notifyAndResumeNewlyReadyWaits is Send/Publish's shared externalWork tail: it re-reads the store AFTER
+// their commit and, for every wait that is Ready now but was not in beforeReady, publishes the EventMeshWait
+// notice and resumes its waiter — exactly the waits THIS call's commit resolved, without either of them
+// needing to carry their own resolved-ids list out of the projection.
+func (o *Orchestrator) notifyAndResumeNewlyReadyWaits(ctx context.Context, beforeReady map[agentcomm.WaitID]bool) {
+	after := o.opts.Store.Snapshot()
+	for _, id := range sortedWaitIDs(after.Assistants.Mesh.Waits) {
+		w := after.Assistants.Mesh.Waits[id]
+		if w.Status != agentcomm.WaitReady || beforeReady[id] {
+			continue
+		}
+		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(id), "status": string(agentcomm.WaitReady)}})
+		o.resumeWaitersAfterCommit(ctx, []agentcomm.ParticipantID{w.Waiter})
+	}
+}
+
 // hasOpenMeshWait reports whether stageID currently has a PENDING mesh wait registered (T5.2). Only
 // WaitPending counts: a wait already WaitReady at this point means the condition was satisfied before the
 // process actually exited — nothing will ever re-trigger a resume for an already-resolved wait, so parking
