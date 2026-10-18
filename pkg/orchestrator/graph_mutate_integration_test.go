@@ -119,10 +119,8 @@ func (r *blockingOnceAutoRunner) RunJSONQuery(context.Context, string) ([]byte, 
 // TestAppend_RaceWithLastStageCompletion — T9.3, §11.4: a concurrent append racing the run's ONLY (and thus
 // last) stage completing must never corrupt state or deadlock — run with -race. The commit either wins the
 // race (lands before the run decides to wind down, and the new stage runs to completion as part of the SAME
-// run) or loses it (rejected run_finalizing once Store.SetRunFinalizing(true) is visible) or — a narrow,
-// acknowledged gap shared with TestCommit_SharedAdmissionSerialization's doc comment — durably commits a
-// moment after the run's own shutdown decision already latched, leaving the new stage pending for a future
-// restart to pick up. All three are acceptable; a panic, a duplicate start, or any other error is not.
+// run) or loses it (rejected run_finalizing): the exit decision and the commit's admission are one step under
+// the store lock (Store.FinalizeIf), so a stage can never be committed and then left pending by an exiting run.
 func TestAppend_RaceWithLastStageCompletion(t *testing.T) {
 	cmd := newSafeGraphCommand(t)
 	cfg := config.Default()
@@ -171,26 +169,8 @@ func TestAppend_RaceWithLastStageCompletion(t *testing.T) {
 		return // commit lost the race cleanly — nothing further to check
 	}
 
-	// Commit won the race. Either the run is still alive and will run n to completion, or the run had
-	// already decided to exit a moment earlier and n is left pending for a future restart — both are
-	// documented-acceptable; just make sure we don't hang waiting for an outcome that can't happen.
-	deadline := time.After(10 * time.Second)
-	for {
-		st, err := state.LoadRunState(runDir)
-		if err == nil {
-			if st.Stages["n"].Status == state.StatusDone {
-				return // commit won AND n ran to completion within this run
-			}
-		}
-		select {
-		case <-deadline:
-			// n may legitimately still be "pending" (run already exited) — only fail if something actively
-			// wrong happened (n never got durably recorded at all, which CommitAddStage's own nil error
-			// already rules out) — nothing more to assert here.
-			return
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
+	// Commit won the race: the run must not have exited under it — n runs to completion within this run.
+	waitForStatus(t, stateFile, "n", state.StatusDone, 10*time.Second)
 }
 
 // TestCrashRightAfterCommitBeforeScheduler — T9.5: a crash immediately after AddStageToGraph's durable

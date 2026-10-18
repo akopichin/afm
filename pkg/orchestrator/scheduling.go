@@ -315,21 +315,9 @@ func (o *Orchestrator) failBlockedStages() {
 	}
 }
 
-func (o *Orchestrator) allTerminal() bool {
-	snap := o.opts.Store.Snapshot()
-	if len(snap.Stages) == 0 {
-		return true
-	}
-	for _, s := range snap.Stages {
-		if !bus.IsTerminal(s.Status) {
-			return false
-		}
-	}
-	return true
-}
-
 // shouldExit reports whether the orchestrator loop should stop. Without a dashboard, any terminal state
-// (done or failed) is final.
+// (done or failed) is final. The run state part is decided again, atomically with operation admission, by
+// Store.FinalizeIf(o.runStateAllowsExit) when the loop actually winds down.
 func (o *Orchestrator) shouldExit() bool {
 	if o.reviewTxnActive() {
 		return false // a review-pause round is in progress; stay alive for the reviewer
@@ -337,22 +325,31 @@ func (o *Orchestrator) shouldExit() bool {
 	if o.pendingAfterHooks.Load() > 0 || o.pendingReflections.Load() > 0 {
 		return false
 	}
-	if !o.allTerminal() {
-		return false
+	snap := o.opts.Store.Snapshot()
+	return o.runStateAllowsExit(&snap)
+}
+
+// runStateAllowsExit is the run-state half of shouldExit: every stage is terminal and nothing accepted still
+// needs a turn. It only reads rs — Store.FinalizeIf runs it under the store lock, so a message or a stage
+// committed concurrently either lands before (and keeps the run alive) or is rejected run_finalizing.
+//
+// Agent Mesh T6.3: every STAGE is terminal, but a run-scoped standing role (no RootStageID at all) or an
+// advisory task whose root stage already finished are both invisible to the stage-status check — see
+// state.AssistantsState.RunBlocker's doc comment for why this is a separate, wider check than the per-stage
+// RequiredBlocker gate.
+func (o *Orchestrator) runStateAllowsExit(rs *state.RunState) bool {
+	for _, s := range rs.Stages {
+		if !bus.IsTerminal(s.Status) {
+			return false
+		}
 	}
-	// Agent Mesh T6.3: every STAGE is terminal, but a run-scoped standing role (no RootStageID at all) or an
-	// advisory task whose root stage already finished are both invisible to the stage-status check above — see
-	// state.AssistantsState.RunBlocker's doc comment for why this is a separate, wider check than the
-	// per-stage RequiredBlocker gate.
 	if o.opts.AssistantsEnabled {
-		rs := o.opts.Store.Snapshot()
-		if _, blocked := rs.Assistants.RunBlocker(); blocked || runAgentHasUnseenMessages(rs) {
+		if _, blocked := rs.Assistants.RunBlocker(); blocked || runAgentHasUnseenMessages(*rs) {
 			return false
 		}
 	}
 	if o.opts.DashboardURL == "" {
 		return true
 	}
-	snap := o.opts.Store.Snapshot()
-	return snap.AllDone()
+	return rs.AllDone()
 }

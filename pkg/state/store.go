@@ -648,6 +648,19 @@ func (s *Store) SetRunFinalizing(v bool) {
 	s.runFinalizing = v
 }
 
+// FinalizeIf marks the run finalizing when canFinish holds for the current projection, deciding both under
+// the SAME lock that admits every operation: an operation committed before the check is part of what
+// canFinish sees, and one arriving after is rejected run_finalizing. canFinish must only read rs.
+func (s *Store) FinalizeIf(canFinish func(rs *RunState) bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !canFinish(s.snapshot) {
+		return false
+	}
+	s.runFinalizing = true
+	return true
+}
+
 // readControlAtSeq reads exactly the ONE control record at seq directly via its recorded byte offset
 // (T2.5) — no scan of the rest of the journal. Caller MUST hold s.mu (same lock as the operation deciding
 // whether to admit a repeat).

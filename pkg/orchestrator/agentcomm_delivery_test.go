@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -151,6 +152,47 @@ func TestShouldExit_QueuedRunAgentWithUnreadMessageHoldsRun(t *testing.T) {
 	}
 	if o.shouldExit() {
 		t.Fatal("a queued run agent with an unread message must hold the run open")
+	}
+}
+
+// TestFinalize_AtomicWithMessageAdmission: the run's exit decision and message admission are one step. A
+// message committed before the decision keeps the run alive; once the run has decided to finish, a send is
+// rejected run_finalizing instead of being accepted for an agent that will never get a turn.
+func TestFinalize_AtomicWithMessageAdmission(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	if _, ok := o.Trigger(assistantsTestStageID, bus.EvComplete, bus.GuardCtx{}, ""); !ok {
+		t.Fatal("EvComplete failed")
+	}
+	res := addTestRunAgent(t, o, "op-add", nil)
+	send := func(id string) error {
+		eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(res.ThreadID), MessageID: "mm-" + id},
+			state.MeshMessageSentPayload{Sender: string(meshUserParticipantID), Recipients: []string{string(res.ParticipantID)}, Kind: string(agentcomm.MessageKindMessage), Body: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.ApplyRunOperation(state.Operation{ID: id, Kind: "mesh_send", Effects: []state.Effect{eff}}, nil)
+		return err
+	}
+
+	if err := send("op-before"); err != nil {
+		t.Fatalf("send before the exit decision: %v", err)
+	}
+	if store.FinalizeIf(o.runStateAllowsExit) {
+		t.Fatal("the run finalized with an accepted message its run agent has not seen")
+	}
+
+	if err := o.MarkMessageDelivered(ctx, "mm-op-before", res.ParticipantID); err != nil {
+		t.Fatal(err)
+	}
+	if !store.FinalizeIf(o.runStateAllowsExit) {
+		t.Fatal("nothing left to do: the run must finalize")
+	}
+	err := send("op-after")
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeRunFinalizing {
+		t.Fatalf("send after the exit decision: err = %v, want run_finalizing", err)
 	}
 }
 

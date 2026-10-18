@@ -747,12 +747,12 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 				// Serialize finalization with PauseFlow under flowPauseMu: either finalizing or the review transaction
 				// wins.
 				o.flowPauseMu.Lock()
-				if !o.reviewTxnActive() {
+				// The exit decision and "reject every later operation" are one step under the store lock
+				// (FinalizeIf): a message, attach or dynamic stage (Этап 9, T9.3) committed a moment before
+				// keeps the run alive, and one arriving after is rejected run_finalizing — never accepted and
+				// then left without a turn.
+				if !o.reviewTxnActive() && o.opts.Store.FinalizeIf(o.runStateAllowsExit) {
 					o.finalizing.Store(true)
-					// Этап 9, T9.3: a dynamic-stage commit (Store.AddStageToGraph, Expect.RunNotFinalizing)
-					// must be rejected run_finalizing from this exact point on — the run has decided to wind
-					// down and must never be "revived" by a concurrent POST adding a new stage.
-					o.opts.Store.SetRunFinalizing(true)
 					o.flowPauseMu.Unlock()
 					o.runEndOfRunMemory(ctx)
 					snap := o.opts.Store.Snapshot()

@@ -117,6 +117,37 @@ func TestOperation_RejectedWhenRunFinalizing(t *testing.T) {
 	}
 }
 
+// TestFinalizeIf_DecidesUnderTheAdmissionLock: the run finalizes only when its predicate holds for the
+// current projection, and from then on every operation is rejected run_finalizing.
+func TestFinalizeIf_DecidesUnderTheAdmissionLock(t *testing.T) {
+	store, err := Open(t.TempDir(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+	mustRecordPolicy(t, store)
+	noTasks := func(rs *RunState) bool { return len(rs.Assistants.Tasks) == 0 }
+
+	if _, err := store.ApplyRunOperation(Operation{ID: "op-1", Kind: "create", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p"}`, "t1", "a")}}, nil); err != nil {
+		t.Fatalf("ApplyRunOperation: %v", err)
+	}
+	if store.FinalizeIf(noTasks) {
+		t.Fatal("FinalizeIf finalized although its predicate does not hold for the committed task")
+	}
+	if _, err := store.ApplyRunOperation(Operation{ID: "op-2", Kind: "create", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p"}`, "t2", "a")}}, nil); err != nil {
+		t.Fatalf("an operation after a declined FinalizeIf must still be admitted: %v", err)
+	}
+
+	if !store.FinalizeIf(func(*RunState) bool { return true }) {
+		t.Fatal("FinalizeIf with a holding predicate must finalize")
+	}
+	_, err = store.ApplyRunOperation(Operation{ID: "op-3", Kind: "create", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p"}`, "t3", "a")}}, nil)
+	var rej *OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeRunFinalizing {
+		t.Fatalf("operation after finalizing: err = %v, want run_finalizing", err)
+	}
+}
+
 // TestOperation_DoesNotHoldLockDuringExternalWork proves externalWork runs AFTER the store's lock is
 // released by attempting a SECOND operation from inside the callback — if the lock were still held, this
 // would deadlock.
