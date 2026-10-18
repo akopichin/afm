@@ -86,6 +86,39 @@ func (as AssistantsState) RequiredBlocker(stageID string) (TaskState, bool) {
 	return *ts, true
 }
 
+// RunBlocker reports whether any task ANYWHERE in the run — regardless of scope or root stage — currently
+// holds accepted-but-unfinished work or a registered mesh wait with a continuation. Agent Mesh T6.3's
+// RUN-level completion barrier, consulted by the orchestrator's shouldExit (pkg/orchestrator/scheduling.go)
+// ONLY once every stage has already reached a terminal status. It is deliberately DIFFERENT and WIDER than
+// RequiredBlocker above: RequiredBlocker only walks ONE stage's required-chain subtree, so it is blind both to
+// a run-scoped standing role (T6.1/T6.2's AttachAndSend, which has no RootStageID at all) and to an advisory
+// stage-scoped task whose root stage has already finished (advisory outcomes never gate their root stage,
+// §4.3 — the stage can reach Done while the task is still mid-flight). Once every stage is terminal, which
+// stage (if any) a task is rooted at no longer matters; only whether ANY task in the whole run still has live
+// work does.
+//
+// A task sitting in StatusQueued is deliberately NOT a blocker: a run-scoped role attached with no first
+// message (T6.2) must stay addressable forever without ever preventing the run from finishing — that is
+// exactly "an idle run-scoped role does not hold the run open" (dev-plan.md T6.3). Every OTHER non-terminal
+// status (running, waiting_parent, waiting_children, waiting_peer, watching, paused) means the task has been
+// ACCEPTED and has durable state riding on it finishing cleanly — including waiting_peer, which a task reaches
+// by registering a mesh Wait with a continuation and cooperatively releasing its own concurrency slot (T5.4):
+// by the time it is sitting there, its own goroutine has already exited, so concurrency.Manager's agentWG no
+// longer tracks it at all — this check is the only thing left that still does. An open-but-empty thread is not
+// a task at all, so it was never a blocker here either way.
+//
+// ok=false means nothing currently blocks a run-level completion decision. Map iteration order is irrelevant:
+// only whether SOME blocker exists matters to the caller, never which one.
+func (as AssistantsState) RunBlocker() (TaskState, bool) {
+	for _, t := range as.Tasks {
+		if t == nil || t.Status.Terminal() || t.Status == assistants.StatusQueued {
+			continue
+		}
+		return *t, true
+	}
+	return TaskState{}, false
+}
+
 // NeedsHumanDecision reports whether stageID's CURRENT required-completion blocker (if any) requires a human
 // decision rather than just more machine work (T7.7, §5.6): a failed/cancelled/held task, or one that
 // completed with a non-pass verdict (needs_changes/inconclusive), needs a Revise/Retry/Waiver from a person.

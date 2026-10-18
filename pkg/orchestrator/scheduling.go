@@ -340,6 +340,15 @@ func (o *Orchestrator) shouldExit() bool {
 	if !o.allTerminal() {
 		return false
 	}
+	// Agent Mesh T6.3: every STAGE is terminal, but a run-scoped standing role (no RootStageID at all) or an
+	// advisory task whose root stage already finished are both invisible to the stage-status check above — see
+	// state.AssistantsState.RunBlocker's doc comment for why this is a separate, wider check than the
+	// per-stage RequiredBlocker gate.
+	if o.opts.AssistantsEnabled {
+		if _, blocked := o.opts.Store.Snapshot().Assistants.RunBlocker(); blocked {
+			return false
+		}
+	}
 	if o.opts.DashboardURL == "" {
 		return true
 	}

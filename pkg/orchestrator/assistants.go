@@ -503,6 +503,15 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 		// no-op for a stage that isn't currently awaiting_assistants.
 		if to.Terminal() {
 			o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
+			// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
+			// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a
+			// scope=run task (no RootStageID at all) or an advisory task whose root stage already finished,
+			// neither of which maybeCompleteAfterAssistants above reaches (it only re-checks ONE stage's own
+			// awaiting_assistants gate). Without this, Run's event loop would have nothing left to wake it once
+			// every stage is already terminal, and would never re-evaluate shouldExit() again — the same
+			// no-op marker WakeEventLoop already exists for (after-hooks, which also do not publish
+			// EventAgentCompleted).
+			o.concurrency.WakeEventLoop()
 		}
 	})
 	o.handleTaskOperationErr(err)

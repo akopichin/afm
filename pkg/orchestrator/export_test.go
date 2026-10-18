@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/state"
@@ -57,4 +58,12 @@ func SetVerifyAgentRunnerForTest(o *Orchestrator, fn func(ctx context.Context, s
 // (Этап 9, T9.4's TestCommit_NoLockHeldDuringModelWorkOrPreflight).
 func SetCommitAddStageBarrierForTest(o *Orchestrator, fn func()) {
 	o.commitAddStageBarrier = fn
+}
+
+// SetRunHelperAgentForTest инъектирует фейковый раннер одного хода помощника (mesh-задачи) для тестов из
+// внешнего package orchestrator_test — тот же приём, что и SetVerifyAgentRunnerForTest, нужен Agent Mesh
+// T6.3's run-level barrier tests, которым требуется реальный Orchestrator.Run(ctx) (через runOrchestratorAsync)
+// с управляемой по времени "подпроцессом" mesh-задачей, а не продакшн-экзекьютор.
+func SetRunHelperAgentForTest(o *Orchestrator, fn func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error)) {
+	o.runHelperAgent = fn
 }
