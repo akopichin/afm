@@ -64,7 +64,7 @@ describe('TeamView', () => {
   test('a direct conversation opens from a person row', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    fireEvent.click(screen.getByText('QA reviewer'))
+    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
   })
 
@@ -139,7 +139,7 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('boom'))
     renderTeamView()
 
-    fireEvent.click(screen.getByText('QA reviewer'))
+    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
 
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
@@ -147,6 +147,31 @@ describe('TeamView', () => {
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
     expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('please review')
+  })
+
+  test('re-selecting the same person after a successful first send returns to the opened thread instead of opening a second one', async () => {
+    mockThreadAndBoardFetches()
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({
+      id: 'mt-9', title: 'QA reviewer', scope: 'run', members: ['user', 'run:qa'], status: 'open',
+    })
+    vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    // roster.threads intentionally stays empty throughout — the 3s poll has not caught up with the thread
+    // the send below opens, which is exactly the window the duplicate-thread bug lived in.
+    renderTeamView()
+
+    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
+    await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'QA reviewer' }))
+    await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'again' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-9', expect.objectContaining({ body: 'again' })))
+    expect(openSpy).toHaveBeenCalledTimes(1)
   })
 
   test('renders the disabled empty state when the mesh capability is off', () => {

@@ -36,6 +36,12 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const [tab, setTab] = useState<TeamTab>('messages')
   const [activeConversation, setActiveConversation] = useState<ThreadConversationTarget | null>(null)
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
+  // pendingThreads — direct threads opened via ThreadConversation's onThreadOpened that the next roster poll
+  // (every 3s, see useMeshRoster) hasn't reported yet. Without this, re-selecting the same person row between
+  // a successful first send and that poll finds nothing in roster.threads, falls back to a fresh 'direct'
+  // target, and the next send mints a SECOND thread via openMeshThread. Filtered against roster.threads below
+  // rather than pruned on poll, so it never needs an effect and stays correct the instant the roster catches up.
+  const [pendingThreads, setPendingThreads] = useState<MeshThread[]>([])
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createTopic, setCreateTopic] = useState('')
@@ -43,11 +49,19 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const [createError, setCreateError] = useState<string | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)
 
+  const unconfirmedThreads = pendingThreads.filter((p) => !roster.threads.some((t) => t.id === p.id))
+  const searchableThreads = unconfirmedThreads.length === 0 ? roster.threads : [...roster.threads, ...unconfirmedThreads]
+
   function handleSelectParticipant(p: MeshParticipant): void {
     setCreateOpen(false)
-    const existing = findDirectThread(roster.threads, p.id)
+    const existing = findDirectThread(searchableThreads, p.id)
     setActiveConversation(existing ? { kind: 'thread', thread: existing } : { kind: 'direct', participant: p })
     setTab('messages')
+  }
+
+  function handleThreadOpened(thread: MeshThread): void {
+    setActiveConversation({ kind: 'thread', thread })
+    setPendingThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))
   }
 
   function handleSelectThread(t: MeshThread): void {
@@ -177,7 +191,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             <ThreadConversation
               key={targetKey(activeConversation)}
               target={activeConversation}
-              onThreadOpened={(thread) => setActiveConversation({ kind: 'thread', thread })}
+              onThreadOpened={handleThreadOpened}
             />
           </div>
         )}
