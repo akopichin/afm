@@ -36,4 +36,9 @@ const (
 	// Применяется только когда делегирует сам помощник (actor.Kind == assistant) — явное, уже подтверждённое
 	// действие человека/бокового агента этим правилом не ограничено (та же оговорка, что у self-match выше).
 	CodeExecutorNotPermitted ErrorCode = "executor_not_permitted"
+	// CodeNotFound — запрос ссылается на то, чего нет: неизвестный тред, участник, сообщение.
+	CodeNotFound ErrorCode = "not_found"
+	// CodeInvalidRequest — запрос некорректен по форме: пустые/повторяющиеся адресаты, адресат не в треде,
+	// неполное условие ожидания и т.п. Reason объясняет, что исправить.
+	CodeInvalidRequest ErrorCode = "invalid_request"
 )

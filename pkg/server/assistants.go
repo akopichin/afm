@@ -3,10 +3,12 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
@@ -16,6 +18,9 @@ import (
 // underlying service cannot currently accept the request at all (e.g. the run store is shutting down) —
 // distinct from a validation rejection; maps to 503.
 var ErrAssistantsUnavailable = errors.New("assistants: service unavailable")
+
+// errCodeInternal — the error code of every unexpected server-side failure.
+const errCodeInternal = "internal"
 
 // AssistantTaskView is one task's dashboard-facing projection — GET /api/stages/{id}/assistants.
 type AssistantTaskView struct {
@@ -318,7 +323,7 @@ func writeAssistantError(w http.ResponseWriter, err error) {
 	}
 	var rej *state.OperationRejectedError
 	if errors.As(err, &rej) {
-		writeAssistantErrCode(w, assistantErrStatus(rej.Code), string(rej.Code))
+		writeAssistantErrMessage(w, assistantErrStatus(rej.Code), string(rej.Code), rej.Reason)
 		return
 	}
 	// Этап 10 (T10.1): a delivered add_stage proposal can ALSO fail with a *graph.ValidationError — the exact
@@ -330,14 +335,16 @@ func writeAssistantError(w http.ResponseWriter, err error) {
 		writeAssistantErrCode(w, graphRejectedStatus(ve.Code), ve.Code)
 		return
 	}
-	writeAssistantErrCode(w, http.StatusInternalServerError, "internal")
+	// Unexpected: never a silent 500 — the error goes to the afm log, the client is pointed there.
+	log.Printf("ERROR: assistants/mesh request failed: %v", err)
+	writeAssistantErrMessage(w, http.StatusInternalServerError, errCodeInternal, "internal error — see the afm log for details")
 }
 
 func assistantErrStatus(code assistants.ErrorCode) int {
 	switch code {
-	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded:
+	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded, agentcomm.CodeWaitCycle:
 		return http.StatusConflict
-	case assistants.CodeFeatureDisabled:
+	case assistants.CodeFeatureDisabled, assistants.CodeNotFound:
 		return http.StatusNotFound
 	case assistants.CodeRunFinalizing:
 		return http.StatusServiceUnavailable
@@ -345,13 +352,24 @@ func assistantErrStatus(code assistants.ErrorCode) int {
 		return http.StatusUnprocessableEntity
 	case assistants.CodeActorNotAllowed:
 		return http.StatusForbidden
+	case assistants.CodeInvalidRequest:
+		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
 	}
 }
 
 func writeAssistantErrCode(w http.ResponseWriter, status int, code string) {
+	writeAssistantErrMessage(w, status, code, "")
+}
+
+// writeAssistantErrMessage writes {"error": code, "message": reason}; message is omitted when empty.
+func writeAssistantErrMessage(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+	body := map[string]string{"error": code}
+	if message != "" {
+		body["message"] = message
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }

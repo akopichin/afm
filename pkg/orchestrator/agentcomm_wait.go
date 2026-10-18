@@ -30,6 +30,22 @@ const (
 // forever with no visible way out (tmp/agent-mesh.md §6.3).
 var ErrWaitRequiresDeadline = errors.New("agentcomm: board_key wait with no known producer requires a deadline")
 
+// waitConditionHint explains what an invalid wait condition is missing, so the agent can fix the call.
+func waitConditionHint(kind agentcomm.WaitConditionKind) string {
+	switch kind {
+	case agentcomm.WaitOnReplyTo:
+		return "condition reply_to needs --message-id"
+	case agentcomm.WaitOnTaskResult:
+		return "condition task_result needs --task-id"
+	case agentcomm.WaitOnBoardKey:
+		return "condition board_key needs --key and --status"
+	case agentcomm.WaitOnStageStatus:
+		return "condition stage_status needs --stage-id and --status"
+	default:
+		return fmt.Sprintf("unknown wait condition %q (want reply_to|addressed_message|task_result|board_key|stage_status)", kind)
+	}
+}
+
 // Wait implements Service.Wait.
 func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, error) {
 	if req.OperationID == "" {
@@ -39,14 +55,16 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 		return WaitReceipt{}, errors.New("agentcomm: waiter is required")
 	}
 	if !req.Condition.Valid() {
-		return WaitReceipt{}, fmt.Errorf("agentcomm: invalid wait condition %q", req.Condition.Kind)
+		return WaitReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: waitConditionHint(req.Condition.Kind)}
 	}
 
 	rs := o.opts.Store.Snapshot()
 
 	if req.Condition.Kind == agentcomm.WaitOnBoardKey {
 		if _, published := rs.Assistants.Mesh.Board[req.Condition.Key]; !published && req.Deadline == nil {
-			return WaitReceipt{}, ErrWaitRequiresDeadline
+			return WaitReceipt{}, &state.OperationRejectedError{
+				Code: assistants.CodeInvalidRequest, Reason: ErrWaitRequiresDeadline.Error() + " (pass --deadline-seconds)", Cause: ErrWaitRequiresDeadline,
+			}
 		}
 	}
 

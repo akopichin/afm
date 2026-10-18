@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // MeshState is the normalized, replay-restored Agent Mesh projection for one run (Agent Mesh Phase 1,
@@ -308,6 +309,12 @@ type MeshMessageSentPayload struct {
 	ArtifactRefs []string `json:"artifact_refs,omitempty"`
 }
 
+// meshRejected is a typed rejection for a mesh operation the caller can fix (unknown thread, bad recipients,
+// exceeded limits): the API turns it into a 4xx with the reason instead of a bare 500.
+func meshRejected(code assistants.ErrorCode, format string, args ...any) error {
+	return &OperationRejectedError{Code: code, Reason: fmt.Sprintf(format, args...)}
+}
+
 // applyMeshMessageSent projects one mesh_message_sent control record: validates the message's shape and
 // thread-membership (agentcomm.ValidateMessage) BEFORE mutating anything, then records one Message plus one
 // agentcomm.DeliveryAccepted receipt and one Inbox entry per recipient, all in the same call.
@@ -325,10 +332,10 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	}
 	thread, ok := as.Mesh.Threads[threadID]
 	if !ok {
-		return fmt.Errorf("mesh_message_sent %s: unknown thread %s", id, threadID)
+		return meshRejected(assistants.CodeNotFound, "unknown thread %s — send without a thread to start a conversation", threadID)
 	}
 	if thread.Status == agentcomm.ThreadClosed {
-		return fmt.Errorf("mesh_message_sent %s: thread %s is closed", id, threadID)
+		return meshRejected(assistants.CodeInvalidStatus, "thread %s is closed", threadID)
 	}
 
 	var p MeshMessageSentPayload
@@ -356,13 +363,13 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		known[mid] = true
 	}
 	if err := agentcomm.ValidateMessage(msg, thread.Members, known); err != nil {
-		return fmt.Errorf("mesh_message_sent %s: %w", id, err)
+		return meshRejected(assistants.CodeInvalidRequest, "%v (thread %s members: %v)", err, threadID, thread.Members)
 	}
 	// agentcomm.MaxThreadMessages/MaxInboxUnread: explicit rejection, never a silent truncation (T0.2). A
 	// recipient's UNREAD count — accepted or delivered, not yet acknowledged — is what the limit bounds; an
 	// already-acknowledged message no longer occupies that budget.
 	if n := len(as.Mesh.MessagesByThread[threadID]); n >= agentcomm.MaxThreadMessages {
-		return fmt.Errorf("mesh_message_sent %s: thread %s has reached MaxThreadMessages (%d)", id, threadID, agentcomm.MaxThreadMessages)
+		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages (MaxThreadMessages)", threadID, agentcomm.MaxThreadMessages)
 	}
 	for _, r := range recipients {
 		unread := 0
@@ -374,7 +381,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 			}
 		}
 		if unread >= agentcomm.MaxInboxUnread {
-			return fmt.Errorf("mesh_message_sent %s: recipient %s has reached MaxInboxUnread (%d)", id, r, agentcomm.MaxInboxUnread)
+			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d unread messages (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
 		}
 	}
 

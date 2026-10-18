@@ -17,11 +17,15 @@ import (
 type OperationRejectedError struct {
 	Code   assistants.ErrorCode
 	Reason string
+	// Cause — an optional sentinel this rejection stands for, so callers can still errors.Is it.
+	Cause error
 }
 
 func (e *OperationRejectedError) Error() string {
 	return fmt.Sprintf("operation rejected (%s): %s", e.Code, e.Reason)
 }
+
+func (e *OperationRejectedError) Unwrap() error { return e.Cause }
 
 // ErrOperationIDConflict is wrapped by OperationRejectedError{Code: CodeInvalidStatus} — kept as a sentinel
 // so callers can errors.Is it without string-matching Reason. Reusing CodeInvalidStatus rather than

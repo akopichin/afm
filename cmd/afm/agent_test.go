@@ -7,11 +7,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/server"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // fakeCLIAgentMesh is a minimal server.AgentMeshActions good enough to exercise the afm agent CLI end to
@@ -20,6 +23,7 @@ type fakeCLIAgentMesh struct {
 	token       string
 	participant string
 	lastSend    server.MeshSendRequest
+	sendErr     error
 }
 
 func (f *fakeCLIAgentMesh) ResolveToken(token string) (string, bool) {
@@ -35,6 +39,9 @@ func (f *fakeCLIAgentMesh) ListParticipants(ctx context.Context, actor string) (
 
 func (f *fakeCLIAgentMesh) Send(ctx context.Context, requestID, actor string, req server.MeshSendRequest) (server.MeshSendReceipt, error) {
 	f.lastSend = req
+	if f.sendErr != nil {
+		return server.MeshSendReceipt{}, f.sendErr
+	}
 	return server.MeshSendReceipt{MessageID: "msg-1", Seq: 1}, nil
 }
 
@@ -188,5 +195,32 @@ func TestAgentCLI_Wait_NeverBlocksAndReportsYieldOrReady(t *testing.T) {
 	}
 	if payload["wait_id"] != "w1" {
 		t.Fatalf("wait_id = %q, want w1", payload["wait_id"])
+	}
+}
+
+// A rejected send prints the server's reason, so the agent learns what to fix instead of "HTTP 500".
+func TestAgentCLI_Send_RejectionPrintsServerReason(t *testing.T) {
+	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "helper:abc", sendErr: &state.OperationRejectedError{
+		Code: assistants.CodeNotFound, Reason: "unknown thread t1 — send without a thread to start a conversation",
+	}}
+	srv := server.New(server.Config{AgentMesh: fake})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	writeTestMeshDescriptor(t, httpSrv, "tok-X", "helper:abc")
+
+	cmd := newAgentSendCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"--thread", "t1", "--to", "helper:qa", "--body", "hello"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("Execute: want an error for a rejected send")
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(errOut.Bytes(), &payload); err != nil {
+		t.Fatalf("stderr must be one JSON object: %v (got %q)", err, errOut.String())
+	}
+	if payload["error"] != "not_found" || !strings.Contains(payload["message"], "send without a thread") {
+		t.Fatalf("stderr = %v, want not_found with the server's reason", payload)
 	}
 }

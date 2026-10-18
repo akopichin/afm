@@ -108,12 +108,17 @@ func (c *agentMeshClient) do(method, path string, body, out any) error {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var apiErr struct {
-			Error string `json:"error"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(raw, &apiErr)
 		code := apiErr.Error
 		if code == "" {
 			code = "http_" + fmt.Sprint(resp.StatusCode)
+		}
+		if apiErr.Message != "" {
+			// The server's reason tells the agent what to fix (e.g. "unknown thread … — send without a thread").
+			return newAgentCLIError(code, "%s %s -> HTTP %d (%s): %s", method, path, resp.StatusCode, code, apiErr.Message)
 		}
 		return newAgentCLIError(code, "mesh request failed: %s %s -> HTTP %d (%s)", method, path, resp.StatusCode, code)
 	}

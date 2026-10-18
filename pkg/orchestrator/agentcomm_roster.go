@@ -214,7 +214,9 @@ func ensureParticipantEffects(rs state.RunState, ids []agentcomm.ParticipantID) 
 		seen[id] = true
 		p, ok := resolveParticipant(rs, id)
 		if !ok {
-			return nil, fmt.Errorf("agentcomm: unknown participant %q", id)
+			return nil, &state.OperationRejectedError{
+				Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown participant %q — `afm agent list` shows who is in this run", id),
+			}
 		}
 		if p.Kind == agentcomm.KindRunAgent || p.Kind == agentcomm.KindSideAgent {
 			// resolveParticipant's default branch only returned ok=true because id is ALREADY in

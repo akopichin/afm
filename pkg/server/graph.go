@@ -175,7 +175,7 @@ func writeGraphError(w http.ResponseWriter, err error) {
 		writeGraphErrCode(w, graphRejectedStatus(ve.Code), ve.Code)
 		return
 	}
-	writeGraphErrCode(w, http.StatusInternalServerError, "internal")
+	writeGraphErrCode(w, http.StatusInternalServerError, errCodeInternal)
 }
 
 func graphRejectedStatus(code string) int {

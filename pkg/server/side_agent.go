@@ -262,7 +262,7 @@ func writeSideAgentError(w http.ResponseWriter, err error) {
 		writeSideAgentErrCode(w, sideAgentErrStatus(sae.Code), string(sae.Code))
 		return
 	}
-	writeSideAgentErrCode(w, http.StatusInternalServerError, "internal")
+	writeSideAgentErrCode(w, http.StatusInternalServerError, errCodeInternal)
 }
 
 func writeSideAgentErrCode(w http.ResponseWriter, status int, code string) {

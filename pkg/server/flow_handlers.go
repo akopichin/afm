@@ -68,7 +68,7 @@ func flowErrCode(err error) (int, string) {
 	case errors.Is(err, orchestrator.ErrNoteNotFound):
 		return http.StatusNotFound, "note_not_found"
 	default:
-		return http.StatusInternalServerError, "internal"
+		return http.StatusInternalServerError, errCodeInternal
 	}
 }
 
