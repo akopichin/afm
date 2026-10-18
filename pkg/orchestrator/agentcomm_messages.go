@@ -154,6 +154,30 @@ func (o *Orchestrator) ReadThread(ctx context.Context, req ReadThreadRequest) (M
 	return pageMessages(rs, ids, req.Cursor, req.Limit), nil
 }
 
+// ListThreads implements Service.ListThreads: every thread req.Participant is a Member of, in the run's
+// thread-open order (ThreadOrder) — a plain membership scan, since Phase 1's MeshState keeps no reverse
+// participant->threads index of its own. The human run owner (meshUserParticipantID, or an empty
+// Participant) is the one exception, mirroring ReadThread's own carve-out exactly: it sees every thread in
+// the run, not just the ones naming it as a Member. This file does not invent any stricter, stage-scoped
+// isolation beyond that — ReadThread enforces none today, so this does not either (dev-plan.md's T7.3
+// dependency note).
+func (o *Orchestrator) ListThreads(ctx context.Context, req ListThreadsRequest) (ThreadPage, error) {
+	rs := o.opts.Store.Snapshot()
+	var page ThreadPage
+	sees := req.Participant == meshUserParticipantID || req.Participant == ""
+	for _, id := range rs.Assistants.Mesh.ThreadOrder {
+		th := rs.Assistants.Mesh.Threads[id]
+		if th == nil {
+			continue
+		}
+		if !sees && !threadHasMember(th, req.Participant) {
+			continue
+		}
+		page.Threads = append(page.Threads, *th)
+	}
+	return page, nil
+}
+
 // ReadInbox implements Service.ReadInbox: every message ever addressed to Participant, newest additions
 // last. It does NOT transition any receipt to delivered — "delivered" is earned only at the actual handoff
 // point (a turn's prompt package, or an explicit MarkMessageDelivered call from the `afm agent inbox`

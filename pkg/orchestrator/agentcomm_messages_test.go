@@ -419,3 +419,99 @@ func TestMesh_CloseThreadResolvesDependentWaits(t *testing.T) {
 		t.Fatalf("wait status after CloseThread = %q, want cancelled", w.Status)
 	}
 }
+
+// TestMesh_ListThreadsReturnsOnlyThreadsTheParticipantBelongsTo is the T7.3 dependency test (dev-plan.md):
+// ReadInbox only surfaces threads where a message was addressed TO the participant and ReadThread needs a
+// known id, so neither can answer "which threads is X in" for a UI roster. ListThreads fills that gap with a
+// plain membership scan.
+func TestMesh_ListThreadsReturnsOnlyThreadsTheParticipantBelongsTo(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	taskID := newRunningHelperForMesh(t, o, store, "op-mt-lt-1")
+	helperID := meshHelperParticipantID(taskID)
+
+	threadIn, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-open-lt-1", Title: "with helper", Members: []agentcomm.ParticipantID{meshUserParticipantID, helperID}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread (with helper): %v", err)
+	}
+	threadIn2, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-open-lt-2", Title: "stage and helper", Members: []agentcomm.ParticipantID{meshStageParticipantID(assistantsTestStageID), helperID}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread (stage and helper): %v", err)
+	}
+	threadOut, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-open-lt-3", Title: "without helper", Members: []agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(assistantsTestStageID)}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread (without helper): %v", err)
+	}
+
+	page, err := o.ListThreads(ctx, ListThreadsRequest{Participant: helperID})
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	got := map[agentcomm.ThreadID]bool{}
+	for _, th := range page.Threads {
+		got[th.ID] = true
+	}
+	if len(got) != 2 || !got[threadIn.ID] || !got[threadIn2.ID] {
+		t.Fatalf("ListThreads(helper) = %v, want exactly {%s, %s}", got, threadIn.ID, threadIn2.ID)
+	}
+	if got[threadOut.ID] {
+		t.Fatalf("ListThreads(helper) unexpectedly includes a thread %s is not a member of", threadOut.ID)
+	}
+}
+
+// TestMesh_ListThreadsEmptyForParticipantWithNoThreads asserts the "zero threads is an empty page, not an
+// error" rule.
+func TestMesh_ListThreadsEmptyForParticipantWithNoThreads(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	taskID := newRunningHelperForMesh(t, o, store, "op-mt-lt-4")
+	helperID := meshHelperParticipantID(taskID)
+
+	page, err := o.ListThreads(ctx, ListThreadsRequest{Participant: helperID})
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if len(page.Threads) != 0 {
+		t.Fatalf("ListThreads for a participant with no threads = %v, want empty", page.Threads)
+	}
+}
+
+// TestMesh_ListThreadsForTheHumanSeesEveryThread mirrors ReadThread's own carve-out (agentcomm_messages.go):
+// the human run owner sees every thread in the run, not just the ones naming it as a Member — ListThreads does
+// not invent a stricter rule than the rest of the Service already enforces.
+func TestMesh_ListThreadsForTheHumanSeesEveryThread(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	taskID := newRunningHelperForMesh(t, o, store, "op-mt-lt-5")
+	helperID := meshHelperParticipantID(taskID)
+
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-open-lt-5", Members: []agentcomm.ParticipantID{meshStageParticipantID(assistantsTestStageID), helperID}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+
+	page, err := o.ListThreads(ctx, ListThreadsRequest{Participant: meshUserParticipantID})
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	found := false
+	for _, th := range page.Threads {
+		if th.ID == thread.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ListThreads(human) did not include thread %s the human is not a member of", thread.ID)
+	}
+}

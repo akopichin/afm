@@ -25,6 +25,7 @@ import (
 // builder calls these methods directly, never a second copy of the logic.
 type Service interface {
 	ListParticipants(context.Context, ListParticipantsRequest) (ParticipantPage, error)
+	ListThreads(context.Context, ListThreadsRequest) (ThreadPage, error)
 	OpenThread(context.Context, OpenThreadRequest) (agentcomm.Thread, error)
 	CloseThread(context.Context, CloseThreadRequest) error
 	Send(context.Context, SendRequest) (SendReceipt, error)
@@ -50,6 +51,25 @@ type ListParticipantsRequest struct {
 // its own task/stage counts, never large enough to need paging (unlike MessagePage/BoardPage).
 type ParticipantPage struct {
 	Participants []agentcomm.Participant
+}
+
+// ListThreadsRequest carries the participant whose threads to list. Mirrors ReadThreadRequest.Reader's own
+// convention exactly (agentcomm_messages.go's ReadThread): Participant == the fixed meshUserParticipantID, or
+// left empty, means "the human run owner", who sees every thread in the run; any other id sees only the
+// threads naming it as a Member. This is the SAME carve-out ReadThread already enforces, not a new one — see
+// ListThreads' doc comment for why a second, stricter rule is deliberately not invented here.
+type ListThreadsRequest struct {
+	Participant agentcomm.ParticipantID
+	Actor       state.Actor
+}
+
+// ThreadPage is ListThreads' result — a slice, not a cursor page, the same ParticipantPage reasoning: today
+// nothing in this package caps how many threads a run or a participant can accumulate, but neither does
+// anything drive that number toward MessagePage/BoardPage's scale (a page of up to MaxThreadMessages entries
+// *within* one thread); a thread listing is one row per conversation, not per message, so it stays small in
+// practice. Revisit with real paging if that assumption stops holding.
+type ThreadPage struct {
+	Threads []agentcomm.Thread
 }
 
 // OpenThreadRequest's Members is the thread's FIXED member set (agentcomm.Thread's own doc comment).

@@ -40,6 +40,18 @@ func (a meshActions) ListParticipants(ctx context.Context) ([]agentcomm.Particip
 	return page.Participants, nil
 }
 
+// Threads implements the T7.3 dependency's HTTP side: every thread the human dashboard operator belongs to.
+// orchestrator.ListThreads already treats meshUIParticipant ("user") as the run owner who sees every thread,
+// not just the ones naming it as a Member (the same carve-out ReadThread/Inbox use elsewhere on this
+// adapter) — exactly what the Team view's "Conversations" grouping needs.
+func (a meshActions) Threads(ctx context.Context) ([]agentcomm.Thread, error) {
+	page, err := a.orch.ListThreads(ctx, orchestrator.ListThreadsRequest{Participant: meshUIParticipant, Actor: meshUIActor})
+	if err != nil {
+		return nil, err
+	}
+	return page.Threads, nil
+}
+
 // OpenThread ensures the human is a member of every thread it opens through this endpoint — a thread the
 // operator cannot send into would make the UI's own composer useless, and ensureParticipantEffects
 // (pkg/orchestrator/agentcomm_roster.go) already treats "user" as always resolvable.

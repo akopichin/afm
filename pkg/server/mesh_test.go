@@ -27,6 +27,9 @@ type fakeMeshActions struct {
 
 	participants []agentcomm.Participant
 
+	threads    []agentcomm.Thread
+	threadsErr error
+
 	openByReq map[string]agentcomm.Thread
 	openCalls int
 	lastOpen  MeshOpenThreadRequest
@@ -63,6 +66,13 @@ func newFakeMeshActions() *fakeMeshActions {
 
 func (f *fakeMeshActions) ListParticipants(ctx context.Context) ([]agentcomm.Participant, error) {
 	return f.participants, nil
+}
+
+func (f *fakeMeshActions) Threads(ctx context.Context) ([]agentcomm.Thread, error) {
+	if f.threadsErr != nil {
+		return nil, f.threadsErr
+	}
+	return f.threads, nil
 }
 
 func (f *fakeMeshActions) OpenThread(ctx context.Context, requestID string, req MeshOpenThreadRequest) (agentcomm.Thread, error) {
@@ -184,6 +194,7 @@ func TestMesh_404WhenCapabilityOff(t *testing.T) {
 		{http.MethodGet, "/api/mesh/participants"},
 		{http.MethodGet, "/api/mesh/board"},
 		{http.MethodGet, "/api/mesh/inbox"},
+		{http.MethodGet, "/api/mesh/threads"},
 		{http.MethodGet, "/api/mesh/threads/mt-1"},
 		{http.MethodPost, "/api/mesh/threads"},
 		{http.MethodPost, "/api/mesh/threads/mt-1/messages"},
@@ -212,6 +223,35 @@ func TestMesh_Participants(t *testing.T) {
 	participants, _ := resp["participants"].([]any)
 	if len(participants) != 1 {
 		t.Fatalf("participants = %v, want 1 entry", resp["participants"])
+	}
+}
+
+// TestMesh_Threads covers GET /api/mesh/threads (bare, list form) — the T7.3 dependency this surface used to
+// 404 on (see mesh.go's package doc comment history). Like TestMesh_Participants/TestMesh_Board, no Origin
+// header is sent: this is a read, not a mutation.
+func TestMesh_Threads(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.threads = []agentcomm.Thread{
+		{ID: "mt-1", Title: "chat", Scope: agentcomm.ScopeStage, Members: []agentcomm.ParticipantID{"user", "stage:s1"}, Status: agentcomm.ThreadOpen},
+	}
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/threads", nil, false)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	threads, _ := resp["threads"].([]any)
+	if len(threads) != 1 {
+		t.Fatalf("threads = %v, want 1 entry", resp["threads"])
+	}
+}
+
+func TestMesh_Threads_ErrorSurfacesThroughWriteAssistantError(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.threadsErr = errUnknownThreadForTest
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, _ := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/threads", nil, false)
+	if w.Code == http.StatusOK {
+		t.Fatalf("HTTP %d, want a non-200 status when the Service call fails", w.Code)
 	}
 }
 

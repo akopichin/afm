@@ -17,18 +17,17 @@ import (
 // (agent_mesh.go) — same maxAgentMeshBodyBytes bound, reused rather than duplicated: this is same-trust
 // local dashboard traffic, same as the agent-facing surface, so a second constant would add nothing.
 //
-// Known gap (do not paper over): the Phase 2 Service has no method to list the threads a participant
-// belongs to — only ReadThread (one thread by id) and ReadInbox (one participant's inbox, which only
-// surfaces threads where a message was addressed TO that participant, not every thread they opened or sent
-// into). `GET /api/mesh/threads` (bare, no id) is therefore NOT implemented here and falls through to the
-// default 404 in routeMesh — it is not a capability-off 404, it is "the Service does not expose this yet".
-// T7.3 (Team view) will need this; adding it is an orchestrator-level change (a new Service method or an
-// extension of ListParticipants/ReadInbox), out of scope for T7.1's "HTTP-only, call existing methods" rule.
+// `GET /api/mesh/threads` (bare, no id) lists every thread the human run owner belongs to — Agent Mesh
+// Phase 7, T7.3's backend dependency: orchestrator.Service.ListThreads (pkg/orchestrator/agentcomm_messages.go)
+// closed the gap this comment used to describe (neither ReadThread, which needs a known id, nor ReadInbox,
+// which only surfaces threads where a message was addressed TO the participant, could answer "which threads
+// is X in").
 
 // MeshActions is the UI-facing Service adapter. nil = capability off: every route 404s (same nil-service
 // convention as AgentMeshActions/AssistantActions).
 type MeshActions interface {
 	ListParticipants(ctx context.Context) ([]agentcomm.Participant, error)
+	Threads(ctx context.Context) ([]agentcomm.Thread, error)
 	OpenThread(ctx context.Context, requestID string, req MeshOpenThreadRequest) (agentcomm.Thread, error)
 	CloseThread(ctx context.Context, requestID, threadID string) error
 	Send(ctx context.Context, requestID, threadID string, req MeshSendRequest) (MeshSendReceipt, error)
@@ -104,6 +103,8 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshBoard(w, r)
 	case path == meshSegInbox && r.Method == http.MethodGet:
 		s.handleMeshInbox(w, r)
+	case path == meshSegThreads && r.Method == http.MethodGet:
+		s.handleMeshThreads(w, r)
 	case path == meshSegThreads && r.Method == http.MethodPost:
 		s.handleMeshOpenThread(w, r)
 	case path == meshSegAttachAndSend && r.Method == http.MethodPost:
@@ -115,7 +116,6 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 	case len(segs) == 3 && segs[0] == meshSegThreads && segs[1] != "" && segs[2] == meshSegThreadClose && r.Method == http.MethodPost:
 		s.handleMeshCloseThread(w, r, segs[1])
 	default:
-		// Includes GET /api/mesh/threads (bare, list form) — see the "Known gap" doc comment above.
 		http.NotFound(w, r)
 	}
 }
@@ -127,6 +127,19 @@ func (s *Server) handleMeshParticipants(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]any{"participants": participants})
+}
+
+// handleMeshThreads is GET /api/mesh/threads (bare, list form) — the T7.3 dependency: every thread the human
+// run owner belongs to (orchestrator.Service.ListThreads sees the human as belonging to every thread in the
+// run, mirroring ReadThread's own carve-out). Like handleMeshParticipants/handleMeshBoard, this is a read with
+// no actor to resolve and no same-origin requirement — see the other GET handlers on this surface.
+func (s *Server) handleMeshThreads(w http.ResponseWriter, r *http.Request) {
+	threads, err := s.mesh.Threads(r.Context())
+	if err != nil {
+		writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"threads": threads})
 }
 
 func (s *Server) handleMeshBoard(w http.ResponseWriter, r *http.Request) {
