@@ -288,7 +288,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	var side *sideAgentRuntime
 	var sideDrained bool
 	if cfg.Server.GetPort() > 0 && sideAgentEnabled(cfg, f) {
-		side, err = startSideAgent(runID, cfg, env, collab.registry)
+		side, err = startSideAgent(runID, cfg, env, collab.registry, orch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: side agent disabled: %v\n", err)
 		}

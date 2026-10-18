@@ -32,10 +32,13 @@ func attachDraft(stageID, profileID, title, instruction, expectedRevision string
 
 // aa is the AssistantActions INTERFACE, not *fakeAssistantActions — passing a nil *fakeAssistantActions
 // through a concrete-typed parameter would produce a non-nil interface wrapping a nil pointer (the classic Go
-// typed-nil trap), defeating TestDraft_CapabilityAndPolicyChecked's nil-capability check entirely.
-func newDraftConfirmServer(t *testing.T, sa *fakeSideAgent, aa AssistantActions) *Server {
+// typed-nil trap), defeating TestDraft_CapabilityAndPolicyChecked's nil-capability check entirely. mesh is the
+// MeshActions interface for the SAME reason — T6.7 re-points attach_assistant draft execution at
+// mesh.AttachAndSend, so most callers below now pass a *fakeMeshActions (mesh_test.go) instead of asserting on
+// aa's own attach bookkeeping.
+func newDraftConfirmServer(t *testing.T, sa *fakeSideAgent, aa AssistantActions, mesh MeshActions) *Server {
 	t.Helper()
-	return newTestServer(t, Config{SideAgent: sa, AssistantActions: aa})
+	return newTestServer(t, Config{SideAgent: sa, AssistantActions: aa, Mesh: mesh})
 }
 
 func postDraftConfirm(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
@@ -58,14 +61,15 @@ func TestDraft_ValidatedAgainstAllowedFields(t *testing.T) {
 
 	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, []sideagent.ActionDraft{draft})}}
 	aa := &fakeAssistantActions{policyRevision: "rev-1"}
-	s := newDraftConfirmServer(t, sa, aa)
+	mesh := newFakeMeshActions()
+	s := newDraftConfirmServer(t, sa, aa, mesh)
 
 	rec := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
-	if aa.attachCalls != 0 {
-		t.Fatalf("Attach called %d times, want 0 — validation must reject before executing", aa.attachCalls)
+	if mesh.attachCalls != 0 {
+		t.Fatalf("AttachAndSend called %d times, want 0 — validation must reject before executing", mesh.attachCalls)
 	}
 }
 
@@ -75,11 +79,27 @@ func TestDraft_ValidatedAgainstAllowedFields(t *testing.T) {
 func TestDraft_CapabilityAndPolicyChecked(t *testing.T) {
 	draft := attachDraft("impl", "qaEngineer", "t", "i", "rev-1")
 	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, []sideagent.ActionDraft{draft})}}
-	s := newDraftConfirmServer(t, sa, nil)
+	s := newDraftConfirmServer(t, sa, nil, newFakeMeshActions())
 
 	rec := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (capability off); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDraft_MeshCapabilityOff404s — T6.7's execution path moved to mesh.AttachAndSend: with AssistantActions
+// on but Mesh off (capabilities that happen not to agree — see confirmAttachAssistantDraft's own doc comment),
+// the confirm endpoint still 404s rather than panicking on a nil Mesh, the same nil-capability convention
+// every other write endpoint on this surface follows.
+func TestDraft_MeshCapabilityOff404s(t *testing.T) {
+	draft := attachDraft("impl", "qaEngineer", "t", "i", "rev-1")
+	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, []sideagent.ActionDraft{draft})}}
+	aa := &fakeAssistantActions{policyRevision: "rev-1"}
+	s := newDraftConfirmServer(t, sa, aa, nil)
+
+	rec := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (mesh capability off); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -90,7 +110,8 @@ func TestDraft_ExpectedRevisionMismatch(t *testing.T) {
 	draft := attachDraft("impl", "qaEngineer", "t", "i", "rev-1")
 	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, []sideagent.ActionDraft{draft})}}
 	aa := &fakeAssistantActions{policyRevision: "rev-2", maxDepth: 3}
-	s := newDraftConfirmServer(t, sa, aa)
+	mesh := newFakeMeshActions()
+	s := newDraftConfirmServer(t, sa, aa, mesh)
 
 	rec := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0}`)
 	if rec.Code != http.StatusConflict {
@@ -106,29 +127,42 @@ func TestDraft_ExpectedRevisionMismatch(t *testing.T) {
 	if resp["current_revision"] != "rev-2" {
 		t.Fatalf("current_revision = %v, want rev-2 (a fresh preview)", resp["current_revision"])
 	}
-	if aa.attachCalls != 0 {
-		t.Fatalf("Attach called %d times, want 0 — a stale draft must never be applied", aa.attachCalls)
+	if mesh.attachCalls != 0 {
+		t.Fatalf("AttachAndSend called %d times, want 0 — a stale draft must never be applied", mesh.attachCalls)
 	}
 }
 
-// TestDraft_ExecutesThroughSingleOperationService — a valid, non-stale draft executes through the EXACT same
-// AssistantActions.Attach path manual confirmation already uses — there is no second mutation path.
-func TestDraft_ExecutesThroughSingleOperationService(t *testing.T) {
+// TestSideAgent_DraftConfirmUsesAttachAndSend (Agent Mesh Phase 6, T6.7) — a valid, non-stale
+// attach_assistant draft executes through the SAME T6.2 composite (mesh.AttachAndSend) every other mesh
+// attach path uses, so the task, thread and (when present) first message commit atomically — there is no
+// second, direct-Attach mutation path left. A double confirm of the SAME draft reuses the SAME derived
+// request id and does not duplicate the underlying helper (mirrors AttachAndSend's own idempotent-replay
+// guarantee, exercised here through the draft-confirm entry point specifically).
+func TestSideAgent_DraftConfirmUsesAttachAndSend(t *testing.T) {
 	draft := attachDraft("impl", "qaEngineer", "Look at this", "please review", "rev-1")
 	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, []sideagent.ActionDraft{draft})}}
 	aa := &fakeAssistantActions{policyRevision: "rev-1"}
-	s := newDraftConfirmServer(t, sa, aa)
+	mesh := newFakeMeshActions()
+	s := newDraftConfirmServer(t, sa, aa, mesh)
 
 	rec := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if aa.attachCalls != 1 {
-		t.Fatalf("Attach called %d times, want exactly 1", aa.attachCalls)
+	if mesh.attachCalls != 1 {
+		t.Fatalf("AttachAndSend called %d times, want exactly 1", mesh.attachCalls)
 	}
-	if aa.lastStage != "impl" || aa.lastAttach.ProfileID != "qaEngineer" ||
-		aa.lastAttach.Title != "Look at this" || aa.lastAttach.Instruction != "please review" {
-		t.Fatalf("Attach called with %+v / stage=%q, want the draft's own fields", aa.lastAttach, aa.lastStage)
+	if mesh.lastAttach.StageID != "impl" || mesh.lastAttach.ProfileID != "qaEngineer" ||
+		mesh.lastAttach.Title != "Look at this" || mesh.lastAttach.Instruction != "please review" {
+		t.Fatalf("AttachAndSend called with %+v, want the draft's own fields", mesh.lastAttach)
+	}
+	if mesh.lastAttach.FirstMessage != nil {
+		t.Fatalf("AttachAndSend FirstMessage = %+v, want nil — a confirmed draft has no chat body of its own", mesh.lastAttach.FirstMessage)
+	}
+	// aa.attachCalls stays 0: the direct Attach path T6.7 replaces is never called any more — only
+	// PolicyRevision (the pre-check above) still reads from AssistantActions.
+	if aa.attachCalls != 0 {
+		t.Fatalf("AssistantActions.Attach called %d times, want 0 — execution goes through mesh.AttachAndSend now", aa.attachCalls)
 	}
 	var resp map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -138,14 +172,15 @@ func TestDraft_ExecutesThroughSingleOperationService(t *testing.T) {
 		t.Fatal("response missing task_id")
 	}
 
-	// A second confirm of the SAME draft must not create a second task (idempotent operation id derived from
-	// turn_id+index, mirroring Attach's own request_id-based idempotency).
+	// A second confirm of the SAME draft must not create a second task/thread/participant (idempotent
+	// operation id derived from turn_id+index, mirroring Attach's own request_id-based idempotency — reused
+	// here as AttachAndSend's OperationID).
 	rec2 := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0}`)
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("second confirm status = %d, want 200; body=%s", rec2.Code, rec2.Body.String())
 	}
-	if aa.attachCalls != 2 {
-		t.Fatalf("Attach called %d times after a repeat confirm, want 2 (re-entering Attach, but idempotently)", aa.attachCalls)
+	if mesh.attachCalls != 2 {
+		t.Fatalf("AttachAndSend called %d times after a repeat confirm, want 2 (re-entering, but idempotently)", mesh.attachCalls)
 	}
 	var resp2 map[string]string
 	_ = json.Unmarshal(rec2.Body.Bytes(), &resp2)
@@ -162,7 +197,8 @@ func TestDraft_ActorScopeEnforced(t *testing.T) {
 	draft := attachDraft("impl", "qaEngineer", "t", "i", "rev-1")
 	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, []sideagent.ActionDraft{draft})}}
 	aa := &fakeAssistantActions{policyRevision: "rev-1"}
-	s := newDraftConfirmServer(t, sa, aa)
+	mesh := newFakeMeshActions()
+	s := newDraftConfirmServer(t, sa, aa, mesh)
 
 	rec := postDraftConfirm(t, s, `{"turn_id":"turn-1","index":0,"actor":{"kind":"admin"}}`)
 	if rec.Code != http.StatusBadRequest {
@@ -171,6 +207,9 @@ func TestDraft_ActorScopeEnforced(t *testing.T) {
 	if aa.attachCalls != 0 {
 		t.Fatalf("Attach called %d times, want 0", aa.attachCalls)
 	}
+	if mesh.attachCalls != 0 {
+		t.Fatalf("AttachAndSend called %d times, want 0", mesh.attachCalls)
+	}
 }
 
 // TestDraft_UnknownOrMissingDraft404s — a confirm for a turn/index that does not exist in history must 404,
@@ -178,7 +217,7 @@ func TestDraft_ActorScopeEnforced(t *testing.T) {
 func TestDraft_UnknownOrMissingDraft404s(t *testing.T) {
 	sa := &fakeSideAgent{history: []sideagent.Event{turnCompletedEvent(t, "turn-1", 1, nil)}}
 	aa := &fakeAssistantActions{policyRevision: "rev-1"}
-	s := newDraftConfirmServer(t, sa, aa)
+	s := newDraftConfirmServer(t, sa, aa, newFakeMeshActions())
 
 	for _, body := range []string{`{"turn_id":"turn-1","index":0}`, `{"turn_id":"unknown-turn","index":0}`} {
 		rec := postDraftConfirm(t, s, body)
@@ -240,7 +279,7 @@ func TestActionFromToolOutput_NotExecuted(t *testing.T) {
 
 	sa := &fakeSideAgent{history: []sideagent.Event{toolEvent, completed}}
 	aa := &fakeAssistantActions{policyRevision: "rev-1"}
-	s := newDraftConfirmServer(t, sa, aa)
+	s := newDraftConfirmServer(t, sa, aa, newFakeMeshActions())
 
 	rec := postDraftConfirm(t, s, `{"turn_id":"turn-tool","index":0}`)
 	if rec.Code != http.StatusNotFound {

@@ -9,13 +9,16 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/secrets"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/sideagent"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // sideAgentEnabled resolves the effective side-agent toggle:
@@ -49,12 +52,24 @@ type sideAgentRuntime struct {
 }
 
 // startSideAgent хранит беседу под afm-root независимо от root_dir; сбой открытия отключает боковой агент,
-// не роняя флоу. registry — реестр профилей помощников (T4.1/T4.3's Config.MentionResolve): nil (collaboration
-// выключена) безопасен — assistants.Registry.Resolve на nil-ресивере просто никогда не резолвит ничего.
-func startSideAgent(runID string, cfg config.Config, env runEnvironment, registry *assistants.Registry) (*sideAgentRuntime, error) {
+// не роняя флоу. registry — реестр профилей помощников, нужен ТОЛЬКО для KnownActionType (T4.4): nil
+// (collaboration выключена) безопасен — assistants.KnownActionType просто не вызывается. orch — общий
+// Service (Agent Mesh Phase 6, T6.7): сюда регистрируется собственная mesh-идентичность бокового агента
+// ("side:<runID>"), и отсюда же резолвится ростер для @-mentions — одна реализация адресации на всё дерево,
+// вместо собственного ad-hoc matching, который раньше жил здесь через registry.Resolve.
+func startSideAgent(runID string, cfg config.Config, env runEnvironment, registry *assistants.Registry, orch *orchestrator.Orchestrator) (*sideAgentRuntime, error) {
 	store, err := sideagent.Open(fmDir(), runID)
 	if err != nil && store == nil {
 		return nil, err
+	}
+
+	// T6.7: регистрируем mesh-идентичность бокового агента ДО того, как он сможет что-либо отправить — иначе
+	// первое же @-mention или Send от "side:<runID>" адресовало бы ещё не существующего участника. Сбой
+	// регистрации отключает боковой агент тем же способом, что и сбой открытия журнала выше (не роняя флоу).
+	if _, err := orch.RegisterSideAgent(context.Background(), orchestrator.RegisterSideAgentRequest{
+		DisplayName: cfg.Client.Command, Actor: state.Actor{Kind: "system"},
+	}); err != nil {
+		return nil, fmt.Errorf("register side agent mesh identity: %w", err)
 	}
 
 	// Учёт side-ходов пишется в usage.jsonl ТОГО ЖЕ namespace, что и журнал. Переиспользуем тот же
@@ -86,10 +101,19 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		Context:     sideagent.ContextBuilder{ByteLimit: sideAgentContextByteLimit},
 		Secrets:     func() []string { return protected },
 		OnUsage:     onUsage,
-		MentionResolve: func(word string) (string, bool) {
-			id, ok := registry.Resolve(word)
-			return string(id), ok
-		},
+		// T6.7: the shared agentcomm.ResolveAlias against the run's LIVE roster — the same resolver every
+		// other mesh addressing path uses — instead of a second, ad-hoc match (assistants.Registry.Resolve)
+		// against the static profile registry alone, which could not see stage agents/helpers/run agents at
+		// all.
+		MentionResolve: sideAgentMentionResolve(func() []agentcomm.Participant {
+			page, err := orch.ListParticipants(context.Background(), orchestrator.ListParticipantsRequest{
+				Actor: state.Actor{Kind: "system"},
+			})
+			if err != nil {
+				return nil
+			}
+			return page.Participants
+		}),
 		// KnownActionType (T4.4) is gated the same way as MentionResolve above: an action draft proposes
 		// creating a helper task, which is meaningless with collaboration off — nil registry means that.
 		KnownActionType: func(typ string) bool {
@@ -97,6 +121,24 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		},
 	})
 	return &sideAgentRuntime{manager: mgr, store: store, acct: acct}, nil
+}
+
+// sideAgentMentionResolve builds sideagent.Config.MentionResolve from a roster-fetcher closure — the same
+// narrow-function-injection style Secrets/OnUsage already use for pkg/sideagent's Config (T6.7): pkg/sideagent
+// itself must not import pkg/agentcomm, so the ONLY alias-resolution implementation in the tree —
+// agentcomm.ResolveAlias — is called from here, in cmd/afm, not duplicated inside pkg/sideagent. An unknown OR
+// ambiguous alias (agentcomm.ResolveAlias's *AmbiguousAliasError) both resolve to ok=false — mentions stay
+// "opt-in, never an error" exactly as pkg/sideagent.extractMentions already documents for a nil resolver;
+// there is no field in TurnAcceptedData for a candidate list to go in, so an ambiguous mention is dropped the
+// same way an unknown one is, not surfaced as a distinct outcome.
+func sideAgentMentionResolve(roster func() []agentcomm.Participant) func(word string) (string, bool) {
+	return func(word string) (string, bool) {
+		id, err := agentcomm.ResolveAlias(word, roster())
+		if err != nil {
+			return "", false
+		}
+		return string(id), true
+	}
 }
 
 // service возвращает значение для server.Config.SideAgent. nil-получатель → nil-интерфейс (capability

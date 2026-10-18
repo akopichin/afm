@@ -292,8 +292,16 @@ func applyOperationCommitted(as *AssistantsState, c *Control, dryRun bool) error
 		}
 		// Actor is carried through from the outer operation_committed record (Этап 7, T7.6: applyTaskWaived is
 		// the first per-effect handler that actually reads it — WaivedBy must record who durably accepted the
-		// risk, not a zero-value Actor).
-		synthetic := &Control{Kind: e.Kind, Time: c.Time, Actor: c.Actor, Target: e.Target, Payload: e.Payload}
+		// risk, not a zero-value Actor). Seq is carried through too (Agent Mesh T6.7 fix): every effect
+		// committed in this batch shares the outer record's own durable seq — applyMeshMessageSent/
+		// applyMeshBoardPublished stamp it onto the Message/BoardEntry they create, and ReadInbox/ReadThread/
+		// ReadBoard page by comparing THAT stored Seq against a cursor. Leaving it zero (as before this fix)
+		// made every mesh entity created via ApplyRunOperation — i.e. every one of them, since that is the
+		// ONLY way the mesh ever creates them — silently indistinguishable from "already read" at the default
+		// cursor=0, so ReadInbox/ReadThread always returned an empty page regardless of what was actually
+		// delivered (TestSideAgent_CanAddressAndBeAddressed is what first exercised a real read-back and
+		// caught it; no earlier test asserted on a Read call's actual message contents, only its error).
+		synthetic := &Control{Kind: e.Kind, Seq: c.Seq, Time: c.Time, Actor: c.Actor, Target: e.Target, Payload: e.Payload}
 		if err := dispatchControlKind(&scratch, synthetic, false); err != nil {
 			return fmt.Errorf("operation effect %d (%s): %w", i, e.Kind, err)
 		}

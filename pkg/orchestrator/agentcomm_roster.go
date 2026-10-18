@@ -26,7 +26,11 @@ const (
 	meshHelperPrefix      = "helper:"
 
 	// actorKindUser is state.Actor.Kind's value for the human operator — the only actor kind that may send an
-	// AttachAndSend first message or register a mesh Wait today (the Side agent's own identity lands in T6.7).
+	// AttachAndSend first message or register a mesh Wait today. The Side agent's own mesh identity
+	// (agentcomm_sideagent.go, T6.7) is registered separately from this — every attach_assistant draft it
+	// proposes is still CONFIRMED by a human dashboard click, so AttachAndSend's own first message is, and
+	// stays, human-authored; the Side agent addresses and is addressed through Send/OpenThread instead, like
+	// any other participant.
 	actorKindUser = "user"
 )
 

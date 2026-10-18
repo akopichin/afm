@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -294,4 +300,87 @@ func TestSideAgentEnabled_Precedence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Agent Mesh Phase 6, T6.7: TestSideAgent_MentionsUseSharedResolver — "@qa" typed in the side-agent composer
+// resolves through agentcomm.ResolveAlias against the run roster; an ambiguous alias is rejected; the
+// resolved id (not the typed name) is what sideAgentMentionResolve returns.
+func TestSideAgent_MentionsUseSharedResolver(t *testing.T) {
+	roster := []agentcomm.Participant{
+		{ID: "run:qaEngineer", Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun, Alias: "qa", Reachable: true},
+		{ID: "stage:impl", Kind: agentcomm.KindStageAgent, Scope: agentcomm.ScopeStage, Alias: "impl", Reachable: true},
+		{ID: "helper:t-1", Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage, Alias: "reviewer", Reachable: true},
+		{ID: "helper:t-2", Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage, Alias: "reviewer", Reachable: true},
+	}
+	resolve := sideAgentMentionResolve(func() []agentcomm.Participant { return roster })
+
+	id, ok := resolve("qa")
+	if !ok {
+		t.Fatal("resolve(\"qa\") = not ok, want a resolved id")
+	}
+	if id != "run:qaEngineer" {
+		t.Fatalf("resolve(\"qa\") = %q, want the CANONICAL participant id %q, not the typed alias", id, "run:qaEngineer")
+	}
+
+	// "@" prefix is accepted too (agentcomm.ResolveAlias's own contract).
+	if id2, ok := resolve("@qa"); !ok || id2 != id {
+		t.Fatalf("resolve(\"@qa\") = (%q, %v), want (%q, true)", id2, ok, id)
+	}
+
+	if _, ok := resolve("reviewer"); ok {
+		t.Fatal("resolve(\"reviewer\") with two matching participants: want ok=false (ambiguous), not a silent pick")
+	}
+
+	if _, ok := resolve("nobody"); ok {
+		t.Fatal("resolve(\"nobody\"): want ok=false (unknown alias)")
+	}
+}
+
+// TestSideAgent_PackageHasNoOwnAliasResolution asserts BY CONSTRUCTION (dev-plan.md T6.7's "Done when"
+// clause) that pkg/sideagent's own (non-test) source never imports pkg/agentcomm or pkg/assistants — the
+// decoupling boundary the package doc comments describe (Config.MentionResolve/KnownActionType are narrow
+// injected functions precisely so this package never needs either import). A regression here would mean
+// someone reintroduced a second, ad-hoc alias-matching implementation inside pkg/sideagent itself instead of
+// going through the one shared resolver (agentcomm.ResolveAlias), called from cmd/afm.
+func TestSideAgent_PackageHasNoOwnAliasResolution(t *testing.T) {
+	const pkgDir = "../../pkg/sideagent"
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", pkgDir, err)
+	}
+	forbidden := []string{"github.com/akopichin/afm/pkg/agentcomm", "github.com/akopichin/afm/pkg/assistants"}
+	checked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(pkgDir, name)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		checked++
+		for _, imp := range file.Imports {
+			importPath := importPathValue(t, imp)
+			for _, f := range forbidden {
+				if importPath == f {
+					t.Fatalf("%s imports %q — pkg/sideagent must stay decoupled (narrow injected functions only)", path, importPath)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no non-test .go files found under pkg/sideagent — test fixture is broken")
+	}
+}
+
+func importPathValue(t *testing.T, imp *ast.ImportSpec) string {
+	t.Helper()
+	v, err := strconv.Unquote(imp.Path.Value)
+	if err != nil {
+		t.Fatalf("unquote import %s: %v", imp.Path.Value, err)
+	}
+	return v
 }

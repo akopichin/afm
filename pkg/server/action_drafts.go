@@ -149,10 +149,17 @@ func (s *Server) handleConfirmActionDraft(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// confirmAttachAssistantDraft is handleConfirmActionDraft's attach_assistant branch (T4.5), unchanged in
-// behavior from before Этап 10 — only split out so handleConfirmActionDraft can dispatch by draft.Type.
+// confirmAttachAssistantDraft is handleConfirmActionDraft's attach_assistant branch (T4.5). Agent Mesh Phase
+// 6, T6.7 re-points its execution at the SAME T6.2 composite (Server.mesh.AttachAndSend) every other mesh
+// attach path already goes through, instead of calling AssistantActions.Attach directly — that direct call
+// was the "second attach composition" dev-plan.md's source document forbids: it committed a task but never a
+// mesh thread/participant, so a draft confirmed through this endpoint silently never became addressable.
+// PolicyRevision/the stale-revision pre-check stay on AssistantActions (unchanged from before this fix) —
+// AttachAndSendRequest carries no revision field of its own to check against, so this read-only query is
+// still how a stale draft is rejected with the SAME 409 shape the dashboard already handles, before anything
+// is executed.
 func (s *Server) confirmAttachAssistantDraft(w http.ResponseWriter, r *http.Request, draft sideagent.ActionDraft, requestID string) {
-	if s.assistantActions == nil {
+	if s.assistantActions == nil || s.mesh == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -178,11 +185,14 @@ func (s *Server) confirmAttachAssistantDraft(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Deterministic, per-draft operation id: a repeat confirm of the SAME draft (double click, retried
-	// request) must resolve to the SAME task, exactly like a manual Attach's client-supplied request_id —
-	// this IS that same id, derived instead of client-chosen, since the client never saw an id to send back.
-	taskID, err := s.assistantActions.Attach(r.Context(), target.StageID, AttachRequest{
-		RequestID:   requestID,
+	// request) must resolve to the SAME task/thread, exactly like a manual Attach's client-supplied
+	// request_id — this IS that same id, derived instead of client-chosen, since the client never saw an id
+	// to send back. No FirstMessage: a confirmed attach_assistant draft creates the task and its mesh thread
+	// atomically, same as before this fix (which created only the task) — there is no chat body in the
+	// draft's own schema (attachAssistantPayload) to send as one.
+	result, err := s.mesh.AttachAndSend(r.Context(), requestID, MeshAttachAndSendRequest{
 		ProfileID:   target.ProfileID,
+		StageID:     target.StageID,
 		Title:       payload.Title,
 		Instruction: payload.Instruction,
 	})
@@ -191,7 +201,7 @@ func (s *Server) confirmAttachAssistantDraft(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
+	_ = json.NewEncoder(w).Encode(map[string]string{"task_id": result.TaskID})
 }
 
 // confirmAddStageDraft is handleConfirmActionDraft's add_stage branch (Этап 10, T10.1): decodeAddStageDraft
