@@ -114,6 +114,11 @@ type Operation struct {
 
 // OperationResult is what ApplyRunOperation returns on success — including when the call is a replay of an
 // already-committed operation_id (T2.5), in which case Seq is the ORIGINAL commit's seq, not a new one.
+// commitTime — the one form of a commit's timestamp in an OperationResult: UTC, without the monotonic clock
+// reading, exactly as it reads back from the journal — so a result is equal live, from cache and after a
+// restart, whatever the machine's local time zone.
+func commitTime(t time.Time) time.Time { return t.UTC().Round(0) }
+
 type OperationResult struct {
 	OperationID string
 	Seq         uint64
@@ -201,7 +206,7 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 
 	// Round(0) drops the monotonic clock reading: a replay (decoded from the journal) carries none, and the
 	// result must be identical either way.
-	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: c.Time.Round(0)}
+	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: commitTime(c.Time)}
 	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, time: res.Time, payloadJSON: payload})
 
 	// Step 6: publish a notice. pkg/state has no notice bus (that lives in pkg/orchestrator) — left as the
@@ -283,8 +288,8 @@ func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayl
 		return OperationResult{}, OperationIDConflictError(opID)
 	}
 	// Repopulate the cache so a THIRD repeat of the same operation_id hits the fast path again.
-	s.opCache.put(opID, opCacheEntry{seq: seq, time: c.Time, payloadJSON: c.Payload})
-	return OperationResult{OperationID: opID, Seq: seq, Time: c.Time}, nil
+	s.opCache.put(opID, opCacheEntry{seq: seq, time: commitTime(c.Time), payloadJSON: c.Payload})
+	return OperationResult{OperationID: opID, Seq: seq, Time: commitTime(c.Time)}, nil
 }
 
 // CommittedOperation is an already committed operation exactly as its journal record holds it — what a retry
@@ -345,7 +350,7 @@ func (s *Store) readCommittedOperation(opID string) (CommittedOperation, bool, e
 	if err != nil {
 		return CommittedOperation{}, false, &StorageError{Inner: fmt.Errorf("re-read committed operation %s at seq %d: %w", opID, seq, err)}
 	}
-	op := CommittedOperation{Result: OperationResult{OperationID: opID, Seq: seq, Time: c.Time}}
+	op := CommittedOperation{Result: OperationResult{OperationID: opID, Seq: seq, Time: commitTime(c.Time)}}
 	if c.Kind != kindOperationCommitted {
 		op.Effects = []Effect{{Kind: c.Kind, Target: c.Target, Payload: c.Payload}}
 		return op, true, nil

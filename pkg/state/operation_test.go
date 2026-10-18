@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
 )
@@ -298,6 +299,11 @@ func TestIdempotency_SurvivesRestart(t *testing.T) {
 	}
 	if res1 != res2 {
 		t.Fatalf("res1=%+v res2=%+v, want identical across restart", res1, res2)
+	}
+	// The result's time is in one canonical form (UTC), so it compares equal whatever the machine's local
+	// time zone — on a UTC machine a Local-zoned live time used to differ from the one read back.
+	if res1.Time.Location() != time.UTC {
+		t.Fatalf("res1.Time location = %v, want UTC", res1.Time.Location())
 	}
 }
 
