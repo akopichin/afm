@@ -108,6 +108,8 @@ type SendRequest struct {
 type SendReceipt struct {
 	MessageID agentcomm.MessageID
 	Seq       uint64
+	// ThreadID — the thread the message went into (SendFromAgent may have chosen or opened it).
+	ThreadID agentcomm.ThreadID
 }
 
 type ReadInboxRequest struct {

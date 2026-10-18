@@ -131,6 +131,17 @@ func (ms MeshState) MessageAnswered(id agentcomm.MessageID) bool {
 // hasMessageAddressedTo reports whether some message already in threadID names recipient among its
 // Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
 // condition is already satisfied at registration time.
+// hasUnseenMessageFor reports whether recipient has a message it has not seen yet (still only accepted, not
+// delivered to it through <inbox> or `afm agent inbox`) — what a thread-less addressed_message wait waits for.
+func (ms MeshState) hasUnseenMessageFor(recipient agentcomm.ParticipantID) bool {
+	for _, id := range ms.Inbox[recipient] {
+		if ms.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
+			return true
+		}
+	}
+	return false
+}
+
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]

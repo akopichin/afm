@@ -141,7 +141,7 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 	if err != nil {
 		return SendReceipt{}, err
 	}
-	return SendReceipt{MessageID: messageID, Seq: res.Seq}, nil
+	return SendReceipt{MessageID: messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
 }
 
 // ReadThread implements Service.ReadThread. Membership is enforced here (not by the projection, which has

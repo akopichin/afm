@@ -48,6 +48,8 @@ type MeshSendRequest struct {
 type MeshSendReceipt struct {
 	MessageID string `json:"message_id"`
 	Seq       uint64 `json:"seq"`
+	// ThreadID — the thread the message went into; an agent that sent without --thread continues there.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 type MeshMessagePage struct {

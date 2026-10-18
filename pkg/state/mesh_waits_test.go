@@ -143,3 +143,31 @@ func TestMesh_ReadyWaitsBasicCorrectness(t *testing.T) {
 		t.Fatalf("ReadyWaits() = %+v, want exactly [ready-wait]", ready)
 	}
 }
+
+// addressed_message WITHOUT a thread = "wake me when anybody writes to me": an agent waiting for a colleague's
+// question before any conversation exists. Only a message the waiter has not seen yet satisfies it — one it
+// already read (delivered) must not wake it again, or a wait right after reading the inbox would loop.
+func TestMesh_AddressedMessageWaitWithoutThread(t *testing.T) {
+	as := setupMeshThread(t, "a", "b")
+	if !(agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage}).Valid() {
+		t.Fatal("addressed_message without a thread must be a valid condition")
+	}
+	// b already read an older message: it must not satisfy a new wait.
+	mustApply(t, &as, meshMessageSentControl(1, "m0", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "old"))
+	mustApply(t, &as, meshMessageReceiptControl(kindMeshMessageDelivered, "m0", "b"))
+
+	mustApply(t, &as, meshWaitRegisteredControl("w1", "b", agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage}, "", "", 0))
+	if got := as.Mesh.Waits["w1"].Status; got != agentcomm.WaitPending {
+		t.Fatalf("wait status = %q, want pending (the only message was already read)", got)
+	}
+	// A message addressed to someone else does not wake b.
+	mustApply(t, &as, meshMessageSentControl(2, "m1", "th-1", "b", []string{"a"}, string(agentcomm.MessageKindMessage), nil, "to a"))
+	if got := as.Mesh.Waits["w1"].Status; got != agentcomm.WaitPending {
+		t.Fatalf("wait status = %q, want still pending", got)
+	}
+	// A new message to b, in any thread, does.
+	mustApply(t, &as, meshMessageSentControl(3, "m2", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "new question"))
+	if got := as.Mesh.Waits["w1"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("wait status = %q, want ready after a new message to b", got)
+	}
+}

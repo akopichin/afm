@@ -128,8 +128,8 @@ func newAgentSendCmd() *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&thread, "thread", "", "thread id to send into (required)")
-	c.Flags().StringVar(&to, "to", "", "comma-separated recipient participant ids (required)")
+	c.Flags().StringVar(&thread, "thread", "", "thread id to send into; omit to start or continue the conversation with --to")
+	c.Flags().StringVar(&to, "to", "", "comma-separated recipients: aliases (docs, @docs) or participant ids (required)")
 	c.Flags().StringVar(&kind, "kind", string(agentcomm.MessageKindMessage), "message kind: message|request|reply|result|proposal")
 	c.Flags().StringVar(&body, "body", "", "message body (required)")
 	c.Flags().StringVar(&inReplyTo, "in-reply-to", "", "id of the message this one answers (required when kind=reply)")
@@ -157,8 +157,8 @@ func newAgentReplyCmd() *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&thread, "thread", "", "thread id (required)")
-	c.Flags().StringVar(&to, "to", "", "comma-separated recipient participant ids (required)")
+	c.Flags().StringVar(&thread, "thread", "", "thread id; omit to reply in the thread of --in-reply-to")
+	c.Flags().StringVar(&to, "to", "", "comma-separated recipients; omit to answer the sender of --in-reply-to")
 	c.Flags().StringVar(&body, "body", "", "reply body (required)")
 	c.Flags().StringVar(&inReplyTo, "in-reply-to", "", "id of the message being answered (required)")
 	c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
@@ -247,7 +247,7 @@ func newAgentWaitCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&condKind, "condition", "", "reply_to|addressed_message|task_result|board_key|stage_status (required)")
 	c.Flags().StringVar(&messageID, "message-id", "", "for condition=reply_to")
-	c.Flags().StringVar(&threadID, "thread-id", "", "for condition=addressed_message")
+	c.Flags().StringVar(&threadID, "thread-id", "", "for condition=addressed_message; omit to wait for a new message to you in any thread")
 	c.Flags().StringVar(&taskID, "task-id", "", "for condition=task_result")
 	c.Flags().StringVar(&stageID, "stage-id", "", "for condition=stage_status")
 	c.Flags().StringVar(&key, "key", "", "for condition=board_key")

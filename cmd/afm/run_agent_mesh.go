@@ -60,7 +60,7 @@ func (a agentMeshActions) Send(ctx context.Context, requestID, actor string, req
 	if kind == "" {
 		kind = agentcomm.MessageKindMessage
 	}
-	receipt, err := a.orch.Send(ctx, orchestrator.SendRequest{
+	receipt, err := a.orch.SendFromAgent(ctx, orchestrator.SendRequest{
 		OperationID: requestID, ThreadID: agentcomm.ThreadID(req.ThreadID), Sender: agentcomm.ParticipantID(actor),
 		Recipients: toParticipantIDs(req.Recipients), Kind: kind, InReplyTo: inReplyTo,
 		Body: req.Body, ArtifactRefs: req.ArtifactRefs, Actor: meshActor(actor),
@@ -68,7 +68,7 @@ func (a agentMeshActions) Send(ctx context.Context, requestID, actor string, req
 	if err != nil {
 		return server.MeshSendReceipt{}, err
 	}
-	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq}, nil
+	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq, ThreadID: string(receipt.ThreadID)}, nil
 }
 
 func toMeshMessagePage(p orchestrator.MessagePage) server.MeshMessagePage {

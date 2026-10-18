@@ -247,7 +247,7 @@ type WaitCondition struct {
 	// MessageID is set for WaitOnReplyTo: the message the waiter expects an answer to.
 	MessageID MessageID `json:"message_id,omitempty"`
 	// ThreadID is set for WaitOnAddressedMessage: the thread to watch for a new message
-	// addressed to the waiter.
+	// addressed to the waiter. Empty means any thread: a message the waiter has not seen yet.
 	ThreadID ThreadID `json:"thread_id,omitempty"`
 	// TaskID is set for WaitOnTaskResult: the assistants task whose terminal result is awaited.
 	// Kept as a plain string (not assistants.TaskID) so this field costs agentcomm no import of
@@ -270,7 +270,7 @@ func (c WaitCondition) Valid() bool {
 	case WaitOnReplyTo:
 		return c.MessageID != ""
 	case WaitOnAddressedMessage:
-		return c.ThreadID != ""
+		return true
 	case WaitOnTaskResult:
 		return c.TaskID != ""
 	case WaitOnBoardKey:
