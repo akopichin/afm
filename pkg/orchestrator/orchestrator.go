@@ -676,6 +676,10 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 			runErr = errors.Join(runErr, fmt.Errorf("persist run completion: %w", err))
 		}
 	}()
+	// closeRemainingMeshWaits (T5.6) runs AFTER agents have drained (WaitAgents) but BEFORE EndRun persists the
+	// terminal status — registered here, between the two, so LIFO gives exactly that order (cancel, drain,
+	// close remaining waits, persist, lifecycle hooks).
+	defer o.closeRemainingMeshWaits()
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 	if err := o.opts.Store.BeginRun(); err != nil {
@@ -702,6 +706,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		o.recoverAssistants(ctx)
 		o.recoverFeedbackIntents(ctx)
 		o.recoverMeshWaits(ctx)
+		o.recoverMeshWaitDeadlines(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
 	if o.opts.AssistantsEnabled {
@@ -803,6 +808,8 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 		return o.onPeerReplied(ctx, ev)
 	case bus.EventPeerQuestion:
 		return o.onPeerQuestion(ctx, ev)
+	case bus.EventPeerWaitEnded:
+		return o.onPeerWaitEnded(ctx, ev)
 	}
 	return nil
 }

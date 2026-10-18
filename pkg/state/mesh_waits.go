@@ -117,7 +117,8 @@ func (as *AssistantsState) resolvePendingWaits(newStatus agentcomm.WaitStatus, m
 // MeshWaitResolvedPayload is the mesh_wait_resolved control record's payload — decoded here by
 // applyMeshWaitResolved. Status is one of agentcomm's non-Pending WaitStatus values: WaitReady (the
 // orchestrator observed the condition become true, e.g. a WaitOnStageStatus it alone can evaluate),
-// WaitCancelled (an explicit cancel) or WaitExpired (deadline passed).
+// WaitCancelled (an explicit cancel), WaitExpired (deadline passed, T5.6) or WaitRunClosed (the run wound
+// down while this wait was still open, T5.6).
 type MeshWaitResolvedPayload struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
@@ -126,7 +127,12 @@ type MeshWaitResolvedPayload struct {
 // applyMeshWaitResolved projects one mesh_wait_resolved control record. Idempotent by construction: a wait
 // that is no longer WaitPending never transitions again, so replaying the SAME resolution twice (the "two
 // concurrent resolutions" race, T1.3) — or cancelling an already-cancelled wait — is a silent no-op, not an
-// error, and never corrupts the stored status.
+// error, and never corrupts the stored status. This is also T5.6's whole race-safety story for a deadline
+// timer firing at the same moment as a satisfying reply: both land here (the reply via resolvePendingWaits
+// under the SAME applyMeshMessageSent/applyMeshBoardPublished commit, the timer via this handler), under the
+// SAME store lock, so whichever commits first wins and the other is this exact no-op — never two outcomes,
+// never a lost reply (the reply's own message/board record commits independently of whether this wait
+// resolution kind wins or loses).
 func applyMeshWaitResolved(as *AssistantsState, c *Control, dryRun bool) error {
 	id := agentcomm.WaitID(c.Target.WaitID)
 	w, ok := as.Mesh.Waits[id]
@@ -148,6 +154,7 @@ func applyMeshWaitResolved(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	w.Status = status
+	w.Reason = p.Reason
 	return nil
 }
 

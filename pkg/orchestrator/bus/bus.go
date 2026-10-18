@@ -113,6 +113,14 @@ const (
 	// type exists purely so onPeerQuestion/onPeerReplied, tests and the dashboard can tell the two resume
 	// reasons apart, not because the underlying mechanics differ.
 	EventPeerQuestion EventType = "peer_question"
+	// EventPeerWaitEnded (Agent Mesh Phase 5, T5.6) fires when a stage's own mesh wait resolves to a
+	// terminal-but-UNSATISFIED outcome — WaitCancelled (CancelWait, by the waiter itself or a human) or
+	// WaitExpired (its deadline elapsed) — while the stage still sits in awaiting_peer. Dispatched through the
+	// exact same FSM shape as EventPeerReplied/EventPeerQuestion (same CAS-protected exactly-once resume), but
+	// NEVER that event type: reusing "peer_replied" for an outcome that never produced a reply would be
+	// exactly the "fake ack" T5.6 forbids. The resumed turn gets a normal fresh phase invocation — it is the
+	// agent's own job to notice, via its usual inbox/wait checks, that nothing answered it.
+	EventPeerWaitEnded EventType = "peer_wait_ended"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

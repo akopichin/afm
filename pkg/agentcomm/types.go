@@ -290,12 +290,18 @@ const (
 	WaitReady     WaitStatus = "ready"
 	WaitCancelled WaitStatus = "cancelled"
 	WaitExpired   WaitStatus = "expired"
+	// WaitRunClosed (Agent Mesh Phase 5, T5.6) resolves a wait that was still WaitPending when the run itself
+	// wound down — nobody will ever revisit it again, so it must not dangle in the journal forever with no
+	// visible terminal outcome. Distinct from WaitCancelled (a deliberate, addressed decision by the waiter or
+	// a human) and WaitExpired (its own deadline elapsed): this one is neither, it is simply "the run ended
+	// while this was still open".
+	WaitRunClosed WaitStatus = "run_closed"
 )
 
 // Valid reports whether s is a recognized WaitStatus. The zero value is never valid.
 func (s WaitStatus) Valid() bool {
 	switch s {
-	case WaitPending, WaitReady, WaitCancelled, WaitExpired:
+	case WaitPending, WaitReady, WaitCancelled, WaitExpired, WaitRunClosed:
 		return true
 	default:
 		return false
@@ -315,6 +321,12 @@ type Wait struct {
 	// waiting for) — the same role assistants.Continuation.Note plays for delegation.
 	ContinuationNote string     `json:"continuation_note,omitempty"`
 	Status           WaitStatus `json:"status"`
+	// Reason (Agent Mesh Phase 5, T5.6) is set once this wait resolves away from Pending without the
+	// condition itself having been satisfied — "deadline exceeded", a human/agent's CancelWait reason, or the
+	// run closing while it was still open. Empty for WaitPending and for a normal WaitReady satisfaction
+	// (the condition itself is the "reason" there, with nothing extra to say). Stored durably so the outcome
+	// is visible on replay, not just in the live notice stream.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Valid reports whether w has the minimum shape a Wait needs: a non-empty ID, waiter, a valid

@@ -58,6 +58,11 @@ const (
 	// original wait is still open when the resumed phase next exits — see retry.go's hasOpenMeshWait check)
 	// do not need to differ at all; only the recorded EVENT differs, for observability and tests.
 	EvPeerQuestion FSMEvent = "peer_question"
+	// EvPeerWaitEnded — Agent Mesh Phase 5 (T5.6): fired instead of EvPeerReplied when the stage is resumed
+	// because its own wait resolved to a terminal-but-unsatisfied outcome (cancelled or expired), not because
+	// it was actually answered. An exact twin of EvPeerReplied/EvPeerQuestion's transition row (same From/To)
+	// for the same reason EvPeerQuestion already is — only the recorded event differs.
+	EvPeerWaitEnded FSMEvent = "peer_wait_ended"
 )
 
 type GuardCtx struct {
@@ -128,6 +133,9 @@ func NewFSM(store *state.Store) *FSM {
 			// EvPeerQuestion — T5.5: an exact twin of EvPeerReplied's row (see its own doc comment above) used
 			// to resume a stage for a bounded counter-question turn instead of a genuine reply.
 			EvPeerQuestion: {From: []state.StageStatus{state.StatusAwaitingPeer}, To: phaseDispatch},
+			// EvPeerWaitEnded — T5.6: another exact twin, used when the stage's own wait ended WITHOUT being
+			// satisfied (cancelled or expired) — see its own doc comment above.
+			EvPeerWaitEnded: {From: []state.StageStatus{state.StatusAwaitingPeer}, To: phaseDispatch},
 			// Разрешаем retry из AwaitingUserInput/AwaitingPeer: поллер мог сменить статус до возврата
 			// ретраибельной ошибки агента.
 			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusRetrying)},

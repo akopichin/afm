@@ -175,6 +175,55 @@ func (o *Orchestrator) onPeerQuestion(ctx context.Context, ev bus.Event) error {
 	return o.resumeAwaitingPeerPhase(ctx, ev, bus.EvPeerQuestion)
 }
 
+// resumeAfterPeerWaitEnded is resumeAwaitingPeerStage's T5.6 entry point: stageID's own wait resolved to a
+// terminal-but-UNSATISFIED outcome (cancelled or expired) — see EventPeerWaitEnded's own doc comment for why
+// this is never EventPeerReplied.
+func (o *Orchestrator) resumeAfterPeerWaitEnded(ctx context.Context, stageID string) {
+	o.resumeAwaitingPeerStage(ctx, stageID, bus.EventPeerWaitEnded)
+}
+
+// onPeerWaitEnded is resumeAwaitingPeerPhase's T5.6 handler, dispatched from EventPeerWaitEnded.
+func (o *Orchestrator) onPeerWaitEnded(ctx context.Context, ev bus.Event) error {
+	return o.resumeAwaitingPeerPhase(ctx, ev, bus.EvPeerWaitEnded)
+}
+
+// resumeWaiterAfterTerminalWait wakes waiter — LIVE path — once one of its waits has resolved to a terminal-
+// but-UNSATISFIED status (WaitCancelled or WaitExpired, never WaitReady). Callers (CancelWait, a firing
+// deadline timer) must first confirm via meshWaitResolvedTo that THEIR OWN resolution attempt is the one that
+// actually stuck — a reply landing first resolves the SAME wait to WaitReady instead, and that outcome's own
+// resume path (resumeWaitersAfterCommit) already owns waking the waiter; calling this one too would fire a
+// second, contradictory resume for the same episode. A stage goes through the critical bus exactly like
+// resumeAfterPeerReply/resumeAfterPeerQuestion (CAS-protected by resumeAwaitingPeerStage's own currentStatus
+// guard — a concurrent Pause/Retry/Revise that already moved the stage out of awaiting_peer makes this a
+// silent no-op, never a stale turn or a lifted manual stop); a task never touches the bus at all, like every
+// other task resume in this file.
+func (o *Orchestrator) resumeWaiterAfterTerminalWait(ctx context.Context, waiter agentcomm.ParticipantID) {
+	if stageID, ok := stageIDFromMeshParticipant(waiter); ok {
+		o.resumeAfterPeerWaitEnded(ctx, stageID)
+		return
+	}
+	if taskID, ok := taskIDFromMeshParticipant(waiter); ok {
+		o.tryResumePeerForTerminalWait(ctx, taskID)
+	}
+}
+
+// resumeWaiterAfterTerminalWaitAtStartup is resumeWaiterAfterTerminalWait's RECOVERY twin, called from
+// recoverMeshWaitDeadlines before Run's event loop starts draining the critical bus — a stage branch must
+// dispatch onPeerWaitEnded DIRECTLY instead of publishing, for the exact same reason recoverMeshWaits' own doc
+// comment gives for onPeerReplied/onPeerQuestion. The task branch is identical to the live path:
+// resumeTaskViaCAS never goes through the critical bus either way.
+func (o *Orchestrator) resumeWaiterAfterTerminalWaitAtStartup(ctx context.Context, waiter agentcomm.ParticipantID) {
+	if stageID, ok := stageIDFromMeshParticipant(waiter); ok {
+		if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: stageID}); err != nil {
+			log.Printf("WARN: mesh: recover peer-wait-ended for stage %q: %v", stageID, err)
+		}
+		return
+	}
+	if taskID, ok := taskIDFromMeshParticipant(waiter); ok {
+		o.tryResumePeerForTerminalWait(ctx, taskID)
+	}
+}
+
 // popPeerWaitPhase returns the phase stashed when stageID parked in awaiting_peer (T5.2), preferring the
 // in-memory prePeerPhase (set by THIS process when it yielded) and falling back to the durable marker file
 // (set by ANY process, read back after a restart — prePeerPhase itself does not survive one).
@@ -226,6 +275,16 @@ func loadMeshPeerWaitPhase(stageDir string) string {
 // racing a live resume for the exact same task — see resumeTaskViaCAS's own doc comment for why a lost CAS
 // race is always a silent no-op, never a double requeue.
 func (o *Orchestrator) tryResumePeer(ctx context.Context, taskID assistants.TaskID) {
+	o.resumeTaskIfWaitCleared(ctx, taskID, "resumed: peer replied")
+}
+
+// resumeTaskIfWaitCleared is the shared guard+CAS-resume step behind tryResumePeer (T5.4, a satisfied wait)
+// and tryResumePeerForTerminalWait (T5.6, an unsatisfied one — cancelled/expired): only resume once the
+// task's own mesh wait set is completely clear (no WaitPending left) — resumeTaskViaCAS's own TaskStatus
+// precondition is what then makes a redundant/racing call (two terminal outcomes landing together, or a live
+// call racing a recovery sweep) a safe no-op, not this check. reason is the only thing that differs between
+// the two callers: a truthful status-change label, never shared text that would misdescribe what happened.
+func (o *Orchestrator) resumeTaskIfWaitCleared(ctx context.Context, taskID assistants.TaskID, reason string) {
 	rs := o.opts.Store.Snapshot()
 	t, ok := rs.Assistants.Tasks[taskID]
 	if !ok || t.Status != assistants.StatusWaitingPeer {
@@ -234,7 +293,14 @@ func (o *Orchestrator) tryResumePeer(ctx context.Context, taskID assistants.Task
 	if o.hasOpenMeshWaitFor(meshHelperParticipantID(taskID)) {
 		return // the wait that parked this task is still genuinely pending — nothing to resume yet
 	}
-	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, "resumed: peer replied")
+	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, reason)
+}
+
+// tryResumePeerForTerminalWait is tryResumePeer's T5.6 counterpart for a wait that resolved WITHOUT being
+// satisfied (cancelled or expired): same guard, but "resumed: peer replied" would be a fake ack for an
+// outcome that never produced a reply, so it gets its own truthful reason instead.
+func (o *Orchestrator) tryResumePeerForTerminalWait(ctx context.Context, taskID assistants.TaskID) {
+	o.resumeTaskIfWaitCleared(ctx, taskID, "resumed: peer wait ended without a reply")
 }
 
 // tryResumePeerForQuestion is tryResumePeer's T5.5 counterpart: unlike tryResumePeer (which only ever fires
