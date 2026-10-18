@@ -110,7 +110,7 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 	// against the live Mesh state, not by the orchestrator from a pre-publish snapshot. See
 	// resolvePendingWaits's doc comment (pkg/state/mesh_waits.go) for why.
 	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
-		return as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+		return as.meshWaitSatisfied(w)
 	})
 	return nil
 }

@@ -24,6 +24,9 @@ type MeshWait struct {
 	TargetTaskID  string `json:"target_task_id,omitempty"`
 	TargetStageID string `json:"target_stage_id,omitempty"`
 	Generation    uint64 `json:"generation,omitempty"`
+	// ResultBaseline is, for a task_result wait, the awaited task's ResultSeq when the wait was registered: a
+	// run agent never becomes terminal, so only a result recorded after that point answers the wait.
+	ResultBaseline uint64 `json:"result_baseline,omitempty"`
 }
 
 // MeshWaitRegisteredPayload is the mesh_wait_registered control record's payload — decoded here by
@@ -66,7 +69,12 @@ func applyMeshWaitRegistered(as *AssistantsState, c *Control, dryRun bool) error
 	}
 
 	mw := &MeshWait{Wait: w, TargetTaskID: c.Target.TaskID, TargetStageID: c.Target.StageID, Generation: p.Generation}
-	if as.meshWaitConditionSatisfied(w.Condition, w.Waiter) {
+	if w.Condition.Kind == agentcomm.WaitOnTaskResult {
+		if t, ok := as.Tasks[assistants.TaskID(w.Condition.TaskID)]; ok {
+			mw.ResultBaseline = t.ResultSeq
+		}
+	}
+	if as.meshWaitSatisfied(mw) {
 		mw.Status = agentcomm.WaitReady
 	}
 	as.Mesh.Waits[id] = mw
@@ -74,35 +82,43 @@ func applyMeshWaitRegistered(as *AssistantsState, c *Control, dryRun bool) error
 	return nil
 }
 
-// meshWaitConditionSatisfied reports whether cond already holds RIGHT NOW, purely from data AssistantsState
-// itself carries. WaitOnStageStatus is NOT decidable here: stage status lives in RunState.Stages, which
-// dispatchControlKind's AssistantsState-only handlers never see (see kindStageGraphAdded's doc comment in
-// record.go for the one existing kind that DOES need full RunState, and why it is dispatched differently).
-// A WaitOnStageStatus condition therefore always starts WaitPending and can only become WaitReady via an
-// explicit mesh_wait_resolved record — the orchestrator (which does read RunState.Stages) is responsible for
-// firing it once the named stage reaches the expected status.
-func (as *AssistantsState) meshWaitConditionSatisfied(cond agentcomm.WaitCondition, waiter agentcomm.ParticipantID) bool {
+// meshWaitSatisfied reports whether w's condition already holds RIGHT NOW, purely from data AssistantsState
+// itself carries. WaitOnStageStatus is NOT decidable here: stage status lives in RunState.Stages, so
+// RunState.resolveStageStatusWaits decides it after every stage transition and every control record.
+func (as *AssistantsState) meshWaitSatisfied(w *MeshWait) bool {
+	cond := w.Condition
 	switch cond.Kind {
 	case agentcomm.WaitOnReplyTo:
 		return as.Mesh.MessageAnswered(cond.MessageID)
 	case agentcomm.WaitOnAddressedMessage:
 		if cond.ThreadID == "" {
-			return as.Mesh.HasUnseenMessageFor(waiter)
+			return as.Mesh.HasUnseenMessageFor(w.Waiter)
 		}
-		return as.Mesh.hasMessageAddressedTo(cond.ThreadID, waiter)
+		return as.Mesh.hasMessageAddressedTo(cond.ThreadID, w.Waiter)
 	case agentcomm.WaitOnTaskResult:
 		// A task's result is final once it is terminal. A run agent never becomes terminal: it returns to
-		// queued after every turn, with that turn's result recorded (LastVerdict) — that recorded result is
-		// what a task_result wait on it observes.
+		// queued after every turn with that turn's result recorded — only a result recorded after the wait was
+		// registered answers it, never an earlier turn's.
 		t, ok := as.Tasks[assistants.TaskID(cond.TaskID)]
-		return ok && (t.Status.Terminal() || (t.Scope == assistants.ScopeRun && t.LastVerdict != ""))
+		return ok && (t.Status.Terminal() || (t.Scope == assistants.ScopeRun && t.ResultSeq > w.ResultBaseline))
 	case agentcomm.WaitOnBoardKey:
 		e, ok := as.Mesh.Board[cond.Key]
 		return ok && e.Status == cond.Status
 	default:
-		// WaitOnStageStatus (never decidable here, see doc comment above) and any other/unknown kind.
+		// WaitOnStageStatus (see resolveStageStatusWaits) and any other/unknown kind.
 		return false
 	}
+}
+
+// resolveStageStatusWaits resolves every pending stage_status wait whose stage is now at the awaited status.
+// Called after every stage transition and every control record, live and on replay alike, so a wait
+// registered after its stage already reached the status is ready at once, and a later transition resolves it
+// in the same step that records it.
+func (rs *RunState) resolveStageStatusWaits() {
+	rs.Assistants.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
+		st, ok := rs.Stages[w.Condition.StageID]
+		return w.Condition.Kind == agentcomm.WaitOnStageStatus && ok && string(st.Status) == w.Condition.Status
+	})
 }
 
 // resolvePendingWaits flips every currently WaitPending wait matching match to newStatus, in place. Called
@@ -111,12 +127,17 @@ func (as *AssistantsState) meshWaitConditionSatisfied(cond agentcomm.WaitConditi
 // committed into, under the SAME lock as that commit — never from a snapshot an orchestrator-level caller read
 // before the commit, which could miss a Wait registered in the gap, or recompute differently on an idempotent
 // replay (the operation's OWN effects must stay fixed; this mutation is not one of them).
+//
+// A resolved wait is replaced by an updated copy, never changed in place: a stage transition resolves waits
+// directly in the live projection, whose wait values Store.Snapshot copies share.
 func (as *AssistantsState) resolvePendingWaits(newStatus agentcomm.WaitStatus, match func(w *MeshWait) bool) {
-	for _, w := range as.Mesh.Waits {
+	for id, w := range as.Mesh.Waits {
 		if w.Status != agentcomm.WaitPending || !match(w) {
 			continue
 		}
-		w.Status = newStatus
+		resolved := *w
+		resolved.Status = newStatus
+		as.Mesh.Waits[id] = &resolved
 	}
 }
 
@@ -125,8 +146,7 @@ func (as *AssistantsState) resolvePendingWaits(newStatus agentcomm.WaitStatus, m
 // applyMeshMessageSent/applyMeshBoardPublished do for their own wait kinds.
 func (as *AssistantsState) resolveTaskResultWaits(taskID assistants.TaskID) {
 	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
-		return w.Condition.Kind == agentcomm.WaitOnTaskResult && w.Condition.TaskID == string(taskID) &&
-			as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+		return w.Condition.Kind == agentcomm.WaitOnTaskResult && w.Condition.TaskID == string(taskID) && as.meshWaitSatisfied(w)
 	})
 }
 

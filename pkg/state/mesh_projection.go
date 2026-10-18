@@ -437,7 +437,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	// its recipients — in the SAME commit as the message itself. See resolvePendingWaits's doc comment for why
 	// this cannot be decided by the orchestrator from a pre-commit snapshot.
 	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
-		return as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+		return as.meshWaitSatisfied(w)
 	})
 	return nil
 }

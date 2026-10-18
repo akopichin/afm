@@ -78,6 +78,30 @@ func (o *Orchestrator) notifyAndResumeNewlyReadyWaits(ctx context.Context, befor
 	}
 }
 
+// stageStatusWaitsPending reports whether some pending stage_status wait names stageID, with the waits ready
+// before the transition about to be applied — the "before" side for resumeWaitersAfterTransition.
+func (o *Orchestrator) stageStatusWaitsPending(stageID string) (map[agentcomm.WaitID]bool, bool) {
+	if o.opts.Store == nil {
+		return nil, false // a bare test Orchestrator built around an FSM alone
+	}
+	rs := o.opts.Store.Snapshot()
+	for _, w := range rs.Assistants.Mesh.Waits {
+		if w.Status == agentcomm.WaitPending && w.Condition.Kind == agentcomm.WaitOnStageStatus && w.Condition.StageID == stageID {
+			return readyWaitSet(rs), true
+		}
+	}
+	return nil, false
+}
+
+// resumeWaitersAfterTransition resumes the waiters whose stage_status waits a transition just resolved (the
+// store resolves them in the transition itself, state.RunState.resolveStageStatusWaits). It runs off the
+// caller's goroutine: a transition may be applied on the event loop, which a stage resume publishes to.
+func (o *Orchestrator) resumeWaitersAfterTransition(beforeReady map[agentcomm.WaitID]bool) {
+	o.concurrency.SpawnDetached(o.runContext(context.Background()), func(ctx context.Context) {
+		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+	})
+}
+
 // hasOpenMeshWaitFor reports whether waiter currently has a PENDING mesh wait registered — the shared
 // primitive behind hasOpenMeshWait (stage-scoped, T5.2) and runHelperTask's own yield check (helper-scoped,
 // T5.4). Only WaitPending counts: a wait already WaitReady at this point means the condition was satisfied

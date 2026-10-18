@@ -154,8 +154,8 @@ func TestShouldExit_QueuedRunAgentWithUnreadMessageHoldsRun(t *testing.T) {
 	}
 }
 
-// A task_result wait on a run agent resolves when a turn's result is committed — whether the wait was
-// registered before that turn or after it.
+// A task_result wait on a run agent resolves on a turn's result committed AFTER the wait was registered —
+// never on an earlier turn's result, which a waiter asking for new work does not want.
 func TestTaskResultWait_RunAgentTurn(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()
@@ -163,31 +163,45 @@ func TestTaskResultWait_RunAgentTurn(t *testing.T) {
 	res := addTestRunAgent(t, o, "op-add", nil)
 
 	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: string(res.TaskID)}
-	before, err := o.Wait(ctx, WaitRequest{OperationID: "op-wait-before", Waiter: meshUserParticipantID, Condition: cond, Actor: state.Actor{Kind: "user"}})
-	if err != nil {
-		t.Fatalf("Wait (before the turn): %v", err)
+	wait := func(id string) WaitReceipt {
+		t.Helper()
+		r, err := o.Wait(ctx, WaitRequest{OperationID: id, Waiter: meshUserParticipantID, Condition: cond, Actor: state.Actor{Kind: "user"}})
+		if err != nil {
+			t.Fatalf("Wait %s: %v", id, err)
+		}
+		return r
 	}
-	if before.Status != agentcomm.WaitPending {
-		t.Fatalf("wait before any turn = %s, want pending", before.Status)
+	turn := func(id string) {
+		t.Helper()
+		if _, err := o.Send(ctx, SendRequest{
+			OperationID: id, ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+			Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindMessage, Body: "go", Actor: state.Actor{Kind: "user"},
+		}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
 	}
 
-	if _, err := o.Send(ctx, SendRequest{
-		OperationID: "op-go", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
-		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindMessage, Body: "go", Actor: state.Actor{Kind: "user"},
-	}); err != nil {
-		t.Fatalf("Send: %v", err)
+	first := wait("op-wait-1")
+	if first.Status != agentcomm.WaitPending {
+		t.Fatalf("wait before any turn = %s, want pending", first.Status)
 	}
-	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
-
-	if got := store.Snapshot().Assistants.Mesh.Waits[before.WaitID].Status; got != agentcomm.WaitReady {
+	turn("op-go-1")
+	if got := store.Snapshot().Assistants.Mesh.Waits[first.WaitID].Status; got != agentcomm.WaitReady {
 		t.Fatalf("wait registered before the turn = %s after it, want ready", got)
 	}
-	after, err := o.Wait(ctx, WaitRequest{OperationID: "op-wait-after", Waiter: meshUserParticipantID, Condition: cond, Actor: state.Actor{Kind: "user"}})
-	if err != nil {
-		t.Fatalf("Wait (after the turn): %v", err)
+
+	second := wait("op-wait-2")
+	if second.Status != agentcomm.WaitPending {
+		t.Fatalf("wait registered after turn 1 = %s, want pending — turn 1's result is not the new result", second.Status)
 	}
-	if after.Status != agentcomm.WaitReady {
-		t.Fatalf("wait registered after the turn = %s, want ready", after.Status)
+	turn("op-go-2")
+	deadline := time.Now().Add(2 * time.Second)
+	for store.Snapshot().Assistants.Mesh.Waits[second.WaitID].Status != agentcomm.WaitReady {
+		if time.Now().After(deadline) {
+			t.Fatal("wait registered after turn 1 did not resolve on turn 2's result")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

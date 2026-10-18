@@ -286,7 +286,7 @@ func TestMesh_WaitRegisteredAfterSendStartsReady(t *testing.T) {
 	}
 
 	// Wait registers SECOND — applyMeshWaitRegistered's own "already satisfied at registration" check
-	// (meshWaitConditionSatisfied) must see the message that already landed and start it Ready directly.
+	// (meshWaitSatisfied) must see the message that already landed and start it Ready directly.
 	waitReceipt, err := o.Wait(ctx, WaitRequest{
 		OperationID: "op-wait-8", Waiter: helperID,
 		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread.ID},

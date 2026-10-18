@@ -52,6 +52,9 @@ type TaskState struct {
 	// (state.go's isIdle) both need it WITHOUT file I/O, identically live and after a restart — see
 	// applyTaskResult's doc comment for why the rest of Result still lives only in the control stream.
 	LastVerdict assistants.Verdict `json:"last_verdict,omitempty"`
+	// ResultSeq is the seq of the most recently projected task_result record (0 if none) — tells a result
+	// recorded after a task_result wait was registered from an earlier one (MeshWait.ResultBaseline).
+	ResultSeq uint64 `json:"result_seq,omitempty"`
 	// Waived/WaiverReason/WaivedBy/WaivedAt (Этап 7, T7.6) record a human's explicit decision to accept the
 	// risk of this required task never closing its own gate — a SEPARATE, audited operation (kindTaskWaived),
 	// never a side effect of cancel/retry/any task_result. Once Waived, RequiredBlocker treats this task's
@@ -482,6 +485,9 @@ func dispatchControl(rs *RunState, c *Control, dryRun bool) error {
 	} else if err := dispatchControlKind(as, c, dryRun); err != nil {
 		return err
 	}
+	if !dryRun {
+		rs.resolveStageStatusWaits()
+	}
 
 	// Idempotency index (T2.5): ANY control record that carries an operation_id contributes to the
 	// never-evicted index, regardless of kind. Restored by replaying the WHOLE log (every call site of
@@ -732,6 +738,7 @@ func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	t.LastVerdict = p.Verdict
+	t.ResultSeq = c.Seq
 	as.resolveTaskResultWaits(id)
 	return nil
 }

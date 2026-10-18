@@ -259,6 +259,14 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 	}
 }
 
+// applyTransition projects one stage transition — the single step shared by live Store.Apply and replay:
+// timers before the change, the new status, then the stage_status waits the new status resolves.
+func (rs *RunState) applyTransition(t *Transition) {
+	accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
+	rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+	rs.resolveStageStatusWaits()
+}
+
 // accountIdleAndBackoff обновляет таймеры ДО перехода; вызывается и из live Apply, и из replay
 // parseEventLog.
 func accountIdleAndBackoff(rs *RunState, stageID string, to StageStatus, t time.Time) {
@@ -438,8 +446,7 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 			goodOffset = offset
 			continue
 		}
-		accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
-		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+		rs.applyTransition(&t)
 		res.history = append(res.history, t)
 		res.lastSeq = t.Seq
 		goodOffset = offset

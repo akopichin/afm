@@ -171,3 +171,37 @@ func TestMesh_AddressedMessageWaitWithoutThread(t *testing.T) {
 		t.Fatalf("wait status = %q, want ready after a new message to b", got)
 	}
 }
+
+// TestMesh_StageStatusWaitResolvesOnTransition: the transition that brings a stage to the awaited status
+// resolves a pending stage_status wait in the same step, live and on replay alike — and the resolution never
+// changes a wait value an earlier snapshot copy shares.
+func TestMesh_StageStatusWaitResolvesOnTransition(t *testing.T) {
+	rs := NewRunState([]string{"build"})
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: "build", Status: string(StatusRunning)}
+	if err := applyControlToRunState(rs, meshWaitRegisteredControl("w1", "user", cond, "", "", 0)); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	before := rs.Assistants.Mesh.Waits["w1"]
+	if before.Status != agentcomm.WaitPending {
+		t.Fatalf("wait on a status not reached yet = %s, want pending", before.Status)
+	}
+
+	rs.applyTransition(&Transition{StageID: "build", From: StatusPending, To: StatusReady})
+	if got := rs.Assistants.Mesh.Waits["w1"].Status; got != agentcomm.WaitPending {
+		t.Fatalf("after a transition to another status = %s, want pending", got)
+	}
+	rs.applyTransition(&Transition{StageID: "build", From: StatusReady, To: StatusRunning})
+	if got := rs.Assistants.Mesh.Waits["w1"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("after the stage reached running = %s, want ready", got)
+	}
+	if before.Status != agentcomm.WaitPending {
+		t.Fatal("resolving the wait changed the value an earlier copy holds")
+	}
+
+	if err := applyControlToRunState(rs, meshWaitRegisteredControl("w2", "user", cond, "", "", 0)); err != nil {
+		t.Fatalf("register again: %v", err)
+	}
+	if got := rs.Assistants.Mesh.Waits["w2"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("wait on the status the stage already has = %s, want ready at once", got)
+	}
+}

@@ -598,6 +598,7 @@ func (o *Orchestrator) Trigger(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx
 // triggerWithSeq — как Trigger, но дополнительно возвращает seq применённой transition. Остальные ~60 call
 // site'ов Trigger в этом не нуждаются и не меняются.
 func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, uint64, bool) {
+	beforeReady, stageWaitsPending := o.stageStatusWaitsPending(stageID)
 	from, to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 	if err != nil {
 		var se *StorageError
@@ -616,6 +617,9 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 	if ok {
 		pubEv := bus.Event{Type: bus.EventStageStatusChanged, StageID: stageID, Data: string(to), Seq: seq}
 		o.ui.Publish(pubEv)
+		if stageWaitsPending {
+			o.resumeWaitersAfterTransition(beforeReady)
+		}
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
 		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)

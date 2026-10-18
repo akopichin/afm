@@ -524,8 +524,7 @@ func (s *Store) Apply(t *Transition) error {
 
 	// SetStageStatusAt, не SetStageStatus: t.Time уже зафиксирован выше и это именно то время, которое
 	// попадёт в events.jsonl.
-	accountIdleAndBackoff(s.snapshot, t.StageID, t.To, t.Time)
-	s.snapshot.SetStageStatusAt(t.StageID, t.To, t.Time)
+	s.snapshot.applyTransition(t)
 	s.snapshot.LastSeq = s.lastSeq
 
 	if err := s.writeSnapshot(); err != nil {
