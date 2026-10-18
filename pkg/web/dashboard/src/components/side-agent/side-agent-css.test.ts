@@ -52,6 +52,19 @@ describe('side-agent.css visibility contract', () => {
   })
 })
 
+// T7.6: the Side agent header button must stay a visible text button ("Side agent" label) at
+// every viewport width, including the app's narrow breakpoint — never collapsed to an icon-only
+// square the way .gh-files-btn is allowed to (Side agent is not in scope for that collapse).
+describe('side-agent.css narrow-viewport contract (T7.6)', () => {
+  it('never hides the "Side agent" label behind display:none at any breakpoint', () => {
+    expect(sideAgentCss).not.toMatch(/\.gh-side-agent-label\s*\{[^}]*display:\s*none/)
+  })
+
+  it('never shrinks the button to a fixed icon-only width at any breakpoint', () => {
+    expect(sideAgentCss).not.toMatch(/\.gh-side-agent-btn[^{]*\{[^}]*width:\s*38px/)
+  })
+})
+
 describe('side-agent.css quote chip contract', () => {
   let style: HTMLStyleElement
   let body: HTMLPreElement

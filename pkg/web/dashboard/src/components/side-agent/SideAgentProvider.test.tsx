@@ -1,7 +1,17 @@
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { SideAgentProvider, useSideAgentContext } from './SideAgentProvider'
+import { GlobalHeader } from '../global-header'
 import type { SideAgentDeps } from '../../hooks/use-side-agent'
+
+const headerProps = {
+  flowName: 'demo',
+  connected: true,
+  startedAt: '2026-07-29T10:00:00.000Z',
+  elapsedMs: 0,
+  idleMs: 0,
+  backoffMs: 0,
+}
 
 function fakeDeps(): SideAgentDeps {
   return {
@@ -113,5 +123,27 @@ describe('SideAgentProvider (App-level wiring)', () => {
   it('default context (no provider) reports enabled: false', () => {
     render(<Consumer />)
     expect(screen.getByRole('button', { name: 'side-agent' })).toHaveAttribute('data-enabled', 'false')
+  })
+
+  // T7.6: the plan's acceptance criterion names the REAL header trigger specifically ("closing
+  // returns to it with focus back on the button") — SideAgentModal.test.tsx already proves the
+  // underlying opener-ref mechanism works for an arbitrary focused element, but nothing exercised
+  // it end-to-end through the actual GlobalHeader button before this test.
+  it('opening via the real header button and closing returns focus to that exact button', async () => {
+    render(
+      <SideAgentProvider runId="r1" enabled deps={fakeDeps()}>
+        <GlobalHeader {...headerProps} />
+      </SideAgentProvider>,
+    )
+    const openBtn = screen.getByRole('button', { name: 'Open side agent' })
+    act(() => openBtn.focus())
+
+    await act(async () => { fireEvent.click(openBtn) })
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(document.activeElement).not.toBe(openBtn) // focus moved into the dialog's composer
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /hide side agent/i })) })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open side agent' }))
   })
 })
