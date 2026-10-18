@@ -151,7 +151,8 @@ agent belongs to the run rather than one stage.
 The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to
 put a task on the board: choose under **Notify** which working agents get a
-message about it (all of them by default), so even an idle run agent picks it up.
+message about it (all of them by default, at most 16 per task), so even an idle run
+agent picks it up.
 Each one gets its own message, recorded together with the task, so the run does
 not finish before the agents read it. A recipient that has finished, or whose
 inbox or conversation is full, is skipped; the task is posted either way.

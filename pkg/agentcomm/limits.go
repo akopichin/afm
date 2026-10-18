@@ -23,6 +23,10 @@ const (
 	// MaxThreadMessages is the most messages a single Thread may ever hold — Thread.Budgets'
 	// effective cap when ThreadBudgets.MaxMessages is left zero.
 	MaxThreadMessages = 200
+	// MaxBoardNotify is the most participants one board publish may name to notify. Each notice is a message
+	// committed in the publish's own operation, so this keeps that one journal record well below the size a
+	// retry reads back.
+	MaxBoardNotify = 16
 	// MaxCausalHops bounds how many reply/wait links the cycle check (pkg/orchestrator) will walk
 	// before giving up, so a malformed or adversarial chain cannot hang admission.
 	MaxCausalHops = 12

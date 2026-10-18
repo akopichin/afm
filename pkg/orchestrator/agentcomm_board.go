@@ -42,6 +42,10 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	if req.Key == "" || req.Author == "" {
 		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board entry needs a key"}
 	}
+	if len(req.Notify) > agentcomm.MaxBoardNotify {
+		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest,
+			Reason: fmt.Sprintf("a board publish may notify at most %d participants, got %d", agentcomm.MaxBoardNotify, len(req.Notify))}
+	}
 	notify := make([]string, len(req.Notify))
 	for i, n := range req.Notify {
 		notify[i] = string(n)
@@ -49,7 +53,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	status := o.RedactSecrets(req.Status)
 	publishEff, err := marshalEffect("mesh_board_published",
 		state.Target{BoardKey: req.Key, ParticipantID: string(req.Author)},
-		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, Notify: notify})
+		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, Notify: &notify})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
 	}
@@ -114,7 +118,8 @@ func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status str
 
 // replayedPublish answers a publish whose request id already committed with the revision that operation
 // committed; another key, author, status, artifacts, expected version or notify list under that id is a
-// conflict. replayed=false: nothing committed.
+// conflict. A record written before the notify list was stored has none to compare: its retry is answered
+// from the record whatever notify list it carries. replayed=false: nothing committed.
 func (o *Orchestrator) replayedPublish(req PublishRequest, notify []string) (agentcomm.BoardEntry, bool, error) {
 	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID)
 	if err != nil || !committed {
@@ -126,7 +131,7 @@ func (o *Orchestrator) replayedPublish(req PublishRequest, notify []string) (age
 		return agentcomm.BoardEntry{}, true, err
 	}
 	if !found || target.BoardKey != req.Key || target.ParticipantID != string(req.Author) || !o.sameRedactedText(p.Status, req.Status) ||
-		!slices.Equal(p.ArtifactRefs, req.ArtifactRefs) || p.ExpectedVersion != req.ExpectedVersion || !slices.Equal(p.Notify, notify) {
+		!slices.Equal(p.ArtifactRefs, req.ArtifactRefs) || p.ExpectedVersion != req.ExpectedVersion || (p.Notify != nil && !slices.Equal(*p.Notify, notify)) {
 		return agentcomm.BoardEntry{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return agentcomm.BoardEntry{
@@ -135,8 +140,20 @@ func (o *Orchestrator) replayedPublish(req PublishRequest, notify []string) (age
 	}, true, nil
 }
 
-// boardNoticeStatusLimit bounds how much of an entry's status a notice quotes; the board holds the rest.
-const boardNoticeStatusLimit = 1000
+// boardNoticeStatusLimit and boardNoticeKeyLimit bound how much of an entry's status and key a notice quotes;
+// the board holds the rest. Together with agentcomm.MaxBoardNotify they keep a publish's journal record small.
+const (
+	boardNoticeStatusLimit = 1000
+	boardNoticeKeyLimit    = 200
+)
+
+// clipForNotice returns s cut to at most limit bytes (on a UTF-8 boundary), marked with "…" when cut.
+func clipForNotice(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return strings.ToValidUTF8(s[:limit], "") + "…"
+}
 
 // boardNotice is one planned notice of a publish: a message from the author to one recipient, in their open
 // conversation or in a new one opened by the same operation.
@@ -155,10 +172,8 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 	if len(req.Notify) == 0 {
 		return nil, nil
 	}
-	if len(status) > boardNoticeStatusLimit {
-		status = strings.ToValidUTF8(status[:boardNoticeStatusLimit], "") + "…"
-	}
-	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", req.Key, status, req.Key)
+	key := clipForNotice(req.Key, boardNoticeKeyLimit)
+	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", key, clipForNotice(status, boardNoticeStatusLimit), key)
 	roster := o.liveRoster(rs)
 	var notices []boardNotice
 	seen := map[agentcomm.ParticipantID]bool{req.Author: true}

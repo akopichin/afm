@@ -49,8 +49,9 @@ type MeshBoardPublishedPayload struct {
 	ExpectedVersion int      `json:"expected_version"`
 	// Notify is the publish request's own list of participants to tell about the entry, kept so a retry of the
 	// same request is compared with it in full. The notices themselves are separate effects of the same
-	// operation; the projection does not read this field.
-	Notify []string `json:"notify,omitempty"`
+	// operation; the projection does not read this field. A new record always carries it, an empty list
+	// included; nil means a record written before the field existed, whose notify list is unknown.
+	Notify *[]string `json:"notify,omitempty"`
 }
 
 // applyMeshBoardPublished projects one mesh_board_published control record.

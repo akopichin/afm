@@ -1,14 +1,19 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
@@ -187,4 +192,90 @@ func TestPublish_RetryWithAnotherNotifyListConflicts(t *testing.T) {
 	if _, err := publishAsUser(o, "op-task", "task/x", "do x", 0); !errors.Is(err, state.ErrOperationIDConflict) {
 		t.Fatalf("retry without the notify list: err = %v, want a request id conflict", err)
 	}
+}
+
+// TestPublish_LegacyRecordWithoutNotifyAnswersRetry: a publish journaled before the notify list was stored has
+// no list to compare with — its retry, notify list included, is answered from that record, not a conflict.
+func TestPublish_LegacyRecordWithoutNotifyAnswersRetry(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	legacy, err := marshalEffect("mesh_board_published",
+		state.Target{BoardKey: "task/legacy", ParticipantID: string(meshUserParticipantID)},
+		map[string]any{"status": "do the legacy thing", "expected_version": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed, err := store.ApplyRunOperation(state.Operation{ID: "op-legacy", Kind: "mesh_publish", Actor: state.Actor{Kind: "user"}, Effects: []state.Effect{legacy}}, nil)
+	if err != nil {
+		t.Fatalf("commit legacy publish: %v", err)
+	}
+
+	entry, err := publishAsUser(o, "op-legacy", "task/legacy", "do the legacy thing", 0, "someone")
+	if err != nil {
+		t.Fatalf("retry of a legacy publish with a notify list: %v", err)
+	}
+	if entry.Version != 1 || entry.Seq != committed.Seq || entry.Status != "do the legacy thing" {
+		t.Fatalf("retry = %+v, want the legacy revision (seq %d)", entry, committed.Seq)
+	}
+	if _, err := publishAsUser(o, "op-legacy", "task/legacy", "something else", 0, "someone"); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("retry with another status: err = %v, want a request id conflict", err)
+	}
+}
+
+// TestPublish_NotifyListIsCapped: one publish commits its notices in its own journal record, so the notify list
+// is capped — an oversized one is an invalid request, and the largest allowed publish still answers its retry
+// from the journal.
+func TestPublish_NotifyListIsCapped(t *testing.T) {
+	state.SetOperationResultCacheCapacityForTest(1) // a retry must read the record back from the journal
+	t.Cleanup(func() { state.SetOperationResultCacheCapacityForTest(0) })
+	o, store := newAssistantsTestOrchestrator(t, true)
+	stubPassingHelper(o)
+	t.Cleanup(o.concurrency.WaitAgents)
+
+	tooMany := make([]agentcomm.ParticipantID, agentcomm.MaxBoardNotify+1)
+	for i := range tooMany {
+		tooMany[i] = agentcomm.ParticipantID(fmt.Sprintf("agent-%d", i))
+	}
+	_, err := publishAsUser(o, "op-too-many", "task/x", "do x", 0, tooMany...)
+	var rejected *state.OperationRejectedError
+	if !errors.As(err, &rejected) || rejected.Code != assistants.CodeInvalidRequest {
+		t.Fatalf("publish notifying %d participants: err = %v, want invalid_request", len(tooMany), err)
+	}
+
+	notify := make([]agentcomm.ParticipantID, agentcomm.MaxBoardNotify)
+	for i := range notify {
+		notify[i] = addTestRunAgent(t, o, fmt.Sprintf("op-add-%d", i), nil).ParticipantID
+	}
+	// Every byte of key and status escapes to six in the journal's JSON: the worst case for the record size.
+	key := strings.Repeat("<", 8*1024)
+	status := strings.Repeat("<", 20*1024)
+	first, err := publishAsUser(o, "op-big", key, status, 0, notify...)
+	if err != nil {
+		t.Fatalf("publish notifying %d participants: %v", len(notify), err)
+	}
+	if _, err := publishAsUser(o, "op-other", "task/other", "evicts op-big from the cache", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CommittedOperation("op-big"); err != nil {
+		t.Fatalf("read the largest allowed publish back from the journal: %v", err)
+	}
+	retry, err := publishAsUser(o, "op-big", key, status, 0, notify...)
+	if err != nil || retry.Seq != first.Seq {
+		t.Fatalf("retry = %+v, %v; want the committed revision (seq %d)", retry, err, first.Seq)
+	}
+	if size := largestJournalLine(t, o.opts.RunDir); size > 512*1024 {
+		t.Fatalf("largest journal record = %d bytes, want a clear margin below the 1 MiB read limit", size)
+	}
+}
+
+func largestJournalLine(t *testing.T, runDir string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	largest := 0
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		largest = max(largest, len(line))
+	}
+	return largest
 }
