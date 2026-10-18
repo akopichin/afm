@@ -102,6 +102,10 @@ const (
 	EventMeshReceipt     EventType = "mesh_receipt"
 	EventMeshWait        EventType = "mesh_wait"
 	EventMeshBoard       EventType = "mesh_board"
+	// EventPeerReplied (Agent Mesh Phase 5, T5.3) fires once a mesh wait a stage registered becomes ready —
+	// the peer twin of EventUserAnswered. Routed through the critical bus exactly like EventUserAnswered when
+	// the stage's own process has already exited, so onPeerReplied can respawn it.
+	EventPeerReplied EventType = "peer_replied"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

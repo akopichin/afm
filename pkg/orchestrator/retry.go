@@ -275,6 +275,22 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				}
 				return
 			}
+			// Agent Mesh Phase 5, T5.2: the executor registered a mesh Wait on a colleague and exited
+			// cooperatively — park in awaiting_peer instead of running it through the completion/incomplete-
+			// work machinery below. This is NOT a false completion, NOT an IncompleteWorkError retry, and NOT
+			// a user question: the lease this invocation held is released simply by this function returning,
+			// exactly like the awaiting_user_input branch above.
+			if o.hasOpenMeshWait(s.ID) {
+				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingPeer {
+					o.prePeerPhase.Store(s.ID, phase)
+					o.Trigger(s.ID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase}, "")
+					return
+				}
+				if completionCheck == nil || completionCheck() == nil {
+					o.completeAgent(ctx, s.ID, phase)
+				}
+				return
+			}
 			var checkErr error
 			if completionCheck != nil {
 				checkErr = completionCheck()

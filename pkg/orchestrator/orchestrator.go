@@ -157,6 +157,10 @@ type Orchestrator struct {
 	stageLeases sync.Map
 	// preAskPhase хранит корректную фазу в момент EvAskUser.
 	preAskPhase sync.Map
+	// prePeerPhase — Agent Mesh Phase 5 (T5.2/T5.3): the peer twin of preAskPhase, storing the phase a stage
+	// was running when it registered a mesh Wait and parked in awaiting_peer, so onPeerReplied knows which
+	// kind of agent to respawn.
+	prePeerPhase sync.Map
 	// hookWaiters holds, per stageID, the channel a blocked before/after hook is waiting on for a user
 	// decision. Only populated while a hook is actually blocked.
 	hookWaiters sync.Map
@@ -794,6 +798,8 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 		return o.onAgentCompleted(ctx, ev)
 	case bus.EventUserAnswered:
 		return o.onUserAnswered(ctx, ev)
+	case bus.EventPeerReplied:
+		return o.onPeerReplied(ctx, ev)
 	}
 	return nil
 }

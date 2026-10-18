@@ -40,6 +40,8 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	}
 	effects := []state.Effect{publishEff}
 
+	var resolvedIDs []agentcomm.WaitID
+	var resolvedWaiters []agentcomm.ParticipantID
 	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
 		w := rs.Assistants.Mesh.Waits[id]
 		if w.Status != agentcomm.WaitPending {
@@ -54,11 +56,17 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 			return agentcomm.BoardEntry{}, err
 		}
 		effects = append(effects, eff)
+		resolvedIDs = append(resolvedIDs, id)
+		resolvedWaiters = append(resolvedWaiters, w.Waiter)
 	}
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_publish", Actor: req.Actor, Effects: effects}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": req.Status}})
+		for _, id := range resolvedIDs {
+			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(id), "status": string(agentcomm.WaitReady)}})
+		}
+		o.resumeWaitersAfterCommit(ctx, resolvedWaiters)
 	})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
