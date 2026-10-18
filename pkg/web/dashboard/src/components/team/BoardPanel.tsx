@@ -1,6 +1,7 @@
-import { useRef, useState, type ReactElement } from 'react'
-import { genMeshRequestId, publishMeshBoard, type MeshBoardEntry, type MeshParticipant } from '../../api/mesh-client'
+import { useState, type ReactElement } from 'react'
+import { publishMeshBoard, type MeshBoardEntry, type MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
+import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
 import type { RunTeamListStage } from './RunTeamList'
 
@@ -36,41 +37,45 @@ export function boardTopLevel(entries: MeshBoardEntry[]): MeshBoardEntry[] {
   return entries.filter((e) => reportOf(e, entries) === undefined)
 }
 
+// boardTaskCount — the tasks on the board (the Board tab's badge): top-level "task/…" keys, not facts or reports.
+export function boardTaskCount(entries: MeshBoardEntry[]): number {
+  return boardTopLevel(entries).filter((e) => e.key.startsWith(TASK_PREFIX)).length
+}
+
 // BoardPanel — the Team view's "Board" tab: the shared board. The operator
 // posts tasks for the agents here; agents publish facts and report on tasks under "<task key>/<alias>".
 export function BoardPanel({ board, participants, stages }: BoardPanelProps): ReactElement {
   const { entries } = board
   const [title, setTitle] = useState('')
   const [details, setDetails] = useState('')
-  const [posting, setPosting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   // uncheckedIds — candidates the operator opted out of; everyone else (incl. agents that appear later) is notified.
   const [uncheckedIds, setUncheckedIds] = useState<ReadonlySet<string>>(new Set())
-  // requestIdRef — one id per task being posted, reused by retries; a new task gets a new id.
-  const requestIdRef = useRef(genMeshRequestId('mesh-board'))
+  // submitter — a retry of the same task reuses its request id; an edited task is a new one.
+  const submitter = useRetryableSubmit<{ key: string; status: string; notify: string[] }>('mesh-board')
 
   const candidates = boardNotifyCandidates(participants, stages)
 
   function post(): void {
-    const name = title.trim()
-    if (name === '' || posting) return
-    setPosting(true)
-    setError(null)
-    const text = details.trim()
-    publishMeshBoard({
-      requestId: requestIdRef.current,
-      key: taskKey(name),
-      status: text !== '' ? `${name} — ${text}` : name,
-      notify: candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id),
-    })
-      .then(() => {
-        requestIdRef.current = genMeshRequestId('mesh-board')
-        setTitle('')
-        setDetails('')
-        return board.reload()
-      })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'request failed'))
-      .finally(() => setPosting(false))
+    const submittedTitle = title
+    const submittedDetails = details
+    const name = submittedTitle.trim()
+    if (name === '') return
+    const text = submittedDetails.trim()
+    submitter.submit(
+      {
+        key: taskKey(name),
+        status: text !== '' ? `${name} — ${text}` : name,
+        notify: candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id),
+      },
+      (p, requestId) => publishMeshBoard({ requestId, key: p.key, status: p.status, notify: [...p.notify] }),
+      {
+        onSuccess: () => {
+          setTitle((cur) => removeSubmittedText(cur, submittedTitle))
+          setDetails((cur) => removeSubmittedText(cur, submittedDetails))
+          void board.reload()
+        },
+      },
+    )
   }
 
   function toggleNotify(id: string): void {
@@ -114,13 +119,13 @@ export function BoardPanel({ board, participants, stages }: BoardPanelProps): Re
         )}
         <div className="team-board-form-actions">
           <span className="team-board-hint">Agents check the board between steps and report under the task.</span>
-          <button type="submit" className="btn btn-send" disabled={posting || title.trim() === ''}>
-            {posting ? 'Posting…' : 'Post task'}
+          <button type="submit" className="btn btn-send" disabled={submitter.pending || title.trim() === ''}>
+            {submitter.pending ? 'Posting…' : 'Post task'}
           </button>
         </div>
-        {error !== null && (
+        {submitter.error !== null && (
           <div className="team-board-error" role="alert">
-            {error}
+            {submitter.error}
           </div>
         )}
       </form>

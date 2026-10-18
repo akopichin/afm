@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getMeshBoard, type MeshBoardEntry } from '../../api/mesh-client'
+import { startSerialPoll, type SerialPoll } from '../../lib/serial-poll'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -14,32 +15,30 @@ export type MeshBoard = {
 export function useMeshBoard(): MeshBoard {
   const [entries, setEntries] = useState<MeshBoardEntry[]>([])
 
-  const reload = useCallback(
-    () =>
-      getMeshBoard()
-        .then((res) => setEntries(res.entries ?? []))
-        .catch(() => {
-          /* transient — keep whatever we had, same posture as the other mesh polls */
-        }),
-    [],
-  )
+  const pollRef = useRef<SerialPoll | null>(null)
 
   useEffect(() => {
-    let cancelled = false
-    const tick = (): void => {
-      getMeshBoard()
-        .then((res) => {
-          if (!cancelled) setEntries(res.entries ?? [])
-        })
-        .catch(() => {})
-    }
-    tick()
-    const timer = setInterval(tick, POLL_INTERVAL_MS)
+    // Serial: reload() after a post and the interval share one queue, so an older read never lands last.
+    const poll = startSerialPoll(
+      (isStopped) =>
+        getMeshBoard().then(
+          (res) => {
+            if (!isStopped()) setEntries(res.entries ?? [])
+          },
+          () => {
+            /* transient — keep whatever we had, same posture as the other mesh polls */
+          },
+        ),
+      POLL_INTERVAL_MS,
+    )
+    pollRef.current = poll
     return () => {
-      cancelled = true
-      clearInterval(timer)
+      poll.stop()
+      pollRef.current = null
     }
   }, [])
+
+  const reload = useCallback(() => pollRef.current?.now() ?? Promise.resolve(), [])
 
   return { entries, reload }
 }

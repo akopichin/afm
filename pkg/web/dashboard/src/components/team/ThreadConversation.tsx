@@ -4,10 +4,11 @@ import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
+import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { MentionMenu } from '../assistants/AssistantMentionMenu'
 import { draftMentions, filterMentionProfiles } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
-import { directPeer, findExistingDirectThread, mentionHandle, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { directPeer, findExistingDirectThread, mentionHandles, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
 
@@ -61,23 +62,37 @@ export function conversationSubtitle(target: ThreadConversationTarget, participa
   return `${target.thread.members.length} participants · you and ${agents} ${agents === 1 ? 'agent' : 'agents'}`
 }
 
-// unreachableNotice — when nobody else in the conversation can answer any more (their stage or task has
-// finished), say so above the composer instead of letting messages silently go unanswered.
-function unreachableNotice(target: ThreadConversationTarget, participants: MeshParticipant[]): string | null {
-  const others = target.kind === 'direct' ? [target.participant.id] : target.thread.members.filter((m) => m !== 'user')
-  const live = others.map((id) => participants.find((p) => p.id === id)).filter((p) => p !== undefined)
-  if (live.length === 0 || live.some((p) => p.reachable)) return null
-  return live.length === 1
-    ? `${participantLabel(live[0] as MeshParticipant)} has finished and can't reply any more.`
-    : 'Everyone in this conversation has finished and can\'t reply any more.'
-}
-
-// recipientsFor — every OTHER member of the conversation: a direct target has exactly one (the person
-// clicked); an opened thread's recipients are its full member list minus the human operator itself.
-function recipientsFor(target: ThreadConversationTarget, opened: MeshThread | null): string[] {
+// otherMemberIds — every OTHER member of the conversation: a direct target has exactly one (the person
+// clicked); an opened thread's are its full member list minus the human operator itself.
+function otherMemberIds(target: ThreadConversationTarget, opened: MeshThread | null): string[] {
   if (target.kind === 'direct') return [target.participant.id]
   const thread = opened ?? target.thread
   return thread.members.filter((m) => m !== 'user')
+}
+
+// Reachability — the other members split into who still gets a message and who has finished (their stage or
+// task is over). A member the roster does not know yet counts as reachable: it was only just added.
+type Reachability = { reachable: string[]; finished: MeshParticipant[] }
+
+function splitByReachability(ids: string[], participants: MeshParticipant[]): Reachability {
+  const finished = ids.map((id) => participants.find((p) => p.id === id)).filter((p): p is MeshParticipant => p !== undefined && !p.reachable)
+  return { reachable: ids.filter((id) => !finished.some((p) => p.id === id)), finished }
+}
+
+// unreachableNotice — when nobody else in the conversation can answer any more, say so above the composer
+// (and keep Send off) instead of letting messages silently go unanswered.
+function unreachableNotice({ reachable, finished }: Reachability): string | null {
+  if (reachable.length > 0 || finished.length === 0) return null
+  return finished.length === 1
+    ? `${participantLabel(finished[0] as MeshParticipant)} has finished and can't reply any more.`
+    : 'Everyone in this conversation has finished and can\'t reply any more.'
+}
+
+// skippedNote — who the default route leaves out because they have finished, e.g. "QA has finished and won't
+// get this message".
+function skippedNote(finished: MeshParticipant[]): string {
+  const names = finished.map(participantLabel).join(', ')
+  return `${names} ${finished.length === 1 ? 'has' : 'have'} finished and won't get this message`
 }
 
 type MemberMention = { id: string; handle: string; title: string; unavailable: boolean }
@@ -85,12 +100,12 @@ type MemberMention = { id: string; handle: string; title: string; unavailable: b
 // otherMembers — everyone in the conversation except the operator, as roster participants.
 function otherMembers(target: ThreadConversationTarget, opened: MeshThread | null, participants: MeshParticipant[]): MeshParticipant[] {
   if (target.kind === 'direct') return [target.participant]
-  return recipientsFor(target, opened)
+  return otherMemberIds(target, opened)
     .map((id) => participants.find((p) => p.id === id))
     .filter((p): p is MeshParticipant => p !== undefined)
 }
 
-// routeAll — the default recipient line: the person in a direct conversation, everyone in a thread.
+// routeAll — the default recipient line: the person in a direct conversation, everyone still here in a thread.
 function routeAll(target: ThreadConversationTarget, label: string): string {
   return target.kind === 'direct' ? label : 'Everyone in this conversation'
 }
@@ -98,13 +113,11 @@ function routeAll(target: ThreadConversationTarget, label: string): string {
 export function ThreadConversation({ target, onThreadOpened, onThreadCreated, participants = [], threads = [] }: ThreadConversationProps): ReactElement {
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // submitter — sends with a request id that a retry of the SAME message reuses; this component remounts per
+  // conversation (see targetKey), so a late response is fenced out by unmount alone.
+  const submitter = useRetryableSubmit<{ recipientIds: string[]; body: string }>('mesh-send')
   // log — opens at the latest message and follows new ones, unless the reader scrolled up.
   const log = useStickToBottom<HTMLDivElement>()
-  // requestIdRef — the SAME send's retry reuses this id; a NEW, successfully-sent message mints its own id
-  // next time (each message is its own idempotent operation, unlike AddRunAgentDialog's single durable attach).
-  const requestIdRef = useRef<string>(genMeshRequestId('mesh-send'))
   // notifiedRef — whether the parent has already been told about openedThread. A 'thread' target starts
   // already known to the parent (it IS activeConversation), so it starts true. A 'direct' target starts
   // false: once its first message opens a real thread, the parent must hear about it exactly once — even if
@@ -125,20 +138,23 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
     },
     [autoGrowRef, caretNodeRef],
   )
-  // Mention candidates — the other members of this conversation, addressed by their short @handle.
+  // Mention candidates — the other members of this conversation, addressed by a short @handle that is unique
+  // among them (two run agents sharing an alias get their ids instead), so a mention means exactly one person.
   const members = target === null ? [] : otherMembers(target, openedThread, participants)
+  const handles = mentionHandles(members)
+  const handleOf = (p: MeshParticipant): string => handles.get(p.id) ?? p.id
   const mention = useMentionMenu<MemberMention>({
     matchesFor: (query) =>
       filterMentionProfiles(
-        members.map((p) => ({ id: p.id, handle: mentionHandle(p), title: participantLabel(p), unavailable: !p.reachable })),
+        members.map((p) => ({ id: p.id, handle: handleOf(p), title: participantLabel(p), unavailable: !p.reachable })),
         query,
       ),
     textFor: (item) => item.handle,
     replaceRange,
   })
-  // mentioned — recipients addressed with `@` in the draft right now; none means everyone else. Derived from
-  // the text, so deleting a mention from the draft also un-addresses that member.
-  const mentioned = members.filter((p) => draftMentions(draft, mentionHandle(p))).map((p) => p.id)
+  // mentioned — recipients addressed with `@` in the draft right now; none means everyone still reachable.
+  // Derived from the text, so deleting a mention from the draft also un-addresses that member.
+  const mentioned = members.filter((p) => draftMentions(draft, handleOf(p))).map((p) => p.id)
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
 
@@ -147,46 +163,52 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
   }
 
   const label = conversationTitle(target, participants)
-  const notice = unreachableNotice(target, participants)
+  const reachability = splitByReachability(otherMemberIds(target, openedThread), participants)
+  const notice = unreachableNotice(reachability)
+  const recipientIds = mentioned.length > 0 ? mentioned : reachability.reachable
+  const canSend = draft.trim() !== '' && recipientIds.length > 0
 
-  async function send(): Promise<void> {
-    const text = draft.trim()
-    if (text === '' || sending || target === null) return
-    setSending(true)
-    setError(null)
-    try {
-      let thread = openedThread ?? (target.kind === 'direct' ? findExistingDirectThread(threads, target.participant.id) : null)
-      if (thread === null) {
-        thread = await openMeshThread({
-          requestId: openRequestIdRef.current,
-          title: '',
-          scope: 'run',
-          memberIds: target.kind === 'direct' ? [target.participant.id] : [],
-        })
-        onThreadCreated?.(thread)
-      }
-      setOpenedThread(thread)
-      await sendMeshMessage(thread.id, {
-        requestId: requestIdRef.current,
-        recipientIds: mentioned.length > 0 ? mentioned : recipientsFor(target, thread),
-        body: text,
-      })
-      requestIdRef.current = genMeshRequestId('mesh-send')
-      setDraft('')
-      // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
-      // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
-      // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
-      // Guarded by notifiedRef, not a per-call local, so a retry whose EARLIER attempt already opened the
-      // thread (and then failed to send) still notifies the parent once this attempt's send succeeds.
-      if (!notifiedRef.current) {
-        notifiedRef.current = true
-        onThreadOpened?.(thread)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'request failed')
-    } finally {
-      setSending(false)
-    }
+  // ensureThread — the conversation's thread, opened on the first send of a direct conversation.
+  async function ensureThread(current: ThreadConversationTarget): Promise<MeshThread> {
+    const known = openedThread ?? (current.kind === 'direct' ? findExistingDirectThread(threads, current.participant.id) : null)
+    if (known !== null) return known
+    const thread = await openMeshThread({
+      requestId: openRequestIdRef.current,
+      title: '',
+      scope: 'run',
+      memberIds: current.kind === 'direct' ? [current.participant.id] : [],
+    })
+    onThreadCreated?.(thread)
+    return thread
+  }
+
+  function send(): void {
+    if (!canSend || target === null) return
+    const submitted = draft
+    const current = target
+    submitter.submit(
+      { recipientIds, body: submitted.trim() },
+      async (p, requestId) => {
+        const thread = await ensureThread(current)
+        setOpenedThread(thread)
+        await sendMeshMessage(thread.id, { requestId, recipientIds: [...p.recipientIds], body: p.body })
+        return thread
+      },
+      {
+        onSuccess: (thread) => {
+          setDraft((cur) => removeSubmittedText(cur, submitted))
+          // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
+          // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
+          // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
+          // Guarded by notifiedRef, not a per-call local, so a retry whose EARLIER attempt already opened the
+          // thread (and then failed to send) still notifies the parent once this attempt's send succeeds.
+          if (!notifiedRef.current) {
+            notifiedRef.current = true
+            onThreadOpened?.(thread)
+          }
+        },
+      },
+    )
   }
 
   return (
@@ -208,6 +230,9 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
       <div className="team-conversation-route">
         <span>From you →</span>
         <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label)}</strong>
+        {mentioned.length === 0 && notice === null && reachability.finished.length > 0 && (
+          <span className="team-conversation-route-skipped">{skippedNote(reachability.finished)}</span>
+        )}
         <span className="team-conversation-route-hint">@ to address someone</span>
       </div>
       <div className="chat-composer-row">
@@ -224,7 +249,7 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
             if (mention.onKeyDown(e)) return
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
-              void send()
+              send()
             }
           }}
           rows={1}
@@ -238,9 +263,9 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
             ariaLabel="Mention someone in this conversation"
           />
         )}
-        <ChatSendButton label="Send" disabled={draft.trim() === ''} sending={sending} onClick={() => void send()} />
+        <ChatSendButton label="Send" disabled={!canSend} sending={submitter.pending} onClick={send} />
       </div>
-      {error !== null && <div className="team-conversation-error" role="alert">{error}</div>}
+      {submitter.error !== null && <div className="team-conversation-error" role="alert">{submitter.error}</div>}
     </div>
   )
 }

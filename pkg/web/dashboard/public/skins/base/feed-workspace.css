@@ -456,6 +456,12 @@
 /* === Agent Mesh Phase 7, T7.4 — Message/Revise mode toggle + Message mode's own subtree === Structural only,
    same semantic tokens as the rest of this file; .feed-reply-chip above is REUSED as-is
    (Message mode's reply chip, below, is the SAME chip chrome Revise's reply-to-thought already uses). */
+/* The Message/Revise tab panel keeps the composer's column layout and spacing. */
+.feed-composer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .feed-composer-modes {
   display: flex;
   gap: 4px;

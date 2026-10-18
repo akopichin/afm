@@ -1,15 +1,17 @@
-import { useRef, useState, type ReactElement } from 'react'
+import { useId, useState, type ReactElement } from 'react'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
-import { genMeshRequestId, openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
+import { openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshBoard, type MeshRoster } from '../../hooks/use-mesh'
+import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { directPeer, findExistingDirectThread, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { RunTeamList } from './RunTeamList'
 import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
 import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
-import { BoardPanel, boardTopLevel } from './BoardPanel'
+import { BoardPanel, boardTaskCount } from './BoardPanel'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
+import { TabList, tabPanelProps } from '../tab-list'
 
 export type TeamViewProps = {
   // roster — owned by App.tsx (ONE useMeshRoster poll for the whole dashboard, same "capability hook lives at
@@ -35,6 +37,7 @@ function mergeById<T extends { id: string }>(fromRoster: T[], local: T[]): T[] {
 // state" posture 'discussion' already established for StageDiscussionPanel/StageProposals).
 export function TeamView({ roster, stages, events, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
+  const tabsId = useId()
   const board = useMeshBoard()
   const [activeConversation, setActiveConversation] = useState<ThreadConversationTarget | null>(null)
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
@@ -51,12 +54,12 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const [createOpen, setCreateOpen] = useState(false)
   const [createTopic, setCreateTopic] = useState('')
   const [createSelected, setCreateSelected] = useState<Set<string>>(new Set())
-  const [createError, setCreateError] = useState<string | null>(null)
-  const [createSubmitting, setCreateSubmitting] = useState(false)
-
-  // createRequestIdRef — one id per "Create conversation" form, reused by retries (a lost response must not
-  // produce a second thread); a new form gets a new id.
-  const createRequestIdRef = useRef(genMeshRequestId('mesh-conversation'))
+  // createInvalid — the form was submitted without a topic or a participant.
+  const [createInvalid, setCreateInvalid] = useState(false)
+  // createSubmitter — a retry of the same form reuses its request id (a lost response must not produce a
+  // second thread). Fenced by the selection: a creation that finishes after the user picked another
+  // conversation does not switch away from it.
+  const createSubmitter = useRetryableSubmit<{ title: string; memberIds: string[] }>('mesh-conversation', targetKey(activeConversation))
 
   const threads = mergeById(roster.threads, localThreads)
   const participants = mergeById(roster.participants, localParticipants)
@@ -95,29 +98,37 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   }
 
   function resetCreateForm(): void {
-    createRequestIdRef.current = genMeshRequestId('mesh-conversation')
     setCreateOpen(false)
     setCreateTopic('')
     setCreateSelected(new Set())
-    setCreateError(null)
+    setCreateInvalid(false)
   }
 
   function submitCreate(): void {
     const topic = createTopic.trim()
     if (topic === '' || createSelected.size === 0) {
-      setCreateError('Enter a topic and select at least one participant.')
+      setCreateInvalid(true)
       return
     }
-    setCreateError(null)
-    setCreateSubmitting(true)
-    openMeshThread({ requestId: createRequestIdRef.current, title: topic, scope: 'run', memberIds: [...createSelected] })
-      .then((thread) => {
-        handleThreadOpened(thread)
-        resetCreateForm()
-      })
-      .catch((err: unknown) => setCreateError(err instanceof Error ? err.message : 'request failed'))
-      .finally(() => setCreateSubmitting(false))
+    setCreateInvalid(false)
+    createSubmitter.submit(
+      { title: topic, memberIds: [...createSelected].sort() },
+      async (p, requestId) => {
+        const thread = await openMeshThread({ requestId, title: p.title, scope: 'run', memberIds: [...p.memberIds] })
+        // Known to the roster right away, even when the user has moved on to another conversation meanwhile.
+        rememberThread(thread)
+        return thread
+      },
+      {
+        onSuccess: (thread) => {
+          setActiveConversation({ kind: 'thread', thread })
+          resetCreateForm()
+        },
+      },
+    )
   }
+
+  const createError = createInvalid ? 'Enter a topic and select at least one participant.' : createSubmitter.error
 
   if (roster.probed && !roster.enabled) {
     return <div className="team-view-disabled empty-hint">Team is not available for this run</div>
@@ -176,27 +187,31 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             </button>
           )}
         </header>
-        <div className="team-tabs" role="tablist" aria-label="Team">
-          {(['messages', 'board', 'activity'] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              aria-selected={tab === t}
-              className={`team-tab${tab === t ? ' active' : ''}`}
-              onClick={() => setTab(t)}
-            >
-              {t === 'messages' ? 'Messages' : t === 'board' ? 'Board' : 'Activity'}
-              {t === 'board' && (
-                <span className="team-tab-count" aria-hidden="true">
-                  {boardTopLevel(board.entries).length}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <TabList
+          idPrefix={tabsId}
+          ariaLabel="Team"
+          className="team-tabs"
+          tabClassName="team-tab"
+          selected={tab}
+          onSelect={setTab}
+          tabs={[
+            { id: 'messages', label: 'Messages' },
+            {
+              id: 'board',
+              label: (
+                <>
+                  Board
+                  <span className="team-tab-count" aria-hidden="true">
+                    {boardTaskCount(board.entries)}
+                  </span>
+                </>
+              ),
+            },
+            { id: 'activity', label: 'Activity' },
+          ]}
+        />
         {tab === 'messages' && (
-          <div className="team-messages">
+          <div className="team-messages" {...tabPanelProps(tabsId, 'messages')}>
             {createOpen && (
               <div className="team-create-conversation">
                 <div className="team-create-conversation-form">
@@ -242,8 +257,8 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
                     <button type="button" className="btn btn-cancel" onClick={resetCreateForm}>
                       Cancel
                     </button>
-                    <button type="button" className="btn btn-send" disabled={createSubmitting} onClick={submitCreate}>
-                      {createSubmitting ? 'Creating…' : 'Create conversation'}
+                    <button type="button" className="btn btn-send" disabled={createSubmitter.pending} onClick={submitCreate}>
+                      {createSubmitter.pending ? 'Creating…' : 'Create conversation'}
                     </button>
                   </div>
                 </div>
@@ -259,8 +274,16 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             />
           </div>
         )}
-        {tab === 'board' && <BoardPanel board={board} participants={participants} stages={teamStages} />}
-        {tab === 'activity' && <ActivityPanel events={events} />}
+        {tab === 'board' && (
+          <div className="team-tab-panel" {...tabPanelProps(tabsId, 'board')}>
+            <BoardPanel board={board} participants={participants} stages={teamStages} />
+          </div>
+        )}
+        {tab === 'activity' && (
+          <div className="team-tab-panel" {...tabPanelProps(tabsId, 'activity')}>
+            <ActivityPanel events={events} />
+          </div>
+        )}
       </div>
       {addRunAgentOpen && (
         <AddRunAgentDialog

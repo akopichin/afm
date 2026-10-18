@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { ThreadConversation } from './ThreadConversation'
 import * as meshClient from '../../api/mesh-client'
@@ -241,5 +241,98 @@ describe('ThreadConversation', () => {
     await waitFor(() => expect(onThreadOpened).toHaveBeenCalledWith(thread))
     expect(openSpy).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledTimes(2)
+  })
+
+  test('a retry of the same message after a lost response reuses its request id; an edited message gets a new one', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const sendSpy = vi
+      .spyOn(meshClient, 'sendMeshMessage')
+      .mockRejectedValueOnce(new Error('network'))
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValue({ message_id: 'm1', seq: 1 })
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    const input = screen.getByPlaceholderText('Message Hand-off…')
+    fireEvent.change(input, { target: { value: 'hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(2))
+    expect(sendSpy.mock.calls[1]?.[1].requestId).toBe(sendSpy.mock.calls[0]?.[1].requestId)
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+    fireEvent.change(input, { target: { value: 'hi, edited' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(3))
+    expect(sendSpy.mock.calls[2]?.[1].requestId).not.toBe(sendSpy.mock.calls[0]?.[1].requestId)
+  })
+
+  test('text typed while a send is in flight survives its success', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    let resolveSend!: (v: { message_id: string; seq: number }) => void
+    vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    const input = screen.getByPlaceholderText('Message Hand-off…') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'first' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    fireEvent.change(input, { target: { value: 'first second' } })
+    await act(async () => resolveSend({ message_id: 'm1', seq: 1 }))
+    expect(input.value).toBe('second')
+  })
+
+  test('in a group with one finished member the default route addresses only the live one and says who is left out', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const done: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: false }
+    const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, done]} />)
+
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByText("API has finished and won't get this message")).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Message Due dates…'), { target: { value: 'status?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['run:qa'] })))
+  })
+
+  test('when everyone in a group has finished, the notice stays and Send is off', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage')
+    const qaDone = { ...qa, reachable: false }
+    const apiDone: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: false }
+    const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qaDone, apiDone]} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent("Everyone in this conversation has finished and can't reply any more.")
+    fireEvent.change(screen.getByPlaceholderText('Message Due dates…'), { target: { value: 'anyone?' } })
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(sendSpy).not.toHaveBeenCalled()
+  })
+
+  test('two members with the same alias: picking one inserts a unique handle and addresses only that one', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const qa1: MeshParticipant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA one', reachable: true }
+    const qa2: MeshParticipant = { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA two', reachable: true }
+    const group: MeshThread = { id: 'mt-g', title: 'Review', scope: 'run', members: ['user', 'run:t-1', 'run:t-2'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa1, qa2]} />)
+
+    const input = screen.getByPlaceholderText('Message Review…') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '@QA', selectionStart: 3 } })
+    const menu = screen.getByRole('listbox', { name: 'Mention someone in this conversation' })
+    fireEvent.click(within(menu).getByText('QA two'))
+    await waitFor(() => expect(input.value).toBe('@run:t-2 '))
+
+    fireEvent.change(input, { target: { value: '@run:t-2 please re-run' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['run:t-2'] })))
+  })
+
+  test('typing the shared alias of two members addresses neither of them on its own', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const qa1: MeshParticipant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA one', reachable: true }
+    const qa2: MeshParticipant = { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA two', reachable: true }
+    const group: MeshThread = { id: 'mt-g', title: 'Review', scope: 'run', members: ['user', 'run:t-1', 'run:t-2'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa1, qa2]} />)
+    fireEvent.change(screen.getByPlaceholderText('Message Review…'), { target: { value: '@qa hi' } })
+    expect(screen.getByText('Everyone in this conversation')).toBeInTheDocument()
   })
 })

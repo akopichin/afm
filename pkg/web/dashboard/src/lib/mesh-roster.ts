@@ -17,6 +17,17 @@ export function mentionHandle(p: MeshParticipant): string {
   return p.alias !== undefined && p.alias !== '' ? p.alias : p.id
 }
 
+// mentionHandles — `@`-имя каждого участника (по id), уникальное среди participants: alias, а если такой же
+// alias (без учёта регистра) есть у кого-то ещё — полный id. Так одно упоминание никогда не адресует двоих.
+export function mentionHandles(participants: MeshParticipant[]): Map<string, string> {
+  const owners = new Map<string, number>()
+  for (const p of participants) {
+    const h = mentionHandle(p).toLowerCase()
+    owners.set(h, (owners.get(h) ?? 0) + 1)
+  }
+  return new Map(participants.map((p) => [p.id, owners.get(mentionHandle(p).toLowerCase()) === 1 ? mentionHandle(p) : p.id]))
+}
+
 // participantInitials — до двух букв для квадратного аватара. Предпочитает заглавные из имени
 // ("QA reviewer" → "QA", "DevOps" → "DO"), иначе первые буквы первых слов.
 export function participantInitials(name: string): string {

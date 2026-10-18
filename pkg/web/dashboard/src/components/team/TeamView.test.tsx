@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { TeamView } from './TeamView'
 import * as meshClient from '../../api/mesh-client'
@@ -79,18 +79,20 @@ describe('TeamView', () => {
     expect(within(tablist).getByRole('tab', { name: 'Activity' })).toBeInTheDocument()
   })
 
-  test('the Board tab counts the tasks on the board, not the reports filed under them', async () => {
+  test('the Board tab counts the tasks on the board, not the reports filed under them or facts', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
       entries: [
-        { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1 },
-        { key: 'task/health/qa', status: 'checked', author_id: 'run:qa', version: 1 },
-        { key: 'api/ready', status: 'yes', author_id: 'stage:implement', version: 1 },
+        { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' },
+        { key: 'task/health/qa', status: 'checked', author_id: 'run:qa', version: 1, seq: 2, ts: '' },
+        { key: 'task/export', status: 'CSV export', author_id: 'user', version: 1, seq: 3, ts: '' },
+        { key: 'api/ready', status: 'yes', author_id: 'stage:implement', version: 1, seq: 4, ts: '' },
       ],
-    } as Awaited<ReturnType<typeof meshClient.getMeshBoard>>)
+    })
     renderTeamView()
     const tab = screen.getByRole('tab', { name: 'Board' })
     await waitFor(() => expect(tab).toHaveTextContent('Board2'))
+    expect(tab).not.toHaveTextContent('Board3')
   })
 
   test('a direct conversation opens from a person row', async () => {
@@ -287,5 +289,71 @@ describe('TeamView', () => {
   test('renders the disabled empty state when the mesh capability is off', () => {
     renderTeamView([makeStage()], [], { enabled: false, probed: true, participants: [], threads: [] })
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
+  })
+
+  test('the tabs follow the tab pattern: arrows switch tabs and each tab controls its panel', () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+    const messages = screen.getByRole('tab', { name: 'Messages' })
+    expect(messages).toHaveAttribute('aria-controls', screen.getByRole('tabpanel').id)
+    messages.focus()
+    fireEvent.keyDown(messages, { key: 'ArrowRight' })
+    const board = screen.getByRole('tab', { name: /^Board/ })
+    expect(board).toHaveFocus()
+    expect(board).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', board.id)
+    expect(screen.getByRole('button', { name: 'Post task' })).toBeInTheDocument()
+  })
+
+  test('a direct send that finishes after the user picked another conversation does not switch back to it', async () => {
+    mockThreadAndBoardFetches()
+    const opened: meshClient.MeshThread = { id: 'mt-9', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(opened)
+    let resolveSend!: (v: { message_id: string; seq: number }) => void
+    vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
+    const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
+
+    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByText('With Implement agent'))
+    await act(async () => resolveSend({ message_id: 'm1', seq: 1 }))
+    expect(screen.getByRole('heading', { name: 'With Implement agent' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message With Implement agent…')).toBeInTheDocument()
+  })
+
+  test('a conversation created after the user picked another one is listed but does not steal the selection', async () => {
+    mockThreadAndBoardFetches()
+    let resolveOpen!: (v: meshClient.MeshThread) => void
+    vi.spyOn(meshClient, 'openMeshThread').mockReturnValue(new Promise((res) => (resolveOpen = res)))
+    const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Hand-off' } })
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    fireEvent.click(screen.getByText('With Implement agent'))
+    await act(async () => resolveOpen({ id: 'mt-9', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }))
+
+    expect(screen.getByRole('heading', { name: 'With Implement agent' })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Hand-off')).toBeInTheDocument()
+  })
+
+  test('a retry of the same "Create conversation" form reuses its request id', async () => {
+    mockThreadAndBoardFetches()
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockRejectedValue(new Error('network'))
+    renderTeamView()
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Hand-off' } })
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2))
+    expect(openSpy.mock.calls[1]?.[0].requestId).toBe(openSpy.mock.calls[0]?.[0].requestId)
   })
 })

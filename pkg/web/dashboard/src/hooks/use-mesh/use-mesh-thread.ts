@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getMeshThread, type MeshMessage } from '../../api/mesh-client'
+import { startSerialPoll } from '../../lib/serial-poll'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -40,22 +41,20 @@ export function useMeshThread(threadId: string | null): MeshMessage[] {
       seenThreadId.current = threadId
       setMessages([])
     }
-    let cancelled = false
-    const load = (): void => {
-      loadAllMessages(threadId)
-        .then((all) => {
-          if (!cancelled) setMessages(all)
-        })
-        .catch(() => {
-          /* transient — keep whatever we had, same posture as useStageAssistants */
-        })
-    }
-    load()
-    const timer = setInterval(load, POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
+    // Serial: a slow read can never land after (and overwrite) a newer one.
+    const poll = startSerialPoll(
+      (isStopped) =>
+        loadAllMessages(threadId).then(
+          (all) => {
+            if (!isStopped()) setMessages(all)
+          },
+          () => {
+            /* transient — keep whatever we had, same posture as useStageAssistants */
+          },
+        ),
+      POLL_INTERVAL_MS,
+    )
+    return poll.stop
   }, [threadId])
 
   return messages

@@ -128,7 +128,11 @@ conversation, and selecting that person again returns to it. The **+** button in
 the conversation header creates a group conversation after you enter a topic and
 choose participants; stages and helpers that have already finished are not
 offered. In a conversation, type `@` to address only some of its members; without
-a mention the message goes to everyone in it. A conversation opens at its latest
+a mention the message goes to everyone in it who can still answer. Members that
+have already finished are named above the composer and left out; when nobody can
+answer any more, sending is turned off. When two agents share a name, the `@`
+menu inserts a handle that addresses only the one you picked. The **Messages**,
+**Board** and **Activity** tabs work with the arrow keys. A conversation opens at its latest
 message, and a reply quotes the message it answers. On narrow screens the roster
 opens from the **☰** button.
 

@@ -48,6 +48,13 @@ describe('buildMeshMentionGroups', () => {
     ])
   })
 
+  it('gives two run agents that share an alias distinct handles (their ids), so a mention names one of them', () => {
+    const qa1: MeshParticipant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', reachable: true }
+    const qa2: MeshParticipant = { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'qa', reachable: true }
+    const thisRun = buildMeshMentionGroups([qa1, qa2], [], 's1')[0]?.items ?? []
+    expect(thisRun.map((i) => i.handle)).toEqual(['run:t-1', 'run:t-2'])
+  })
+
   it('marks an unreachable participant unavailable with its reason', () => {
     const terminal: MeshParticipant = { ...stageAgent, reachable: false, unreachable_reason: 'stage s1 has reached a terminal status' }
     const groups = buildMeshMentionGroups([terminal], [], 's1')

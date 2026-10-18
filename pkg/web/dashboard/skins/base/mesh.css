@@ -360,6 +360,18 @@
   outline-offset: 2px;
 }
 
+/* A Board/Activity tab panel: fills the space under the tabs like .team-messages does. */
+.team-tab-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.team-tab-panel > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .team-messages {
   flex: 1 1 auto;
   min-height: 0;
@@ -595,6 +607,13 @@
 .team-conversation-route-hint {
   margin-left: auto;
   flex: 0 0 auto;
+}
+/* Members the default route leaves out because they have finished. */
+.team-conversation-route-skipped {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Nobody left who can answer (their stage/task finished). */

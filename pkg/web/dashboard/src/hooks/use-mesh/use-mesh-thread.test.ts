@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { useMeshThread } from './use-mesh-thread'
 import * as meshClient from '../../api/mesh-client'
@@ -69,4 +69,28 @@ describe('useMeshThread', () => {
     expect(getMeshThreadSpy).toHaveBeenNthCalledWith(2, 'mt-1', 50, 50)
     expect(result.current[50]?.body).toBe('msg-51')
   })
+
+  test('a slow poll is not overlapped by the next tick, so an older read never lands after a newer one', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveFirst!: (v: { messages: meshClient.MeshMessage[]; next_cursor: number }) => void
+      const spy = vi
+        .spyOn(meshClient, 'getMeshThread')
+        .mockReturnValueOnce(new Promise((res) => (resolveFirst = res)))
+        .mockResolvedValue({ messages: [msg('m1', 'new'), msg('m2', 'newer')], next_cursor: 2 })
+      const { result } = renderHook(() => useMeshThread('mt-1'))
+      await act(async () => vi.advanceTimersByTime(6000))
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      await act(async () => resolveFirst({ messages: [msg('m1', 'old')], next_cursor: 1 }))
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(result.current.map((m) => m.body)).toEqual(['new', 'newer'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
+
+function msg(id: string, body: string): meshClient.MeshMessage {
+  return { id, thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body, seq: 1, created_at: '2026-10-18T00:00:00Z' }
+}

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { MeshParticipant, MeshThread } from '../api/mesh-client'
-import { boardNotifyCandidates, mentionHandle, participantInitials, participantLabel, senderLabel, threadLabel } from './mesh-roster'
+import { boardNotifyCandidates, mentionHandle, mentionHandles, participantInitials, participantLabel, senderLabel, threadLabel } from './mesh-roster'
 
 const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'claude', reachable: true }
 const commit: MeshParticipant = { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', alias: 'commit', display_name: 'Commit & cleanup', stage_id: 'commit', reachable: true }
@@ -24,6 +24,15 @@ describe('mesh-roster', () => {
   test('mentionHandle uses the short server alias instead of the run-scoped id', () => {
     expect(mentionHandle(side)).toBe('side')
     expect(mentionHandle(bare)).toBe('stage:x')
+  })
+
+  test('mentionHandles falls back to the id when two participants share an alias, so one handle never means two people', () => {
+    const qa1: MeshParticipant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', reachable: true }
+    const qa2: MeshParticipant = { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'QA', reachable: true }
+    const handles = mentionHandles([qa1, qa2, side])
+    expect(handles.get('run:t-1')).toBe('run:t-1')
+    expect(handles.get('run:t-2')).toBe('run:t-2')
+    expect(handles.get(side.id)).toBe('side')
   })
 
   test('senderLabel names the operator "You" and known participants by name', () => {

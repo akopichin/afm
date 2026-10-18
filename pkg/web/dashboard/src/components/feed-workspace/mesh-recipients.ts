@@ -4,7 +4,7 @@
 
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { mentionHandle, participantLabel } from '../../lib/mesh-roster'
+import { mentionHandles, participantLabel } from '../../lib/mesh-roster'
 import type { MentionGroup, MentionItem } from '../assistants/AssistantMentionMenu'
 
 // MeshMentionTarget — what a selected feed-composer mention resolves to for Send: either an EXISTING mesh
@@ -19,10 +19,10 @@ export type MeshMentionTarget =
 
 export type MeshMentionItem = MentionItem & { target: MeshMentionTarget }
 
-function toParticipantItem(p: MeshParticipant): MeshMentionItem {
+function toParticipantItem(p: MeshParticipant, handle: string): MeshMentionItem {
   return {
     id: p.id,
-    handle: mentionHandle(p),
+    handle,
     title: participantLabel(p),
     unavailable: !p.reachable,
     unavailableReason: p.unreachable_reason,
@@ -40,8 +40,11 @@ export function buildMeshMentionGroups(
   profiles: AssistantProfile[],
   stageId: string,
 ): MentionGroup<MeshMentionItem>[] {
-  const thisRun = participants.filter((p) => p.scope === 'run' && p.kind !== 'user').map(toParticipantItem)
-  const thisStage = participants.filter((p) => p.scope === 'stage' && p.stage_id === stageId).map(toParticipantItem)
+  // One @handle per participant across the whole roster: two run agents sharing an alias get their ids.
+  const handles = mentionHandles(participants)
+  const item = (p: MeshParticipant): MeshMentionItem => toParticipantItem(p, handles.get(p.id) ?? p.id)
+  const thisRun = participants.filter((p) => p.scope === 'run' && p.kind !== 'user').map(item)
+  const thisStage = participants.filter((p) => p.scope === 'stage' && p.stage_id === stageId).map(item)
   const attach: MeshMentionItem[] = profiles
     .filter((p) => p.available)
     .map((p) => ({ id: p.id, title: p.title, target: { kind: 'profile', profileId: p.id } }))

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import * as meshClient from '../../api/mesh-client'
@@ -559,6 +559,62 @@ describe('FeedComposer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(screen.getByText('Paused · waiting for Continue')).toBeInTheDocument())
+    })
+
+    it('Message/Revise follow the tab pattern: arrow keys switch modes and each tab controls its panel', () => {
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
+      const revise = screen.getByRole('tab', { name: 'Revise' })
+      expect(revise).toHaveAttribute('tabindex', '0')
+      expect(revise).toHaveAttribute('aria-controls', screen.getByRole('tabpanel').id)
+      revise.focus()
+      fireEvent.keyDown(revise, { key: 'ArrowLeft' })
+      const message = screen.getByRole('tab', { name: 'Message' })
+      expect(message).toHaveFocus()
+      expect(message).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', message.id)
+      expect(screen.getByRole('textbox', { name: /message the mesh/i })).toBeInTheDocument()
+    })
+
+    it('a retry of the same message after a lost response reuses its request id; an edited message gets a new one', async () => {
+      const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+      const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('network'))
+      openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
+      selectMention('@run:qa')
+      const input = screen.getByRole('textbox', { name: /message the mesh/i })
+      fireEvent.change(input, { target: { value: '@run:qa ping' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(2))
+      expect(sendSpy.mock.calls[1]?.[1].requestId).toBe(sendSpy.mock.calls[0]?.[1].requestId)
+
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+      fireEvent.change(input, { target: { value: '@run:qa ping again' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(3))
+      expect(sendSpy.mock.calls[2]?.[1].requestId).not.toBe(sendSpy.mock.calls[0]?.[1].requestId)
+    })
+
+    it('a send that finishes after another recipient was picked neither clears the new draft nor opens the old thread', async () => {
+      const threadSpy = vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+      vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-new', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+      let resolveSend!: (v: meshClient.MeshSendReceipt) => void
+      vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
+      openMessageMode()
+      selectMention('@run:qa')
+      const input = screen.getByRole('textbox', { name: /message the mesh/i }) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: '@run:qa one' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())
+
+      selectMention('@stage:s1')
+      fireEvent.change(input, { target: { value: '@stage:s1 two' } })
+      await act(async () => resolveSend({ message_id: 'm1', seq: 1 }))
+
+      expect(input.value).toBe('@stage:s1 two')
+      expect(threadSpy).not.toHaveBeenCalledWith('mt-new', expect.anything(), expect.anything())
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled()
     })
   })
 })

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { attachAndSendMesh, genMeshRequestId, type MeshAttachAndSendResult } from '../../api/mesh-client'
+import { attachAndSendMesh, type MeshAttachAndSendResult } from '../../api/mesh-client'
+import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { visibleFocusables } from '../../lib/focus-trap'
 
@@ -23,13 +24,10 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
   const [instruction, setInstruction] = useState('')
   // firstMessage — optional; without one the agent is only registered and starts no work until it is sent one.
   const [firstMessage, setFirstMessage] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
-  // requestIdRef — minted ONCE when the dialog opens (component mount) and reused on every retry, per T7.3's
-  // "the dialog composes nothing client-side and shares one request_id across retries" rule: a slow response
-  // followed by a second click must not mint a second durable attach.
-  const requestIdRef = useRef(genMeshRequestId('mesh-run-agent'))
+  // submitter — a retry of the same agent reuses its request id (a slow response followed by a second click
+  // must not mint a second durable attach); changing any field makes it a new request with a new id.
+  const submitter = useRetryableSubmit<{ profileId: string; title: string; instruction: string; firstMessage: string }>('mesh-run-agent')
 
   const selected = available.find((p) => p.id === profileId) ?? null
 
@@ -63,25 +61,24 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onCancel])
 
-  const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitting
+  const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitter.pending
 
   function handleSubmit(): void {
     if (!canSubmit) return
-    setSubmitting(true)
-    setError(null)
-    attachAndSendMesh({
-      requestId: requestIdRef.current,
-      profileId,
-      scope: 'run',
-      title: title.trim(),
-      instruction: instruction.trim(),
-      ...(firstMessage.trim() !== '' ? { firstMessage: firstMessage.trim() } : {}),
-    })
-      .then((result) => onAttached(result, title.trim() !== '' ? title.trim() : (selected?.title ?? profileId)))
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'request failed')
-        setSubmitting(false)
-      })
+    const name = title.trim() !== '' ? title.trim() : (selected?.title ?? profileId)
+    submitter.submit(
+      { profileId, title: title.trim(), instruction: instruction.trim(), firstMessage: firstMessage.trim() },
+      (p, requestId) =>
+        attachAndSendMesh({
+          requestId,
+          profileId: p.profileId,
+          scope: 'run',
+          title: p.title,
+          instruction: p.instruction,
+          ...(p.firstMessage !== '' ? { firstMessage: p.firstMessage } : {}),
+        }),
+      { onSuccess: (result) => onAttached(result, name) },
+    )
   }
 
   return (
@@ -133,9 +130,9 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
             </label>
           </>
         )}
-        {error !== null && (
+        {submitter.error !== null && (
           <div className="add-run-agent-error" role="alert">
-            Add run agent failed: {error}
+            Add run agent failed: {submitter.error}
           </div>
         )}
         <div className="modal-actions">
@@ -143,7 +140,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
             Cancel
           </button>
           <button type="button" className="btn btn-send" disabled={!canSubmit} onClick={handleSubmit}>
-            {submitting ? 'Adding…' : 'Add run agent'}
+            {submitter.pending ? 'Adding…' : 'Add run agent'}
           </button>
         </div>
       </div>
