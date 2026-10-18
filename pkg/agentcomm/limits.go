@@ -1,0 +1,25 @@
+package agentcomm
+
+// Limits bound every unbounded-looking dimension of the mesh, so a run can never grow a thread,
+// an inbox, or a wait graph without bound. Each is enforced explicitly where it applies — see
+// ValidateMessage for the message-level limits, and the pkg/state/pkg/orchestrator phases for the
+// rest.
+const (
+	// MaxBodyBytes is the largest a single Message.Body may be.
+	MaxBodyBytes = 16 * 1024
+	// MaxRecipients is the most explicit recipients a single Message may name.
+	MaxRecipients = 8
+	// MaxThreadMembers is the most participants a single Thread may fix at open time.
+	MaxThreadMembers = 8
+	// MaxArtifactRefs is the most artifact references a single Message or BoardEntry may carry.
+	MaxArtifactRefs = 8
+	// MaxInboxUnread is the most unread inbox references a single participant may accumulate
+	// before new messages are rejected rather than queued without bound.
+	MaxInboxUnread = 200
+	// MaxThreadMessages is the most messages a single Thread may ever hold — Thread.Budgets'
+	// effective cap when ThreadBudgets.MaxMessages is left zero.
+	MaxThreadMessages = 200
+	// MaxCausalHops bounds how many reply/wait links the cycle check (pkg/orchestrator) will walk
+	// before giving up, so a malformed or adversarial chain cannot hang admission.
+	MaxCausalHops = 12
+)

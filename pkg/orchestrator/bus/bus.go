@@ -91,6 +91,17 @@ const (
 	// forwarded proposal as "user forwarded a proposal from @X", never as raw AI text passed off as the human's
 	// own words (TestFeedUI_ShowsUserForwardedProposal).
 	EventFeedbackDelivered EventType = "feedback_delivered"
+	// Agent Mesh Phase 2 (T2.5): additive non-FSM notice types for the Service's own mutations. A
+	// reconnecting client reconstructs every one of these from notices.jsonl (publishNotice writes both),
+	// exactly like the discussion/proposal events above — never from a second, mesh-only journal. The
+	// client's existing content-key dedupe path for seq-less collaboration events already handles them
+	// (use-event-feed.ts), so no UI-side change is required to add a new one here.
+	EventMeshParticipant EventType = "mesh_participant"
+	EventMeshThread      EventType = "mesh_thread"
+	EventMeshMessage     EventType = "mesh_message"
+	EventMeshReceipt     EventType = "mesh_receipt"
+	EventMeshWait        EventType = "mesh_wait"
+	EventMeshBoard       EventType = "mesh_board"
 	// eventAgentDrained is an internal-only nudge published on the critical bus right after a script_after
 	// hook's goroutine finishes, once pendingAfterHooks has already been decremented.
 	eventAgentDrained EventType = "__agent_drained"

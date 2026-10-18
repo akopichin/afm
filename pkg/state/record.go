@@ -37,6 +37,20 @@ type Target struct {
 	ProposalID string `json:"proposal_id,omitempty"`
 	// IntentID — id FeedbackIntent (feedback_intent_created/feedback_intent_consumed), T6.5/T6.6.
 	IntentID string `json:"intent_id,omitempty"`
+	// ThreadID — id of an agentcomm.Thread (mesh_thread_opened/mesh_thread_closed/mesh_message_sent),
+	// Agent Mesh Phase 1 (T1.1). Follows the same "own id of the entity this record creates/changes" rule as
+	// MessageID/ProposalID above.
+	ThreadID string `json:"thread_id,omitempty"`
+	// ParticipantID — id of an agentcomm.Participant: the entity created by mesh_participant_added, or the
+	// addressed recipient for a mesh_message_delivered/mesh_message_acked/mesh_message_undeliverable receipt,
+	// or the publishing author for mesh_board_published (T1.1/T1.2/T1.4).
+	ParticipantID string `json:"participant_id,omitempty"`
+	// WaitID — id of an agentcomm.Wait (mesh_wait_registered/mesh_wait_resolved), Agent Mesh Phase 1 (T1.3).
+	WaitID string `json:"wait_id,omitempty"`
+	// BoardKey — the shared board's key (mesh_board_published), Agent Mesh Phase 1 (T1.4). Unlike the other
+	// Target id fields this is not server-minted: the caller names an arbitrary, meaningful key (e.g.
+	// "design-doc"), so there is no derive-from-operation-id convention for it.
+	BoardKey string `json:"board_key,omitempty"`
 }
 
 // Control — управляющая запись нового формата журнала (помощники/задачи/политика/квоты). Отличается от
@@ -110,30 +124,55 @@ const (
 	// kindOperationCommitted: that wrapper's per-effect projection (applyOperationCommitted) only ever mutates
 	// AssistantsState, which has nothing to do with the stage graph/StageOrder this kind needs to touch.
 	kindStageGraphAdded = "stage_graph_added"
+	// Agent Mesh Phase 1 (T1.1-T1.4) control kinds — the durable layer for pkg/agentcomm's shared vocabulary
+	// (participants/threads/messages/receipts/waits/board). Each projects onto AssistantsState.Mesh
+	// (mesh_projection.go/mesh_waits.go/mesh_board.go), the same way the task-tree kinds above project onto
+	// AssistantsState's other fields — dispatchControlKind handles every one of them, standalone or bundled as
+	// an operation_committed Effect.
+	kindMeshParticipantAdded     = "mesh_participant_added"
+	kindMeshThreadOpened         = "mesh_thread_opened"
+	kindMeshThreadClosed         = "mesh_thread_closed"
+	kindMeshMessageSent          = "mesh_message_sent"
+	kindMeshMessageDelivered     = "mesh_message_delivered"
+	kindMeshMessageAcked         = "mesh_message_acked"
+	kindMeshMessageUndeliverable = "mesh_message_undeliverable"
+	kindMeshWaitRegistered       = "mesh_wait_registered"
+	kindMeshWaitResolved         = "mesh_wait_resolved"
+	kindMeshBoardPublished       = "mesh_board_published"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
 // задач (T2.3 заводит task_*, T2.6 — policy_set/quota_reserved). Неизвестный kind — не ошибка на будущее,
 // а гарантия того, что лог, записанный более новой версией afm, не будет молча неверно понят более старой.
 var controlKinds = map[string]bool{
-	kindTaskCreated:            true,
-	kindTaskStatusChanged:      true,
-	kindTaskHoldSet:            true,
-	kindTaskHoldCleared:        true,
-	kindTaskContinuationSaved:  true,
-	kindPolicySet:              true,
-	kindQuotaReserved:          true,
-	kindTaskResult:             true,
-	kindTaskGenerationBumped:   true,
-	kindRootGenerationBumped:   true,
-	kindOperationCommitted:     true,
-	kindDiscussionMessage:      true,
-	kindProposalCreated:        true,
-	kindProposalStatusChanged:  true,
-	kindFeedbackIntentCreated:  true,
-	kindFeedbackIntentConsumed: true,
-	kindTaskWaived:             true,
-	kindStageGraphAdded:        true,
+	kindTaskCreated:              true,
+	kindTaskStatusChanged:        true,
+	kindTaskHoldSet:              true,
+	kindTaskHoldCleared:          true,
+	kindTaskContinuationSaved:    true,
+	kindPolicySet:                true,
+	kindQuotaReserved:            true,
+	kindTaskResult:               true,
+	kindTaskGenerationBumped:     true,
+	kindRootGenerationBumped:     true,
+	kindOperationCommitted:       true,
+	kindDiscussionMessage:        true,
+	kindProposalCreated:          true,
+	kindProposalStatusChanged:    true,
+	kindFeedbackIntentCreated:    true,
+	kindFeedbackIntentConsumed:   true,
+	kindTaskWaived:               true,
+	kindStageGraphAdded:          true,
+	kindMeshParticipantAdded:     true,
+	kindMeshThreadOpened:         true,
+	kindMeshThreadClosed:         true,
+	kindMeshMessageSent:          true,
+	kindMeshMessageDelivered:     true,
+	kindMeshMessageAcked:         true,
+	kindMeshMessageUndeliverable: true,
+	kindMeshWaitRegistered:       true,
+	kindMeshWaitResolved:         true,
+	kindMeshBoardPublished:       true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

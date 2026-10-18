@@ -96,6 +96,10 @@ type AssistantsState struct {
 	Proposals ProposalBoard `json:"proposals,omitempty"`
 	// FeedbackIntents (T6.5/T6.6) is the durable idempotent-delivery pipeline state, keyed by intent id.
 	FeedbackIntents map[string]*FeedbackIntent `json:"feedback_intents,omitempty"`
+	// Mesh (Agent Mesh Phase 1, T1.1-T1.4) is the durable projection of pkg/agentcomm's shared vocabulary:
+	// participants, threads, messages+receipts, waits and the shared board. See mesh_projection.go/
+	// mesh_waits.go/mesh_board.go.
+	Mesh MeshState `json:"mesh,omitempty"`
 }
 
 // DiscussionState is the normalized, replay-restored discussion-log projection for one run (T6.1). Messages
@@ -184,6 +188,7 @@ func newAssistantsState() AssistantsState {
 			ByStage:   map[string][]string{},
 		},
 		FeedbackIntents: map[string]*FeedbackIntent{},
+		Mesh:            newMeshState(),
 	}
 }
 
@@ -224,6 +229,7 @@ func (as AssistantsState) Clone() AssistantsState {
 	}
 	out.Policy = as.Policy
 	out.QuotaReserved = as.QuotaReserved
+	out.Mesh = as.Mesh.clone()
 	return out
 }
 
@@ -262,6 +268,7 @@ func (as AssistantsState) deepClone() AssistantsState {
 		nfi := *fi
 		out.FeedbackIntents[id] = &nfi
 	}
+	out.Mesh = as.Mesh.deepClone()
 	return out
 }
 
@@ -500,6 +507,26 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyFeedbackIntentConsumed(as, c, dryRun)
 	case kindTaskWaived:
 		return applyTaskWaived(as, c, dryRun)
+	case kindMeshParticipantAdded:
+		return applyMeshParticipantAdded(as, c, dryRun)
+	case kindMeshThreadOpened:
+		return applyMeshThreadOpened(as, c, dryRun)
+	case kindMeshThreadClosed:
+		return applyMeshThreadClosed(as, c, dryRun)
+	case kindMeshMessageSent:
+		return applyMeshMessageSent(as, c, dryRun)
+	case kindMeshMessageDelivered:
+		return applyMeshMessageDelivered(as, c, dryRun)
+	case kindMeshMessageAcked:
+		return applyMeshMessageAcked(as, c, dryRun)
+	case kindMeshMessageUndeliverable:
+		return applyMeshMessageUndeliverable(as, c, dryRun)
+	case kindMeshWaitRegistered:
+		return applyMeshWaitRegistered(as, c, dryRun)
+	case kindMeshWaitResolved:
+		return applyMeshWaitResolved(as, c, dryRun)
+	case kindMeshBoardPublished:
+		return applyMeshBoardPublished(as, c, dryRun)
 	default:
 		// controlKinds already rejected anything not listed above during decodeLine — reaching here would
 		// be a registry/switch drift, not a journal problem.
