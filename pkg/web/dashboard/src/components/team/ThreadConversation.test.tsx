@@ -70,6 +70,14 @@ describe('ThreadConversation', () => {
     expect(quote.closest('.team-conversation-message-body')).toHaveTextContent('Got it')
   })
 
+  test('a conversation agents started between themselves is read-only for you', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const agentsOnly: MeshThread = { id: 'mt-7', title: '', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
+    render(<ThreadConversation target={{ kind: 'thread', thread: agentsOnly }} participants={[qa]} />)
+    expect(screen.getByText(/talking between themselves/)).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
   test('a conversation opens at its latest message, not at the top', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
       messages: [{ id: 'm0', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'latest', seq: 1, created_at: '2026-10-18T00:00:00Z' }],

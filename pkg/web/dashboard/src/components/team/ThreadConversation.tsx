@@ -59,7 +59,10 @@ export function conversationSubtitle(target: ThreadConversationTarget, participa
   const peer = directPeer(target.thread, participants)
   if (peer !== undefined) return `Direct conversation · ${participantRole(peer.kind)}`
   const agents = target.thread.members.filter((m) => m !== 'user').length
-  return `${target.thread.members.length} participants · you and ${agents} ${agents === 1 ? 'agent' : 'agents'}`
+  const agentsText = `${agents} ${agents === 1 ? 'agent' : 'agents'}`
+  // A conversation agents started between themselves does not include you.
+  const who = target.thread.members.includes('user') ? `you and ${agentsText}` : agentsText
+  return `${target.thread.members.length} participants · ${who}`
 }
 
 // otherMemberIds — every OTHER member of the conversation: a direct target has exactly one (the person
@@ -167,6 +170,9 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
   const notice = unreachableNotice(reachability)
   const recipientIds = mentioned.length > 0 ? mentioned : reachability.reachable
   const canSend = draft.trim() !== '' && recipientIds.length > 0
+  // readOnly — a conversation agents started between themselves: you can read along, but only members may
+  // write into it (the server refuses anyone else).
+  const readOnly = target.kind === 'thread' && !target.thread.members.includes('user')
 
   // ensureThread — the conversation's thread, opened on the first send of a direct conversation.
   async function ensureThread(current: ThreadConversationTarget): Promise<MeshThread> {
@@ -226,46 +232,55 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
           </ul>
         )}
       </div>
-      {notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
-      <div className="team-conversation-route">
-        <span>From you →</span>
-        <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label)}</strong>
-        {mentioned.length === 0 && notice === null && reachability.finished.length > 0 && (
-          <span className="team-conversation-route-skipped">{skippedNote(reachability.finished)}</span>
-        )}
-        <span className="team-conversation-route-hint">@ to address someone</span>
-      </div>
-      <div className="chat-composer-row">
-        <textarea
-          ref={setInputRef}
-          className="chat-composer-input"
-          placeholder={`Message ${label}…`}
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value)
-            mention.onInput(e.target.value, e.target.selectionStart ?? e.target.value.length)
-          }}
-          onKeyDown={(e) => {
-            if (mention.onKeyDown(e)) return
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-              e.preventDefault()
-              send()
-            }
-          }}
-          rows={1}
-        />
-        {mention.open && (
-          <MentionMenu
-            groups={[{ label: '', items: mention.matches }]}
-            highlightIndex={mention.highlightIndex}
-            onHover={mention.setHighlightIndex}
-            onSelect={mention.pick}
-            ariaLabel="Mention someone in this conversation"
+      {readOnly ? (
+        <p className="team-conversation-notice" role="status">
+          The agents are talking between themselves — you can read along. To weigh in, message them directly or
+          start a conversation with them.
+        </p>
+      ) : (
+        <>
+        {notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
+        <div className="team-conversation-route">
+          <span>From you →</span>
+          <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label)}</strong>
+          {mentioned.length === 0 && notice === null && reachability.finished.length > 0 && (
+            <span className="team-conversation-route-skipped">{skippedNote(reachability.finished)}</span>
+          )}
+          <span className="team-conversation-route-hint">@ to address someone</span>
+        </div>
+        <div className="chat-composer-row">
+          <textarea
+            ref={setInputRef}
+            className="chat-composer-input"
+            placeholder={`Message ${label}…`}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              mention.onInput(e.target.value, e.target.selectionStart ?? e.target.value.length)
+            }}
+            onKeyDown={(e) => {
+              if (mention.onKeyDown(e)) return
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault()
+                send()
+              }
+            }}
+            rows={1}
           />
-        )}
-        <ChatSendButton label="Send" disabled={!canSend} sending={submitter.pending} onClick={send} />
-      </div>
-      {submitter.error !== null && <div className="team-conversation-error" role="alert">{submitter.error}</div>}
+          {mention.open && (
+            <MentionMenu
+              groups={[{ label: '', items: mention.matches }]}
+              highlightIndex={mention.highlightIndex}
+              onHover={mention.setHighlightIndex}
+              onSelect={mention.pick}
+              ariaLabel="Mention someone in this conversation"
+            />
+          )}
+          <ChatSendButton label="Send" disabled={!canSend} sending={submitter.pending} onClick={send} />
+        </div>
+        {submitter.error !== null && <div className="team-conversation-error" role="alert">{submitter.error}</div>}
+        </>
+      )}
     </div>
   )
 }
@@ -275,8 +290,7 @@ function messageTime(createdAt: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// MessageRow — one message: avatar, author, "→ recipients", time, then the text bubble.
-// MessageRow — one message; a reply quotes the start of the message it answers ("Replying to …").
+// MessageRow — one message: avatar, author, "→ recipients", time, then the text bubble; a reply quotes the start of the message it answers ("Replying to …").
 function MessageRow({ message, participants, answered }: { message: MeshMessage; participants: MeshParticipant[]; answered?: MeshMessage }): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const kind = participants.find((p) => p.id === message.sender_id)?.kind ?? (message.sender_id === 'user' ? 'user' : '')

@@ -70,6 +70,14 @@ describe('TeamView', () => {
     expect(screen.getByText('3 participants · you and 2 agents')).toBeInTheDocument()
   })
 
+  test('a conversation agents started between themselves does not count you in it', () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-8', title: 'Pairing', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Pairing'))
+    expect(screen.getByText('2 participants · 2 agents')).toBeInTheDocument()
+  })
+
   test('tabs are "Messages", "Board", "Activity"', () => {
     mockThreadAndBoardFetches()
     renderTeamView()
