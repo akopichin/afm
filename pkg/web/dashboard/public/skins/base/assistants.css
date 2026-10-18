@@ -715,7 +715,8 @@
   color: var(--attention);
 }
 
-/* === `@`-mention menu (T4.2) — side-agent composer's profile suggestion popup === */
+/* === `@`-mention menu (T4.2) — side-agent composer's profile suggestion popup; lifted into a shared
+   primitive (MentionMenu) by T7.4, also used by the feed composer's grouped mesh mention menu === */
 .assistant-mention-menu {
   list-style: none;
   margin: 0;
@@ -761,6 +762,16 @@
 }
 .assistant-mention-unavailable {
   font-size: 11px;
+  color: var(--text-muted);
+}
+/* .assistant-mention-group-label — section heading row (T7.4's "This run"/"This stage"/"Attach to stage").
+   The side agent's own single ungrouped list never renders one of these (empty group label). */
+.assistant-mention-group-label {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
 }
 

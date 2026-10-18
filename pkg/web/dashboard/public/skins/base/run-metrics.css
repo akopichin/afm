@@ -167,7 +167,11 @@
 .metrics-popover .metric-label { display: block; }
 
 /* Responsive contract: collapse order keeps Started + Elapsed inline longest, folding the rest behind the
-   "⋯" popover in this order: Idle + Backoff first, then Est. cost, then everything. */
+   "⋯" popover in this order: Idle + Backoff first, then Est. cost/tokens — down to the app's narrow-viewport
+   breakpoint (900px, shared with header.css/layout.css/side-agent.css). Below that, the center zone has no
+   room left to hide things behind a button without losing information the user needs at a glance, so the
+   bar wraps onto more lines instead (T7.6: "stay visible, wrapping not disappearing") and the now-redundant
+   "⋯" button goes away again. */
 @media (max-width: 1279px) {
   .run-metrics { gap: 16px; }
   .run-metrics > .metric .metric-label { display: none; }
@@ -179,6 +183,12 @@
   .run-metrics > .metric[data-metric="tokens"],
   .run-metrics > .metric[data-metric="cost"] { display: none; }
 }
-@media (max-width: 899px) {
-  .run-metrics > .metric { display: none; }
+@media (max-width: 900px) {
+  .run-metrics { flex-wrap: wrap; justify-content: center; row-gap: 4px; }
+  .run-metrics > .metric .metric-label { display: block; }
+  .run-metrics > .metric[data-metric="idle"],
+  .run-metrics > .metric[data-metric="backoff"],
+  .run-metrics > .metric[data-metric="tokens"],
+  .run-metrics > .metric[data-metric="cost"] { display: inline-flex; }
+  .metrics-more { display: none; }
 }
