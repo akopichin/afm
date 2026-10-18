@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -22,6 +25,10 @@ type fakeAgentMeshActions struct {
 	lastSend    MeshSendRequest
 	sendCalls   int
 	participant []agentcomm.Participant
+	// threadMembers, when non-nil, makes Thread enforce membership (keyed by thread id) — used only by the
+	// T8.4 private-thread isolation test below; every other test leaves it nil (Thread always succeeds), the
+	// same zero-value-means-"not exercised" convention lastSender/lastSend already follow.
+	threadMembers map[string][]string
 }
 
 func newFakeAgentMeshActions() *fakeAgentMeshActions {
@@ -58,6 +65,25 @@ func (f *fakeAgentMeshActions) Inbox(ctx context.Context, actor string, cursor u
 }
 
 func (f *fakeAgentMeshActions) Thread(ctx context.Context, actor, threadID string, cursor uint64, limit int) (MeshMessagePage, error) {
+	if f.threadMembers != nil {
+		if actor == "user" {
+			return MeshMessagePage{}, nil // the human run owner sees every thread (ReadThread's own carve-out)
+		}
+		members, ok := f.threadMembers[threadID]
+		if !ok {
+			return MeshMessagePage{}, errors.New("unknown thread")
+		}
+		member := false
+		for _, m := range members {
+			if m == actor {
+				member = true
+				break
+			}
+		}
+		if !member {
+			return MeshMessagePage{}, errors.New("not a member of this thread")
+		}
+	}
 	return MeshMessagePage{}, nil
 }
 
@@ -217,5 +243,117 @@ func TestAgentMesh_ReplyForcesReplyKind(t *testing.T) {
 	}
 	if fake.lastSend.Kind != "reply" {
 		t.Fatalf("kind = %q, want reply even though the body said %q", fake.lastSend.Kind, "message")
+	}
+}
+
+// ---- Agent Mesh Phase 8, T8.4: limits, authority and isolation ----
+//
+// See pkg/orchestrator/agentcomm_limits_test.go's own header comment for the full bullet-by-bullet mapping of
+// dev-plan.md's T8.4 clauses to named tests across both packages. The four tests below are this file's share:
+// forging an author/generation/run, a private thread's isolation at the HTTP adapter (not just the Service),
+// and the agent-facing surface never exposing a capability-widening route.
+
+// TestAgentMesh_PublishIgnoresClientSuppliedAuthor mirrors TestAgentMesh_TokenIdentityIsNeverClientSupplied
+// for PublishBoard: MeshPublishRequest has no author/actor field at all, so the board entry's AuthorID can
+// only ever be the token-resolved actor, regardless of what a malicious body tries to smuggle in.
+func TestAgentMesh_PublishIgnoresClientSuppliedAuthor(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "helper:a"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	body, _ := json.Marshal(map[string]any{
+		"request_id": "req-1", "key": "qa.tests", "status": "ready",
+		// MeshPublishRequest has nowhere to decode these into — smuggled for nothing.
+		"author_id": "helper:b", "actor": "helper:b",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/agent-mesh/publish", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok-A")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	var entry agentcomm.BoardEntry
+	if err := json.Unmarshal(w.Body.Bytes(), &entry); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if entry.AuthorID != "helper:a" {
+		t.Fatalf("published author_id = %q, want helper:a (the token's own identity)", entry.AuthorID)
+	}
+}
+
+// TestAgentMesh_RequestBodiesCarryNoSenderActorGenerationOrRunOverride is T8.4's "cannot forge ... a
+// generation or a run" clause, proven structurally: none of the agent-facing request DTOs have a field a
+// client could even populate for sender/actor/generation/run identity — reflect over every exported field's
+// json tag and fail loudly if one is ever added, rather than relying on nobody noticing in review.
+func TestAgentMesh_RequestBodiesCarryNoSenderActorGenerationOrRunOverride(t *testing.T) {
+	forbidden := map[string]bool{
+		"sender_id": true, "sender": true, "actor": true, "actor_id": true,
+		"generation": true, "run_id": true, "task_generation": true,
+	}
+	types := []any{MeshSendRequest{}, MeshWaitRequest{}, MeshPublishRequest{}}
+	for _, v := range types {
+		rt := reflect.TypeOf(v)
+		for i := 0; i < rt.NumField(); i++ {
+			tag := rt.Field(i).Tag.Get("json")
+			name := strings.Split(tag, ",")[0]
+			if forbidden[name] {
+				t.Fatalf("%s.%s has json tag %q — the authenticated actor must be the ONLY source of identity/generation/run, never the request body", rt.Name(), rt.Field(i).Name, name)
+			}
+		}
+	}
+}
+
+// TestAgentMesh_PrivateThreadNotReadableByNonMemberHumanExcepted complements
+// TestMesh_ReadThreadMembershipEnforced (pkg/orchestrator/agentcomm_messages_test.go, the authoritative
+// Service-level enforcement) by proving the HTTP adapter actually PROPAGATES that rejection rather than
+// swallowing it or returning 200 with empty/wrong data — and that the human run owner's own carve-out survives
+// the same round trip.
+func TestAgentMesh_PrivateThreadNotReadableByNonMemberHumanExcepted(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-member"] = "helper:a"
+	fake.tokens["tok-outsider"] = "helper:b"
+	fake.tokens["tok-human"] = "user"
+	fake.threadMembers = map[string][]string{"t1": {"helper:a"}}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	get := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/agent-mesh/thread?id=t1", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := get("tok-member"); code != http.StatusOK {
+		t.Fatalf("member read: HTTP %d, want 200", code)
+	}
+	if code := get("tok-human"); code != http.StatusOK {
+		t.Fatalf("human run owner read: HTTP %d, want 200 (the human sees every thread)", code)
+	}
+	if code := get("tok-outsider"); code == http.StatusOK {
+		t.Fatalf("non-member read a private thread: HTTP %d, want an explicit rejection", code)
+	}
+}
+
+// TestAgentMesh_NoAttachOrCapabilityWideningRouteExposedToAgents is T8.4's "a peer message cannot create a
+// new root to dodge max_depth or widen capabilities" clause: AgentMeshActions (this file's own interface)
+// has no AttachAndSend/AddRunAgent method at all — the only two things in this codebase that create a NEW
+// mesh participant/task — so there is no route for an authenticated agent token to reach one, by construction,
+// never merely by convention. routeAgentMesh's own switch (agent_mesh.go) is exhaustive; anything not listed
+// there 404s before even touching the Service.
+func TestAgentMesh_NoAttachOrCapabilityWideningRouteExposedToAgents(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "helper:a"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	for _, action := range []string{"attach-and-send", "attach", "add-run-agent", "threads"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent-mesh/"+action, bytes.NewReader([]byte(`{}`)))
+		req.Header.Set("Authorization", "Bearer tok-A")
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s: HTTP %d, want 404 — the agent-facing surface must never expose a capability-widening route", action, w.Code)
+		}
 	}
 }
