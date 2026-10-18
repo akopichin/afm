@@ -154,7 +154,7 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		s := string(*req.InReplyTo)
 		inReplyTo = &s
 	}
-	body := redactMeshText(req.Body)
+	body := o.RedactSecrets(req.Body)
 	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),

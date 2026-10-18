@@ -140,7 +140,7 @@ func normalizeScope(s assistants.Scope) assistants.Scope {
 
 // replayedAttachAndSend rebuilds the result of an AttachAndSend that already committed under req's id, or
 // reports a conflict when req is not that attach (another profile, title, first message, members).
-func replayedAttachAndSend(rs state.RunState, t *state.TaskState, req AttachAndSendRequest) (AttachAndSendResult, error) {
+func (o *Orchestrator) replayedAttachAndSend(rs state.RunState, t *state.TaskState, req AttachAndSendRequest) (AttachAndSendResult, error) {
 	threadID := deriveMeshThreadID(req.OperationID)
 	th := rs.Assistants.Mesh.Threads[threadID]
 	if !sameAttach(t, req.ProfileID, req.Scope, req.StageID, req.Title, req.Instruction, req.Mode) || th == nil {
@@ -154,7 +154,7 @@ func replayedAttachAndSend(rs state.RunState, t *state.TaskState, req AttachAndS
 	res := AttachAndSendResult{TaskID: t.ID, ParticipantID: meshParticipantForTask(rs, t.Task), ThreadID: threadID}
 	mid := deriveMeshMessageID(req.OperationID)
 	m := rs.Assistants.Mesh.Messages[mid]
-	if (m != nil) != (req.FirstMessage != nil) || (m != nil && m.Body != redactMeshText(*req.FirstMessage)) {
+	if (m != nil) != (req.FirstMessage != nil) || (m != nil && m.Body != o.RedactSecrets(*req.FirstMessage)) {
 		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
 	}
 	if m != nil {
@@ -225,7 +225,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 	rs := o.opts.Store.Snapshot()
 	if t, committed := committedTask(rs, req.OperationID); committed {
-		return replayedAttachAndSend(rs, t, req)
+		return o.replayedAttachAndSend(rs, t, req)
 	}
 
 	scope := req.Scope
@@ -394,7 +394,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 			}
 			msgRecipients = append(msgRecipients, string(m))
 		}
-		body := redactMeshText(*req.FirstMessage)
+		body := o.RedactSecrets(*req.FirstMessage)
 		msgEff, merr := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(mid)},
 			state.MeshMessageSentPayload{Sender: string(senderID), Recipients: msgRecipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
 		if merr != nil {

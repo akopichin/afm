@@ -57,6 +57,7 @@ import (
 	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // TestMesh_InboxUnreadLimitProducesExplicitRefusal is T8.4's inbox-limit clause: a recipient's own unread
@@ -293,5 +294,59 @@ func TestMesh_SecretsAbsentFromLiveNoticeAndNoticesJournal(t *testing.T) {
 	}
 	if strings.Contains(string(data), secretValue) {
 		t.Fatal("notices.jsonl contains the raw secret")
+	}
+}
+
+// TestMesh_RedactsSecretsOutsideTheEnvironment: secrets.env values and minted mesh tokens never appear in afm's
+// own environment, yet they must be redacted from mesh text like environment secrets are — in a message, a
+// board status, and in both copies of a discussion post.
+func TestMesh_RedactsSecretsOutsideTheEnvironment(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	const fromSecretsEnv = "secrets-env-value-1234567" //nolint:gosec // test fixture value, not a real credential
+	o.opts.SecretValues = []string{fromSecretsEnv}
+	token, err := o.meshTokens().mint(meshStageParticipantID(assistantsTestStageID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaked := func(text string) bool { return strings.Contains(text, fromSecretsEnv) || strings.Contains(text, token) }
+	text := "creds: " + fromSecretsEnv + " and " + token
+
+	stage := meshStageParticipantID(assistantsTestStageID)
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-red-open", Members: []agentcomm.ParticipantID{meshUserParticipantID, stage}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	sent, err := o.Send(ctx, SendRequest{OperationID: "op-red-send", ThreadID: thread.ID, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{stage}, Kind: agentcomm.MessageKindMessage, Body: text})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	entry, err := o.Publish(ctx, PublishRequest{OperationID: "op-red-board", Author: meshUserParticipantID, Key: "k", Status: text, Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	postID, err := o.PostDiscussionMessage(ctx, PostMessageRequest{OperationID: "op-red-post", StageID: assistantsTestStageID, AuthorKind: assistants.AuthorHuman, Round: assistants.RoundFreeform, Body: text, Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatalf("PostDiscussionMessage: %v", err)
+	}
+
+	rs := store.Snapshot()
+	for what, got := range map[string]string{
+		"message":                rs.Assistants.Mesh.Messages[sent.MessageID].Body,
+		"board status":           entry.Status,
+		"discussion post":        rs.Assistants.Discussions.Messages[postID].Body,
+		"discussion mesh mirror": rs.Assistants.Mesh.Messages[agentcomm.MessageID(postID)].Body,
+	} {
+		if got == "" || leaked(got) {
+			t.Fatalf("%s = %q, want the secrets.env value and the mesh token redacted", what, got)
+		}
+	}
+	journal, err := os.ReadFile(filepath.Join(o.opts.RunDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaked(string(journal)) {
+		t.Fatal("events.jsonl carries a secret outside the environment")
 	}
 }

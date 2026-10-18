@@ -169,7 +169,7 @@ func parseCursorLimit(r *http.Request) (cursor uint64, limit int) {
 func (s *Server) handleAgentMeshParticipants(w http.ResponseWriter, r *http.Request, actor string) {
 	participants, err := s.agentMesh.ListParticipants(r.Context(), actor)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"participants": participants})
@@ -180,7 +180,7 @@ func (s *Server) handleAgentMeshInbox(w http.ResponseWriter, r *http.Request, ac
 	all := r.URL.Query().Get("all") == "1"
 	page, err := s.agentMesh.Inbox(r.Context(), actor, cursor, limit, all)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, page)
@@ -195,7 +195,7 @@ func (s *Server) handleAgentMeshThread(w http.ResponseWriter, r *http.Request, a
 	cursor, limit := parseCursorLimit(r)
 	page, err := s.agentMesh.Thread(r.Context(), actor, threadID, cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, page)
@@ -204,7 +204,7 @@ func (s *Server) handleAgentMeshThread(w http.ResponseWriter, r *http.Request, a
 func (s *Server) handleAgentMeshBoard(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.agentMesh.Board(r.Context(), r.URL.Query().Get("key"))
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"entries": entries})
@@ -227,7 +227,7 @@ func (s *Server) handleAgentMeshSend(w http.ResponseWriter, r *http.Request, act
 	}
 	receipt, err := s.agentMesh.Send(r.Context(), body.RequestID, actor, body.MeshSendRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, receipt)
@@ -246,7 +246,7 @@ func (s *Server) handleAgentMeshAck(w http.ResponseWriter, r *http.Request, acto
 		return
 	}
 	if err := s.agentMesh.Ack(r.Context(), body.RequestID, actor, body.MessageID); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{keyStatus: "ok"})
@@ -266,7 +266,7 @@ func (s *Server) handleAgentMeshWait(w http.ResponseWriter, r *http.Request, act
 	}
 	receipt, err := s.agentMesh.Wait(r.Context(), body.RequestID, actor, body.MeshWaitRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, receipt)
@@ -286,7 +286,7 @@ func (s *Server) handleAgentMeshCancelWait(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.agentMesh.CancelWait(r.Context(), body.RequestID, actor, body.WaitID, body.Reason); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{keyStatus: "ok"})
@@ -306,7 +306,7 @@ func (s *Server) handleAgentMeshPublish(w http.ResponseWriter, r *http.Request, 
 	}
 	entry, err := s.agentMesh.PublishBoard(r.Context(), body.RequestID, actor, body.MeshPublishRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, entry)

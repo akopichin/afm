@@ -36,7 +36,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board entry needs a key"}
 	}
 
-	status := redactMeshText(req.Status)
+	status := o.RedactSecrets(req.Status)
 	publishEff, err := marshalEffect("mesh_board_published",
 		state.Target{BoardKey: req.Key, ParticipantID: string(req.Author)},
 		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion})

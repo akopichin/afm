@@ -117,7 +117,7 @@ func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request, st
 	}
 	tree, err := s.assistantsReader.TaskTree(stageID)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -168,7 +168,7 @@ func (s *Server) handleAttachAssistant(w http.ResponseWriter, r *http.Request, s
 		Instruction: body.Instruction, Mode: body.Mode, Trigger: body.Trigger,
 	})
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -251,7 +251,7 @@ func (s *Server) handleWaiveTask(w http.ResponseWriter, r *http.Request, taskID 
 		return
 	}
 	if err := s.assistantActions.WaiveTask(r.Context(), taskID, body.Reason); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -283,7 +283,7 @@ func (s *Server) handleAssistantTaskAction(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -304,7 +304,7 @@ func (s *Server) handleAssistantEvents(w http.ResponseWriter, r *http.Request, t
 	}
 	events, nextCursor, hasMore, err := s.assistantsReader.TaskEvents(taskID, cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -318,7 +318,7 @@ func (s *Server) handleAssistantEvents(w http.ResponseWriter, r *http.Request, t
 // every other admission/validation rejection (capability_unavailable, delegation_depth_exceeded,
 // invalid_parent, ancestor_inactive), 404 for feature_disabled, 503 when the service reports itself
 // unavailable outright.
-func writeAssistantError(w http.ResponseWriter, err error) {
+func (s *Server) writeAssistantError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrAssistantsUnavailable) {
 		writeAssistantErrCode(w, http.StatusServiceUnavailable, "service_unavailable")
 		return
@@ -338,8 +338,17 @@ func writeAssistantError(w http.ResponseWriter, err error) {
 		return
 	}
 	// Unexpected: never a silent 500 — the error goes to the afm log, the client is pointed there.
-	log.Printf("ERROR: assistants/mesh request failed: %q", redact.String(err.Error(), executor.SecretValuesForRedaction())) //nolint:gosec // G706: secrets redacted, %q escapes newlines so a value cannot forge log lines
+	log.Printf("ERROR: assistants/mesh request failed: %q", s.redactSecrets(err.Error())) //nolint:gosec // G706: secrets redacted, %q escapes newlines so a value cannot forge log lines
 	writeAssistantErrMessage(w, http.StatusInternalServerError, errCodeInternal, "internal error — see the afm log for details")
+}
+
+// redactSecrets removes known secret values from text the server logs: the run's full secret set when the
+// composition root wired it (Config.RedactSecrets), else the secrets in afm's own environment.
+func (s *Server) redactSecrets(text string) string {
+	if s.redact != nil {
+		return s.redact(text)
+	}
+	return redact.String(text, executor.SecretValuesForRedaction())
 }
 
 func assistantErrStatus(code assistants.ErrorCode) int {

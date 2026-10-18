@@ -70,6 +70,8 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
+	// Redacted once, before either copy of the post (the discussion message and its mesh mirror) is built.
+	req.Body = o.RedactSecrets(req.Body)
 	messageID := deriveMessageID(req.OperationID)
 	rs := o.opts.Store.Snapshot()
 	// A retry of an already-committed post replays it, whatever changed since (the stage finished, so the

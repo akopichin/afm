@@ -85,6 +85,9 @@ type Options struct {
 	Debug           bool              // if true, executors log the exact agent input to debug logs
 	Memory          flow.MemoryConfig // agent-память v3: параметры конвейера (max_rules/commit)
 	MemoryDir       string            // abs путь к директории памяти ("" = выключено)
+	// SecretValues are secret values resolved outside afm's environment (project and global secrets.env) that
+	// must be redacted from mesh text, task context and logs like environment secrets are.
+	SecretValues []string
 	// CurrentFileSHA резолвит текущий content_sha файла для renderReviewFeedback — сравнить с content_sha
 	// ноты на момент injection и пометить дрифт.
 	CurrentFileSHA func(root, path string) (string, bool)

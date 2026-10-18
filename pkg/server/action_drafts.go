@@ -197,7 +197,7 @@ func (s *Server) confirmAttachAssistantDraft(w http.ResponseWriter, r *http.Requ
 		Instruction: payload.Instruction,
 	})
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -225,7 +225,7 @@ func (s *Server) confirmAddStageDraft(w http.ResponseWriter, r *http.Request, dr
 	addDraft.RequestID = requestID
 	res, err := s.graphActions.CommitAddStage(r.Context(), addDraft)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

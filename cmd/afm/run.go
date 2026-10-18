@@ -267,6 +267,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		BrowserDescriptor:  browserDesc,
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
+		SecretValues:       loadRedactionSecrets(rootDir, cfg.Docker.SecretsFile),
 	}
 	if ws != nil {
 		orchOpts.ResolveFile = workspaceResolveFile(ws)

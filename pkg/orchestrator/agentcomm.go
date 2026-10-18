@@ -260,11 +260,21 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	})
 }
 
-// redactMeshText removes known secret values from text an agent or the human writes into the mesh (a message
-// body, a board status): it must never reach the durable journal, a recipient's inbox or a notice verbatim —
-// the same redaction pass buildTaskContext applies to everything else a task sees (assistants_context.go).
-func redactMeshText(s string) string {
-	return redact.String(s, executor.SecretValuesForRedaction())
+// secretValues is every secret value text afm writes or shows must not carry: afm's own transport secrets and
+// credentials from its environment (executor.SecretValuesForRedaction), the resolved secrets.env values the
+// run was started with (Options.SecretValues), and the mesh bearer tokens minted for live agent invocations —
+// those exist only in the descriptor file handed to a child, never in afm's own environment.
+func (o *Orchestrator) secretValues() []string {
+	vals := append(executor.SecretValuesForRedaction(), o.opts.SecretValues...)
+	return append(vals, o.meshTokens().values()...)
+}
+
+// RedactSecrets removes every secretValues value from text an agent or the human writes into the mesh (a
+// message body, a board status, a discussion post) or that afm passes on or logs (a task's context, a failure
+// reason, the HTTP layer's error log): it must never reach the durable journal, a recipient's inbox, a notice
+// or a log verbatim.
+func (o *Orchestrator) RedactSecrets(s string) string {
+	return redact.String(s, o.secretValues())
 }
 
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place

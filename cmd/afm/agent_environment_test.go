@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -207,5 +208,28 @@ func TestLifecycleRootDir_EmptyReturnsAbsoluteCWD(t *testing.T) {
 	}
 	if got != wantWd {
 		t.Errorf("lifecycleRootDir(\"\") = %q, want CWD %q", got, wantWd)
+	}
+}
+
+// loadRedactionSecrets reads the global and project secrets.env, skipping values too short to be credentials.
+func TestLoadRedactionSecrets_ReadsBothLayersAndSkipsShortValues(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	for dir, content := range map[string]string{
+		home:    "GLOBAL_TOKEN=global-secret-value\n",
+		project: "PROJECT_TOKEN=project-secret-value\nDEBUG=1\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, ".afm"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".afm", "secrets.env"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := loadRedactionSecrets(project, "")
+	slices.Sort(got)
+	if want := []string{"global-secret-value", "project-secret-value"}; !slices.Equal(got, want) {
+		t.Fatalf("loadRedactionSecrets = %v, want %v", got, want)
 	}
 }

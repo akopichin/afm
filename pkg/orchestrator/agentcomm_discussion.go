@@ -61,6 +61,7 @@ func discussionMeshSender(stageID string, kind assistants.MessageAuthorKind) (ag
 //
 // Returns (nil, nil) — no error, no effects — when discussionMeshSender reports the author cannot be mirrored
 // yet; PostDiscussionMessage then commits only the discussion_message effect, unchanged from before T6.4.
+// req.Body is already redacted (PostDiscussionMessage): both copies of the post carry the same text.
 func discussionMeshEffects(rs state.RunState, stageID, messageID string, req PostMessageRequest) ([]state.Effect, error) {
 	sender, ok := discussionMeshSender(stageID, req.AuthorKind)
 	if !ok {
@@ -91,9 +92,8 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 			recipients = append(recipients, string(m))
 		}
 	}
-	body := redactMeshText(req.Body)
 	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: messageID},
-		state.MeshMessageSentPayload{Sender: string(sender), Recipients: recipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
+		state.MeshMessageSentPayload{Sender: string(sender), Recipients: recipients, Kind: string(agentcomm.MessageKindMessage), Body: req.Body})
 	if err != nil {
 		return nil, err
 	}

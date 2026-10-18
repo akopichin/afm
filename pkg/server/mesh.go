@@ -136,7 +136,7 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeshParticipants(w http.ResponseWriter, r *http.Request) {
 	participants, err := s.mesh.ListParticipants(r.Context())
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"participants": participants})
@@ -149,7 +149,7 @@ func (s *Server) handleMeshParticipants(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleMeshThreads(w http.ResponseWriter, r *http.Request) {
 	threads, err := s.mesh.Threads(r.Context())
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"threads": threads})
@@ -158,7 +158,7 @@ func (s *Server) handleMeshThreads(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeshBoard(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.mesh.Board(r.Context(), r.URL.Query().Get("key"))
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"entries": entries})
@@ -168,7 +168,7 @@ func (s *Server) handleMeshInbox(w http.ResponseWriter, r *http.Request) {
 	cursor, limit := parseCursorLimit(r)
 	page, err := s.mesh.Inbox(r.Context(), cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, page)
@@ -182,7 +182,7 @@ func (s *Server) handleMeshReadThread(w http.ResponseWriter, r *http.Request, th
 	cursor, limit := parseCursorLimit(r)
 	page, err := s.mesh.Thread(r.Context(), threadID, cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, page)
@@ -208,7 +208,7 @@ func (s *Server) handleMeshOpenThread(w http.ResponseWriter, r *http.Request) {
 	}
 	thread, err := s.mesh.OpenThread(r.Context(), body.RequestID, body.MeshOpenThreadRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, thread)
@@ -240,7 +240,7 @@ func (s *Server) handleMeshSend(w http.ResponseWriter, r *http.Request, threadID
 	body.ThreadID = threadID
 	receipt, err := s.mesh.Send(r.Context(), body.RequestID, threadID, body.MeshSendRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, receipt)
@@ -266,7 +266,7 @@ func (s *Server) handleMeshCloseThread(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	if err := s.mesh.CloseThread(r.Context(), body.RequestID, threadID); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{keyStatus: "ok"})
@@ -295,7 +295,7 @@ func (s *Server) handleMeshPublishBoard(w http.ResponseWriter, r *http.Request) 
 	}
 	entry, err := s.mesh.PublishBoard(r.Context(), body.RequestID, body.MeshBoardPublishRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, entry)
@@ -319,7 +319,7 @@ func (s *Server) handleMeshAttachAndSend(w http.ResponseWriter, r *http.Request)
 	}
 	result, err := s.mesh.AttachAndSend(r.Context(), body.RequestID, body.MeshAttachAndSendRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, result)

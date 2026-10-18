@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/redact"
@@ -53,7 +52,7 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	followUp := o.loadFollowUp(task.ID)
 	childResults := o.collectChildResultsJSON(task.ID)
 
-	secrets := executor.SecretValuesForRedaction()
+	secrets := o.secretValues()
 	roleInstructions := redact.String(task.ProfileSnapshot.Instructions, secrets)
 	instruction := redact.String(task.Instruction, secrets)
 	plan := redact.String(string(planRaw), secrets)

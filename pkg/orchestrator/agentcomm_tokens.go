@@ -66,6 +66,17 @@ func (s *meshTokenStore) revoke(token string) {
 	s.mu.Unlock()
 }
 
+// values returns every live token, for redaction (Orchestrator.secretValues).
+func (s *meshTokenStore) values() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.tokens))
+	for token := range s.tokens {
+		out = append(out, token)
+	}
+	return out
+}
+
 // ResolveMeshToken implements the agent-facing HTTP layer's identity check (T3.1): the server never trusts a
 // client-supplied participant id, only this lookup.
 func (o *Orchestrator) ResolveMeshToken(token string) (agentcomm.ParticipantID, bool) {

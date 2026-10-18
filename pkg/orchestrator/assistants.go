@@ -542,7 +542,7 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 	rs := o.opts.Store.Snapshot()
 	beforeReady := readyWaitSet(rs)
 	if to.Terminal() && hasParent {
-		if mirror, merr := childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
+		if mirror, merr := o.childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
 			log.Printf("WARN: assistants: child result mesh mirror (task=%s parent=%s): %v", taskID, parentID, merr)
 		} else if len(mirror) > 0 {
 			effects = append(effects, mirror...)

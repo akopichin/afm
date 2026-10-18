@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -47,6 +48,28 @@ func lifecycleRootDir(agentRootDir string) string {
 // project <afmRoot>/.afm/secrets.env.
 func loadHookSecretLayers(afmRoot string) (map[string]string, error) {
 	return docker.LoadSecretLayers("", afmRoot)
+}
+
+// minRedactedSecretLen skips secrets.env values too short to be credentials ("1", "true"): redacting them
+// would mangle ordinary text everywhere.
+const minRedactedSecretLen = 8
+
+// loadRedactionSecrets returns the secret values from the global and project secrets.env (or the configured
+// override) for redaction in mesh text, task context and logs. Best-effort: an unreadable file is reported,
+// not fatal — environment secrets are still redacted.
+func loadRedactionSecrets(afmRoot, override string) []string {
+	loaded, err := docker.LoadSecretLayers(override, afmRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: secrets.env not read for redaction: %v\n", err)
+		return nil
+	}
+	var values []string
+	for _, v := range loaded {
+		if len(v) >= minRedactedSecretLen {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 // resolveMemoryDir возвращает директорию памяти флоу: если память выключена — пустая строка, ничего дальше

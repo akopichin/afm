@@ -65,6 +65,7 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	sc.GraphActions = orch
 	sc.AgentMesh = agentMeshServerActions(orch)
 	sc.Mesh = meshServerActions(orch)
+	sc.RedactSecrets = orch.RedactSecrets
 	sc.ReviewState = orch.ReviewState
 	srv := server.New(sc)
 	addr, err := srv.Start()

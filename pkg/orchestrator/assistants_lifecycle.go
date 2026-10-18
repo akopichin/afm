@@ -15,7 +15,6 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/redact"
 )
 
 // helperAgentRunner is the subsituteable seam for one helper-agent turn — mirrors verifyAgentRunner.
@@ -265,7 +264,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			}
 			return
 		}
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, helperFailureReason(outcome.ProcessErr))
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
 		return
 	case outcome.ProtocolErr != nil:
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
@@ -366,12 +365,12 @@ const maxFailureReasonLen = 300
 
 // helperFailureReason is the failed task's reason: the process error when there is one (secrets redacted,
 // length-capped), so the dashboard says why the helper failed — not only that it did.
-func helperFailureReason(processErr error) string {
+func (o *Orchestrator) helperFailureReason(processErr error) string {
 	const prefix = "helper execution failed"
 	if processErr == nil {
 		return prefix
 	}
-	reason := []rune(prefix + ": " + redact.String(processErr.Error(), executor.SecretValuesForRedaction()))
+	reason := []rune(prefix + ": " + o.RedactSecrets(processErr.Error()))
 	if len(reason) > maxFailureReasonLen {
 		return string(reason[:maxFailureReasonLen-1]) + "…"
 	}

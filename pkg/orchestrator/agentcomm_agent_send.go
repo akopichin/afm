@@ -27,7 +27,7 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 	// the same alias, the conversation closed) — never re-resolving names or picking another thread. The same
 	// request id with a different message is a conflict, exactly like the store's own idempotency check.
 	if m, ok := rs.Assistants.Mesh.Messages[deriveMeshMessageID(req.OperationID)]; ok {
-		if !committedSendMatches(rs, roster, *m, req) {
+		if !committedSendMatches(rs, roster, *m, req, o.RedactSecrets(req.Body)) {
 			return SendReceipt{}, state.OperationIDConflictError(req.OperationID)
 		}
 		return SendReceipt{MessageID: m.ID, Seq: m.Seq, ThreadID: m.ThreadID}, nil
@@ -71,11 +71,11 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 }
 
 // committedSendMatches reports whether m — the message already committed under req's request id — is the
-// message req asks to send: same sender, kind, body (as redacted at send time), reply target, artifacts,
+// message req asks to send: same sender, kind, body (redactedBody: req's body as redacted at send time), reply target, artifacts,
 // thread (when req names one) and recipients. Recipient names are resolved against m's own recipients, so an
 // alias that has since become ambiguous (a new agent with the same alias) still names whom it named then.
-func committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
-	if m.Sender != req.Sender || m.Kind != req.Kind || m.Body != redactMeshText(req.Body) ||
+func committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest, redactedBody string) bool {
+	if m.Sender != req.Sender || m.Kind != req.Kind || m.Body != redactedBody ||
 		!slices.Equal(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
 		return false
 	}

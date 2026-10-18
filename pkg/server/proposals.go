@@ -57,7 +57,7 @@ func (s *Server) routeStageProposals(w http.ResponseWriter, r *http.Request, sta
 	}
 	proposals, err := s.proposalActions.Proposals(stageID)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -129,7 +129,7 @@ func (s *Server) handleProposalAction(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
