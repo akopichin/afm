@@ -519,3 +519,67 @@
   box-shadow: 0 0 0 2px rgba(var(--attention-rgb), 0.28);
 }
 .feed-composer-send.paused { background: var(--attention); }
+
+/* === Agent Mesh Phase 7, T7.4 — Message/Revise mode toggle + Message mode's own subtree === Structural only,
+   same semantic tokens as the rest of this file; .feed-composer-send/.feed-reply-chip above are REUSED as-is
+   (Message mode's reply chip, below, is the SAME chip chrome Revise's reply-to-thought already uses). */
+.feed-composer-modes {
+  display: flex;
+  gap: 4px;
+}
+.feed-composer-mode {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.feed-composer-mode:hover { background: var(--surface-hover); color: var(--text-secondary); }
+.feed-composer-mode.active { background: var(--surface-hover); color: var(--text-primary); font-weight: 600; }
+.feed-composer-mode:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+.feed-composer-send-label { font-size: 13px; padding: 0 4px; }
+
+.mesh-message-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mesh-message-row { position: relative; }
+.mesh-message-textarea { flex: 1 1 auto; }
+
+.mesh-message-thread {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mesh-message-thread-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+.mesh-message-thread-sender { flex-shrink: 0; color: var(--text-muted); }
+.mesh-message-thread-body { flex: 1; min-width: 0; color: var(--text-secondary); word-break: break-word; }
+.mesh-message-thread-reply {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-primary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.mesh-message-error { color: var(--danger); font-size: 12px; }
+.mesh-message-receipt { color: var(--text-muted); font-size: 11px; }

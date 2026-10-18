@@ -29,3 +29,23 @@ export function filterMentionProfiles<T extends { id: string; title: string }>(p
   const q = query.toLowerCase()
   return profiles.filter((p) => p.id.toLowerCase().includes(q) || p.title.toLowerCase().includes(q))
 }
+
+// MentionGroup — a labeled section of mention candidates. The feed composer's `@` menu (dev-plan.md T7.4)
+// needs several sections ("This run" / "This stage" / "Attach to stage"); the side-agent composer keeps using
+// one unlabeled group (AssistantMentionMenu wraps filterMentionProfiles directly, unchanged).
+export type MentionGroup<T extends { id: string; title: string }> = {
+  label: string
+  items: T[]
+}
+
+// filterMentionGroups applies filterMentionProfiles to each group independently and drops any group the query
+// leaves empty, so a narrowing query can make a whole section (e.g. "Attach to stage") disappear instead of
+// rendering an empty heading.
+export function filterMentionGroups<T extends { id: string; title: string }>(
+  groups: MentionGroup<T>[],
+  query: string,
+): MentionGroup<T>[] {
+  return groups
+    .map((g) => ({ label: g.label, items: filterMentionProfiles(g.items, query) }))
+    .filter((g) => g.items.length > 0)
+}

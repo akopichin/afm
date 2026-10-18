@@ -1,6 +1,38 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
 import { buildReplyBody } from '../../lib/quote'
+import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
+import { useCaretInsert } from '../../hooks/use-caret-insert'
+import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
+import { MentionMenu } from '../assistants/AssistantMentionMenu'
+import { detectMentionTrigger, filterMentionGroups } from '../assistants/mention-match'
+import {
+  attachAndSendMesh,
+  genMeshRequestId,
+  openMeshThread,
+  sendMeshMessage,
+  type MeshMessage,
+} from '../../api/mesh-client'
+import { buildMeshMentionGroups, findExistingDirectThread, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
+import { computeReceiptPhase, RECEIPT_LABEL } from './mesh-receipt'
+import type { AssistantProfile } from '../../types/assistant-profile'
+import type { Stage } from '../../types'
+
+// FeedComposerMeshProps (Agent Mesh Phase 7, T7.4) — when provided, the composer gains a Message/Revise mode
+// toggle; the Message tab addresses the shared mesh (participants + attach-to-stage profiles) instead of the
+// EXISTING note-to-agent path below. When omitted (every call site before T7.4, and every pre-existing test),
+// the composer behaves EXACTLY as before: no tabs, the single Revise-equivalent note field, unchanged DOM.
+export type FeedComposerMeshProps = {
+  // roster — the SAME useMeshRoster poll App.tsx already owns, passed down (no second poller here).
+  roster: MeshRoster
+  // profiles — configured helper roles, for the "Attach to stage" mention group. Same useAssistantProfiles
+  // poll App.tsx already owns.
+  profiles: AssistantProfile[]
+  // stages — for looking up a mentioned participant's OWN stage status (Paused · waiting for Continue).
+  stages: Stage[]
+}
+
+type ComposerMode = 'message' | 'revise'
 
 type FeedComposerProps = {
   // Стадия, живому агенту которой уйдёт заметка.
@@ -32,10 +64,13 @@ type FeedComposerProps = {
   onBlur?: (hasDraft: boolean) => void
   // «Resume now» на баннере — снять паузу немедленно, не отправляя заметку.
   onResumeNow?: () => void
+  // mesh (T7.4) — см. FeedComposerMeshProps. undefined → ЛЕГАСИ-поведение, один режим, без табов.
+  mesh?: FeedComposerMeshProps
 }
 
-// FeedComposer — messenger-поле ввода заметки живому агенту, прибитое к низу ленты. Доставка идёт через
-// существующий Revise (graceful-пауза + feedback.md) — сам вызов задаёт FeedWorkspace/App.
+// FeedComposer — messenger-поле ввода внизу ленты. Без mesh — ровно сегодняшнее поведение: заметка живому
+// агенту идёт через существующий Revise (graceful-пауза + feedback.md). С mesh (T7.4) добавляется отдельный
+// режим Message, адресующий общий mesh напрямую — это ДРУГОЙ путь доставки, Revise он не трогает.
 export function FeedComposer({
   stageId,
   onSend,
@@ -49,7 +84,9 @@ export function FeedComposer({
   onFocus,
   onBlur,
   onResumeNow,
+  mesh,
 }: FeedComposerProps): ReactElement {
+  const [mode, setMode] = useState<ComposerMode>('revise')
   const [value, setValue] = useState('')
   const [sending, setSending] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -87,75 +124,362 @@ export function FeedComposer({
 
   return (
     <div className="feed-composer" ref={rootRef}>
-      {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
-          line-comment цитаты (левый акцент + приглушённый исходник, кламп 2
-          строки). ✕ снимает цитату. */}
-      {replyQuote !== null && (
-        <div className="feed-reply-chip">
-          <span className="feed-reply-chip-label">↩ In reply to</span>
-          <span className="feed-reply-chip-src">{replyQuote}</span>
+      {mesh !== undefined && (
+        <div className="feed-composer-modes" role="tablist" aria-label="Composer mode">
           <button
             type="button"
-            className="feed-reply-chip-cancel"
-            aria-label="Cancel reply to thought"
-            onClick={onCancelReply}
+            role="tab"
+            aria-selected={mode === 'message'}
+            className={`feed-composer-mode${mode === 'message' ? ' active' : ''}`}
+            onClick={() => setMode('message')}
           >
+            Message
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'revise'}
+            className={`feed-composer-mode${mode === 'revise' ? ' active' : ''}`}
+            onClick={() => setMode('revise')}
+          >
+            Revise
+          </button>
+        </div>
+      )}
+
+      {mesh !== undefined && mode === 'message' ? (
+        <MeshMessageComposer stageId={stageId} mesh={mesh} />
+      ) : (
+        <>
+          {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
+              line-comment цитаты (левый акцент + приглушённый исходник, кламп 2
+              строки). ✕ снимает цитату. */}
+          {replyQuote !== null && (
+            <div className="feed-reply-chip">
+              <span className="feed-reply-chip-label">↩ In reply to</span>
+              <span className="feed-reply-chip-src">{replyQuote}</span>
+              <button
+                type="button"
+                className="feed-reply-chip-cancel"
+                aria-label="Cancel reply to thought"
+                onClick={onCancelReply}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {/* Полоса опций над строкой ввода: тумблер с подписью, прижат вправо. */}
+          {onTogglePauseOnFocus !== undefined && (
+            <div className="composer-opts">
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={pauseOnFocusEnabled}
+                  onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
+                />
+                <span className="track" aria-hidden="true" />
+                <span className="switch-label">Hold the agent while you type</span>
+              </label>
+            </div>
+          )}
+          {/* Янтарный баннер: стадия на паузе, снимется на отправке (или «Resume now»). */}
+          {paused && (
+            <div className="pause-banner" role="status">
+              <span className="pause-banner-icon" aria-hidden="true">⏸</span>
+              <span className="pause-banner-text">Stage paused. The agent is on hold — it'll resume when you send.</span>
+              <button type="button" className="pause-banner-resume" onClick={onResumeNow}>
+                Resume now
+              </button>
+            </div>
+          )}
+          <div className={`feed-composer-row${paused ? ' focused' : ''}`}>
+            <PasteableTextarea
+              stageId={stageId}
+              className="feed-composer-textarea"
+              value={value}
+              onChange={setValue}
+              placeholder="Note to agent…"
+              allowFileReferences
+              attachInline
+              rows={1}
+              onSubmit={() => void submit()}
+              onFocus={onFocus}
+              onBlur={() => onBlur?.(value.trim() !== '')}
+              maxHeight={200}
+            />
+            <button
+              type="button"
+              className={`feed-composer-send${paused ? ' paused' : ''}`}
+              aria-label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
+              disabled={empty || sending}
+              onClick={() => void submit()}
+            >
+              {mesh !== undefined ? (
+                <span className="feed-composer-send-label">Apply Revise</span>
+              ) : (
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 2 11 13" />
+                  <path d="M22 2 15 22l-4-9-9-4 20-7Z" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+const MAX_MESSAGE_TEXTAREA_HEIGHT = 200
+
+type MeshMessageComposerProps = {
+  stageId: string
+  mesh: FeedComposerMeshProps
+}
+
+// targetKey — a stable string identity for a MeshMentionTarget, used as a dependency/reset key: switching
+// target must drop whatever thread/reply state the PREVIOUS target had, even though 'participant'/'profile'
+// carry different fields.
+function targetKey(target: MeshMentionTarget | null): string {
+  if (target === null) return ''
+  return target.kind === 'participant' ? `participant:${target.id}` : `profile:${target.profileId}`
+}
+
+// MeshMessageComposer — Message mode's own subtree (Agent Mesh Phase 7, T7.4): `@`-mention a recipient
+// (reusing the shared MentionMenu popup — mesh-recipients.ts's grouped items, not a second filtering scheme),
+// then Send addresses the mesh directly: an existing participant's thread (opening a NEW one the first time,
+// per findExistingDirectThread's own "never widen a private thread" rule) or, for an "Attach to stage" pick,
+// the T6.2 attachAndSendMesh composite. Free text here NEVER reaches the Revise/onSend path above — the two
+// modes share a stageId and nothing else.
+function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): ReactElement {
+  const [draft, setDraft] = useState('')
+  const [target, setTarget] = useState<MeshMentionTarget | null>(null)
+  const [openedThreadId, setOpenedThreadId] = useState<string | null>(null)
+  const [replyTo, setReplyTo] = useState<{ messageId: string; preview: string } | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
+  // lastSend — the most recent send's receipt-tracking state: set (messageId: null) the instant Send fires,
+  // filled in once the request resolves. null participantId before resolution (an "Attach to stage" pick only
+  // learns the real participant id from the response) is fine — computeReceiptPhase's inFlight branch never
+  // looks at it.
+  const [lastSend, setLastSend] = useState<{ participantId: string; threadId: string; messageId: string | null } | null>(null)
+  const [sending, setSending] = useState(false)
+
+  const [mention, setMention] = useState<ReturnType<typeof detectMentionTrigger>>(null)
+  const [highlightIndex, setHighlightIndex] = useState(0)
+
+  const autoGrowRef = useAutoGrowTextarea(draft, MAX_MESSAGE_TEXTAREA_HEIGHT)
+  const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const setRefs = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      textareaRef.current = node
+      caretNodeRef.current = node
+      autoGrowRef(node)
+    },
+    [autoGrowRef, caretNodeRef],
+  )
+
+  const groups = useMemo(
+    () => buildMeshMentionGroups(mesh.roster.participants, mesh.profiles, stageId),
+    [mesh.roster.participants, mesh.profiles, stageId],
+  )
+  const matchGroups = mention !== null ? filterMentionGroups(groups, mention.query) : []
+  const flatMatches = useMemo(() => matchGroups.flatMap((g) => g.items), [matchGroups])
+  const menuOpen = flatMatches.length > 0
+
+  // Switching target drops whatever thread/reply context the previous one carried — addressing someone new
+  // never inherits an unrelated open conversation.
+  const key = targetKey(target)
+  useEffect(() => {
+    if (target?.kind === 'participant') {
+      setOpenedThreadId(findExistingDirectThread(mesh.roster.threads, target.id)?.id ?? null)
+    } else {
+      setOpenedThreadId(null)
+    }
+    setReplyTo(null)
+    setSendError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key IS the target identity; mesh.roster.threads
+    // intentionally excluded so a later poll tick doesn't silently re-pick a thread mid-compose.
+  }, [key])
+
+  const threadMessages = useMeshThread(openedThreadId)
+
+  function selectMention(item: MeshMentionItem): void {
+    if (mention === null) return
+    const end = mention.start + 1 + mention.query.length
+    replaceRange(mention.start, end, `@${item.id} `)
+    setTarget(item.target)
+    setMention(null)
+  }
+
+  function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
+    const v = e.target.value
+    setDraft(v)
+    const caret = e.target.selectionStart ?? v.length
+    setMention(detectMentionTrigger(v, caret))
+    setHighlightIndex(0)
+  }
+
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setHighlightIndex((i) => (i + 1) % flatMatches.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setHighlightIndex((i) => (i - 1 + flatMatches.length) % flatMatches.length)
+        return
+      }
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+        e.preventDefault()
+        const item = flatMatches[highlightIndex]
+        if (item !== undefined) selectMention(item)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setMention(null)
+        return
+      }
+    }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      void submit()
+    }
+  }
+
+  async function submit(): Promise<void> {
+    const text = draft.trim()
+    if (text === '' || sending || target === null) return
+    setSending(true)
+    setSendError(null)
+    try {
+      if (target.kind === 'profile') {
+        setLastSend({ participantId: '', threadId: openedThreadId ?? '', messageId: null })
+        const result = await attachAndSendMesh({
+          requestId: genMeshRequestId('mesh-feed-attach'),
+          profileId: target.profileId,
+          scope: 'stage',
+          stageId,
+          firstMessage: text,
+        })
+        setOpenedThreadId(result.thread_id)
+        setLastSend({ participantId: result.participant_id, threadId: result.thread_id, messageId: result.message_id ?? null })
+      } else {
+        let threadId = openedThreadId
+        setLastSend({ participantId: target.id, threadId: threadId ?? '', messageId: null })
+        if (threadId === null) {
+          const thread = await openMeshThread({
+            requestId: genMeshRequestId('mesh-feed-open'),
+            title: '',
+            scope: target.scope,
+            memberIds: [target.id],
+          })
+          threadId = thread.id
+          setOpenedThreadId(thread.id)
+        }
+        const receipt = await sendMeshMessage(threadId, {
+          requestId: genMeshRequestId('mesh-feed-send'),
+          recipientIds: [target.id],
+          inReplyTo: replyTo?.messageId,
+          body: text,
+        })
+        setLastSend({ participantId: target.id, threadId, messageId: receipt.message_id })
+      }
+      setDraft('')
+      setReplyTo(null)
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'request failed')
+      setLastSend(null)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const liveParticipant = lastSend === null ? undefined : mesh.roster.participants.find((p) => p.id === lastSend.participantId)
+  const stagePaused =
+    liveParticipant?.stage_id !== undefined && mesh.stages.find((s) => s.id === liveParticipant.stage_id)?.status === 'paused'
+  const answered = lastSend !== null && lastSend.messageId !== null && threadMessages.some((m) => m.in_reply_to === lastSend.messageId)
+  const receiptPhase =
+    lastSend === null
+      ? null
+      : computeReceiptPhase({
+          participant: liveParticipant,
+          stagePaused,
+          answered,
+          inFlight: lastSend.messageId === null,
+        })
+
+  const empty = draft.trim() === '' || target === null
+
+  return (
+    <div className="mesh-message-composer">
+      {openedThreadId !== null && threadMessages.length > 0 && (
+        <ul className="mesh-message-thread" aria-label="Conversation">
+          {threadMessages.map((m: MeshMessage) => (
+            <li key={m.id} className="mesh-message-thread-item">
+              <span className="mesh-message-thread-sender">{m.sender_id === 'user' ? 'You' : m.sender_id}</span>
+              <span className="mesh-message-thread-body">{m.body}</span>
+              <button
+                type="button"
+                className="mesh-message-thread-reply"
+                onClick={() => setReplyTo({ messageId: m.id, preview: m.body.slice(0, 120) })}
+              >
+                Reply
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {replyTo !== null && (
+        <div className="feed-reply-chip">
+          <span className="feed-reply-chip-label">↩ Reply</span>
+          <span className="feed-reply-chip-src">{replyTo.preview}</span>
+          <button type="button" className="feed-reply-chip-cancel" aria-label="Cancel reply to message" onClick={() => setReplyTo(null)}>
             ✕
           </button>
         </div>
       )}
-      {/* Полоса опций над строкой ввода: тумблер с подписью, прижат вправо. */}
-      {onTogglePauseOnFocus !== undefined && (
-        <div className="composer-opts">
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={pauseOnFocusEnabled}
-              onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
-            />
-            <span className="track" aria-hidden="true" />
-            <span className="switch-label">Hold the agent while you type</span>
-          </label>
-        </div>
-      )}
-      {/* Янтарный баннер: стадия на паузе, снимется на отправке (или «Resume now»). */}
-      {paused && (
-        <div className="pause-banner" role="status">
-          <span className="pause-banner-icon" aria-hidden="true">⏸</span>
-          <span className="pause-banner-text">Stage paused. The agent is on hold — it'll resume when you send.</span>
-          <button type="button" className="pause-banner-resume" onClick={onResumeNow}>
-            Resume now
-          </button>
-        </div>
-      )}
-      <div className={`feed-composer-row${paused ? ' focused' : ''}`}>
-        <PasteableTextarea
-          stageId={stageId}
-          className="feed-composer-textarea"
-          value={value}
-          onChange={setValue}
-          placeholder="Note to agent…"
-          allowFileReferences
-          attachInline
+
+      <div className="feed-composer-row mesh-message-row">
+        <textarea
+          ref={setRefs}
+          className="feed-composer-textarea mesh-message-textarea"
+          value={draft}
+          onChange={handleChange}
+          onKeyDown={onKeyDown}
+          placeholder="Message someone… (@ to mention)"
+          aria-label="Message the mesh"
           rows={1}
-          onSubmit={() => void submit()}
-          onFocus={onFocus}
-          onBlur={() => onBlur?.(value.trim() !== '')}
-          maxHeight={200}
         />
-        <button
-          type="button"
-          className={`feed-composer-send${paused ? ' paused' : ''}`}
-          aria-label="Send note to agent"
-          disabled={empty || sending}
-          onClick={() => void submit()}
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M22 2 11 13" />
-            <path d="M22 2 15 22l-4-9-9-4 20-7Z" />
-          </svg>
+        {menuOpen && (
+          <MentionMenu
+            groups={matchGroups}
+            highlightIndex={highlightIndex}
+            onHover={setHighlightIndex}
+            onSelect={selectMention}
+            ariaLabel="Mention a mesh participant or profile"
+          />
+        )}
+        <button type="button" className="feed-composer-send" aria-label="Send message" disabled={empty || sending} onClick={() => void submit()}>
+          <span className="feed-composer-send-label">Send</span>
         </button>
       </div>
+
+      {sendError !== null && (
+        <div className="mesh-message-error" role="alert">
+          {sendError}
+        </div>
+      )}
+      {receiptPhase !== null && (
+        <div className="mesh-message-receipt" role="status">
+          {RECEIPT_LABEL[receiptPhase]}
+        </div>
+      )}
     </div>
   )
 }

@@ -782,6 +782,10 @@ describe('App', () => {
       }
         if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      // /api/mesh/* — capability off by default (see mockFetchForStatus's own comment): without this the
+      // generic catch-all below would make useMeshRoster misread this test as mesh-enabled and swap the
+      // Revise composer's "Send note to agent" button for the mesh-mode "Apply Revise" label.
+      if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
 
       return { ok: true, json: async () => [] } as Response
     })
@@ -1442,6 +1446,8 @@ describe('App', () => {
       }
       if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      // /api/mesh/* — capability off by default (see mockFetchForStatus's own comment).
+      if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
       return { ok: true, json: async () => [] } as Response
     })
 
@@ -1678,6 +1684,8 @@ describe('App', () => {
       if (method === 'POST' && url.includes('/revise')) { posts.push('revise'); return { ok: true, json: async () => ({}) } as Response }
       if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      // /api/mesh/* — capability off by default (see mockFetchForStatus's own comment).
+      if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
       return { ok: true, json: async () => [] } as Response
     })
 
@@ -1740,6 +1748,8 @@ describe('App', () => {
       if (method === 'POST' && url.includes('/revise')) { posts.push('revise'); return { ok: true, json: async () => ({}) } as Response }
       if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      // /api/mesh/* — capability off by default (see mockFetchForStatus's own comment).
+      if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
       return { ok: true, json: async () => [] } as Response
     })
 

@@ -4,7 +4,7 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
 import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
-import { FeedComposer } from './FeedComposer'
+import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
@@ -27,6 +27,9 @@ type FeedWorkspaceProps = {
   // не показываем.
   noteTarget?: string | null
   onSendNote?: (stageId: string, text: string) => Promise<void>
+  // mesh (Agent Mesh Phase 7, T7.4) — проброс в FeedComposer как есть. undefined → легаси-поведение, без
+  // Message/Revise табов (см. FeedComposer.tsx).
+  mesh?: FeedComposerMeshProps
   // --- Pause on focus — сквозной проброс в FeedComposer (стейт живёт в App). ---
   pauseOnFocusEnabled?: boolean
   onTogglePauseOnFocus?: (v: boolean) => void
@@ -70,6 +73,7 @@ export function FeedWorkspace({
   onComposerResumeNow,
   systemAuthorLabel = 'Flow',
   imagePolicy = 'stage',
+  mesh,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
 
@@ -151,6 +155,7 @@ export function FeedWorkspace({
           onFocus={onComposerFocus}
           onBlur={onComposerBlur}
           onResumeNow={onComposerResumeNow}
+          mesh={mesh}
         />
       )}
     </section>

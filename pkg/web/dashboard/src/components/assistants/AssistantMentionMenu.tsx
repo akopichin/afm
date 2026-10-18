@@ -1,6 +1,94 @@
 import type { ReactElement } from 'react'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
+// MentionItem — the minimum shape the shared popup (MentionMenu) needs to render one option: an id/title pair
+// plus an optional "why this can't be used" marker. mention-match.ts's MentionGroup<T> is keyed on the same
+// {id, title} shape, so any T satisfying both can flow straight through filterMentionProfiles/
+// filterMentionGroups into this component without a second adapter layer.
+export type MentionItem = {
+  id: string
+  title: string
+  unavailable?: boolean
+  unavailableReason?: string
+}
+
+export type MentionGroup<T extends MentionItem> = {
+  // label — a section heading ("This run" / "This stage" / "Attach to stage", dev-plan.md T7.4). Empty
+  // string renders no heading row at all.
+  label: string
+  items: T[]
+}
+
+export type MentionMenuProps<T extends MentionItem> = {
+  groups: MentionGroup<T>[]
+  // highlightIndex — a FLAT index across every item in every group, in render order. Callers already reduce
+  // their matches to one flat array for keyboard Up/Down (see SideAgentComposer/FeedComposer), so this
+  // component only needs to know which position in that same order is active.
+  highlightIndex: number
+  onHover: (index: number) => void
+  onSelect: (item: T) => void
+  ariaLabel: string
+}
+
+// MentionMenu — the ONE `@mention` suggestion popup (dev-plan.md T4.2, lifted into a shared primitive by
+// T7.4): the side agent's own AssistantMentionMenu below wraps it with a single unlabeled group, and the feed
+// composer's mesh mention menu (mesh-recipients.ts) passes several labeled groups straight through. Rendering
+// lives here ONCE — no second popup component.
+export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onHover, onSelect, ariaLabel }: MentionMenuProps<T>): ReactElement | null {
+  const total = groups.reduce((n, g) => n + g.items.length, 0)
+  if (total === 0) return null
+
+  let cursor = -1
+  return (
+    <ul className="assistant-mention-menu" role="listbox" aria-label={ariaLabel}>
+      {groups.flatMap((group) => {
+        const rows: ReactElement[] = []
+        if (group.label !== '') {
+          rows.push(
+            <li key={`${group.label}__hdr`} className="assistant-mention-group-label" role="presentation">
+              {group.label}
+            </li>,
+          )
+        }
+        for (const item of group.items) {
+          cursor += 1
+          const index = cursor
+          rows.push(
+            <li
+              key={item.id}
+              role="option"
+              aria-selected={index === highlightIndex}
+              className={`assistant-mention-item${index === highlightIndex ? ' active' : ''}`}
+            >
+              <button
+                type="button"
+                className="assistant-mention-option"
+                onMouseEnter={() => onHover(index)}
+                // onMouseDown (not onClick): the textarea's blur would otherwise fire first on a click
+                // sequence in some browsers, but preventDefault here keeps focus in the textarea so the caret
+                // position this selection relies on stays valid.
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  onSelect(item)
+                }}
+              >
+                <span className="assistant-mention-id">@{item.id}</span>
+                <span className="assistant-mention-title">{item.title}</span>
+                {item.unavailable === true && (
+                  <span className="assistant-mention-unavailable" title={item.unavailableReason}>
+                    Unavailable
+                  </span>
+                )}
+              </button>
+            </li>,
+          )
+        }
+        return rows
+      })}
+    </ul>
+  )
+}
+
 export type AssistantMentionMenuProps = {
   // profiles — already filtered by the caller (mention-match's filterMentionProfiles); this component only
   // renders and dispatches selection/hover, it does not know about the query text.
@@ -10,42 +98,22 @@ export type AssistantMentionMenuProps = {
   onSelect: (profile: AssistantProfile) => void
 }
 
-// AssistantMentionMenu — the `@mention` suggestion popup under the side-agent composer (dev-plan.md T4.2). A
-// mention always addresses a ROLE (profile), never a running task instance — see pkg/assistants.Registry.Resolve's
-// doc comment; addressing an already-running task is a separate mechanism (task_id, T4.7).
+// AssistantMentionMenu — the side agent's own `@mention` popup (dev-plan.md T4.2): a thin, single-group
+// instantiation of the shared MentionMenu above. A mention always addresses a ROLE (profile), never a running
+// task instance — see pkg/assistants.Registry.Resolve's doc comment; addressing an already-running task is a
+// separate mechanism (task_id, T4.7).
 export function AssistantMentionMenu({ profiles, highlightIndex, onHover, onSelect }: AssistantMentionMenuProps): ReactElement | null {
-  if (profiles.length === 0) return null
+  const items = profiles.map((p) => ({ ...p, unavailable: !p.available, unavailableReason: p.unavailableReason }))
   return (
-    <ul className="assistant-mention-menu" role="listbox" aria-label="Mention an assistant profile">
-      {profiles.map((p, i) => (
-        <li
-          key={p.id}
-          role="option"
-          aria-selected={i === highlightIndex}
-          className={`assistant-mention-item${i === highlightIndex ? ' active' : ''}`}
-        >
-          <button
-            type="button"
-            className="assistant-mention-option"
-            onMouseEnter={() => onHover(i)}
-            // onMouseDown (not onClick): the textarea's blur would otherwise fire first on a click sequence
-            // in some browsers, but preventDefault here keeps focus in the textarea so the caret position
-            // this selection relies on stays valid.
-            onMouseDown={(e) => {
-              e.preventDefault()
-              onSelect(p)
-            }}
-          >
-            <span className="assistant-mention-id">@{p.id}</span>
-            <span className="assistant-mention-title">{p.title}</span>
-            {!p.available && (
-              <span className="assistant-mention-unavailable" title={p.unavailableReason}>
-                Unavailable
-              </span>
-            )}
-          </button>
-        </li>
-      ))}
-    </ul>
+    <MentionMenu
+      groups={[{ label: '', items }]}
+      highlightIndex={highlightIndex}
+      onHover={onHover}
+      onSelect={(item) => {
+        const original = profiles.find((p) => p.id === item.id)
+        if (original !== undefined) onSelect(original)
+      }}
+      ariaLabel="Mention an assistant profile"
+    />
   )
 }

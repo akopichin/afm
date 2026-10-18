@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMentionTrigger, filterMentionProfiles } from './mention-match'
+import { detectMentionTrigger, filterMentionGroups, filterMentionProfiles } from './mention-match'
 
 describe('detectMentionTrigger', () => {
   it('detects an in-progress mention right after @', () => {
@@ -47,5 +47,26 @@ describe('filterMentionProfiles', () => {
 
   it('returns nothing when nothing matches', () => {
     expect(filterMentionProfiles(profiles, 'zzz')).toHaveLength(0)
+  })
+})
+
+describe('filterMentionGroups', () => {
+  const groups = [
+    { label: 'This run', items: [{ id: 'run:qa', title: 'QA reviewer' }] },
+    { label: 'This stage', items: [{ id: 'stage:s1', title: 'Stage agent' }] },
+    { label: 'Attach to stage', items: [{ id: 'frontendDeveloper', title: 'Frontend reviewer' }] },
+  ]
+
+  it('returns every non-empty group for an empty query', () => {
+    expect(filterMentionGroups(groups, '')).toEqual(groups)
+  })
+
+  it('filters each group independently and drops groups left empty', () => {
+    const result = filterMentionGroups(groups, 'frontend')
+    expect(result).toEqual([{ label: 'Attach to stage', items: [{ id: 'frontendDeveloper', title: 'Frontend reviewer' }] }])
+  })
+
+  it('returns an empty array when nothing matches in any group', () => {
+    expect(filterMentionGroups(groups, 'zzz')).toEqual([])
   })
 })

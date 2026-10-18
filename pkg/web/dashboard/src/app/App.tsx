@@ -583,6 +583,10 @@ export function App(): ReactElement {
                     onComposerResumeNow={() =>
                       workspaceStage !== null && pauseOnFocus.resumeNow(workspaceStage.id)
                     }
+                    // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team
+                    // (meshRoster.enabled mirrors TeamView's own capability gate: no tab/toggle until the
+                    // first roster probe confirms the capability is actually on).
+                    mesh={meshRoster.enabled ? { roster: meshRoster, profiles: assistantProfiles, stages } : undefined}
                   />
                 ) : wsState.view === 'assistant' ? (
                   <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
