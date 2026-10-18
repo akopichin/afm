@@ -1,4 +1,4 @@
-import { useId, useState, type ReactElement } from 'react'
+import { useId, useState, type ReactElement, type SetStateAction } from 'react'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
@@ -50,6 +50,11 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   // on poll, so this needs no effect and is correct the instant the roster catches up.
   const [localThreads, setLocalThreads] = useState<MeshThread[]>([])
   const [localParticipants, setLocalParticipants] = useState<MeshParticipant[]>([])
+  // drafts — each conversation's unsent text by targetKey. Kept here, above the keyed <ThreadConversation>,
+  // because a direct conversation's first send remounts it under its new thread's key (handleThreadOpened
+  // moves the draft along), and text typed while that send was in flight must not be lost.
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const activeKey = targetKey(activeConversation)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createTopic, setCreateTopic] = useState('')
@@ -59,7 +64,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   // createSubmitter — a retry of the same form reuses its request id (a lost response must not produce a
   // second thread). Fenced by the selection: a creation that finishes after the user picked another
   // conversation does not switch away from it.
-  const createSubmitter = useRetryableSubmit<{ title: string; memberIds: string[] }>('mesh-conversation', targetKey(activeConversation))
+  const createSubmitter = useRetryableSubmit<{ title: string; memberIds: string[] }>('mesh-conversation', activeKey)
 
   const threads = mergeById(roster.threads, localThreads)
   const participants = mergeById(roster.participants, localParticipants)
@@ -76,9 +81,21 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
     setLocalThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))
   }
 
-  function handleThreadOpened(thread: MeshThread): void {
+  function setActiveDraft(action: SetStateAction<string>): void {
+    setDrafts((prev) => ({ ...prev, [activeKey]: typeof action === 'function' ? action(prev[activeKey] ?? '') : action }))
+  }
+
+  function openThread(thread: MeshThread): void {
     rememberThread(thread)
     setActiveConversation({ kind: 'thread', thread })
+  }
+
+  // handleThreadOpened — the selected direct conversation's first send opened this thread: the conversation
+  // continues there, and what is left of its draft moves along with it.
+  function handleThreadOpened(thread: MeshThread): void {
+    const threadKey = targetKey({ kind: 'thread', thread })
+    setDrafts(({ [activeKey]: carried = '', ...rest }) => ({ ...rest, [threadKey]: carried }))
+    openThread(thread)
   }
 
   function handleSelectThread(t: MeshThread): void {
@@ -215,16 +232,19 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
             {createOpen && (
               <div className="team-create-conversation">
                 <div className="team-create-conversation-form">
+                  {/* The fields are locked while the conversation is being created: a success resets the form,
+                      so anything typed meanwhile would be lost. */}
                   <label className="team-create-conversation-topic">
                     <span>Topic</span>
                     <input
                       type="text"
                       value={createTopic}
+                      disabled={createSubmitter.pending}
                       onChange={(e) => setCreateTopic(e.target.value)}
                       placeholder="What is this about?"
                     />
                   </label>
-                  <fieldset className="team-create-conversation-participants">
+                  <fieldset className="team-create-conversation-participants" disabled={createSubmitter.pending}>
                     <legend>Participants</legend>
                     {addressable.length === 0 ? (
                       <p className="empty-hint">No one to add yet</p>
@@ -265,8 +285,10 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
               </div>
             )}
             <ThreadConversation
-              key={targetKey(activeConversation)}
+              key={activeKey}
               target={activeConversation}
+              draft={drafts[activeKey] ?? ''}
+              onDraftChange={setActiveDraft}
               participants={participants}
               threads={threads}
               onThreadOpened={handleThreadOpened}
@@ -295,7 +317,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
               ...prev,
               { id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true },
             ])
-            handleThreadOpened({ id: result.thread_id, title: name, scope: 'run', members: ['user', result.participant_id], status: 'open' })
+            openThread({ id: result.thread_id, title: name, scope: 'run', members: ['user', result.participant_id], status: 'open' })
             setTab('messages')
           }}
           onCancel={() => setAddRunAgentOpen(false)}

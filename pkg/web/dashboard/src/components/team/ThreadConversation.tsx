@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
 import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
@@ -33,6 +33,11 @@ export type ThreadConversationProps = {
   // threads — the latest known threads. A direct target re-checks them when SENDING, not only when the person
   // was clicked: the roster poll may learn about an existing direct thread after the click.
   threads?: MeshThread[]
+  // draft / onDraftChange — the composer's text, when the parent keeps it. TeamView does, so that text typed
+  // while the first message of a direct conversation is sending survives the remount onThreadOpened causes.
+  // Without them the component keeps its own draft.
+  draft?: string
+  onDraftChange?: Dispatch<SetStateAction<string>>
 }
 
 // targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
@@ -113,9 +118,12 @@ function routeAll(target: ThreadConversationTarget, label: string): string {
   return target.kind === 'direct' ? label : 'Everyone in this conversation'
 }
 
-export function ThreadConversation({ target, onThreadOpened, onThreadCreated, participants = [], threads = [] }: ThreadConversationProps): ReactElement {
+export function ThreadConversation(props: ThreadConversationProps): ReactElement {
+  const { target, onThreadOpened, onThreadCreated, participants = [], threads = [] } = props
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
-  const [draft, setDraft] = useState('')
+  const [ownDraft, setOwnDraft] = useState('')
+  const draft = props.draft ?? ownDraft
+  const setDraft = props.onDraftChange ?? setOwnDraft
   // submitter — sends with a request id that a retry of the SAME message reuses; this component remounts per
   // conversation (see targetKey), so a late response is fenced out by unmount alone.
   const submitter = useRetryableSubmit<{ recipientIds: string[]; body: string }>('mesh-send')
@@ -198,11 +206,13 @@ export function ThreadConversation({ target, onThreadOpened, onThreadCreated, pa
         const thread = await ensureThread(current)
         setOpenedThread(thread)
         await sendMeshMessage(thread.id, { requestId, recipientIds: [...p.recipientIds], body: p.body })
+        // Here rather than in onSuccess: a draft kept by the parent outlives this conversation view, and a
+        // message that was sent must not wait there to be sent again after the user switched away and back.
+        setDraft((cur) => removeSubmittedText(cur, submitted))
         return thread
       },
       {
         onSuccess: (thread) => {
-          setDraft((cur) => removeSubmittedText(cur, submitted))
           // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
           // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
           // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
