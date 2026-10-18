@@ -28,14 +28,20 @@ import (
 const (
 	afmSecretEnvPrefix    = "AFM_SECRET_"    //nolint:gosec // это имя переменной окружения, а не сам секрет
 	afmSyspromptEnvPrefix = "AFM_SYSPROMPT_" //nolint:gosec // аналогично
+	// afmMeshTokenEnv is the bare env var name the Docker transport uses for the mesh bearer token (Agent
+	// Mesh Phase 3, T3.3) — mirrors AFM_BROWSER_TRANSPORT_TOKEN. The host path never sets this literal
+	// variable (the token lives only in the AFM_MESH_DESCRIPTOR file there); Docker needs it because the
+	// descriptor file itself is minted on the host, outside the container's filesystem.
+	afmMeshTokenEnv = "AFM_MESH_TOKEN" //nolint:gosec // env var name, not the secret value
 )
 
-// IsCrossAgentTransportSecret определяет секреты AFM_SECRET_*, AFM_HOOK_SECRET_* и AFM_SYSPROMPT_* для
-// фильтрации verify-окружения.
+// IsCrossAgentTransportSecret определяет секреты AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_* и
+// AFM_MESH_TOKEN для фильтрации verify-окружения.
 func IsCrossAgentTransportSecret(kv string) bool {
 	return strings.HasPrefix(kv, afmSecretEnvPrefix) ||
 		strings.HasPrefix(kv, afmSyspromptEnvPrefix) ||
-		strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix)
+		strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix) ||
+		strings.HasPrefix(kv, afmMeshTokenEnv+"=")
 }
 
 // afmSecretEnvName воспроизводит ТОТ ЖЕ transform, что pkg/docker/wrapper.go's envName делает над именем
@@ -117,6 +123,11 @@ type Config struct {
 	// BrowserMCP, if set, injects the managed Chrome DevTools MCP for this author runner: a per-invocation
 	// descriptor file + --mcp-config, plus the non-secret AFM_BROWSER_* env.
 	BrowserMCP *BrowserMCP
+	// MeshClient, if set, injects the Agent Mesh capability for this author runner (Agent Mesh Phase 3,
+	// T3.3): a freshly-minted per-invocation bearer token in a 0600 descriptor file, referenced by the
+	// non-secret AFM_MESH_DESCRIPTOR env var. nil means this invocation gets no mesh descriptor at all
+	// (verify agents, JSON-fix agents, memory-pipeline agents and lifecycle hooks never set it).
+	MeshClient *MeshClient
 	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
 	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
 	runMode RunMode
@@ -867,6 +878,8 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 			// always strip inherited; re-added by caller only if mode.isolated()
 		case IsBrowserTransportEnv(kv):
 			// Strip AFM_BROWSER_* from all children; only author runners re-add non-secret browser vars.
+		case IsMeshTransportEnv(kv):
+			// Strip AFM_MESH_* from all children; only author runners with a MeshClient re-add it below.
 		case mode.isolated() && isVerifierOwnSecret(kv, e.cfg.Command):
 			// D2b: the verifier's/helper's OWN secret (AFM_SECRET_<command>) survives.
 			filtered = append(filtered, kv)
@@ -917,6 +930,16 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		args = append(args, bargs...)
 		browserEnv = benv
 	}
+	// Agent Mesh capability (author runners only; never in VerifyMode) — mirrors the browser block above.
+	var meshEnv []string
+	if e.cfg.MeshClient != nil && !e.cfg.VerifyMode {
+		menv, cleanup, merr := e.setupMeshDescriptor()
+		if merr != nil {
+			return fmt.Errorf("mesh descriptor setup: %w", merr)
+		}
+		defer cleanup()
+		meshEnv = menv
+	}
 	// Resolve the command via WrapperDir before exec.
 	cmdPath := e.cfg.Command
 	if e.cfg.WrapperDir != "" {
@@ -946,9 +969,10 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		// scripts/codex-as-claude.sh) независимо от этого флага.
 		filtered = append(filtered, "CODEX_VERIFY=1")
 	}
-	// Re-add only the non-secret browser env for author runners (the token lives
-	// solely in the 0600 descriptor file referenced by AFM_BROWSER_DESCRIPTOR).
+	// Re-add only the non-secret browser/mesh env for author runners (the tokens live solely in their 0600
+	// descriptor files referenced by AFM_BROWSER_DESCRIPTOR/AFM_MESH_DESCRIPTOR).
 	filtered = append(filtered, browserEnv...)
+	filtered = append(filtered, meshEnv...)
 	if e.cfg.WrapperDir != "" {
 		pathSet := false
 		for i, kv := range filtered {

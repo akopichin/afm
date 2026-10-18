@@ -36,6 +36,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
+		MeshClient:     o.meshClientFor(meshHelperParticipantID(taskID)),
 	}
 }
 

@@ -359,6 +359,10 @@ type Orchestrator struct {
 	watchClock watch.Clock
 	// watchPollInterval overrides the watcher poll ticker period in tests; 0 = production default.
 	watchPollInterval time.Duration
+
+	// --- Agent Mesh Phase 3 (T3.1): per-invocation agent-mesh bearer tokens ---
+	meshTokensOnce  sync.Once
+	meshTokensStore *meshTokenStore
 }
 
 // bumpPauseGen увеличивает per-stage generation-счётчик паузы (см. поле
