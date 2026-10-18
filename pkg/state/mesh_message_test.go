@@ -2,10 +2,12 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // ---- T1.2: messages, inbox references and receipts ----
@@ -222,6 +224,27 @@ func TestMesh_MessageSentRejectsAtMaxThreadMessages(t *testing.T) {
 	}
 	if got := len(as.Mesh.MessagesByThread["th-1"]); got != agentcomm.MaxThreadMessages {
 		t.Fatalf("the rejected message was still appended: thread now has %d messages", got)
+	}
+}
+
+// A thread's own message budget (MaxMessages) is enforced exactly at its boundary, not the global limit.
+func TestMesh_MessageSentRejectsAtThreadBudget(t *testing.T) {
+	as := newAssistantsState()
+	mustApply(t, &as, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	mustApply(t, &as, meshParticipantAddedControl("b", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	payload, _ := json.Marshal(MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: []string{"a", "b"}, MaxMessages: 3})
+	mustApply(t, &as, &Control{Kind: kindMeshThreadOpened, SchemaVersion: ControlSchemaVersion, Target: Target{ThreadID: "th-small"}, Payload: payload})
+
+	for i := range 3 {
+		mustApply(t, &as, meshMessageSentControl(uint64(i+1), fmt.Sprintf("m%d", i), "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "q"))
+	}
+	err := dispatchControlKind(&as, meshMessageSentControl(4, "m-over", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), false)
+	var rej *OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeBudgetExceeded {
+		t.Fatalf("4th message in a 3-message thread: err = %v, want budget_exceeded", err)
+	}
+	if got := len(as.Mesh.MessagesByThread["th-small"]); got != 3 {
+		t.Fatalf("thread has %d messages, want 3", got)
 	}
 }
 

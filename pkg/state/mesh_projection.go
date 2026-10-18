@@ -403,9 +403,10 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		}
 		return meshRejected(assistants.CodeInvalidRequest, "%v (thread %s members: %v)", err, threadID, thread.Members)
 	}
-	// agentcomm.MaxThreadMessages/MaxInboxUnread: explicit rejection, never a silent truncation (T0.2).
-	if n := len(as.Mesh.MessagesByThread[threadID]); n >= agentcomm.MaxThreadMessages {
-		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages (MaxThreadMessages)", threadID, agentcomm.MaxThreadMessages)
+	// The thread's message limit (its own budget when set, never above MaxThreadMessages) and MaxInboxUnread:
+	// explicit rejection, never a silent truncation (T0.2).
+	if limit := threadMessageLimit(thread); len(as.Mesh.MessagesByThread[threadID]) >= limit {
+		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages", threadID, limit)
 	}
 	if err := as.Mesh.CheckInboxCapacity(recipients); err != nil {
 		return err
@@ -432,6 +433,15 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 		return as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
 	})
 	return nil
+}
+
+// threadMessageLimit is how many messages thread may hold: its own Budgets.MaxMessages when set, capped by the
+// global agentcomm.MaxThreadMessages.
+func threadMessageLimit(thread *agentcomm.Thread) int {
+	if b := thread.Budgets.MaxMessages; b > 0 && b < agentcomm.MaxThreadMessages {
+		return b
+	}
+	return agentcomm.MaxThreadMessages
 }
 
 // deliveryRank orders DeliveryStatus so receipt transitions can be checked for monotonicity: a status may

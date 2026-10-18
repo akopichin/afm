@@ -107,7 +107,13 @@ func meshActorSenderID(actor state.Actor) (agentcomm.ParticipantID, error) {
 	if actor.Kind == actorKindUser {
 		return meshUserParticipantID, nil
 	}
-	return "", fmt.Errorf("agentcomm: attach-and-send cannot send a first message for actor kind %q (only the human sends one today; the Side agent's own identity lands in T6.7)", actor.Kind)
+	return "", attachRejected(assistants.CodeActorNotAllowed, "only the human sends an attach's first message, not actor kind %q", actor.Kind)
+}
+
+// attachRejected is a typed, correctable AttachAndSend rejection — the API answers with its code's 4xx and the
+// reason, not a bare 500.
+func attachRejected(code assistants.ErrorCode, format string, args ...any) error {
+	return &state.OperationRejectedError{Code: code, Reason: fmt.Sprintf(format, args...)}
 }
 
 // AttachAndSend implements T6.2: one ApplyRunOperation that creates the task (frozen profile snapshot), the
@@ -144,21 +150,21 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		scope = assistants.ScopeStage
 	}
 	if !scope.Valid() {
-		return AttachAndSendResult{}, fmt.Errorf("agentcomm: invalid scope %q", scope)
+		return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "invalid scope %q (want stage or run)", scope)
 	}
 
 	var targetStageID string
 	switch scope {
 	case assistants.ScopeStage:
 		if req.StageID == "" {
-			return AttachAndSendResult{}, errors.New("agentcomm: stage id is required for scope=stage")
+			return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "a stage id is required for scope=stage")
 		}
 		st := o.reg().Stage(req.StageID)
 		if st == nil {
-			return AttachAndSendResult{}, fmt.Errorf("agentcomm: unknown stage %q", req.StageID)
+			return AttachAndSendResult{}, attachRejected(assistants.CodeNotFound, "unknown stage %q", req.StageID)
 		}
 		if st.IsScript() {
-			return AttachAndSendResult{}, fmt.Errorf("agentcomm: stage %q is a script stage — helpers are not supported there", req.StageID)
+			return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "stage %q is a script stage — helpers are not supported there", req.StageID)
 		}
 		if cur := o.currentStatus(req.StageID); cur == state.StatusDone || cur == state.StatusFailed {
 			return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %q already reached %s", req.StageID, cur)}
@@ -166,7 +172,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		targetStageID = req.StageID
 	case assistants.ScopeRun:
 		if req.StageID != "" {
-			return AttachAndSendResult{}, errors.New("agentcomm: stage id must be empty for scope=run")
+			return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "a run agent belongs to no stage — omit the stage id for scope=run")
 		}
 	default:
 		// Unreachable: scope.Valid() above already narrowed scope to ScopeStage or ScopeRun.
@@ -187,6 +193,11 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	// Freeze the availability verdict into the snapshot BEFORE it is handed to taskCreatedEffect — same
 	// admission-time-freeze rule Attach/admitChildren already follow (see their own comments).
 	profile.ReadonlyEnforcement = view.ReadonlyEnforcement
+	// An agent added without a title is named after its profile ("UX expert"), never its bare profile id.
+	title := req.Title
+	if title == "" {
+		title = profile.Title
+	}
 
 	rs := o.opts.Store.Snapshot()
 	depth := assistants.ComputeDepth(nil) // top-level: AttachAndSend never has a parent task
@@ -204,7 +215,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		Scope:                  string(scope),
 		ProfileID:              string(req.ProfileID),
 		ProfileSnapshot:        profile,
-		Title:                  req.Title,
+		Title:                  title,
 		Instruction:            req.Instruction,
 		Mode:                   string(mode),
 		Trigger:                string(assistants.TriggerOneShot),
@@ -234,12 +245,12 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	case assistants.ScopeStage:
 		newParticipant = agentcomm.Participant{
 			ID: meshHelperParticipantID(taskID), Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage,
-			Alias: string(taskID), DisplayName: req.Title, StageID: req.StageID, Reachable: true,
+			Alias: string(taskID), DisplayName: title, StageID: req.StageID, Reachable: true,
 		}
 	case assistants.ScopeRun:
 		newParticipant = agentcomm.Participant{
 			ID: meshRunParticipantID(taskID), Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun,
-			Alias: runAgentAlias(req.Title, req.ProfileID), DisplayName: req.Title, Reachable: true,
+			Alias: runAgentAlias(title, req.ProfileID), DisplayName: title, Reachable: true,
 		}
 	default:
 		// Unreachable (see the earlier switch's default) — leaves newParticipant zero, caught by Valid() below.
@@ -279,7 +290,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 
 	threadID := deriveMeshThreadID(req.OperationID)
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: req.Title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs})
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs})
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}
@@ -338,7 +349,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		for _, m := range members {
 			o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
 		}
-		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": req.Title}})
+		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": title}})
 		if messageID != nil {
 			o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 				"message_id": string(*messageID), "thread_id": string(threadID), "sender_id": string(senderID), "kind": string(agentcomm.MessageKindMessage),

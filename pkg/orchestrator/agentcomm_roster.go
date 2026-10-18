@@ -68,7 +68,8 @@ func meshParticipantForTask(rs state.RunState, task assistants.Task) agentcomm.P
 	return own
 }
 
-// runTaskForParticipant maps a run participant id to the task behind it: "run:<taskID>" directly; a legacy
+// runTaskForParticipant maps a registered run participant id to the task behind it: "run:<taskID>" of a
+// scope=run task directly (never a stage helper that merely shares the id suffix); a legacy
 // "run:<profileID>" (journals from before run agents were keyed by task, when there was one per profile) to
 // that profile's run task without a "run:<taskID>" participant of its own — the lowest id if several, so the
 // answer is deterministic and never flips to a newer agent of the same profile.
@@ -77,11 +78,11 @@ func runTaskForParticipant(rs state.RunState, id agentcomm.ParticipantID) (assis
 	if !ok || suffix == "" {
 		return "", false
 	}
-	if _, isTask := rs.Assistants.Tasks[assistants.TaskID(suffix)]; isTask {
-		return assistants.TaskID(suffix), true
-	}
-	if _, legacy := rs.Assistants.Mesh.Participants[id]; !legacy {
+	if _, registered := rs.Assistants.Mesh.Participants[id]; !registered {
 		return "", false
+	}
+	if t, isTask := rs.Assistants.Tasks[assistants.TaskID(suffix)]; isTask && t.Scope == assistants.ScopeRun {
+		return assistants.TaskID(suffix), true
 	}
 	var owner assistants.TaskID
 	for tid, t := range rs.Assistants.Tasks {

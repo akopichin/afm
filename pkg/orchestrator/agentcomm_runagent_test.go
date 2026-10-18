@@ -154,3 +154,40 @@ func TestRunParticipant_LegacyProfileKeyedIdentity(t *testing.T) {
 		t.Fatalf("run:<new task> -> %s,%v", owner, ok)
 	}
 }
+
+// "run:<suffix>" names a task only when that participant is registered and the task is a run agent — a stage
+// helper whose id happens to equal the suffix is not a run participant.
+func TestRunParticipant_SuffixMatchingAHelperIsNotARunAgent(t *testing.T) {
+	helper := assistants.TaskID("t-helper")
+	runID := agentcomm.ParticipantID("run:t-helper")
+	rs := state.RunState{Assistants: state.AssistantsState{
+		Tasks: map[assistants.TaskID]*state.TaskState{
+			helper: {Task: assistants.Task{ID: helper, Scope: assistants.ScopeStage, ProfileID: "qa"}},
+		},
+		Mesh: state.MeshState{Participants: map[agentcomm.ParticipantID]*agentcomm.Participant{}},
+	}}
+	if owner, ok := runTaskForParticipant(rs, runID); ok {
+		t.Fatalf("unregistered run:t-helper -> %s, want no task", owner)
+	}
+	rs.Assistants.Mesh.Participants[runID] = &agentcomm.Participant{ID: runID, Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun}
+	if owner, ok := runTaskForParticipant(rs, runID); ok {
+		t.Fatalf("run:t-helper with a stage-scoped task t-helper -> %s, want no task", owner)
+	}
+}
+
+// A run agent added without a title is named after its profile's title, not its bare profile id.
+func TestAddRunAgent_WithoutTitleUsesProfileTitle(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	res, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{OperationID: "op-untitled", ProfileID: "reviewer", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	rs := store.Snapshot()
+	p := rs.Assistants.Mesh.Participants[res.ParticipantID]
+	if p == nil || p.DisplayName != "Reviewer" || p.Alias != "reviewer" {
+		t.Fatalf("participant = %+v, want display name Reviewer", p)
+	}
+	if title := rs.Assistants.Tasks[res.TaskID].Title; title != "Reviewer" {
+		t.Fatalf("task title = %q, want Reviewer", title)
+	}
+}
