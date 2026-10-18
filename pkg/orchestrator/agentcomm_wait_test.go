@@ -61,9 +61,21 @@ func TestMesh_WaitMutualCycleRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send 1: %v", err)
 	}
-	if _, err := o.Wait(ctx, WaitRequest{OperationID: "op-w-2-wait1", Waiter: h1, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: msg1.MessageID}}); err != nil {
+	wait1, err := o.Wait(ctx, WaitRequest{OperationID: "op-w-2-wait1", Waiter: h1, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: msg1.MessageID}})
+	if err != nil {
 		t.Fatalf("Wait 1 (h1 waits on h2): %v", err)
 	}
+	// Agent Mesh Phase 5, T5.4: wait1 is a genuine, still-PENDING mesh wait registered directly against h1's
+	// own participant id — unlike the rest of this test file's fixtures, it is never resolved. Left dangling,
+	// it would make newRunningHelperForMesh's cleanup (close(release), expecting h1 to reach StatusCompleted)
+	// fail instead: runHelperTask now treats ANY open mesh wait on its own participant as a cooperative yield
+	// (hasOpenMeshWaitFor), exactly like T5.2 already does for a stage. Cancel it here, before h1's cleanup
+	// runs (t.Cleanup is LIFO — this runs before newRunningHelperForMesh's own registered cleanup for h1).
+	t.Cleanup(func() {
+		if err := o.CancelWait(ctx, CancelWaitRequest{OperationID: "op-w-2-wait1-cancel", WaitID: wait1.WaitID, Actor: state.Actor{Kind: "agent", ID: string(h1)}}); err != nil {
+			t.Fatalf("CancelWait wait1: %v", err)
+		}
+	})
 
 	msg2, err := o.Send(ctx, SendRequest{OperationID: "op-w-2-send2", ThreadID: thread.ID, Sender: h2, Recipients: []agentcomm.ParticipantID{h1}, Kind: agentcomm.MessageKindRequest, Body: "q2"})
 	if err != nil {

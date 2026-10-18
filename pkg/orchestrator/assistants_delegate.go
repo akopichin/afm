@@ -308,16 +308,43 @@ func (o *Orchestrator) requiredChildOpen(taskID assistants.TaskID) bool {
 	return false
 }
 
+// resumeTaskViaCAS is the shared CAS-and-requeue step behind BOTH tryResumeParent (waiting_children -> queued,
+// T4a.5) and tryResumePeer (waiting_peer -> queued, T5.4): build a FRESH, never-reused operation id, commit a
+// "queued" transition guarded by a TaskStatus precondition on from, publish the task's new status, and let
+// maybeScheduleTask take it the rest of the way. The precondition IS the "resume exactly once" mechanism, not
+// a side signal — called redundantly (two siblings finishing at the same moment; a live resume racing a
+// startup recovery sweep over the same task; two callers racing the same already-resolved wait) is always
+// safe: the loser's ApplyRunOperation simply hits the stale-revision rejection and is a silent no-op
+// (handleTaskOperationErr classifies it the same way maybeScheduleTask's own lost CAS races already are).
+func (o *Orchestrator) resumeTaskViaCAS(ctx context.Context, taskID assistants.TaskID, rootStageID string, from assistants.TaskStatus, reason string) {
+	eff, err := taskStatusEffect(taskID, assistants.StatusQueued, reason)
+	if err != nil {
+		return
+	}
+	op := state.Operation{
+		ID:      "task-resume:" + string(taskID) + ":" + randomOpSuffix(),
+		Kind:    "resume_task",
+		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}},
+		Effects: []state.Effect{eff},
+	}
+	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStageID, Data: map[string]any{
+			"task_id": string(taskID), "status": string(assistants.StatusQueued),
+		}})
+		o.maybeScheduleTask(ctx, taskID)
+	})
+	o.handleTaskOperationErr(err)
+}
+
 // tryResumeParent moves parentID from waiting_children back to queued EXACTLY ONCE when every one of its
 // current children has reached a terminal status — the CAS precondition (TaskStatus: waiting_children) IS
 // the "exactly once" mechanism, not a side signal: called redundantly (two siblings finishing at the same
 // moment, T4a.5's TestContinuation_TwoChildrenFinishSimultaneously_OneResume; or a live finish racing
-// startup recovery's own pass over the same task) is always safe — every loser's ApplyRunOperation simply
-// hits the stale-revision rejection and is a silent no-op (handleTaskOperationErr classifies it the same way
-// maybeScheduleTask's own lost CAS races already are). Re-evaluating ByParent fresh on every call (rather
-// than trusting a cached "N remaining" counter) is also what makes a NEW required child added mid-wait
-// correctly reopen readiness (TestWaitingChildren_NewRequiredChildReopensReadiness) — there is nothing to
-// invalidate, the set is just read again.
+// startup recovery's own pass over the same task) is always safe — see resumeTaskViaCAS's own doc comment.
+// Re-evaluating ByParent fresh on every call (rather than trusting a cached "N remaining" counter) is also
+// what makes a NEW required child added mid-wait correctly reopen readiness
+// (TestWaitingChildren_NewRequiredChildReopensReadiness) — there is nothing to invalidate, the set is just
+// read again.
 func (o *Orchestrator) tryResumeParent(ctx context.Context, parentID assistants.TaskID) {
 	rs := o.opts.Store.Snapshot()
 	parent, ok := rs.Assistants.Tasks[parentID]
@@ -334,24 +361,7 @@ func (o *Orchestrator) tryResumeParent(ctx context.Context, parentID assistants.
 			return // at least one CURRENT-generation child is still open — not ready yet
 		}
 	}
-
-	eff, err := taskStatusEffect(parentID, assistants.StatusQueued, "resumed: all children finished")
-	if err != nil {
-		return
-	}
-	op := state.Operation{
-		ID:      "task-resume:" + string(parentID) + ":" + randomOpSuffix(),
-		Kind:    "resume_task",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(parentID): assistants.StatusWaitingChildren}},
-		Effects: []state.Effect{eff},
-	}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: parent.RootStageID, Data: map[string]any{
-			"task_id": string(parentID), "status": string(assistants.StatusQueued),
-		}})
-		o.maybeScheduleTask(ctx, parentID)
-	})
-	o.handleTaskOperationErr(err)
+	o.resumeTaskViaCAS(ctx, parentID, parent.RootStageID, assistants.StatusWaitingChildren, "resumed: all children finished")
 }
 
 // recoverAssistants re-activates every non-terminal helper task a FRESH process inherited from the journal
@@ -395,6 +405,13 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 			o.maybeScheduleTask(ctx, id)
 		case assistants.StatusWaitingChildren:
 			o.tryResumeParent(ctx, id)
+		case assistants.StatusWaitingPeer:
+			// T5.4: a helper task whose mesh wait resolved right before a crash, with the live resume never
+			// happening because the process went down between that commit and the requeue — mirrors
+			// recoverMeshWaits' role for a stage's own awaiting_peer. tryResumePeer's own readiness check
+			// (hasOpenMeshWaitFor) makes calling it here unconditionally safe: a wait still genuinely pending
+			// leaves the task exactly where it is, untouched, for a future live Send/Publish to wake normally.
+			o.tryResumePeer(ctx, id)
 		default:
 			// waiting_parent/watching/paused/terminal: nothing for a fresh process to do on its own —
 			// waiting_parent is reactivated by the stage's own startup path, paused stays paused until an

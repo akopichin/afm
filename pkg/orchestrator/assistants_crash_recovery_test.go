@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -182,6 +183,133 @@ func TestCrash_ChildResultRecordedBeforeParentContinuation_RecoveredOnRestart(t 
 
 	close(childRelease)
 	o.concurrency.WaitAgents()
+}
+
+// TestCrash_HelperWaitResolvedBeforeRequeue_RecoveredOnRestart — Agent Mesh Phase 5, T5.4's own crash
+// scenario, the helper-task twin of TestMesh_RecoverMeshWaits_ResumesAlreadyReadyWait (stage-level, T5.3): a
+// helper parked in waiting_peer whose mesh wait resolves (a reply commits) right before a crash, with the live
+// resume (resumeWaitersAfterCommit -> tryResumePeer) never happening because the process went down between
+// that commit and the requeue. recoverAssistants' own waiting_peer case must not leave it stranded.
+func TestCrash_HelperWaitResolvedBeforeRequeue_RecoveredOnRestart(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	runDir := o.opts.RunDir
+
+	taskID := deriveTaskID("op-peer-crash")
+	helperID := meshHelperParticipantID(taskID)
+	colleague := agentcomm.ParticipantID("user")
+	threadID := deriveMeshThreadID("op-peer-crash-open")
+
+	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if _, err := o.Wait(context.Background(), WaitRequest{
+			OperationID: "op-peer-crash-wait", Waiter: helperID,
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID},
+		}); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+		return executor.HelperOutcome{ProcessOK: true}, nil
+	}
+
+	attachTestTask(ctx, t, o, "op-peer-crash")
+	waitForTaskStatus(t, store, taskID, assistants.StatusWaitingPeer, 2*time.Second)
+
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-peer-crash-open", Members: []agentcomm.ParticipantID{helperID, colleague}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	if thread.ID != threadID {
+		t.Fatalf("thread id = %s, want %s (deriveMeshThreadID must be deterministic)", thread.ID, threadID)
+	}
+
+	// Commit JUST the resolving reply — bypassing Send's own externalWork (which would immediately call
+	// notifyAndResumeNewlyReadyWaits/tryResumePeer in the SAME synchronous commit) — the exact state a crash
+	// between "reply durably recorded" and "requeue ran" would leave behind.
+	msgID := deriveMeshMessageID("op-peer-crash-send")
+	eff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(msgID)},
+		state.MeshMessageSentPayload{Sender: string(colleague), Recipients: []string{string(helperID)}, Kind: string(agentcomm.MessageKindMessage), Body: "ready"})
+	if err != nil {
+		t.Fatalf("build message effect: %v", err)
+	}
+	op := state.Operation{ID: "op-peer-crash-send", Kind: "mesh_send", Effects: []state.Effect{eff}}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil { // nil externalWork == "crashed before the live resume ran"
+		t.Fatalf("commit reply (pre-crash): %v", err)
+	}
+	if got := store.Snapshot().Assistants.Tasks[taskID].Status; got != assistants.StatusWaitingPeer {
+		t.Fatalf("test setup: task must still be waiting_peer pre-restart, got %s", got)
+	}
+
+	store.Close()
+
+	store2, err := state.Open(runDir, []string{assistantsTestStageID})
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+	o2 := reopenAssistantsOrchestrator(o, store2)
+
+	var resumedRan bool
+	o2.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if tid == string(taskID) {
+			resumedRan = true
+		}
+		return passResultOutcome(), nil
+	}
+
+	o2.recoverAssistants(context.Background())
+
+	waitForTaskStatus(t, store2, taskID, assistants.StatusCompleted, 2*time.Second)
+	if !resumedRan {
+		t.Fatal("recovery must actually resume the task whose wait resolved before the crash, not leave it stranded in waiting_peer")
+	}
+}
+
+// TestCrash_HelperWaitStillPending_LeftAloneOnRestart is TestCrash_HelperWaitResolvedBeforeRequeue_
+// RecoveredOnRestart's negative counterpart: a wait that is STILL genuinely pending at restart must be left
+// exactly where it is — recoverAssistants' waiting_peer case must never requeue a task whose reply never
+// actually arrived, which is precisely what tryResumePeer's own hasOpenMeshWaitFor guard (not a separate
+// check here) is responsible for.
+func TestCrash_HelperWaitStillPending_LeftAloneOnRestart(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	runDir := o.opts.RunDir
+
+	taskID := deriveTaskID("op-peer-crash-pending")
+	helperID := meshHelperParticipantID(taskID)
+	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if _, err := o.Wait(context.Background(), WaitRequest{
+			OperationID: "op-peer-crash-pending-wait", Waiter: helperID,
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+		}); err != nil {
+			t.Errorf("Wait: %v", err)
+		}
+		return executor.HelperOutcome{ProcessOK: true}, nil
+	}
+
+	attachTestTask(ctx, t, o, "op-peer-crash-pending")
+	waitForTaskStatus(t, store, taskID, assistants.StatusWaitingPeer, 2*time.Second)
+	store.Close()
+
+	store2, err := state.Open(runDir, []string{assistantsTestStageID})
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+	o2 := reopenAssistantsOrchestrator(o, store2)
+	o2.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		t.Fatal("a task whose wait is still pending must never be respawned by recovery")
+		return executor.HelperOutcome{}, nil
+	}
+
+	o2.recoverAssistants(context.Background())
+
+	time.Sleep(30 * time.Millisecond)
+	if got := store2.Snapshot().Assistants.Tasks[taskID].Status; got != assistants.StatusWaitingPeer {
+		t.Fatalf("status = %s, want unchanged waiting_peer (wait is still pending)", got)
+	}
 }
 
 // TestDuplicateChildResult_OnlyResumesParentOnce — T11.3 (§19.3 scenario 19, the "duplicate child result"

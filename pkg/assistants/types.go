@@ -94,11 +94,16 @@ const (
 	StatusQueued          TaskStatus = "queued"
 	StatusRunning         TaskStatus = "running"
 	StatusWaitingChildren TaskStatus = "waiting_children"
-	StatusWatching        TaskStatus = "watching"
-	StatusPaused          TaskStatus = "paused"
-	StatusCompleted       TaskStatus = "completed"
-	StatusFailed          TaskStatus = "failed"
-	StatusCancelled       TaskStatus = "cancelled"
+	// StatusWaitingPeer — задача зарегистрировала mesh Wait на коллегу (другого
+	// помощника, стадию или человека) и вышла, отдав свой слот конкурентности
+	// (Agent Mesh, T5.4) — помощник-двойник stage-уровневого awaiting_peer
+	// (T5.1), но в ОТДЕЛЬНОМ, независимом от bus-FSM жизненном цикле задачи.
+	StatusWaitingPeer TaskStatus = "waiting_peer"
+	StatusWatching    TaskStatus = "watching"
+	StatusPaused      TaskStatus = "paused"
+	StatusCompleted   TaskStatus = "completed"
+	StatusFailed      TaskStatus = "failed"
+	StatusCancelled   TaskStatus = "cancelled"
 )
 
 // Terminal сообщает, что статус окончательный — задача больше не изменится.

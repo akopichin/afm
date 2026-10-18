@@ -253,6 +253,18 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
+	// Agent Mesh Phase 5, T5.4: the subprocess registered a mesh Wait on a colleague (another helper, a
+	// stage, or the human) and exited cooperatively — mirrors retry.go's stage-level T5.2 branch exactly, and
+	// for the same reason: this is NOT a false completion, NOT a protocol error, and must not run through
+	// DecodeResultWithRepair at all — a yielding agent is not expected to have produced a kind:"result"/
+	// kind:"delegate" envelope, and treating its (expected) empty/absent RawText as malformed would be wrong.
+	// This task's own concurrency lease is released simply by this function returning next, exactly like
+	// runWithRetry's awaiting_peer branch releases a stage's.
+	if o.hasOpenMeshWaitFor(meshHelperParticipantID(taskID)) {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+		return
+	}
+
 	env, repaired, decErr := assistants.DecodeResultWithRepair([]byte(outcome.RawText))
 	if decErr != nil {
 		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's

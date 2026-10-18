@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
@@ -16,12 +17,18 @@ import (
 // Agent Mesh Phase 5, T5.3: resume on reply — the peer twin of onUserAnswered/resumeAfterAnswer.
 
 // resumeWaitersAfterCommit is called from Send/Publish's externalWork (after their commit) for every
-// waiter a wait just resolved for. Only stage-scoped waiters are resumed here — a helper-scoped waiter
-// (T5.4, not yet implemented) stays Ready in the durable projection; nothing picks it up automatically yet.
+// waiter a wait just resolved for — a stage-scoped waiter resumes via resumeAfterPeerReply (T5.3), a
+// helper-scoped one via tryResumePeer (T5.4). Any other participant kind (the human, a future run/side
+// agent) has nothing of its own to resume — it is the one initiating these replies, never parked waiting for
+// one.
 func (o *Orchestrator) resumeWaitersAfterCommit(ctx context.Context, waiters []agentcomm.ParticipantID) {
 	for _, w := range waiters {
 		if stageID, ok := stageIDFromMeshParticipant(w); ok {
 			o.resumeAfterPeerReply(ctx, stageID)
+			continue
+		}
+		if taskID, ok := taskIDFromMeshParticipant(w); ok {
+			o.tryResumePeer(ctx, taskID)
 		}
 	}
 }
@@ -56,14 +63,15 @@ func (o *Orchestrator) notifyAndResumeNewlyReadyWaits(ctx context.Context, befor
 	}
 }
 
-// hasOpenMeshWait reports whether stageID currently has a PENDING mesh wait registered (T5.2). Only
-// WaitPending counts: a wait already WaitReady at this point means the condition was satisfied before the
-// process actually exited — nothing will ever re-trigger a resume for an already-resolved wait, so parking
-// in awaiting_peer for one would strand the stage forever. (In practice `afm agent wait` already reports
-// "ready" instead of "yield" for this case, so a well-behaved agent would not have exited expecting one.)
-func (o *Orchestrator) hasOpenMeshWait(stageID string) bool {
+// hasOpenMeshWaitFor reports whether waiter currently has a PENDING mesh wait registered — the shared
+// primitive behind hasOpenMeshWait (stage-scoped, T5.2) and runHelperTask's own yield check (helper-scoped,
+// T5.4). Only WaitPending counts: a wait already WaitReady at this point means the condition was satisfied
+// before the process actually exited — nothing will ever re-trigger a resume for an already-resolved wait, so
+// parking in awaiting_peer/waiting_peer for one would strand the waiter forever. (In practice `afm agent wait`
+// already reports "ready" instead of "yield" for this case, so a well-behaved agent would not have exited
+// expecting one.)
+func (o *Orchestrator) hasOpenMeshWaitFor(waiter agentcomm.ParticipantID) bool {
 	rs := o.opts.Store.Snapshot()
-	waiter := meshStageParticipantID(stageID)
 	for _, w := range rs.Assistants.Mesh.Waits {
 		if w.Waiter == waiter && w.Status == agentcomm.WaitPending {
 			return true
@@ -72,10 +80,22 @@ func (o *Orchestrator) hasOpenMeshWait(stageID string) bool {
 	return false
 }
 
+// hasOpenMeshWait is hasOpenMeshWaitFor's stage-scoped convenience wrapper (T5.2's own call sites).
+func (o *Orchestrator) hasOpenMeshWait(stageID string) bool {
+	return o.hasOpenMeshWaitFor(meshStageParticipantID(stageID))
+}
+
 // stageIDFromMeshParticipant inverts meshStageParticipantID.
 func stageIDFromMeshParticipant(p agentcomm.ParticipantID) (string, bool) {
 	id, ok := strings.CutPrefix(string(p), meshStagePrefix)
 	return id, ok && id != ""
+}
+
+// taskIDFromMeshParticipant inverts meshHelperParticipantID (T5.4) — resumeWaitersAfterCommit's helper-scoped
+// twin of stageIDFromMeshParticipant above.
+func taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
+	id, ok := strings.CutPrefix(string(p), meshHelperPrefix)
+	return assistants.TaskID(id), ok && id != ""
 }
 
 // resumeAfterPeerReply drives stageID out of awaiting_peer once its wait is ready. Unlike
@@ -151,6 +171,26 @@ func loadMeshPeerWaitPhase(stageDir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// tryResumePeer moves taskID from waiting_peer back to queued once its mesh wait has resolved (T5.4) — the
+// helper-task twin of tryResumeParent (assistants_delegate.go): both share resumeTaskViaCAS's CAS-and-requeue
+// step, but unlike tryResumeParent there is no separate "are all children terminal" readiness condition to
+// re-derive here — a mesh wait that is no longer PENDING already means "go" (see hasOpenMeshWaitFor's own doc
+// comment for why an unresolved/pending wait must never be requeued). That check is what makes this function
+// safe to call unconditionally for EVERY task sitting in waiting_peer, including from a startup recovery sweep
+// racing a live resume for the exact same task — see resumeTaskViaCAS's own doc comment for why a lost CAS
+// race is always a silent no-op, never a double requeue.
+func (o *Orchestrator) tryResumePeer(ctx context.Context, taskID assistants.TaskID) {
+	rs := o.opts.Store.Snapshot()
+	t, ok := rs.Assistants.Tasks[taskID]
+	if !ok || t.Status != assistants.StatusWaitingPeer {
+		return
+	}
+	if o.hasOpenMeshWaitFor(meshHelperParticipantID(taskID)) {
+		return // the wait that parked this task is still genuinely pending — nothing to resume yet
+	}
+	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, "resumed: peer replied")
 }
 
 // recoverMeshWaits re-derives, on startup, every stage parked in awaiting_peer whose wait has ALREADY
