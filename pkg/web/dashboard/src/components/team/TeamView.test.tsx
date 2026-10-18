@@ -131,6 +131,24 @@ describe('TeamView', () => {
     expect(sendSpy).toHaveBeenCalledWith('mt-b', expect.objectContaining({ body: 'for B' }))
   })
 
+  test('a failed first send keeps the draft and error visible even though the thread opened', async () => {
+    mockThreadAndBoardFetches()
+    vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({
+      id: 'mt-9', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open',
+    })
+    vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('boom'))
+    renderTeamView()
+
+    fireEvent.click(screen.getByText('QA reviewer'))
+    await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
+    expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('please review')
+  })
+
   test('renders the disabled empty state when the mesh capability is off', () => {
     renderTeamView([makeStage()], [], { enabled: false, probed: true, participants: [], threads: [] })
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()

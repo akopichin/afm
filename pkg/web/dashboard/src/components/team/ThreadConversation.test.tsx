@@ -71,4 +71,19 @@ describe('ThreadConversation', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
     expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('please review')
   })
+
+  test('a thread that opens but then fails to send keeps the draft, shows the error, and does not notify the parent yet', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)
+    vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('boom'))
+    const onThreadOpened = vi.fn()
+
+    render(<ThreadConversation target={{ kind: 'direct', participant: qa }} onThreadOpened={onThreadOpened} />)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
+    expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('please review')
+    expect(onThreadOpened).not.toHaveBeenCalled()
+  })
 })

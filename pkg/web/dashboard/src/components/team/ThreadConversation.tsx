@@ -71,6 +71,7 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
     setError(null)
     try {
       let thread = openedThread
+      let justOpened = false
       if (thread === null) {
         thread = await openMeshThread({
           requestId: genMeshRequestId('mesh-open'),
@@ -79,7 +80,7 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
           memberIds: target.kind === 'direct' ? [target.participant.id] : [],
         })
         setOpenedThread(thread)
-        onThreadOpened?.(thread)
+        justOpened = true
       }
       await sendMeshMessage(thread.id, {
         requestId: requestIdRef.current,
@@ -88,6 +89,10 @@ export function ThreadConversation({ target, onThreadOpened }: ThreadConversatio
       })
       requestIdRef.current = genMeshRequestId('mesh-send')
       setDraft('')
+      // Tell the parent only AFTER a successful send: onThreadOpened changes TeamView's `activeConversation`,
+      // which changes this component's `key` and unmounts it (see targetKey's doc comment above) — firing it
+      // before the send could fail would wipe the in-flight draft/error on an instance that no longer exists.
+      if (justOpened) onThreadOpened?.(thread)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'request failed')
     } finally {
