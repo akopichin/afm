@@ -336,17 +336,25 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 	return !rs.Assistants.Mesh.HasWakingUnreadFor(meshParticipantForTask(rs, t.Task))
 }
 
-// runAgentHasUnseenMessages reports whether some queued run agent has a message it has not seen yet: its next
-// turn is due (the message's Send, or its previous turn's own tail, schedules it), so the run must not finish
-// under it. state.RunBlocker deliberately ignores queued tasks — an idle run agent with nothing to read never
-// holds the run open — but without this check a message accepted during an agent's last turn could lose the
-// race to the run loop: the turn's running→queued commit wakes the loop before the next turn is scheduled.
-func runAgentHasUnseenMessages(rs state.RunState) bool {
-	for _, t := range rs.Assistants.Tasks {
-		if t.Scope == assistants.ScopeRun && t.Status == assistants.StatusQueued &&
-			rs.Assistants.Mesh.HasWakingUnreadFor(meshParticipantForTask(rs, t.Task)) {
-			return true
+// queuedTurnDue reports whether some queued task still has a turn due, so the run must not finish under it.
+// state.RunBlocker deliberately ignores queued tasks — an idle run agent with nothing to read never holds the
+// run open — but queued is also the step between a commit that makes a task runnable and the commit that
+// starts it: a resume (waiting_peer/waiting_children → queued, then queued → running in a separate operation)
+// or a message accepted during a run agent's last turn. Without this check the run loop could finalize the run
+// in between, and the start would then be rejected run_finalizing, losing the turn. Only an idle run agent
+// (idleRunAgent) and a held (paused) task are exempt: neither starts on its own.
+func queuedTurnDue(rs state.RunState) bool {
+	for id, t := range rs.Assistants.Tasks {
+		if t.Status != assistants.StatusQueued {
+			continue
 		}
+		if held, _ := rs.Assistants.EffectivelyHeld(id); held {
+			continue
+		}
+		if t.Scope == assistants.ScopeRun && idleRunAgent(rs, t) {
+			continue
+		}
+		return true
 	}
 	return false
 }

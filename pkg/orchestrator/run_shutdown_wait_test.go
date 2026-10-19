@@ -22,7 +22,8 @@ import (
 func TestMesh_RunShutdown_KeepsRemainingWaitPending(t *testing.T) {
 	rec := &flowEventRecorder{}
 	dispatcher := newFlowRecorderDispatcher(t, rec)
-	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 0.2")
+	// The stage runs long enough for the run agent to register its wait on the stage before it finishes.
+	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 1")
 
 	registered := make(chan agentcomm.WaitID, 1)
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {

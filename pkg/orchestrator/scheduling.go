@@ -344,7 +344,7 @@ func (o *Orchestrator) runStateAllowsExit(rs *state.RunState) bool {
 		}
 	}
 	if o.opts.AssistantsEnabled {
-		if _, blocked := rs.Assistants.RunBlocker(); blocked || runAgentHasUnseenMessages(*rs) {
+		if _, blocked := rs.Assistants.RunBlocker(); blocked || queuedTurnDue(*rs) {
 			return false
 		}
 	}

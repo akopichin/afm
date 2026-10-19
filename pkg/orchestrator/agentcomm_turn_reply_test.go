@@ -410,7 +410,7 @@ func TestPassive_DoesNotWakeAnIdleRunAgent(t *testing.T) {
 	if !idleRunAgent(rs, rs.Assistants.Tasks[b.TaskID]) {
 		t.Fatal("b must count as idle with only a passive message waiting")
 	}
-	if runAgentHasUnseenMessages(rs) {
+	if queuedTurnDue(rs) {
 		t.Fatal("a passive message must not hold the run open (run-finalization blocker)")
 	}
 

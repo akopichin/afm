@@ -237,8 +237,9 @@ func TestRunBarrier_RegisteredWaitHoldsRun_WakesOnCancel(t *testing.T) {
 	dispatcher := newFlowRecorderDispatcher(t, rec)
 	// A brief sleep (not an instant "true") gives this test a safe window to attach the role WHILE the stage is
 	// still running — see TestRunBarrier_IdleRoleDoesNotHoldRun's identical comment for why both "before the
-	// stage reaches Running" and "after the stage is already Done" are each their own race.
-	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 0.2")
+	// stage reaches Running" and "after the stage is already Done" are each their own race. One second, not less:
+	// the role must register its wait on the stage before the stage finishes, even on a loaded machine.
+	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 1")
 
 	registered := make(chan struct{})
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
