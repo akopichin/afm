@@ -71,6 +71,15 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), stages, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
 	}
+	// Clean shutdown, as in a real run: cancel the run context and wait for the helper agents BEFORE the store
+	// closes and t.TempDir is removed (cleanups run LIFO). A helper still running when the test returns would
+	// otherwise write its task directory while RemoveAll walks it ("directory not empty") or block forever.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	o.runCtx = runCtx
+	t.Cleanup(func() {
+		cancelRun()
+		o.concurrency.WaitAgents()
+	})
 	return o, store
 }
 

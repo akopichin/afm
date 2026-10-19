@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
@@ -96,8 +97,11 @@ func TestTaskContext_WorkspaceSection(t *testing.T) {
 
 // TestTaskContext_WorkspaceSection_ReadOnlySandbox: a helper in an OS read-only sandbox (the host codex
 // adapter) is told plainly that it cannot write — not even its scratch directory — instead of being offered a
-// place for notes it cannot use.
+// place for notes it cannot use. The test pins the host environment: run inside a container (a Linux CI
+// image has /.dockerenv) the same task honestly has no OS sandbox.
 func TestTaskContext_WorkspaceSection_ReadOnlySandbox(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "")
+	t.Cleanup(config.SwapContainerMarkerPresent(func() bool { return false }))
 	o, _ := newAssistantsTestOrchestrator(t, true)
 	o.opts.RootDir = t.TempDir()
 	taskID := assistants.TaskID("t-readonly")
