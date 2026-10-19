@@ -102,6 +102,16 @@ a post without a message shows as *"You posted in the Discussion"*. The
 **↩ Reply in conversation** is no longer offered on a closed conversation, and
 the feed keeps at most the newest 2,000 conversation messages of a stage.
 
+### Fix: picking a second person in People replaces the first
+
+Clicking a person in the stage's People panel while the composer already
+addresses someone now replaces that `@handle` instead of adding the new one in
+front and leaving the old one in the text, and puts the cursor at the end. A
+reply under way stays only when the new person is in that conversation. The
+People drawer on a narrow window takes the keyboard focus, keeps **Tab** inside
+and gives the focus back when it closes, and a long command chip is shortened
+with an ellipsis and a tooltip.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was

@@ -7,7 +7,7 @@ import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { MentionMenu, mentionText } from '../assistants/AssistantMentionMenu'
-import { draftMentions, filterMentionGroups } from '../assistants/mention-match'
+import { draftMentions, filterMentionGroups, readdressDraft } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
 import { TabList, tabPanelProps } from '../tab-list'
@@ -354,15 +354,19 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated, pic
     openRequestIdRef.current = genMeshRequestId('mesh-feed-open')
   }
 
-  // addressMention — make item the recipient and put its @handle in front of the draft unless the draft
-  // already mentions it (so the user never re-types the mention).
+  // addressMention — make item the single recipient: its @handle replaces the previous recipient's (or the
+  // handle the draft starts with), or goes in front (readdressDraft), so the text never names someone the
+  // message is not sent to. The caret goes to the end of the draft, ready to type.
   function addressMention(item: MeshMentionItem): void {
     const handle = mentionText(item)
     addressedRef.current = targetKey(item.target)
     setTarget(item.target)
     setTargetHandle(handle)
-    setDraft((cur) => (draftMentions(cur, handle) ? cur : `@${handle} ${cur}`))
-    textareaRef.current?.focus()
+    const next = readdressDraft(draft, targetHandle, handle)
+    const el = textareaRef.current
+    if (next !== draft) replaceRange(0, draft.length, next) // the caret lands after the replaced text
+    else el?.setSelectionRange(next.length, next.length)
+    el?.focus()
   }
 
   // replyToMessage — Reply on a message of the shown conversation: answer it there, addressed back to its
@@ -374,15 +378,18 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated, pic
   }
 
   // A people-panel pick addresses that person like an @ menu pick: someone new drops the previous
-  // conversation. A finished participant cannot be written to (the panel disables it, the roster may have
-  // caught up since). A Reply in conversation from the feed also answers that message in its thread — the
-  // same Reply as on the conversation shown above the input.
+  // conversation — unless a reply is under way in a conversation they are in, which then stays, now addressed
+  // to them. A finished participant cannot be written to (the panel disables it, the roster may have caught up
+  // since). A Reply in conversation from the feed also answers that message in its thread — the same Reply as
+  // on the conversation shown above the input.
   useEffect(() => {
     if (pick === null) return
     onPickHandled()
     const item = participantMentionItem(mesh.roster.participants, pick.participantId)
     if (item === null || item.unavailable === true) return
-    if (targetKey(item.target) !== addressedRef.current) addressNewTarget(item.target)
+    const replyThread = replyTo !== null ? knownThreads.find((t) => t.id === openedThreadId) : undefined
+    const keepsReply = pick.reply === undefined && replyThread?.members.includes(pick.participantId) === true
+    if (targetKey(item.target) !== addressedRef.current && !keepsReply) addressNewTarget(item.target)
     addressMention(item)
     if (pick.reply !== undefined) {
       setOpenedThreadId(pick.reply.threadId)
