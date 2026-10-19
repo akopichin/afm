@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,8 +14,12 @@ import (
 // the recipient's inbox, but never counts as a waking unread message.
 
 func autoResultControl(seq uint64, msgID, threadID, sender string, recipients []string, inReplyTo *string, body string) *Control {
+	kind := agentcomm.MessageKindReply
+	if inReplyTo == nil {
+		kind = agentcomm.MessageKindMessage
+	}
 	payload, _ := json.Marshal(MeshMessageSentPayload{
-		Sender: sender, Recipients: recipients, Kind: string(agentcomm.MessageKindReply), InReplyTo: inReplyTo,
+		Sender: sender, Recipients: recipients, Kind: string(kind), InReplyTo: inReplyTo,
 		Body: body, AutoResult: true,
 	})
 	return &Control{
@@ -84,5 +89,47 @@ func TestMesh_JournalWithoutAutoResultLoads(t *testing.T) {
 	}
 	if !rs.Assistants.Mesh.HasWakingUnreadFor(agent) {
 		t.Fatal("an old unread message must still wake its recipient")
+	}
+}
+
+// A thread-scoped addressed_message wait ("wake me when someone writes to me in this thread") is not satisfied
+// by a passive turn result either — at registration or when the result arrives.
+func TestMesh_AutoResultDoesNotSatisfyThreadAddressedWait(t *testing.T) {
+	as := setupMeshThread(t, "a", "b")
+	mustApply(t, &as, autoResultControl(1, "r0", "th-1", "b", []string{"a"}, nil, "an earlier turn result"))
+	mustApply(t, &as, meshWaitRegisteredControl("in-thread", "a", agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "th-1"}, "", "", 0))
+	if got := as.Mesh.Waits["in-thread"].Status; got != agentcomm.WaitPending {
+		t.Fatalf("wait at registration = %q, want pending: a turn result is not a message to wake for", got)
+	}
+	mustApply(t, &as, autoResultControl(2, "r1", "th-1", "b", []string{"a"}, nil, "another turn result"))
+	if got := as.Mesh.Waits["in-thread"].Status; got != agentcomm.WaitPending {
+		t.Fatalf("wait = %q, want still pending", got)
+	}
+	mustApply(t, &as, meshMessageSentControl(3, "m", "th-1", "b", []string{"a"}, string(agentcomm.MessageKindMessage), nil, "a real message"))
+	if got := as.Mesh.Waits["in-thread"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("wait = %q, want ready after an ordinary message", got)
+	}
+}
+
+// Passive turn results have their own inbox cap: they never use up the room a waking message needs, and an
+// inbox full of them refuses only further passive ones.
+func TestMesh_PassiveMessagesHaveTheirOwnInboxCap(t *testing.T) {
+	as := setupMeshThread(t, "a", "b")
+	// Two threads so neither hits MaxThreadMessages.
+	mustApply(t, &as, meshThreadOpenedControl("th-2", []string{"a", "b"}))
+	for i := range agentcomm.MaxInboxPassive {
+		th := "th-1"
+		if i >= agentcomm.MaxThreadMessages/2 {
+			th = "th-2"
+		}
+		mustApply(t, &as, autoResultControl(uint64(i+1), fmt.Sprintf("p%d", i), th, "b", []string{"a"}, nil, "result"))
+	}
+	if err := dispatchControlKind(&as, autoResultControl(9999, "p-over", "th-2", "b", []string{"a"}, nil, "one too many"), true); err == nil {
+		t.Fatal("a passive message past MaxInboxPassive must be refused")
+	}
+	mustApply(t, &as, meshThreadOpenedControl("th-3", []string{"a", "b"}))
+	mustApply(t, &as, meshMessageSentControl(10000, "m", "th-3", "b", []string{"a"}, string(agentcomm.MessageKindMessage), nil, "a real message"))
+	if !as.Mesh.HasWakingUnreadFor("a") {
+		t.Fatal("the waking message must get through an inbox full of passive results")
 	}
 }

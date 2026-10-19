@@ -176,7 +176,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 		if p, ok := resolveParticipant(rs, recipient); !ok || !p.Reachable {
 			continue
 		}
-		if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}); err != nil {
+		if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {
 			log.Printf("WARN: mesh: board key %s: not notifying %s: %v", req.Key, recipient, err)
 			continue
 		}

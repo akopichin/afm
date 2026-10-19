@@ -429,10 +429,12 @@ func TestPassive_DoesNotWakeAnIdleRunAgent(t *testing.T) {
 	}
 }
 
-// Stage extra turns: a passive message arriving mid-turn does not earn the stage another turn.
+// Stage extra turns: a passive message arriving mid-turn does not earn the stage another turn. Once the stage
+// finishes, the result it never read is undeliverable — but it is not reported as unanswered work.
 func TestPassive_DoesNotExtendAStageTurn(t *testing.T) {
 	runner := &scriptedStageRunner{}
 	o, store := newUnreadTestOrchestrator(t, flow.AgentAuto, runner)
+	var passive agentcomm.MessageID
 	runner.turn = func(n int32) error {
 		if n == 1 {
 			th := deriveMeshThreadID("unread-thread")
@@ -441,11 +443,17 @@ func TestPassive_DoesNotExtendAStageTurn(t *testing.T) {
 			}); err != nil {
 				t.Errorf("OpenThread: %v", err)
 			}
-			sendAs(t, o, "op-passive", th, meshUserParticipantID, unreadTestStage, "a turn result", nil, true)
+			passive = sendAs(t, o, "op-passive", th, meshUserParticipantID, unreadTestStage, "a turn result", nil, true)
 		}
 		return nil
 	}
 	runToEnd(t, o)
+	if got := receiptOf(store, passive, unreadTestStage); got != agentcomm.DeliveryUndeliverable {
+		t.Fatalf("receipt = %s, want undeliverable: the stage will never read it", got)
+	}
+	if strings.Contains(noticesText(t, o), "unread message") {
+		t.Fatalf("a passive turn result is not unanswered work:\n%s", noticesText(t, o))
+	}
 	if got := runner.turns.Load(); got != 1 {
 		t.Fatalf("stage turns = %d, want 1: a turn result is no reason for an extra turn", got)
 	}
@@ -454,8 +462,9 @@ func TestPassive_DoesNotExtendAStageTurn(t *testing.T) {
 	}
 }
 
-// Run finalization: a finished stage with only a passive message unread does not hold the run open.
-func TestPassive_FinishedStageDoesNotBlockTheRun(t *testing.T) {
+// Run finalization: a finished stage's unread passive result holds the run only until the release right after
+// the stage finished marks it undeliverable — the same as any unread message, so it never stays accepted.
+func TestPassive_FinishedStageIsReleasedBeforeTheRunEnds(t *testing.T) {
 	ms := state.MeshState{
 		Messages: map[agentcomm.MessageID]*agentcomm.Message{"p": {ID: "p", AutoResult: true}},
 		Inbox:    map[agentcomm.ParticipantID][]agentcomm.MessageID{meshStageParticipantID("s"): {"p"}},
@@ -464,12 +473,12 @@ func TestPassive_FinishedStageDoesNotBlockTheRun(t *testing.T) {
 	rs := *state.NewRunState([]string{"s"})
 	rs.Stages["s"] = state.StageState{Status: state.StatusDone}
 	rs.Assistants.Mesh = ms
-	if finishedStageHasUnread(rs) {
-		t.Fatal("a passive message must not keep a finished stage's run open")
-	}
-	ms.Messages["p"] = &agentcomm.Message{ID: "p"}
 	if !finishedStageHasUnread(rs) {
-		t.Fatal("an ordinary unread message still does")
+		t.Fatal("the run must wait for the release of a finished stage's unread messages, passive ones included")
+	}
+	ms.Receipts["p"] = map[agentcomm.ParticipantID]agentcomm.DeliveryStatus{meshStageParticipantID("s"): agentcomm.DeliveryUndeliverable}
+	if finishedStageHasUnread(rs) {
+		t.Fatal("once released, nothing holds the run")
 	}
 }
 

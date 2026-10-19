@@ -16,6 +16,10 @@ const (
 	// MaxInboxUnread is the most messages a single participant may have waiting to be handed to it
 	// (accepted, not yet delivered) before new messages are rejected rather than queued without bound.
 	MaxInboxUnread = 200
+	// MaxInboxPassive is the same bound for passive turn results (Message.AutoResult), counted separately: they
+	// wait for the recipient's next turn without waking it, so they must never use up the room a waking
+	// message needs.
+	MaxInboxPassive = 200
 	// MaxHumanInbox is how many of the newest messages to the human its inbox index keeps. The human is not
 	// limited by MaxInboxUnread (the dashboard shows every thread in full, nothing is handed over), so the
 	// index drops its oldest entries instead; those messages stay in their threads.

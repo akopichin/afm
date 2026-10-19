@@ -147,21 +147,28 @@ func (ms MeshState) HasWakingUnreadFor(recipient agentcomm.ParticipantID) bool {
 // messages it has not been handed yet (still accepted) — explicit rejection, never a silent truncation (T0.2).
 // The limit bounds what is still waiting to reach the recipient: a message handed over in a turn's <inbox> or
 // by `afm agent inbox` (delivered) no longer occupies it, so a recipient that keeps reading never fills up.
-// The human is not limited: the dashboard shows every thread in full, there is no queue to hand over. Exported
-// so a caller can check it before taking a step it would otherwise leave behind.
-func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID) error {
+// Passive turn results (passive=true, Message.AutoResult) are counted against their own
+// agentcomm.MaxInboxPassive instead: an idle recipient collects them without being woken, and they must never
+// crowd out the waking message that would start its next turn. The human is not limited: the dashboard shows
+// every thread in full, there is no queue to hand over. Exported so a caller can check it before taking a step
+// it would otherwise leave behind.
+func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID, passive bool) error {
+	limit, what := agentcomm.MaxInboxUnread, "messages waiting to be read (MaxInboxUnread)"
+	if passive {
+		limit, what = agentcomm.MaxInboxPassive, "turn results waiting to be read (MaxInboxPassive)"
+	}
 	for _, r := range recipients {
 		if p, ok := ms.Participants[r]; ok && p.Kind == agentcomm.KindUser {
 			continue
 		}
 		waiting := 0
 		for _, mid := range ms.Inbox[r] {
-			if ms.Receipts[mid][r] == agentcomm.DeliveryAccepted {
+			if m := ms.Messages[mid]; m != nil && m.AutoResult == passive && ms.Receipts[mid][r] == agentcomm.DeliveryAccepted {
 				waiting++
 			}
 		}
-		if waiting >= agentcomm.MaxInboxUnread {
-			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d messages waiting to be read (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
+		if waiting >= limit {
+			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d %s", r, limit, what)
 		}
 	}
 	return nil
@@ -178,12 +185,15 @@ func (ms *MeshState) appendToInbox(recipient agentcomm.ParticipantID, id agentco
 	ms.Inbox[recipient] = ids
 }
 
-// hasMessageAddressedTo reports whether some message already in threadID names recipient among its
-// Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
+// hasMessageAddressedTo reports whether some message already in threadID, other than a passive turn result,
+// names recipient among its Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
 // condition is already satisfied at registration time.
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]
+		if m.AutoResult {
+			continue // a passive turn result never wakes anybody
+		}
 		for _, r := range m.Recipients {
 			if r == recipient {
 				return true
@@ -432,7 +442,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	if len(as.Mesh.MessagesByThread[threadID]) >= limit {
 		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages", threadID, limit)
 	}
-	if err := as.Mesh.CheckInboxCapacity(recipients); err != nil {
+	if err := as.Mesh.CheckInboxCapacity(recipients, msg.AutoResult); err != nil {
 		return err
 	}
 

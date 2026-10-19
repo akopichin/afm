@@ -196,9 +196,12 @@ full result it is. Team, the feed's conversation preview and the Discussion mark
 it with a **turn result** tag. A turn result does not wake its recipient: it
 waits in the inbox and is handed over at the recipient's next turn, so it does
 not start an idle run agent, give a stage an extra turn, resume an agent that
-waits for "any message" (`addressed_message` without a thread), or keep the run
-open. An agent that waits for an answer to that very message (`reply_to`) is
-resumed by it. afm skips the reply when the agent already answered the waking
+waits for a message (`addressed_message`, in one conversation or any), or keep
+the run open. An agent that waits for an answer to that very message
+(`reply_to`) is resumed by it. Turn results waiting in an inbox have their own
+limit of 200, so they never take the room an ordinary message needs; a stage
+that finishes without reading one marks it undeliverable without listing it as
+unanswered. afm skips the reply when the agent already answered the waking
 message itself during the turn; a question to someone else or a reply to a
 different message does not count. A turn with no waking message posts nothing.
 If the reply cannot be delivered — the conversation is closed or full, the
