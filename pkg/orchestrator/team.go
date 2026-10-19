@@ -15,6 +15,9 @@ import (
 // teamAliasAttempts bounds how often a member is added again after a concurrent attach took its @name.
 const teamAliasAttempts = 3
 
+// errTeamAliasContention: every attempt to add a member lost its @name to a concurrent attach.
+var errTeamAliasContention = errors.New("its @name was taken by a concurrent attach on every attempt")
+
 // teamOperationID names the AddRunAgent operation that creates a team member's agent. It depends only on
 // the declaration id, so a resumed run finds the agent it already created instead of adding a second one.
 func teamOperationID(memberID string) string {
@@ -53,7 +56,8 @@ func TeamMembersToCreate(store *state.Store, team flow.Team) (flow.Team, error) 
 // waits, idle, until somebody writes to it.
 //
 // An agent that cannot be added (an unavailable profile, a finished run) is reported and skipped, like stage
-// assistants. A journal that cannot be read or written is returned: the run must not start without it.
+// assistants. A journal that cannot be read or written, or a member that keeps losing its @name to concurrent
+// attaches, is returned: the run must not start without its team because of either.
 func (o *Orchestrator) initTeam(ctx context.Context) error {
 	if len(o.opts.Team) == 0 || !o.opts.AssistantsEnabled {
 		return nil
@@ -70,7 +74,7 @@ func (o *Orchestrator) initTeam(ctx context.Context) error {
 		default:
 			if err := o.addTeamAgent(ctx, m); err != nil {
 				var se *state.StorageError
-				if errors.As(err, &se) {
+				if errors.As(err, &se) || errors.Is(err, errTeamAliasContention) {
 					return fmt.Errorf("team member %q: %w", m.ID, err)
 				}
 				o.teamWarning(m.ID, fmt.Sprintf("agent not added: %v", err))
@@ -82,11 +86,10 @@ func (o *Orchestrator) initTeam(ctx context.Context) error {
 
 // addTeamAgent creates a member's agent. The dashboard is already up, so an "Add run agent" can take the
 // member's @name between its read of the roster and its commit; that rejection is retried with a fresh
-// roster, which gives the member the next free name.
+// roster, which gives the member the next free name. Losing every attempt is errTeamAliasContention.
 func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) error {
-	var err error
 	for range teamAliasAttempts {
-		_, err = o.AddRunAgent(ctx, AddRunAgentRequest{
+		_, err := o.AddRunAgent(ctx, AddRunAgentRequest{
 			OperationID: teamOperationID(m.ID),
 			ProfileID:   assistants.ProfileID(m.Profile),
 			Title:       m.Title,
@@ -98,7 +101,7 @@ func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) erro
 			return err
 		}
 	}
-	return err
+	return fmt.Errorf("%w (%d attempts)", errTeamAliasContention, teamAliasAttempts)
 }
 
 // warnIfTeamMemberChanged compares a saved team agent with its declaration in the current flow.yaml. A

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,5 +285,34 @@ func TestRun_TeamExistsBeforeReviewPauseResume(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the review-pause owner was never respawned")
+	}
+}
+
+// TestInitTeam_AliasContentionStopsStartup: when every attempt loses its @name to a concurrent attach, the
+// run does not start without the declared member — startup fails with a clear error.
+func TestInitTeam_AliasContentionStopsStartup(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.opts.Team = flow.Team{{ID: "arch", Profile: "reviewer", Title: "Architecture"}}
+	inHook, steals := false, 0
+	o.testAfterAttachSnapshot = func() {
+		if inHook {
+			return
+		}
+		inHook = true
+		defer func() { inHook = false }()
+		steals++
+		if _, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{
+			OperationID: fmt.Sprintf("dashboard-op-%d", steals), ProfileID: "qa", Title: "Architecture", Actor: state.Actor{Kind: "user"},
+		}); err != nil {
+			t.Errorf("dashboard AddRunAgent: %v", err)
+		}
+	}
+
+	err := o.initTeam(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `team member "arch"`) {
+		t.Fatalf("initTeam = %v, want a startup error naming arch", err)
+	}
+	if _, saved, _ := savedTeamAgent(store, "arch"); saved {
+		t.Fatal("arch was added despite the error")
 	}
 }

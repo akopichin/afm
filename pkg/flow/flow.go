@@ -379,12 +379,18 @@ func ParseFile(path string) (*Flow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read flow file: %w", err)
 	}
-	var f Flow
-	if err := yaml.Unmarshal(data, &f); err != nil {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
-	if err := rejectNullTeam(data); err != nil {
-		return nil, err
+	var f Flow
+	if len(root.Content) > 0 {
+		if err := root.Decode(&f); err != nil {
+			return nil, fmt.Errorf("parse yaml: %w", err)
+		}
+		if err := rejectNullTeam(root.Content[0]); err != nil {
+			return nil, err
+		}
 	}
 	if err := f.validate(); err != nil {
 		return nil, err
