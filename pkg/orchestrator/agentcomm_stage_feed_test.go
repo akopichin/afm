@@ -119,6 +119,30 @@ func TestStageMessages_ConversationsOfTheStage(t *testing.T) {
 	}
 }
 
+// TestStageMessages_EveryPollCarriesTheThreadsStatus: a poll with nothing new still returns every thread of the
+// stage's feed, so a conversation closed after its last message shows as closed without a new message.
+func TestStageMessages_EveryPollCarriesTheThreadsStatus(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	impl := meshStageParticipantID(assistantsTestStageID)
+	r, err := agentSend(o, "op-agents", "stage:docs", []string{string(impl)}, "docs asks impl")
+	if err != nil {
+		t.Fatalf("SendFromAgent: %v", err)
+	}
+	cursor := o.StageMessages(assistantsTestStageID, 0, 0).NextCursor
+
+	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "op-close", ThreadID: r.ThreadID, Actor: state.Actor{Kind: actorKindUser}}); err != nil {
+		t.Fatalf("CloseThread: %v", err)
+	}
+	page := o.StageMessages(assistantsTestStageID, cursor, 0)
+	if len(page.Messages) != 0 || page.NextCursor != cursor {
+		t.Fatalf("page = %+v, want no new messages at cursor %d", page, cursor)
+	}
+	if len(page.Threads) != 1 || page.Threads[0].ID != r.ThreadID || page.Threads[0].Status != agentcomm.ThreadClosed {
+		t.Fatalf("threads = %+v, want %s, closed", page.Threads, r.ThreadID)
+	}
+}
+
 func TestStageMessages_HelperOfTheStageMakesTheThreadVisible(t *testing.T) {
 	o, store := newTwoStageMeshOrchestrator(t)
 	ctx := context.Background()

@@ -18,7 +18,9 @@ with the author's `@handle` and answers in that conversation, and a line such as
 when it was opened from that stage (recorded as `origin_stage` on
 `mesh_thread_opened`) or when the stage's agent or one of its helpers takes part;
 conversations from older runs show by their members. The server reads them from
-`GET /api/mesh/stages/{id}/messages`.
+`GET /api/mesh/stages/{id}/messages`; every response lists all of the
+feed's conversations, so a conversation closed without a new message shows as
+closed on the next poll.
 
 ### Improvement: you are in every new conversation
 
