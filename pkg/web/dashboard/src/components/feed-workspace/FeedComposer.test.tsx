@@ -416,6 +416,54 @@ describe('FeedComposer', () => {
       expect(openSpy).not.toHaveBeenCalled()
     })
 
+    describe('the conversation preview is sticky', () => {
+      const writer: MeshParticipant = { id: 'run:t-w', kind: 'run_agent', scope: 'run', alias: 'writer', display_name: 'Writer', reachable: true }
+      const writerThread: MeshThread = { id: 'mt-w', scope: 'run', members: ['user', 'run:t-w'], status: 'open' }
+
+      function openWithWritersReply(): HTMLTextAreaElement {
+        vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+          messages: [{ id: 'mw1', thread_id: 'mt-w', sender_id: 'run:t-w', recipient_ids: ['user'], kind: 'reply', body: 'draft is ready', seq: 1, created_at: '2026-10-19T00:00:00Z' }],
+          next_cursor: 1,
+        })
+        openMessageMode(meshProps({ roster: roster({ participants: [runAgent, stageAgent, writer], threads: [writerThread] }) }))
+        selectMention('@writer')
+        return screen.getByRole('textbox', { name: /message the mesh/i }) as HTMLTextAreaElement
+      }
+
+      it("erasing the @mention keeps the conversation in view; Send stays off until someone is picked", async () => {
+        const ta = openWithWritersReply()
+        await waitFor(() => expect(screen.getByText('draft is ready')).toBeInTheDocument())
+
+        fireEvent.change(ta, { target: { value: 'thanks' } })
+        expect(screen.getByText('draft is ready')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+        expect(screen.getByText('Pick someone with @ or press Reply')).toBeInTheDocument()
+      })
+
+      it('× closes the conversation', async () => {
+        openWithWritersReply()
+        await waitFor(() => expect(screen.getByText('draft is ready')).toBeInTheDocument())
+        fireEvent.click(screen.getByRole('button', { name: 'Close conversation' }))
+        expect(screen.queryByText('draft is ready')).toBeNull()
+      })
+
+      it("Reply re-addresses the message's sender with its @handle and answers in that conversation", async () => {
+        const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'mw2', seq: 2 })
+        const ta = openWithWritersReply()
+        await waitFor(() => expect(screen.getByText('draft is ready')).toBeInTheDocument())
+        fireEvent.change(ta, { target: { value: 'looks good' } })
+
+        fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+        expect(ta.value).toBe('@writer looks good')
+        expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled()
+        fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+        await waitFor(() =>
+          expect(sendSpy).toHaveBeenCalledWith('mt-w', expect.objectContaining({ recipientIds: ['run:t-w'], inReplyTo: 'mw1', body: '@writer looks good' })),
+        )
+      })
+    })
+
     it('a reply target picked while a send is in flight survives that send finishing', async () => {
       const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
       vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
