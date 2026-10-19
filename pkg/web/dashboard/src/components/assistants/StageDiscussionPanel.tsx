@@ -33,6 +33,13 @@ function toMessage(w: DiscussionMessageWire): DiscussionMessage {
   }
 }
 
+// withAnswersApplied — rows already on screen keep the `unanswered` flag they were fetched with; once a reply
+// to one of them arrives on a later page, it is answered (the server's own rule: any reply not from the human).
+export function withAnswersApplied(messages: DiscussionMessage[]): DiscussionMessage[] {
+  const answered = new Set(messages.filter((m) => m.authorKind !== 'human' && m.parentMessageId).map((m) => m.parentMessageId))
+  return messages.map((m) => (m.unanswered === true && answered.has(m.id) ? { ...m, unanswered: false } : m))
+}
+
 export type StageDiscussionPanelProps = {
   stageId: string
   // participants — the Agent Mesh roster, so authors are shown by name and can be pulled in with `@`.
@@ -102,7 +109,7 @@ export function StageDiscussionPanel({ stageId, participants = [], stageStatus }
           const page = await listStageDiscussion(stageId, cursorRef.current)
           if (isStopped()) return
           if (page.messages.length > 0) {
-            setMessages((prev) => prev.concat(page.messages.map(toMessage)))
+            setMessages((prev) => withAnswersApplied(prev.concat(page.messages.map(toMessage))))
           }
           cursorRef.current = page.nextCursor
           if (!page.hasMore) return

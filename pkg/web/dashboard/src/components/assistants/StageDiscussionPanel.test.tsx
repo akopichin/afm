@@ -156,4 +156,29 @@ describe('StageDiscussionPanel', () => {
     rerender(<StageDiscussionPanel stageId="implement" stageStatus="done" />)
     await waitFor(() => expect(screen.getByText('Not answered')).toBeInTheDocument())
   })
+
+  test('a reply arriving later clears the "Not answered" mark of the row already on screen', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(runClient, 'listStageDiscussion')
+        .mockResolvedValueOnce({
+          messages: [{ id: 'm1', author_kind: 'human', round: 0, body: 'any news?', unanswered: true, created_at: '2026-10-16T10:00:00Z' }],
+          nextCursor: 1,
+          hasMore: false,
+        })
+        .mockResolvedValue({
+          messages: [{ id: 'm2', author_kind: 'assistant', author_id: 'run:t-1', round: 0, parent_message_id: 'm1', body: 'yes', created_at: '2026-10-16T10:01:00Z' }],
+          nextCursor: 2,
+          hasMore: false,
+        })
+      render(<StageDiscussionPanel stageId="implement" stageStatus="done" />)
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(screen.getByText('Not answered')).toBeInTheDocument()
+      await act(async () => vi.advanceTimersByTime(3000))
+      expect(screen.getByText('yes')).toBeInTheDocument()
+      expect(screen.queryByText('Not answered')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -24,7 +24,9 @@ A Revise (from the feed, a stage button, an accepted proposal or a discussion
 question) now applies only if the stage is still in the status it was decided
 for, and manual Revise is decided together with the flow review pause. A Pause
 that lands first is no longer undone by a Revise moving the stage back to
-`revising`.
+`revising`. When a Pause wins, an accepted proposal stays accepted and is
+delivered later instead of being marked delivered, and a stage button answers
+409 instead of reporting success.
 
 ### Improvement: `@` mentions in the stage Discussion
 
