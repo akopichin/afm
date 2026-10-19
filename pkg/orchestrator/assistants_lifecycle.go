@@ -42,6 +42,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
 		Redact:         o.RedactSecrets,
+		Secrets:        o.secretValues,
 		MeshClient:     o.meshClientFor(participant),
 		OnDelivered:    o.deliverRenderedInbox(participant),
 	}

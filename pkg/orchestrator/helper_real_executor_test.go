@@ -234,3 +234,41 @@ func readTrimmed(t *testing.T, path string) string {
 	}
 	return strings.TrimSpace(string(raw))
 }
+
+// TestHelperTurn_RealExecutor_SecretSplitAcrossStderrWritesIsRedacted: the helper prints a known secret to
+// stderr across two writes and the 64 KiB flush point of a long line; agent.stderr.log never holds it — the executor redacts the stream knowing the secrets.
+func TestHelperTurn_RealExecutor_SecretSplitAcrossStderrWritesIsRedacted(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	const secret = "s3cr3t-token-split-across-writes"
+	o.opts.SecretValues = []string{secret}
+	out := t.TempDir()
+	answer := mustJSONLine(t, map[string]any{"type": "assistant", "message": map[string]any{"content": []map[string]any{
+		{"type": "text", "text": `{"schema_version":1,"kind":"result","verdict":"pass","summary":"looks fine"}`},
+	}}})
+	script := filepath.Join(out, "agent.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/bash\n"+
+		// A long line: the secret straddles the 64 KiB point where a line-based redactor would flush.
+		`{ printf 'token='; head -c 65530 /dev/zero | tr '\0' a; printf '%s' '`+secret[:10]+`'; } >&2`+"\n"+
+		"sleep 0.1\n"+
+		`printf '%s\n' '`+secret[10:]+`' >&2`+"\n"+
+		"cat <<'EOF'\n"+answer+"\nEOF\n"+
+		`echo '{"type":"result","subtype":"success"}'`+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, _, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return o.execHelperAgent(ctx, taskID, profileID, script, prompt, logFile, resultFile)
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-stderr-secret")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 5*time.Second)
+	o.concurrency.WaitAgents()
+
+	raw, err := os.ReadFile(filepath.Join(o.taskDir(taskID), "agent.stderr.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), secret) || !strings.Contains(string(raw), "token=") {
+		t.Fatalf("agent.stderr.log ends with %q, want the stderr line with the secret masked", raw[max(0, len(raw)-80):])
+	}
+}
