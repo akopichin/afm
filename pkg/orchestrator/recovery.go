@@ -223,6 +223,35 @@ func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
 	o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 }
 
+// executionPhases maps an execution kind to the phase its turn runs (the phase a park resumes into).
+var executionPhases = map[string]string{kindAutonomous: phaseAutonomous, kindImplementation: phaseImplementation, kindReview: phaseReview}
+
+// parkInterruptedTurn parks a running stage whose turn ended for waits but whose process stopped before its exit
+// parked it — Ctrl+C right after `afm agent wait` answered "yield", or a Pause that interrupted it then. Rerunning
+// the author would ask again; a completion marker it left must not finish the stage past the wait. The park is
+// what the exit would have committed (interruptedTurnEpisode), and its continuation is decided at once.
+func (o *Orchestrator) parkInterruptedTurn(ctx context.Context, s flow.Stage) bool {
+	rs := o.opts.Store.Snapshot()
+	episode := interruptedTurnEpisode(rs, s.ID)
+	if len(episode) == 0 {
+		return false
+	}
+	phase, ok := executionPhases[o.executionKind(s)]
+	if !ok {
+		return false
+	}
+	epoch := rs.Stages[s.ID].Epoch
+	o.prePeerPhase.Store(s.ID, phase)
+	saveMeshPeerWaitPhase(o.stageDir(s.ID), phase)
+	guard := bus.GuardCtx{Phase: phase, ExpectFrom: state.StatusRunning, ExpectEpoch: &epoch, PeerWaits: episode}
+	if _, ok := o.Trigger(s.ID, bus.EvAwaitPeer, guard, "recovered: the turn had yielded on waits"); !ok {
+		o.prePeerPhase.CompareAndDelete(s.ID, phase)
+		return true // the stage moved on meanwhile; whoever moved it owns it
+	}
+	o.continueParkedStage(ctx, s.ID)
+	return true
+}
+
 // resumeStageAtStatus is shared by startup and Continue: the recorded status
 // describes work whose process is no longer running.
 func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, status state.StageStatus) {
@@ -230,7 +259,13 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusPlanning:
 		o.resumePlanningStage(ctx, s)
 	case state.StatusRunning, state.StatusRetrying:
+		if status == state.StatusRunning && o.parkInterruptedTurn(ctx, s) {
+			return
+		}
 		o.resumeExecutionStage(ctx, s, status)
+	case state.StatusAwaitingPeer:
+		// Continue of a paused park: the continuation is decided on the park's waits again.
+		o.continueParkedStage(ctx, s.ID)
 	case state.StatusRevising:
 		kind := o.revisingKind(s)
 		o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind))

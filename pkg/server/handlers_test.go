@@ -700,6 +700,29 @@ func TestHandlePause(t *testing.T) {
 	}
 }
 
+// A stage parked waiting for a colleague (awaiting_peer) can be paused: team reviews park there routinely.
+func TestHandlePause_AwaitingPeer(t *testing.T) {
+	var pausedID string
+	srv, _ := setupTestServer(t)
+	for _, tr := range []state.Transition{
+		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
+		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingPeer, Event: "await_peer"},
+	} {
+		if err := srv.store.Apply(&tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
+	w := httptest.NewRecorder()
+	srv.handlePause(w, req)
+
+	if w.Code != http.StatusOK || pausedID != testStageID {
+		t.Fatalf("pause of awaiting_peer: status %d, paused %q; want 200 and the stage paused", w.Code, pausedID)
+	}
+}
+
 func TestHandlePause_WrongStatus(t *testing.T) {
 	srv, _ := setupTestServer(t) // seeded at awaiting_approval by setupTestServer itself
 	srv.actions = fakeStageActions{}

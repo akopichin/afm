@@ -362,3 +362,25 @@ func TestMesh_NewReplyToWaitIgnoresAHumanReplyOnReplay(t *testing.T) {
 		t.Fatalf("new wait = %+v, want pending under the recipient-only rule", got)
 	}
 }
+
+// A wait remembers when it was registered and whether it was still pending then (`afm agent wait` answered
+// "yield") — derived on replay, so recovery can tell which waits a crashed turn yielded on.
+func TestMesh_WaitRecordsRegistrationSeqAndYield(t *testing.T) {
+	as := setupMeshThread(t, "author", "rev")
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m1"}
+	mustApply(t, &as, meshMessageSentControl(1, "m1", "th-1", "author", []string{"rev"}, string(agentcomm.MessageKindMessage), nil, "review please"))
+	pending := recipientReplyWaitControl("w-pending", "author", cond)
+	pending.Seq = 2
+	mustApply(t, &as, pending)
+	mustApply(t, &as, meshMessageSentControl(3, "m2", "th-1", "rev", []string{"author"}, string(agentcomm.MessageKindReply), strp("m1"), "lgtm"))
+	ready := recipientReplyWaitControl("w-ready", "author", cond)
+	ready.Seq = 4
+	mustApply(t, &as, ready)
+
+	if w := as.Mesh.Waits["w-pending"]; !w.Yielded || w.RegisteredSeq != 2 || w.Status != agentcomm.WaitReady {
+		t.Fatalf("w-pending = %+v, want yielded at seq 2 (ready since)", w)
+	}
+	if w := as.Mesh.Waits["w-ready"]; w.Yielded || w.RegisteredSeq != 4 {
+		t.Fatalf("w-ready = %+v, want ready at registration (no yield) at seq 4", w)
+	}
+}

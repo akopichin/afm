@@ -279,12 +279,17 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 // timers before the change, the new status, then the stage_status waits the new status resolves.
 func (rs *RunState) applyTransition(t *Transition) {
 	accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
+	prev := rs.Stages[t.StageID]
 	rs.SetStageStatusAt(t.StageID, t.To, t.Time)
 	st := rs.Stages[t.StageID]
 	if stageTakeoverEvents[t.Event] {
 		st.Epoch++
 	}
 	st.PeerWaits = slices.Clone(t.PeerWaits)
+	// Pausing a park and continuing it keep its episode: Continue decides the continuation on the same waits.
+	if (t.To == StatusPaused && t.From == StatusAwaitingPeer) || (t.From == StatusPaused && t.To == StatusAwaitingPeer) {
+		st.PeerWaits = slices.Clone(prev.PeerWaits)
+	}
 	st.Seq = t.Seq
 	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()

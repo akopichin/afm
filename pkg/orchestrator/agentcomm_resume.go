@@ -546,7 +546,7 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 }
 
 // meshWaitStatusesOf is the status of every wait of waiter right now — the "before the turn" side of
-// turnWaitAnswered.
+// turnEpisode.
 func (o *Orchestrator) meshWaitStatusesOf(waiter agentcomm.ParticipantID) map[agentcomm.WaitID]agentcomm.WaitStatus {
 	out := map[agentcomm.WaitID]agentcomm.WaitStatus{}
 	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
@@ -564,10 +564,28 @@ func (o *Orchestrator) meshWaitStatusesOf(waiter agentcomm.ParticipantID) map[ag
 // its answer in the same turn), and neither is an older wait already resolved before the turn. Sorted.
 func (o *Orchestrator) turnEpisode(waiter agentcomm.ParticipantID, before map[agentcomm.WaitID]agentcomm.WaitStatus) []agentcomm.WaitID {
 	var episode []agentcomm.WaitID
-	for id, status := range o.meshWaitStatusesOf(waiter) {
+	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter != waiter {
+			continue
+		}
 		prev, existed := before[id]
-		_, yielded := o.yieldedWaits.Load(id)
-		if status == agentcomm.WaitPending || prev == agentcomm.WaitPending || (!existed && yielded) {
+		if w.Status == agentcomm.WaitPending || prev == agentcomm.WaitPending || (!existed && w.Yielded) {
+			episode = append(episode, id)
+		}
+	}
+	slices.Sort(episode)
+	return episode
+}
+
+// interruptedTurnEpisode is turnEpisode for a turn whose process is gone without an exit (a crash, or a Pause
+// that stopped it right after `afm agent wait` answered "yield"): the waits still pending, and those the
+// current turn — everything since the stage's latest transition — yielded on.
+func interruptedTurnEpisode(rs state.RunState, stageID string) []agentcomm.WaitID {
+	waiter := meshStageParticipantID(stageID)
+	since := rs.Stages[stageID].Seq
+	var episode []agentcomm.WaitID
+	for id, w := range rs.Assistants.Mesh.Waits {
+		if w.Waiter == waiter && (w.Status == agentcomm.WaitPending || (w.Yielded && w.RegisteredSeq > since)) {
 			episode = append(episode, id)
 		}
 	}

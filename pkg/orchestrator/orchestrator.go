@@ -167,9 +167,6 @@ type Orchestrator struct {
 	// was running when it registered a mesh Wait and parked in awaiting_peer, so onPeerReplied knows which
 	// kind of agent to respawn.
 	prePeerPhase sync.Map
-	// yieldedWaits marks the waits registered still pending in this process (agentcomm.WaitID → struct{}):
-	// `afm agent wait` answered "yield", so the agent ended its turn for them. See turnWaitAnswered.
-	yieldedWaits sync.Map
 	// unreadTurns counts, per stageID, the extra turns given because the stage agent finished with unread
 	// messages (int); unreadNotePending marks a stage whose next prompt gets the "answer them, then finish" note.
 	// See agentcomm_unread.go.

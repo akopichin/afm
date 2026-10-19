@@ -381,8 +381,8 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch st.Status {
-	// awaiting_assistants: see Orchestrator.Pause's matching comment (control_api.go) — T7.1's checklist.
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants:
+	// awaiting_assistants/awaiting_peer: see Orchestrator.Pause's matching comments (control_api.go).
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer:
 	default:
 		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
 		return

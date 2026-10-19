@@ -33,6 +33,11 @@ type MeshWait struct {
 	// only a reply from a recipient of the awaited message answers it. A wait journaled before that rule keeps
 	// the old one — any reply answers it — so replaying an old journal resolves its waits as it did then.
 	RecipientReplyOnly bool `json:"recipient_reply_only,omitempty"`
+	// RegisteredSeq is the seq of the record that registered the wait, and Yielded whether it was still pending
+	// then — `afm agent wait` answered "yield", so the waiter ended its turn for it. Both are derived from the
+	// registration on replay; recovery uses them to find the waits a turn interrupted before its park yielded on.
+	RegisteredSeq uint64 `json:"registered_seq,omitempty"`
+	Yielded       bool   `json:"yielded,omitempty"`
 }
 
 // MeshWaitRegisteredPayload is the mesh_wait_registered control record's payload — decoded here by
@@ -91,9 +96,11 @@ func applyMeshWaitRegistered(as *AssistantsState, c *Control, dryRun bool) error
 			mw.ResultBaseline = t.ResultSeq
 		}
 	}
+	mw.RegisteredSeq = c.Seq
 	if as.meshWaitSatisfied(mw) {
 		mw.Status = agentcomm.WaitReady
 	}
+	mw.Yielded = mw.Status == agentcomm.WaitPending
 	as.Mesh.Waits[id] = mw
 	as.Mesh.WaitOrder = append(as.Mesh.WaitOrder, id)
 	return nil

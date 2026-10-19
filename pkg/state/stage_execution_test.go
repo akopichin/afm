@@ -140,3 +140,29 @@ func TestStageSeq_IdentifiesTheLatestTransition(t *testing.T) {
 		t.Fatalf("replayed seq = %d, want %d", got, park2)
 	}
 }
+
+// A paused park keeps its episode, and Continue back into awaiting_peer restores the same waits, so the
+// continuation is decided on them again.
+func TestStagePeerWaits_SurvivePauseAndContinue(t *testing.T) {
+	s, err := Open(t.TempDir(), []string{"s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	applyTr(t, s, StatusPending, StatusRunning, "start_run")
+	if err := s.Apply(&Transition{StageID: "s", From: StatusRunning, To: StatusAwaitingPeer, Event: "await_peer", PeerWaits: []agentcomm.WaitID{"w1"}}); err != nil {
+		t.Fatal(err)
+	}
+	applyTr(t, s, StatusAwaitingPeer, StatusPaused, "pause")
+	if got := s.Snapshot().Stages["s"].PeerWaits; len(got) != 1 {
+		t.Fatalf("paused park's waits = %v, want w1", got)
+	}
+	applyTr(t, s, StatusPaused, StatusAwaitingPeer, "continue")
+	if got := s.Snapshot().Stages["s"].PeerWaits; len(got) != 1 || got[0] != "w1" {
+		t.Fatalf("continued park's waits = %v, want w1", got)
+	}
+	applyTr(t, s, StatusAwaitingPeer, StatusRunning, "peer_replied")
+	if got := s.Snapshot().Stages["s"].PeerWaits; got != nil {
+		t.Fatalf("waits after the resume = %v, want none", got)
+	}
+}
