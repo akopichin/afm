@@ -421,10 +421,15 @@ on is answered, or ends without an answer, before its process exits, the stage
 continues in a new turn instead of finishing or being retried as incomplete.
 An answer the agent already read in that turn (with `afm agent inbox`) is not a
 reason for another turn. Every turn's prompt lists the requests the stage agent
-sent in earlier turns with their answers and whether a wait for one is still
-open, and a continuation that is not a resumed agent session also gets the
-earlier turns' actions, so the agent goes on where it stopped instead of asking
-its colleagues again.
+sent in earlier turns: each with its answers, its open wait, or the status and
+reason of a wait that ended without an answer (cancelled, expired). Requests
+still waiting come first, then the newest others; the list keeps at most 20
+requests and about 24 KiB of text, shows the start of each request and answer
+(`afm agent inbox --all` has the full text) and says how many requests and
+answers it left out. A continuation that is not a resumed agent session also
+gets the earlier turns' actions, also when afm restarted before its agent
+started, so the agent goes on where it stopped instead of asking its
+colleagues again.
 The park remembers which waits the turn ended for, so after a restart the stage
 continues on the same rule, also when one of them was answered by a turn
 result and another is still open. If you pause, continue or revise the stage

@@ -138,14 +138,16 @@ type AgentCommRequest struct {
 	Answers []AgentCommInboxMessage
 	// Waiting — a wait for its answer is still open: the answer resumes the participant when it arrives.
 	Waiting bool
+	// WaitEnded — the wait for its answer ended without one: its status and reason (e.g. "cancelled: ...").
+	WaitEnded string
 }
 
 // AgentCommRequestsBlock renders the <your_requests> block: the requests the participant sent in earlier turns,
 // oldest first, each with its answers or a note that it is still waiting. A turn started as a fresh agent session
 // has no memory of sending them; without this list it asks the same colleagues again. The block repeats on every
-// turn, so the caller cuts the texts to their start; the block points to the full text. No requests renders
-// nothing.
-func AgentCommRequestsBlock(requests []AgentCommRequest) string {
+// turn, so the caller cuts the texts to their start and leaves some out; omittedRequests/omittedAnswers say how
+// many, and the block points to the full text. No requests renders nothing.
+func AgentCommRequestsBlock(requests []AgentCommRequest, omittedRequests, omittedAnswers int) string {
 	if len(requests) == 0 {
 		return ""
 	}
@@ -157,11 +159,18 @@ func AgentCommRequestsBlock(requests []AgentCommRequest) string {
 		for _, a := range r.Answers {
 			writeInboxMessage(&sb, "  ", a, a.Body)
 		}
-		if r.Waiting {
+		switch {
+		case r.Waiting:
 			sb.WriteString("  (still waiting for an answer: your open wait resumes you when it arrives)\n")
-		} else if len(r.Answers) == 0 {
+		case len(r.Answers) > 0:
+		case r.WaitEnded != "":
+			fmt.Fprintf(&sb, "  (ended without an answer (%s): its wait is over, do not wait for this one any more)\n", escapeTags(r.WaitEnded))
+		default:
 			sb.WriteString("  (no answer, and no wait registered for one)\n")
 		}
+	}
+	if omittedRequests > 0 || omittedAnswers > 0 {
+		fmt.Fprintf(&sb, "%d more requests and %d more answers are not shown here.\n", omittedRequests, omittedAnswers)
 	}
 	sb.WriteString("Texts are cut to their start; `afm agent inbox --all` shows them in full.\n")
 	sb.WriteString("</your_requests>\n")

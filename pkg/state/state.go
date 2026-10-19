@@ -91,6 +91,11 @@ type StageState struct {
 	Epoch uint64 `json:"epoch,omitempty"`
 	// PeerWaits — while parked in awaiting_peer: the waits its continuation depends on (Transition.PeerWaits).
 	PeerWaits []agentcomm.WaitID `json:"peer_waits,omitempty"`
+	// PeerContinued — the stage's current turn continues earlier turns after it waited for colleagues: set by the
+	// resume out of awaiting_peer (peerContinuationEvents), kept while that turn is retried, cleared by any other
+	// transition. A turn that starts as a fresh agent session reads it to get the earlier turns' actions — also
+	// after a restart between the resume and the agent's start. Derived on replay.
+	PeerContinued bool `json:"peer_continued,omitempty"`
 	// Seq is the seq of the stage's latest transition. While parked, it identifies the park: a resume is fenced
 	// to it (Transition.ExpectStageSeq), so a resume decided for an earlier park cannot move a later one.
 	Seq uint64 `json:"seq,omitempty"`
@@ -99,6 +104,19 @@ type StageState struct {
 // stageTakeoverEvents are the FSM events (pkg/orchestrator/bus) by which someone other than the stage's running
 // process takes the stage over or hands it to a new process; each one starts a new StageState.Epoch.
 var stageTakeoverEvents = map[string]bool{"pause": true, "continue": true, "revise": true}
+
+// peerContinuationEvents are the FSM events (pkg/orchestrator/bus) that resume a stage parked in awaiting_peer.
+var peerContinuationEvents = map[string]bool{"peer_replied": true, "peer_question": true, "peer_wait_ended": true}
+
+// continuesPeerTurn reports whether transition t keeps the stage in a turn that continues after a peer wait:
+// the resume itself, or a retry of that turn.
+func continuesPeerTurn(prev StageState, t *Transition) bool {
+	if t.From == StatusAwaitingPeer && peerContinuationEvents[t.Event] {
+		return true
+	}
+	retry := t.To == StatusRetrying || (t.From == StatusRetrying && t.To == StatusRunning)
+	return prev.PeerContinued && retry
+}
 
 // RunState is the snapshot cache; events.jsonl is authoritative.
 type RunState struct {
@@ -290,6 +308,7 @@ func (rs *RunState) applyTransition(t *Transition) {
 	if (t.To == StatusPaused && t.From == StatusAwaitingPeer) || (t.From == StatusPaused && t.To == StatusAwaitingPeer) {
 		st.PeerWaits = slices.Clone(prev.PeerWaits)
 	}
+	st.PeerContinued = continuesPeerTurn(prev, t)
 	st.Seq = t.Seq
 	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()

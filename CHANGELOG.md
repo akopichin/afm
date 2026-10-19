@@ -24,11 +24,14 @@ only that it finished.
 
 A stage agent resumed by a reviewer's answer used to begin its task again in a
 fresh session and ask the same colleagues once more, round after round. Every
-turn's prompt now lists the requests the stage sent earlier with their answers
-and the waits still open, a continuation without a resumed session also gets
-the earlier turns' actions, and an answer the agent already read during its
-turn no longer earns the stage another turn. The `agent-team-review` example
-checks where the review stands at the start of each turn.
+turn's prompt now lists the requests the stage sent earlier with their answers,
+the waits still open and the ones that ended without an answer (with status and
+reason) — open requests first, at most 20 requests and about 24 KiB, with a
+count of what was left out. A continuation without a resumed session also gets
+the earlier turns' actions, even after a restart before its agent started, and
+an answer the agent already read during its turn no longer earns the stage
+another turn. The `agent-team-review` example checks where the review stands
+at the start of each turn and finishes when a reviewer is unavailable.
 
 ### Improvement: the stage conversation lives in the Feed
 

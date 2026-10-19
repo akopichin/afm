@@ -166,3 +166,53 @@ func TestStagePeerWaits_SurvivePauseAndContinue(t *testing.T) {
 		t.Fatalf("waits after the resume = %v, want none", got)
 	}
 }
+
+// PeerContinued marks a turn that continues the stage after it waited for colleagues: set by the resume out of
+// awaiting_peer, kept while that turn is retried, cleared by any other transition — and derived the same way on
+// replay, so a restart before the continuation's agent started still knows it continues earlier turns.
+func TestStagePeerContinued_SetByThePeerResumeAndReplayed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, []string{"s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued := func() bool { return s.Snapshot().Stages["s"].PeerContinued }
+	applyTr(t, s, StatusPending, StatusRunning, "start_run")
+	for _, ev := range []string{"peer_replied", "peer_question", "peer_wait_ended"} {
+		applyTr(t, s, StatusRunning, StatusAwaitingPeer, "await_peer")
+		if continued() {
+			t.Fatal("PeerContinued set on the park itself")
+		}
+		applyTr(t, s, StatusAwaitingPeer, StatusRunning, ev)
+		if !continued() {
+			t.Fatalf("PeerContinued not set by %s", ev)
+		}
+	}
+	applyTr(t, s, StatusRunning, StatusRetrying, "retry")
+	applyTr(t, s, StatusRetrying, StatusRunning, "retry_start")
+	if !continued() {
+		t.Fatal("a retry of the continuation turn lost PeerContinued")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rs.Stages["s"].PeerContinued {
+		t.Fatal("replay lost PeerContinued")
+	}
+
+	s2, err := Open(dir, []string{"s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s2.Close() })
+	if err := s2.Apply(&Transition{StageID: "s", From: StatusRunning, To: StatusPaused, Event: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Snapshot().Stages["s"].PeerContinued {
+		t.Fatal("PeerContinued survived a transition that is not part of the continuation turn")
+	}
+}

@@ -8,10 +8,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -98,5 +100,124 @@ func TestPeerContinuation_SecondAnswerReadInTheContinuationFinishes(t *testing.T
 	}
 	if !strings.Contains(prompt, "Previously completed actions") || !strings.Contains(prompt, "Asked both reviewers.") {
 		t.Fatalf("a fresh continuation session must get the earlier turns' actions:\n%s", prompt)
+	}
+}
+
+// A restart between the resume out of awaiting_peer and the continuation agent's start: the restarted turn is
+// still a continuation and gets the earlier turns' actions — the journal says so, not process memory.
+func TestPeerContinuation_CrashBeforeTheAgentStartedKeepsTheContext(t *testing.T) {
+	runDir := t.TempDir()
+	o, store := newUnreadTestOrchestratorAt(t, runDir, flow.AgentAuto, &scriptedStageRunner{turn: func(int32) error { return nil }})
+	thread, question := yieldedStage(t, o)
+	epoch := store.Snapshot().Stages[unreadTestStageID].Epoch
+	o.parkForPeers(context.Background(), unreadTestStageID, phaseAutonomous, epoch, o.turnEpisode(unreadTestStage, nil), func() { t.Error("no revise here") })
+	answerAsUser(t, o, thread, question)
+	park := store.Snapshot().Stages[unreadTestStageID].Seq
+	if _, ok := o.Trigger(unreadTestStageID, bus.EvPeerReplied, bus.GuardCtx{Phase: phaseAutonomous, ExpectStageSeq: &park}, ""); !ok {
+		t.Fatal("the resume transition did not commit")
+	}
+	stageDir := filepath.Join(runDir, unreadTestStageID)
+	for _, name := range []string{".done", "execution_summary.md"} {
+		if err := os.Remove(filepath.Join(stageDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Asked the human."}]}}` + "\n"
+	if err := os.WriteFile(filepath.Join(stageDir, flow.PhaseJSONL(flow.PhaseAutonomous)), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &scriptedStageRunner{turn: func(int32) error { return nil }}
+	restartAndRecover(t, runDir, runner)
+	deadline := time.Now().Add(5 * time.Second)
+	for runner.turns.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no turn after recovery")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if prompt := runner.prompt(1); !strings.Contains(prompt, "Previously completed actions") || !strings.Contains(prompt, "Asked the human.") {
+		t.Fatalf("the recovered continuation must get the earlier turns' actions:\n%s", prompt)
+	}
+}
+
+// requestsMesh is a mesh in which the stage sent n review requests (seq 1..n, ids mm-1..mm-n) to qa.
+func requestsMesh(n int) state.MeshState {
+	mesh := state.MeshState{
+		Participants: map[agentcomm.ParticipantID]*agentcomm.Participant{"run:qa": {ID: "run:qa", Alias: "qa"}},
+		Messages:     map[agentcomm.MessageID]*agentcomm.Message{},
+		Waits:        map[agentcomm.WaitID]*state.MeshWait{},
+	}
+	for i := 1; i <= n; i++ {
+		id := agentcomm.MessageID(fmt.Sprintf("mm-%d", i))
+		mesh.Messages[id] = &agentcomm.Message{
+			ID: id, Sender: unreadTestStage, Recipients: []agentcomm.ParticipantID{"run:qa"}, Kind: agentcomm.MessageKindRequest,
+			Body: "please review", Seq: uint64(i),
+		}
+	}
+	return mesh
+}
+
+func addReply(mesh state.MeshState, id string, to agentcomm.MessageID, seq uint64, body string) {
+	mesh.Messages[agentcomm.MessageID(id)] = &agentcomm.Message{
+		ID: agentcomm.MessageID(id), Sender: "run:qa", Recipients: []agentcomm.ParticipantID{unreadTestStage},
+		Kind: agentcomm.MessageKindReply, InReplyTo: &to, Body: body, Seq: seq,
+	}
+}
+
+func addWait(mesh state.MeshState, id string, on agentcomm.MessageID, status agentcomm.WaitStatus, reason string) {
+	mesh.Waits[agentcomm.WaitID(id)] = &state.MeshWait{Wait: agentcomm.Wait{
+		ID: agentcomm.WaitID(id), Waiter: unreadTestStage, Status: status, Reason: reason,
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: on},
+	}}
+}
+
+// An old request whose wait is still open stays in the block behind any number of newer answered ones, and the
+// block says how many requests it left out.
+func TestRequestsBlock_KeepsOpenRequestsFirst(t *testing.T) {
+	mesh := requestsMesh(maxListedRequests + 6)
+	addWait(mesh, "mw-old", "mm-1", agentcomm.WaitPending, "")
+	for i := 2; i <= maxListedRequests+6; i++ {
+		addReply(mesh, fmt.Sprintf("mm-r%d", i), agentcomm.MessageID(fmt.Sprintf("mm-%d", i)), uint64(100+i), "no findings")
+	}
+	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	if !strings.Contains(block, "[mm-1] to qa") || !strings.Contains(block, "still waiting") {
+		t.Fatalf("the open request was evicted:\n%s", block)
+	}
+	if strings.Contains(block, "[mm-2] to qa") || !strings.Contains(block, "6 more requests") {
+		t.Fatalf("want the oldest answered requests left out and counted:\n%s", block)
+	}
+}
+
+// Many long answers stay within the block's total budget; the answers left out are counted.
+func TestRequestsBlock_StaysWithinItsBudget(t *testing.T) {
+	mesh := requestsMesh(maxListedRequests)
+	long := strings.Repeat("x", 4*answerExcerptBytes)
+	seq := uint64(1000)
+	for i := 1; i <= maxListedRequests; i++ {
+		for j := range 5 {
+			seq++
+			addReply(mesh, fmt.Sprintf("mm-r%d-%d", i, j), agentcomm.MessageID(fmt.Sprintf("mm-%d", i)), seq, long)
+		}
+	}
+	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	if len(block) > requestsBlockBudget+2048 {
+		t.Fatalf("block is %d bytes, budget %d", len(block), requestsBlockBudget)
+	}
+	if !strings.Contains(block, "more answers are not shown") {
+		t.Fatalf("the left-out answers must be counted:\n%.2000s", block)
+	}
+}
+
+// A wait that ended without an answer (cancelled, expired) shows its status and reason.
+func TestRequestsBlock_ShowsAWaitThatEnded(t *testing.T) {
+	mesh := requestsMesh(1)
+	addWait(mesh, "mw-1", "mm-1", agentcomm.WaitCancelled, "no recipient of mm-1 can answer it")
+	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	if !strings.Contains(block, "cancelled: no recipient of mm-1 can answer it") || strings.Contains(block, "no wait registered") {
+		t.Fatalf("an ended wait must show its status and reason:\n%s", block)
 	}
 }

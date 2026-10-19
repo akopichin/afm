@@ -308,11 +308,6 @@ func (o *Orchestrator) resumeAwaitingPeerPhase(ctx context.Context, ev bus.Event
 	if stage == nil {
 		return nil
 	}
-	// A continuation that does not resume the agent's session is a fresh one: like a Continue, it gets the
-	// earlier turns' actions, so it goes on from where they stopped instead of starting its task over.
-	if !willResume(*stage, o.stageDir(stage.ID), phase) {
-		o.armResumeContext(stage.ID)
-	}
 	return o.resumeStageForPhase(ctx, *stage, phase, fsmEv, ev.ParkSeq)
 }
 

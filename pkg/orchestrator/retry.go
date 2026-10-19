@@ -259,6 +259,12 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// A turn that continues the stage after a peer wait (state.StageState.PeerContinued, from the journal — it
+	// survives a restart before the agent started) is a fresh session unless the agent's session is resumed:
+	// it gets the earlier turns' actions, so it goes on where they stopped instead of starting its task over.
+	if o.opts.Store != nil && o.opts.Store.Snapshot().Stages[s.ID].PeerContinued && !willResume(s, stageDir, phase) {
+		resumeCtx = true
+	}
 	// maxRetries/retryBackoff/maxUnknownRetries/retryBackoffMax — снапшоты с инстанса (см.
 	// Orchestrator-комментарий): эта горутина может пережить возврат Run(), поэтому globals не читаем.
 	maxRetries := o.maxRetries
