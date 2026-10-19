@@ -3,6 +3,7 @@ package executor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -161,5 +162,27 @@ func TestObservation_WriteToolNeverTruncatedByAdapter(t *testing.T) {
 	_, detail, ok := ObservationToAction(obs[0], 5)
 	if !ok || detail != obs[0].Content {
 		t.Fatalf("Write detail truncated: got %q, want full %q", detail, obs[0].Content)
+	}
+}
+
+// A stored event longer than the live-pipe line limit is replayed whole: the restart baseline counts every
+// observation in it, exactly as the live run did, so ids handed out before the restart are never reused.
+func TestObservation_ReplayCountsAnOversizedStoredLineWhole(t *testing.T) {
+	meta := observationMeta{runID: "run1", stageID: "impl", executionID: "impl/implementation"}
+	big := strings.Repeat("x", maxOutputLineBytes)
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"` + big + `"},{"type":"text","text":"tail"}]}}`
+	ev, ok := parseStreamEvent(line)
+	if !ok {
+		t.Fatal("the oversized line should parse")
+	}
+	live := 0
+	buildObservationsFromEvent(meta, ev, &live)
+
+	path := filepath.Join(t.TempDir(), "implementation.jsonl")
+	if err := os.WriteFile(path, []byte(line+"\n"+assistantLine(t, "after")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := countExistingObservations(meta, path), live+1; got != want {
+		t.Fatalf("restart baseline seq = %d, want %d", got, want)
 	}
 }

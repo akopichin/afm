@@ -491,3 +491,30 @@ func TestDrain_BlockedConsumerDoesNotHoldTheDrain(t *testing.T) {
 		})
 	}
 }
+
+// RunScript's stderr is a dualWriter whose live stream feeds the same OnAction sink as the stdout callback.
+// When that sink is stuck, drain still returns, and the truncation warning lands in the durable log, not in
+// the stuck stream.
+func TestDrain_WarningDoesNotWaitForASinkSharedWithAStuckCallback(t *testing.T) {
+	unblock := make(chan struct{})
+	t.Cleanup(func() { close(unblock) })
+	sink := func(string) { <-unblock } // OnAction, shared by stdout and the stderr stream
+	var log bytes.Buffer
+	stderr := &dualWriter{stream: newLineWriter(sink), file: &log}
+	a := startExitedAgentWith(t, "echo first\n", stderr, func(line string) bool {
+		sink(line)
+		return true
+	})
+	a.pipes.drainLimit = 300 * time.Millisecond
+
+	drained := make(chan error, 1)
+	go func() { drained <- a.pipes.drain(context.Background(), nil, nil, a.group, stderr) }()
+	select {
+	case <-drained:
+	case <-time.After(a.pipes.drainLimit + pipeFlushPeriod + 2*time.Second):
+		t.Fatal("drain waits for the stuck sink while reporting the truncation")
+	}
+	if !strings.Contains(log.String(), "agent output truncated") {
+		t.Fatalf("stderr log = %q, want the truncation warning", log.String())
+	}
+}

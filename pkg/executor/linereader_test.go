@@ -48,12 +48,12 @@ func (r *endlessReader) Read(b []byte) (int, error) {
 	return k, nil
 }
 
-// A line longer than maxOutputLineBytes is cut there and marked, its tail is skipped up to the next newline,
-// and the lines after it arrive whole: one runaway line cannot grow memory without bound.
-func TestLineReaderTruncatesOverlongLines(t *testing.T) {
+// A live output line longer than maxOutputLineBytes is cut there and marked, its tail is skipped up to the next
+// newline, and the lines after it arrive whole: one runaway line cannot grow memory without bound.
+func TestAgentOutputLineReaderTruncatesOverlongLines(t *testing.T) {
 	var got []string
 	r := io.MultiReader(&endlessReader{n: 3 * maxOutputLineBytes}, strings.NewReader("\r\nnext\n\nlast"))
-	if err := lineReader(r, func(line string) bool {
+	if err := agentOutputLineReader(r, func(line string) bool {
 		got = append(got, line)
 		return true
 	}); err != nil {

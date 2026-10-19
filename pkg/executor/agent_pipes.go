@@ -105,7 +105,7 @@ func (p *agentPipes) start(prompt string, stderr io.Writer, onLine func(string) 
 	}()
 	stdout := p.outputs[0]
 	p.read(stdout, func() error {
-		return lineReader(stdout, func(line string) bool {
+		return agentOutputLineReader(stdout, func(line string) bool {
 			more := false
 			return stdout.hand(func() { more = onLine(line) }) && more
 		})
@@ -228,7 +228,8 @@ func (p *agentPipes) drain(ctx context.Context, idle <-chan time.Time, interrupt
 // abandon stops waiting for the output readers. Closing the read ends ends a reader that waits for data; a
 // reader stuck handing data to its consumer cannot be stopped, but it hands over nothing more once its current
 // call returns, so after drain returns no new output callback starts and nothing new is written to stderr.
-// abandon reports the truncated output on stderr — unless the stderr writer is the stuck consumer.
+// abandon reports the truncated output in the durable stderr log — unless the stderr writer is the stuck
+// consumer.
 func (p *agentPipes) abandon(stderr io.Writer, exitedAt time.Time) {
 	stderrStuck := false
 	for i, o := range p.outputs {
@@ -241,8 +242,17 @@ func (p *agentPipes) abandon(stderr io.Writer, exitedAt time.Time) {
 		return
 	}
 	// No reader writes to stderr any more: the stderr reader is abandoned while idle, or stderr is a file.
-	_, _ = fmt.Fprintf(stderr, "afm: agent output truncated: its output was still being read %s after the agent "+
+	_, _ = fmt.Fprintf(durableLog(stderr), "afm: agent output truncated: its output was still being read %s after the agent "+
 		"exited and its process group was killed\n", time.Since(exitedAt).Round(100*time.Millisecond))
+}
+
+// durableLog is the part of stderr that only stores output: RunScript's dualWriter also streams stderr live to
+// OnAction — the sink the stuck stdout callback may be blocked in — so a warning written there could block too.
+func durableLog(stderr io.Writer) io.Writer {
+	if d, ok := stderr.(*dualWriter); ok {
+		return d.file
+	}
+	return stderr
 }
 
 // stdoutErr is the stdout reader's own error once it has returned; a reader that drain abandoned or whose pipe

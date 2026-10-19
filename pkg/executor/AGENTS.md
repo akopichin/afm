@@ -20,9 +20,14 @@
   пишущий без пауз потомок не держит ход вечно. После kill чтение длится не дольше
   `pipeFlushPeriod`, затем drain бросает readers и возвращается, даже если callback
   вывода или stderr-writer завис: начатый вызов доработает сам, новых не будет
-  (`outputPipe.hand`). Предупреждение об обрезке пишется в stderr-лог, если завис не он.
-- Строка stdout длиннее `maxOutputLineBytes` (16 MiB, как у читателей логов в
-  `pkg/server`) обрезается с `truncationMarker`, хвост до `\n` пропускается.
+  (`outputPipe.hand`). Предупреждение об обрезке пишется только в durable stderr-лог
+  (у `dualWriter` RunScript — в файл, не в live-поток: он кормит тот же `OnAction`, где
+  мог зависнуть callback) и пропускается, если завис сам stderr-writer.
+- Строка живого stdout длиннее `maxOutputLineBytes` (16 MiB, как у читателей логов в
+  `pkg/server`) обрезается с `truncationMarker` (`agentOutputLineReader`), хвост до
+  `\n` пропускается. Уже сохранённые логи (replay наблюдений, retry-контекст)
+  читаются `lineReader` без предела: replay обязан видеть те же строки, что живой ран,
+  иначе id наблюдений после рестарта повторятся.
 - `Config.Dir` — CWD агента; абсолютный `Config.StageDir` передаётся как
   `AFM_STAGE_DIR`. Эти пути независимы.
 - Verify и helper запуски используют свежую изолированную сессию без stage
