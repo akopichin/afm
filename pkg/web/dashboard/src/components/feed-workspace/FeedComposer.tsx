@@ -43,7 +43,8 @@ export type FeedComposerMeshProps = {
 // MeshPick — someone to add to the recipients.
 export type MeshPick = { participantId: string; seq: number }
 // MeshReplyTarget — a conversation message the human answers in its thread ("↩ Reply in conversation").
-export type MeshReplyTarget = { messageId: string; threadId: string; senderId: string; preview: string }
+// members — the members of that message's conversation: the reply stays in it, so only they can get it.
+export type MeshReplyTarget = { messageId: string; threadId: string; senderId: string; preview: string; members: string[] }
 
 type ComposerMode = 'message' | 'revise'
 
@@ -339,8 +340,8 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
   const [interrupt, setInterrupt] = useState(false)
 
   const { recipients, defaultProblem } = useMemo(
-    () => composerRecipients({ participants, stages: mesh.stages, stageId, picked: activePicked, draft, replyTo: reply?.senderId ?? null }),
-    [participants, mesh.stages, stageId, activePicked, draft, reply?.senderId],
+    () => composerRecipients({ participants, stages: mesh.stages, stageId, picked: activePicked, draft, replyTo: reply?.senderId ?? null, replyMembers: reply?.members ?? null }),
+    [participants, mesh.stages, stageId, activePicked, draft, reply?.senderId, reply?.members],
   )
   const recipientIds = recipients.flatMap((r) => (r.participantId !== null ? [r.participantId] : [])).sort()
   const problems = recipients.flatMap((r) => (r.problem !== null ? [r.problem] : []))

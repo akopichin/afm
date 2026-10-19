@@ -192,7 +192,13 @@ export function FeedWorkspace({
                         ? () =>
                             setMeshReplyTo({
                               stageId: noteTarget,
-                              target: { messageId: m.id, threadId: m.thread_id, senderId: m.sender_id, preview: messageText(m.body, true).slice(0, 120) },
+                              target: {
+                                messageId: m.id,
+                                threadId: m.thread_id,
+                                senderId: m.sender_id,
+                                preview: messageText(m.body, true).slice(0, 120),
+                                members: conversation.threads[m.thread_id]?.members ?? [],
+                              },
                             })
                         : undefined
                     }

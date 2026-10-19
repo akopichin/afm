@@ -83,13 +83,16 @@ export type ComposerRecipientsInput = {
   draft: string
   // replyTo — the sender of the conversation message being answered: a recipient for that reply only.
   replyTo?: string | null
+  // replyMembers — the members of that message's conversation: a reply stays in it, so it can go to them only
+  // (a conversation never gains members). null — not a reply.
+  replyMembers?: string[] | null
 }
 
 // composerRecipients — the message's recipients: the sender of the message answered first, then picked
 // people, then typed @handles, each person once; without any of them, the stage agent if it can read the
 // message. Unknown, ambiguous, unreachable and departed names stay in the list with their problem: an explicit
 // recipient is never dropped or replaced by someone else.
-export function composerRecipients({ participants, stages, stageId, picked, draft, replyTo = null }: ComposerRecipientsInput): ComposerRecipients {
+export function composerRecipients({ participants, stages, stageId, picked, draft, replyTo = null, replyMembers = null }: ComposerRecipientsInput): ComposerRecipients {
   const handles = mentionHandles(participants)
   const handleOf = (p: MeshParticipant): string => handles.get(p.id) ?? p.id
   const recipients: ComposerRecipient[] = []
@@ -104,14 +107,17 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
     if (from === 'picked') r.picked = true
     if (token !== undefined) r.typedTokens.push(token)
   }
-  // The feed stage's own agent once the stage has finished can still be named on purpose: the post goes into the
-  // stage's conversation, recorded (as the Discussion always allowed) and delivered to the others named.
+  // The feed stage's own agent once the stage has finished can still be named on purpose in a NEW message: it is a
+  // post in the stage's conversation (messageRoute 'stage'), recorded (as the Discussion always allowed) and
+  // delivered to the others named. A reply goes into its own conversation instead, where it is just finished.
   const finishedHere = (p: MeshParticipant): boolean =>
-    p.id === `stage:${stageId}` && ['done', 'failed'].includes(stages.find((s) => s.id === stageId)?.status ?? '')
+    replyMembers === null && p.id === `stage:${stageId}` && ['done', 'failed'].includes(stages.find((s) => s.id === stageId)?.status ?? '')
+  const outsideReply = (p: MeshParticipant): string | null =>
+    replyMembers !== null && !replyMembers.includes(p.id) ? `@${handleOf(p)} is not in this conversation — a reply goes only to its members` : null
   const known = (p: MeshParticipant) => () =>
     finishedHere(p)
       ? { handle: handleOf(p), participantId: p.id, problem: null, note: FINISHED_STAGE_NOTE }
-      : { handle: handleOf(p), participantId: p.id, problem: recipientProblem(p, handleOf(p), stages), note: null }
+      : { handle: handleOf(p), participantId: p.id, problem: recipientProblem(p, handleOf(p), stages) ?? outsideReply(p), note: null }
   // A person named by id who left the roster: still a chip, with the reason, so Send cannot quietly go elsewhere.
   const departed = (id: string) => () => ({ handle: id, participantId: null, problem: `@${id} is no longer available in this run`, note: null })
   const byId = (id: string, from: RecipientSource): void => {

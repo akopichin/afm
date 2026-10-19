@@ -102,6 +102,18 @@ describe("composerRecipients — the feed stage's finished agent", () => {
     expect(fromDocs.recipients[0]?.problem).toMatch(/terminal status/)
   })
 
+  it('in a reply it is an ordinary finished recipient, and anyone outside the reply thread is an error', () => {
+    const r = composerRecipients({
+      participants: [user, finishedImpl, docs, qa], stages: doneStages, stageId: 'impl', picked: [], draft: '@impl @qa ok',
+      replyTo: 'stage:docs', replyMembers: ['user', 'stage:docs', 'stage:impl'],
+    })
+    expect(r.recipients.map((x) => [x.participantId, x.problem, x.note])).toEqual([
+      ['stage:docs', null, null],
+      ['stage:impl', "@impl can't receive messages: stage impl has reached a terminal status", null],
+      ['run:t-1', '@qa is not in this conversation — a reply goes only to its members', null],
+    ])
+  })
+
   it('is never the default: with nobody named a recipient is still required', () => {
     const r = composerRecipients({ participants: [user, finishedImpl, qa], stages: doneStages, stageId: 'impl', picked: [], draft: 'hi' })
     expect(r.recipients).toEqual([])

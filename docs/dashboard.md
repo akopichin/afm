@@ -353,7 +353,9 @@ line such as *"reviewer posted in the stage conversation"*.
   **↩ Reply in conversation** chip quotes the message, which is highlighted in
   the feed. The reply goes to that conversation's people only: people you picked
   before wait until the reply ends, and anyone you add during it is dropped with
-  it. One message is answered at a time — choosing another replaces it; **✕**
+  it. Naming someone who is not in that conversation, or the finished stage's
+  agent, is an error on their chip and Send stays off — a conversation never
+  gains members. One message is answered at a time — choosing another replaces it; **✕**
   cancels. It is told apart from answering a thought with Revise by its colour.
   It is offered while the composer is shown, on open conversations you are a
   member of, and while the author can still read it; if the conversation closes

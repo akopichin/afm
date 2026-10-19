@@ -343,7 +343,7 @@ describe('FeedComposer', () => {
       await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: 'how is it going?', mentions: [], interrupt: true }))
 
       // A reply stays in its conversation: no Interrupt there.
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={{ messageId: 'm5', threadId: 'mt-1', senderId: 'stage:s1', preview: 'x' }} />)
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={{ messageId: 'm5', threadId: 'mt-1', senderId: 'stage:s1', preview: 'x', members: ['user', 'stage:s1'] }} />)
       expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
     })
 
@@ -365,7 +365,7 @@ describe('FeedComposer', () => {
 
     it("a reply has its own draft: the ordinary draft's @mentions are not its recipients, and the draft comes back after it", async () => {
       const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-docs' })
-      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question' }
+      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] }
       const { rerender } = renderComposer()
       type('@qa half-written note')
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={reply} />)
@@ -388,6 +388,21 @@ describe('FeedComposer', () => {
       expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: '@s1 @qa recap for the record', mentions: ['run:t-1'], interrupt: false }))
+    })
+
+    it('a reply goes only to its conversation: someone outside it, or the finished stage agent, is an error and Send is off', () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
+      const done = { ...stageAgent, reachable: false, unreachable_reason: 'stage s1 has reached a terminal status' }
+      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2', 'stage:s1'] }
+      renderComposer(meshProps({ roster: roster({ participants: [runAgent, docsAgent, done] }), stages: [makeStage({ status: 'done' })] }), { reviseAvailable: false, meshReply: reply })
+      type('@qa @s1 thanks')
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent('@qa is not in this conversation — a reply goes only to its members')
+      expect(alert).toHaveTextContent("@s1 can't receive messages: stage s1 has reached a terminal status")
+      expect(within(recipients()).queryByText('finished — post recorded, not read')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+      fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+      expect(send).not.toHaveBeenCalled()
     })
 
     it('@ lists the agents of other stages too', () => {
@@ -492,7 +507,7 @@ describe('FeedComposer', () => {
       const onCancel = vi.fn()
       const onReplySent = vi.fn()
       renderComposer(meshProps(), {
-        meshReply: { messageId: 'm5', threadId: 'mt-1', senderId: 'run:t-1', preview: 'Found a bug' },
+        meshReply: { messageId: 'm5', threadId: 'mt-1', senderId: 'run:t-1', preview: 'Found a bug', members: ['user', 'run:t-1'] },
         onCancelMeshReply: onCancel,
         onMeshReplySent: onReplySent,
       })
@@ -532,7 +547,7 @@ describe('FeedComposer', () => {
 
     it('a reply is addressed to that conversation only: earlier picks wait, and picks made during it end with it', async () => {
       const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-docs' })
-      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question' }
+      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] }
       const { rerender } = renderComposer()
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
       expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
