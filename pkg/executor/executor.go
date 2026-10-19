@@ -1084,7 +1084,10 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			return readErr
 		}
 		if errors.Is(waitErr, exec.ErrWaitDelay) {
-			return nil // the agent exited cleanly; only a leftover child still held its stderr pipe
+			// The agent exited cleanly, but a leftover descendant still held its stderr pipe. Kill the group so
+			// it cannot keep working after the turn is reported complete.
+			killProcessGroup(cmd, syscall.SIGKILL)
+			return nil
 		}
 		return waitErr
 	case <-idleTimer.C():
