@@ -27,14 +27,21 @@ as a warning line.
 A picked recipient who left the run stays as a chip with the reason and blocks
 Send instead of the stage agent taking over. **↩ Reply in conversation** is
 addressed to that conversation only: earlier picks wait and picks made during
-the reply end with it. **×** on a chip removes every mention of that person,
+the reply end with it, and the reply has its own draft, so the text and
+`@mentions` you were writing to others come back after it. **×** on a chip removes every mention of that person,
 also a full id shown by its alias. A reply ends when its conversation closes. A
 recipient shows *Delivered* only after afm actually hands it the message; until
 then *Accepted · waiting for an inbox check*. On the server, a conversation you
 start from a stage's feed is that feed's own (two feeds writing to the same agent
 at once no longer share one), an older conversation of agents you are not a
 member of is not reused for your message, and retrying a request id from another
-feed is a conflict instead of the first send's receipt.
+feed is a conflict instead of the first send's receipt (a send recorded before
+the feed was kept is retried as before). **Interrupt agent** is reset after a
+successful send. The finished stage's agent can be named on purpose again: the
+post is recorded in its conversation and reaches the others named, as the
+Discussion allowed. Old stage-conversation posts are placed by journal order
+(both readers now return the journal `seq`), keep their role and evidence as
+tags, and an agent's old answer to your post stays under **Author's work**.
 
 ### Improvement: the stage Feed composer writes to several people
 

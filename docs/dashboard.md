@@ -21,13 +21,13 @@ right (there is no three-column layout or bottom progress bar).
   collapses into a slide-over drawer (open with the ☰ toggle next to the tabs).
   Run metrics (Started / Elapsed / Idle / Backoff) live in the header, center.
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
-  *selected stage's own* event history, capped at its last 200 events) plus one
+  *selected stage's own* event history, capped at its last 2,000 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
   plan or Q&A history to reopen. When Agent Mesh is available, a run-wide **Team** tab
   opens the participant roster and conversations (see
   [Team conversations](collaboration.md#team-conversations)). The workspace also has a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
-  flow's last 1000 events across every stage. Feed always reflects whichever
+  flow's last 10,000 events across every stage. Feed always reflects whichever
   stage is selected — including an old, already-completed one, which used to
   show up empty once enough later activity had pushed it out of a single
   flow-wide window. Clicking a `pending` or `done` stage stays on Feed; read-only
@@ -261,6 +261,17 @@ Sending posts **one** message to all recipients:
   goes to exactly its recipients: into your open conversation with those people
   that this stage's feed shows (a reply stays in the conversation it answers), or
   a new one there, opened in the same step.
+- Once the stage has finished, its agent is no longer the default recipient, but
+  you can still name it (`@` or the People panel): the chip says *finished — post
+  recorded, not read*. The post is kept in your conversation with that stage and
+  reaches the other agents you named; the stage's agent does not read it.
+
+**Interrupt agent** is reset after each successful send and kept after a failed
+one, so a retry interrupts too.
+
+A **↩ Reply in conversation** has its own draft: the text and `@mentions` you
+were writing to others are neither its text nor its recipients, and they come
+back when the reply ends.
 
 A failed send keeps the draft and shows the
 server's reason; sending it again is the same message, never a duplicate. Under
@@ -328,7 +339,9 @@ anyone answering is marked **Not answered** (the mark goes once a reply arrives)
 Runs recorded before conversations lived in the feed keep their stage
 conversation log: its posts — including helper results with the evidence they
 cited, which reached no inbox — show as read-only bubbles in journal order, once
-each, next to the newer messages. Until that log is read, such a post shows as a
+each, next to the newer messages. Such a bubble shows its author's role and the
+cited ids as tags; an agent's answer to your post counts as addressed to you, so
+**Author's work** keeps it. Until that log is read, such a post shows as a
 line such as *"reviewer posted in the stage conversation"*.
 
 - Filter the feed with **All**, **Conversations** (only the messages) or

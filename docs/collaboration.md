@@ -205,8 +205,10 @@ conversation it answers — the switch is not shown. Name other agents too (`@`,
 or a pick in the People panel), such as run agents, helpers or other stages'
 agents: they receive the post together with the stage agent, in the same
 conversation; the post shows who it went to (`→ QA, DevOps`), and their replies
-to it appear under their own names. Agents that have finished cannot be sent
-to. The dashboard has no separate Discussion tab and no proposal cards; agent
+to it appear under their own names. Other agents that have finished cannot be
+sent to. The stage's own agent, once the stage has finished, can still be named
+on purpose: the post is recorded in its conversation and reaches the others
+named, but the stage's agent does not read it. The dashboard has no separate Discussion tab and no proposal cards; agent
 proposals are still recorded by the run. In the Side agent, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
