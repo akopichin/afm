@@ -72,7 +72,8 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	waitID := deriveMeshWaitID(req.OperationID)
 	eff, err := marshalEffect("mesh_wait_registered", state.Target{WaitID: string(waitID)}, state.MeshWaitRegisteredPayload{
 		Waiter: string(req.Waiter), Condition: req.Condition, Deadline: req.Deadline, ContinuationNote: req.ContinuationNote,
-		FreshResultOnly: req.Condition.Kind == agentcomm.WaitOnTaskResult,
+		FreshResultOnly:    req.Condition.Kind == agentcomm.WaitOnTaskResult,
+		RecipientReplyOnly: req.Condition.Kind == agentcomm.WaitOnReplyTo,
 	})
 	if err != nil {
 		return WaitReceipt{}, err
@@ -184,7 +185,7 @@ func validateWaitTarget(rs state.RunState, req WaitRequest) error {
 		if !ok {
 			return notFound("unknown message %s", cond.MessageID)
 		}
-		if rs.Assistants.Mesh.MessageAnswered(cond.MessageID) {
+		if rs.Assistants.Mesh.MessageAnsweredByRecipient(cond.MessageID) {
 			return nil
 		}
 		return closedThread(m.ThreadID)
@@ -226,7 +227,7 @@ func validateWaitTarget(rs state.RunState, req WaitRequest) error {
 func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
 	switch cond.Kind {
 	case agentcomm.WaitOnReplyTo:
-		return rs.Assistants.Mesh.MessageAnswered(cond.MessageID)
+		return rs.Assistants.Mesh.MessageAnsweredByRecipient(cond.MessageID)
 	case agentcomm.WaitOnStageStatus:
 		st, ok := rs.Stages[cond.StageID]
 		return ok && string(st.Status) == cond.Status
