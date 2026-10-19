@@ -387,3 +387,81 @@ func TestTurnReply_UndeliveredAnswerEndsTheRequestersWait(t *testing.T) {
 		t.Fatal("no notice that the turn result was not delivered")
 	}
 }
+
+// A turn owes replies to two requesters, and one of their conversations is full. The reply that fits is still
+// posted and answers its requester; only the wait whose reply cannot be delivered is cancelled.
+func TestTurnReply_OneFullConversationDoesNotDropTheOtherReply(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+	rev, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-rev", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-peer", ProfileID: "qa", Title: "Peer", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := openThread(t, o, "op-full-thread", 1, stage, rev.ParticipantID)
+	roomy := openThread(t, o, "op-roomy-thread", 0, peer.ParticipantID, rev.ParticipantID)
+	userThread := openThread(t, o, "op-user-thread", 0, rev.ParticipantID, meshUserParticipantID)
+
+	var revCalls atomic.Int32
+	var question atomic.Value
+	o.runHelperAgent = func(_ context.Context, taskID, _, _, _, _, _ string) (executor.HelperOutcome, error) {
+		if assistants.TaskID(taskID) != rev.TaskID {
+			return passResultOutcome(), nil
+		}
+		switch revCalls.Add(1) {
+		case 1: // the stage's request: ask the human, then yield
+			q := sendAs(t, o, "op-rev-question", userThread, rev.ParticipantID, meshUserParticipantID, "which base revision?", nil, false)
+			question.Store(q)
+			if _, err := o.Wait(context.Background(), WaitRequest{
+				OperationID: "op-rev-wait", Waiter: rev.ParticipantID, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: q},
+			}); err != nil {
+				t.Errorf("reviewer Wait: %v", err)
+			}
+			return executor.HelperOutcome{ProcessOK: true}, nil
+		case 2: // the peer's request arrives while it waits: still waiting, so yield again
+			return executor.HelperOutcome{ProcessOK: true}, nil
+		default:
+			return passResultOutcome(), nil
+		}
+	}
+
+	stageRequest := sendAs(t, o, "op-stage-request", full, stage, rev.ParticipantID, "please review", nil, false)
+	stageWait, err := o.Wait(ctx, WaitRequest{OperationID: "op-stage-wait", Waiter: stage, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: stageRequest}})
+	if err != nil {
+		t.Fatalf("stage Wait: %v", err)
+	}
+	waitForTaskStatus(t, store, rev.TaskID, assistants.StatusWaitingPeer, 2*time.Second)
+	peerRequest := sendAs(t, o, "op-peer-request", roomy, peer.ParticipantID, rev.ParticipantID, "and mine?", nil, false)
+	peerWait, err := o.Wait(ctx, WaitRequest{OperationID: "op-peer-wait", Waiter: peer.ParticipantID, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: peerRequest}})
+	if err != nil {
+		t.Fatalf("peer Wait: %v", err)
+	}
+	waitUntil(t, "the second reviewer turn", func() bool {
+		tk := store.Snapshot().Assistants.Tasks[rev.TaskID]
+		return revCalls.Load() == 2 && tk.Status == assistants.StatusWaitingPeer && len(tk.OpenRequests) == 2
+	})
+	q := question.Load().(agentcomm.MessageID)
+	sendAs(t, o, "op-user-answer", userThread, meshUserParticipantID, rev.ParticipantID, "HEAD~1", &q, true)
+
+	waitUntil(t, "the peer's reply", func() bool { return len(repliesTo(store, peerRequest)) == 1 })
+	waitUntil(t, "the stage's wait to end", func() bool {
+		return store.Snapshot().Assistants.Mesh.Waits[stageWait.WaitID].Status != agentcomm.WaitPending
+	})
+	o.concurrency.WaitAgents()
+
+	waits := store.Snapshot().Assistants.Mesh.Waits
+	if got := waits[peerWait.WaitID].Status; got != agentcomm.WaitReady {
+		t.Fatalf("peer wait = %s, want ready: its reply fits", got)
+	}
+	if got := waits[stageWait.WaitID]; got.Status != agentcomm.WaitCancelled || !strings.Contains(got.Reason, "could not be delivered") {
+		t.Fatalf("stage wait = %s %q, want cancelled: its conversation is full", got.Status, got.Reason)
+	}
+	if len(repliesTo(store, stageRequest)) != 0 {
+		t.Fatal("a reply landed in the full conversation")
+	}
+}

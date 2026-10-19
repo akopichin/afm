@@ -455,6 +455,19 @@ func (c *opResultCache) put(id string, e opCacheEntry) {
 }
 
 // readyWaitIDs is the set of mesh waits that are ready in as.
+// CheckEffects reports whether effects, committed together as one operation, would project onto rs — the
+// same projection-level admission an ApplyRunOperation commit runs (thread and inbox limits, membership,
+// ...), without writing or changing anything. Preconditions are not part of it. A caller holding several
+// optional parts of one operation uses it to tell which part a rejection came from.
+func (rs RunState) CheckEffects(effects []Effect) error {
+	payload, err := json.Marshal(operationCommittedPayload{OpKind: "check", Effects: effects})
+	if err != nil {
+		return fmt.Errorf("marshal operation effects: %w", err)
+	}
+	scratch := rs
+	return validateControlForRunState(&scratch, &Control{Kind: kindOperationCommitted, SchemaVersion: ControlSchemaVersion, Payload: payload})
+}
+
 // pendingWaitIDs is the set of waits still pending in as.
 func pendingWaitIDs(as AssistantsState) map[agentcomm.WaitID]bool {
 	out := map[agentcomm.WaitID]bool{}

@@ -132,13 +132,42 @@ func (o *Orchestrator) turnRepliesCheck(replies []plannedMessage) func(*state.Ru
 	}
 }
 
-// undeliveredReplyWaitEffects cancels, with reason, the pending reply_to waits for the messages replies would
-// have answered, when nobody else among each message's recipients can still answer it: the agent has finished
-// its turn for that request, and its answer could not be delivered, so a requester waiting for it would wait
-// forever. The cancellations commit with the finish that drops the replies.
-func undeliveredReplyWaitEffects(rs state.RunState, replies []plannedMessage, reason string) []state.Effect {
-	var effects []state.Effect
+// undeliveredReply is a turn reply that could not be delivered, and why.
+type undeliveredReply struct {
+	reply  plannedMessage
+	reason string
+}
+
+// splitDeliverable splits replies into those that can still be delivered against rs and those that cannot,
+// each checked on its own — turnRepliesCheck's commit-time rule and the projection's own limits (a full
+// conversation or inbox) — so one full conversation never costs another requester its answer.
+func (o *Orchestrator) splitDeliverable(rs state.RunState, replies []plannedMessage) ([]plannedMessage, []undeliveredReply) {
+	var good []plannedMessage
+	var bad []undeliveredReply
 	for _, r := range replies {
+		err := o.turnRepliesCheck([]plannedMessage{r})(&rs)
+		if err == nil {
+			err = rs.CheckEffects(r.effects)
+		}
+		if err != nil {
+			bad = append(bad, undeliveredReply{reply: r, reason: "the answer to it could not be delivered: " + o.RedactSecrets(rejectionReason(err))})
+			continue
+		}
+		good = append(good, r)
+	}
+	return good, bad
+}
+
+// undeliveredReplyWaitEffects cancels the pending reply_to waits for the messages undelivered replies would
+// have answered, each with its reply's reason, when nobody else among the message's recipients can still answer
+// it: the agent has finished its turn for that request, and its answer could not be delivered, so a requester
+// waiting for it would wait forever. The cancellations commit with the finish that drops the replies; reasons
+// maps each cancelled wait to its reason, for the notice.
+func undeliveredReplyWaitEffects(rs state.RunState, undelivered []undeliveredReply) ([]state.Effect, map[agentcomm.WaitID]string) {
+	var effects []state.Effect
+	reasons := map[agentcomm.WaitID]string{}
+	for _, u := range undelivered {
+		r := u.reply
 		m := rs.Assistants.Mesh.Messages[*r.send.InReplyTo]
 		if m == nil || slices.ContainsFunc(m.Recipients, func(p agentcomm.ParticipantID) bool {
 			return p != r.send.Sender && canStillAnswer(rs, agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: m.ID}, p)
@@ -151,15 +180,16 @@ func undeliveredReplyWaitEffects(rs state.RunState, replies []plannedMessage, re
 				continue
 			}
 			eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)},
-				state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: reason})
+				state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: u.reason})
 			if err != nil {
 				log.Printf("WARN: assistants: cancel the wait %s for an undelivered turn reply: %v", id, err)
 				continue
 			}
 			effects = append(effects, eff)
+			reasons[id] = u.reason
 		}
 	}
-	return effects
+	return effects, reasons
 }
 
 // turnReplyBody is the text of a turn reply: the result's summary, cut to fit the mesh's body limit, and a line

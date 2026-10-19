@@ -518,7 +518,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			Effects: effects,
 		}
 	}
-	afterFinish := func(delivered []plannedMessage, endedReason string) func(state.OperationResult) {
+	afterFinish := func(delivered []plannedMessage, endedReasons map[agentcomm.WaitID]string) func(state.OperationResult) {
 		return func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 				"task_id": string(taskID), "status": string(to), "reason": reason,
@@ -531,7 +531,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			// The waits this commit cancelled because their answer was dropped: their waiters continue.
 			for _, waitID := range res.EndedWaits {
 				o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
-					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": endedReason}})
+					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": endedReasons[waitID]}})
 				if w := o.opts.Store.Snapshot().Assistants.Mesh.Waits[waitID]; w != nil {
 					o.resumeWaiterAfterTerminalWait(o.runContext(context.Background()), w.Waiter)
 				}
@@ -574,42 +574,67 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		}
 	}
 
-	withReplies := func(replies []plannedMessage) ([]state.Effect, func(*state.RunState) error) {
-		all := append(slices.Clone(effects), mirror...)
-		if len(replies) == 0 {
-			return all, nil
+	// Each rejected attempt drops what made it fail — a reply the agent answered itself meanwhile, the replies
+	// that cannot be delivered (their requesters' waits are cancelled in the same commit), then the mirror, then
+	// any remaining reply — so the loop ends after a few attempts with the task finished.
+	var (
+		storageErr  *state.StorageError
+		undelivered []undeliveredReply
+		dropped     error
+		withMirror  = len(mirror) > 0
+	)
+	for range len(replies) + 3 {
+		rs := o.opts.Store.Snapshot()
+		all := slices.Clone(effects)
+		if withMirror {
+			all = append(all, mirror...)
 		}
+		var check func(*state.RunState) error
 		for _, r := range replies {
 			all = append(all, r.effects...)
 		}
-		return all, o.turnRepliesCheck(replies)
-	}
-	var storageErr *state.StorageError
-	for {
-		all, check := withReplies(replies)
-		_, err = o.opts.Store.ApplyRunOperation(finishOp(all, check), afterFinish(replies, ""))
-		if !errors.Is(err, errTurnAlreadyAnswered) {
+		if len(replies) > 0 {
+			check = o.turnRepliesCheck(replies)
+		}
+		cancels, endedReasons := undeliveredReplyWaitEffects(rs, undelivered)
+		all = append(all, cancels...)
+		_, err = o.opts.Store.ApplyRunOperation(finishOp(all, check), afterFinish(replies, endedReasons))
+		if err == nil || errors.As(err, &storageErr) {
 			break
 		}
-		// The agent answered one of the messages itself meanwhile: post the rest.
-		rest := unansweredReplies(o.opts.Store.Snapshot(), replies)
-		if len(rest) == len(replies) {
-			break
-		}
-		replies = rest
-	}
-	if err != nil && (len(mirror) > 0 || len(replies) > 0) && !errors.As(err, &storageErr) {
-		dropped := err
-		notDelivered := "the answer to it could not be delivered: " + o.RedactSecrets(rejectionReason(dropped))
-		fallback := append(slices.Clone(effects), undeliveredReplyWaitEffects(o.opts.Store.Snapshot(), replies, notDelivered)...)
-		_, err = o.opts.Store.ApplyRunOperation(finishOp(fallback, nil), afterFinish(nil, notDelivered))
-		if err == nil {
-			var first *plannedMessage
-			if len(replies) > 0 {
-				first = &replies[0]
+		rs = o.opts.Store.Snapshot()
+		if errors.Is(err, errTurnAlreadyAnswered) {
+			if rest := unansweredReplies(rs, replies); len(rest) < len(replies) {
+				replies = rest
+				continue
 			}
-			o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, first), dropped)
 		}
+		if dropped == nil {
+			dropped = err
+		}
+		if good, bad := o.splitDeliverable(rs, replies); len(bad) > 0 {
+			replies, undelivered = good, append(undelivered, bad...)
+			continue
+		}
+		if withMirror {
+			withMirror = false
+			continue
+		}
+		if len(replies) == 0 {
+			break // nothing left to drop: the rejection is the finish's own (e.g. the task moved on)
+		}
+		reason := "the answer to it could not be delivered: " + o.RedactSecrets(rejectionReason(err))
+		for _, r := range replies {
+			undelivered = append(undelivered, undeliveredReply{reply: r, reason: reason})
+		}
+		replies = nil
+	}
+	if err == nil && dropped != nil {
+		var first *plannedMessage
+		if len(undelivered) > 0 {
+			first = &undelivered[0].reply
+		}
+		o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, first), dropped)
 	}
 	if err == nil && turn > 0 {
 		if cerr := o.clearTurnInbox(taskID); cerr != nil {
