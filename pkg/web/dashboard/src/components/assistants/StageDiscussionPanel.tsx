@@ -28,6 +28,7 @@ function toMessage(w: DiscussionMessageWire): DiscussionMessage {
     evidence: w.evidence,
     body: w.body ?? '',
     mentions: w.mentions,
+    unanswered: w.unanswered,
     createdAt: w.created_at,
   }
 }
@@ -40,7 +41,7 @@ export type StageDiscussionPanelProps = {
   stageStatus?: string
 }
 
-type DiscussionMention = { id: string; handle: string; title: string; unavailable: boolean }
+type DiscussionMention = { id: string; handle: string; title: string }
 
 // StageDiscussionPanel is the mounted, stateful wrapper around the presentational StageDiscussion: it polls
 // the stage's discussion log (GET /api/stages/{id}/discussion, its own poll — independent of /api/status, the
@@ -69,15 +70,16 @@ export function StageDiscussionPanel({ stageId, participants = [], stageStatus }
   )
   const cursorRef = useRef(0)
 
-  // Mention candidates — everyone in the run but you and this stage's own agent (it gets every post anyway),
-  // each under an `@handle` unique among them, so one mention never means two participants.
-  const candidates = participants.filter((p) => p.id !== 'user' && p.id !== `stage:${stageId}`)
+  // Mention candidates — everyone in the run who can still read a post, but you and this stage's own agent (it
+  // gets every post anyway), each under an `@handle` unique among them, so one mention never means two
+  // participants. A finished agent is not offered: the post would never reach it.
+  const candidates = participants.filter((p) => p.id !== 'user' && p.id !== `stage:${stageId}` && p.reachable)
   const handles = mentionHandles(candidates)
   const handleOf = (p: MeshParticipant): string => handles.get(p.id) ?? p.id
   const mention = useMentionMenu<DiscussionMention>({
     matchesFor: (query) =>
       filterMentionProfiles(
-        candidates.map((p) => ({ id: p.id, handle: handleOf(p), title: participantLabel(p), unavailable: !p.reachable })),
+        candidates.map((p) => ({ id: p.id, handle: handleOf(p), title: participantLabel(p) })),
         query,
       ),
     textFor: (item) => item.handle,
@@ -86,10 +88,12 @@ export function StageDiscussionPanel({ stageId, participants = [], stageStatus }
   // mentioned — derived from the text, so deleting a mention from the draft also un-addresses that agent.
   const mentioned = candidates.filter((p) => draftMentions(draft, handleOf(p))).map((p) => p.id)
   const running = stageStatus === 'running'
+  // finished — once the stage is done/failed the log is read again from the start: a post that was merely not
+  // answered YET is now marked as never answered.
+  const finished = stageStatus === 'done' || stageStatus === 'failed'
 
   useEffect(() => {
     setMessages([])
-    setInterrupt(false)
     cursorRef.current = 0
     // Serial: two slow polls never read the same cursor, so a page is never appended twice.
     const poll = startSerialPoll(async (isStopped) => {
@@ -108,7 +112,7 @@ export function StageDiscussionPanel({ stageId, participants = [], stageStatus }
       }
     }, POLL_INTERVAL_MS)
     return poll.stop
-  }, [stageId])
+  }, [stageId, finished])
 
   function send(): void {
     const submitted = draft
@@ -142,6 +146,7 @@ export function StageDiscussionPanel({ stageId, participants = [], stageStatus }
       </div>
       <div className="chat-composer-row">
         <textarea
+          {...mention.inputAria}
           ref={setInputRef}
           className="chat-composer-input"
           placeholder="Add a message to this stage's discussion…"
@@ -161,6 +166,7 @@ export function StageDiscussionPanel({ stageId, participants = [], stageStatus }
         />
         {mention.open && (
           <MentionMenu
+            id={mention.listboxId}
             groups={[{ label: '', items: mention.matches }]}
             highlightIndex={mention.highlightIndex}
             onHover={mention.setHighlightIndex}

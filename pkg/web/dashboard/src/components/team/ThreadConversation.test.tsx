@@ -68,7 +68,8 @@ describe('ThreadConversation', () => {
     render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
     await waitFor(() => expect(screen.getByText('Could not run the e2e suite.')).toBeInTheDocument())
     expect(screen.getByText('Inconclusive')).toBeInTheDocument()
-    expect(screen.queryByText(/schema_version/)).toBeNull()
+    // The raw JSON is only inside the collapsed "Raw" details, never the visible text.
+    expect(screen.getByText(/schema_version/).closest('details')).not.toBeNull()
   })
 
   test('a reply quotes the message it answers, inside its bubble', async () => {
@@ -91,7 +92,7 @@ describe('ThreadConversation', () => {
     const agentsOnly: MeshThread = { id: 'mt-7', title: '', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: agentsOnly }} participants={[qa]} />)
     expect(screen.getByText(/talking between themselves/)).toBeInTheDocument()
-    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
   })
 
   test('a conversation opens at its latest message, not at the top', async () => {

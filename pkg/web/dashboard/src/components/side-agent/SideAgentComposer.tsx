@@ -102,6 +102,7 @@ export function SideAgentComposer({
       )}
       <div className="chat-composer-row">
         <textarea
+          {...mention.inputAria}
           ref={setRefs}
           className="chat-composer-input"
           value={draft}
@@ -113,6 +114,7 @@ export function SideAgentComposer({
         />
         {mention.open && (
           <AssistantMentionMenu
+            id={mention.listboxId}
             profiles={mention.matches}
             highlightIndex={mention.highlightIndex}
             onHover={mention.setHighlightIndex}

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactElement } from 'react'
 import type { AssistantProfile } from '../../types/assistant-profile'
+import { mentionOptionId } from './use-mention-menu'
 
 // MentionItem — the minimum shape the shared popup (MentionMenu) needs to render one option: an id/title pair
 // plus an optional "why this can't be used" marker. mention-match.ts's MentionGroup<T> is keyed on the same
@@ -31,6 +32,8 @@ export type MentionMenuProps<T extends MentionItem> = {
   onHover: (index: number) => void
   onSelect: (item: T) => void
   ariaLabel: string
+  // id — the listbox id the composer's textarea points at (useMentionMenu's listboxId); options get derived ids.
+  id?: string
 }
 
 const MENU_GAP = 6
@@ -55,7 +58,7 @@ export function mentionText(item: MentionItem): string {
 // T7.4): the side agent's own AssistantMentionMenu below wraps it with a single unlabeled group, and the feed
 // composer's mesh mention menu (mesh-recipients.ts) passes several labeled groups straight through. Rendering
 // lives here ONCE — no second popup component.
-export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onHover, onSelect, ariaLabel }: MentionMenuProps<T>): ReactElement | null {
+export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onHover, onSelect, ariaLabel, id }: MentionMenuProps<T>): ReactElement | null {
   const listRef = useRef<HTMLUListElement | null>(null)
   // The menu opens upward from the composer row; cap its height to the room actually left above the row
   // inside the nearest clipping ancestor (panels use overflow: hidden), so its top options never get cut off.
@@ -72,7 +75,7 @@ export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onH
 
   let cursor = -1
   return (
-    <ul ref={listRef} className="assistant-mention-menu" role="listbox" aria-label={ariaLabel}>
+    <ul ref={listRef} id={id} className="assistant-mention-menu" role="listbox" aria-label={ariaLabel}>
       {groups.flatMap((group) => {
         const rows: ReactElement[] = []
         if (group.label !== '') {
@@ -88,6 +91,7 @@ export function MentionMenu<T extends MentionItem>({ groups, highlightIndex, onH
           rows.push(
             <li
               key={item.id}
+              id={id !== undefined ? mentionOptionId(id, index) : undefined}
               role="option"
               aria-selected={index === highlightIndex}
               className={`assistant-mention-item${index === highlightIndex ? ' active' : ''}`}
@@ -125,13 +129,14 @@ export type AssistantMentionMenuProps = {
   highlightIndex: number
   onHover: (index: number) => void
   onSelect: (profile: AssistantProfile) => void
+  id?: string
 }
 
 // AssistantMentionMenu — the side agent's own `@mention` popup (dev-plan.md T4.2): a thin, single-group
 // instantiation of the shared MentionMenu above. A mention always addresses a ROLE (profile), never a running
 // task instance — see pkg/assistants.Registry.Resolve's doc comment; addressing an already-running task is a
 // separate mechanism (task_id, T4.7).
-export function AssistantMentionMenu({ profiles, highlightIndex, onHover, onSelect }: AssistantMentionMenuProps): ReactElement | null {
+export function AssistantMentionMenu({ profiles, highlightIndex, onHover, onSelect, id }: AssistantMentionMenuProps): ReactElement | null {
   const items = profiles.map((p) => ({ ...p, unavailable: !p.available, unavailableReason: p.unavailableReason }))
   return (
     <MentionMenu
@@ -143,6 +148,7 @@ export function AssistantMentionMenu({ profiles, highlightIndex, onHover, onSele
         if (original !== undefined) onSelect(original)
       }}
       ariaLabel="Mention an assistant profile"
+      id={id}
     />
   )
 }

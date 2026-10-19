@@ -333,7 +333,7 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
   // replyToMessage — Reply on a message of the shown conversation: answer it there, addressed back to its
   // sender, whose @handle goes into the draft (so the user never re-types the mention).
   function replyToMessage(m: MeshMessage): void {
-    setReplyTo({ messageId: m.id, preview: messageText(m.body).slice(0, 120) })
+    setReplyTo({ messageId: m.id, preview: messageText(m.body, m.sender_id !== 'user').slice(0, 120) })
     const sender = participantMentionItem(mesh.roster.participants, m.sender_id)
     if (sender === null) return
     const handle = mentionText(sender)
@@ -454,19 +454,25 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
       )}
       {openedThreadId !== null && threadMessages.length > 0 && (
         <div className="mesh-message-thread-frame">
-          <button type="button" className="mesh-message-thread-close" aria-label="Close conversation" onClick={closeConversation}>
-            ✕
-          </button>
+          <div className="mesh-message-thread-header">
+            <span>Conversation</span>
+            <button type="button" className="mesh-message-thread-close" aria-label="Close conversation" onClick={closeConversation}>
+              ✕
+            </button>
+          </div>
           <ul className="mesh-message-thread" aria-label="Conversation">
             {threadMessages.map((m: MeshMessage) => (
               <li key={m.id} className="mesh-message-thread-item">
                 <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
                 <span className="mesh-message-thread-body">
-                  <AgentMessageBody body={m.body} />
+                  <AgentMessageBody body={m.body} fromAgent={m.sender_id !== 'user'} />
                 </span>
-                <button type="button" className="mesh-message-thread-reply" onClick={() => replyToMessage(m)}>
-                  Reply
-                </button>
+                {/* Your own message has nobody to address back: Reply is offered on others' messages only. */}
+                {m.sender_id !== 'user' && (
+                  <button type="button" className="mesh-message-thread-reply" onClick={() => replyToMessage(m)}>
+                    Reply
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -486,6 +492,7 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
       {target === null && <div className="mesh-message-route">Pick someone with @ or press Reply</div>}
       <div className="chat-composer-row">
         <textarea
+          {...mention.inputAria}
           ref={setRefs}
           className="chat-composer-input"
           value={draft}
@@ -497,6 +504,7 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
         />
         {mention.open && (
           <MentionMenu
+            id={mention.listboxId}
             groups={matchGroups}
             highlightIndex={mention.highlightIndex}
             onHover={mention.setHighlightIndex}

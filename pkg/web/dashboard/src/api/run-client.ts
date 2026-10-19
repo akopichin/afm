@@ -355,6 +355,8 @@ export type DiscussionMessageWire = {
   evidence?: string[]
   body?: string
   mentions?: string[]
+  interrupt?: boolean
+  unanswered?: boolean
   created_at: string
 }
 

@@ -3,12 +3,15 @@
 // показывается как summary плюс вердикт, а не как сырой JSON.
 
 export type AgentResultBody = {
-  // verdict — pass | needs_changes | inconclusive (или иное значение, которое прислал агент).
+  // verdict — pass | needs_changes | inconclusive.
   verdict: string
   summary: string
 }
 
-// parseAgentResultBody — результат, если body целиком является объектом результата, иначе null.
+const VERDICTS = ['pass', 'needs_changes', 'inconclusive']
+
+// parseAgentResultBody — the result, if body is exactly a v1 result object (schema_version 1, kind "result",
+// a known verdict, a string summary), else null.
 export function parseAgentResultBody(body: string): AgentResultBody | null {
   const text = body.trim()
   if (!text.startsWith('{')) return null
@@ -20,13 +23,15 @@ export function parseAgentResultBody(body: string): AgentResultBody | null {
   }
   if (typeof value !== 'object' || value === null) return null
   const v = value as Record<string, unknown>
-  if (v.schema_version === undefined || v.kind !== 'result' || typeof v.summary !== 'string') return null
-  return { verdict: typeof v.verdict === 'string' ? v.verdict : '', summary: v.summary }
+  if (v.schema_version !== 1 || v.kind !== 'result' || typeof v.verdict !== 'string' || !VERDICTS.includes(v.verdict)) return null
+  if (typeof v.summary !== 'string') return null
+  return { verdict: v.verdict, summary: v.summary }
 }
 
-// messageText — what a message says, in words: the summary of a pasted result object, else the body itself.
-export function messageText(body: string): string {
-  return parseAgentResultBody(body)?.summary ?? body
+// messageText — what a message says, in words: for an agent's pasted result object its summary, else the
+// body itself. A human's text is never reinterpreted.
+export function messageText(body: string, fromAgent: boolean): string {
+  return (fromAgent ? parseAgentResultBody(body)?.summary : undefined) ?? body
 }
 
 // verdictLabel — the verdict in words for its chip.
@@ -36,9 +41,7 @@ export function verdictLabel(verdict: string): string {
       return 'Pass'
     case 'needs_changes':
       return 'Needs changes'
-    case 'inconclusive':
-      return 'Inconclusive'
     default:
-      return verdict
+      return 'Inconclusive'
   }
 }

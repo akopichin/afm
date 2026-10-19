@@ -103,6 +103,24 @@ describe('useRetryableSubmit', () => {
     expect(result.current.pending).toBe(false)
   })
 
+  test('A → B → A: a response from the first A is stale for the second A', async () => {
+    const pending = deferred<string>()
+    const onSuccess = vi.fn()
+    const { result, rerender } = renderHook(({ fence }) => useRetryableSubmit<Payload>('t', fence), { initialProps: { fence: 'a' } })
+
+    act(() => result.current.submit({ body: 'x' }, () => pending.promise, { onSuccess }))
+    rerender({ fence: 'b' })
+    rerender({ fence: 'a' })
+    expect(result.current.pending).toBe(false)
+
+    await act(async () => pending.resolve('ok'))
+    expect(onSuccess).not.toHaveBeenCalled()
+
+    const fresh = vi.fn()
+    await act(async () => result.current.submit({ body: 'y' }, () => Promise.resolve('ok'), { onSuccess: fresh }))
+    expect(fresh).toHaveBeenCalledTimes(1)
+  })
+
   test('a late failure after the fence changed shows no error for the new selection', async () => {
     const pending = deferred<string>()
     const onFailure = vi.fn()

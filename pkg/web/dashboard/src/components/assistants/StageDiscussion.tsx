@@ -18,6 +18,8 @@ export type DiscussionMessage = {
   body: string
   // mentions — mesh participant ids the human also addressed with `@`.
   mentions?: string[]
+  // unanswered — a human post of a finished stage that nobody replied to.
+  unanswered?: boolean
   createdAt: string
 }
 
@@ -78,8 +80,13 @@ export function StageDiscussion({ messages, participants = [] }: StageDiscussion
             {m.mentions && m.mentions.length > 0 && (
               <span className="stage-discussion-message-mentions">→ {m.mentions.map((id) => senderLabel(id, participants)).join(', ')}</span>
             )}
+            {m.unanswered === true && (
+              <span className="stage-discussion-message-unanswered" title="The stage finished without replying to this message">
+                Not answered
+              </span>
+            )}
           </div>
-          <AgentMessageBody body={m.body} markdown />
+          <AgentMessageBody body={m.body} fromAgent={m.authorKind !== 'human'} markdown />
           {m.evidence && m.evidence.length > 0 && (
             <ul className="stage-discussion-message-evidence">
               {m.evidence.map((e) => (

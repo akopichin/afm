@@ -271,7 +271,7 @@ describe('FeedComposer', () => {
     }
 
     function selectMention(label: string): void {
-      const ta = screen.getByRole('textbox', { name: /message the mesh/i })
+      const ta = screen.getByRole('combobox', { name: /message the mesh/i })
       fireEvent.change(ta, { target: { value: '@', selectionStart: 1 } })
       fireEvent.click(screen.getByText(label))
     }
@@ -297,7 +297,7 @@ describe('FeedComposer', () => {
       render(<FeedComposer stageId="s1" onSend={onSend} mesh={meshProps()} />)
       fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa fix this bug' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa fix this bug' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
@@ -308,7 +308,7 @@ describe('FeedComposer', () => {
 
     it('@ opens a server-sourced list distinguishing This run / This stage / Attach to stage', () => {
       openMessageMode()
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@', selectionStart: 1 } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@', selectionStart: 1 } })
       expect(screen.getByText('This run')).toBeInTheDocument()
       expect(screen.getByText('This stage')).toBeInTheDocument()
       expect(screen.getByText('Attach to stage')).toBeInTheDocument()
@@ -324,7 +324,7 @@ describe('FeedComposer', () => {
 
       openMessageMode()
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa hello there' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa hello there' } })
 
       expect(openSpy).not.toHaveBeenCalled()
       expect(sendSpy).not.toHaveBeenCalled()
@@ -340,7 +340,7 @@ describe('FeedComposer', () => {
 
       openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa please review' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa please review' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
@@ -358,7 +358,7 @@ describe('FeedComposer', () => {
 
       openMessageMode(meshProps({ roster: roster({ threads: [groupThread] }) }))
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa hi' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa hi' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
@@ -369,7 +369,7 @@ describe('FeedComposer', () => {
     it('deleting the @mention from the draft un-addresses the recipient (Send is disabled again)', () => {
       openMessageMode(meshProps())
       selectMention('@run:qa')
-      const ta = screen.getByRole('textbox', { name: /message the mesh/i })
+      const ta = screen.getByRole('combobox', { name: /message the mesh/i })
       fireEvent.change(ta, { target: { value: '@run:qa hello' } })
       expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled()
       fireEvent.change(ta, { target: { value: 'hello' } })
@@ -382,14 +382,14 @@ describe('FeedComposer', () => {
       vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
       openMessageMode(meshProps())
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa one' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa one' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1))
 
       fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
       fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa two' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa two' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenLastCalledWith('mt-new', expect.objectContaining({ body: '@run:qa two' })))
       expect(openSpy).toHaveBeenCalledTimes(1)
@@ -408,7 +408,7 @@ describe('FeedComposer', () => {
       selectMention('@run:qa')
       await waitFor(() => expect(screen.getByText('original question')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa here is the answer' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa here is the answer' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
@@ -427,7 +427,7 @@ describe('FeedComposer', () => {
         })
         openMessageMode(meshProps({ roster: roster({ participants: [runAgent, stageAgent, writer], threads: [writerThread] }) }))
         selectMention('@writer')
-        return screen.getByRole('textbox', { name: /message the mesh/i }) as HTMLTextAreaElement
+        return screen.getByRole('combobox', { name: /message the mesh/i }) as HTMLTextAreaElement
       }
 
       it("erasing the @mention keeps the conversation in view; Send stays off until someone is picked", async () => {
@@ -445,6 +445,22 @@ describe('FeedComposer', () => {
         await waitFor(() => expect(screen.getByText('draft is ready')).toBeInTheDocument())
         fireEvent.click(screen.getByRole('button', { name: 'Close conversation' }))
         expect(screen.queryByText('draft is ready')).toBeNull()
+      })
+
+      it('your own messages offer no Reply, and Close sits in its own header row', async () => {
+        vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+          messages: [
+            { id: 'mw0', thread_id: 'mt-w', sender_id: 'user', recipient_ids: ['run:t-w'], kind: 'message', body: 'please draft it', seq: 1, created_at: '2026-10-19T00:00:00Z' },
+            { id: 'mw1', thread_id: 'mt-w', sender_id: 'run:t-w', recipient_ids: ['user'], kind: 'reply', body: 'draft is ready', seq: 2, created_at: '2026-10-19T00:00:01Z' },
+          ],
+          next_cursor: 2,
+        })
+        openMessageMode(meshProps({ roster: roster({ participants: [runAgent, stageAgent, writer], threads: [writerThread] }) }))
+        selectMention('@writer')
+        await waitFor(() => expect(screen.getByText('draft is ready')).toBeInTheDocument())
+        expect(screen.getAllByRole('button', { name: 'Reply' })).toHaveLength(1)
+        expect(screen.getByText('please draft it').closest('li')).not.toHaveTextContent('Reply')
+        expect(screen.getByRole('button', { name: 'Close conversation' }).closest('.mesh-message-thread-header')).not.toBeNull()
       })
 
       it("Reply re-addresses the message's sender with its @handle and answers in that conversation", async () => {
@@ -481,7 +497,7 @@ describe('FeedComposer', () => {
       await waitFor(() => expect(screen.getByText('second question')).toBeInTheDocument())
       const [replyToFirst, replyToSecond] = screen.getAllByRole('button', { name: 'Reply' })
       fireEvent.click(replyToFirst as HTMLElement)
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa answer one' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa answer one' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-1', expect.objectContaining({ inReplyTo: 'm0' })))
 
@@ -503,7 +519,7 @@ describe('FeedComposer', () => {
       selectMention('@run:qa')
       await waitFor(() => expect(screen.getByText('original question')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa answer' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa answer' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(document.querySelector('.feed-reply-chip')).toBeNull())
@@ -514,7 +530,7 @@ describe('FeedComposer', () => {
       function openPreview(): void {
         openMessageMode()
         selectMention('@frontendDeveloper')
-        fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@frontendDeveloper please take a look' } })
+        fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@frontendDeveloper please take a look' } })
         fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       }
 
@@ -562,7 +578,7 @@ describe('FeedComposer', () => {
         expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull()
         expect(attachSpy).not.toHaveBeenCalled()
         expect(sendSpy).not.toHaveBeenCalled()
-        expect(screen.getByRole('textbox', { name: /message the mesh/i })).toHaveValue('@frontendDeveloper please take a look')
+        expect(screen.getByRole('combobox', { name: /message the mesh/i })).toHaveValue('@frontendDeveloper please take a look')
       })
 
       it('a server error (unavailable profile / exceeded quota) renders in-dialog with no partial attach', async () => {
@@ -616,7 +632,7 @@ describe('FeedComposer', () => {
 
       openMessageMode()
       selectMention('@stage:s1')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@stage:s1 status?' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@stage:s1 status?' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(screen.getByText('Awaiting delivery')).toBeInTheDocument())
@@ -635,7 +651,7 @@ describe('FeedComposer', () => {
       openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
       selectMention('@run:qa')
       await waitFor(() => expect(screen.getByText('done')).toBeInTheDocument())
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa ping' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@run:qa ping' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(screen.getByText('Answered')).toBeInTheDocument())
@@ -648,7 +664,7 @@ describe('FeedComposer', () => {
 
       openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }), stages: [makeStage({ status: 'paused' })] }))
       selectMention('@stage:s1')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@stage:s1 status?' } })
+      fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: '@stage:s1 status?' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(screen.getByText('Paused · waiting for Continue')).toBeInTheDocument())
@@ -665,7 +681,7 @@ describe('FeedComposer', () => {
       expect(message).toHaveFocus()
       expect(message).toHaveAttribute('aria-selected', 'true')
       expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', message.id)
-      expect(screen.getByRole('textbox', { name: /message the mesh/i })).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: /message the mesh/i })).toBeInTheDocument()
     })
 
     it('a retry of the same message after a lost response reuses its request id; an edited message gets a new one', async () => {
@@ -674,7 +690,7 @@ describe('FeedComposer', () => {
       const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('network'))
       openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
       selectMention('@run:qa')
-      const input = screen.getByRole('textbox', { name: /message the mesh/i })
+      const input = screen.getByRole('combobox', { name: /message the mesh/i })
       fireEvent.change(input, { target: { value: '@run:qa ping' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
@@ -696,7 +712,7 @@ describe('FeedComposer', () => {
       vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
       openMessageMode()
       selectMention('@run:qa')
-      const input = screen.getByRole('textbox', { name: /message the mesh/i }) as HTMLTextAreaElement
+      const input = screen.getByRole('combobox', { name: /message the mesh/i }) as HTMLTextAreaElement
       fireEvent.change(input, { target: { value: '@run:qa one' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())

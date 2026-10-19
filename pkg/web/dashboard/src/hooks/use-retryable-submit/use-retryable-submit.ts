@@ -22,7 +22,7 @@ export type RetryableSubmit<P> = {
 
 // Unsettled — the request id of the latest attempt for one fence+payload that has not succeeded yet.
 type Unsettled = { attempt: number; fence: string; requestId: string }
-type Running = { attempt: number; fence: string }
+type Running = { attempt: number; generation: number }
 
 // errorMessage — the text a form shows for a failed request.
 export function errorMessage(err: unknown): string {
@@ -51,14 +51,20 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
   const latestAttemptRef = useRef(0)
   // runningRef mirrors `running` for the double-submit check, which must not wait for a re-render.
   const runningRef = useRef<Running | null>(null)
+  // selection — the fence plus a generation bumped on EVERY fence change, so a return to an earlier
+  // selection (A → B → A) is a new selection: an attempt started under the first A is stale for the second.
+  const [selection, setSelection] = useState({ fence, generation: 0 })
+  if (selection.fence !== fence) setSelection({ fence, generation: selection.generation + 1 })
   const fenceRef = useRef(fence)
+  const generationRef = useRef(selection.generation)
   const mountedRef = useRef(true)
   const [running, setRunningState] = useState<Running | null>(null)
-  const [failure, setFailure] = useState<{ fence: string; message: string } | null>(null)
+  const [failure, setFailure] = useState<{ generation: number; message: string } | null>(null)
 
   useLayoutEffect(() => {
-    fenceRef.current = fence
-  }, [fence])
+    fenceRef.current = selection.fence
+    generationRef.current = selection.generation
+  }, [selection])
 
   useEffect(() => {
     mountedRef.current = true
@@ -70,13 +76,15 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
   const submit = useCallback(
     <R,>(payload: P, send: (payload: Readonly<P>, requestId: string) => Promise<R>, handlers: SubmitHandlers<R> = {}): void => {
       const startedFence = fenceRef.current
-      if (runningRef.current !== null && runningRef.current.fence === startedFence) return
+      const startedGeneration = generationRef.current
+      if (runningRef.current !== null && runningRef.current.generation === startedGeneration) return
       const snapshot: Readonly<P> = Object.freeze({ ...payload })
       const key = JSON.stringify([startedFence, snapshot])
       const requestId = unsettledRef.current.get(key)?.requestId ?? genMeshRequestId(requestIdPrefix)
       const attempt = ++latestAttemptRef.current
       unsettledRef.current.set(key, { attempt, fence: startedFence, requestId })
-      const isCurrent = (): boolean => mountedRef.current && fenceRef.current === startedFence && latestAttemptRef.current === attempt
+      const isCurrent = (): boolean =>
+        mountedRef.current && generationRef.current === startedGeneration && latestAttemptRef.current === attempt
       const setRunning = (next: Running | null): void => {
         runningRef.current = next
         setRunningState(next)
@@ -86,7 +94,7 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
         if (mountedRef.current && runningRef.current?.attempt === attempt) setRunning(null)
       }
 
-      setRunning({ attempt, fence: startedFence })
+      setRunning({ attempt, generation: startedGeneration })
       setFailure(null)
       send(snapshot, requestId).then(
         (result) => {
@@ -104,7 +112,7 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
           settle()
           if (!isCurrent()) return
           const message = errorMessage(err)
-          setFailure({ fence: startedFence, message })
+          setFailure({ generation: startedGeneration, message })
           handlers.onFailure?.(message)
         },
       )
@@ -113,8 +121,8 @@ export function useRetryableSubmit<P extends object>(requestIdPrefix: string, fe
   )
 
   return {
-    pending: running !== null && running.fence === fence,
-    error: failure !== null && failure.fence === fence ? failure.message : null,
+    pending: running !== null && running.generation === selection.generation,
+    error: failure !== null && failure.generation === selection.generation ? failure.message : null,
     submit,
   }
 }

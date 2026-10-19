@@ -100,6 +100,7 @@ describe('StageDiscussion', () => {
     )
     expect(screen.getByText('All checks green.')).toBeInTheDocument()
     expect(screen.getByText('Pass')).toBeInTheDocument()
-    expect(screen.queryByText(/schema_version/)).toBeNull()
+    // The raw JSON is only inside the collapsed "Raw" details, never the visible text.
+    expect(screen.getByText(/schema_version/).closest('details')).not.toBeNull()
   })
 })

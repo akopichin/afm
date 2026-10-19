@@ -113,14 +113,21 @@ describe('StageDiscussionPanel', () => {
       { id: 'stage:implement', kind: 'stage_agent', scope: 'stage', alias: 'implement', reachable: true },
       { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
       { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA 2', reachable: true },
+      { id: 'run:t-3', kind: 'run_agent', scope: 'run', alias: 'gone', display_name: 'Gone', reachable: false },
     ]
     render(<StageDiscussionPanel stageId="implement" participants={participants} stageStatus="running" />)
     const input = screen.getByPlaceholderText(/add a message to this stage/i) as HTMLTextAreaElement
+    expect(input).toHaveAttribute('aria-expanded', 'false')
 
     fireEvent.change(input, { target: { value: '@', selectionStart: 1 } })
     const menu = screen.getByRole('listbox', { name: /bring another agent/i })
     expect(menu).not.toHaveTextContent('You')
     expect(menu).not.toHaveTextContent('implement')
+    expect(menu).not.toHaveTextContent('Gone') // a finished agent would never get the post
+    // Combobox wiring: the input names its open listbox and the highlighted option.
+    expect(input).toHaveAttribute('aria-expanded', 'true')
+    expect(input).toHaveAttribute('aria-controls', menu.id)
+    expect(document.getElementById(input.getAttribute('aria-activedescendant') ?? '')).toHaveAttribute('aria-selected', 'true')
     fireEvent.click(within(menu).getByRole('button', { name: /QA 2/ }))
     // Both run agents share the alias `qa`, so the pick is written as its full id — one mention, one agent.
     expect(input.value).toBe('@run:t-2 ')
@@ -135,5 +142,18 @@ describe('StageDiscussionPanel', () => {
         interrupt: false,
       }),
     )
+  })
+
+  test('when the stage finishes the log is read again, so unanswered posts get marked', async () => {
+    const list = vi.spyOn(runClient, 'listStageDiscussion')
+    const { rerender } = render(<StageDiscussionPanel stageId="implement" stageStatus="running" />)
+    await waitFor(() => expect(list).toHaveBeenCalledWith('implement', 0))
+    list.mockResolvedValue({
+      messages: [{ id: 'm1', author_kind: 'human', round: 0, body: 'any news?', unanswered: true, created_at: '2026-10-16T10:00:00Z' }],
+      nextCursor: 1,
+      hasMore: false,
+    })
+    rerender(<StageDiscussionPanel stageId="implement" stageStatus="done" />)
+    await waitFor(() => expect(screen.getByText('Not answered')).toBeInTheDocument())
   })
 })

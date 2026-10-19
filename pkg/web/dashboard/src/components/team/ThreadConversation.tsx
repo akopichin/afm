@@ -262,6 +262,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         </div>
         <div className="chat-composer-row">
           <textarea
+            {...mention.inputAria}
             ref={setInputRef}
             className="chat-composer-input"
             placeholder={`Message ${label}…`}
@@ -281,6 +282,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
           />
           {mention.open && (
             <MentionMenu
+              id={mention.listboxId}
               groups={[{ label: '', items: mention.matches }]}
               highlightIndex={mention.highlightIndex}
               onHover={mention.setHighlightIndex}
@@ -321,10 +323,10 @@ function MessageRow({ message, participants, answered }: { message: MeshMessage;
           {answered !== undefined && (
             <blockquote className="team-conversation-reply-quote">
               <span className="team-conversation-reply-quote-author">Replying to {senderLabel(answered.sender_id, participants)}</span>
-              <span className="team-conversation-reply-quote-text">{messageText(answered.body)}</span>
+              <span className="team-conversation-reply-quote-text">{messageText(answered.body, answered.sender_id !== 'user')}</span>
             </blockquote>
           )}
-          <AgentMessageBody body={message.body} />
+          <AgentMessageBody body={message.body} fromAgent={!fromYou} />
         </div>
       </div>
     </li>

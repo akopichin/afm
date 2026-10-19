@@ -444,6 +444,13 @@
   margin-left: auto;
   flex: 0 0 auto;
 }
+.stage-discussion-message-unanswered {
+  font-size: 10px;
+  color: var(--attention);
+  border: 1px solid rgba(var(--attention-rgb), 0.4);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
 .stage-discussion-message-mentions {
   min-width: 0;
   font-size: 11px;

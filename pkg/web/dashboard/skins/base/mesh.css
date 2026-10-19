@@ -933,3 +933,6 @@
 }
 .agent-result-verdict[data-verdict='pass'] { color: var(--success); border-color: rgba(var(--success-rgb), 0.4); }
 .agent-result-verdict[data-verdict='needs_changes'] { color: var(--attention); border-color: rgba(var(--attention-rgb), 0.4); }
+.agent-result-raw { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+.agent-result-raw > summary { cursor: pointer; }
+.agent-result-raw > pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); }

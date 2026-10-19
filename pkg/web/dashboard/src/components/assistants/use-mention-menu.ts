@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useId, useState, type KeyboardEvent } from 'react'
 import { detectMentionTrigger, type MentionTrigger } from './mention-match'
 
 export type UseMentionMenuOptions<T> = {
@@ -24,6 +24,22 @@ export type UseMentionMenuResult<T> = {
   // onKeyDown — Up/Down/Enter/Escape while the menu is open; returns true when it handled the key.
   onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => boolean
   pick: (item: T) => void
+  // listboxId — the id to give the MentionMenu, so the composer can point at it.
+  listboxId: string
+  // inputAria — combobox wiring for the composer's textarea: whether the menu is open, which listbox it
+  // controls and which option is active, so keyboard and screen-reader users follow the highlight.
+  inputAria: {
+    role: 'combobox'
+    'aria-autocomplete': 'list'
+    'aria-expanded': boolean
+    'aria-controls': string | undefined
+    'aria-activedescendant': string | undefined
+  }
+}
+
+// mentionOptionId — the DOM id of the option at index in the listbox listboxId (MentionMenu renders it).
+export function mentionOptionId(listboxId: string, index: number): string {
+  return `${listboxId}-option-${index}`
 }
 
 // useMentionMenu — the one `@`-mention state machine for every composer (feed, Team conversation, side
@@ -33,6 +49,7 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
   const [highlightIndex, setHighlightIndex] = useState(0)
   const matches = mention !== null ? matchesFor(mention.query) : []
   const open = matches.length > 0
+  const listboxId = useId()
 
   function pick(item: T): void {
     if (mention === null) return
@@ -75,5 +92,12 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
     }
   }
 
-  return { query: mention?.query ?? null, matches, open, highlightIndex, setHighlightIndex, onInput, onKeyDown, pick }
+  const inputAria = {
+    role: 'combobox' as const,
+    'aria-autocomplete': 'list' as const,
+    'aria-expanded': open,
+    'aria-controls': open ? listboxId : undefined,
+    'aria-activedescendant': open ? mentionOptionId(listboxId, highlightIndex) : undefined,
+  }
+  return { query: mention?.query ?? null, matches, open, highlightIndex, setHighlightIndex, onInput, onKeyDown, pick, listboxId, inputAria }
 }
