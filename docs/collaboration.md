@@ -55,7 +55,9 @@ the stage agent (`root_dir`, or the run's worktree). Its task context names
 that directory, a **base revision** for `git diff <base>` (in a worktree, the
 commit the branch forked from; otherwise `HEAD`), and its own scratch directory.
 The scratch directory is also in `$AFM_SCRATCH_DIR`; it is meant for the
-helper's notes and temporary files.
+helper's notes and temporary files. A helper in the host's read-only sandbox
+(the `codex-as-claude` adapter) cannot write it — nor anything else — so its
+prompt says so and asks for notes in its answer instead.
 
 What stops a helper from changing project files depends on where it runs, not
 on its prompt:

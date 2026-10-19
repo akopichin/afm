@@ -60,7 +60,9 @@ instead of their own scratch directory. Their task context names the project
 root, a base revision for `git diff <base>` (the fork point in a worktree,
 otherwise `HEAD`), and the scratch directory, which is also passed as
 `AFM_SCRATCH_DIR` for notes. The protection of project files depends on the
-environment: the host codex adapter is read-only, a Docker run is not. The
+environment: the host codex adapter is read-only, a Docker run is not. A helper
+in the host's read-only sandbox cannot write its scratch directory either; its
+prompt says so and asks for notes in its answer. The
 collaboration docs list these guarantees. The stage feed now shows *"The
 working tree changed during <agent>'s turn"* when a helper turn saw the tree
 change.

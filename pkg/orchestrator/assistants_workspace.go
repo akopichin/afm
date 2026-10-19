@@ -12,8 +12,9 @@ import (
 // workspaceSection tells a helper where it works: the project root (its working directory, the same as the
 // stage agent's), the revision to diff the project against, and its own scratch directory for notes. It
 // promises no write protection: whether the helper can change project files depends on its environment
-// (docs/collaboration.md), not on this text.
-func (o *Orchestrator) workspaceSection(taskID assistants.TaskID) string {
+// (docs/collaboration.md), not on this text. A helper in an OS read-only sandbox (the host codex adapter runs
+// `-s read-only`) cannot write its scratch directory either, and is told so instead.
+func (o *Orchestrator) workspaceSection(task assistants.Task) string {
 	root, err := filepath.Abs(o.fingerprintDir())
 	if err != nil {
 		root = o.fingerprintDir()
@@ -24,8 +25,12 @@ func (o *Orchestrator) workspaceSection(taskID assistants.TaskID) string {
 	if base := diffBaseRevision(root); base != "" {
 		fmt.Fprintf(&b, "- Base revision: `%s` — `git diff %s` shows the changes made on top of it, committed and not.\n", base, base)
 	}
-	fmt.Fprintf(&b, "- Scratch directory: `%s` (also in `$AFM_SCRATCH_DIR`) — keep your notes and temporary files there, not in the project.\n\n",
-		o.taskScratchDir(taskID))
+	scratch := o.taskScratchDir(task.ID)
+	if task.ProfileSnapshot.ReadonlyEnforcement == assistants.ReadonlyEnforcementOS {
+		fmt.Fprintf(&b, "- Scratch directory: `%s` (also in `$AFM_SCRATCH_DIR`) — you run in a read-only sandbox and cannot write files there or anywhere else; put your notes in your answer.\n\n", scratch)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "- Scratch directory: `%s` (also in `$AFM_SCRATCH_DIR`) — keep your notes and temporary files there, not in the project.\n\n", scratch)
 	return b.String()
 }
 

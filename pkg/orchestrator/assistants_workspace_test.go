@@ -94,6 +94,28 @@ func TestTaskContext_WorkspaceSection(t *testing.T) {
 	}
 }
 
+// TestTaskContext_WorkspaceSection_ReadOnlySandbox: a helper in an OS read-only sandbox (the host codex
+// adapter) is told plainly that it cannot write — not even its scratch directory — instead of being offered a
+// place for notes it cannot use.
+func TestTaskContext_WorkspaceSection_ReadOnlySandbox(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	o.opts.RootDir = t.TempDir()
+	taskID := assistants.TaskID("t-readonly")
+	task := assistants.Task{ID: taskID, RootStageID: assistantsTestStageID, Instruction: "review",
+		ProfileSnapshot: assistants.Profile{ReadonlyEnforcement: assistants.ReadonlyEnforcementOS}}
+
+	tc, err := o.buildTaskContext(task, *o.reg().Stage(assistantsTestStageID))
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+	if !strings.Contains(tc.Prompt, "read-only sandbox") || !strings.Contains(tc.Prompt, "cannot write") {
+		t.Fatalf("a read-only helper must be told it cannot write its notes:\n%s", tc.Prompt)
+	}
+	if strings.Contains(tc.Prompt, "keep your notes and temporary files there") {
+		t.Fatalf("a read-only helper must not be offered a scratch it cannot write:\n%s", tc.Prompt)
+	}
+}
+
 // TestHelperTreeModified_NamesTheAgentAndKeepsVerdict: a working tree that changed during a helper's turn is
 // reported (durably, for the feed) with the agent's name — an observation that never changes the verdict.
 func TestHelperTreeModified_NamesTheAgentAndKeepsVerdict(t *testing.T) {
