@@ -107,7 +107,10 @@ the exit, the live reply paths and recovery after a restart decide the
 continuation by the same rule, so a crash right after the park no longer loses
 it when one wait was answered by a turn result and another is still open. A
 Pause, Continue or Revise that lands while the process is exiting wins: the
-stale exit no longer parks the stage, and a Revise runs its feedback turn.
+stale exit neither parks nor completes the stage (also not the park of the
+process that replaced it), a Revise of that turn runs exactly one feedback
+turn, and a continuation queued for an earlier park is dropped instead of
+resuming the next one.
 
 ### Fix: only a recipient answers a `reply_to` wait
 

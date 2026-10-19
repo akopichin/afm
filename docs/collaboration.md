@@ -403,8 +403,9 @@ continues in a new turn instead of finishing or being retried as incomplete.
 The park remembers which waits the turn ended for, so after a restart the stage
 continues on the same rule, also when one of them was answered by a turn
 result and another is still open. If you pause, continue or revise the stage
-while that process is exiting, your action wins: the old process does not park
-the stage, and a revise starts its feedback turn.
+while that process is exiting, your action wins: the old process neither parks
+nor completes the stage, a revise of its turn starts exactly one feedback turn,
+and a continuation decided for an earlier park never resumes a later one.
 
 ## Add a stage during a run
 
