@@ -296,7 +296,8 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Ef
 // meshMessageSentRecord is the mesh_message_sent payload as the orchestrator journals it: the projection's
 // payload plus the request's intent the projection does not need — OriginStage, the stage feed a send without a
 // thread was written from, so a retry under the same request id from another feed is a conflict, not a replay.
-// An additive omitempty field: older journals and readers are unaffected.
+// An additive omitempty field: older journals and readers are unaffected; a record without it is retried by the
+// legacy rule (the feed is not compared).
 type meshMessageSentRecord struct {
 	state.MeshMessageSentPayload
 	OriginStage string `json:"origin_stage,omitempty"`

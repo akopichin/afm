@@ -88,7 +88,9 @@ func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Partic
 	if err != nil {
 		return SendReceipt{}, true, err
 	}
-	if !found || p.OriginStage != req.OriginStage || !o.committedSendMatches(rs, roster, committedMessage(target, p.MeshMessageSentPayload), req) {
+	// A record without origin_stage (written before it was kept, or a send from no feed) keeps the legacy retry
+	// rule: the feed is not compared.
+	if !found || (p.OriginStage != "" && p.OriginStage != req.OriginStage) || !o.committedSendMatches(rs, roster, committedMessage(target, p.MeshMessageSentPayload), req) {
 		return SendReceipt{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return SendReceipt{MessageID: agentcomm.MessageID(target.MessageID), Seq: op.Result.Seq, ThreadID: agentcomm.ThreadID(target.ThreadID)}, true, nil

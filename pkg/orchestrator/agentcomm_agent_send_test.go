@@ -450,3 +450,20 @@ func TestSendFromAgent_SameRequestFromAnotherFeedIsAConflict(t *testing.T) {
 		t.Fatalf("err = %v, want an operation id conflict", err)
 	}
 }
+
+// A send committed before the feed was recorded with it (no origin_stage in its record — the same bytes a
+// send without a feed writes) is retried after the upgrade from a feed: the legacy retry still replays it.
+func TestSendFromAgent_RetryOfARecordWithoutOriginReplays(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	first, err := userSend(o, "op-old", "", []string{"docs"}, "hi")
+	if err != nil {
+		t.Fatalf("send without a feed: %v", err)
+	}
+	again, err := userSend(o, "op-old", "docs", []string{"docs"}, "hi")
+	if err != nil {
+		t.Fatalf("retry from a feed of a record without origin_stage: %v", err)
+	}
+	if again.MessageID != first.MessageID {
+		t.Fatalf("retry = %+v, want the original receipt %+v", again, first)
+	}
+}

@@ -86,3 +86,22 @@ func TestMeshActions_AttachAndSendReturnsTheParticipant(t *testing.T) {
 		t.Fatalf("participant = %+v, want the new run agent's roster entry with its alias", p)
 	}
 }
+
+// The stage conversation log and the stage feed's mesh messages carry the same journal seq for a post, so the
+// dashboard orders the two readers by it, not by timestamps.
+func TestDiscussionAdapter_MessagesCarryTheJournalSeq(t *testing.T) {
+	a, _ := newMeshAdapterTestActions(t, "impl")
+	d := collaborationDiscussion(a)
+	id, err := d.PostMessage(context.Background(), "impl", server.DiscussionPost{RequestID: "req-post", Body: "status?"})
+	if err != nil {
+		t.Fatalf("PostMessage: %v", err)
+	}
+	log, _, _, err := d.Messages("impl", 0, 10)
+	if err != nil || len(log) != 1 || log[0].ID != id || log[0].Seq == 0 {
+		t.Fatalf("log = %+v, err = %v; want the post with its journal seq", log, err)
+	}
+	page, err := a.StageMessages(context.Background(), "impl", 0, 10)
+	if err != nil || len(page.Messages) != 1 || page.Messages[0].Seq != log[0].Seq {
+		t.Fatalf("mesh page = %+v, err = %v; want the mirror with seq %d", page.Messages, err, log[0].Seq)
+	}
+}

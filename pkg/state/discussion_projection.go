@@ -91,6 +91,7 @@ func applyDiscussionMessage(as *AssistantsState, c *Control, dryRun bool) error 
 		Interrupt:       p.Interrupt,
 		AutoResult:      p.AutoResult,
 		CreatedAt:       c.Time,
+		Seq:             c.Seq,
 	}
 	as.Discussions.Messages[id] = &msg
 	as.Discussions.ByStage[stageID] = append(as.Discussions.ByStage[stageID], id)
