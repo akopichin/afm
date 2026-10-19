@@ -259,6 +259,17 @@ describe('StagesList', () => {
     expect(onPause).toHaveBeenCalledWith('a')
   })
 
+  test('a stage parked waiting for a colleague (awaiting_peer) can be paused from the menu', () => {
+    const onPause = vi.fn()
+    const stages: Stage[] = [
+      { id: 'p', name: '', status: 'awaiting_peer', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: false, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} accounting={{ supported: false }} />)
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    fireEvent.click(screen.getByText('Pause'))
+    expect(onPause).toHaveBeenCalledWith('p')
+  })
+
   test('the kebab no longer offers "Add note for agent" on a running stage — that moved to the feed composer', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },

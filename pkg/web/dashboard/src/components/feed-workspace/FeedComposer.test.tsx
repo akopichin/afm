@@ -433,6 +433,17 @@ describe('FeedComposer', () => {
       await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-1', 'run:t-2'], body: 'please both review' })))
     })
 
+    it("a stage post refused for a mention that can no longer read it shows the server's reason and keeps the draft", async () => {
+      const reason = '@qa cannot read this post (task t-1 has reached a terminal status) — remove the mention and send again'
+      vi.spyOn(runClient, 'postStageDiscussionMessage').mockRejectedValue(new runClient.FlowApiError('/api/stages/s1/discussion', 409, 'invalid_status', reason))
+      renderComposer()
+      type('@s1 @qa status?')
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(reason))
+      expect(input().value).toBe('@s1 @qa status?')
+      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+    })
+
     it('@ lists the agents of other stages too', () => {
       const other: MeshParticipant = { id: 'stage:docs', kind: 'stage_agent', scope: 'stage', stage_id: 'docs', alias: 'docs-stage', display_name: 'Docs stage', reachable: true }
       renderComposer(meshProps({ roster: roster({ participants: [runAgent, stageAgent, other] }) }))

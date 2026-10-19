@@ -20,20 +20,27 @@ export class FlowApiError extends Error {
   code: string | undefined
   status: number
 
-  constructor(url: string, status: number, code: string | undefined) {
-    super(`${url} -> ${status}${code ? ` (${code})` : ''}`)
+  // reason — the server's explanation of a rejected request (the error body's message, e.g. why a mention cannot
+  // read a post); it becomes the error's message, so a form shows it as it is. Without one the message names the
+  // request, its status and code.
+  constructor(url: string, status: number, code: string | undefined, reason?: string) {
+    super(reason !== undefined && reason !== '' ? reason : `${url} -> ${status}${code ? ` (${code})` : ''}`)
     this.status = status
     this.code = code
   }
 }
 
-async function readErrorCode(response: Response): Promise<string | undefined> {
+// flowApiError — the FlowApiError of a failed response: its error code and, when the server gave one, its reason.
+async function flowApiError(url: string, response: Response): Promise<FlowApiError> {
   try {
     const body: unknown = await response.json()
-    return isRecord(body) && typeof body.error === 'string' ? body.error : undefined
+    if (isRecord(body)) {
+      return new FlowApiError(url, response.status, typeof body.error === 'string' ? body.error : undefined, typeof body.message === 'string' ? body.message : undefined)
+    }
   } catch {
-    return undefined
+    /* no JSON body */
   }
+  return new FlowApiError(url, response.status, undefined)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,7 +57,7 @@ async function jsonRequest<T>(url: string, method: 'POST' | 'PUT', body: unknown
   })
 
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
 
   return response.json() as Promise<T>
@@ -116,7 +123,7 @@ export async function answerDialog(
     body: JSON.stringify({ id, phase, answer, from_options: fromOptions }),
   })
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
 }
 
@@ -157,7 +164,7 @@ export async function listNotes(): Promise<{ rev: number; notes: ReviewNote[] }>
   const url = '/api/flow/notes'
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { rev?: number; notes?: ReviewNote[] | null }
   // Defensive normalization: a freshly created store serializes an empty note list as `"notes": null`.
@@ -191,7 +198,7 @@ export async function deleteNote(id: string, expectedRev: number): Promise<void>
   const url = `/api/flow/notes/${encodeURIComponent(id)}?expected_rev=${expectedRev}`
   const response = await fetch(url, { method: 'DELETE' })
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
 }
 
@@ -280,7 +287,7 @@ export async function listStageAssistants(stageId: string): Promise<{ tasks: Ass
   const url = stageUrl(stageId, 'assistants')
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { tasks?: AssistantTaskWire[] | null }
   return { tasks: body.tasks ?? [] }
@@ -293,7 +300,7 @@ export async function listAssistantProfiles(): Promise<{ profiles: AssistantProf
   const url = '/api/assistant-profiles'
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { profiles?: AssistantProfileWire[] | null; max_depth?: number; max_depth_source?: string }
   return {
@@ -323,7 +330,7 @@ export async function getAssistantTaskEvents(
   const url = `/api/assistants/${encodeURIComponent(taskId)}/events?cursor=${cursor}`
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { events?: AssistantEventWire[] | null; next_cursor?: number; has_more?: boolean }
   return { events: body.events ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
@@ -336,7 +343,7 @@ export async function getAssistantTaskRaw(taskId: string): Promise<string> {
   const url = `/api/assistants/${encodeURIComponent(taskId)}/raw`
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { content?: string }
   return body.content ?? ''
@@ -373,7 +380,7 @@ export async function listStageDiscussion(
   const url = `${stageUrl(stageId, 'discussion')}?cursor=${cursor}&limit=${limit}`
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { messages?: DiscussionMessageWire[] | null; next_cursor?: number; has_more?: boolean }
   return { messages: body.messages ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
