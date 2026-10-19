@@ -1,21 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
 import { buildReplyBody } from '../../lib/quote'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useMeshThread, type MeshRoster } from '../../hooks/use-mesh'
-import { MentionMenu } from '../assistants/AssistantMentionMenu'
-import { detectMentionTrigger, filterMentionGroups } from '../assistants/mention-match'
+import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
+import { MentionMenu, mentionText } from '../assistants/AssistantMentionMenu'
+import { draftMentions, filterMentionGroups } from '../assistants/mention-match'
+import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
+import { TabList, tabPanelProps } from '../tab-list'
 import {
   genMeshRequestId,
   openMeshThread,
   sendMeshMessage,
   type MeshAttachAndSendResult,
   type MeshMessage,
+  type MeshThread,
 } from '../../api/mesh-client'
-import { buildMeshMentionGroups, findExistingDirectThread, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
-import { computeReceiptPhase, RECEIPT_LABEL } from './mesh-receipt'
+import { buildMeshMentionGroups, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
+import { findExistingDirectThread, senderLabel } from '../../lib/mesh-roster'
+import { computeReceiptPhase, RECEIPT_LABEL, type ReceiptPhase } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
 
@@ -88,9 +94,13 @@ export function FeedComposer({
   mesh,
 }: FeedComposerProps): ReactElement {
   const [mode, setMode] = useState<ComposerMode>('revise')
+  // localThreads — direct threads Message mode opened that the roster poll has not reported yet. Kept here
+  // (not in MeshMessageComposer) so switching to Revise and back does not forget them and open a duplicate.
+  const [localThreads, setLocalThreads] = useState<MeshThread[]>([])
   const [value, setValue] = useState('')
   const [sending, setSending] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const tabsId = useId()
 
   const empty = value.trim() === ''
 
@@ -98,7 +108,7 @@ export function FeedComposer({
   // лишнего клика в textarea.
   useEffect(() => {
     if (replyKey === undefined) return
-    rootRef.current?.querySelector<HTMLTextAreaElement>('.feed-composer-textarea')?.focus()
+    rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-composer-input')?.focus()
   }, [replyKey])
 
   async function submit(): Promise<void> {
@@ -123,109 +133,108 @@ export function FeedComposer({
     }
   }
 
-  return (
-    <div className="feed-composer" ref={rootRef}>
-      {mesh !== undefined && (
-        <div className="feed-composer-modes" role="tablist" aria-label="Composer mode">
+  // reviseComposer — the note-to-agent field: the whole composer without mesh, the Revise tab with it.
+  const reviseComposer = (
+    <>
+      {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
+          line-comment цитаты (левый акцент + приглушённый исходник, кламп 2
+          строки). ✕ снимает цитату. */}
+      {replyQuote !== null && (
+        <div className="feed-reply-chip">
+          <span className="feed-reply-chip-label">↩ In reply to</span>
+          <span className="feed-reply-chip-src">{replyQuote}</span>
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === 'message'}
-            className={`feed-composer-mode${mode === 'message' ? ' active' : ''}`}
-            onClick={() => setMode('message')}
+            className="feed-reply-chip-cancel"
+            aria-label="Cancel reply to thought"
+            onClick={onCancelReply}
           >
-            Message
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'revise'}
-            className={`feed-composer-mode${mode === 'revise' ? ' active' : ''}`}
-            onClick={() => setMode('revise')}
-          >
-            Revise
+            ✕
           </button>
         </div>
       )}
-
-      {mesh !== undefined && mode === 'message' ? (
-        <MeshMessageComposer stageId={stageId} mesh={mesh} />
-      ) : (
-        <>
-          {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
-              line-comment цитаты (левый акцент + приглушённый исходник, кламп 2
-              строки). ✕ снимает цитату. */}
-          {replyQuote !== null && (
-            <div className="feed-reply-chip">
-              <span className="feed-reply-chip-label">↩ In reply to</span>
-              <span className="feed-reply-chip-src">{replyQuote}</span>
-              <button
-                type="button"
-                className="feed-reply-chip-cancel"
-                aria-label="Cancel reply to thought"
-                onClick={onCancelReply}
-              >
-                ✕
-              </button>
-            </div>
-          )}
-          {/* Полоса опций над строкой ввода: тумблер с подписью, прижат вправо. */}
-          {onTogglePauseOnFocus !== undefined && (
-            <div className="composer-opts">
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={pauseOnFocusEnabled}
-                  onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
-                />
-                <span className="track" aria-hidden="true" />
-                <span className="switch-label">Hold the agent while you type</span>
-              </label>
-            </div>
-          )}
-          {/* Янтарный баннер: стадия на паузе, снимется на отправке (или «Resume now»). */}
-          {paused && (
-            <div className="pause-banner" role="status">
-              <span className="pause-banner-icon" aria-hidden="true">⏸</span>
-              <span className="pause-banner-text">Stage paused. The agent is on hold — it'll resume when you send.</span>
-              <button type="button" className="pause-banner-resume" onClick={onResumeNow}>
-                Resume now
-              </button>
-            </div>
-          )}
-          <div className={`feed-composer-row${paused ? ' focused' : ''}`}>
-            <PasteableTextarea
-              stageId={stageId}
-              className="feed-composer-textarea"
-              value={value}
-              onChange={setValue}
-              placeholder="Note to agent…"
-              allowFileReferences
-              attachInline
-              rows={1}
-              onSubmit={() => void submit()}
-              onFocus={onFocus}
-              onBlur={() => onBlur?.(value.trim() !== '')}
-              maxHeight={200}
+      {/* Полоса опций над строкой ввода: тумблер с подписью, прижат вправо. */}
+      {onTogglePauseOnFocus !== undefined && (
+        <div className="composer-opts">
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={pauseOnFocusEnabled}
+              onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
             />
-            <button
-              type="button"
-              className={`feed-composer-send${paused ? ' paused' : ''}`}
-              aria-label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
-              disabled={empty || sending}
-              onClick={() => void submit()}
-            >
-              {mesh !== undefined ? (
-                <span className="feed-composer-send-label">Apply Revise</span>
-              ) : (
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M22 2 11 13" />
-                  <path d="M22 2 15 22l-4-9-9-4 20-7Z" />
-                </svg>
-              )}
-            </button>
-          </div>
-        </>
+            <span className="track" aria-hidden="true" />
+            <span className="switch-label">Hold the agent while you type</span>
+          </label>
+        </div>
+      )}
+      {/* Янтарный баннер: стадия на паузе, снимется на отправке (или «Resume now»). */}
+      {paused && (
+        <div className="pause-banner" role="status">
+          <span className="pause-banner-icon" aria-hidden="true">⏸</span>
+          <span className="pause-banner-text">Stage paused. The agent is on hold — it'll resume when you send.</span>
+          <button type="button" className="pause-banner-resume" onClick={onResumeNow}>
+            Resume now
+          </button>
+        </div>
+      )}
+      <div className={`chat-composer-row${paused ? ' paused' : ''}`}>
+        <PasteableTextarea
+          stageId={stageId}
+          className="chat-composer-input"
+          value={value}
+          onChange={setValue}
+          placeholder="Note to agent…"
+          allowFileReferences
+          attachInline
+          rows={1}
+          onSubmit={() => void submit()}
+          onFocus={onFocus}
+          onBlur={() => onBlur?.(value.trim() !== '')}
+          maxHeight={200}
+        />
+        <ChatSendButton
+          label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
+          disabled={empty}
+          sending={sending}
+          paused={paused}
+          onClick={() => void submit()}
+        />
+      </div>
+    </>
+  )
+
+  return (
+    <div className="feed-composer" ref={rootRef}>
+      {mesh !== undefined && (
+        <TabList
+          idPrefix={tabsId}
+          ariaLabel="Composer mode"
+          className="feed-composer-modes"
+          tabClassName="feed-composer-mode"
+          selected={mode}
+          onSelect={setMode}
+          tabs={[
+            { id: 'message', label: 'Message' },
+            { id: 'revise', label: 'Revise' },
+          ]}
+        />
+      )}
+
+      {mesh !== undefined ? (
+        <div className="feed-composer-panel" {...tabPanelProps(tabsId, mode)}>
+          {mode === 'message' ? (
+            <MeshMessageComposer
+              stageId={stageId}
+              mesh={mesh}
+              knownThreads={[...mesh.roster.threads, ...localThreads.filter((l) => !mesh.roster.threads.some((t) => t.id === l.id))]}
+              onThreadCreated={(thread) => setLocalThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))}
+            />
+          ) : (
+            reviseComposer
+          )}
+        </div>
+      ) : (
+        reviseComposer
       )}
     </div>
   )
@@ -236,6 +245,9 @@ const MAX_MESSAGE_TEXTAREA_HEIGHT = 200
 type MeshMessageComposerProps = {
   stageId: string
   mesh: FeedComposerMeshProps
+  // knownThreads — the roster's threads plus ones opened here that the poll has not reported yet.
+  knownThreads: MeshThread[]
+  onThreadCreated: (thread: MeshThread) => void
 }
 
 // targetKey — a stable string identity for a MeshMentionTarget, used as a dependency/reset key: switching
@@ -252,25 +264,27 @@ function targetKey(target: MeshMentionTarget | null): string {
 // per findExistingDirectThread's own "never widen a private thread" rule) or, for an "Attach to stage" pick,
 // the T6.2 attachAndSendMesh composite. Free text here NEVER reaches the Revise/onSend path above — the two
 // modes share a stageId and nothing else.
-function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): ReactElement {
+function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: MeshMessageComposerProps): ReactElement {
   const [draft, setDraft] = useState('')
   const [target, setTarget] = useState<MeshMentionTarget | null>(null)
+  // targetHandle — the `@handle` that picked target; deleting it from the draft un-addresses the target.
+  const [targetHandle, setTargetHandle] = useState('')
+  // openRequestIdRef — one id for opening the target's thread, reused by retries: a lost response must not
+  // open a second thread. A new target gets a new id.
+  const openRequestIdRef = useRef(genMeshRequestId('mesh-feed-open'))
   const [openedThreadId, setOpenedThreadId] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<{ messageId: string; preview: string } | null>(null)
-  const [sendError, setSendError] = useState<string | null>(null)
   // attachPreview — an "Attach to stage" pick is never sent straight away (T7.5): Send opens this preview
   // instead, and only the dialog's OWN "Attach and send" click actually calls attachAndSendMesh. Cancel clears
   // this with zero requests and leaves `draft` untouched so the user can edit and retry.
   const [attachPreview, setAttachPreview] = useState<{ profileId: string; instruction: string } | null>(null)
-  // lastSend — the most recent send's receipt-tracking state: set (messageId: null) the instant Send fires,
-  // filled in once the request resolves. null participantId before resolution (an "Attach to stage" pick only
-  // learns the real participant id from the response) is fine — computeReceiptPhase's inFlight branch never
-  // looks at it.
+  // lastSend — the most recent successful send, for its receipt. messageId is null when an attach-and-send
+  // result carried no message id yet.
   const [lastSend, setLastSend] = useState<{ participantId: string; threadId: string; messageId: string | null } | null>(null)
-  const [sending, setSending] = useState(false)
-
-  const [mention, setMention] = useState<ReturnType<typeof detectMentionTrigger>>(null)
-  const [highlightIndex, setHighlightIndex] = useState(0)
+  // submitter — a retry of the same message reuses its request id. Fenced by the target: a send that
+  // finishes after another recipient was picked neither clears the new draft nor writes its old thread id.
+  const key = targetKey(target)
+  const submitter = useRetryableSubmit<{ recipientId: string; inReplyTo?: string; body: string }>('mesh-feed-send', key)
 
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_MESSAGE_TEXTAREA_HEIGHT)
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
@@ -288,77 +302,52 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
     () => buildMeshMentionGroups(mesh.roster.participants, mesh.profiles, stageId),
     [mesh.roster.participants, mesh.profiles, stageId],
   )
-  const matchGroups = mention !== null ? filterMentionGroups(groups, mention.query) : []
-  const flatMatches = useMemo(() => matchGroups.flatMap((g) => g.items), [matchGroups])
-  const menuOpen = flatMatches.length > 0
+  const mention = useMentionMenu<MeshMentionItem>({
+    matchesFor: (query) => filterMentionGroups(groups, query).flatMap((g) => g.items),
+    textFor: mentionText,
+    replaceRange,
+    onPicked: (item) => {
+      setTarget(item.target)
+      setTargetHandle(mentionText(item))
+    },
+  })
+  const matchGroups = mention.query !== null ? filterMentionGroups(groups, mention.query) : []
 
   // Switching target drops whatever thread/reply context the previous one carried — addressing someone new
   // never inherits an unrelated open conversation.
-  const key = targetKey(target)
   useEffect(() => {
     if (target?.kind === 'participant') {
-      setOpenedThreadId(findExistingDirectThread(mesh.roster.threads, target.id)?.id ?? null)
+      setOpenedThreadId(findExistingDirectThread(knownThreads, target.id)?.id ?? null)
     } else {
       setOpenedThreadId(null)
     }
     setReplyTo(null)
-    setSendError(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- key IS the target identity; mesh.roster.threads
+    openRequestIdRef.current = genMeshRequestId('mesh-feed-open')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key IS the target identity; knownThreads
     // intentionally excluded so a later poll tick doesn't silently re-pick a thread mid-compose.
   }, [key])
 
   const threadMessages = useMeshThread(openedThreadId)
 
-  function selectMention(item: MeshMentionItem): void {
-    if (mention === null) return
-    const end = mention.start + 1 + mention.query.length
-    replaceRange(mention.start, end, `@${item.id} `)
-    setTarget(item.target)
-    setMention(null)
-  }
-
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
     const v = e.target.value
     setDraft(v)
-    const caret = e.target.selectionStart ?? v.length
-    setMention(detectMentionTrigger(v, caret))
-    setHighlightIndex(0)
+    mention.onInput(v, e.target.selectionStart ?? v.length)
+    if (target !== null && !draftMentions(v, targetHandle)) setTarget(null)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (menuOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setHighlightIndex((i) => (i + 1) % flatMatches.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setHighlightIndex((i) => (i - 1 + flatMatches.length) % flatMatches.length)
-        return
-      }
-      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-        e.preventDefault()
-        const item = flatMatches[highlightIndex]
-        if (item !== undefined) selectMention(item)
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        setMention(null)
-        return
-      }
-    }
+    if (mention.onKeyDown(e)) return
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      void submit()
+      submit()
     }
   }
 
-  async function submit(): Promise<void> {
-    const text = draft.trim()
-    if (text === '' || sending || target === null) return
+  function submit(): void {
+    const submitted = draft
+    const text = submitted.trim()
+    if (text === '' || target === null) return
     // "Attach to stage" never sends straight away — Send opens the preview dialog below instead, and only
     // its OWN confirm click (handleAttachConfirmed) issues the attachAndSendMesh request. No network call,
     // no roster/feed mutation, happens on this path.
@@ -366,36 +355,38 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
       setAttachPreview({ profileId: target.profileId, instruction: text })
       return
     }
-    setSending(true)
-    setSendError(null)
-    try {
-      let threadId = openedThreadId
-      setLastSend({ participantId: target.id, threadId: threadId ?? '', messageId: null })
-      if (threadId === null) {
-        const thread = await openMeshThread({
-          requestId: genMeshRequestId('mesh-feed-open'),
-          title: '',
-          scope: target.scope,
-          memberIds: [target.id],
-        })
-        threadId = thread.id
-        setOpenedThreadId(thread.id)
-      }
-      const receipt = await sendMeshMessage(threadId, {
-        requestId: genMeshRequestId('mesh-feed-send'),
-        recipientIds: [target.id],
-        inReplyTo: replyTo?.messageId,
-        body: text,
-      })
-      setLastSend({ participantId: target.id, threadId, messageId: receipt.message_id })
-      setDraft('')
-      setReplyTo(null)
-    } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'request failed')
-      setLastSend(null)
-    } finally {
-      setSending(false)
-    }
+    const recipient = target
+    // Re-check at send time: the roster poll may have learned about a direct thread after the mention was picked.
+    const knownThreadId = openedThreadId ?? findExistingDirectThread(knownThreads, recipient.id)?.id ?? null
+    const submittedReplyTo = replyTo?.messageId
+    submitter.submit(
+      { recipientId: recipient.id, inReplyTo: submittedReplyTo, body: text },
+      async (p, requestId) => {
+        let threadId = knownThreadId
+        if (threadId === null) {
+          const thread = await openMeshThread({
+            requestId: openRequestIdRef.current,
+            title: '',
+            scope: recipient.scope,
+            memberIds: [recipient.id],
+          })
+          onThreadCreated(thread)
+          threadId = thread.id
+        }
+        const receipt = await sendMeshMessage(threadId, { requestId, recipientIds: [p.recipientId], inReplyTo: p.inReplyTo, body: p.body })
+        return { threadId, messageId: receipt.message_id }
+      },
+      {
+        onSuccess: ({ threadId, messageId }) => {
+          setOpenedThreadId(threadId)
+          setLastSend({ participantId: recipient.id, threadId, messageId })
+          setDraft((cur) => removeSubmittedText(cur, submitted))
+          // A reply target picked while this message was sending belongs to the next message: keep it.
+          setReplyTo((cur) => (cur?.messageId === submittedReplyTo ? null : cur))
+        },
+        onFailure: () => setLastSend(null),
+      },
+    )
   }
 
   // handleAttachConfirmed — the attach preview's "Attach and send" resolved: this is the ONLY place the
@@ -412,8 +403,10 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
   const stagePaused =
     liveParticipant?.stage_id !== undefined && mesh.stages.find((s) => s.id === liveParticipant.stage_id)?.status === 'paused'
   const answered = lastSend !== null && lastSend.messageId !== null && threadMessages.some((m) => m.in_reply_to === lastSend.messageId)
-  const receiptPhase =
-    lastSend === null
+  // receiptPhase — "awaiting" while a send to the current target is in flight, else the last send's receipt.
+  const receiptPhase: ReceiptPhase | null = submitter.pending
+    ? 'awaiting'
+    : lastSend === null
       ? null
       : computeReceiptPhase({
           participant: liveParticipant,
@@ -441,7 +434,7 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
         <ul className="mesh-message-thread" aria-label="Conversation">
           {threadMessages.map((m: MeshMessage) => (
             <li key={m.id} className="mesh-message-thread-item">
-              <span className="mesh-message-thread-sender">{m.sender_id === 'user' ? 'You' : m.sender_id}</span>
+              <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
               <span className="mesh-message-thread-body">{m.body}</span>
               <button
                 type="button"
@@ -465,10 +458,10 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
         </div>
       )}
 
-      <div className="feed-composer-row mesh-message-row">
+      <div className="chat-composer-row">
         <textarea
           ref={setRefs}
-          className="feed-composer-textarea mesh-message-textarea"
+          className="chat-composer-input"
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
@@ -476,23 +469,21 @@ function MeshMessageComposer({ stageId, mesh }: MeshMessageComposerProps): React
           aria-label="Message the mesh"
           rows={1}
         />
-        {menuOpen && (
+        {mention.open && (
           <MentionMenu
             groups={matchGroups}
-            highlightIndex={highlightIndex}
-            onHover={setHighlightIndex}
-            onSelect={selectMention}
+            highlightIndex={mention.highlightIndex}
+            onHover={mention.setHighlightIndex}
+            onSelect={mention.pick}
             ariaLabel="Mention a mesh participant or profile"
           />
         )}
-        <button type="button" className="feed-composer-send" aria-label="Send message" disabled={empty || sending} onClick={() => void submit()}>
-          <span className="feed-composer-send-label">Send</span>
-        </button>
+        <ChatSendButton label="Send message" disabled={empty} sending={submitter.pending} onClick={submit} />
       </div>
 
-      {sendError !== null && (
+      {submitter.error !== null && (
         <div className="mesh-message-error" role="alert">
-          {sendError}
+          {submitter.error}
         </div>
       )}
       {receiptPhase !== null && (

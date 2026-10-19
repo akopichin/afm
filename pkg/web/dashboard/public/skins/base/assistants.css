@@ -418,25 +418,10 @@
   height: 100%;
   box-sizing: border-box;
 }
-.stage-discussion-composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-.stage-discussion-input {
-  flex: 1;
-  font: inherit;
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--separator-subtle);
-  background: var(--surface-raised);
-  color: var(--text-primary);
-  resize: vertical;
-  min-height: 40px;
-}
-.stage-discussion-input:focus {
-  outline: none;
-  border-color: var(--accent-primary);
+.stage-discussion-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .stage-discussion-error {
   font-size: 12px;
@@ -718,6 +703,7 @@
 /* === `@`-mention menu (T4.2) — side-agent composer's profile suggestion popup; lifted into a shared
    primitive (MentionMenu) by T7.4, also used by the feed composer's grouped mesh mention menu === */
 .assistant-mention-menu {
+  /* Positioning (above the composer row) lives in public/chat-composer.css — it must survive a skin_dir. */
   list-style: none;
   margin: 0;
   padding: 4px;

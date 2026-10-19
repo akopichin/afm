@@ -93,7 +93,7 @@ describe('side-agent.css quote chip contract', () => {
 
   it('puts the chip on its own full-width line above the input instead of beside it', () => {
     // A long comment used to grow the chip inside the composer row and squeeze the
-    // textarea into a sliver. The composer wraps and the chip takes a whole line.
+    // textarea into a sliver. The composer is a column: the chip takes a whole line above the input row.
     const composer = document.createElement('div')
     composer.className = 'side-agent-composer'
     const chip = document.createElement('div')
@@ -101,8 +101,7 @@ describe('side-agent.css quote chip contract', () => {
     composer.appendChild(chip)
     document.body.appendChild(composer)
 
-    expect(getComputedStyle(composer).flexWrap).toBe('wrap')
-    expect(getComputedStyle(chip).flexBasis).toBe('100%')
+    expect(getComputedStyle(composer).flexDirection).toBe('column')
 
     composer.remove()
   })

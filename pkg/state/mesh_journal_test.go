@@ -147,12 +147,12 @@ func TestMesh_RoundTripDecodeEveryKind(t *testing.T) {
 			kind:   kindMeshBoardPublished,
 			target: Target{BoardKey: "k", ParticipantID: "a"},
 			payload: mustMarshal(t, MeshBoardPublishedPayload{
-				Status: "final", ExpectedVersion: 2, ArtifactRefs: []string{"artifacts/x"}, AuthorizedBy: []string{"b"},
+				Status: "final", ExpectedVersion: 2, ArtifactRefs: []string{"artifacts/x"},
 			}),
 			check: func(t *testing.T, raw json.RawMessage) {
 				var p MeshBoardPublishedPayload
 				mustUnmarshal(t, raw, &p)
-				if p.ExpectedVersion != 2 || len(p.ArtifactRefs) != 1 || p.ArtifactRefs[0] != "artifacts/x" || len(p.AuthorizedBy) != 1 || p.AuthorizedBy[0] != "b" {
+				if p.ExpectedVersion != 2 || len(p.ArtifactRefs) != 1 || p.ArtifactRefs[0] != "artifacts/x" {
 					t.Fatalf("payload = %+v", p)
 				}
 			},
@@ -212,17 +212,22 @@ func TestMesh_BogusKindFailsClosed(t *testing.T) {
 // TestMesh_ReplayEquivalence replay.
 func meshJournalFixture(t *testing.T) []byte {
 	t.Helper()
-	controls := []*Control{
+	return journalOf(t, []*Control{
 		meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)),
 		meshParticipantAddedControl("b", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)),
 		meshThreadOpenedControl("th-1", []string{"a", "b"}),
 		meshMessageSentControl(0, "m1", "th-1", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "hi"),
 		meshMessageReceiptControl(kindMeshMessageDelivered, "m1", "b"),
 		meshWaitRegisteredControl("w1", "b", agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "th-1"}, "", "", 0),
-		meshBoardPublishedControl("k", "a", "draft", 0, nil, nil),
+		meshBoardPublishedControl("k", "a", "draft", 0, nil),
 		taskCreatedControl("op-1", "t1", "stage-a", nil),
-	}
+	})
+}
 
+// journalOf renders controls as events.jsonl lines, each stamped with its own Seq/Time — a journal to replay
+// through parseEventLog, the same path a restart takes.
+func journalOf(t *testing.T, controls []*Control) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	for i, c := range controls {
@@ -355,7 +360,7 @@ func TestMesh_AllKindsRegisteredAndDispatchable(t *testing.T) {
 			return meshWaitResolvedControl("reg-wait2", string(agentcomm.WaitReady), "ok")
 		},
 		kindMeshBoardPublished: func(t *testing.T, as *AssistantsState) *Control {
-			return meshBoardPublishedControl("reg-key", "reg-author", "draft", 0, nil, nil)
+			return meshBoardPublishedControl("reg-key", "reg-author", "draft", 0, nil)
 		},
 	}
 

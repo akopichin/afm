@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -25,10 +26,36 @@ const (
 // pkg/state/mesh_waits.go) — a reply that arrived before Wait was called still resolves the wait on the
 // very first read after commit, with no separate catch-up pass.
 
-// ErrWaitRequiresDeadline is returned when a board_key condition names a key the board has never seen
-// published and the caller did not set a Deadline — an unreachable producer must not be allowed to wait
-// forever with no visible way out (tmp/agent-mesh.md §6.3).
-var ErrWaitRequiresDeadline = errors.New("agentcomm: board_key wait with no known producer requires a deadline")
+// ErrWaitRequiresDeadline is returned when a wait has no known producer yet — a board_key never published, or
+// a thread not opened yet — and the caller did not set a Deadline: an unreachable producer must not be allowed
+// to wait forever with no visible way out (tmp/agent-mesh.md §6.3).
+var ErrWaitRequiresDeadline = errors.New("agentcomm: a wait with no known producer requires a deadline")
+
+// requireDeadline rejects a speculative wait (its producer may never appear) that has no deadline.
+func requireDeadline(req WaitRequest, what string) error {
+	if req.Deadline != nil {
+		return nil
+	}
+	return &state.OperationRejectedError{
+		Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("%s: %v (pass --deadline-seconds)", what, ErrWaitRequiresDeadline), Cause: ErrWaitRequiresDeadline,
+	}
+}
+
+// waitConditionHint explains what an invalid wait condition is missing, so the agent can fix the call.
+func waitConditionHint(kind agentcomm.WaitConditionKind) string {
+	switch kind {
+	case agentcomm.WaitOnReplyTo:
+		return "condition reply_to needs --message-id"
+	case agentcomm.WaitOnTaskResult:
+		return "condition task_result needs --task-id"
+	case agentcomm.WaitOnBoardKey:
+		return "condition board_key needs --key and --status"
+	case agentcomm.WaitOnStageStatus:
+		return "condition stage_status needs --stage-id and --status"
+	default:
+		return fmt.Sprintf("unknown wait condition %q (want reply_to|addressed_message|task_result|board_key|stage_status)", kind)
+	}
+}
 
 // Wait implements Service.Wait.
 func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, error) {
@@ -39,38 +66,22 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 		return WaitReceipt{}, errors.New("agentcomm: waiter is required")
 	}
 	if !req.Condition.Valid() {
-		return WaitReceipt{}, fmt.Errorf("agentcomm: invalid wait condition %q", req.Condition.Kind)
-	}
-
-	rs := o.opts.Store.Snapshot()
-
-	if req.Condition.Kind == agentcomm.WaitOnBoardKey {
-		if _, published := rs.Assistants.Mesh.Board[req.Condition.Key]; !published && req.Deadline == nil {
-			return WaitReceipt{}, ErrWaitRequiresDeadline
-		}
-	}
-
-	graph := buildMeshWaitGraph(rs)
-	for _, target := range meshWaitTargets(rs, req.Condition) {
-		if target == req.Waiter {
-			continue
-		}
-		if meshWaitReachable(graph, target, req.Waiter) {
-			return WaitReceipt{}, &state.OperationRejectedError{
-				Code:   agentcomm.CodeWaitCycle,
-				Reason: fmt.Sprintf("%q already (transitively) waits on %q", target, req.Waiter),
-			}
-		}
+		return WaitReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: waitConditionHint(req.Condition.Kind)}
 	}
 
 	waitID := deriveMeshWaitID(req.OperationID)
 	eff, err := marshalEffect("mesh_wait_registered", state.Target{WaitID: string(waitID)}, state.MeshWaitRegisteredPayload{
 		Waiter: string(req.Waiter), Condition: req.Condition, Deadline: req.Deadline, ContinuationNote: req.ContinuationNote,
+		FreshResultOnly: req.Condition.Kind == agentcomm.WaitOnTaskResult,
 	})
 	if err != nil {
 		return WaitReceipt{}, err
 	}
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_wait", Actor: req.Actor, Effects: []state.Effect{eff}}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_wait", Actor: req.Actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{
+		// Decided under the commit's lock: two waits registered at the same time must not both pass the cycle
+		// check against a snapshot that has neither of them.
+		Check: func(rs *state.RunState) error { return validateWaitAdmission(*rs, req) },
+	}}
 	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "waiter_id": string(req.Waiter)}})
 	}); err != nil {
@@ -91,6 +102,140 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 		o.armMeshWaitDeadline(waitID, *req.Deadline)
 	}
 	return WaitReceipt{WaitID: waitID, Status: status}, nil
+}
+
+// validateWaitAdmission rejects a wait that could never end on its own: one on a message, task or stage that
+// does not exist, on a closed thread, on a stage already finished in another status, a speculative wait (a key
+// nobody has published, a thread not opened yet) without a deadline, a wait only the waiter itself could
+// satisfy, a wait for an answer nobody left can send (every recipient or thread member finished), or a wait that would close a cycle — every participant that could satisfy it already
+// (transitively) waits on the waiter. A condition that already holds is always admitted: it is ready at once.
+// Run under the commit's lock.
+func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
+	if err := validateWaitTarget(rs, req); err != nil {
+		return err
+	}
+	if waitConditionHolds(rs, req.Condition) {
+		return nil
+	}
+	all := meshWaitTargets(rs, req.Condition)
+	targets := slices.DeleteFunc(slices.Clone(all), func(p agentcomm.ParticipantID) bool { return p == req.Waiter })
+	if len(all) > 0 && len(targets) == 0 {
+		return &state.OperationRejectedError{
+			Code: agentcomm.CodeWaitCycle, Reason: fmt.Sprintf("only %s itself could satisfy this wait — it would wait on itself forever", req.Waiter),
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	if !slices.ContainsFunc(targets, func(p agentcomm.ParticipantID) bool { return canStillAnswer(rs, req.Condition, p) }) {
+		return &state.OperationRejectedError{
+			Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) has finished — nobody will answer", targets),
+		}
+	}
+	graph := buildMeshWaitGraph(rs)
+	memo := map[agentcomm.ParticipantID]bool{}
+	for _, target := range targets {
+		if !graph.dependsOn(target, req.Waiter, 0, memo, map[agentcomm.ParticipantID]bool{}) {
+			return nil // this one can still act on its own
+		}
+	}
+	return &state.OperationRejectedError{
+		Code:   agentcomm.CodeWaitCycle,
+		Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", targets, req.Waiter, agentcomm.MaxCausalHops),
+	}
+}
+
+// canStillAnswer reports whether participant p can still send the message a reply_to or addressed_message wait
+// cond is waiting for: p has not finished, and for reply_to its copy of the message was not given up as
+// undeliverable (agentcomm_unread.go). Other conditions are not decided here. An unknown participant is not
+// ruled out.
+func canStillAnswer(rs state.RunState, cond agentcomm.WaitCondition, p agentcomm.ParticipantID) bool {
+	switch cond.Kind {
+	case agentcomm.WaitOnReplyTo:
+		if rs.Assistants.Mesh.Receipts[cond.MessageID][p] == agentcomm.DeliveryUndeliverable {
+			return false
+		}
+	case agentcomm.WaitOnAddressedMessage:
+	default:
+		return true
+	}
+	participant, known := resolveParticipant(rs, p)
+	return !known || participant.Reachable
+}
+
+// validateWaitTarget rejects a wait whose target does not exist or can no longer produce what it waits for.
+func validateWaitTarget(rs state.RunState, req WaitRequest) error {
+	cond := req.Condition
+	notFound := func(format string, args ...any) error {
+		return &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf(format, args...)}
+	}
+	closedThread := func(id agentcomm.ThreadID) error {
+		if th, ok := rs.Assistants.Mesh.Threads[id]; ok && th.Status == agentcomm.ThreadClosed {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("thread %s is closed — nothing more will arrive in it", id)}
+		}
+		return nil
+	}
+	switch cond.Kind {
+	case agentcomm.WaitOnReplyTo:
+		m, ok := rs.Assistants.Mesh.Messages[cond.MessageID]
+		if !ok {
+			return notFound("unknown message %s", cond.MessageID)
+		}
+		if rs.Assistants.Mesh.MessageAnswered(cond.MessageID) {
+			return nil
+		}
+		return closedThread(m.ThreadID)
+	case agentcomm.WaitOnAddressedMessage:
+		if cond.ThreadID == "" {
+			return nil
+		}
+		// A thread not opened yet may still be opened (thread ids are derived from request ids), but nobody is
+		// known to do it — such a wait needs a deadline. A closed thread never gets another message.
+		if _, opened := rs.Assistants.Mesh.Threads[cond.ThreadID]; !opened {
+			return requireDeadline(req, fmt.Sprintf("thread %s is not open yet", cond.ThreadID))
+		}
+		return closedThread(cond.ThreadID)
+	case agentcomm.WaitOnTaskResult:
+		if _, ok := rs.Assistants.Tasks[assistants.TaskID(cond.TaskID)]; !ok {
+			return notFound("unknown task %s", cond.TaskID)
+		}
+	case agentcomm.WaitOnStageStatus:
+		st, ok := rs.Stages[cond.StageID]
+		if !ok {
+			return notFound("unknown stage %s", cond.StageID)
+		}
+		if (st.Status == state.StatusDone || st.Status == state.StatusFailed) && string(st.Status) != cond.Status {
+			return &state.OperationRejectedError{
+				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %s already finished as %s — it will not become %s", cond.StageID, st.Status, cond.Status),
+			}
+		}
+	case agentcomm.WaitOnBoardKey:
+		if _, published := rs.Assistants.Mesh.Board[cond.Key]; !published {
+			return requireDeadline(req, fmt.Sprintf("board key %s was never published", cond.Key))
+		}
+	default:
+	}
+	return nil
+}
+
+// waitConditionHolds reports whether cond is already satisfied for kinds whose answer does not depend on the
+// waiter: such a wait is ready at once, whoever its producer is.
+func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
+	switch cond.Kind {
+	case agentcomm.WaitOnReplyTo:
+		return rs.Assistants.Mesh.MessageAnswered(cond.MessageID)
+	case agentcomm.WaitOnStageStatus:
+		st, ok := rs.Stages[cond.StageID]
+		return ok && string(st.Status) == cond.Status
+	case agentcomm.WaitOnBoardKey:
+		e, ok := rs.Assistants.Mesh.Board[cond.Key]
+		return ok && e.Status == cond.Status
+	case agentcomm.WaitOnTaskResult:
+		t, ok := rs.Assistants.Tasks[assistants.TaskID(cond.TaskID)]
+		return ok && t.Status.Terminal()
+	default:
+		return false
+	}
 }
 
 // CancelWait implements Service.CancelWait. Idempotent: cancelling an already-resolved wait is a no-op,
@@ -122,7 +267,7 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 		return err
 	}
 	if waiter, won := o.meshWaitResolvedTo(req.WaitID, agentcomm.WaitCancelled); won {
-		o.resumeWaiterAfterTerminalWait(ctx, waiter)
+		o.resumeWaiterAfterTerminalWait(o.runContext(ctx), waiter) // must not die with the HTTP request
 	}
 	return nil
 }
@@ -241,6 +386,15 @@ func (o *Orchestrator) recoverMeshWaitDeadlines(ctx context.Context) {
 	}
 }
 
+// closeMeshWaitsIfFinalized closes the remaining waits only when the run has really finished (FinalizeIf
+// decided it). An interrupted run (Ctrl+C, a fatal error) is resumed later: its waits stay pending, and their
+// deadlines are re-armed by recoverMeshWaitDeadlines on the next start.
+func (o *Orchestrator) closeMeshWaitsIfFinalized() {
+	if o.finalizing.Load() {
+		o.closeRemainingMeshWaits()
+	}
+}
+
 // closeRemainingMeshWaits resolves every still-WaitPending mesh wait to WaitRunClosed as Run winds down
 // (T5.6): a wait nobody will ever revisit again (the whole run is ending) must not dangle in the journal
 // forever with no visible terminal outcome. Called from Run's own defer chain AFTER WaitAgents has drained
@@ -262,59 +416,107 @@ func (o *Orchestrator) closeRemainingMeshWaits() {
 	}
 }
 
-// buildMeshWaitGraph returns every "X cannot proceed until Y acts" edge currently known to the projection:
-// live (WaitPending) mesh waits plus assistants' own waiting_children links. This is deliberately NOT the
-// full scheduling graph — stage depends_on is static and already cycle-free by flow validation, so it can
-// never itself CLOSE a new cycle that a fresh mesh wait could complete; only the two dynamic relationships
-// below can.
-func buildMeshWaitGraph(rs state.RunState) map[agentcomm.ParticipantID][]agentcomm.ParticipantID {
-	g := map[agentcomm.ParticipantID][]agentcomm.ParticipantID{}
-	add := func(from, to agentcomm.ParticipantID) {
-		if from == "" || to == "" || from == to {
-			return
-		}
-		g[from] = append(g[from], to)
-	}
+// meshWaitEdge is one way a participant can be unblocked: by ANY of targets (a mesh wait — any recipient of a
+// message, any other member of a thread may answer), or only by ALL of them (a task waiting for its children).
+type meshWaitEdge struct {
+	targets  []agentcomm.ParticipantID
+	needsAll bool
+}
 
+// meshWaitGraph maps a blocked participant to the edges that can unblock it; any one edge resolving wakes it.
+type meshWaitGraph map[agentcomm.ParticipantID][]meshWaitEdge
+
+// buildMeshWaitGraph returns every "X cannot proceed until Y acts" relationship currently known to the
+// projection: live (WaitPending) mesh waits plus assistants' own waiting_children links. This is deliberately
+// NOT the full scheduling graph — stage depends_on is static and already cycle-free by flow validation, so it
+// can never itself CLOSE a new cycle that a fresh mesh wait could complete; only the two dynamic relationships
+// below can.
+func buildMeshWaitGraph(rs state.RunState) meshWaitGraph {
+	g := meshWaitGraph{}
 	for _, w := range rs.Assistants.Mesh.Waits {
 		if w.Status != agentcomm.WaitPending {
 			continue
 		}
-		for _, target := range meshWaitTargets(rs, w.Condition) {
-			add(w.Waiter, target)
+		targets := slices.DeleteFunc(meshWaitTargets(rs, w.Condition), func(p agentcomm.ParticipantID) bool { return p == w.Waiter })
+		if len(targets) > 0 {
+			g[w.Waiter] = append(g[w.Waiter], meshWaitEdge{targets: targets})
 		}
 	}
-
 	for id, t := range rs.Assistants.Tasks {
 		if t.Status != assistants.StatusWaitingChildren {
 			continue
 		}
-		parent := meshHelperParticipantID(id)
+		var children []agentcomm.ParticipantID
 		for _, cid := range currentChildren(rs, id, t.TaskGeneration) {
 			if c, ok := rs.Assistants.Tasks[cid]; ok && !c.Status.Terminal() {
-				add(parent, meshHelperParticipantID(cid))
+				children = append(children, meshHelperParticipantID(cid))
 			}
+		}
+		if len(children) > 0 {
+			parent := meshHelperParticipantID(id)
+			g[parent] = append(g[parent], meshWaitEdge{targets: children, needsAll: true})
 		}
 	}
 	return g
 }
 
-// meshWaitTargets returns the participant(s) whose action would satisfy cond — who the waiter is, in
-// effect, blocked on. A board_key condition with a known current author counts (its publisher IS the
-// producer the waiter needs to act); one with no publish yet has no known target and contributes no edge
-// (its only guard is ErrWaitRequiresDeadline above, not the cycle check).
+// dependsOn reports whether node cannot act until waiter does: node is the waiter, or every edge that could
+// unblock node depends on the waiter. A participant with no edges is free to act. A chain longer than
+// agentcomm.MaxCausalHops, or a loop that does not pass through the waiter, counts as dependent — the check
+// must never admit a cycle it could not see to the end. memo keeps the walk linear in the graph size.
+func (g meshWaitGraph) dependsOn(node, waiter agentcomm.ParticipantID, depth int, memo, path map[agentcomm.ParticipantID]bool) bool {
+	if node == waiter {
+		return true
+	}
+	if v, ok := memo[node]; ok {
+		return v
+	}
+	if depth >= agentcomm.MaxCausalHops || path[node] {
+		return true
+	}
+	path[node] = true
+	defer delete(path, node)
+	result := len(g[node]) > 0
+	for _, e := range g[node] {
+		if !g.edgeDependsOn(e, waiter, depth+1, memo, path) {
+			result = false
+			break
+		}
+	}
+	memo[node] = result
+	return result
+}
+
+// edgeDependsOn: an any-of edge depends on the waiter when every target does; an all-of edge when one does.
+func (g meshWaitGraph) edgeDependsOn(e meshWaitEdge, waiter agentcomm.ParticipantID, depth int, memo, path map[agentcomm.ParticipantID]bool) bool {
+	for _, t := range e.targets {
+		if g.dependsOn(t, waiter, depth, memo, path) == e.needsAll {
+			return e.needsAll
+		}
+	}
+	return !e.needsAll
+}
+
+// meshWaitTargets returns the participant(s) whose action would satisfy cond — any one of them is enough. A
+// board_key condition with a known current author counts (its publisher IS the producer the waiter needs to
+// act); one with no publish yet has no known target and contributes no edge (its only guard is
+// ErrWaitRequiresDeadline above, not the cycle check).
 func meshWaitTargets(rs state.RunState, cond agentcomm.WaitCondition) []agentcomm.ParticipantID {
 	switch cond.Kind {
 	case agentcomm.WaitOnReplyTo:
 		if m, ok := rs.Assistants.Mesh.Messages[cond.MessageID]; ok {
-			return m.Recipients
+			return slices.Clone(m.Recipients)
 		}
 	case agentcomm.WaitOnAddressedMessage:
 		if th, ok := rs.Assistants.Mesh.Threads[cond.ThreadID]; ok {
-			return th.Members
+			return slices.Clone(th.Members)
 		}
 	case agentcomm.WaitOnTaskResult:
-		return []agentcomm.ParticipantID{meshHelperParticipantID(assistants.TaskID(cond.TaskID))}
+		taskID := assistants.TaskID(cond.TaskID)
+		if t, ok := rs.Assistants.Tasks[taskID]; ok {
+			return []agentcomm.ParticipantID{meshParticipantForTask(rs, t.Task)}
+		}
+		return []agentcomm.ParticipantID{meshHelperParticipantID(taskID)}
 	case agentcomm.WaitOnStageStatus:
 		return []agentcomm.ParticipantID{meshStageParticipantID(cond.StageID)}
 	case agentcomm.WaitOnBoardKey:
@@ -325,28 +527,4 @@ func meshWaitTargets(rs state.RunState, cond agentcomm.WaitCondition) []agentcom
 		return nil
 	}
 	return nil
-}
-
-// meshWaitReachable reports whether, in g, there is a path from start to target within
-// agentcomm.MaxCausalHops steps — used to detect that registering a NEW start->target edge would close a
-// cycle (target can already reach start, so the two together form a loop no one can break).
-func meshWaitReachable(g map[agentcomm.ParticipantID][]agentcomm.ParticipantID, start, target agentcomm.ParticipantID) bool {
-	seen := map[agentcomm.ParticipantID]bool{start: true}
-	queue := []agentcomm.ParticipantID{start}
-	for hops := 0; len(queue) > 0 && hops < agentcomm.MaxCausalHops; hops++ {
-		var next []agentcomm.ParticipantID
-		for _, n := range queue {
-			for _, m := range g[n] {
-				if m == target {
-					return true
-				}
-				if !seen[m] {
-					seen[m] = true
-					next = append(next, m)
-				}
-			}
-		}
-		queue = next
-	}
-	return false
 }

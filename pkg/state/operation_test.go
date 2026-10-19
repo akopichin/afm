@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
 )
@@ -114,6 +115,37 @@ func TestOperation_RejectedWhenRunFinalizing(t *testing.T) {
 	var rej *OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != assistants.CodeRunFinalizing {
 		t.Fatalf("err = %v, want *OperationRejectedError{Code: run_finalizing}", err)
+	}
+}
+
+// TestFinalizeIf_DecidesUnderTheAdmissionLock: the run finalizes only when its predicate holds for the
+// current projection, and from then on every operation is rejected run_finalizing.
+func TestFinalizeIf_DecidesUnderTheAdmissionLock(t *testing.T) {
+	store, err := Open(t.TempDir(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+	mustRecordPolicy(t, store)
+	noTasks := func(rs *RunState) bool { return len(rs.Assistants.Tasks) == 0 }
+
+	if _, err := store.ApplyRunOperation(Operation{ID: "op-1", Kind: "create", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p"}`, "t1", "a")}}, nil); err != nil {
+		t.Fatalf("ApplyRunOperation: %v", err)
+	}
+	if store.FinalizeIf(noTasks) {
+		t.Fatal("FinalizeIf finalized although its predicate does not hold for the committed task")
+	}
+	if _, err := store.ApplyRunOperation(Operation{ID: "op-2", Kind: "create", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p"}`, "t2", "a")}}, nil); err != nil {
+		t.Fatalf("an operation after a declined FinalizeIf must still be admitted: %v", err)
+	}
+
+	if !store.FinalizeIf(func(*RunState) bool { return true }) {
+		t.Fatal("FinalizeIf with a holding predicate must finalize")
+	}
+	_, err = store.ApplyRunOperation(Operation{ID: "op-3", Kind: "create", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p"}`, "t3", "a")}}, nil)
+	var rej *OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeRunFinalizing {
+		t.Fatalf("operation after finalizing: err = %v, want run_finalizing", err)
 	}
 }
 
@@ -267,6 +299,11 @@ func TestIdempotency_SurvivesRestart(t *testing.T) {
 	}
 	if res1 != res2 {
 		t.Fatalf("res1=%+v res2=%+v, want identical across restart", res1, res2)
+	}
+	// The result's time is in one canonical form (UTC), so it compares equal whatever the machine's local
+	// time zone — on a UTC machine a Local-zoned live time used to differ from the one read back.
+	if res1.Time.Location() != time.UTC {
+		t.Fatalf("res1.Time location = %v, want UTC", res1.Time.Location())
 	}
 }
 
@@ -470,5 +507,72 @@ func TestIdempotency_NewOperationDoesNotReadJournal(t *testing.T) {
 	}
 	if atomic.LoadInt32(&reads) != 0 {
 		t.Fatalf("journal reads = %d, want 0 for a brand-new operation_id (cache miss on a key the index has never seen must not read the journal)", reads)
+	}
+}
+
+// TestCommittedOperation_SameFromCacheAndJournal: a committed operation reads back with its own result and
+// effects — from the cache right after the commit, and from the journal after a restart — and an unknown id
+// reports nothing committed.
+func TestCommittedOperation_SameFromCacheAndJournal(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustRecordPolicy(t, store)
+	op := Operation{ID: "op-A", Kind: "create_children", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p","title":"T"}`, "tA", "a")}}
+	res, err := store.ApplyRunOperation(op, nil)
+	if err != nil {
+		t.Fatalf("ApplyRunOperation: %v", err)
+	}
+	check := func(when string, s *Store) {
+		t.Helper()
+		got, committed, err := s.CommittedOperation("op-A", "create_children")
+		if err != nil || !committed {
+			t.Fatalf("%s: committed=%v err=%v", when, committed, err)
+		}
+		if got.Result.Seq != res.Seq || !got.Result.Time.Equal(res.Time) {
+			t.Fatalf("%s: result = %+v, want %+v", when, got.Result, res)
+		}
+		var p TaskCreatedPayload
+		target, found, err := got.Effect("task_created", &p)
+		if err != nil || !found || target.TaskID != "tA" || p.Title != "T" {
+			t.Fatalf("%s: task_created = %+v %+v (found=%v, err=%v)", when, target, p, found, err)
+		}
+		if _, committed, err := s.CommittedOperation("op-unknown", "create_children"); committed || err != nil {
+			t.Fatalf("%s: unknown id: committed=%v err=%v", when, committed, err)
+		}
+	}
+	check("live", store)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	defer reopened.Close()
+	check("after restart", reopened)
+}
+
+// TestCommittedOperation_AnotherKindConflicts: an operation read back as another kind than it was committed as
+// is a request id conflict.
+func TestCommittedOperation_AnotherKindConflicts(t *testing.T) {
+	store, err := Open(t.TempDir(), []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	mustRecordPolicy(t, store)
+	op := Operation{ID: "op-A", Kind: "create_children", Effects: []Effect{taskCreatedEffect(`{"profile_id":"p","title":"T"}`, "tA", "a")}}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil {
+		t.Fatalf("ApplyRunOperation: %v", err)
+	}
+	got, committed, err := store.CommittedOperation("op-A", "create_children")
+	if err != nil || !committed || got.Kind != "create_children" {
+		t.Fatalf("same kind: kind=%q committed=%v err=%v", got.Kind, committed, err)
+	}
+	if _, _, err := store.CommittedOperation("op-A", "attach_task"); !errors.Is(err, ErrOperationIDConflict) {
+		t.Fatalf("another kind: err = %v, want a request id conflict", err)
 	}
 }

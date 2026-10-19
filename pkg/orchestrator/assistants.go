@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -189,12 +188,12 @@ func (o *Orchestrator) handleTaskOperationErr(err error) {
 	}
 }
 
-// Attach creates one new top-level helper task for a stage: capability + stage + profile + delegation-depth
-// checks, then a single durable ApplyRunOperation — task_created alone (parent stage still pending: nothing
+// Attach creates one new top-level helper task for a stage: admission (admitTopLevelTask, shared with
+// AttachAndSend), then a single durable ApplyRunOperation — task_created alone (parent stage still pending: nothing
 // to run yet, task stays "waiting_parent"), or task_created PLUS a status transition in the SAME atomic batch
 // when the parent stage is already active: to "queued" (immediately scheduled) for a plain one_shot task
 // (TestAttach_ToPendingStageStaysWaitingParent/TestLifecycle_HappyPath), or to "watching" (NOT scheduled —
-// see startsWatching below) for a checkpoints/on_completion watcher (T5.4).
+// its collector starts every pass) for a checkpoints/on_completion watcher (T5.4).
 //
 // Known Этап-3 scope limit: a task attached while the stage is pending is never automatically promoted when
 // that stage later starts — Этап 3 is the one-shot, non-recursive MVP, and wiring that promotion means
@@ -208,123 +207,44 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
-	st := o.reg().Stage(req.StageID)
-	if st == nil {
-		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
+	treq := topLevelTaskRequest{
+		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: assistants.ScopeStage, StageID: req.StageID,
+		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Trigger: req.Trigger, Actor: req.Actor,
 	}
-	if st.IsScript() {
-		return "", fmt.Errorf("assistants: stage %q is a script stage — helpers are not supported there", req.StageID)
-	}
-	// Этап 7 (T7.3): a stage already in its terminal status will never again be checked by
-	// maybeCompleteAfterAssistants (that hook is a no-op once the stage isn't awaiting_assistants) — admitting
-	// a NEW required task here would silently create a requirement nothing will ever re-evaluate, rather than
-	// the race being cleanly won by whichever of Attach/completeStage's CAS committed first
-	// (TestAttachRequiredRacesWithComplete).
-	if cur := o.currentStatus(req.StageID); cur == state.StatusDone || cur == state.StatusFailed {
-		return "", &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %q already reached %s", req.StageID, cur)}
-	}
-	if o.opts.AssistantsRegistry == nil {
-		return "", &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "no assistant profiles configured"}
-	}
-	profile, ok := o.opts.AssistantsRegistry.Get(req.ProfileID)
-	if !ok {
-		return "", &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: fmt.Sprintf("unknown profile %q", req.ProfileID)}
-	}
-	view, _ := profileView(o.opts.AssistantsRegistry, req.ProfileID)
-	if !view.Available {
-		return "", &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: view.UnavailableReason}
-	}
-	// Freeze the availability check's CURRENT read-only verdict onto the local copy of the profile BEFORE it
-	// is handed to taskCreatedEffect below — same pattern as PolicyRev/MaxDepthAtCreate (also captured at
-	// admission time, not re-derived later): a task's durable ProfileSnapshot must remember the guarantee
-	// that actually backed it when it ran, even if the profile's config (or its live availability) changes
-	// afterward.
-	profile.ReadonlyEnforcement = view.ReadonlyEnforcement
-
-	rs := o.opts.Store.Snapshot()
-	depth := assistants.ComputeDepth(nil) // top-level: Этап 3 scope has no parent task
-	if rs.Assistants.Policy.Blocks(depth) {
-		return "", &state.OperationRejectedError{Code: assistants.CodeDelegationDepthExceeded, Reason: fmt.Sprintf("max_depth=%d", rs.Assistants.Policy.MaxDepth)}
+	// A retry of an already-committed attach replays it, whatever changed since (the stage finished, the
+	// profile went away).
+	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachTask); err != nil || committed {
+		if err != nil {
+			return "", err
+		}
+		return replayedTopLevelTask(op, treq)
 	}
 
-	taskID := deriveTaskID(req.OperationID)
-	mode := req.Mode
-	if mode == "" {
-		mode = assistants.ModeAdvisory
-	}
-	trigger := req.Trigger
-	if trigger == "" {
-		trigger = assistants.TriggerOneShot
-	}
-
-	created, err := taskCreatedEffect(taskID, req.StageID, state.TaskCreatedPayload{
-		ProfileID:              string(req.ProfileID),
-		ProfileSnapshot:        profile,
-		Title:                  req.Title,
-		Instruction:            req.Instruction,
-		Mode:                   string(mode),
-		Trigger:                string(trigger),
-		PolicyRev:              rs.Assistants.Policy.Revision,
-		MaxDepthAtCreate:       rs.Assistants.Policy.MaxDepth,
-		CreatedBy:              string(req.Actor.Kind),
-		RootGenerationAtCreate: rs.Assistants.RootGenerations[req.StageID],
-	})
+	task, err := o.admitTopLevelTask(o.opts.Store.Snapshot(), treq)
 	if err != nil {
 		return "", err
 	}
-	effects := []state.Effect{created}
-
-	parentActive := o.currentStatus(req.StageID) != state.StatusPending
-	// startsWatching (T5.4): a checkpoints/on_completion watcher's first turn must be driven by the SAME
-	// mechanism as every later one — the collector's own Ready() decision, or finalizeWatcherOnCompletion once
-	// the root stage's result is known — never an unconditional "run right now" the way a plain one_shot task
-	// does. Landing it directly in the resting "watching" state (instead of "queued") means fireWatcherTask's
-	// existing watching->queued->running transition is the ONLY path that ever starts its first, or any later,
-	// turn (TestTrigger_OnCompletionRunsAtStageResultReady/TestTrigger_RequiredWatcherHasFinalBoundedPass).
-	startsWatching := parentActive && isWatcherTrigger(trigger)
-	if parentActive {
-		initialStatus := assistants.StatusQueued
-		if startsWatching {
-			initialStatus = assistants.StatusWatching
-		}
-		statusEffect, qerr := taskStatusEffect(taskID, initialStatus, "")
-		if qerr != nil {
-			return "", qerr
-		}
-		effects = append(effects, statusEffect)
-	}
-
-	op := state.Operation{
-		ID:    req.OperationID,
-		Kind:  "attach_task",
-		Actor: req.Actor,
-		// StageNotTerminal closes the TOCTOU window between the early o.currentStatus check above and this
-		// commit: if the stage reaches done/failed (e.g. a concurrent completeStage) in between, THIS CAS
-		// rejects atomically under the same lock as the write, rather than racing to admit a requirement
-		// nothing will ever check again (TestAttachRequiredRacesWithComplete).
-		Expect:  state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, StageNotTerminal: []string{req.StageID}},
-		Effects: effects,
-	}
+	op := state.Operation{ID: req.OperationID, Kind: opKindAttachTask, Actor: req.Actor, Expect: task.Expect, Effects: task.Effects}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: req.StageID, Data: map[string]any{
-			"task_id": string(taskID), "profile_id": string(req.ProfileID),
+			"task_id": string(task.ID), "profile_id": string(req.ProfileID),
 		}})
-		if isWatcherTrigger(trigger) {
+		if isWatcherTrigger(task.Trigger) {
 			// bindWatcher only needs the identity fields (RootStageID/Trigger) — read back the just-committed
 			// task rather than constructing a partial assistants.Task by hand here.
-			if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
-				o.bindWatcher(taskID, t.Task)
+			if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[task.ID]; ok {
+				o.bindWatcher(task.ID, t.Task)
 			}
 		}
-		if parentActive && !startsWatching {
-			o.maybeScheduleTask(runCtx, taskID)
+		if task.Status == assistants.StatusQueued {
+			o.maybeScheduleTask(runCtx, task.ID)
 		}
 	})
 	if err != nil {
 		return "", err
 	}
-	return taskID, nil
+	return task.ID, nil
 }
 
 // PauseTask holds a task via the shared hold mechanism: cancels its in-flight subprocess immediately if
@@ -393,6 +313,37 @@ func (o *Orchestrator) CancelTask(ctx context.Context, taskID assistants.TaskID)
 	return nil
 }
 
+// runAgentIdleReason is the status reason of a run agent that finished a turn and waits for its next message.
+const runAgentIdleReason = "idle: waiting for a message"
+
+// idleRunAgent reports whether t is a standing run agent with nothing to do: queued because it was attached
+// without a first message or finished its last turn (not because a wait resumed it), and nobody has written
+// to it since. Such an agent only starts on a new message — never on its own after a restart or a Continue.
+func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
+	if t.Scope != assistants.ScopeRun || t.Status != assistants.StatusQueued {
+		return false
+	}
+	if t.StatusReason != "" && t.StatusReason != runAgentIdleReason {
+		return false
+	}
+	return !rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task))
+}
+
+// runAgentHasUnseenMessages reports whether some queued run agent has a message it has not seen yet: its next
+// turn is due (the message's Send, or its previous turn's own tail, schedules it), so the run must not finish
+// under it. state.RunBlocker deliberately ignores queued tasks — an idle run agent with nothing to read never
+// holds the run open — but without this check a message accepted during an agent's last turn could lose the
+// race to the run loop: the turn's running→queued commit wakes the loop before the next turn is scheduled.
+func runAgentHasUnseenMessages(rs state.RunState) bool {
+	for _, t := range rs.Assistants.Tasks {
+		if t.Scope == assistants.ScopeRun && t.Status == assistants.StatusQueued &&
+			rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task)) {
+			return true
+		}
+	}
+	return false
+}
+
 // maybeScheduleTask attempts to move a QUEUED, not-currently-held task to running and spawn its helper
 // process. Safe to call any number of times for the same task — including from an idempotent Attach replay
 // (T2.5), where externalWork fires again even though nothing new happened — because the transition's own
@@ -407,6 +358,9 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	rs := o.opts.Store.Snapshot()
 	t, ok := rs.Assistants.Tasks[taskID]
 	if !ok || t.Status != assistants.StatusQueued {
+		return
+	}
+	if idleRunAgent(rs, t) {
 		return
 	}
 	eff, err := taskStatusEffect(taskID, assistants.StatusRunning, "")
@@ -492,16 +446,13 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 	// practice (both ids already name known, just-read tasks) and must never block the task's own terminal
 	// transition from landing, so it is logged and the finish proceeds without the mirror rather than failing
 	// the whole operation.
-	var beforeReady map[agentcomm.WaitID]bool
-	mirrored := false
+	rs := o.opts.Store.Snapshot()
+	beforeReady := readyWaitSet(rs)
 	if to.Terminal() && hasParent {
-		rs := o.opts.Store.Snapshot()
-		if mirror, merr := childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
+		if mirror, merr := o.childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
 			log.Printf("WARN: assistants: child result mesh mirror (task=%s parent=%s): %v", taskID, parentID, merr)
 		} else if len(mirror) > 0 {
 			effects = append(effects, mirror...)
-			beforeReady = readyWaitSet(rs)
-			mirrored = true
 		}
 	}
 
@@ -538,12 +489,16 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 			// EventAgentCompleted).
 			o.concurrency.WakeEventLoop()
 		}
-		if mirrored {
-			// Mirrors Send/PostDiscussionMessage's own tail: the mirrored message can be exactly what a
-			// pending mesh Wait (e.g. an addressed_message wait the parent registered on this very delegate
-			// thread) needed to become ready — resume it the same way any other mesh write does.
-			o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
+		if to == assistants.StatusQueued {
+			// queued never holds the run open either (state.RunBlocker): a run agent going idle after its turn
+			// may be the last thing the run-level barrier was waiting on.
+			o.concurrency.WakeEventLoop()
 		}
+		// Mirrors Send/PostDiscussionMessage's own tail: this commit can be exactly what a pending mesh Wait
+		// needed — a task_result wait on this task (its terminal status, or a run agent's recorded turn
+		// result), or an addressed_message wait on the delegate thread the result was mirrored into — resume
+		// it the same way any other mesh write does.
+		o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
 	})
 	o.handleTaskOperationErr(err)
 }

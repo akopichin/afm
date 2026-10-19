@@ -1,7 +1,6 @@
-// Package orchestrator_test (this file, Agent Mesh Phase 5, T5.6): closing the run finishes remaining mesh
-// waits with a visible run_closed outcome, exercised through the REAL Orchestrator.Run shutdown sequence
-// (cancel -> WaitAgents -> closeRemainingMeshWaits -> EndRun), not just the unit-level
-// closeRemainingMeshWaits call the internal package tests already cover directly.
+// Package orchestrator_test (this file, Agent Mesh Phase 5, T5.6): an interrupted run keeps its pending mesh
+// waits pending for the resumed run, exercised through the REAL Orchestrator.Run shutdown sequence (cancel ->
+// WaitAgents -> closeMeshWaitsIfFinalized -> EndRun). Only a run that really finished closes them as run_closed.
 package orchestrator_test
 
 import (
@@ -16,24 +15,19 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// TestMesh_RunShutdown_ClosesRemainingWaitWithRunClosed registers a mesh wait with no deadline that will never
-// be satisfied (its colleague never replies) — state.AssistantsState.RunBlocker (T6.3) holds the run open for
-// exactly this reason, so the only way this run ever ends is a forced shutdown (ctx cancellation), the same
-// path a real `afm run` takes on SIGINT/SIGTERM. Once Run actually returns, the wait must not be left dangling
-// in the journal forever: it must show a visible, stored run_closed outcome.
-func TestMesh_RunShutdown_ClosesRemainingWaitWithRunClosed(t *testing.T) {
+// TestMesh_RunShutdown_KeepsRemainingWaitPending registers a mesh wait that is not satisfied yet —
+// state.AssistantsState.RunBlocker (T6.3) holds the run open for exactly this reason, so this run ends only by a
+// forced shutdown (ctx cancellation), the same path a real `afm run` takes on SIGINT/SIGTERM. The run is resumed
+// later, so the wait must still be pending — not closed as if the run had ended.
+func TestMesh_RunShutdown_KeepsRemainingWaitPending(t *testing.T) {
 	rec := &flowEventRecorder{}
 	dispatcher := newFlowRecorderDispatcher(t, rec)
 	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 0.2")
 
 	registered := make(chan agentcomm.WaitID, 1)
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		// "run:<profileID>" is AddRunAgent's own real mesh identity for a scope=run task (dev-plan.md's
-		// Vocabulary table) — NOT "helper:<taskID>" (a stage-scoped helper's identity): Agent Mesh Phase 8's
-		// own QA/DevOps acceptance test (T8.1) found this task's own Wait/resume classification previously
-		// used the wrong id unconditionally, which this test's own (now corrected) waiter used to coincidentally
-		// match before that fix.
-		waiter := agentcomm.ParticipantID("run:qa")
+		// AddRunAgent's real mesh identity for this scope=run task is "run:<taskID>".
+		waiter := orchestrator.RunAgentParticipantIDForTest("op-add-qa")
 		receipt, err := orch.Wait(ctx, orchestrator.WaitRequest{
 			OperationID:      "wait-" + taskID,
 			Waiter:           waiter,
@@ -64,7 +58,7 @@ func TestMesh_RunShutdown_ClosesRemainingWaitWithRunClosed(t *testing.T) {
 	waitForStatus(t, stateFile, runBarrierStageID, state.StatusRunning, 10*time.Second)
 
 	msg := "go"
-	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{
+	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa",
 		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {
@@ -100,10 +94,7 @@ func TestMesh_RunShutdown_ClosesRemainingWaitWithRunClosed(t *testing.T) {
 	if !ok {
 		t.Fatalf("wait %s missing from the final snapshot", waitID)
 	}
-	if w.Status != agentcomm.WaitRunClosed {
-		t.Fatalf("wait status after forced shutdown = %q, want run_closed", w.Status)
-	}
-	if w.Reason == "" {
-		t.Fatal("wait reason after forced shutdown is empty, want a stored, visible reason")
+	if w.Status != agentcomm.WaitPending {
+		t.Fatalf("wait status after forced shutdown = %q, want pending (the run is resumed later)", w.Status)
 	}
 }

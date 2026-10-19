@@ -78,6 +78,30 @@ func (o *Orchestrator) notifyAndResumeNewlyReadyWaits(ctx context.Context, befor
 	}
 }
 
+// stageStatusWaitsPending reports whether some pending stage_status wait names stageID, with the waits ready
+// before the transition about to be applied — the "before" side for resumeWaitersAfterTransition.
+func (o *Orchestrator) stageStatusWaitsPending(stageID string) (map[agentcomm.WaitID]bool, bool) {
+	if o.opts.Store == nil {
+		return nil, false // a bare test Orchestrator built around an FSM alone
+	}
+	rs := o.opts.Store.Snapshot()
+	for _, w := range rs.Assistants.Mesh.Waits {
+		if w.Status == agentcomm.WaitPending && w.Condition.Kind == agentcomm.WaitOnStageStatus && w.Condition.StageID == stageID {
+			return readyWaitSet(rs), true
+		}
+	}
+	return nil, false
+}
+
+// resumeWaitersAfterTransition resumes the waiters whose stage_status waits a transition just resolved (the
+// store resolves them in the transition itself, state.RunState.resolveStageStatusWaits). It runs off the
+// caller's goroutine: a transition may be applied on the event loop, which a stage resume publishes to.
+func (o *Orchestrator) resumeWaitersAfterTransition(beforeReady map[agentcomm.WaitID]bool) {
+	o.concurrency.SpawnDetached(o.runContext(context.Background()), func(ctx context.Context) {
+		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+	})
+}
+
 // hasOpenMeshWaitFor reports whether waiter currently has a PENDING mesh wait registered — the shared
 // primitive behind hasOpenMeshWait (stage-scoped, T5.2) and runHelperTask's own yield check (helper-scoped,
 // T5.4). Only WaitPending counts: a wait already WaitReady at this point means the condition was satisfied
@@ -106,30 +130,13 @@ func stageIDFromMeshParticipant(p agentcomm.ParticipantID) (string, bool) {
 	return id, ok && id != ""
 }
 
-// taskIDFromMeshParticipant inverts meshHelperParticipantID (T5.4) AND meshRunParticipantID (T6.2b) —
-// resumeWaitersAfterCommit's task-scoped twin of stageIDFromMeshParticipant above. A "run:<profileID>" id (a
-// standing role, AddRunAgent) carries no task id in its own string form the way a helper's "helper:<taskID>"
-// does, so resolving it needs an actual snapshot lookup for the one scope=run task currently registered under
-// that profile — AddRunAgent's own "idempotent per profile" guarantee (addRunAgentOperationID's doc comment)
-// is what makes that lookup unambiguous. This is a method (not a free function) purely for that snapshot
-// access; Agent Mesh Phase 8's own QA/DevOps acceptance test (T8.1) is what caught every caller of the old
-// free function silently treating a run-scoped participant as neither a stage nor a task, so none of
-// resumeWaitersAfterCommit/resumeWaiterAfterTerminalWait/maybeResumeAwaitingPeerQuestion ever resumed one.
+// taskIDFromMeshParticipant inverts meshHelperParticipantID and meshRunParticipantID (see
+// runTaskForParticipant for the legacy "run:<profileID>" form).
 func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
 	if id, ok := strings.CutPrefix(string(p), meshHelperPrefix); ok && id != "" {
 		return assistants.TaskID(id), true
 	}
-	profileID, ok := strings.CutPrefix(string(p), meshRunPrefix)
-	if !ok || profileID == "" {
-		return "", false
-	}
-	rs := o.opts.Store.Snapshot()
-	for id, t := range rs.Assistants.Tasks {
-		if t.Scope == assistants.ScopeRun && string(t.ProfileID) == profileID {
-			return id, true
-		}
-	}
-	return "", false
+	return runTaskForParticipant(o.opts.Store.Snapshot(), p)
 }
 
 // resumeAwaitingPeerStage drives stageID out of awaiting_peer via evType (EventPeerReplied or, T5.5,
@@ -309,7 +316,7 @@ func (o *Orchestrator) resumeTaskIfWaitCleared(ctx context.Context, taskID assis
 	if !ok || t.Status != assistants.StatusWaitingPeer {
 		return
 	}
-	if o.hasOpenMeshWaitFor(meshParticipantForTask(t.Task)) {
+	if o.hasOpenMeshWaitFor(meshParticipantForTask(rs, t.Task)) {
 		return // the wait that parked this task is still genuinely pending — nothing to resume yet
 	}
 	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, reason)
@@ -348,13 +355,7 @@ func (o *Orchestrator) tryResumePeerForQuestion(ctx context.Context, taskID assi
 // reusing the delivery receipt the prompt-building code already maintains means there is nothing new to keep
 // consistent across a restart.
 func (o *Orchestrator) hasUndeliveredInbox(participant agentcomm.ParticipantID) bool {
-	rs := o.opts.Store.Snapshot()
-	for _, id := range rs.Assistants.Mesh.Inbox[participant] {
-		if rs.Assistants.Mesh.Receipts[id][participant] == agentcomm.DeliveryAccepted {
-			return true
-		}
-	}
-	return false
+	return o.opts.Store.Snapshot().Assistants.Mesh.HasUnseenMessageFor(participant)
 }
 
 // maybeResumeAwaitingPeerQuestion resumes participant for a bounded T5.5 counter-question turn if, and only
@@ -424,18 +425,32 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 			}
 			continue
 		}
-		ready := false
+		ready, ended := false, false
 		for _, w := range rs.Assistants.Mesh.Waits {
-			if w.Waiter == waiter && w.Status == agentcomm.WaitReady {
-				ready = true
-				break
+			if w.Waiter != waiter {
+				continue
 			}
+			ready = ready || w.Status == agentcomm.WaitReady
+			ended = ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
 		}
-		if !ready {
-			continue
-		}
-		if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
-			log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
+		switch {
+		case ready:
+			if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
+				log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
+			}
+		case ended:
+			// The wait was cancelled or expired (e.g. its colleague finished without reading the question) and
+			// the process stopped before the waiter was woken.
+			if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: s.ID}); err != nil {
+				log.Printf("WARN: mesh: recover awaiting_peer stage %q after its wait ended: %v", s.ID, err)
+			}
+		case o.hasUndeliveredInbox(waiter):
+			// Parked for unread messages with no wait at all (agentcomm_unread.go), and the process stopped
+			// before the extra turn started.
+			if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
+				log.Printf("WARN: mesh: recover awaiting_peer stage %q for unread messages: %v", s.ID, err)
+			}
+		default:
 		}
 	}
 }

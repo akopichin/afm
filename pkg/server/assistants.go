@@ -3,12 +3,16 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
+	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -16,6 +20,9 @@ import (
 // underlying service cannot currently accept the request at all (e.g. the run store is shutting down) —
 // distinct from a validation rejection; maps to 503.
 var ErrAssistantsUnavailable = errors.New("assistants: service unavailable")
+
+// errCodeInternal — the error code of every unexpected server-side failure.
+const errCodeInternal = "internal"
 
 // AssistantTaskView is one task's dashboard-facing projection — GET /api/stages/{id}/assistants.
 type AssistantTaskView struct {
@@ -110,7 +117,7 @@ func (s *Server) handleListAssistants(w http.ResponseWriter, r *http.Request, st
 	}
 	tree, err := s.assistantsReader.TaskTree(stageID)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -161,7 +168,7 @@ func (s *Server) handleAttachAssistant(w http.ResponseWriter, r *http.Request, s
 		Instruction: body.Instruction, Mode: body.Mode, Trigger: body.Trigger,
 	})
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -244,7 +251,7 @@ func (s *Server) handleWaiveTask(w http.ResponseWriter, r *http.Request, taskID 
 		return
 	}
 	if err := s.assistantActions.WaiveTask(r.Context(), taskID, body.Reason); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -276,7 +283,7 @@ func (s *Server) handleAssistantTaskAction(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -297,7 +304,7 @@ func (s *Server) handleAssistantEvents(w http.ResponseWriter, r *http.Request, t
 	}
 	events, nextCursor, hasMore, err := s.assistantsReader.TaskEvents(taskID, cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -311,14 +318,14 @@ func (s *Server) handleAssistantEvents(w http.ResponseWriter, r *http.Request, t
 // every other admission/validation rejection (capability_unavailable, delegation_depth_exceeded,
 // invalid_parent, ancestor_inactive), 404 for feature_disabled, 503 when the service reports itself
 // unavailable outright.
-func writeAssistantError(w http.ResponseWriter, err error) {
+func (s *Server) writeAssistantError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrAssistantsUnavailable) {
 		writeAssistantErrCode(w, http.StatusServiceUnavailable, "service_unavailable")
 		return
 	}
 	var rej *state.OperationRejectedError
 	if errors.As(err, &rej) {
-		writeAssistantErrCode(w, assistantErrStatus(rej.Code), string(rej.Code))
+		writeAssistantErrMessage(w, assistantErrStatus(rej.Code), string(rej.Code), rej.Reason)
 		return
 	}
 	// Этап 10 (T10.1): a delivered add_stage proposal can ALSO fail with a *graph.ValidationError — the exact
@@ -330,14 +337,25 @@ func writeAssistantError(w http.ResponseWriter, err error) {
 		writeAssistantErrCode(w, graphRejectedStatus(ve.Code), ve.Code)
 		return
 	}
-	writeAssistantErrCode(w, http.StatusInternalServerError, "internal")
+	// Unexpected: never a silent 500 — the error goes to the afm log, the client is pointed there.
+	log.Printf("ERROR: assistants/mesh request failed: %q", s.redactSecrets(err.Error())) //nolint:gosec // G706: secrets redacted, %q escapes newlines so a value cannot forge log lines
+	writeAssistantErrMessage(w, http.StatusInternalServerError, errCodeInternal, "internal error — see the afm log for details")
+}
+
+// redactSecrets removes known secret values from text the server logs: the run's full secret set when the
+// composition root wired it (Config.RedactSecrets), else the secrets in afm's own environment.
+func (s *Server) redactSecrets(text string) string {
+	if s.redact != nil {
+		return s.redact(text)
+	}
+	return redact.String(text, executor.SecretValuesForRedaction())
 }
 
 func assistantErrStatus(code assistants.ErrorCode) int {
 	switch code {
-	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded:
+	case assistants.CodeStaleRevision, assistants.CodeInvalidStatus, assistants.CodeFlowPaused, assistants.CodeBudgetExceeded, agentcomm.CodeWaitCycle:
 		return http.StatusConflict
-	case assistants.CodeFeatureDisabled:
+	case assistants.CodeFeatureDisabled, assistants.CodeNotFound:
 		return http.StatusNotFound
 	case assistants.CodeRunFinalizing:
 		return http.StatusServiceUnavailable
@@ -345,13 +363,24 @@ func assistantErrStatus(code assistants.ErrorCode) int {
 		return http.StatusUnprocessableEntity
 	case assistants.CodeActorNotAllowed:
 		return http.StatusForbidden
+	case assistants.CodeInvalidRequest:
+		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
 	}
 }
 
 func writeAssistantErrCode(w http.ResponseWriter, status int, code string) {
+	writeAssistantErrMessage(w, status, code, "")
+}
+
+// writeAssistantErrMessage writes {"error": code, "message": reason}; message is omitted when empty.
+func writeAssistantErrMessage(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+	body := map[string]string{"error": code}
+	if message != "" {
+		body["message"] = message
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }

@@ -96,7 +96,7 @@ describe('SideAgentModal', () => {
     const { rerender } = render(<SideAgentModal api={api} />)
     act(() => {})
     const overlay = document.querySelector('.side-agent-overlay') as HTMLElement
-    const ta = overlay.querySelector('.side-agent-textarea') as HTMLTextAreaElement
+    const ta = overlay.querySelector('.side-agent-composer .chat-composer-input') as HTMLTextAreaElement
     let inertAtFocus: boolean | null = null
     const spy = vi.spyOn(ta, 'focus').mockImplementation(() => { inertAtFocus = overlay.inert })
     act(() => { rerender(<SideAgentModal api={{ ...api, isOpen: true }} />) })

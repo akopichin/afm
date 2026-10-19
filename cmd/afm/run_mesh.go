@@ -125,6 +125,16 @@ func (a meshActions) Board(ctx context.Context, key string) ([]agentcomm.BoardEn
 // ids/strings, per dev-plan.md's T7.1 note ("the handler itself composes nothing"). Scope/Mode pass through
 // as given: AttachAndSendRequest's own zero values already mean ScopeStage/ModeAdvisory, so there is no
 // default to duplicate here.
+// PublishBoard posts a board entry as the human operator (meshUIActor) — e.g. a task the agents pick up — and
+// notifies req.Notify about it.
+func (a meshActions) PublishBoard(ctx context.Context, requestID string, req server.MeshBoardPublishRequest) (agentcomm.BoardEntry, error) {
+	return a.orch.Publish(ctx, orchestrator.PublishRequest{
+		OperationID: requestID, Author: meshUIParticipant, Key: req.Key, Status: req.Status,
+		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, Notify: toParticipantIDs(req.Notify),
+		Actor: meshUIActor,
+	})
+}
+
 func (a meshActions) AttachAndSend(ctx context.Context, requestID string, req server.MeshAttachAndSendRequest) (server.MeshAttachAndSendResult, error) {
 	result, err := a.orch.AttachAndSend(ctx, orchestrator.AttachAndSendRequest{
 		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Scope: assistants.Scope(req.Scope),

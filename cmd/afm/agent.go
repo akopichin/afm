@@ -128,8 +128,8 @@ func newAgentSendCmd() *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&thread, "thread", "", "thread id to send into (required)")
-	c.Flags().StringVar(&to, "to", "", "comma-separated recipient participant ids (required)")
+	c.Flags().StringVar(&thread, "thread", "", "thread id to send into; omit to start or continue the conversation with --to")
+	c.Flags().StringVar(&to, "to", "", "comma-separated recipients: aliases (docs, @docs) or participant ids (required)")
 	c.Flags().StringVar(&kind, "kind", string(agentcomm.MessageKindMessage), "message kind: message|request|reply|result|proposal")
 	c.Flags().StringVar(&body, "body", "", "message body (required)")
 	c.Flags().StringVar(&inReplyTo, "in-reply-to", "", "id of the message this one answers (required when kind=reply)")
@@ -157,8 +157,8 @@ func newAgentReplyCmd() *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&thread, "thread", "", "thread id (required)")
-	c.Flags().StringVar(&to, "to", "", "comma-separated recipient participant ids (required)")
+	c.Flags().StringVar(&thread, "thread", "", "thread id; omit to reply in the thread of --in-reply-to")
+	c.Flags().StringVar(&to, "to", "", "comma-separated recipients; omit to answer the sender of --in-reply-to")
 	c.Flags().StringVar(&body, "body", "", "reply body (required)")
 	c.Flags().StringVar(&inReplyTo, "in-reply-to", "", "id of the message being answered (required)")
 	c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
@@ -168,13 +168,20 @@ func newAgentReplyCmd() *cobra.Command {
 func newAgentInboxCmd() *cobra.Command {
 	var cursor uint64
 	var limit int
+	var all bool
 	c := &cobra.Command{
-		Use:          "inbox",
-		Short:        "Read messages addressed to this participant",
+		Use:   "inbox",
+		Short: "Read NEW messages addressed to this participant (--all for the whole history)",
+		Long: "Read the messages addressed to this participant that it has not seen yet — neither in its prompt's <inbox> block " +
+			"nor returned by an earlier `afm agent inbox`. Each message is returned once. --all returns every message ever " +
+			"addressed to it.",
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				path := "inbox?cursor=" + strconv.FormatUint(cursor, 10) + "&limit=" + strconv.Itoa(limit)
+				if all {
+					path += "&all=1"
+				}
 				var out map[string]any
 				if err := c2.do("GET", path, nil, &out); err != nil {
 					return nil, err
@@ -185,6 +192,7 @@ func newAgentInboxCmd() *cobra.Command {
 	}
 	c.Flags().Uint64Var(&cursor, "cursor", 0, "only messages after this seq")
 	c.Flags().IntVar(&limit, "limit", 0, "max messages to return (0 = server default)")
+	c.Flags().BoolVar(&all, "all", false, "every message ever addressed to you, including ones already seen")
 	return c
 }
 
@@ -247,7 +255,7 @@ func newAgentWaitCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&condKind, "condition", "", "reply_to|addressed_message|task_result|board_key|stage_status (required)")
 	c.Flags().StringVar(&messageID, "message-id", "", "for condition=reply_to")
-	c.Flags().StringVar(&threadID, "thread-id", "", "for condition=addressed_message")
+	c.Flags().StringVar(&threadID, "thread-id", "", "for condition=addressed_message; omit to wait for a new message to you in any thread")
 	c.Flags().StringVar(&taskID, "task-id", "", "for condition=task_result")
 	c.Flags().StringVar(&stageID, "stage-id", "", "for condition=stage_status")
 	c.Flags().StringVar(&key, "key", "", "for condition=board_key")
@@ -291,7 +299,7 @@ func newAgentBoardGetCmd() *cobra.Command {
 }
 
 func newAgentBoardPublishCmd() *cobra.Command {
-	var key, status, artifacts, authorizedBy string
+	var key, status, artifacts string
 	var expectedVersion int
 	c := &cobra.Command{
 		Use:          "publish",
@@ -301,7 +309,7 @@ func newAgentBoardPublishCmd() *cobra.Command {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				reqBody := map[string]any{
 					"request_id": newAgentRequestID(), "key": key, "status": status,
-					"artifact_refs": splitCSV(artifacts), "expected_version": expectedVersion, "authorized_by": splitCSV(authorizedBy),
+					"artifact_refs": splitCSV(artifacts), "expected_version": expectedVersion,
 				}
 				var out agentcomm.BoardEntry
 				if err := c2.do("POST", "publish", reqBody, &out); err != nil {
@@ -315,6 +323,5 @@ func newAgentBoardPublishCmd() *cobra.Command {
 	c.Flags().StringVar(&status, "status", "", "the published status value (required)")
 	c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
 	c.Flags().IntVar(&expectedVersion, "expected-version", 0, "0 for a first publish; otherwise the key's current version")
-	c.Flags().StringVar(&authorizedBy, "authorized-by", "", "comma-separated participant ids allowed to publish the NEXT revision")
 	return c
 }

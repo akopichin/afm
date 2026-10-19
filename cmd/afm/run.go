@@ -267,6 +267,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		BrowserDescriptor:  browserDesc,
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
+		SecretValues:       loadRedactionSecrets(rootDir, cfg, hooks),
 	}
 	if ws != nil {
 		orchOpts.ResolveFile = workspaceResolveFile(ws)
@@ -325,7 +326,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		// Аварийный выход (Ctrl+C / сбой): прерываем активный боковой ход и ждём
 		// его лишь ограниченное время; журнал закрываем только если дренирован.
 		sideDrained = side.shutdownEmergency(sideAgentEmergencyDrain)
-		return fmt.Errorf("run: %w", runErr)
+		return runExitError(ctx, runErr)
 	}
 	fmt.Printf("afm: flow %q completed\n", f.Name)
 	if srv != nil {

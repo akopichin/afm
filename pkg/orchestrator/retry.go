@@ -259,6 +259,10 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 
 		err := agentFn(retryCtx)
 		if err == nil {
+			// The turn ran to its end, so its <inbox> messages were handed over. The executor marks them at
+			// process start (OnDelivered); repeating it here (idempotent) also covers a runner that never calls
+			// it — otherwise they would look unread and earn the stage an extra turn (agentcomm_unread.go).
+			o.deliverRenderedInbox(meshStageParticipantID(s.ID))()
 			// afm bug: интерактивный агент может завершиться, не дождавшись ответа пользователя — на диске остаётся
 			// question.json без answer.json.
 			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {

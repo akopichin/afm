@@ -113,70 +113,63 @@ func TestServer_IndexDefaultTheme(t *testing.T) {
 	}
 }
 
-// Структурный CSS «бокового» агента доставляется ПОСТОЯННОЙ ссылкой /side-agent.css. Плюс фактическая
-// отдача файла: HTML-only проверка не поймала бы 404 из-за отсутствия файла в embed.
-func TestServer_SideAgentCSSLinkInIndex(t *testing.T) {
-	srv := New(Config{})
-	handler := srv.Handler()
+// permanentStylesheets — структурный CSS, который доставляется ПОСТОЯННОЙ ссылкой мимо скина: skin_dir
+// заменяет основной stylesheet, а модалка бокового агента и чат-композеры должны оставаться свёрстанными.
+// marker — правило, которое обязано быть в файле.
+var permanentStylesheets = []struct{ path, marker string }{
+	{"side-agent.css", ".side-agent-modal"},
+	{"chat-composer.css", ".chat-composer-row"},
+}
 
-	req := httptest.NewRequest("GET", "/", nil)
+// Постоянные ссылки есть в index (их добавляет index.dev.html, сборка переносит в index.html), а файлы
+// реально отдаются: HTML-only проверка не поймала бы 404 из-за отсутствия файла в //go:embed.
+func TestServer_PermanentStylesheetsLinkedAndServed(t *testing.T) {
+	handler := New(Config{}).Handler()
+
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	body := w.Body.String()
-	// Активная skin-ссылка (встроенная тема) И постоянная ссылка на side-agent.css.
 	if !strings.Contains(body, `href="./skins/graphite/index.css"`) {
 		t.Error("index должен сохранять активную skin-ссылку")
 	}
-	if !strings.Contains(body, `href="./side-agent.css"`) {
-		t.Error("index должен содержать постоянную ссылку на /side-agent.css (её добавляет index.dev.html, сборка переносит в index.html)")
+	for _, css := range permanentStylesheets {
+		if !strings.Contains(body, `href="./`+css.path+`"`) {
+			t.Errorf("index должен содержать постоянную ссылку на /%s", css.path)
+		}
+		cssW := httptest.NewRecorder()
+		handler.ServeHTTP(cssW, httptest.NewRequest("GET", "/"+css.path, nil))
+		if cssW.Code != http.StatusOK {
+			t.Fatalf("GET /%s: got %d, want 200 (файл обязан быть в //go:embed)", css.path, cssW.Code)
+		}
+		if !strings.Contains(cssW.Body.String(), css.marker) {
+			t.Errorf("/%s должен содержать структурные правила %s", css.path, css.marker)
+		}
 	}
 }
 
-func TestServer_ServesSideAgentCSS(t *testing.T) {
-	srv := New(Config{})
-	handler := srv.Handler()
-
-	req := httptest.NewRequest("GET", "/side-agent.css", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /side-agent.css: got %d, want 200 (файл обязан быть в //go:embed)", w.Code)
-	}
-	if strings.TrimSpace(w.Body.String()) == "" {
-		t.Error("GET /side-agent.css должен отдавать непустой CSS")
-	}
-	if !strings.Contains(w.Body.String(), ".side-agent-modal") {
-		t.Error("side-agent.css должен содержать структурные правила .side-agent-modal")
-	}
-}
-
-// При custom skin /side-agent.css всё равно отдаётся из web.FS, сохраняя структуру модалки.
-func TestServer_SideAgentCSSSurvivesSkinDir(t *testing.T) {
+// При custom skin постоянные таблицы стилей всё равно подключены и отдаются из web.FS.
+func TestServer_PermanentStylesheetsSurviveSkinDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.css"), []byte(`:root{--x:1;}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{SkinDir: dir})
-	handler := srv.Handler()
+	handler := New(Config{SkinDir: dir}).Handler()
 
-	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	body := w.Body.String()
 	if !strings.Contains(body, `href="./skins/custom/index.css"`) {
 		t.Error("skin_dir должен давать custom skin-ссылку")
 	}
-	if !strings.Contains(body, `href="./side-agent.css"`) {
-		t.Error("ссылка /side-agent.css должна оставаться и для skin_dir")
-	}
-
-	cssReq := httptest.NewRequest("GET", "/side-agent.css", nil)
-	cssW := httptest.NewRecorder()
-	handler.ServeHTTP(cssW, cssReq)
-	if cssW.Code != http.StatusOK {
-		t.Fatalf("GET /side-agent.css под skin_dir: got %d, want 200", cssW.Code)
+	for _, css := range permanentStylesheets {
+		if !strings.Contains(body, `href="./`+css.path+`"`) {
+			t.Errorf("ссылка /%s должна оставаться и для skin_dir", css.path)
+		}
+		cssW := httptest.NewRecorder()
+		handler.ServeHTTP(cssW, httptest.NewRequest("GET", "/"+css.path, nil))
+		if cssW.Code != http.StatusOK {
+			t.Fatalf("GET /%s под skin_dir: got %d, want 200", css.path, cssW.Code)
+		}
 	}
 }
 

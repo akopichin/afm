@@ -32,10 +32,23 @@ describe('AssistantMentionMenu', () => {
     expect(screen.getByText('@ghost')).toBeInTheDocument()
   })
 
-  it('selecting a profile calls onSelect with it', () => {
+  it('clicking a profile selects it once; mousedown alone only keeps focus in the textarea', () => {
     const onSelect = vi.fn()
     render(<AssistantMentionMenu profiles={PROFILES} highlightIndex={0} onHover={vi.fn()} onSelect={onSelect} />)
-    fireEvent.mouseDown(screen.getByText('@frontendDeveloper'))
+    const option = screen.getByText('@frontendDeveloper').closest('button') as HTMLButtonElement
+    expect(fireEvent.mouseDown(option)).toBe(false) // default prevented → the textarea keeps focus
+    expect(onSelect).not.toHaveBeenCalled()
+    fireEvent.click(option)
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith(PROFILES[0])
+  })
+
+  it('a keyboard-focused option is selected with Enter (the browser turns it into a click)', () => {
+    const onSelect = vi.fn()
+    render(<AssistantMentionMenu profiles={PROFILES} highlightIndex={0} onHover={vi.fn()} onSelect={onSelect} />)
+    const option = screen.getByText('@frontendDeveloper').closest('button') as HTMLButtonElement
+    option.focus()
+    fireEvent.click(option) // what Enter/Space on a focused <button> dispatches
     expect(onSelect).toHaveBeenCalledWith(PROFILES[0])
   })
 })

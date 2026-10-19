@@ -1321,3 +1321,28 @@ func TestReExec_WorktreeNeedsNoExtraMount(t *testing.T) {
 		t.Fatalf("worktree run must carry %s: %s", docker.WorktreeEnvVar, strings.Join(with, " "))
 	}
 }
+
+// A helper-profile command that is a recipe (reviewer → codex) is "used" too: it needs its in-image wrapper
+// and its secrets, otherwise the host's binary (a macOS codex) gets bind-mounted into the Linux container and
+// fails with "exec format error". A non-recipe extra command stays out (it is mounted, not generated).
+func TestUsedRecipeCommands_IncludesHelperProfileCommands(t *testing.T) {
+	recipes := map[string]config.AgentRecipe{
+		"codex":     {Type: config.RecipeTypeCodex},
+		"architect": {Model: "opus"},
+	}
+	f := &flow.Flow{Name: "test", Stages: []flow.Stage{{ID: "s1", Command: "claude"}}}
+	used := docker.UsedRecipeCommands(f, "claude", recipes, "codex", "architect", "some-host-tool")
+	if !used["codex"] || !used["architect"] || used["some-host-tool"] {
+		t.Fatalf("used = %v, want codex and architect (profile recipes), not some-host-tool", used)
+	}
+	got := docker.UsedRecipes(f, "claude", recipes, "codex")
+	if _, ok := got["codex"]; !ok {
+		t.Fatalf("UsedRecipes = %v, want the helper's codex recipe", got)
+	}
+	mounts := docker.ScanCommandsWithExtra(f, "claude", used, []string{"codex"})
+	for _, m := range mounts {
+		if m.ContainerName == "codex" {
+			t.Fatalf("codex must not be mounted from the host when its recipe wrapper is generated: %+v", m)
+		}
+	}
+}

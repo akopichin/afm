@@ -25,11 +25,13 @@ func TestDelegate_ResultDeliveredThroughSharedMeshInbox(t *testing.T) {
 
 	var calls atomic.Int32
 	var resumedPrompt string
+	releaseChild := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		switch calls.Add(1) {
 		case 1:
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		case 2:
+			<-releaseChild // the child holds until the parent got an ordinary peer message (part 2 below)
 			return passResultOutcome(), nil
 		default:
 			resumedPrompt = prompt
@@ -40,32 +42,11 @@ func TestDelegate_ResultDeliveredThroughSharedMeshInbox(t *testing.T) {
 	parentID := attachTestTask(context.Background(), t, o, "op-parent")
 	waitForTaskStatus(t, store, parentID, assistants.StatusWaitingChildren, 2*time.Second)
 	childID := store.Snapshot().Assistants.ByParent[parentID][0]
-	waitForTaskStatus(t, store, childID, assistants.StatusCompleted, 2*time.Second)
-	waitForTaskStatus(t, store, parentID, assistants.StatusCompleted, 2*time.Second)
-
 	parentParticipant := meshHelperParticipantID(parentID)
 	childParticipant := meshHelperParticipantID(childID)
 
-	// 1) The child's result reached the parent through the mesh's one read primitive — Service.ReadInbox —
-	// not only through the bespoke collectChildResultsJSON file/state read.
-	page, err := o.ReadInbox(context.Background(), ReadInboxRequest{Participant: parentParticipant})
-	if err != nil {
-		t.Fatalf("ReadInbox: %v", err)
-	}
-	foundChild := false
-	for _, m := range page.Messages {
-		if m.Sender == childParticipant {
-			foundChild = true
-		}
-	}
-	if !foundChild {
-		t.Fatalf("parent's inbox (via ReadInbox) = %+v, want a message sent by the finished child %s", page.Messages, childID)
-	}
-
-	// 2) Prove it is the SAME primitive an ordinary peer reply uses: open a plain thread naming the parent and
-	// send it a message exactly as any other helper/human would (Service.Send), then re-read with the EXACT
-	// same ReadInbox call — both the delegate mirror and this ordinary reply must appear side by side in the
-	// one inbox, never through two separate mechanisms.
+	// 2) An ordinary peer message to the (still live) parent — the same Send any helper/human uses — must land
+	// in the SAME inbox the delegate mirror (part 1) lands in, never a second mechanism.
 	thread, err := o.OpenThread(context.Background(), OpenThreadRequest{
 		OperationID: "op-thread-peer", Scope: agentcomm.ScopeStage,
 		Members: []agentcomm.ParticipantID{meshUserParticipantID, parentParticipant},
@@ -80,13 +61,23 @@ func TestDelegate_ResultDeliveredThroughSharedMeshInbox(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	page2, err := o.ReadInbox(context.Background(), ReadInboxRequest{Participant: parentParticipant})
+	close(releaseChild)
+	waitForTaskStatus(t, store, childID, assistants.StatusCompleted, 2*time.Second)
+	waitForTaskStatus(t, store, parentID, assistants.StatusCompleted, 2*time.Second)
+
+	// 1) The child's result reached the parent through the mesh's one read primitive — Service.ReadInbox —
+	// next to the ordinary peer message, not only through the bespoke collectChildResultsJSON read.
+	page, err := o.ReadInbox(context.Background(), ReadInboxRequest{Participant: parentParticipant})
 	if err != nil {
-		t.Fatalf("ReadInbox (after peer send): %v", err)
+		t.Fatalf("ReadInbox: %v", err)
 	}
-	if len(page2.Messages) != len(page.Messages)+1 {
-		t.Fatalf("inbox after an ordinary Send = %d messages, want %d (the earlier delegate mirror plus this one, through the SAME ReadInbox call)",
-			len(page2.Messages), len(page.Messages)+1)
+	foundChild, foundPeer := false, false
+	for _, m := range page.Messages {
+		foundChild = foundChild || m.Sender == childParticipant
+		foundPeer = foundPeer || m.Body == "a plain peer reply"
+	}
+	if !foundChild || !foundPeer {
+		t.Fatalf("parent's inbox (via ReadInbox) = %+v, want both the child's result and the peer message", page.Messages)
 	}
 
 	// 3) The SAME prompt-injection function that would show the parent an ordinary peer reply

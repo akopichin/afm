@@ -24,10 +24,12 @@ export function detectMentionTrigger(value: string, caret: number): MentionTrigg
 
 // filterMentionProfiles matches a typed query against a profile's id or title, case-insensitively. An empty
 // query (just typed '@') matches everything, so the menu opens showing every configured role.
-export function filterMentionProfiles<T extends { id: string; title: string }>(profiles: T[], query: string): T[] {
+export function filterMentionProfiles<T extends { id: string; title: string; handle?: string }>(profiles: T[], query: string): T[] {
   if (query === '') return profiles
   const q = query.toLowerCase()
-  return profiles.filter((p) => p.id.toLowerCase().includes(q) || p.title.toLowerCase().includes(q))
+  return profiles.filter(
+    (p) => p.id.toLowerCase().includes(q) || p.title.toLowerCase().includes(q) || (p.handle?.toLowerCase().includes(q) ?? false),
+  )
 }
 
 // MentionGroup — a labeled section of mention candidates. The feed composer's `@` menu (dev-plan.md T7.4)
@@ -48,4 +50,12 @@ export function filterMentionGroups<T extends { id: string; title: string }>(
   return groups
     .map((g) => ({ label: g.label, items: filterMentionProfiles(g.items, query) }))
     .filter((g) => g.items.length > 0)
+}
+
+// draftMentions reports whether the draft still contains `@handle` as a whole token. Recipients picked with
+// `@` are derived from the text at send time, so deleting the mention from the draft also un-addresses it.
+export function draftMentions(draft: string, handle: string): boolean {
+  if (handle === '') return false
+  const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,;:!?)])`, 'i').test(draft)
 }

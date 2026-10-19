@@ -114,6 +114,8 @@ func TestCrash_QueuedChildNeverSpawnedBeforeCrash_RecoveredOnRestart(t *testing.
 	// closed original store) before the test directory is cleaned up.
 	close(parentRelease)
 	o.concurrency.WaitAgents()
+	// The restarted process also re-ran the parent (it was running at the crash): wait for that turn too.
+	o2.concurrency.WaitAgents()
 }
 
 // TestCrash_ChildResultRecordedBeforeParentContinuation_RecoveredOnRestart — scenario 18(b).
@@ -204,7 +206,7 @@ func TestCrash_HelperWaitResolvedBeforeRequeue_RecoveredOnRestart(t *testing.T) 
 	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-peer-crash-wait", Waiter: helperID,
-			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID},
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: threadID}, Deadline: testFarDeadline(),
 		}); err != nil {
 			t.Errorf("Wait: %v", err)
 		}
@@ -282,7 +284,7 @@ func TestCrash_HelperWaitStillPending_LeftAloneOnRestart(t *testing.T) {
 	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-peer-crash-pending-wait", Waiter: helperID,
-			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 		}); err != nil {
 			t.Errorf("Wait: %v", err)
 		}

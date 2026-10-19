@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -68,12 +70,20 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
+	messageID := deriveMessageID(req.OperationID)
+	// A retry of an already-committed post replays it, whatever changed since (the stage finished, so the
+	// mesh mirror would now be built differently).
+	if replayed, err := o.replayedDiscussionPost(messageID, req); replayed {
+		return messageID, err
+	}
+	// Redacted once, before either copy of the post (the discussion message and its mesh mirror) is built.
+	req.Body = o.RedactSecrets(req.Body)
+	rs := o.opts.Store.Snapshot()
 	st := o.reg().Stage(req.StageID)
 	if st == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
 	}
 
-	messageID := deriveMessageID(req.OperationID)
 	eff, err := discussionMessageEffect(req.StageID, messageID, state.DiscussionMessagePayload{
 		AuthorKind: string(req.AuthorKind), AuthorID: req.AuthorID, Role: req.Role,
 		Round: req.Round, ParentMessageID: req.ParentMessageID, ContextVersion: req.ContextVersion,
@@ -84,16 +94,29 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	}
 	effects := []state.Effect{eff}
 
-	rs := o.opts.Store.Snapshot()
 	meshEffects, err := discussionMeshEffects(rs, req.StageID, messageID, req)
 	if err != nil {
 		return "", err
 	}
 	effects = append(effects, meshEffects...)
 	beforeReady := readyWaitSet(rs)
+	runCtx := o.runContext(ctx) // a resumed waiter must not die with the HTTP request.
 
 	threadID := deriveDiscussionThreadID(req.StageID)
-	op := state.Operation{ID: req.OperationID, Kind: "post_discussion_message", Actor: req.Actor, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: opKindPostDiscussionMessage, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+		// The mirror was built from a snapshot; whether its recipient stage is still reachable is decided again
+		// under the commit's lock, so a stage finishing in between cannot get a deliverable receipt.
+		Check: func(cur *state.RunState) error {
+			again, err := discussionMeshEffects(*cur, req.StageID, messageID, req)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(again, meshEffects) {
+				return &state.OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("stage %s changed status while posting — post again", req.StageID)}
+			}
+			return nil
+		},
+	}}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventDiscussionMessage, StageID: req.StageID, Data: map[string]any{
 			"message_id": messageID, "author_kind": string(req.AuthorKind), "author_id": req.AuthorID, "round": req.Round,
@@ -111,12 +134,34 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 		// A discussion reply can be exactly what a stage agent parked on a mesh wait (e.g. an
 		// addressed_message wait on this very thread) is waiting for — resume it the SAME way Send/Publish do
 		// (agentcomm_resume.go), rather than leaving it stranded until something else happens to wake it.
-		o.notifyAndResumeNewlyReadyWaits(ctx, beforeReady)
+		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
 	})
 	if err != nil {
 		return "", err
 	}
 	return messageID, nil
+}
+
+// replayedDiscussionPost reports whether req's request id already committed a post, and whether that post is
+// exactly req (every field of its discussion message) — anything else under that id is a conflict.
+func (o *Orchestrator) replayedDiscussionPost(messageID string, req PostMessageRequest) (bool, error) {
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindPostDiscussionMessage)
+	if err != nil || !committed {
+		return err != nil, err // a storage error answers the request too
+	}
+	var p state.DiscussionMessagePayload
+	target, found, err := op.Effect("discussion_message", &p)
+	if err != nil {
+		return true, err
+	}
+	same := found && target.StageID == req.StageID && target.MessageID == messageID &&
+		p.AuthorKind == string(req.AuthorKind) && p.AuthorID == req.AuthorID && p.Role == req.Role && p.Round == req.Round &&
+		p.ParentMessageID == req.ParentMessageID && p.ContextVersion == req.ContextVersion &&
+		slices.Equal(p.Evidence, req.Evidence) && o.sameRedactedText(p.Body, req.Body)
+	if !same {
+		return true, state.OperationIDConflictError(req.OperationID)
+	}
+	return true, nil
 }
 
 // DiscussionMessages returns stageID's discussion log in commit order (never re-sorted by timestamp —

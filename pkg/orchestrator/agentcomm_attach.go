@@ -10,11 +10,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"unicode"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
-	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -57,12 +59,118 @@ type AttachAndSendResult struct {
 	MessageID     *agentcomm.MessageID
 }
 
-// meshRunParticipantID returns the stable, PROFILE-derived participant id for a scope=run standing role —
-// "run:<profileID>" per dev-plan.md's Vocabulary table. Keying it on the profile id (not the operation id,
-// unlike the task/thread/message ids below) is what lets AddRunAgent's "idempotent per profile" guarantee
-// (T6.2b) fall out of plain operation-id idempotency: see addRunAgentOperationID in agentcomm_runagent.go.
-func meshRunParticipantID(profileID assistants.ProfileID) agentcomm.ParticipantID {
-	return agentcomm.ParticipantID(meshRunPrefix + string(profileID))
+// meshRunParticipantID returns a scope=run role's participant id — "run:<taskID>", keyed on the task like a
+// helper's "helper:<taskID>", so several run agents of the SAME profile ("new1" and "new2", both UX experts)
+// are distinct participants. Idempotency of one "Add run agent" submission is the caller's request id.
+func meshRunParticipantID(taskID assistants.TaskID) agentcomm.ParticipantID {
+	return agentcomm.ParticipantID(meshRunPrefix + string(taskID))
+}
+
+// runAgentAlias is the base of the short @-name a run agent answers to: its title as a handle ("New QA" →
+// "new-qa"), else the profile id. uniqueAlias makes it unique within the run.
+func runAgentAlias(title string, profileID assistants.ProfileID) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-':
+			b.WriteRune(r)
+		case unicode.IsSpace(r):
+			b.WriteByte('-')
+		default:
+		}
+	}
+	alias := strings.Trim(b.String(), "-")
+	for strings.Contains(alias, "--") {
+		alias = strings.ReplaceAll(alias, "--", "-")
+	}
+	if alias != "" {
+		return alias
+	}
+	return string(profileID)
+}
+
+// uniqueAlias returns base, or base-2, base-3, … — the first that no participant in roster answers to, so
+// an @name always names exactly one participant.
+func uniqueAlias(roster []agentcomm.Participant, base string) string {
+	taken := func(alias string) bool {
+		return slices.ContainsFunc(roster, func(p agentcomm.Participant) bool { return strings.EqualFold(p.Alias, alias) })
+	}
+	alias := base
+	for n := 2; taken(alias); n++ {
+		alias = fmt.Sprintf("%s-%d", base, n)
+	}
+	return alias
+}
+
+// aliasTaken is the admission check for a new participant's alias, run under the commit's lock: two agents
+// added at the same moment must not both get the same @name.
+func aliasTaken(rs state.RunState, alias string) error {
+	for _, p := range rs.Assistants.Mesh.Participants {
+		if strings.EqualFold(p.Alias, alias) {
+			return attachRejected(assistants.CodeStaleRevision, "the name @%s was just taken by another participant — add the agent again", alias)
+		}
+	}
+	return nil
+}
+
+// newTaskParticipantID is the mesh identity a newly attached task gets: "run:<taskID>" for a run agent,
+// "helper:<taskID>" for a helper on a stage.
+func newTaskParticipantID(scope assistants.Scope, taskID assistants.TaskID) agentcomm.ParticipantID {
+	if scope == assistants.ScopeRun {
+		return meshRunParticipantID(taskID)
+	}
+	return meshHelperParticipantID(taskID)
+}
+
+// attachThreadMembers is the member set of an attach's first thread: the human, the new participant, then
+// every extra recipient once.
+func attachThreadMembers(newParticipant agentcomm.ParticipantID, recipients []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	members := []agentcomm.ParticipantID{meshUserParticipantID, newParticipant}
+	for _, r := range recipients {
+		if !slices.Contains(members, r) {
+			members = append(members, r)
+		}
+	}
+	return members
+}
+
+// replayedAttachAndSend answers an AttachAndSend whose request id already committed, from the committed
+// operation: its task, its thread's exact member set and its first message (or its absence) must all be what
+// req asks for, otherwise the request id was reused for another request — a conflict.
+func (o *Orchestrator) replayedAttachAndSend(op state.CommittedOperation, treq topLevelTaskRequest, req AttachAndSendRequest) (AttachAndSendResult, error) {
+	taskID, err := replayedTopLevelTask(op, treq)
+	if err != nil {
+		return AttachAndSendResult{}, err
+	}
+	res := AttachAndSendResult{TaskID: taskID, ParticipantID: newTaskParticipantID(normalizeScope(req.Scope), taskID), ThreadID: deriveMeshThreadID(req.OperationID)}
+
+	var thread state.MeshThreadOpenedPayload
+	threadTarget, found, err := op.Effect("mesh_thread_opened", &thread)
+	if err != nil {
+		return AttachAndSendResult{}, err
+	}
+	want := attachThreadMembers(res.ParticipantID, req.Recipients)
+	got := make([]agentcomm.ParticipantID, len(thread.Members))
+	for i, m := range thread.Members {
+		got[i] = agentcomm.ParticipantID(m)
+	}
+	if !found || agentcomm.ThreadID(threadTarget.ThreadID) != res.ThreadID || !slices.Equal(sortedMemberSet(got), sortedMemberSet(want)) {
+		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
+	}
+
+	var msg state.MeshMessageSentPayload
+	msgTarget, sent, err := op.Effect("mesh_message_sent", &msg)
+	if err != nil {
+		return AttachAndSendResult{}, err
+	}
+	if sent != (req.FirstMessage != nil) || (sent && !o.sameRedactedText(msg.Body, *req.FirstMessage)) {
+		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
+	}
+	if sent {
+		mid := agentcomm.MessageID(msgTarget.MessageID)
+		res.MessageID = &mid
+	}
+	return res, nil
 }
 
 // meshThreadScopeFor maps an assistants.Scope onto the agentcomm.Scope the opened thread should carry. The
@@ -83,7 +191,13 @@ func meshActorSenderID(actor state.Actor) (agentcomm.ParticipantID, error) {
 	if actor.Kind == actorKindUser {
 		return meshUserParticipantID, nil
 	}
-	return "", fmt.Errorf("agentcomm: attach-and-send cannot send a first message for actor kind %q (only the human sends one today; the Side agent's own identity lands in T6.7)", actor.Kind)
+	return "", attachRejected(assistants.CodeActorNotAllowed, "only the human sends an attach's first message, not actor kind %q", actor.Kind)
+}
+
+// attachRejected is a typed, correctable AttachAndSend rejection — the API answers with its code's 4xx and the
+// reason, not a bare 500.
+func attachRejected(code assistants.ErrorCode, format string, args ...any) error {
+	return &state.OperationRejectedError{Code: code, Reason: fmt.Sprintf(format, args...)}
 }
 
 // AttachAndSend implements T6.2: one ApplyRunOperation that creates the task (frozen profile snapshot), the
@@ -101,12 +215,9 @@ func meshActorSenderID(actor state.Actor) (agentcomm.ParticipantID, error) {
 //     for a run-scoped role — one registration convention, not two. ensureParticipantEffects IS reused for
 //     every member this call does NOT invent (the human "user" and any extra Recipients), because those ARE
 //     resolvable from the current snapshot.
-//   - MaxTasks quota: Attach (assistants.go) does not reserve against AssistantsState.QuotaReserved today —
-//     only admitChildren's nested-delegation path does. CollaborationLimits.MaxTasks's own doc comment
-//     ("top-level attaches plus every delegated descendant") already says a top-level attach SHOULD count;
-//     AttachAndSend is the new composite dev-plan.md's own Implement line names an explicit
-//     Expect{StageNotTerminal, MaxQuota} for, so it reserves 1 unit here — using the SAME existing
-//     quotaReservedEffect/Preconditions.MaxQuota machinery admitChildren already established, not a new one.
+//   - The task itself is admitted by admitTopLevelTask, shared with Attach (assistants.go): one place for the
+//     stage/profile/depth rules, defaults, the initial status and the MaxTasks quota reservation
+//     (CollaborationLimits.MaxTasks: "top-level attaches plus every delegated descendant").
 func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendRequest) (AttachAndSendResult, error) {
 	if !o.opts.AssistantsEnabled {
 		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
@@ -114,111 +225,35 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	if req.OperationID == "" {
 		return AttachAndSendResult{}, errors.New("agentcomm: operation id is required")
 	}
-
-	scope := req.Scope
-	if scope == "" {
-		scope = assistants.ScopeStage
+	treq := topLevelTaskRequest{
+		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
+		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Actor: req.Actor,
 	}
-	if !scope.Valid() {
-		return AttachAndSendResult{}, fmt.Errorf("agentcomm: invalid scope %q", scope)
-	}
-
-	var targetStageID string
-	switch scope {
-	case assistants.ScopeStage:
-		if req.StageID == "" {
-			return AttachAndSendResult{}, errors.New("agentcomm: stage id is required for scope=stage")
+	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachAndSend); err != nil || committed {
+		if err != nil {
+			return AttachAndSendResult{}, err
 		}
-		st := o.reg().Stage(req.StageID)
-		if st == nil {
-			return AttachAndSendResult{}, fmt.Errorf("agentcomm: unknown stage %q", req.StageID)
-		}
-		if st.IsScript() {
-			return AttachAndSendResult{}, fmt.Errorf("agentcomm: stage %q is a script stage — helpers are not supported there", req.StageID)
-		}
-		if cur := o.currentStatus(req.StageID); cur == state.StatusDone || cur == state.StatusFailed {
-			return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %q already reached %s", req.StageID, cur)}
-		}
-		targetStageID = req.StageID
-	case assistants.ScopeRun:
-		if req.StageID != "" {
-			return AttachAndSendResult{}, errors.New("agentcomm: stage id must be empty for scope=run")
-		}
-	default:
-		// Unreachable: scope.Valid() above already narrowed scope to ScopeStage or ScopeRun.
-		return AttachAndSendResult{}, fmt.Errorf("agentcomm: unhandled scope %q", scope)
+		return o.replayedAttachAndSend(op, treq, req)
 	}
-
-	if o.opts.AssistantsRegistry == nil {
-		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "no assistant profiles configured"}
-	}
-	profile, ok := o.opts.AssistantsRegistry.Get(req.ProfileID)
-	if !ok {
-		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: fmt.Sprintf("unknown profile %q", req.ProfileID)}
-	}
-	view, _ := profileView(o.opts.AssistantsRegistry, req.ProfileID)
-	if !view.Available {
-		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: view.UnavailableReason}
-	}
-	// Freeze the availability verdict into the snapshot BEFORE it is handed to taskCreatedEffect — same
-	// admission-time-freeze rule Attach/admitChildren already follow (see their own comments).
-	profile.ReadonlyEnforcement = view.ReadonlyEnforcement
 
 	rs := o.opts.Store.Snapshot()
-	depth := assistants.ComputeDepth(nil) // top-level: AttachAndSend never has a parent task
-	if rs.Assistants.Policy.Blocks(depth) {
-		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeDelegationDepthExceeded, Reason: fmt.Sprintf("max_depth=%d", rs.Assistants.Policy.MaxDepth)}
-	}
-
-	taskID := deriveTaskID(req.OperationID)
-	mode := req.Mode
-	if mode == "" {
-		mode = assistants.ModeAdvisory
-	}
-
-	created, err := taskCreatedEffect(taskID, targetStageID, state.TaskCreatedPayload{
-		Scope:                  string(scope),
-		ProfileID:              string(req.ProfileID),
-		ProfileSnapshot:        profile,
-		Title:                  req.Title,
-		Instruction:            req.Instruction,
-		Mode:                   string(mode),
-		Trigger:                string(assistants.TriggerOneShot),
-		PolicyRev:              rs.Assistants.Policy.Revision,
-		MaxDepthAtCreate:       rs.Assistants.Policy.MaxDepth,
-		CreatedBy:              req.Actor.Kind,
-		RootGenerationAtCreate: rs.Assistants.RootGenerations[targetStageID],
-	})
+	task, err := o.admitTopLevelTask(rs, treq)
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}
-	effects := []state.Effect{created}
+	scope, taskID, title := task.Scope, task.ID, task.Title
+	targetStageID := req.StageID
+	effects := slices.Clone(task.Effects)
 
-	// ScopeRun has no stage to wait on — it always starts eligible to run immediately, same as Attach's
-	// parentActive branch for a top-level task under an already-running stage.
-	startQueued := scope == assistants.ScopeRun || o.currentStatus(req.StageID) != state.StatusPending
-	if startQueued {
-		statusEff, serr := taskStatusEffect(taskID, assistants.StatusQueued, "")
-		if serr != nil {
-			return AttachAndSendResult{}, serr
-		}
-		effects = append(effects, statusEff)
+	newParticipant := agentcomm.Participant{
+		ID: newTaskParticipantID(scope, taskID), Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage,
+		Alias: string(taskID), DisplayName: title, StageID: req.StageID, Reachable: true,
 	}
-
-	var newParticipant agentcomm.Participant
-	switch scope {
-	case assistants.ScopeStage:
+	if scope == assistants.ScopeRun {
 		newParticipant = agentcomm.Participant{
-			ID: meshHelperParticipantID(taskID), Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage,
-			Alias: string(taskID), DisplayName: req.Title, StageID: req.StageID, Reachable: true,
+			ID: newParticipant.ID, Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun,
+			Alias: uniqueAlias(o.liveRoster(rs), runAgentAlias(title, req.ProfileID)), DisplayName: title, Reachable: true,
 		}
-	case assistants.ScopeRun:
-		newParticipant = agentcomm.Participant{
-			ID: meshRunParticipantID(req.ProfileID), Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun,
-			Alias: string(req.ProfileID), DisplayName: req.Title, Reachable: true,
-		}
-	default:
-		// Unreachable (see the earlier switch's default) — leaves newParticipant zero, caught by Valid() below.
 	}
 	if !newParticipant.Valid() {
 		return AttachAndSendResult{}, fmt.Errorf("agentcomm: built an invalid participant for scope %q", scope)
@@ -239,15 +274,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 	effects = append(effects, knownEffects...)
 
-	members := []agentcomm.ParticipantID{meshUserParticipantID, newParticipant.ID}
-	memberSet := map[agentcomm.ParticipantID]bool{meshUserParticipantID: true, newParticipant.ID: true}
-	for _, r := range req.Recipients {
-		if memberSet[r] {
-			continue
-		}
-		memberSet[r] = true
-		members = append(members, r)
-	}
+	members := attachThreadMembers(newParticipant.ID, req.Recipients)
 	memberStrs := make([]string, len(members))
 	for i, m := range members {
 		memberStrs[i] = string(m)
@@ -255,7 +282,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 
 	threadID := deriveMeshThreadID(req.OperationID)
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: req.Title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs})
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs})
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}
@@ -277,7 +304,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 			}
 			msgRecipients = append(msgRecipients, string(m))
 		}
-		body := redact.String(*req.FirstMessage, secretValuesForRedaction())
+		body := o.RedactSecrets(*req.FirstMessage)
 		msgEff, merr := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(mid)},
 			state.MeshMessageSentPayload{Sender: string(senderID), Recipients: msgRecipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
 		if merr != nil {
@@ -286,22 +313,21 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		effects = append(effects, msgEff)
 	}
 
-	quotaEff, err := quotaReservedEffect(1)
-	if err != nil {
-		return AttachAndSendResult{}, err
+	expect := task.Expect
+	expect.Check = func(cur *state.RunState) error {
+		if scope == assistants.ScopeRun {
+			if err := aliasTaken(*cur, newParticipant.Alias); err != nil {
+				return err
+			}
+		}
+		if req.FirstMessage != nil {
+			// The first message also goes to every extra member — the same reachability rule as Send.
+			return rejectUnreachableRecipients(*cur, req.Recipients)
+		}
+		return nil
 	}
-	effects = append(effects, quotaEff)
 
-	var maxQuota *int
-	if mt := o.opts.Config.Collaboration.Limits.MaxTasks; mt != nil {
-		maxQuota = mt
-	}
-	expect := state.Preconditions{PolicyRevision: rs.Assistants.Policy.Revision, MaxQuota: maxQuota}
-	if scope == assistants.ScopeStage {
-		expect.StageNotTerminal = []string{req.StageID}
-	}
-
-	op := state.Operation{ID: req.OperationID, Kind: "attach_and_send", Actor: req.Actor, Expect: expect, Effects: effects}
+	op := state.Operation{ID: req.OperationID, Kind: opKindAttachAndSend, Actor: req.Actor, Expect: expect, Effects: effects}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: targetStageID, Data: map[string]any{
@@ -310,7 +336,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		for _, m := range members {
 			o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
 		}
-		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": req.Title}})
+		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": title}})
 		if messageID != nil {
 			o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
 				"message_id": string(*messageID), "thread_id": string(threadID), "sender_id": string(senderID), "kind": string(agentcomm.MessageKindMessage),
@@ -318,9 +344,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		}
 		// Scheduling (and so spawning the executor) only happens when there is actual work to do: a role
 		// attached with no FirstMessage must stay queued and addressable, never start its process — the
-		// committed effects are identical either way (see startQueued above), only this externalWork step
+		// committed effects are identical either way (the admitted initial status), only this externalWork step
 		// differs on whether a message was sent.
-		if startQueued && messageID != nil {
+		if task.Status == assistants.StatusQueued && messageID != nil {
 			o.maybeScheduleTask(runCtx, taskID)
 		}
 	})

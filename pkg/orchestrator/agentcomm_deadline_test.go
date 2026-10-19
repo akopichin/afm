@@ -263,7 +263,7 @@ func TestMesh_CancelWait_ResumesAwaitingPeerStageViaPeerWaitEnded(t *testing.T) 
 	waiter := meshStageParticipantID("s1")
 	receipt, err := o.Wait(context.Background(), WaitRequest{
 		OperationID: "op-cancel-resume-wait", Waiter: waiter,
-		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 	})
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
@@ -288,7 +288,7 @@ func TestMesh_CancelWait_SecondCallDoesNotDoubleResume(t *testing.T) {
 	waiter := meshStageParticipantID("s1")
 	receipt, err := o.Wait(context.Background(), WaitRequest{
 		OperationID: "op-cancel-twice-wait", Waiter: waiter,
-		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 	})
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
@@ -556,7 +556,7 @@ func TestMesh_CloseRemainingMeshWaits_ResolvesPendingToRunClosedWithoutResuming(
 	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-close-1-wait", Waiter: helperID,
-			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 		}); err != nil {
 			t.Errorf("Wait: %v", err)
 		}

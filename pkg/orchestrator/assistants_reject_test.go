@@ -86,12 +86,12 @@ func TestReject_RepeatedDelegationIsBoundedNotInfinite(t *testing.T) {
 	}
 }
 
-// TestReject_BudgetExceeded mirrors the depth test for a whole-run quota ceiling of zero.
+// TestReject_BudgetExceeded mirrors the depth test for a whole-run quota that the parent itself fills.
 func TestReject_BudgetExceeded(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
-	zero := 0
-	o.opts.Config.Collaboration.Limits.MaxTasks = &zero
+	onlyTheParent := 1
+	o.opts.Config.Collaboration.Limits.MaxTasks = &onlyTheParent
 
 	var calls atomic.Int32
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
@@ -110,13 +110,13 @@ func TestReject_BudgetExceeded(t *testing.T) {
 	}
 }
 
-// TestReject_NoSilentPartialExecution: a 2-child delegate request against a 1-task quota ceiling creates
+// TestReject_NoSilentPartialExecution: a 2-child delegate request with room for one more task creates
 // NEITHER child — never a silently truncated group.
 func TestReject_NoSilentPartialExecution(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
-	one := 1
-	o.opts.Config.Collaboration.Limits.MaxTasks = &one
+	parentAndOneChild := 2
+	o.opts.Config.Collaboration.Limits.MaxTasks = &parentAndOneChild
 
 	var calls atomic.Int32
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {

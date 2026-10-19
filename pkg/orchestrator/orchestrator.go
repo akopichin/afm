@@ -85,6 +85,9 @@ type Options struct {
 	Debug           bool              // if true, executors log the exact agent input to debug logs
 	Memory          flow.MemoryConfig // agent-память v3: параметры конвейера (max_rules/commit)
 	MemoryDir       string            // abs путь к директории памяти ("" = выключено)
+	// SecretValues are secret values resolved outside afm's environment (project and global secrets.env) that
+	// must be redacted from mesh text, task context and logs like environment secrets are.
+	SecretValues []string
 	// CurrentFileSHA резолвит текущий content_sha файла для renderReviewFeedback — сравнить с content_sha
 	// ноты на момент injection и пометить дрифт.
 	CurrentFileSHA func(root, path string) (string, bool)
@@ -161,6 +164,11 @@ type Orchestrator struct {
 	// was running when it registered a mesh Wait and parked in awaiting_peer, so onPeerReplied knows which
 	// kind of agent to respawn.
 	prePeerPhase sync.Map
+	// unreadTurns counts, per stageID, the extra turns given because the stage agent finished with unread
+	// messages (int); unreadNotePending marks a stage whose next prompt gets the "answer them, then finish" note.
+	// See agentcomm_unread.go.
+	unreadTurns       sync.Map
+	unreadNotePending sync.Map
 	// hookWaiters holds, per stageID, the channel a blocked before/after hook is waiting on for a user
 	// decision. Only populated while a hook is actually blocked.
 	hookWaiters sync.Map
@@ -359,6 +367,10 @@ type Orchestrator struct {
 	// instead of the resting "watching" one — consumed exactly once (LoadAndDelete) by runHelperTask's success
 	// tail, mirroring taskPausePending/taskClarifyPending's one-shot signal pattern above.
 	taskFinalPass sync.Map
+	// renderedInbox maps a mesh participant to the message ids its most recently built prompt put into the
+	// <inbox> block — what that turn's OnDelivered marks delivered once its process has started (see
+	// agentCommInboxFor). One agent per participant runs at a time, so the latest prompt is that turn's prompt.
+	renderedInbox sync.Map
 	// watchClock — injectable Clock for watch.NewCollector (test seam, mirrors fingerprintFn); nil = real time.
 	watchClock watch.Clock
 	// watchPollInterval overrides the watcher poll ticker period in tests; 0 = production default.
@@ -594,6 +606,7 @@ func (o *Orchestrator) Trigger(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx
 // triggerWithSeq — как Trigger, но дополнительно возвращает seq применённой transition. Остальные ~60 call
 // site'ов Trigger в этом не нуждаются и не меняются.
 func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, uint64, bool) {
+	beforeReady, stageWaitsPending := o.stageStatusWaitsPending(stageID)
 	from, to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
 	if err != nil {
 		var se *StorageError
@@ -612,6 +625,12 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 	if ok {
 		pubEv := bus.Event{Type: bus.EventStageStatusChanged, StageID: stageID, Data: string(to), Seq: seq}
 		o.ui.Publish(pubEv)
+		if stageWaitsPending {
+			o.resumeWaitersAfterTransition(beforeReady)
+		}
+		if bus.IsTerminal(to) && o.stageHasUnreadMessages(stageID) {
+			o.releaseUnreadAfterTransition(stageID)
+		}
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
 		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)
@@ -676,10 +695,10 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 			runErr = errors.Join(runErr, fmt.Errorf("persist run completion: %w", err))
 		}
 	}()
-	// closeRemainingMeshWaits (T5.6) runs AFTER agents have drained (WaitAgents) but BEFORE EndRun persists the
+	// closeMeshWaitsIfFinalized (T5.6) runs AFTER agents have drained (WaitAgents) but BEFORE EndRun persists the
 	// terminal status — registered here, between the two, so LIFO gives exactly that order (cancel, drain,
 	// close remaining waits, persist, lifecycle hooks).
-	defer o.closeRemainingMeshWaits()
+	defer o.closeMeshWaitsIfFinalized()
 	defer o.concurrency.WaitAgents() // выполнится ПОСЛЕ cancel (LIFO) — сначала отмена, потом ожидание
 	defer cancel()
 	if err := o.opts.Store.BeginRun(); err != nil {
@@ -706,6 +725,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		o.recoverAssistants(ctx)
 		o.recoverFeedbackIntents(ctx)
 		o.recoverMeshWaits(ctx)
+		o.recoverUnreadOfFinishedStages(ctx)
 		o.recoverMeshWaitDeadlines(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
@@ -739,12 +759,12 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 				// Serialize finalization with PauseFlow under flowPauseMu: either finalizing or the review transaction
 				// wins.
 				o.flowPauseMu.Lock()
-				if !o.reviewTxnActive() {
+				// The exit decision and "reject every later operation" are one step under the store lock
+				// (FinalizeIf): a message, attach or dynamic stage (Этап 9, T9.3) committed a moment before
+				// keeps the run alive, and one arriving after is rejected run_finalizing — never accepted and
+				// then left without a turn.
+				if !o.reviewTxnActive() && o.opts.Store.FinalizeIf(o.runStateAllowsExit) {
 					o.finalizing.Store(true)
-					// Этап 9, T9.3: a dynamic-stage commit (Store.AddStageToGraph, Expect.RunNotFinalizing)
-					// must be rejected run_finalizing from this exact point on — the run has decided to wind
-					// down and must never be "revived" by a concurrent POST adding a new stage.
-					o.opts.Store.SetRunFinalizing(true)
 					o.flowPauseMu.Unlock()
 					o.runEndOfRunMemory(ctx)
 					snap := o.opts.Store.Snapshot()
@@ -867,6 +887,10 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 			}
 			return nil
 		}
+		// A teammate wrote while the agent was working: one more turn to answer instead of done.
+		if o.continueForUnreadMessages(ctx, ev.StageID, agentType) {
+			return nil
+		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
 		o.completeStage(ctx, ev.StageID, current, "")
@@ -878,6 +902,9 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// Standalone review публикует собственный completion; встроенный review завершается через implementation
 		// и сюда не попадает.
 		if current == state.StatusRunning || current == state.StatusRevising {
+			if o.continueForUnreadMessages(ctx, ev.StageID, agentType) {
+				return nil
+			}
 			o.completeStage(ctx, ev.StageID, current, "review complete")
 		}
 	default:

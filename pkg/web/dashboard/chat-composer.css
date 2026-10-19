@@ -1,0 +1,99 @@
+/* pkg/web/dashboard/public/chat-composer.css — единая строка ввода всех чат-композеров (лента: Message и
+   Revise, обсуждение стадии, Team, боковой агент): pill-поле [поле … ✈] в стиле Telegram, кнопка отправки
+   внутри поля. Компонент кнопки — ChatSendButton. Подключается ПОСТОЯННОЙ ссылкой, как side-agent.css: skin_dir
+   заменяет основной stylesheet, а композеры (включая боковой агент) должны оставаться свёрстанными. Только
+   семантические токены, которые даёт любой скин. */
+
+.chat-composer-row {
+  /* Якорь для всплывающего меню `@` (.assistant-mention-menu). */
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 3px 5px;
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  /* Фикс px (не %/pill): при росте поля радиус углов НЕ меняется — иначе 999px/50% превращает высокое
+     поле в «капсулу» с растущими полукружиями. */
+  border-radius: 22px;
+}
+.chat-composer-row:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.28);
+}
+/* Стадия на паузе: янтарная рамка вместо акцентной. */
+.chat-composer-row.paused {
+  border-color: var(--attention);
+  box-shadow: 0 0 0 2px rgba(var(--attention-rgb), 0.28);
+}
+
+.chat-composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  /* min-height == высота кнопки: одна строка читается по центру, при росте кнопка прибита к низу. */
+  min-height: 38px;
+  padding: 8px 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.chat-composer-input::placeholder { color: var(--text-muted); }
+.chat-composer-input:focus,
+.chat-composer-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Кнопка отправки — акцентный круг внутри поля, прибит к низу. */
+.chat-send,
+.chat-stop {
+  flex-shrink: 0;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: opacity var(--motion-fast, 120ms) ease, filter var(--motion-fast, 120ms) ease;
+}
+.chat-send {
+  background: var(--accent-primary);
+  color: var(--surface-canvas);
+}
+.chat-send svg { width: 20px; height: 20px; }
+.chat-send.paused { background: var(--attention); }
+.chat-send:hover:not(:disabled),
+.chat-stop:hover { filter: brightness(1.06); }
+.chat-send:disabled { opacity: 0.4; cursor: default; }
+.chat-send:focus-visible,
+.chat-stop:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Stop (боковой агент, пока идёт turn) — тот же круг, но нейтральный. */
+.chat-stop {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+/* The @-mention menu floats ABOVE the composer row, from its left edge (the row is position: relative).
+   Without this it became a flex item of the row, stretched the input and ran into the send button. Its
+   max-height is capped at runtime to the room left above the row (MentionMenu). */
+.assistant-mention-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: min(360px, 100%);
+  max-height: 280px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}

@@ -277,23 +277,6 @@
   padding-top: 10px;
   border-top: 1px solid var(--separator-subtle);
 }
-/* Строка ввода — единое pill-поле [📎 textarea ✈] в стиле Telegram: обе кнопки ЖИВУТ ВНУТРИ поля.
-   Скругление 50% (pill) через большой радиус. */
-.feed-composer-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  padding: 3px 5px;
-  background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
-  /* Фикс px (не %/pill): при росте textarea радиус углов НЕ меняется — иначе
-     999px/50% превращает высокое поле в «капсулу» с растущими полукружиями. */
-  border-radius: 22px;
-}
-.feed-composer-row:focus-within {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.28);
-}
 /* PasteableTextarea оборачивает textarea + strip вложений — растягиваем на всю
    доступную ширину, кнопка отправки справа. */
 .feed-composer .pasteable-textarea-wrap {
@@ -353,7 +336,7 @@
 .feed-reply-chip-cancel:hover { color: var(--text-primary); background: var(--surface-hover); }
 .feed-reply-chip-cancel:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 /* Внутренняя обёртка [📎][textarea] — безрамочная и прозрачная: рамку/фон/pill
-   несёт .feed-composer-row (см. выше). Скрепка прибита к низу (как и send). */
+   несёт .chat-composer-row (public/chat-composer.css). Скрепка прибита к низу (как и send). */
 .feed-composer .pasteable-input-row {
   align-items: flex-end;
   gap: 2px;
@@ -379,49 +362,6 @@
   background: var(--surface-hover);
 }
 .feed-composer .pasteable-attach-label { display: none; }
-.feed-composer-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  resize: none;
-  /* min-height == высота кнопок, чтобы при одной строке ряд читался по центру, а при росте кнопки
-     прибивались к низу. */
-  min-height: 38px;
-  padding: 8px 6px;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-primary);
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-}
-.feed-composer-textarea::placeholder { color: var(--text-muted); }
-.feed-composer-textarea:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-/* Кнопка отправки — акцентный круг, ТОЖЕ внутри поля, прибита к низу (Telegram).
-   Крупная (36px), зелёная-акцентная, при одной строке визуально по центру. */
-.feed-composer-send {
-  flex-shrink: 0;
-  align-self: flex-end;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  color: var(--surface-canvas);
-  cursor: pointer;
-  transition: opacity var(--motion-fast, 120ms) ease, filter var(--motion-fast, 120ms) ease;
-}
-.feed-composer-send svg { width: 20px; height: 20px; }
-.feed-composer-send:hover:not(:disabled) { filter: brightness(1.06); }
-.feed-composer-send:disabled { opacity: 0.4; cursor: default; }
-.feed-composer-send:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-
 /* --- Pause on focus: полоса опций, toggle, баннер паузы --- */
 /* Полоса опций над строкой ввода: единственный тумблер, прижат вправо. */
 .composer-opts {
@@ -513,16 +453,15 @@
 .pause-banner-resume:hover { background: rgba(var(--attention-rgb), 0.16); }
 .pause-banner-resume:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-/* Тонировка строки ввода/кнопки, пока стадия на паузе (янтарный вместо акцента). */
-.feed-composer-row.focused {
-  border-color: var(--attention);
-  box-shadow: 0 0 0 2px rgba(var(--attention-rgb), 0.28);
-}
-.feed-composer-send.paused { background: var(--attention); }
-
 /* === Agent Mesh Phase 7, T7.4 — Message/Revise mode toggle + Message mode's own subtree === Structural only,
-   same semantic tokens as the rest of this file; .feed-composer-send/.feed-reply-chip above are REUSED as-is
+   same semantic tokens as the rest of this file; .feed-reply-chip above is REUSED as-is
    (Message mode's reply chip, below, is the SAME chip chrome Revise's reply-to-thought already uses). */
+/* The Message/Revise tab panel keeps the composer's column layout and spacing. */
+.feed-composer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .feed-composer-modes {
   display: flex;
   gap: 4px;
@@ -541,15 +480,11 @@
 .feed-composer-mode.active { background: var(--surface-hover); color: var(--text-primary); font-weight: 600; }
 .feed-composer-mode:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
-.feed-composer-send-label { font-size: 13px; padding: 0 4px; }
-
 .mesh-message-composer {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.mesh-message-row { position: relative; }
-.mesh-message-textarea { flex: 1 1 auto; }
 
 .mesh-message-thread {
   list-style: none;

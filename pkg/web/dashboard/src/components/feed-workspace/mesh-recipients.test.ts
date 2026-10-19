@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshMentionGroups, findExistingDirectThread, participantLabel } from './mesh-recipients'
+import { buildMeshMentionGroups } from './mesh-recipients'
+import { findExistingDirectThread, participantLabel } from '../../lib/mesh-roster'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
@@ -45,6 +46,13 @@ describe('buildMeshMentionGroups', () => {
     expect(attach?.items).toEqual([
       { id: 'frontendDeveloper', title: 'Frontend reviewer', target: { kind: 'profile', profileId: 'frontendDeveloper' } },
     ])
+  })
+
+  it('gives two run agents that share an alias distinct handles (their ids), so a mention names one of them', () => {
+    const qa1: MeshParticipant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', reachable: true }
+    const qa2: MeshParticipant = { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'qa', reachable: true }
+    const thisRun = buildMeshMentionGroups([qa1, qa2], [], 's1')[0]?.items ?? []
+    expect(thisRun.map((i) => i.handle)).toEqual(['run:t-1', 'run:t-2'])
   })
 
   it('marks an unreachable participant unavailable with its reason', () => {

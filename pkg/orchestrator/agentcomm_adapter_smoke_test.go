@@ -162,7 +162,7 @@ func (a smokeMeshActions) Send(ctx context.Context, requestID, actor string, req
 	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq}, nil
 }
 
-func (a smokeMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (server.MeshMessagePage, error) {
+func (a smokeMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (server.MeshMessagePage, error) {
 	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: agentcomm.ParticipantID(actor), Cursor: cursor, Limit: limit, Actor: smokeMeshActor(actor)})
 	if err != nil {
 		return server.MeshMessagePage{}, err
@@ -211,7 +211,7 @@ func (a smokeMeshActions) CancelWait(ctx context.Context, requestID, actor, wait
 func (a smokeMeshActions) PublishBoard(ctx context.Context, requestID, actor string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {
 	return a.orch.Publish(ctx, orchestrator.PublishRequest{
 		OperationID: requestID, Author: agentcomm.ParticipantID(actor), Key: req.Key, Status: req.Status,
-		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, AuthorizedBy: smokeParticipantIDs(req.AuthorizedBy),
+		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion,
 		Actor: smokeMeshActor(actor),
 	})
 }

@@ -3,7 +3,8 @@
 // isolation, FeedComposer just calls these.
 
 import type { AssistantProfile } from '../../types/assistant-profile'
-import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
+import type { MeshParticipant } from '../../api/mesh-client'
+import { mentionHandles, participantLabel } from '../../lib/mesh-roster'
 import type { MentionGroup, MentionItem } from '../assistants/AssistantMentionMenu'
 
 // MeshMentionTarget — what a selected feed-composer mention resolves to for Send: either an EXISTING mesh
@@ -18,17 +19,10 @@ export type MeshMentionTarget =
 
 export type MeshMentionItem = MentionItem & { target: MeshMentionTarget }
 
-// participantLabel — "display_name, else alias, else id" fallback for a mesh participant. The feed composer's
-// own copy of the same fallback ThreadConversation/TeamView already use inline for their one-off labels.
-export function participantLabel(p: MeshParticipant): string {
-  if (p.display_name !== undefined && p.display_name !== '') return p.display_name
-  if (p.alias !== undefined && p.alias !== '') return p.alias
-  return p.id
-}
-
-function toParticipantItem(p: MeshParticipant): MeshMentionItem {
+function toParticipantItem(p: MeshParticipant, handle: string): MeshMentionItem {
   return {
     id: p.id,
+    handle,
     title: participantLabel(p),
     unavailable: !p.reachable,
     unavailableReason: p.unreachable_reason,
@@ -46,8 +40,11 @@ export function buildMeshMentionGroups(
   profiles: AssistantProfile[],
   stageId: string,
 ): MentionGroup<MeshMentionItem>[] {
-  const thisRun = participants.filter((p) => p.scope === 'run' && p.kind !== 'user').map(toParticipantItem)
-  const thisStage = participants.filter((p) => p.scope === 'stage' && p.stage_id === stageId).map(toParticipantItem)
+  // One @handle per participant across the whole roster: two run agents sharing an alias get their ids.
+  const handles = mentionHandles(participants)
+  const item = (p: MeshParticipant): MeshMentionItem => toParticipantItem(p, handles.get(p.id) ?? p.id)
+  const thisRun = participants.filter((p) => p.scope === 'run' && p.kind !== 'user').map(item)
+  const thisStage = participants.filter((p) => p.scope === 'stage' && p.stage_id === stageId).map(item)
   const attach: MeshMentionItem[] = profiles
     .filter((p) => p.available)
     .map((p) => ({ id: p.id, title: p.title, target: { kind: 'profile', profileId: p.id } }))
@@ -57,16 +54,4 @@ export function buildMeshMentionGroups(
     { label: 'This stage', items: thisStage },
     { label: 'Attach to stage', items: attach },
   ]
-}
-
-// findExistingDirectThread — an already-open, exactly-two-member (human + participant) thread, if one
-// exists. Re-addressing the same participant must land back in THAT conversation; a participant with no such
-// thread yet gets a NEW one on send — a larger group thread that happens to include them is deliberately NOT
-// matched here, so sending never widens an existing private conversation into a group one.
-export function findExistingDirectThread(threads: MeshThread[], participantId: string): MeshThread | null {
-  return (
-    threads.find(
-      (t) => t.status === 'open' && t.members.length === 2 && t.members.includes(participantId) && t.members.includes('user'),
-    ) ?? null
-  )
 }

@@ -1965,6 +1965,7 @@ describe('App', () => {
         } as Response
       }
       if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
       if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
       return { ok: true, json: async () => [] } as Response

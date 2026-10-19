@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMentionTrigger, filterMentionGroups, filterMentionProfiles } from './mention-match'
+import { detectMentionTrigger, draftMentions, filterMentionGroups, filterMentionProfiles } from './mention-match'
 
 describe('detectMentionTrigger', () => {
   it('detects an in-progress mention right after @', () => {
@@ -68,5 +68,16 @@ describe('filterMentionGroups', () => {
 
   it('returns an empty array when nothing matches in any group', () => {
     expect(filterMentionGroups(groups, 'zzz')).toEqual([])
+  })
+})
+
+describe('draftMentions', () => {
+  it('finds @handle as a whole token, case-insensitively', () => {
+    expect(draftMentions('@api what does a bad dueDate return?', 'api')).toBe(true)
+    expect(draftMentions('ask @API, please', 'api')).toBe(true)
+    expect(draftMentions('hi there', 'api')).toBe(false)
+    expect(draftMentions('@apiary', 'api')).toBe(false)
+    expect(draftMentions('mail@api', 'api')).toBe(false)
+    expect(draftMentions('@stage:api ok', 'stage:api')).toBe(true)
   })
 })

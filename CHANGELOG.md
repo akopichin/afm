@@ -3,7 +3,107 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-19
+
+### Fix: a stage no longer finishes with a teammate's question unread
+
+A stage agent whose turn ended while a message to it was still unread used to go
+to `done` with the question unanswered, leaving the asking agent waiting forever
+and the run open. Now the stage gets one more turn with the unread messages in
+its prompt and a note to answer them before finishing, at most 5 times per
+stage. If a stage still finishes with unread messages (the limit was reached, or
+the stage failed), a notice lists them, they are marked undeliverable, and the
+senders' waits for an answer to them are cancelled and the senders resumed, so
+the run can finish. This also holds across a restart and when two recipients of
+the same question finish at once, and a new wait for an answer nobody can send
+any more is refused.
+
+### Fix: an interrupted run keeps its team's coordination
+
+Stopping `afm run` (Ctrl+C) no longer fails a run agent or helper that was in the
+middle of a turn — it is retried when the run resumes — and no longer closes the
+agents' pending waits: they stay open and their deadlines keep running after
+`afm run` resumes. Ctrl+C prints one line instead of the command's usage text and
+exits with code 130. A board task's notices are committed together with the task,
+retried requests are answered from what was originally committed, impossible
+waits (on a stage that already finished differently, or on the waiter itself)
+are refused, every active secret source is redacted, and the human's inbox keeps
+the newest 1000 messages.
+
+### Fix: Agent Mesh keeps old runs loadable and accepted work safe
+
+Runs written before a board key was owned by its author alone, or before a
+conversation's own message limit applied, load again. A message, attach or
+dynamic stage is either accepted before the run decides to finish, and then
+handled, or refused with `run_finalizing` — never accepted and dropped. A
+`task_result` wait on a run agent resolves on the first result after the wait,
+`stage_status` waits resolve, and waits that could never end are refused.
+Retrying a request whose response was lost returns its original result. Posting
+a board task never fails because of its notices, and a run agent's `@name` is
+unique in the run. Secrets from `secrets.env` and live mesh tokens are redacted
+like environment secrets, `max_tasks` counts every attached task, and one turn's
+inbox is bounded.
+
+### Fix: Team and chat composers never send twice or lose a draft
+
+Resending after a lost response reuses the same request, so it is not duplicated;
+editing the text first sends it as a new message. Only the text that was sent is
+cleared, a late response never switches you back to a conversation you left, and
+polls can no longer show an older state over a newer one. A conversation's default
+route skips members who have finished and says so, `@` mentions always address
+exactly one participant, the Board badge counts tasks only, and the Team and
+composer tabs work with the keyboard.
+
 ## 2026-10-18
+
+### Fix: run agents work side by side and answer each message once
+
+Several run agents with the same recipe (for example two reviewers, or QA and
+DevOps) now run in parallel under the run's `max_parallel` instead of strictly
+one after another. `afm agent inbox` lists only messages the agent has not been
+handed yet (`--all` shows the history), so a standing agent no longer answers an
+old question on every new turn, and a message that arrives mid-turn is neither
+lost nor marked read before the agent sees it. A queued agent with an unread
+message keeps the run open; `task_result` waits resolve on a turn's result.
+Agent Mesh checks run against the current state, so concurrent sends, waits and
+board updates cannot slip past reachability, cycle or limit checks. A board key
+can be updated only by its author, board text is redacted like messages, a
+thread's own message budget is enforced, and an agent added without a title is
+named after its role.
+
+### Improvement: Team shows who is doing what
+
+Run agents and helpers show whether they are working, waiting, idle, paused or
+done. Posting a board task can notify the agents (all working ones by default),
+and the Board tab counts its tasks. Conversations open at the latest message,
+replies quote the message they answer, group conversations show their members'
+initials, one-to-one conversations show the person, and finished stages are not
+offered for new conversations. Discussion names authors as the roster does, and a
+stage added during the run keeps its name in the rail.
+
+### Fix: let agents start conversations and report clear errors
+
+Run agents are standing roles: each new message starts their next turn and they
+stay idle (never holding the run open) in between. You can post tasks to the Team
+board, and agents report on them under the task. Agents can now message each other
+without a pre-made thread: `afm agent send`
+reuses or opens the conversation with its recipients, accepts `@name`s, and
+returns the `thread_id`; `afm agent reply` and a thread-less `afm agent wait`
+work without thread ids. Rejected Agent Mesh requests return a 4xx with the
+reason instead of a bare HTTP 500, and unexpected errors are logged. Several run
+agents can share a role, an agent added without a first message starts on its
+first message, a failed helper shows the actual process error, and in Docker a
+helper role's recipe (for example codex) runs the image's binary instead of a
+mounted host one.
+
+### Improvement: Team view and chat composers match the prototype
+
+The Team roster lists stages in flow order with live status, avatars, `@name`s
+and nested helpers; conversations show who wrote to whom and when, and the
+composer stays at the bottom. All chat composers share one send button and input
+row, `@` mentions float above the input and pick recipients in Team
+conversations, and the roster becomes a drawer on narrow screens. The header
+keeps its run metrics readable with long flow descriptions and on phones.
 
 ### Improvement: add run-wide Team conversations and agent messaging
 

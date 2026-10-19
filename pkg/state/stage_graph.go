@@ -102,7 +102,7 @@ func (s *Store) AddStageToGraph(op StageGraphOperation) (StageGraphResult, error
 	// returns the ORIGINAL outcome, never re-validated against preconditions that may have changed since.
 	if seq, known := s.snapshot.Assistants.OperationIndex[op.ID]; known {
 		res, rerr := s.reconcileIdempotentRepeatLocked(op.ID, seq, payload)
-		return StageGraphResult(res), rerr
+		return StageGraphResult{OperationID: res.OperationID, Seq: res.Seq}, rerr
 	}
 
 	if op.Expect.RunNotFinalizing && s.runFinalizing {
@@ -133,7 +133,7 @@ func (s *Store) AddStageToGraph(op StageGraphOperation) (StageGraphResult, error
 	if err := s.appendControlLocked(c); err != nil {
 		return StageGraphResult{}, err
 	}
-	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, payloadJSON: payload})
+	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, time: c.Time, payloadJSON: payload})
 	return StageGraphResult{OperationID: op.ID, Seq: c.Seq}, nil
 }
 

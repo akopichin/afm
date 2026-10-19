@@ -1,6 +1,7 @@
 package progress
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -59,10 +60,15 @@ func (l *Logger) LogAction(toolName, detail string) {
 func (l *Logger) LogEnd(err error) {
 	duration := time.Since(l.startTime).Round(time.Second)
 	var line string
-	if err == nil {
+	switch {
+	case err == nil:
 		line = fmt.Sprintf("=== completed | %s | duration: %s ===\n",
 			time.Now().Format("2006-01-02 15:04:05"), duration)
-	} else {
+	case errors.Is(err, context.Canceled):
+		// The run was stopped (Ctrl+C) — not a failure: the agent is retried when the run resumes.
+		line = fmt.Sprintf("=== interrupted | %s | duration: %s ===\n",
+			time.Now().Format("2006-01-02 15:04:05"), duration)
+	default:
 		line = fmt.Sprintf("=== FAILED | %s | duration: %s | %s ===\n",
 			time.Now().Format("2006-01-02 15:04:05"), duration, err)
 	}

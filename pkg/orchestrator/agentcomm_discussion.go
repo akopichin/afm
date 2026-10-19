@@ -16,7 +16,6 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -62,6 +61,7 @@ func discussionMeshSender(stageID string, kind assistants.MessageAuthorKind) (ag
 //
 // Returns (nil, nil) — no error, no effects — when discussionMeshSender reports the author cannot be mirrored
 // yet; PostDiscussionMessage then commits only the discussion_message effect, unchanged from before T6.4.
+// req.Body is already redacted (PostDiscussionMessage): both copies of the post carry the same text.
 func discussionMeshEffects(rs state.RunState, stageID, messageID string, req PostMessageRequest) ([]state.Effect, error) {
 	sender, ok := discussionMeshSender(stageID, req.AuthorKind)
 	if !ok {
@@ -92,14 +92,52 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 			recipients = append(recipients, string(m))
 		}
 	}
-	// Secrets must never reach the durable journal verbatim — same redaction pass Send applies
-	// (agentcomm_messages.go) to every other mesh message body.
-	body := redact.String(req.Body, secretValuesForRedaction())
 	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: messageID},
-		state.MeshMessageSentPayload{Sender: string(sender), Recipients: recipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
+		state.MeshMessageSentPayload{Sender: string(sender), Recipients: recipients, Kind: string(agentcomm.MessageKindMessage), Body: req.Body})
 	if err != nil {
 		return nil, err
 	}
 	effects = append(effects, msgEff)
+
+	// A post to a stage that has already finished keeps its place in the thread's history, but nobody will
+	// ever read it: its receipt is undeliverable from the start, so it never counts as an unread message.
+	for _, r := range recipients {
+		p, ok := resolveParticipant(rs, agentcomm.ParticipantID(r))
+		if !ok || p.Reachable {
+			continue
+		}
+		undeliverable, err := marshalEffect("mesh_message_undeliverable", state.Target{MessageID: messageID, ParticipantID: r},
+			state.MeshMessageReceiptPayload{Reason: p.UnreachableReason})
+		if err != nil {
+			return nil, err
+		}
+		effects = append(effects, undeliverable)
+	}
 	return effects, nil
+}
+
+// discussionMirrorOfStageReply is the way back of the discussion mirror: when a stage agent writes in its own
+// stage's discussion thread (typically answering the human's discussion post), the same message — same id, in
+// the same operation — is also recorded as the stage's discussion message, so the Discussion tab shows the
+// answer and not only the question. Anything else is not mirrored (ok=false).
+//
+// The reply keeps its parent only when the parent is itself a discussion message: the Team view can write into
+// this thread directly, and such a message exists only in the mesh — naming it as the discussion parent would
+// make the discussion projection reject the agent's whole reply.
+func discussionMirrorOfStageReply(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, bool, error) {
+	stageID, ok := stageIDFromMeshParticipant(req.Sender)
+	if !ok || req.ThreadID != deriveDiscussionThreadID(stageID) {
+		return state.Effect{}, false, nil
+	}
+	var parent string
+	if req.InReplyTo != nil {
+		if _, inDiscussion := rs.Assistants.Discussions.Messages[string(*req.InReplyTo)]; inDiscussion {
+			parent = string(*req.InReplyTo)
+		}
+	}
+	eff, err := discussionMessageEffect(stageID, string(messageID), state.DiscussionMessagePayload{
+		AuthorKind: string(assistants.AuthorMainAgent), AuthorID: string(req.Sender), Role: string(assistants.AuthorMainAgent),
+		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body,
+	})
+	return eff, err == nil, err
 }

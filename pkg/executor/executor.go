@@ -44,6 +44,34 @@ func IsCrossAgentTransportSecret(kv string) bool {
 		strings.HasPrefix(kv, afmMeshTokenEnv+"=")
 }
 
+// SecretValuesForRedaction collects the actual VALUES currently held by every environment variable this
+// process already treats as a cross-agent transport secret or an author credential (
+// IsCrossAgentTransportSecret / config.ClaudeAuthEnvVars — the SAME classification used to strip these from
+// a verify/helper subprocess's env, reused here rather than inventing a second secret taxonomy) — fed to
+// redact.String so none of them can leak into a prompt, a mesh message or a log line even if they happen to
+// appear inside quoted text.
+func SecretValuesForRedaction() []string {
+	var vals []string
+	add := func(kv string) {
+		if i := strings.IndexByte(kv, '='); i > 0 && i+1 < len(kv) {
+			vals = append(vals, kv[i+1:])
+		}
+	}
+	for _, kv := range os.Environ() {
+		if IsCrossAgentTransportSecret(kv) {
+			add(kv)
+			continue
+		}
+		for _, name := range config.ClaudeAuthEnvVars {
+			if strings.HasPrefix(kv, name+"=") {
+				add(kv)
+				break
+			}
+		}
+	}
+	return vals
+}
+
 // afmSecretEnvName воспроизводит ТОТ ЖЕ transform, что pkg/docker/wrapper.go's envName делает над именем
 // враппер-команды при построении переменной AFM_SECRET_<NAME>.
 func afmSecretEnvName(cmd string) string {

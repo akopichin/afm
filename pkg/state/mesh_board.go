@@ -3,19 +3,16 @@ package state
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
-// MeshBoardEntry wraps agentcomm.BoardEntry with the minimal republish-authorization bookkeeping this
-// projection needs (T1.4): which OTHER participant ids the CURRENT author has explicitly allowed to publish
-// the NEXT revision of this key. See applyMeshBoardPublished's doc comment for the authorization rule this
-// supports.
+// MeshBoardEntry is the projection's board entry. A key belongs to its first publisher: only that author
+// publishes its next revisions (see applyMeshBoardPublished).
 type MeshBoardEntry struct {
 	agentcomm.BoardEntry
-	AuthorizedBy []agentcomm.ParticipantID `json:"authorized_by,omitempty"`
 }
 
 // ErrBoardStaleRevision — a mesh_board_published record's ExpectedVersion does not match the key's current
@@ -24,12 +21,16 @@ type MeshBoardEntry struct {
 // (operation.go), at the projection level since no caller wires a Preconditions check for the board yet.
 var ErrBoardStaleRevision = errors.New("mesh: board publish is based on a stale revision")
 
-// ErrBoardNotAuthorized — a mesh_board_published record's publisher is neither the key's current AuthorID nor
-// named in that entry's AuthorizedBy list (see applyMeshBoardPublished's doc comment for the full rule).
+// ErrBoardNotAuthorized — a mesh_board_published record's publisher is not the key's author.
 var ErrBoardNotAuthorized = errors.New("mesh: board publisher is not authorized for this key")
 
 // ErrBoardArtifactRefOutsideRun — an ArtifactRef does not start with boardArtifactRefPrefix.
 var ErrBoardArtifactRefOutsideRun = errors.New("mesh: board artifact ref is outside the run's artifact namespace")
+
+// boardRejected is a typed, fixable board rejection (4xx with the reason) that still errors.Is its sentinel.
+func boardRejected(code assistants.ErrorCode, sentinel error, format string, args ...any) error {
+	return &OperationRejectedError{Code: code, Reason: fmt.Sprintf(format, args...), Cause: sentinel}
+}
 
 // boardArtifactRefPrefix is the only prefix mesh_board_published's ArtifactRefs may start with. pkg/state has
 // no notion of "the run's artifact store" (that lives in pkg/executor/pkg/server) — this is a cheap
@@ -46,9 +47,11 @@ type MeshBoardPublishedPayload struct {
 	Status          string   `json:"status"`
 	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
 	ExpectedVersion int      `json:"expected_version"`
-	// AuthorizedBy lets this publish name OTHER participants allowed to publish the NEXT revision of this key
-	// — see applyMeshBoardPublished's doc comment.
-	AuthorizedBy []string `json:"authorized_by,omitempty"`
+	// Notify is the publish request's own list of participants to tell about the entry, kept so a retry of the
+	// same request is compared with it in full. The notices themselves are separate effects of the same
+	// operation; the projection does not read this field. A new record always carries it, an empty list
+	// included; nil means a record written before the field existed, whose notify list is unknown.
+	Notify *[]string `json:"notify,omitempty"`
 }
 
 // applyMeshBoardPublished projects one mesh_board_published control record.
@@ -58,11 +61,10 @@ type MeshBoardPublishedPayload struct {
 // Version, exactly the lost-update guard a plain "if changed since I last read, reject" CAS gives, without
 // this package needing to track per-reader read timestamps.
 //
-// Authorization (Phase 1's minimal model — documented here since agentcomm.BoardEntry has no general ACL of
-// its own): a publish is accepted if its author is EITHER the key's current AuthorID, OR was explicitly named
-// in the current entry's AuthorizedBy list by whoever published that entry. There is no third way to become
-// authorized (no roles, no "anyone in the thread") — a later phase that needs richer sharing can widen this
-// without changing the journal format, since AuthorizedBy is already a list.
+// Ownership: a key belongs to its author — every later revision must come from that same author. Anyone
+// else reports under a key of their own (e.g. "<task key>/<alias>" for a report on a task the human posted).
+// The rule applies to NEW publishes only: older journals may hold a revision by a participant the author
+// granted it to through `authorized_by`, and such a journal must still replay.
 func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error {
 	key := c.Target.BoardKey
 	if key == "" {
@@ -79,7 +81,7 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 	}
 	for _, ref := range p.ArtifactRefs {
 		if !strings.HasPrefix(ref, boardArtifactRefPrefix) {
-			return fmt.Errorf("mesh_board_published %s: %w: %q", key, ErrBoardArtifactRefOutsideRun, ref)
+			return boardRejected(assistants.CodeInvalidRequest, ErrBoardArtifactRefOutsideRun, "artifact ref %q of board key %s is outside this run's artifacts", ref, key)
 		}
 	}
 
@@ -87,14 +89,14 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 	version := 1
 	if !exists {
 		if p.ExpectedVersion != 0 {
-			return fmt.Errorf("mesh_board_published %s: %w (no prior publish, expected_version must be 0, got %d)", key, ErrBoardStaleRevision, p.ExpectedVersion)
+			return boardRejected(assistants.CodeStaleRevision, ErrBoardStaleRevision, "board key %s is not published yet: expected_version must be 0, got %d", key, p.ExpectedVersion)
 		}
 	} else {
 		if p.ExpectedVersion != existing.Version {
-			return fmt.Errorf("mesh_board_published %s: %w (expected %d, current %d)", key, ErrBoardStaleRevision, p.ExpectedVersion, existing.Version)
+			return boardRejected(assistants.CodeStaleRevision, ErrBoardStaleRevision, "board key %s is at version %d, not %d — read it again (afm agent board get)", key, existing.Version, p.ExpectedVersion)
 		}
-		if author != existing.AuthorID && !slices.Contains(existing.AuthorizedBy, author) {
-			return fmt.Errorf("mesh_board_published %s: %w: %q", key, ErrBoardNotAuthorized, author)
+		if author != existing.AuthorID && as.admittingNewRecord(dryRun) {
+			return boardRejected(assistants.CodeActorNotAllowed, ErrBoardNotAuthorized, "%s may not update board key %s (published by %s) — publish your own key, e.g. %s/<your alias>", author, key, existing.AuthorID, key)
 		}
 		version = existing.Version + 1
 	}
@@ -103,24 +105,17 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 		return nil
 	}
 
-	authorizedBy := make([]agentcomm.ParticipantID, 0, len(p.AuthorizedBy))
-	for _, a := range p.AuthorizedBy {
-		authorizedBy = append(authorizedBy, agentcomm.ParticipantID(a))
-	}
-	entry := &MeshBoardEntry{
-		BoardEntry: agentcomm.BoardEntry{
-			AuthorID: author, Key: key, Version: version, Status: p.Status, ArtifactRefs: p.ArtifactRefs,
-			Seq: c.Seq, Ts: c.Time,
-		},
-		AuthorizedBy: authorizedBy,
-	}
+	entry := &MeshBoardEntry{BoardEntry: agentcomm.BoardEntry{
+		AuthorID: author, Key: key, Version: version, Status: p.Status, ArtifactRefs: p.ArtifactRefs,
+		Seq: c.Seq, Ts: c.Time,
+	}}
 	as.Mesh.Board[key] = entry
 
 	// Resolve every PENDING WaitOnBoardKey wait this publish satisfies in the SAME commit — decided here,
 	// against the live Mesh state, not by the orchestrator from a pre-publish snapshot. See
 	// resolvePendingWaits's doc comment (pkg/state/mesh_waits.go) for why.
 	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
-		return as.meshWaitConditionSatisfied(w.Condition, w.Waiter)
+		return as.meshWaitSatisfied(w)
 	})
 	return nil
 }

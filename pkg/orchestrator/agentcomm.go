@@ -15,8 +15,10 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/prompts"
+	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -108,13 +110,18 @@ type SendRequest struct {
 type SendReceipt struct {
 	MessageID agentcomm.MessageID
 	Seq       uint64
+	// ThreadID — the thread the message went into (SendFromAgent may have chosen or opened it).
+	ThreadID agentcomm.ThreadID
 }
 
 type ReadInboxRequest struct {
 	Participant agentcomm.ParticipantID
 	Cursor      uint64
 	Limit       int
-	Actor       state.Actor
+	// OnlyNew limits the page to messages not yet handed to Participant (receipt still accepted) — neither in
+	// a turn's <inbox> block nor returned by an earlier inbox read. False returns the whole history.
+	OnlyNew bool
+	Actor   state.Actor
 }
 
 type ReadThreadRequest struct {
@@ -172,8 +179,10 @@ type PublishRequest struct {
 	Status          string
 	ArtifactRefs    []string
 	ExpectedVersion int
-	AuthorizedBy    []agentcomm.ParticipantID
-	Actor           state.Actor
+	// Notify, if set, names participants told about the new entry by one message from Author, sent right after
+	// the publish (e.g. the agents the human hands a board task to).
+	Notify []agentcomm.ParticipantID
+	Actor  state.Actor
 }
 
 // ReadBoardRequest's Key, when empty, returns every entry on the board.
@@ -211,15 +220,17 @@ func deriveMeshWaitID(operationID string) agentcomm.WaitID {
 // callback into the SAME stage's executor.Config.
 func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 	block, _ := o.agentCommInboxFor(meshStageParticipantID(s.ID))
+	if note := o.unreadTurnNote(s.ID); block != "" {
+		block += note
+	}
 	return block
 }
 
-// agentCommOnDeliveredForStage returns the OnDelivered callback for stage s's executor.Config — see
-// agentCommInboxFor's doc comment for why marking delivery is deferred to cmd.Start() succeeding, not to
-// prompt assembly.
+// agentCommOnDeliveredForStage returns the OnDelivered callback for stage s's executor.Config: it marks the
+// messages of the stage's latest rendered <inbox> block delivered (deliverRenderedInbox) — see
+// agentCommInboxFor's doc comment for why marking is deferred to cmd.Start() succeeding.
 func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
-	_, onDelivered := o.agentCommInboxFor(meshStageParticipantID(s.ID))
-	return onDelivered
+	return o.deliverRenderedInbox(meshStageParticipantID(s.ID))
 }
 
 // agentCommBlockFor renders stage s's <agent_communication> block (Agent Mesh Phase 4, T4.2) — called from
@@ -240,8 +251,9 @@ func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	participantID := meshHelperParticipantID(taskID)
 	scope := agentcomm.ScopeStage
-	if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
-		participantID = meshParticipantForTask(t.Task)
+	rs := o.opts.Store.Snapshot()
+	if t, ok := rs.Assistants.Tasks[taskID]; ok {
+		participantID = meshParticipantForTask(rs, t.Task)
 		if t.Scope == assistants.ScopeRun {
 			scope = agentcomm.ScopeRun
 		}
@@ -250,6 +262,42 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
 	})
 }
+
+// secretValues is every secret value text afm writes or shows must not carry: afm's own transport secrets and
+// credentials from its environment (executor.SecretValuesForRedaction), the resolved secrets.env values the
+// run was started with (Options.SecretValues), and the mesh bearer tokens minted for live agent invocations —
+// those exist only in the descriptor file handed to a child, never in afm's own environment.
+func (o *Orchestrator) secretValues() []string {
+	vals := append(executor.SecretValuesForRedaction(), o.opts.SecretValues...)
+	return append(vals, o.meshTokens().values()...)
+}
+
+// RedactSecrets removes every secretValues value from text an agent or the human writes into the mesh (a
+// message body, a board status, a discussion post) or that afm passes on or logs (a task's context, a failure
+// reason, the HTTP layer's error log): it must never reach the durable journal, a recipient's inbox, a notice
+// or a log verbatim.
+func (o *Orchestrator) RedactSecrets(s string) string {
+	return redact.String(s, o.secretValues())
+}
+
+// sameRedactedText reports whether stored — text redacted when its operation committed — is the text requested
+// in a retry of that operation. Both sides are redacted with the CURRENT secret set, so a secret added since
+// (a newly minted mesh token) does not turn a faithful retry into a conflict.
+func (o *Orchestrator) sameRedactedText(stored, requested string) bool {
+	return o.RedactSecrets(stored) == o.RedactSecrets(requested)
+}
+
+// Kinds of the operations a client retries under its own request id: each one is committed under its kind,
+// and a retry reads it back as that kind (state.Store.CommittedOperation), so one request id can never answer
+// a request of another kind.
+const (
+	opKindAttachTask            = "attach_task"
+	opKindAttachAndSend         = "attach_and_send"
+	opKindMeshSend              = "mesh_send"
+	opKindMeshPublish           = "mesh_publish"
+	opKindMeshOpenThread        = "mesh_open_thread"
+	opKindPostDiscussionMessage = "post_discussion_message"
+)
 
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place
 // every agentcomm_*.go file turns a typed payload into the Effect shape ApplyRunOperation expects, instead

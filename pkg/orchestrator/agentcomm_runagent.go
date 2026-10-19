@@ -11,14 +11,11 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// AddRunAgentRequest carries no OperationID: the request itself has no natural per-click idempotency key
-// (unlike AttachRequest/AttachAndSendRequest, whose caller already owns an HTTP request id), and dev-plan.md's
-// own test name for this wrapper — TestAddRunAgent_IdempotentPerProfile — asks for a STRONGER guarantee than
-// plain operation-id replay: two "Add run agent" submissions for the SAME profile (e.g. a double-click, or two
-// browser tabs, each minting its own request id) must resolve to the SAME participant, not two standing roles
-// for the one profile. addRunAgentOperationID below derives a canonical, profile-keyed operation id instead of
-// taking the caller's — making that guarantee a plain idempotent AttachAndSend replay under the hood.
+// AddRunAgentRequest is AttachAndSendRequest without Scope/StageID: a run agent is always run-scoped. Each
+// call with a new OperationID adds a NEW agent — several agents of the same profile are allowed; replaying the
+// same OperationID (a double-click, a retry) returns the agent that call already created.
 type AddRunAgentRequest struct {
+	OperationID  string
 	ProfileID    assistants.ProfileID
 	Title        string
 	Instruction  string
@@ -27,21 +24,13 @@ type AddRunAgentRequest struct {
 	Actor        state.Actor
 }
 
-// addRunAgentOperationID derives AddRunAgent's canonical operation id from the profile id ALONE — the one
-// thing that makes a run-scoped role a *standing* role is that there is exactly one of it per profile per run,
-// regardless of how many times "Add run agent" is submitted for that profile or under how many different
-// caller-generated request ids.
-func addRunAgentOperationID(profileID assistants.ProfileID) string {
-	return "add-run-agent:" + string(profileID)
-}
-
 // AddRunAgent is a thin request-shaping wrapper over AttachAndSend — dev-plan.md's T6.2b "Done when" line is
 // explicit that this function must contain no ApplyRunOperation call of its own. Attaching after the run has
 // started finalizing is rejected by AttachAndSend's own ApplyRunOperation call (ApplyRunOperation's
 // unconditional Step 1 check), with no extra plumbing needed here.
 func (o *Orchestrator) AddRunAgent(ctx context.Context, req AddRunAgentRequest) (AttachAndSendResult, error) {
 	return o.AttachAndSend(ctx, AttachAndSendRequest{
-		OperationID:  addRunAgentOperationID(req.ProfileID),
+		OperationID:  req.OperationID,
 		ProfileID:    req.ProfileID,
 		Scope:        assistants.ScopeRun,
 		Title:        req.Title,

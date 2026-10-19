@@ -10,9 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/config"
-	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/redact"
@@ -34,6 +33,13 @@ const maxTaskContextBytes = 200 * 1024
 type TaskContext struct {
 	Prompt  string
 	Version assistants.ContextVersion
+	// markInboxDelivered marks exactly the <inbox> messages included in Prompt as delivered — called only once
+	// the turn's process has run, so a message that arrives later, or a turn that never started, leaves the
+	// messages unseen and they wake the agent again.
+	markInboxDelivered func()
+	// inboxIDs are the <inbox> messages included in Prompt — this turn's input, recorded as unfinished until
+	// the turn's process has run (saveTurnInbox).
+	inboxIDs []agentcomm.MessageID
 }
 
 // buildTaskContext assembles a task's FULL context, entirely server-side (never delegated to the model
@@ -50,7 +56,7 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	followUp := o.loadFollowUp(task.ID)
 	childResults := o.collectChildResultsJSON(task.ID)
 
-	secrets := secretValuesForRedaction()
+	secrets := o.secretValues()
 	roleInstructions := redact.String(task.ProfileSnapshot.Instructions, secrets)
 	instruction := redact.String(task.Instruction, secrets)
 	plan := redact.String(string(planRaw), secrets)
@@ -79,7 +85,7 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// fenced/escaped internally by AgentCommInboxBlock (pkg/prompts/agentcomm.go), the same "data can never
 	// act as an instruction" rule.
 	b.WriteString(o.agentCommBlockForTask(task.ID))
-	inboxBlock, _ := o.agentCommInboxForTask(task.ID)
+	inboxBlock, inboxIDs, markInboxDelivered := o.agentCommInboxForTask(task.ID)
 	b.WriteString(inboxBlock)
 
 	prompt := b.String()
@@ -93,7 +99,7 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// sent) or which messages are pending (the only thing that actually varies between attempts) both show
 	// up as a different ContextVersion.
 	version := computeContextVersion(stage.ID, generation, roleInstructions, instruction, plan, artifacts, prevResult, childResults, followUp, inboxBlock)
-	return TaskContext{Prompt: prompt, Version: version}, nil
+	return TaskContext{Prompt: prompt, Version: version, markInboxDelivered: markInboxDelivered, inboxIDs: inboxIDs}, nil
 }
 
 // outputContractBlock returns afm's own "## Output contract" section carrying the machine-answer contract
@@ -201,32 +207,4 @@ func (o *Orchestrator) previousTaskResultJSON(taskID assistants.TaskID) string {
 		return ""
 	}
 	return string(raw)
-}
-
-// secretValuesForRedaction collects the actual VALUES currently held by every environment variable this
-// process already treats as a cross-agent transport secret or an author credential (executor.
-// IsCrossAgentTransportSecret / config.ClaudeAuthEnvVars — the SAME classification used to strip these from
-// a verify/helper subprocess's env, reused here rather than inventing a second secret taxonomy) — fed to
-// redact.String so none of them can leak into a task's assembled prompt even if they happen to appear
-// inside a plan/artifact/instruction being quoted.
-func secretValuesForRedaction() []string {
-	var vals []string
-	add := func(kv string) {
-		if i := strings.IndexByte(kv, '='); i > 0 && i+1 < len(kv) {
-			vals = append(vals, kv[i+1:])
-		}
-	}
-	for _, kv := range os.Environ() {
-		if executor.IsCrossAgentTransportSecret(kv) {
-			add(kv)
-			continue
-		}
-		for _, name := range config.ClaudeAuthEnvVars {
-			if strings.HasPrefix(kv, name+"=") {
-				add(kv)
-				break
-			}
-		}
-	}
-	return vals
 }

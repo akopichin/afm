@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
 )
@@ -17,11 +18,15 @@ import (
 type OperationRejectedError struct {
 	Code   assistants.ErrorCode
 	Reason string
+	// Cause — an optional sentinel this rejection stands for, so callers can still errors.Is it.
+	Cause error
 }
 
 func (e *OperationRejectedError) Error() string {
 	return fmt.Sprintf("operation rejected (%s): %s", e.Code, e.Reason)
 }
+
+func (e *OperationRejectedError) Unwrap() error { return e.Cause }
 
 // ErrOperationIDConflict is wrapped by OperationRejectedError{Code: CodeInvalidStatus} — kept as a sentinel
 // so callers can errors.Is it without string-matching Reason. Reusing CodeInvalidStatus rather than
@@ -30,6 +35,17 @@ func (e *OperationRejectedError) Error() string {
 // the caller's point of view, a request that is not valid to retry as given — the same shape of problem
 // CodeInvalidStatus already names.
 var ErrOperationIDConflict = errors.New("assistants: operation_id already used with different content")
+
+// OperationIDConflictError is the typed rejection for a request id that was already used with different
+// content — what both the store's idempotency check and a caller-level replay check (e.g. the agent send's
+// own replay of an already-committed message) return, so the API answers 409, not 500.
+func OperationIDConflictError(opID string) error {
+	return &OperationRejectedError{
+		Code:   assistants.CodeInvalidStatus,
+		Reason: fmt.Sprintf("request id %s was already used for a different request — retry with a new request id", opID),
+		Cause:  ErrOperationIDConflict,
+	}
+}
 
 // Effect is one state mutation bundled into an Operation. Reuses the SAME per-kind payload shapes as
 // standalone control records (task_created, task_status_changed, policy_set, quota_reserved, ...) — see
@@ -76,6 +92,11 @@ type Preconditions struct {
 	// (TestAttachRequiredRacesWithComplete). Checked under the SAME lock as the write, like every other
 	// precondition here.
 	StageNotTerminal []string
+	// Check, if non-nil, is a caller-supplied admission check run against the CURRENT projection under the
+	// SAME lock as the write — for a rule that needs the caller's own knowledge of the run (e.g. whether a
+	// message recipient has finished) but must not be decided from an earlier snapshot. It must only read rs.
+	// Like every precondition, it is skipped for an idempotent repeat of an already-committed operation.
+	Check func(rs *RunState) error
 }
 
 // Operation is a single caller-intent: ApplyRunOperation either durably commits ALL of its Effects as one
@@ -93,9 +114,16 @@ type Operation struct {
 
 // OperationResult is what ApplyRunOperation returns on success — including when the call is a replay of an
 // already-committed operation_id (T2.5), in which case Seq is the ORIGINAL commit's seq, not a new one.
+// commitTime — the one form of a commit's timestamp in an OperationResult: UTC, without the monotonic clock
+// reading, exactly as it reads back from the journal — so a result is equal live, from cache and after a
+// restart, whatever the machine's local time zone.
+func commitTime(t time.Time) time.Time { return t.UTC().Round(0) }
+
 type OperationResult struct {
 	OperationID string
 	Seq         uint64
+	// Time is the commit's own timestamp (the record's Time) — also the ORIGINAL one on a replay.
+	Time time.Time
 }
 
 // ApplyRunOperation is the single mutation path for new (assistants/task) state (§6.3, dev-plan T2.4). The
@@ -176,8 +204,10 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 		return OperationResult{}, err
 	}
 
-	res := OperationResult{OperationID: op.ID, Seq: c.Seq}
-	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, payloadJSON: payload})
+	// Round(0) drops the monotonic clock reading: a replay (decoded from the journal) carries none, and the
+	// result must be identical either way.
+	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: commitTime(c.Time)}
+	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, time: res.Time, payloadJSON: payload})
 
 	// Step 6: publish a notice. pkg/state has no notice bus (that lives in pkg/orchestrator) — left as the
 	// caller's responsibility; ApplyRunOperation's return value (and the durable record itself) is what a
@@ -233,6 +263,9 @@ func (s *Store) checkPreconditionsLocked(rs *RunState, op Operation) error {
 			return &OperationRejectedError{Code: assistants.CodeBudgetExceeded, Reason: fmt.Sprintf("quota %d + %d exceeds max %d", rs.Assistants.QuotaReserved, requested, *exp.MaxQuota)}
 		}
 	}
+	if exp.Check != nil {
+		return exp.Check(rs)
+	}
 	return nil
 }
 
@@ -242,21 +275,92 @@ func (s *Store) checkPreconditionsLocked(rs *RunState, op Operation) error {
 func (s *Store) reconcileIdempotentRepeatLocked(opID string, seq uint64, newPayload []byte) (OperationResult, error) {
 	if e, ok := s.opCache.get(opID); ok {
 		if !bytes.Equal(e.payloadJSON, newPayload) {
-			return OperationResult{}, fmt.Errorf("%w: %s", ErrOperationIDConflict, opID)
+			return OperationResult{}, OperationIDConflictError(opID)
 		}
-		return OperationResult{OperationID: opID, Seq: e.seq}, nil
+		return OperationResult{OperationID: opID, Seq: e.seq, Time: e.time}, nil
 	}
 
-	payload, err := s.readControlPayloadAtSeq(seq)
+	c, err := s.readControlAtSeq(seq)
 	if err != nil {
 		return OperationResult{}, &StorageError{Inner: fmt.Errorf("re-read committed operation %s at seq %d: %w", opID, seq, err)}
 	}
-	if !bytes.Equal(payload, newPayload) {
-		return OperationResult{}, fmt.Errorf("%w: %s", ErrOperationIDConflict, opID)
+	if !bytes.Equal(c.Payload, newPayload) {
+		return OperationResult{}, OperationIDConflictError(opID)
 	}
 	// Repopulate the cache so a THIRD repeat of the same operation_id hits the fast path again.
-	s.opCache.put(opID, opCacheEntry{seq: seq, payloadJSON: payload})
-	return OperationResult{OperationID: opID, Seq: seq}, nil
+	s.opCache.put(opID, opCacheEntry{seq: seq, time: commitTime(c.Time), payloadJSON: c.Payload})
+	return OperationResult{OperationID: opID, Seq: seq, Time: commitTime(c.Time)}, nil
+}
+
+// CommittedOperation is an already committed operation exactly as its journal record holds it — what a retry
+// of the same request id is answered from, never from the current projection, which may have moved on.
+type CommittedOperation struct {
+	Result OperationResult
+	// Kind is the committed operation's kind (Operation.Kind); "" for a legacy single control record, which
+	// carries no operation kind.
+	Kind    string
+	Effects []Effect
+}
+
+// Effect decodes the first effect of kind into payload and returns its target; ok=false when the operation
+// has no such effect.
+func (c CommittedOperation) Effect(kind string, payload any) (target Target, ok bool, err error) {
+	for _, e := range c.Effects {
+		if e.Kind != kind {
+			continue
+		}
+		if err := decodePayload(e.Payload, payload); err != nil {
+			return Target{}, false, fmt.Errorf("decode committed %s: %w", kind, err)
+		}
+		return e.Target, true, nil
+	}
+	return Target{}, false, nil
+}
+
+// CommittedOperation returns the operation committed under opID; ok=false when none was. kind is the kind of
+// operation the caller retries: an operation of another kind committed under the same id is a request id
+// conflict (ErrOperationIDConflict), even when its effects look alike. It reads the bounded cache or, on a
+// miss, the one journal record at the operation's seq.
+func (s *Store) CommittedOperation(opID, kind string) (CommittedOperation, bool, error) {
+	op, ok, err := s.readCommittedOperation(opID)
+	if err != nil || !ok {
+		return op, ok, err
+	}
+	if op.Kind != "" && op.Kind != kind {
+		return CommittedOperation{}, true, OperationIDConflictError(opID)
+	}
+	return op, true, nil
+}
+
+func (s *Store) readCommittedOperation(opID string) (CommittedOperation, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seq, known := s.snapshot.Assistants.OperationIndex[opID]
+	if !known {
+		return CommittedOperation{}, false, nil
+	}
+	if e, ok := s.opCache.get(opID); ok {
+		var p operationCommittedPayload
+		if err := json.Unmarshal(e.payloadJSON, &p); err != nil {
+			return CommittedOperation{}, false, fmt.Errorf("decode committed operation %s: %w", opID, err)
+		}
+		return CommittedOperation{Result: OperationResult{OperationID: opID, Seq: e.seq, Time: e.time}, Kind: p.OpKind, Effects: p.Effects}, true, nil
+	}
+	c, err := s.readControlAtSeq(seq)
+	if err != nil {
+		return CommittedOperation{}, false, &StorageError{Inner: fmt.Errorf("re-read committed operation %s at seq %d: %w", opID, seq, err)}
+	}
+	op := CommittedOperation{Result: OperationResult{OperationID: opID, Seq: seq, Time: commitTime(c.Time)}}
+	if c.Kind != kindOperationCommitted {
+		op.Effects = []Effect{{Kind: c.Kind, Target: c.Target, Payload: c.Payload}}
+		return op, true, nil
+	}
+	var p operationCommittedPayload
+	if err := decodePayload(c.Payload, &p); err != nil {
+		return CommittedOperation{}, false, fmt.Errorf("decode committed operation %s: %w", opID, err)
+	}
+	op.Kind, op.Effects = p.OpKind, p.Effects
+	return op, true, nil
 }
 
 // ---- T2.5: bounded response-body cache ----
@@ -288,6 +392,7 @@ func opResultCacheCapacity() int {
 
 type opCacheEntry struct {
 	seq         uint64
+	time        time.Time
 	payloadJSON []byte
 }
 

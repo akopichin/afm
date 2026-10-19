@@ -13,12 +13,20 @@ const (
 	MaxThreadMembers = 8
 	// MaxArtifactRefs is the most artifact references a single Message or BoardEntry may carry.
 	MaxArtifactRefs = 8
-	// MaxInboxUnread is the most unread inbox references a single participant may accumulate
-	// before new messages are rejected rather than queued without bound.
+	// MaxInboxUnread is the most messages a single participant may have waiting to be handed to it
+	// (accepted, not yet delivered) before new messages are rejected rather than queued without bound.
 	MaxInboxUnread = 200
+	// MaxHumanInbox is how many of the newest messages to the human its inbox index keeps. The human is not
+	// limited by MaxInboxUnread (the dashboard shows every thread in full, nothing is handed over), so the
+	// index drops its oldest entries instead; those messages stay in their threads.
+	MaxHumanInbox = 1000
 	// MaxThreadMessages is the most messages a single Thread may ever hold — Thread.Budgets'
 	// effective cap when ThreadBudgets.MaxMessages is left zero.
 	MaxThreadMessages = 200
+	// MaxBoardNotify is the most participants one board publish may name to notify. Each notice is a message
+	// committed in the publish's own operation, so this keeps that one journal record well below the size a
+	// retry reads back.
+	MaxBoardNotify = 16
 	// MaxCausalHops bounds how many reply/wait links the cycle check (pkg/orchestrator) will walk
 	// before giving up, so a malformed or adversarial chain cannot hang admission.
 	MaxCausalHops = 12

@@ -25,7 +25,9 @@ type AgentMeshActions interface {
 	ResolveToken(token string) (participantID string, ok bool)
 	ListParticipants(ctx context.Context, actor string) ([]agentcomm.Participant, error)
 	Send(ctx context.Context, requestID, actor string, req MeshSendRequest) (MeshSendReceipt, error)
-	Inbox(ctx context.Context, actor string, cursor uint64, limit int) (MeshMessagePage, error)
+	// Inbox returns the messages addressed to actor that it has not been handed yet, or with all its whole
+	// inbox history.
+	Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (MeshMessagePage, error)
 	Thread(ctx context.Context, actor, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Ack(ctx context.Context, requestID, actor, messageID string) error
 	Wait(ctx context.Context, requestID, actor string, req MeshWaitRequest) (MeshWaitReceipt, error)
@@ -48,6 +50,8 @@ type MeshSendRequest struct {
 type MeshSendReceipt struct {
 	MessageID string `json:"message_id"`
 	Seq       uint64 `json:"seq"`
+	// ThreadID — the thread the message went into; an agent that sent without --thread continues there.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 type MeshMessagePage struct {
@@ -71,7 +75,6 @@ type MeshPublishRequest struct {
 	Status          string   `json:"status"`
 	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
 	ExpectedVersion int      `json:"expected_version"`
-	AuthorizedBy    []string `json:"authorized_by,omitempty"`
 }
 
 // authenticateAgentMesh resolves the bearer token from r's Authorization header. A missing, malformed or
@@ -98,6 +101,9 @@ func (s *Server) authenticateAgentMesh(w http.ResponseWriter, r *http.Request) (
 // The bearer token (authenticateAgentMesh) is this surface's actual CSRF-equivalent defense — a same-origin
 // check would add nothing a browser-originated request could exploit anyway, since no browser ever holds a
 // valid per-invocation mesh token.
+// agentMeshActionReply is the /api/agent-mesh/reply route segment.
+const agentMeshActionReply = "reply"
+
 func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 	if s.agentMesh == nil {
 		http.NotFound(w, r)
@@ -126,7 +132,7 @@ func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentMeshBoard(w, r)
 	case action == "send" && r.Method == http.MethodPost:
 		s.handleAgentMeshSend(w, r, actor, "")
-	case action == "reply" && r.Method == http.MethodPost:
+	case action == agentMeshActionReply && r.Method == http.MethodPost:
 		s.handleAgentMeshSend(w, r, actor, string(agentcomm.MessageKindReply))
 	case action == "ack" && r.Method == http.MethodPost:
 		s.handleAgentMeshAck(w, r, actor)
@@ -163,7 +169,7 @@ func parseCursorLimit(r *http.Request) (cursor uint64, limit int) {
 func (s *Server) handleAgentMeshParticipants(w http.ResponseWriter, r *http.Request, actor string) {
 	participants, err := s.agentMesh.ListParticipants(r.Context(), actor)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"participants": participants})
@@ -171,9 +177,10 @@ func (s *Server) handleAgentMeshParticipants(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleAgentMeshInbox(w http.ResponseWriter, r *http.Request, actor string) {
 	cursor, limit := parseCursorLimit(r)
-	page, err := s.agentMesh.Inbox(r.Context(), actor, cursor, limit)
+	all := r.URL.Query().Get("all") == "1"
+	page, err := s.agentMesh.Inbox(r.Context(), actor, cursor, limit, all)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, page)
@@ -188,7 +195,7 @@ func (s *Server) handleAgentMeshThread(w http.ResponseWriter, r *http.Request, a
 	cursor, limit := parseCursorLimit(r)
 	page, err := s.agentMesh.Thread(r.Context(), actor, threadID, cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, page)
@@ -197,7 +204,7 @@ func (s *Server) handleAgentMeshThread(w http.ResponseWriter, r *http.Request, a
 func (s *Server) handleAgentMeshBoard(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.agentMesh.Board(r.Context(), r.URL.Query().Get("key"))
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"entries": entries})
@@ -220,7 +227,7 @@ func (s *Server) handleAgentMeshSend(w http.ResponseWriter, r *http.Request, act
 	}
 	receipt, err := s.agentMesh.Send(r.Context(), body.RequestID, actor, body.MeshSendRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, receipt)
@@ -239,7 +246,7 @@ func (s *Server) handleAgentMeshAck(w http.ResponseWriter, r *http.Request, acto
 		return
 	}
 	if err := s.agentMesh.Ack(r.Context(), body.RequestID, actor, body.MessageID); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{keyStatus: "ok"})
@@ -259,7 +266,7 @@ func (s *Server) handleAgentMeshWait(w http.ResponseWriter, r *http.Request, act
 	}
 	receipt, err := s.agentMesh.Wait(r.Context(), body.RequestID, actor, body.MeshWaitRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, receipt)
@@ -279,7 +286,7 @@ func (s *Server) handleAgentMeshCancelWait(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.agentMesh.CancelWait(r.Context(), body.RequestID, actor, body.WaitID, body.Reason); err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{keyStatus: "ok"})
@@ -299,7 +306,7 @@ func (s *Server) handleAgentMeshPublish(w http.ResponseWriter, r *http.Request, 
 	}
 	entry, err := s.agentMesh.PublishBoard(r.Context(), body.RequestID, actor, body.MeshPublishRequest)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	writeJSON(w, entry)

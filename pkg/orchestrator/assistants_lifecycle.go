@@ -27,7 +27,7 @@ type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt,
 // everything it is entitled to read as inline TEXT (plan/artifacts), so it needs no live write access to the
 // project tree — scratch/ is the only directory it can write to.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
-	_, onDelivered := o.agentCommInboxForTask(taskID)
+	participant := o.taskMeshParticipant(taskID)
 	return executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
@@ -38,8 +38,8 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
-		MeshClient:     o.meshClientFor(o.taskMeshParticipant(taskID)),
-		OnDelivered:    onDelivered,
+		MeshClient:     o.meshClientFor(participant),
+		OnDelivered:    o.deliverRenderedInbox(participant),
 	}
 }
 
@@ -179,6 +179,10 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
 		return
 	}
+	if werr := o.saveTurnInbox(taskID, tc.inboxIDs); werr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist turn inbox: "+werr.Error())
+		return
+	}
 
 	logFile := filepath.Join(dir, "agent.log")
 	resultFile := filepath.Join(dir, rawResultFileName)
@@ -194,6 +198,20 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 
 	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
+	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
+	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
+	// a helperAgentRunner that never calls OnDelivered — otherwise a run agent would see them as unseen forever
+	// and restart itself after every turn. A process that never started leaves them accepted for the next turn.
+	// Only a turn that ran to its end consumed its input: a cut-short one (run shutdown, Pause) keeps the
+	// turn-inbox record, so its retry is handed the same messages again.
+	if err == nil && outcome.ProcessOK {
+		if tc.markInboxDelivered != nil {
+			tc.markInboxDelivered()
+		}
+		if cerr := o.clearTurnInbox(taskID); cerr != nil {
+			log.Printf("assistants: task %s: forget finished turn input: %v", taskID, cerr)
+		}
+	}
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
 		// Observation only — never changes the task's verdict (mirrors verify_tree_modified exactly).
 		o.publishNotice(bus.Event{Type: bus.EventHelperTreeModified, StageID: task.RootStageID, Data: map[string]any{
@@ -214,6 +232,14 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// killed) would either race a second, contradictory status onto "cancelled", or wrongly persist/attach a
 	// result.json + task_result event to a task the caller already told to stop.
 	finalizedByOther := o.taskTerminal(taskID)
+
+	// The run itself is shutting down (Ctrl+C): an invocation it cut short did not fail. The task stays
+	// running, exactly like an interrupted stage, and recoverAssistants re-queues it when the run is resumed.
+	// A turn that still finished with a result is recorded as usual below.
+	if ctx.Err() != nil && (err != nil || !outcome.ProcessOK) {
+		log.Printf("assistants: task %s interrupted by run shutdown — it is retried when the run resumes", taskID)
+		return
+	}
 
 	if err != nil {
 		if finalizedByOther {
@@ -257,7 +283,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			}
 			return
 		}
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "helper execution failed")
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
 		return
 	case outcome.ProtocolErr != nil:
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
@@ -271,7 +297,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// kind:"delegate" envelope, and treating its (expected) empty/absent RawText as malformed would be wrong.
 	// This task's own concurrency lease is released simply by this function returning next, exactly like
 	// runWithRetry's awaiting_peer branch releases a stage's.
-	if o.hasOpenMeshWaitFor(meshParticipantForTask(task)) {
+	if o.hasOpenMeshWaitFor(meshParticipantForTask(o.opts.Store.Snapshot(), task)) {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
 		return
 	}
@@ -341,5 +367,31 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			return
 		}
 	}
+	// A run agent is a standing role: its turn ends idle (queued, which never holds the run open — see
+	// state.RunBlocker) rather than completed, and the next message addressed to it starts its next turn
+	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away.
+	if task.Scope == assistants.ScopeRun {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, resultEff)
+		o.maybeScheduleTask(ctx, taskID)
+		return
+	}
 	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+}
+
+// maxFailureReasonLen (in characters, ellipsis included) keeps a failure reason short enough for the task list
+// and the event log.
+const maxFailureReasonLen = 300
+
+// helperFailureReason is the failed task's reason: the process error when there is one (secrets redacted,
+// length-capped), so the dashboard says why the helper failed — not only that it did.
+func (o *Orchestrator) helperFailureReason(processErr error) string {
+	const prefix = "helper execution failed"
+	if processErr == nil {
+		return prefix
+	}
+	reason := []rune(prefix + ": " + o.RedactSecrets(processErr.Error()))
+	if len(reason) > maxFailureReasonLen {
+		return string(reason[:maxFailureReasonLen-1]) + "…"
+	}
+	return string(reason)
 }

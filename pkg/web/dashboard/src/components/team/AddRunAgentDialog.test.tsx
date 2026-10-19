@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 import type { AssistantProfile } from '../../types/assistant-profile'
@@ -52,13 +52,36 @@ describe('AddRunAgentDialog', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('transient'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
-    await waitFor(() => expect(onAttached).toHaveBeenCalledWith({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' }))
+    await waitFor(() => expect(onAttached).toHaveBeenCalledWith({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' }, 'QA reviewer'))
 
     expect(attachSpy).toHaveBeenCalledTimes(2)
     const [firstCall, secondCall] = attachSpy.mock.calls
     expect(firstCall?.[0]).toMatchObject({ profileId: 'qa', scope: 'run', instruction: 'review everything' })
     expect(firstCall?.[0].stageId).toBeUndefined()
     expect(secondCall?.[0].requestId).toBe(firstCall?.[0].requestId)
+  })
+
+  test('an optional first message is sent so the agent starts right away', async () => {
+    const attachSpy = vi
+      .spyOn(meshClient, 'attachAndSendMesh')
+      .mockResolvedValue({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1', message_id: 'm1' })
+    renderDialog()
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review everything' } })
+    fireEvent.change(screen.getByLabelText('First message (optional)'), { target: { value: '  start with the API  ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalled())
+    expect(attachSpy.mock.calls[0]?.[0]).toMatchObject({ firstMessage: 'start with the API' })
+  })
+
+  test('without a first message none is sent', async () => {
+    const attachSpy = vi
+      .spyOn(meshClient, 'attachAndSendMesh')
+      .mockResolvedValue({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' })
+    renderDialog()
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review everything' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalled())
+    expect(attachSpy.mock.calls[0]?.[0]).not.toHaveProperty('firstMessage')
   })
 
   test('only available profiles are offered', () => {
@@ -70,5 +93,31 @@ describe('AddRunAgentDialog', () => {
   test('empty state when no profile is available', () => {
     renderDialog({ profiles: [profiles[1]!] })
     expect(screen.getByText('No agent profiles are available for this run.')).toBeInTheDocument()
+  })
+
+  test('editing the form after a failure makes the retry a new request with a new request_id', async () => {
+    const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockRejectedValue(new Error('conflict'))
+    renderDialog()
+    const instruction = screen.getByPlaceholderText('What should this run agent do?')
+    fireEvent.change(instruction, { target: { value: 'review everything' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('conflict'))
+
+    fireEvent.change(instruction, { target: { value: 'review the API only' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalledTimes(2))
+    expect(attachSpy.mock.calls[1]?.[0].requestId).not.toBe(attachSpy.mock.calls[0]?.[0].requestId)
+  })
+
+  test('a response that arrives after the dialog was closed is ignored', async () => {
+    let resolveAttach!: (v: meshClient.MeshAttachAndSendResult) => void
+    vi.spyOn(meshClient, 'attachAndSendMesh').mockReturnValue(new Promise((res) => (resolveAttach = res)))
+    const onAttached = vi.fn()
+    const { unmount } = render(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review everything' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    unmount()
+    await act(async () => resolveAttach({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' }))
+    expect(onAttached).not.toHaveBeenCalled()
   })
 })

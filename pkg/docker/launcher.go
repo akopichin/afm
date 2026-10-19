@@ -229,9 +229,10 @@ func stageVerifyCommands(s flow.Stage) []string {
 	return s.VerifyAgentCommands()
 }
 
-// UsedRecipeCommands returns the recipe keys that are actually referenced as a
-// stage command or the global client command. Only these get generated wrappers.
-func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]config.AgentRecipe) map[string]bool {
+// UsedRecipeCommands returns the recipe keys that are actually referenced as a stage/verify command, the
+// global client command or one of extra (helper-profile commands — the same list ScanCommandsWithExtra
+// mounts). Only these get generated wrappers; a used recipe is never mounted from the host.
+func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]config.AgentRecipe, extra ...string) map[string]bool {
 	used := map[string]bool{}
 	check := func(cmd string) {
 		if cmd == "" || cmd == config.ClaudeCommand {
@@ -250,6 +251,9 @@ func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]confi
 			}
 		}
 	}
+	for _, cmd := range extra {
+		check(cmd)
+	}
 	return used
 }
 
@@ -257,8 +261,8 @@ func UsedRecipeCommands(f *flow.Flow, globalCmd string, recipes map[string]confi
 // is actually referenced by the flow. Why: ReExec resolves a secret for EVERY entry in ReExecConfig.Recipes
 // and fail-fasts on the first missing one — passing the entire cfg.Docker.Agents map would let a
 // defined-but-unused agent with a missing secret block the whole run (and leak its secret into container env).
-func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentRecipe) map[string]config.AgentRecipe {
-	used := UsedRecipeCommands(f, globalCmd, all)
+func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentRecipe, extra ...string) map[string]config.AgentRecipe {
+	used := UsedRecipeCommands(f, globalCmd, all, extra...)
 	out := make(map[string]config.AgentRecipe, len(used))
 	for cmd := range used {
 		out[cmd] = all[cmd]

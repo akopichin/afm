@@ -36,16 +36,28 @@ describe('StageDiscussion', () => {
         ]}
       />,
     )
-    expect(screen.getByText('@qaEngineer')).toBeInTheDocument()
+    expect(screen.getByText('qaEngineer')).toBeInTheDocument()
     expect(screen.getByText('reviewer')).toBeInTheDocument()
     expect(screen.getByText('f-1')).toBeInTheDocument()
     expect(screen.getByText('f-2')).toBeInTheDocument()
   })
 
+  test('an agent author is named from the roster, with its role in words — never a raw id or wire value', () => {
+    render(
+      <StageDiscussion
+        messages={[makeMessage({ authorKind: 'main_agent', authorId: 'stage:harden', role: 'main_agent', body: 'returns 400' })]}
+        participants={[{ id: 'stage:harden', kind: 'stage_agent', scope: 'stage', stage_id: 'harden', display_name: 'Hardening', reachable: true }]}
+      />,
+    )
+    expect(screen.getByText('Hardening')).toBeInTheDocument()
+    expect(screen.getByText('Stage agent')).toBeInTheDocument()
+    expect(screen.queryByText(/stage:harden|main_agent/)).toBeNull()
+  })
+
   test('a silent (non-responding) participant is never rendered as agreeing — only real messages render', () => {
     render(<StageDiscussion messages={[makeMessage({ authorId: 'qa' })]} />)
     // Only ONE message rendered — no synthetic entry for anyone else.
-    expect(screen.getAllByText(/@/)).toHaveLength(1)
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
   })
 
   test('TestDiscussion_MarkdownViaSafeRenderer', () => {

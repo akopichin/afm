@@ -101,6 +101,7 @@ type Server struct {
 	graphActions      GraphActions              // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
 	agentMesh         AgentMeshActions          // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
 	mesh              MeshActions               // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
+	redact            func(string) string       // removes the run's secret values from logged text; nil = environment secrets only
 	theme             string                    // "goga" или "" (default graphite)
 	version           string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
 	indexBytes        []byte                    // предподготовленный index.html (с заменами скина/favicon)
@@ -144,6 +145,8 @@ func (s *Server) stageConfig(id string) StageConfig {
 // StageConfig is the immutable, per-stage configuration used by the dashboard.
 // Runtime status and filesystem-derived flags belong to StageView.
 type StageConfig struct {
+	// Name is the stage's display name from the runtime registry, so a stage added during the run has one too.
+	Name        string
 	Interactive bool
 	AutoApprove bool
 	IsScript    bool
@@ -207,8 +210,11 @@ type Config struct {
 	// AgentMesh — Agent Mesh Phase 3 (T3.1) agent-facing adapter; nil = capability off (/api/agent-mesh/* 404).
 	AgentMesh AgentMeshActions
 	// Mesh — Agent Mesh Phase 7 (T7.1) UI-facing adapter; nil = capability off (/api/mesh/* 404).
-	Mesh  MeshActions
-	Theme string
+	Mesh MeshActions
+	// RedactSecrets removes the run's secret values (environment, secrets.env, live mesh tokens) from text
+	// the server logs; nil redacts only afm's environment secrets.
+	RedactSecrets func(string) string
+	Theme         string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
 	SkinDir string
@@ -255,6 +261,7 @@ func New(cfg Config) *Server {
 		graphActions:      cfg.GraphActions,
 		agentMesh:         cfg.AgentMesh,
 		mesh:              cfg.Mesh,
+		redact:            cfg.RedactSecrets,
 		theme:             cfg.Theme,
 		version:           cfg.Version,
 		wsPongWait:        pongWait,

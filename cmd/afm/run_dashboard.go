@@ -25,6 +25,7 @@ func dashboardStageConfig(stages []flow.Stage) map[string]server.StageConfig {
 	configs := make(map[string]server.StageConfig, len(stages))
 	for _, s := range stages {
 		configs[s.ID] = server.StageConfig{
+			Name:        s.Name,
 			Interactive: s.Interactive,
 			AutoApprove: s.AutoApprove,
 			IsScript:    s.IsScript(),
@@ -64,6 +65,7 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	sc.GraphActions = orch
 	sc.AgentMesh = agentMeshServerActions(orch)
 	sc.Mesh = meshServerActions(orch)
+	sc.RedactSecrets = orch.RedactSecrets
 	sc.ReviewState = orch.ReviewState
 	srv := server.New(sc)
 	addr, err := srv.Start()

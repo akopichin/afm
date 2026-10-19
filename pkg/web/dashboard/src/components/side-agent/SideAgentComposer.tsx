@@ -1,8 +1,10 @@
-import { useCallback, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useCallback, useRef, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { AssistantMentionMenu } from '../assistants/AssistantMentionMenu'
-import { detectMentionTrigger, filterMentionProfiles, type MentionTrigger } from '../assistants/mention-match'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { filterMentionProfiles } from '../assistants/mention-match'
+import { useMentionMenu } from '../assistants/use-mention-menu'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
 const MAX_TEXTAREA_HEIGHT = 200
@@ -53,10 +55,11 @@ export function SideAgentComposer({
     [autoGrowRef, caretNodeRef],
   )
 
-  const [mention, setMention] = useState<MentionTrigger | null>(null)
-  const [highlightIndex, setHighlightIndex] = useState(0)
-  const matches = mention !== null ? filterMentionProfiles(assistantProfiles, mention.query) : []
-  const menuOpen = matches.length > 0
+  const mention = useMentionMenu<AssistantProfile>({
+    matchesFor: (query) => filterMentionProfiles(assistantProfiles, query),
+    textFor: (profile) => profile.id,
+    replaceRange,
+  })
 
   const canSend = !running && draft.trim() !== ''
 
@@ -64,50 +67,16 @@ export function SideAgentComposer({
     if (canSend) onSend()
   }
 
-  function selectMention(profile: AssistantProfile): void {
-    if (mention === null) return
-    const end = mention.start + 1 + mention.query.length // "@" + typed query so far
-    replaceRange(mention.start, end, `@${profile.id} `)
-    setMention(null)
-  }
-
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
     const value = e.target.value
     onDraftChange(value)
-    const caret = e.target.selectionStart ?? value.length
-    setMention(detectMentionTrigger(value, caret))
-    setHighlightIndex(0)
+    mention.onInput(value, e.target.selectionStart ?? value.length)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (menuOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setHighlightIndex((i) => (i + 1) % matches.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setHighlightIndex((i) => (i - 1 + matches.length) % matches.length)
-        return
-      }
-      if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-        e.preventDefault()
-        const profile = matches[highlightIndex]
-        if (profile !== undefined) selectMention(profile)
-        return
-      }
-      if (e.key === 'Escape') {
-        // Первый Escape закрывает только список подсказок и не должен всплыть дальше — иначе он закрыл бы и
-        // модалку беседы разом (TestMention_EscapeClosesSuggestionsThenModal). Второй Escape (список уже
-        // закрыт) до этой ветки не доходит и свободно всплывает к обработчику модалки.
-        e.preventDefault()
-        e.stopPropagation()
-        setMention(null)
-        return
-      }
-    }
-
+    // The first Escape only closes the suggestions (the hook stops it from bubbling), so it does not close
+    // the conversation modal too (TestMention_EscapeClosesSuggestionsThenModal); the second one bubbles.
+    if (mention.onKeyDown(e)) return
     // Cmd/Ctrl+Enter — отправка; обычный Enter оставляем textarea (новая строка).
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
       e.preventDefault()
@@ -131,10 +100,10 @@ export function SideAgentComposer({
           <pre className="side-agent-quote-chip-body">{quote}</pre>
         </div>
       )}
-      <div className="side-agent-textarea-wrap">
+      <div className="chat-composer-row">
         <textarea
           ref={setRefs}
-          className="side-agent-textarea"
+          className="chat-composer-input"
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
@@ -142,24 +111,22 @@ export function SideAgentComposer({
           aria-label="Message the agent"
           rows={1}
         />
-        {menuOpen && (
+        {mention.open && (
           <AssistantMentionMenu
-            profiles={matches}
-            highlightIndex={highlightIndex}
-            onHover={setHighlightIndex}
-            onSelect={selectMention}
+            profiles={mention.matches}
+            highlightIndex={mention.highlightIndex}
+            onHover={mention.setHighlightIndex}
+            onSelect={mention.pick}
           />
         )}
-      </div>
-      <div className="side-agent-composer-actions">
         {running && (
-          <button type="button" className="btn btn-cancel side-agent-stop" onClick={onStop}>
-            Stop
+          <button type="button" className="chat-stop" aria-label="Stop" title="Stop" onClick={onStop}>
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
+            </svg>
           </button>
         )}
-        <button type="button" className="btn btn-send side-agent-send" disabled={!canSend} onClick={submit}>
-          Send
-        </button>
+        <ChatSendButton label="Send" disabled={!canSend} onClick={submit} />
       </div>
     </div>
   )

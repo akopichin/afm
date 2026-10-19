@@ -1,7 +1,9 @@
 package progress_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,5 +158,26 @@ func TestLoggerEndWithError(t *testing.T) {
 	}
 	if !strings.Contains(content, "idle timeout after 30m") {
 		t.Errorf("missing error message: %q", content)
+	}
+}
+
+// A run stopped with Ctrl+C cancels the agent's context: its log says "interrupted", not FAILED — the agent is
+// retried when the run resumes.
+func TestLoggerEndInterrupted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	lg, err := progress.NewLogger(path)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	lg.LogStart("implementation", "checkout")
+	lg.LogEnd(fmt.Errorf("run agent: %w", context.Canceled))
+	lg.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if content := string(data); !strings.Contains(content, "=== interrupted |") || strings.Contains(content, "FAILED") {
+		t.Errorf("want an interrupted banner and no FAILED: %q", content)
 	}
 }

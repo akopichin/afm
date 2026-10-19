@@ -60,7 +60,7 @@ func (f *fakeAgentMeshActions) Send(ctx context.Context, requestID, actor string
 	return receipt, nil
 }
 
-func (f *fakeAgentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (MeshMessagePage, error) {
+func (f *fakeAgentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (MeshMessagePage, error) {
 	return MeshMessagePage{}, nil
 }
 

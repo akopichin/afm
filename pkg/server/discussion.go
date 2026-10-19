@@ -72,7 +72,7 @@ func (s *Server) handleDiscussionGet(w http.ResponseWriter, r *http.Request, sta
 	}
 	messages, next, hasMore, err := s.discussionService.Messages(stageID, cursor, limit)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -113,7 +113,7 @@ func (s *Server) handleDiscussionPost(w http.ResponseWriter, r *http.Request, st
 	}
 	id, err := s.discussionService.PostMessage(r.Context(), stageID, body.RequestID, body.Body)
 	if err != nil {
-		writeAssistantError(w, err)
+		s.writeAssistantError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

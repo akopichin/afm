@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { useMeshRoster } from './use-mesh-roster'
 import * as meshClient from '../../api/mesh-client'
@@ -33,5 +33,26 @@ describe('useMeshRoster', () => {
     await waitFor(() => expect(result.current.probed).toBe(true))
     expect(result.current.enabled).toBe(false)
     expect(result.current.participants).toEqual([])
+  })
+
+  test('a slow poll is not overlapped by the next tick, so an older roster never replaces a newer one', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveFirst!: (v: { participants: meshClient.MeshParticipant[] }) => void
+      const participants = vi
+        .spyOn(meshClient, 'listMeshParticipants')
+        .mockReturnValueOnce(new Promise((res) => (resolveFirst = res)))
+        .mockResolvedValue({ participants: [{ id: 'run:new', kind: 'run_agent', scope: 'run', reachable: true }] })
+      vi.spyOn(meshClient, 'listMeshThreads').mockResolvedValue({ threads: [] })
+      const { result } = renderHook(() => useMeshRoster())
+      await act(async () => vi.advanceTimersByTime(6000))
+      expect(participants).toHaveBeenCalledTimes(1)
+
+      await act(async () => resolveFirst({ participants: [{ id: 'run:old', kind: 'run_agent', scope: 'run', reachable: true }] }))
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(result.current.participants.map((p) => p.id)).toEqual(['run:new'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

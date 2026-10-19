@@ -13,6 +13,7 @@
    registry. */
 
 .team-view {
+  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
@@ -23,46 +24,65 @@
   padding: 16px;
 }
 
-/* === Roster (RunTeamList) === */
+/* === Roster (RunTeamList) — "Run team" rail: title + full-width "Add run agent", then This run / Stages /
+   Conversations groups. Rows: avatar, name over "@handle · status/role", presence dot. === */
 .team-roster {
-  width: 240px;
-  flex: 0 0 240px;
+  width: 260px;
+  flex: 0 0 260px;
   min-width: 0;
   overflow-y: auto;
+  /* Long names are clipped with an ellipsis, never scrolled sideways (a horizontally scrolled roster
+     used to hide its own left edge). */
+  overflow-x: hidden;
   border-right: 1px solid var(--separator-subtle);
-  padding: 12px 10px;
+  padding: 16px 8px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 4px;
+  font-family: var(--font-ui);
+}
+
+.team-roster-top {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 8px 4px;
+}
+.team-roster-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.team-add-run-agent {
+  width: 100%;
+  justify-content: center;
+  min-height: 34px;
 }
 
 .team-roster-group h3 {
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
-.team-roster-group-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+  margin: 17px 8px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.team-roster-group-header h3 {
-  margin: 0;
+.team-roster-count {
+  margin-left: auto;
+  letter-spacing: 0;
 }
 
-.team-add-run-agent {
-  font-size: 11px;
-  padding: 3px 8px;
-}
-
-.team-roster-empty {
+.team-roster-empty,
+.team-thread-list-empty {
   font-size: 12px;
-  margin: 0;
+  margin: 0 8px;
 }
 
 .team-roster-list,
@@ -77,18 +97,19 @@
 
 .team-person-row,
 .team-thread-item {
+  position: relative;
   width: 100%;
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
   text-align: left;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  padding: 9px;
+  border-radius: 8px;
   cursor: pointer;
 }
 .team-person-row:hover,
@@ -97,8 +118,10 @@
 }
 .team-person-row.active,
 .team-thread-item.active {
-  background: var(--surface-hover);
-  color: var(--text-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+}
+.team-thread-item.active {
+  box-shadow: inset 2px 0 var(--accent-primary);
 }
 .team-person-row:focus-visible,
 .team-thread-item:focus-visible {
@@ -106,63 +129,247 @@
   outline-offset: 1px;
 }
 
+.team-person-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
 .team-person-name,
 .team-thread-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.team-person-status,
+.team-person-detail {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* The @handle is what you type in a mention — shown so you know how to address this agent. */
+.team-person-handle {
+  /* The alias is what you type in a mention, so it keeps its room; the status after it is the one clipped
+     (the full text is in the row's tooltip). Only a very long alias is clipped too. */
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 65%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent-primary);
+}
+.team-person-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-person-status::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--text-muted);
+}
 .team-thread-closed {
   flex: 0 0 auto;
+  margin-left: auto;
   font-size: 11px;
   color: var(--text-muted);
 }
 
-.team-thread-list-empty {
-  font-size: 12px;
-  margin: 0;
+/* A stage's helpers sit right under it, indented, with a small tree branch. */
+.team-person-row.nested {
+  padding-left: 26px;
+}
+.team-person-row.nested::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  left: 13px;
+  width: 8px;
+  height: 16px;
+  border-left: 1px solid var(--separator-subtle);
+  border-bottom: 1px solid var(--separator-subtle);
+  border-bottom-left-radius: 3px;
 }
 
-/* === Main pane: tabs + Messages/Board/Activity === */
+/* Live stage status: the running stage stands out, a failed one is red, one not started yet is dimmed.
+   Semantic tokens only — no per-status --c-* mapping here. */
+.team-person-row[data-status="running"] .team-person-status {
+  color: var(--success);
+}
+.team-person-row[data-status="failed"] .team-person-status,
+.team-person-row[data-status="hook_failed"] .team-person-status {
+  color: var(--danger);
+}
+.team-person-row[data-status="pending"]:not(.active) {
+  opacity: 0.6;
+}
+
+/* Presence dot: working / waiting (paused, awaiting a reply or a colleague) / failed / idle. */
+.team-presence {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.team-presence[data-presence="working"] {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(var(--success-rgb), 0.12);
+}
+.team-presence[data-presence="waiting"] {
+  background: var(--attention);
+}
+.team-presence[data-presence="failed"] {
+  background: var(--danger);
+}
+
+/* Square avatar with initials, tinted by participant kind. */
+.mesh-avatar {
+  --agent-color: var(--accent-primary);
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--agent-color);
+  background: color-mix(in srgb, var(--agent-color) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--agent-color) 24%, transparent);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+}
+.mesh-avatar[data-kind="run_agent"] { --agent-color: var(--success); }
+.mesh-avatar[data-kind="helper"] { --agent-color: var(--attention); }
+.mesh-avatar[data-kind="side_agent"] { --agent-color: var(--text-secondary); }
+.mesh-avatar[data-kind="user"] { --agent-color: var(--text-secondary); }
+.mesh-avatar.large {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  font-size: 12px;
+}
+
+/* === Main pane: conversation header, then Messages/Board/Activity tabs === */
 .team-main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  font-family: var(--font-ui);
+}
+
+.team-conversation-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px 14px;
+}
+.team-thread-symbol {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  color: var(--accent-primary);
+}
+.team-conversation-heading {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.team-conversation-heading h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-conversation-heading p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-icon-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.team-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.team-icon-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .team-tabs {
+  flex: 0 0 auto;
   display: flex;
-  gap: 4px;
-  padding: 8px 12px;
+  gap: 22px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--separator-subtle);
 }
-
 .team-tab {
   border: 0;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 13px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
+  font-size: 12px;
+  padding: 0 0 11px;
   cursor: pointer;
 }
 .team-tab:hover {
-  background: var(--surface-hover);
   color: var(--text-secondary);
 }
 .team-tab.active {
-  background: var(--surface-hover);
   color: var(--text-primary);
-  font-weight: 600;
+  border-bottom-color: var(--accent-primary);
 }
 .team-tab:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: 2px;
+}
+
+/* A Board/Activity tab panel: fills the space under the tabs like .team-messages does. */
+.team-tab-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.team-tab-panel > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .team-messages {
@@ -170,17 +377,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 12px;
-  gap: 10px;
-  overflow-y: auto;
+  gap: 12px;
+  padding: 16px 24px;
 }
 
 /* === Create conversation === */
-.team-create-conversation-toggle {
-  align-self: flex-start;
-  font-size: 12px;
-  padding: 4px 10px;
-}
 
 .team-create-conversation-form {
   display: flex;
@@ -245,19 +446,6 @@
 .team-create-conversation-participant:hover {
   background: var(--surface-hover);
 }
-.team-create-conversation-participant-avatar {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent-primary);
-  background: var(--surface-agent-message);
-}
 .team-create-conversation-participant-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -291,76 +479,148 @@
   gap: 8px;
 }
 
-/* === Conversation (ThreadConversation) === */
+/* === Conversation (ThreadConversation) — messages with avatar, author, "→ recipients", time and a bubble. === */
 .team-conversation {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.team-conversation-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
+/* The messages area takes all free height in BOTH states (messages or the "No messages yet" hint), so the
+   composer below it stays pinned to the bottom instead of jumping down after the first message. */
 .team-conversation-messages {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+.team-conversation-message-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 18px;
+}
+.team-conversation-empty-messages {
+  margin: 0;
 }
 
 .team-conversation-message {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
-  background: var(--surface-agent-message);
-  /* Incoming (agent) messages: a left-aligned, content-width bubble — without an explicit
-     align-self a column flex item stretches to full width (the defect this fixes). */
-  align-self: flex-start;
-  max-width: 72%;
+  gap: 10px;
 }
-.team-conversation-message[data-sender="user"] {
-  background: var(--surface-user-message);
-  align-self: flex-end;
+.team-conversation-message-content {
+  min-width: 0;
+  flex: 1 1 auto;
 }
-
+.team-conversation-message-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
 .team-conversation-message-sender {
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.team-conversation-message-route {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.team-conversation-message-header time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--text-muted);
 }
 .team-conversation-message-body {
+  padding: 10px 14px;
+  background: var(--surface-agent-message);
+  border: 1px solid var(--separator-subtle);
+  border-radius: 0 10px 10px 10px;
   font-size: 13px;
+  line-height: 1.6;
   color: var(--text-secondary);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.team-conversation-message.from-you .team-conversation-message-body {
+  background: color-mix(in srgb, var(--accent-primary) 9%, var(--surface-canvas));
+  border-color: rgba(var(--accent-primary-rgb), 0.16);
 }
 
-.team-conversation-composer {
+/* A reply quotes the start of the message it answers, inside its bubble. */
+.team-conversation-reply-quote {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 4px;
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  white-space: normal;
 }
-.team-conversation-input {
-  flex: 1 1 auto;
-  font: inherit;
-  resize: vertical;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--separator-subtle);
-  background: var(--surface-canvas);
-  color: var(--text-primary);
+.team-conversation-reply-quote-author {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+.team-conversation-reply-quote-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Smaller avatar/symbol for a conversation row in the roster. */
+.mesh-avatar.small,
+.team-thread-symbol.small {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 9.5px;
+}
+
+/* "From you → <recipients>" above the composer; `@` narrows the recipients. */
+.team-conversation-route {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-conversation-route strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.team-conversation-route-hint {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+/* Members the default route leaves out because they have finished. */
+.team-conversation-route-skipped {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Nobody left who can answer (their stage/task finished). */
+.team-conversation-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--attention);
 }
 
 .team-conversation-error {
@@ -368,54 +628,164 @@
   font-size: 12px;
 }
 
-/* === Board (BoardPanel) === */
-.team-board-list {
-  list-style: none;
-  margin: 0;
-  padding: 12px;
+/* === Board (BoardPanel): post a task, then task cards with the agents' reports under them === */
+.team-board {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 24px;
+}
+.team-board-form {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow-y: auto;
-}
-
-.team-board-entry {
+  padding: 12px;
   border: 1px solid var(--separator-subtle);
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  background: var(--surface-raised);
+}
+.team-board-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
-
-.team-board-entry-header {
+.team-board-field input,
+.team-board-field textarea {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+  resize: vertical;
+}
+.team-board-notify {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.team-board-notify legend {
+  float: left;
+  margin-right: 4px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-board-notify-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.team-board-form-actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.team-board-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.team-board-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+.team-board-empty {
+  font-size: 12px;
+}
+.team-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.team-board-entry {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-agent-message);
+}
+.team-board-entry[data-task] {
+  border-left: 2px solid var(--accent-primary);
+}
+.team-board-entry-header {
+  display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
 .team-board-entry-key {
   font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--text-primary);
-}
-.team-board-entry-status {
   font-size: 11px;
   color: var(--accent-primary);
+  overflow-wrap: anywhere;
 }
-
+.team-board-entry-version {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.team-board-entry-status {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .team-board-entry-meta {
-  display: flex;
-  gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
 }
-
 .team-board-entry-artifacts {
   margin: 0;
   padding-left: 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.team-board-reports {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--separator-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-board-report {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 12px;
-  color: var(--text-muted);
+}
+.team-board-report-author {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.team-board-report-status {
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* === Add run agent dialog === */
@@ -481,4 +851,70 @@
 .add-run-agent-error {
   color: var(--danger);
   font-size: 12px;
+}
+
+/* === Narrow screens: the roster becomes a drawer opened from the conversation header (as in the prototype). */
+.team-roster-toggle,
+.team-roster-scrim {
+  display: none;
+}
+@media (max-width: 760px) {
+  .team-roster {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: min(300px, 85%);
+    flex-basis: auto;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition: transform var(--motion-fast, 120ms) ease, visibility var(--motion-fast, 120ms);
+  }
+  .team-roster.open {
+    transform: none;
+    visibility: visible;
+  }
+  .team-roster-toggle {
+    display: grid;
+  }
+  .team-roster-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    border: 0;
+    padding: 0;
+    background: color-mix(in srgb, var(--surface-canvas) 60%, transparent);
+    cursor: pointer;
+  }
+  .team-conversation-header,
+  .team-tabs,
+  .team-messages {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+/* How many tasks/facts are on the board, next to the tab name. */
+.team-tab-count {
+  margin-left: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* Shown when more agents are ticked than one task may notify. */
+.team-board-notify-limit {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--attention);
+}
+
+/* An agents-only conversation is read-only for you — information, not a warning. */
+.team-conversation-notice.readonly {
+  color: var(--text-muted);
 }

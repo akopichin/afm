@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import * as meshClient from '../../api/mesh-client'
@@ -273,7 +273,7 @@ describe('FeedComposer', () => {
     function selectMention(label: string): void {
       const ta = screen.getByRole('textbox', { name: /message the mesh/i })
       fireEvent.change(ta, { target: { value: '@', selectionStart: 1 } })
-      fireEvent.mouseDown(screen.getByText(label))
+      fireEvent.click(screen.getByText(label))
     }
 
     it('does not render mode tabs when mesh is not provided (legacy, unchanged behavior)', () => {
@@ -297,13 +297,13 @@ describe('FeedComposer', () => {
       render(<FeedComposer stageId="s1" onSend={onSend} mesh={meshProps()} />)
       fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
       selectMention('@run:qa')
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: 'fix this bug' } })
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa fix this bug' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
       expect(onSend).not.toHaveBeenCalled()
       expect(openSpy).toHaveBeenCalled()
-      expect(sendSpy).toHaveBeenCalledWith('mt-new', expect.objectContaining({ body: 'fix this bug' }))
+      expect(sendSpy).toHaveBeenCalledWith('mt-new', expect.objectContaining({ body: '@run:qa fix this bug' }))
     })
 
     it('@ opens a server-sourced list distinguishing This run / This stage / Attach to stage', () => {
@@ -366,6 +366,35 @@ describe('FeedComposer', () => {
       expect(sendSpy).toHaveBeenCalledWith('mt-new', expect.objectContaining({ recipientIds: ['run:qa'] }))
     })
 
+    it('deleting the @mention from the draft un-addresses the recipient (Send is disabled again)', () => {
+      openMessageMode(meshProps())
+      selectMention('@run:qa')
+      const ta = screen.getByRole('textbox', { name: /message the mesh/i })
+      fireEvent.change(ta, { target: { value: '@run:qa hello' } })
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled()
+      fireEvent.change(ta, { target: { value: 'hello' } })
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+    })
+
+    it('a thread opened in Message mode is remembered across a Revise round-trip (no duplicate open)', async () => {
+      const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-new', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+      vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+      openMessageMode(meshProps())
+      selectMention('@run:qa')
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa one' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1))
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
+      fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
+      selectMention('@run:qa')
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa two' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenLastCalledWith('mt-new', expect.objectContaining({ body: '@run:qa two' })))
+      expect(openSpy).toHaveBeenCalledTimes(1)
+    })
+
     it('Reply preserves the thread and in_reply_to', async () => {
       const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
       vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
@@ -379,12 +408,57 @@ describe('FeedComposer', () => {
       selectMention('@run:qa')
       await waitFor(() => expect(screen.getByText('original question')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
-      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: 'here is the answer' } })
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa here is the answer' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
-      expect(sendSpy).toHaveBeenCalledWith('mt-1', expect.objectContaining({ inReplyTo: 'm0', body: 'here is the answer' }))
+      expect(sendSpy).toHaveBeenCalledWith('mt-1', expect.objectContaining({ inReplyTo: 'm0', body: '@run:qa here is the answer' }))
       expect(openSpy).not.toHaveBeenCalled()
+    })
+
+    it('a reply target picked while a send is in flight survives that send finishing', async () => {
+      const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+        messages: [
+          { id: 'm0', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'first question', seq: 1, created_at: '2026-10-18T00:00:00Z' },
+          { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'second question', seq: 2, created_at: '2026-10-18T00:00:01Z' },
+        ],
+        next_cursor: 2,
+      })
+      let resolveSend!: (v: { message_id: string; seq: number }) => void
+      vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
+
+      openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
+      selectMention('@run:qa')
+      await waitFor(() => expect(screen.getByText('second question')).toBeInTheDocument())
+      const [replyToFirst, replyToSecond] = screen.getAllByRole('button', { name: 'Reply' })
+      fireEvent.click(replyToFirst as HTMLElement)
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa answer one' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-1', expect.objectContaining({ inReplyTo: 'm0' })))
+
+      fireEvent.click(replyToSecond as HTMLElement)
+      await act(async () => resolveSend({ message_id: 'm2', seq: 3 }))
+
+      expect(document.querySelector('.feed-reply-chip-src')).toHaveTextContent('second question')
+    })
+
+    it('a successful send clears the reply target it was sent with', async () => {
+      const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+        messages: [{ id: 'm0', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'original question', seq: 1, created_at: '2026-10-18T00:00:00Z' }],
+        next_cursor: 1,
+      })
+      vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 2 })
+
+      openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
+      selectMention('@run:qa')
+      await waitFor(() => expect(screen.getByText('original question')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+      fireEvent.change(screen.getByRole('textbox', { name: /message the mesh/i }), { target: { value: '@run:qa answer' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+      await waitFor(() => expect(document.querySelector('.feed-reply-chip')).toBeNull())
     })
 
     // --- Agent Mesh Phase 7, T7.5: attach preview for a profile with no instance ---
@@ -530,6 +604,62 @@ describe('FeedComposer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
       await waitFor(() => expect(screen.getByText('Paused · waiting for Continue')).toBeInTheDocument())
+    })
+
+    it('Message/Revise follow the tab pattern: arrow keys switch modes and each tab controls its panel', () => {
+      render(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
+      const revise = screen.getByRole('tab', { name: 'Revise' })
+      expect(revise).toHaveAttribute('tabindex', '0')
+      expect(revise).toHaveAttribute('aria-controls', screen.getByRole('tabpanel').id)
+      revise.focus()
+      fireEvent.keyDown(revise, { key: 'ArrowLeft' })
+      const message = screen.getByRole('tab', { name: 'Message' })
+      expect(message).toHaveFocus()
+      expect(message).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', message.id)
+      expect(screen.getByRole('textbox', { name: /message the mesh/i })).toBeInTheDocument()
+    })
+
+    it('a retry of the same message after a lost response reuses its request id; an edited message gets a new one', async () => {
+      const existingThread: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+      const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('network'))
+      openMessageMode(meshProps({ roster: roster({ threads: [existingThread] }) }))
+      selectMention('@run:qa')
+      const input = screen.getByRole('textbox', { name: /message the mesh/i })
+      fireEvent.change(input, { target: { value: '@run:qa ping' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(2))
+      expect(sendSpy.mock.calls[1]?.[1].requestId).toBe(sendSpy.mock.calls[0]?.[1].requestId)
+
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+      fireEvent.change(input, { target: { value: '@run:qa ping again' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(3))
+      expect(sendSpy.mock.calls[2]?.[1].requestId).not.toBe(sendSpy.mock.calls[0]?.[1].requestId)
+    })
+
+    it('a send that finishes after another recipient was picked neither clears the new draft nor opens the old thread', async () => {
+      const threadSpy = vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+      vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-new', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+      let resolveSend!: (v: meshClient.MeshSendReceipt) => void
+      vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
+      openMessageMode()
+      selectMention('@run:qa')
+      const input = screen.getByRole('textbox', { name: /message the mesh/i }) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: '@run:qa one' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())
+
+      selectMention('@stage:s1')
+      fireEvent.change(input, { target: { value: '@stage:s1 two' } })
+      await act(async () => resolveSend({ message_id: 'm1', seq: 1 }))
+
+      expect(input.value).toBe('@stage:s1 two')
+      expect(threadSpy).not.toHaveBeenCalledWith('mt-new', expect.anything(), expect.anything())
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled()
     })
   })
 })

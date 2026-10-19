@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -69,5 +70,34 @@ func TestMesh_TerminalStageStaysInRosterUnreachable(t *testing.T) {
 	}
 	if found.UnreachableReason == "" {
 		t.Fatal("expected a non-empty unreachable reason")
+	}
+}
+
+// The roster says what a run agent or helper is doing now: its task's status, with an idle run agent (queued,
+// nothing to read) told apart from one whose next turn is due.
+func TestTaskActivity(t *testing.T) {
+	task := func(status assistants.TaskStatus) *state.TaskState {
+		return &state.TaskState{Task: assistants.Task{Scope: assistants.ScopeRun, Status: status}}
+	}
+	held := task(assistants.StatusRunning)
+	held.Holds = map[string]state.Hold{"user": {}}
+	for _, tc := range []struct {
+		name string
+		task *state.TaskState
+		idle bool
+		want agentcomm.Activity
+	}{
+		{"running", task(assistants.StatusRunning), false, agentcomm.ActivityWorking},
+		{"queued with a turn due", task(assistants.StatusQueued), false, agentcomm.ActivityWorking},
+		{"queued with nothing to read", task(assistants.StatusQueued), true, agentcomm.ActivityIdle},
+		{"waiting for a colleague", task(assistants.StatusWaitingPeer), false, agentcomm.ActivityWaiting},
+		{"waiting for children", task(assistants.StatusWaitingChildren), false, agentcomm.ActivityWaiting},
+		{"paused", task(assistants.StatusPaused), false, agentcomm.ActivityPaused},
+		{"held while running", held, false, agentcomm.ActivityPaused},
+		{"completed", task(assistants.StatusCompleted), false, agentcomm.ActivityDone},
+	} {
+		if got := taskActivity(tc.task, tc.idle); got != tc.want {
+			t.Errorf("%s: activity = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

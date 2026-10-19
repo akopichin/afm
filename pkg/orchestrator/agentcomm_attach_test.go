@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -130,7 +132,7 @@ func TestAttachAndSend_ScopeRunCreatesStandingParticipant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AttachAndSend: %v", err)
 	}
-	waitForTaskStatus(t, store, res.TaskID, assistants.StatusCompleted, 2*time.Second)
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
 
 	rs := store.Snapshot()
 	task, ok := rs.Assistants.Tasks[res.TaskID]
@@ -151,8 +153,8 @@ func TestAttachAndSend_ScopeRunCreatesStandingParticipant(t *testing.T) {
 	if p.Kind != agentcomm.KindRunAgent || p.Scope != agentcomm.ScopeRun {
 		t.Fatalf("participant kind/scope = %s/%s, want run_agent/run", p.Kind, p.Scope)
 	}
-	if res.ParticipantID != meshRunParticipantID("qa") {
-		t.Fatalf("participant id = %s, want the standard run:<profileID> form", res.ParticipantID)
+	if res.ParticipantID != meshRunParticipantID(res.TaskID) {
+		t.Fatalf("participant id = %s, want the run:<taskID> form", res.ParticipantID)
 	}
 	if p.StageID != "" {
 		t.Fatalf("a scope=run participant must not be bound to a stage, got %q", p.StageID)
@@ -381,5 +383,172 @@ func TestAttachAndSend_RejectsClientSuppliedCommand(t *testing.T) {
 				t.Fatalf("AttachAndSendRequest has a %q field — the executor must be resolved server-side from ProfileID alone", f)
 			}
 		}
+	}
+}
+
+// A role attached with no first message stays queued — until somebody actually writes to it: its first
+// addressed message starts it (before, it stayed queued forever and never answered).
+func TestAttachAndSend_NoFirstMessage_FirstAddressedMessageStartsTheAgent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	stubPassingHelper(o)
+
+	res, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+		OperationID: "op-idle-qa", ProfileID: "qa", Title: "Idle QA", Instruction: "answer questions", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	if st := store.Snapshot().Assistants.Tasks[res.TaskID].Status; st != assistants.StatusQueued {
+		t.Fatalf("status = %s, want queued before any message", st)
+	}
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "op-idle-hello", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindRequest, Body: "are you there?",
+		Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
+}
+
+// A helper that fails to start reports WHY (e.g. a host binary of the wrong architecture in the container)
+// instead of a bare "helper execution failed".
+func TestHelperStartFailure_ReasonCarriesTheProcessError(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessErr: errors.New("agent start failed: codex: fork/exec /usr/local/bin/codex: exec format error")}, nil
+	}
+	msg := "check the api"
+	res, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+		OperationID: "op-broken", ProfileID: "reviewer", Title: "Reviewer", Instruction: "review", FirstMessage: &msg,
+		Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	task := waitForTaskStatus(t, store, res.TaskID, assistants.StatusFailed, 2*time.Second)
+	if !strings.Contains(task.StatusReason, "exec format error") {
+		t.Fatalf("reason = %q, want the process error", task.StatusReason)
+	}
+}
+
+// Work a message starts must not die with the HTTP request that carried it: the dashboard handler returns (its
+// request context is cancelled) while the agent's turn is still running.
+func TestSend_StartedWorkSurvivesTheRequestContext(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		time.Sleep(50 * time.Millisecond)
+		if ctx.Err() != nil {
+			return executor.HelperOutcome{Interrupted: true}, nil
+		}
+		return passResultOutcome(), nil
+	}
+	res, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{
+		OperationID: "op-ctx-qa", ProfileID: "qa", Title: "QA", Instruction: "answer", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	reqCtx, cancel := context.WithCancel(context.Background())
+	if _, err := o.Send(reqCtx, SendRequest{
+		OperationID: "op-ctx-hello", ThreadID: res.ThreadID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindRequest, Body: "hi",
+		Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	cancel() // the HTTP handler returned
+	waitForRunAgentTurn(t, store, res.TaskID, 2*time.Second)
+}
+
+// TestAddRunAgent_AliasIsUniqueInTheRun: two run agents with the same title get distinct @names, so an @name
+// always names exactly one participant.
+func TestAddRunAgent_AliasIsUniqueInTheRun(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	first := addTestRunAgent(t, o, "op-qa-1", nil)
+	second := addTestRunAgent(t, o, "op-qa-2", nil)
+
+	rs := store.Snapshot()
+	a, b := rs.Assistants.Mesh.Participants[first.ParticipantID].Alias, rs.Assistants.Mesh.Participants[second.ParticipantID].Alias
+	if a != "qa" || b != "qa-2" {
+		t.Fatalf("aliases = %q, %q, want qa and qa-2", a, b)
+	}
+	roster := o.liveRoster(rs)
+	for alias, want := range map[string]agentcomm.ParticipantID{"@qa": first.ParticipantID, "@qa-2": second.ParticipantID} {
+		if got, err := agentcomm.ResolveAlias(alias, roster); err != nil || got != want {
+			t.Fatalf("ResolveAlias(%s) = %s, %v, want %s", alias, got, err, want)
+		}
+	}
+}
+
+// TestTopLevelAttach_SharesOneQuota: Attach and AttachAndSend admit top-level tasks against the same
+// max_tasks — one of each cannot exceed a limit of one.
+func TestTopLevelAttach_SharesOneQuota(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	one := 1
+	o.opts.Config.Collaboration.Limits.MaxTasks = &one
+
+	if _, err := o.Attach(context.Background(), AttachRequest{OperationID: "op-helper", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "look", Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	_, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{OperationID: "op-run", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "user"}})
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeBudgetExceeded {
+		t.Fatalf("a second top-level task over max_tasks=1: err = %v, want budget_exceeded", err)
+	}
+	if got := store.Snapshot().Assistants.QuotaReserved; got != 1 {
+		t.Fatalf("QuotaReserved = %d, want 1", got)
+	}
+}
+
+// TestCommittedRequestReplaysAfterStateChange: a retry of a request whose response was lost replays the
+// committed outcome even when the state it was validated against has changed since — here the stage
+// finished, which a fresh attach, discussion post or thread open would be refused or built differently for.
+func TestCommittedRequestReplaysAfterStateChange(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+
+	attach := AttachRequest{OperationID: "op-attach", StageID: assistantsTestStageID, ProfileID: "reviewer", Instruction: "look", Actor: state.Actor{Kind: "user"}}
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+	taskID, err := o.Attach(ctx, attach)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+	post := PostMessageRequest{OperationID: "op-post", StageID: assistantsTestStageID, AuthorKind: assistants.AuthorHuman, Round: assistants.RoundFreeform, Body: "hello", Actor: state.Actor{Kind: "user"}}
+	postID, err := o.PostDiscussionMessage(ctx, post)
+	if err != nil {
+		t.Fatalf("PostDiscussionMessage: %v", err)
+	}
+	open := OpenThreadRequest{OperationID: "op-open", Scope: agentcomm.ScopeStage, Members: []agentcomm.ParticipantID{meshUserParticipantID, stage}}
+	thread, err := o.OpenThread(ctx, open)
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+
+	if _, ok := o.Trigger(assistantsTestStageID, bus.EvComplete, bus.GuardCtx{}, ""); !ok {
+		t.Fatal("EvComplete failed")
+	}
+
+	if again, err := o.Attach(ctx, attach); err != nil || again != taskID {
+		t.Fatalf("Attach retry after the stage finished = %s, %v, want %s", again, err, taskID)
+	}
+	if again, err := o.PostDiscussionMessage(ctx, post); err != nil || again != postID {
+		t.Fatalf("discussion post retry after the stage finished = %s, %v, want %s", again, err, postID)
+	}
+	if again, err := o.OpenThread(ctx, open); err != nil || again.ID != thread.ID {
+		t.Fatalf("thread open retry after the stage finished = %+v, %v, want %s", again, err, thread.ID)
+	}
+
+	changed := attach
+	changed.Instruction = "something else"
+	if _, err := o.Attach(ctx, changed); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("the same request id for a different attach: err = %v, want a conflict", err)
 	}
 }

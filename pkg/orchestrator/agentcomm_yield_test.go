@@ -21,7 +21,7 @@ func registerTestStageWait(t *testing.T, o *Orchestrator, stageID, opID string) 
 	waiter := meshStageParticipantID(stageID)
 	receipt, err := o.Wait(context.Background(), WaitRequest{
 		OperationID: opID, Waiter: waiter,
-		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"},
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
 	})
 	if err != nil {
 		t.Fatalf("Wait: %v", err)

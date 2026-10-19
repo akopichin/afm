@@ -304,7 +304,8 @@ func TestAdmission_AncestorHoldBlocksGrandchild(t *testing.T) {
 func TestAdmission_ConcurrentParentsRespectSharedQuota(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
-	maxTasks := 3
+	const parents, children = 2, 3
+	maxTasks := parents + children // the two top-level parents count too
 	o.opts.Config.Collaboration.Limits.MaxTasks = &maxTasks
 
 	release := make(chan struct{})
@@ -337,8 +338,8 @@ func TestAdmission_ConcurrentParentsRespectSharedQuota(t *testing.T) {
 	go admit(parentB, "op-b")
 	wg.Wait()
 
-	if got := accepted.Load(); got != int32(maxTasks) {
-		t.Fatalf("accepted = %d, want exactly %d (shared quota, both branches)", got, maxTasks)
+	if got := accepted.Load(); got != children {
+		t.Fatalf("accepted = %d, want exactly %d (shared quota, both branches)", got, children)
 	}
 	rs := store.Snapshot()
 	if rs.Assistants.QuotaReserved != maxTasks {
@@ -352,7 +353,7 @@ func TestAdmission_ConcurrentParentsRespectSharedQuota(t *testing.T) {
 func TestAdmission_GroupIsAllOrNothing(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
-	maxTasks := 1
+	maxTasks := 2 // the parent and one child
 	o.opts.Config.Collaboration.Limits.MaxTasks = &maxTasks
 
 	release := make(chan struct{})
@@ -372,7 +373,7 @@ func TestAdmission_GroupIsAllOrNothing(t *testing.T) {
 	if len(rs.Assistants.ByParent[parentID]) != 0 {
 		t.Fatalf("ByParent[parent] = %v, want no children created at all (all-or-nothing)", rs.Assistants.ByParent[parentID])
 	}
-	if rs.Assistants.QuotaReserved != 0 {
-		t.Fatalf("QuotaReserved = %d, want 0 (rejected group must not reserve anything)", rs.Assistants.QuotaReserved)
+	if rs.Assistants.QuotaReserved != 1 {
+		t.Fatalf("QuotaReserved = %d, want only the parent's 1 (rejected group must not reserve anything)", rs.Assistants.QuotaReserved)
 	}
 }

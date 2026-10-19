@@ -64,7 +64,7 @@ func TestWait_SurvivesCounterQuestion(t *testing.T) {
 			// A's first turn: register the REAL wait (on realThread) and exit.
 			receipt, err := o.Wait(context.Background(), WaitRequest{
 				OperationID: "op-cq-1-wait", Waiter: a,
-				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: realThread},
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: realThread}, Deadline: testFarDeadline(),
 			})
 			if err != nil {
 				t.Errorf("Wait: %v", err)
@@ -195,7 +195,7 @@ func TestWait_SurvivesCounterQuestion_ChildQuestionsWaitingParent(t *testing.T) 
 			case 1:
 				if _, err := o.Wait(context.Background(), WaitRequest{
 					OperationID: "op-cq-parent-wait", Waiter: parent,
-					Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: realThread},
+					Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: realThread}, Deadline: testFarDeadline(),
 				}); err != nil {
 					t.Errorf("Wait: %v", err)
 				}

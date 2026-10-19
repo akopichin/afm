@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MeshApiError, listMeshParticipants, listMeshThreads, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
+import { startSerialPoll } from '../../lib/serial-poll'
 
 // Poll interval — independent of /api/status's own poll, same posture as useStageAssistants/
 // useAssistantProfiles (AGENTS.md: a capability's own data is its own request, never bolted onto the status
@@ -30,39 +31,29 @@ const EMPTY: MeshRoster = { enabled: false, probed: false, participants: [], thr
 // "capability off" and stops polling.
 export function useMeshRoster(): MeshRoster {
   const [state, setState] = useState<MeshRoster>(EMPTY)
-  const offRef = useRef(false)
 
   useEffect(() => {
-    let cancelled = false
-    offRef.current = false
-    let timer: ReturnType<typeof setInterval> | undefined
-
-    const load = (first: boolean): void => {
-      if (offRef.current) return
-      Promise.all([listMeshParticipants(), listMeshThreads()])
-        .then(([p, t]) => {
-          if (cancelled) return
-          setState({ enabled: true, probed: true, participants: p.participants, threads: t.threads })
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return
-          if (first && err instanceof MeshApiError && err.status === 404) {
-            offRef.current = true
-            if (timer !== undefined) clearInterval(timer)
+    let first = true
+    // Serial: two slow polls never overlap, so an older roster never replaces a newer one.
+    const poll = startSerialPoll(
+      (isStopped) =>
+        Promise.all([listMeshParticipants(), listMeshThreads()]).then(
+          ([p, t]) => {
+            first = false
+            if (!isStopped()) setState({ enabled: true, probed: true, participants: p.participants, threads: t.threads })
+          },
+          (err: unknown) => {
+            const wasFirst = first
+            first = false
+            if (isStopped() || !wasFirst) return // later-poll transient error: keep whatever roster we already have
+            // A 404 on the first poll: the capability is off for good (it does not flip on mid-run).
+            if (err instanceof MeshApiError && err.status === 404) poll.stop()
             setState(EMPTY_PROBED)
-            return
-          }
-          if (first) setState(EMPTY_PROBED)
-          // Later-poll transient error: keep whatever roster we already have.
-        })
-    }
-
-    load(true)
-    timer = setInterval(() => load(false), POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      if (timer !== undefined) clearInterval(timer)
-    }
+          },
+        ),
+      POLL_INTERVAL_MS,
+    )
+    return poll.stop
   }, [])
 
   return state

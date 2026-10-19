@@ -524,8 +524,7 @@ func (s *Store) Apply(t *Transition) error {
 
 	// SetStageStatusAt, не SetStageStatus: t.Time уже зафиксирован выше и это именно то время, которое
 	// попадёт в events.jsonl.
-	accountIdleAndBackoff(s.snapshot, t.StageID, t.To, t.Time)
-	s.snapshot.SetStageStatusAt(t.StageID, t.To, t.Time)
+	s.snapshot.applyTransition(t)
 	s.snapshot.LastSeq = s.lastSeq
 
 	if err := s.writeSnapshot(); err != nil {
@@ -649,10 +648,23 @@ func (s *Store) SetRunFinalizing(v bool) {
 	s.runFinalizing = v
 }
 
-// readControlPayloadAtSeq reads exactly the ONE control record at seq directly via its recorded byte offset
+// FinalizeIf marks the run finalizing when canFinish holds for the current projection, deciding both under
+// the SAME lock that admits every operation: an operation committed before the check is part of what
+// canFinish sees, and one arriving after is rejected run_finalizing. canFinish must only read rs.
+func (s *Store) FinalizeIf(canFinish func(rs *RunState) bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !canFinish(s.snapshot) {
+		return false
+	}
+	s.runFinalizing = true
+	return true
+}
+
+// readControlAtSeq reads exactly the ONE control record at seq directly via its recorded byte offset
 // (T2.5) — no scan of the rest of the journal. Caller MUST hold s.mu (same lock as the operation deciding
 // whether to admit a repeat).
-func (s *Store) readControlPayloadAtSeq(seq uint64) (json.RawMessage, error) {
+func (s *Store) readControlAtSeq(seq uint64) (Control, error) {
 	controlReadHookMu.Lock()
 	hook := controlReadHook
 	controlReadHookMu.Unlock()
@@ -662,32 +674,32 @@ func (s *Store) readControlPayloadAtSeq(seq uint64) (json.RawMessage, error) {
 
 	offset, ok := s.seqOffsets[seq]
 	if !ok {
-		return nil, fmt.Errorf("no recorded journal offset for seq %d", seq)
+		return Control{}, fmt.Errorf("no recorded journal offset for seq %d", seq)
 	}
 	const maxLineBytes = 1 << 20 // 1 MiB — generous for a human-scale operation's bundled effects
 	buf := make([]byte, maxLineBytes)
 	n, err := s.eventsLog.ReadAt(buf, offset)
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("read journal at offset %d: %w", offset, err)
+		return Control{}, fmt.Errorf("read journal at offset %d: %w", offset, err)
 	}
 	idx := bytes.IndexByte(buf[:n], '\n')
 	if idx < 0 {
-		return nil, fmt.Errorf("control record at seq %d exceeds %d bytes or is missing its terminating newline", seq, maxLineBytes)
+		return Control{}, fmt.Errorf("control record at seq %d exceeds %d bytes or is missing its terminating newline", seq, maxLineBytes)
 	}
 	var c Control
 	if err := json.Unmarshal(buf[:idx], &c); err != nil {
-		return nil, fmt.Errorf("decode control record at seq %d: %w", seq, err)
+		return Control{}, fmt.Errorf("decode control record at seq %d: %w", seq, err)
 	}
-	return c.Payload, nil
+	return c, nil
 }
 
-// controlReadHookMu/controlReadHook — test seam counting/observing calls to readControlPayloadAtSeq, so T2.5
+// controlReadHookMu/controlReadHook — test seam counting/observing calls to readControlAtSeq, so T2.5
 // can assert a brand-new operation_id's hot path never touches the journal (TestIdempotency_
 // NewOperationDoesNotReadJournal) while a cache-miss-but-index-hit repeat reads it exactly once.
 var controlReadHookMu sync.Mutex
 var controlReadHook func()
 
-// SetControlReadHook installs a test hook called every time readControlPayloadAtSeq runs. Production code
+// SetControlReadHook installs a test hook called every time readControlAtSeq runs. Production code
 // MUST NOT call this.
 func SetControlReadHook(h func()) {
 	controlReadHookMu.Lock()

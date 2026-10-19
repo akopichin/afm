@@ -2,10 +2,12 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 )
 
 // ---- T1.2: messages, inbox references and receipts ----
@@ -225,6 +227,48 @@ func TestMesh_MessageSentRejectsAtMaxThreadMessages(t *testing.T) {
 	}
 }
 
+// A thread's own message budget (MaxMessages) is enforced exactly at its boundary, not the global limit.
+func TestMesh_MessageSentRejectsAtThreadBudget(t *testing.T) {
+	as := newAssistantsState()
+	mustApply(t, &as, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	mustApply(t, &as, meshParticipantAddedControl("b", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	payload, _ := json.Marshal(MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: []string{"a", "b"}, MaxMessages: 3})
+	mustApply(t, &as, &Control{Kind: kindMeshThreadOpened, SchemaVersion: ControlSchemaVersion, Target: Target{ThreadID: "th-small"}, Payload: payload})
+
+	for i := range 3 {
+		mustApply(t, &as, meshMessageSentControl(uint64(i+1), fmt.Sprintf("m%d", i), "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "q"))
+	}
+	err := dispatchControlKind(&as, meshMessageSentControl(4, "m-over", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "one too many"), true)
+	var rej *OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeBudgetExceeded {
+		t.Fatalf("4th message in a 3-message thread: err = %v, want budget_exceeded", err)
+	}
+	if got := len(as.Mesh.MessagesByThread["th-small"]); got != 3 {
+		t.Fatalf("thread has %d messages, want 3", got)
+	}
+}
+
+// TestMesh_ReplayKeepsThreadFilledPastItsBudget: journals written before a thread's own budget was enforced
+// hold threads filled past it (only the global limit applied). Replaying one must not fail at the first
+// message above the budget.
+func TestMesh_ReplayKeepsThreadFilledPastItsBudget(t *testing.T) {
+	payload, _ := json.Marshal(MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: []string{"a", "b"}, MaxMessages: 1})
+	controls := []*Control{
+		meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)),
+		meshParticipantAddedControl("b", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)),
+		{Kind: kindMeshThreadOpened, SchemaVersion: ControlSchemaVersion, Target: Target{ThreadID: "th-small"}, Payload: payload},
+		meshMessageSentControl(0, "m1", "th-small", "a", []string{"b"}, string(agentcomm.MessageKindMessage), nil, "first"),
+		meshMessageSentControl(0, "m2", "th-small", "b", []string{"a"}, string(agentcomm.MessageKindMessage), nil, "second, past the budget"),
+	}
+	rs := NewRunState(nil)
+	if res := parseEventLog(journalOf(t, controls), rs); res.corrupted || res.unsupported != nil {
+		t.Fatalf("an old journal with a thread past its own budget must replay: corrupted=%v unsupported=%v", res.corrupted, res.unsupported)
+	}
+	if got := len(rs.Assistants.Mesh.MessagesByThread["th-small"]); got != 2 {
+		t.Fatalf("replayed thread has %d messages, want 2", got)
+	}
+}
+
 // TestMesh_MessageSentRejectsAtMaxInboxUnread spreads messages to the SAME recipient across many different
 // threads (so no single thread's MaxThreadMessages is anywhere near its own limit) to isolate the
 // cross-thread per-recipient MaxInboxUnread check.
@@ -255,5 +299,59 @@ func TestMesh_MessageSentRejectsAtMaxInboxUnread(t *testing.T) {
 	}
 	if got := len(as.Mesh.Inbox["qa"]); got != agentcomm.MaxInboxUnread {
 		t.Fatalf("the rejected message was still added to qa's inbox: now has %d entries", got)
+	}
+}
+
+// TestMesh_InboxCapacityCountsOnlyMessagesWaitingForHandover: the inbox limit bounds messages not yet handed
+// over. Delivered messages free their place, and the human — who reads threads in the dashboard, never
+// through a handover — is never blocked by messages addressed to them.
+func TestMesh_InboxCapacityCountsOnlyMessagesWaitingForHandover(t *testing.T) {
+	as := newAssistantsState()
+	mustApply(t, &as, meshParticipantAddedControl("user", string(agentcomm.KindUser), string(agentcomm.ScopeRun)))
+	mustApply(t, &as, meshParticipantAddedControl("qa", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+
+	var seq uint64
+	send := func(id, thread, from, to string) error {
+		seq++
+		return dispatchControlKind(&as, meshMessageSentControl(seq, id, thread, from, []string{to}, string(agentcomm.MessageKindMessage), nil, "q"), false)
+	}
+	for i := range agentcomm.MaxInboxUnread {
+		thread := fmt.Sprintf("th-%d", i)
+		mustApply(t, &as, meshThreadOpenedControl(thread, []string{"user", "qa"}))
+		if err := send(fmt.Sprintf("to-qa-%d", i), thread, "user", "qa"); err != nil {
+			t.Fatalf("send to qa %d: %v", i, err)
+		}
+		mustApply(t, &as, meshMessageReceiptControl(kindMeshMessageDelivered, fmt.Sprintf("to-qa-%d", i), "qa"))
+		if err := send(fmt.Sprintf("to-user-%d", i), thread, "qa", "user"); err != nil {
+			t.Fatalf("send to the human %d: %v", i, err)
+		}
+	}
+	mustApply(t, &as, meshThreadOpenedControl("th-more", []string{"user", "qa"}))
+	if err := send("to-qa-more", "th-more", "user", "qa"); err != nil {
+		t.Fatalf("qa has read every message, a new one must be accepted: %v", err)
+	}
+	if err := send("to-user-more", "th-more", "qa", "user"); err != nil {
+		t.Fatalf("messages to the human must never hit the inbox limit: %v", err)
+	}
+}
+
+// TestMesh_HumanInboxKeepsNewestMessages: the human's inbox index is bounded by agentcomm.MaxHumanInbox and
+// keeps the newest messages; an agent's inbox is bounded by capacity instead, never trimmed.
+func TestMesh_HumanInboxKeepsNewestMessages(t *testing.T) {
+	ms := newMeshState()
+	ms.Participants["user"] = &agentcomm.Participant{ID: "user", Kind: agentcomm.KindUser, Scope: agentcomm.ScopeRun}
+	ms.Participants["helper:t1"] = &agentcomm.Participant{ID: "helper:t1", Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage}
+	total := agentcomm.MaxHumanInbox + 5
+	for i := range total {
+		id := agentcomm.MessageID(fmt.Sprintf("m%d", i))
+		ms.appendToInbox("user", id)
+		ms.appendToInbox("helper:t1", id)
+	}
+	human := ms.Inbox["user"]
+	if len(human) != agentcomm.MaxHumanInbox || human[0] != "m5" || human[len(human)-1] != agentcomm.MessageID(fmt.Sprintf("m%d", total-1)) {
+		t.Fatalf("human inbox = %d entries from %s to %s, want the newest %d", len(human), human[0], human[len(human)-1], agentcomm.MaxHumanInbox)
+	}
+	if got := len(ms.Inbox["helper:t1"]); got != total {
+		t.Fatalf("agent inbox = %d entries, want all %d", got, total)
 	}
 }

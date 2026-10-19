@@ -70,6 +70,9 @@ type Manager struct {
 	defaultCmd   string
 	activeAgents sync.Map
 	agentWG      sync.WaitGroup
+	// owners maps an owner key to a channel closed once that owner's goroutine has completely finished — its
+	// run returned and its lease is released. SpawnOwned for a key that is still running waits for it.
+	owners sync.Map // OwnerKey -> chan struct{}
 
 	// shouldRun — единая точка входа для пред-запускной проверки стадии. nil означает "всегда запускать"
 	// (используется тестами, которым эта проверка не нужна).
@@ -82,6 +85,10 @@ type Manager struct {
 	// back to an unlimited noopSemaphore (§7.2 — "an unknown command must not get an unbounded run").
 	dynMu   sync.Mutex
 	dynSems map[string]Semaphore
+	// dynCap — how many agents may run at once on one such command: the run's global max_parallel, or
+	// defaultDynamicCap when the run sets no global limit. Several run agents of one role (two reviewers, QA
+	// and DevOps on one recipe) must work side by side, not strictly one after another.
+	dynCap int
 
 	// Clock — часы WaitAgents' drain таймаута. nil (не задан конструктором — New/NewWithSemaphores его не
 	// принимают, чтобы не трогать ~40 call sites) означает clock.Real(). orchestrator.New НАМЕРЕННО не
@@ -144,8 +151,16 @@ func New(critical *bus.CriticalBus, stages []flow.Stage, defaultCommand string, 
 			sems[cmd] = noopSemaphore{}
 		}
 	}
-	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand, shouldRun: shouldRun}
+	dynCap := globalMaxParallel
+	if dynCap <= 0 {
+		dynCap = defaultDynamicCap
+	}
+	return &Manager{critical: critical, sems: sems, defaultCmd: defaultCommand, shouldRun: shouldRun, dynCap: dynCap}
 }
+
+// defaultDynamicCap — the limit for a command no stage declared when the run sets no global max_parallel:
+// bounded (§7.2), but wide enough for a small team of agents sharing one recipe.
+const defaultDynamicCap = 4
 
 // NewWithSemaphores строит Manager с готовой картой семафоров — используется
 // тестами, которым нужен прямой контроль над блокировкой (см. ChannelSemaphore).
@@ -177,7 +192,8 @@ func (m *Manager) resolveCmd(cmd string) string {
 // semForCmd выбирает семафор команды для Lease. Известная (зарегистрированная в New/NewWithSemaphores)
 // команда — её собственный семафор (возможно noopSemaphore, если у неё явно нет лимита). Команда, которую
 // Manager никогда не видел (ни одна стадия её не объявляла) — НЕ unlimited noop: лениво заводим для неё
-// консервативный single-flight семафор (capacity 1), кешируем в dynSems под dynMu, и дальше отдаём тот же
+// семафор ёмкостью dynCap (глобальный max_parallel или defaultDynamicCap; у NewWithSemaphores — 1),
+// кешируем в dynSems под dynMu, и дальше отдаём тот же
 // инстанс каждому вызову с тем же именем команды — иначе два конкурентных помощника с одним и тем же
 // неизвестным profile-командой получили бы КАЖДЫЙ свой независимый лимит=1 вместо общего.
 func (m *Manager) semForCmd(cmd string) Semaphore {
@@ -197,7 +213,7 @@ func (m *Manager) dynamicSemForCmd(cmd string) Semaphore {
 	if m.dynSems == nil {
 		m.dynSems = map[string]Semaphore{}
 	}
-	sem := ChannelSemaphore(make(chan struct{}, 1))
+	sem := ChannelSemaphore(make(chan struct{}, max(m.dynCap, 1)))
 	m.dynSems[cmd] = sem
 	return sem
 }
@@ -208,10 +224,20 @@ func (m *Manager) dynamicSemForCmd(cmd string) Semaphore {
 // shouldRun IMMEDIATELY AFTER acquiring the semaphore (the goroutine may have queued for an arbitrary amount
 // of time, during which the owner could have been paused/cancelled) — same ordering as SpawnAgentLease used
 // to inline before this extraction. shouldRun==nil means "always run".
+//
+// One owner key runs one goroutine at a time: a spawn for an owner whose previous goroutine is still running
+// (a run agent's next turn scheduled from its previous turn's tail, or by a message arriving just then) starts
+// only after that goroutine has finished, deferred cleanup included — so the old turn can never release
+// state, a lease or an activity marker that already belongs to the new one.
 func (m *Manager) SpawnOwned(ctx context.Context, owner OwnerKey, cmd string, shouldRun func() bool, run func(context.Context, *Lease)) {
 	m.agentWG.Add(1)
 	go func() {
 		defer m.agentWG.Done()
+		done, ok := m.claimOwner(ctx, owner)
+		if !ok {
+			return
+		}
+		defer m.releaseOwner(owner, done)
 		lease, err := m.AcquireLease(ctx, cmd)
 		if err != nil {
 			return
@@ -226,6 +252,29 @@ func (m *Manager) SpawnOwned(ctx context.Context, owner OwnerKey, cmd string, sh
 		}
 		run(ctx, lease)
 	}()
+}
+
+// claimOwner makes the calling goroutine owner's only running goroutine, waiting for a previous one to
+// finish. It fails only when ctx is cancelled while waiting.
+func (m *Manager) claimOwner(ctx context.Context, owner OwnerKey) (chan struct{}, bool) {
+	done := make(chan struct{})
+	for {
+		prev, running := m.owners.LoadOrStore(owner, done)
+		if !running {
+			return done, true
+		}
+		select {
+		case <-prev.(chan struct{}):
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+// releaseOwner ends the claim taken by claimOwner and wakes a spawn waiting for owner.
+func (m *Manager) releaseOwner(owner OwnerKey, done chan struct{}) {
+	m.owners.CompareAndDelete(owner, done)
+	close(done)
 }
 
 // SpawnAgentLease runs an agent with one transferable command-slot lease. Cancellation while waiting

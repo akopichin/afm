@@ -60,7 +60,7 @@ func (a agentMeshActions) Send(ctx context.Context, requestID, actor string, req
 	if kind == "" {
 		kind = agentcomm.MessageKindMessage
 	}
-	receipt, err := a.orch.Send(ctx, orchestrator.SendRequest{
+	receipt, err := a.orch.SendFromAgent(ctx, orchestrator.SendRequest{
 		OperationID: requestID, ThreadID: agentcomm.ThreadID(req.ThreadID), Sender: agentcomm.ParticipantID(actor),
 		Recipients: toParticipantIDs(req.Recipients), Kind: kind, InReplyTo: inReplyTo,
 		Body: req.Body, ArtifactRefs: req.ArtifactRefs, Actor: meshActor(actor),
@@ -68,17 +68,28 @@ func (a agentMeshActions) Send(ctx context.Context, requestID, actor string, req
 	if err != nil {
 		return server.MeshSendReceipt{}, err
 	}
-	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq}, nil
+	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq, ThreadID: string(receipt.ThreadID)}, nil
 }
 
 func toMeshMessagePage(p orchestrator.MessagePage) server.MeshMessagePage {
 	return server.MeshMessagePage{Messages: p.Messages, NextCursor: p.NextCursor}
 }
 
-func (a agentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int) (server.MeshMessagePage, error) {
-	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: agentcomm.ParticipantID(actor), Cursor: cursor, Limit: limit, Actor: meshActor(actor)})
+// Inbox returns only messages the agent has not been handed yet unless all is set: a run agent gets a fresh
+// session every turn, and showing it messages it already handled (in an earlier turn's <inbox> or inbox read)
+// makes it answer them again.
+func (a agentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64, limit int, all bool) (server.MeshMessagePage, error) {
+	reader := agentcomm.ParticipantID(actor)
+	page, err := a.orch.ReadInbox(ctx, orchestrator.ReadInboxRequest{Participant: reader, Cursor: cursor, Limit: limit, OnlyNew: !all, Actor: meshActor(actor)})
 	if err != nil {
 		return server.MeshMessagePage{}, err
+	}
+	// Handing messages to the agent is what "delivered" means: a later thread-less addressed_message wait must
+	// not wake it again for a message it has already read. Idempotent per (message, recipient).
+	for _, m := range page.Messages {
+		if err := a.orch.MarkMessageDelivered(ctx, m.ID, reader); err != nil {
+			return server.MeshMessagePage{}, err
+		}
 	}
 	return toMeshMessagePage(page), nil
 }
@@ -124,7 +135,7 @@ func (a agentMeshActions) CancelWait(ctx context.Context, requestID, actor, wait
 func (a agentMeshActions) PublishBoard(ctx context.Context, requestID, actor string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {
 	return a.orch.Publish(ctx, orchestrator.PublishRequest{
 		OperationID: requestID, Author: agentcomm.ParticipantID(actor), Key: req.Key, Status: req.Status,
-		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, AuthorizedBy: toParticipantIDs(req.AuthorizedBy),
+		ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion,
 		Actor: meshActor(actor),
 	})
 }

@@ -3,9 +3,12 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 )
 
 // runRootDirInline — снимок прежней инлайн-логики cmd/afm/run.go для agentRootDir, буквально скопированный
@@ -207,5 +210,46 @@ func TestLifecycleRootDir_EmptyReturnsAbsoluteCWD(t *testing.T) {
 	}
 	if got != wantWd {
 		t.Errorf("lifecycleRootDir(\"\") = %q, want CWD %q", got, wantWd)
+	}
+}
+
+// loadRedactionSecrets collects every effective secret: both default secrets.env layers AND the override, the
+// values recipe and hook references resolve to (environment included), skipping values under 4 characters.
+func TestLoadRedactionSecrets_IncludesEveryActiveSource(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HOOK_TOKEN_FROM_ENV", "hook-env-secret")
+	t.Setenv("RECIPE_TOKEN_FROM_ENV", "recipe-env-secret")
+	for dir, content := range map[string]string{
+		home:    "GLOBAL_TOKEN=global-secret-value\n",
+		project: "PROJECT_TOKEN=project-secret-value\nPIN=4242\nDEBUG=1\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, ".afm"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".afm", "secrets.env"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	override := filepath.Join(t.TempDir(), "override.env")
+	if err := os.WriteFile(override, []byte("OVERRIDE_TOKEN=override-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg config.Config
+	cfg.Docker.SecretsFile = override
+	cfg.Docker.Agents = map[string]config.AgentRecipe{"glm": {Auth: config.RecipeAuth{From: "env:RECIPE_TOKEN_FROM_ENV"}}}
+	hooks := []lifecyclehooks.RegisteredHook{{Hook: lifecyclehooks.Hook{
+		ID: "notify", Env: map[string]lifecyclehooks.SecretRef{"TOKEN": "env:HOOK_TOKEN_FROM_ENV"}, //nolint:gosec // a reference to a test env var, not a credential
+		ResolvedEnv: map[string]string{"CHAT": "resolved-hook-value"},
+	}}}
+
+	got := loadRedactionSecrets(project, cfg, hooks)
+	for _, want := range []string{"global-secret-value", "project-secret-value", "4242", "override-secret", "hook-env-secret", "recipe-env-secret", "resolved-hook-value"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("redaction set %v is missing %q", got, want)
+		}
+	}
+	if slices.Contains(got, "1") {
+		t.Errorf("redaction set %v holds a value shorter than %d characters", got, minRedactedSecretLen)
 	}
 }

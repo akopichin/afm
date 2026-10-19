@@ -103,18 +103,23 @@ func TestWaitingChildren_NewRequiredChildReopensReadiness(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	activateStage(t, o, assistantsTestStageID)
 
-	var calls atomic.Int32
+	var parentTurns atomic.Int32
 	release1 := make(chan struct{})
 	release2 := make(chan struct{})
+	// Each child is released by its own identity, not by call order: the two children run concurrently, and
+	// the late child's agent can start before the first one's.
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		switch calls.Add(1) {
-		case 1:
-			return delegateOutcome(childJSON(assistants.ModeRequired)), nil
-		case 2:
-			<-release1
+		switch {
+		case assistants.TaskID(taskID) == deriveTaskID("op-parent"):
+			if parentTurns.Add(1) == 1 {
+				return delegateOutcome(childJSON(assistants.ModeRequired)), nil
+			}
+			return passResultOutcome(), nil
+		case store.Snapshot().Assistants.Tasks[assistants.TaskID(taskID)].Title == "late child":
+			<-release2
 			return passResultOutcome(), nil
 		default:
-			<-release2
+			<-release1
 			return passResultOutcome(), nil
 		}
 	}

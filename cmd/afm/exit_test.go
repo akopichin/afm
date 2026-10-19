@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,5 +103,21 @@ func TestRunMain_ExitErrorSilentSuppressesPrinting(t *testing.T) {
 	})
 	if got := out; got == "" {
 		t.Error("expected check's own stdout table even on a corrupt ledger, got empty output")
+	}
+}
+
+// TestRunExitError_InterruptIsNotAUsageError: Ctrl+C ends the run with a silent exit 130 (main prints no usage);
+// any other run error stays an ordinary error.
+func TestRunExitError_InterruptIsNotAUsageError(t *testing.T) {
+	interrupted, cancel := context.WithCancel(context.Background())
+	cancel()
+	var exitErr *ExitError
+	if err := runExitError(interrupted, context.Canceled); !errors.As(err, &exitErr) || !exitErr.Silent || exitErr.Code != interruptedExitCode {
+		t.Fatalf("interrupted run error = %v, want a silent ExitError with code %d", err, interruptedExitCode)
+	}
+
+	boom := errors.New("boom")
+	if err := runExitError(context.Background(), boom); !errors.Is(err, boom) || errors.As(err, &exitErr) {
+		t.Fatalf("failed run error = %v, want the wrapped run error", err)
 	}
 }

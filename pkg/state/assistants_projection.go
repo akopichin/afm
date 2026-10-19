@@ -52,6 +52,9 @@ type TaskState struct {
 	// (state.go's isIdle) both need it WITHOUT file I/O, identically live and after a restart — see
 	// applyTaskResult's doc comment for why the rest of Result still lives only in the control stream.
 	LastVerdict assistants.Verdict `json:"last_verdict,omitempty"`
+	// ResultSeq is the seq of the most recently projected task_result record (0 if none) — tells a result
+	// recorded after a task_result wait was registered from an earlier one (MeshWait.ResultBaseline).
+	ResultSeq uint64 `json:"result_seq,omitempty"`
 	// Waived/WaiverReason/WaivedBy/WaivedAt (Этап 7, T7.6) record a human's explicit decision to accept the
 	// risk of this required task never closing its own gate — a SEPARATE, audited operation (kindTaskWaived),
 	// never a side effect of cancel/retry/any task_result. Once Waived, RequiredBlocker treats this task's
@@ -100,6 +103,18 @@ type AssistantsState struct {
 	// participants, threads, messages+receipts, waits and the shared board. See mesh_projection.go/
 	// mesh_waits.go/mesh_board.go.
 	Mesh MeshState `json:"mesh,omitempty"`
+
+	// admitting is true only on the scratch copy that validates a NEW record before it is written
+	// (applyOperationCommitted with dryRun). Never persisted. See admittingNewRecord.
+	admitting bool
+}
+
+// admittingNewRecord reports whether a handler is deciding admission of a record being written NOW, as opposed
+// to applying it after a successful validation or replaying it from the journal. A rule added after records
+// were already journaled (a key's sole ownership, a thread's own message budget) is enforced only here, so a
+// journal written under the older, looser rule still replays.
+func (as *AssistantsState) admittingNewRecord(dryRun bool) bool {
+	return dryRun || as.admitting
 }
 
 // DiscussionState is the normalized, replay-restored discussion-log projection for one run (T6.1). Messages
@@ -286,6 +301,7 @@ func applyOperationCommitted(as *AssistantsState, c *Control, dryRun bool) error
 	}
 
 	scratch := as.deepClone()
+	scratch.admitting = dryRun
 	for i, e := range p.Effects {
 		if e.Kind == kindOperationCommitted {
 			return fmt.Errorf("operation effect %d: nested operation_committed is not allowed", i)
@@ -468,6 +484,9 @@ func dispatchControl(rs *RunState, c *Control, dryRun bool) error {
 		}
 	} else if err := dispatchControlKind(as, c, dryRun); err != nil {
 		return err
+	}
+	if !dryRun {
+		rs.resolveStageStatusWaits()
 	}
 
 	// Idempotency index (T2.5): ANY control record that carries an operation_id contributes to the
@@ -654,6 +673,7 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	if status.Terminal() {
 		t.FinishedAt = c.Time
 	}
+	as.resolveTaskResultWaits(id)
 	return nil
 }
 
@@ -718,6 +738,8 @@ func applyTaskResult(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	t.LastVerdict = p.Verdict
+	t.ResultSeq = c.Seq
+	as.resolveTaskResultWaits(id)
 	return nil
 }
 

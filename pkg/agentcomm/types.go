@@ -76,7 +76,22 @@ type Participant struct {
 	Reachable bool `json:"reachable"`
 	// UnreachableReason explains why Reachable is false. Empty when Reachable is true.
 	UnreachableReason string `json:"unreachable_reason,omitempty"`
+	// Activity is what a task-backed participant (run agent, helper) is doing right now, derived from its
+	// task on every roster read and never journaled; empty for stage agents (their stage status says it), the
+	// user and the Side agent.
+	Activity Activity `json:"activity,omitempty"`
 }
+
+// Activity — what a run agent or helper is doing now, for the Team roster.
+type Activity string
+
+const (
+	ActivityWorking Activity = "working" // its turn is running
+	ActivityWaiting Activity = "waiting" // it is waiting for a colleague, its children or its parent
+	ActivityIdle    Activity = "idle"    // a run agent between turns, with nothing to read
+	ActivityPaused  Activity = "paused"
+	ActivityDone    Activity = "done" // its task has finished
+)
 
 // Valid reports whether p has the minimum identity a Participant needs: a non-empty ID and a
 // recognized Kind and Scope. The zero Participant is never valid.
@@ -219,7 +234,7 @@ const (
 	// WaitOnAddressedMessage is satisfied by any new message addressed to the waiter in ThreadID.
 	WaitOnAddressedMessage WaitConditionKind = "addressed_message"
 	// WaitOnTaskResult is satisfied when the assistants task named by TaskID reaches a terminal
-	// status.
+	// status, or — for a run agent, which never becomes terminal — once a turn's result is recorded.
 	WaitOnTaskResult WaitConditionKind = "task_result"
 	// WaitOnBoardKey is satisfied when the board entry named Key reaches Status.
 	WaitOnBoardKey WaitConditionKind = "board_key"
@@ -247,9 +262,9 @@ type WaitCondition struct {
 	// MessageID is set for WaitOnReplyTo: the message the waiter expects an answer to.
 	MessageID MessageID `json:"message_id,omitempty"`
 	// ThreadID is set for WaitOnAddressedMessage: the thread to watch for a new message
-	// addressed to the waiter.
+	// addressed to the waiter. Empty means any thread: a message the waiter has not seen yet.
 	ThreadID ThreadID `json:"thread_id,omitempty"`
-	// TaskID is set for WaitOnTaskResult: the assistants task whose terminal result is awaited.
+	// TaskID is set for WaitOnTaskResult: the assistants task whose result is awaited.
 	// Kept as a plain string (not assistants.TaskID) so this field costs agentcomm no import of
 	// pkg/assistants.
 	TaskID string `json:"task_id,omitempty"`
@@ -270,7 +285,7 @@ func (c WaitCondition) Valid() bool {
 	case WaitOnReplyTo:
 		return c.MessageID != ""
 	case WaitOnAddressedMessage:
-		return c.ThreadID != ""
+		return true
 	case WaitOnTaskResult:
 		return c.TaskID != ""
 	case WaitOnBoardKey:

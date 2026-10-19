@@ -82,9 +82,13 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 		}
 		awaitingAssistantsBlocked := st.Status == state.StatusAwaitingAssistants && rs.Assistants.NeedsHumanDecision(id)
 
+		name := cfg.Name
+		if name == "" {
+			name = rs.StageNames[id]
+		}
 		views = append(views, StageView{
 			ID:                        id,
-			Name:                      rs.StageNames[id],
+			Name:                      name,
 			Status:                    st.Status,
 			UpdatedAt:                 st.UpdatedAt,
 			Interactive:               cfg.Interactive,

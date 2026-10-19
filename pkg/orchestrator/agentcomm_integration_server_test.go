@@ -106,6 +106,13 @@ func (a meshServerActionsForTest) Inbox(ctx context.Context, cursor uint64, limi
 	return server.MeshMessagePage{Messages: page.Messages, NextCursor: page.NextCursor}, nil
 }
 
+func (a meshServerActionsForTest) PublishBoard(ctx context.Context, requestID string, req server.MeshBoardPublishRequest) (agentcomm.BoardEntry, error) {
+	return a.orch.Publish(ctx, orchestrator.PublishRequest{
+		OperationID: requestID, Author: "user", Key: req.Key, Status: req.Status, ExpectedVersion: req.ExpectedVersion,
+		Notify: smokeParticipantIDs(req.Notify), Actor: state.Actor{Kind: "user"},
+	})
+}
+
 func (a meshServerActionsForTest) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
 	page, err := a.orch.ReadBoard(ctx, orchestrator.ReadBoardRequest{Key: key})
 	if err != nil {
@@ -184,11 +191,9 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	// Deliberately never queried from here on — see this test's own doc comment.
 
 	ctx := context.Background()
-	// "run:<profileID>" is AddRunAgent's own documented participant-id vocabulary (dev-plan.md's Vocabulary
-	// table, agentcomm_attach.go's own meshRunParticipantID doc comment) — stable and public, not derived from
-	// any unexported symbol this external test package could not otherwise reach.
-	qaParticipant := agentcomm.ParticipantID("run:qa")
-	devopsParticipant := agentcomm.ParticipantID("run:devops")
+	// AddRunAgent's mesh identity for a scope=run task is "run:<taskID>", derived from the operation id.
+	qaParticipant := orchestrator.RunAgentParticipantIDForTest("op-add-qa")
+	devopsParticipant := orchestrator.RunAgentParticipantIDForTest("op-add-devops")
 
 	var qaCalls, devopsCalls atomic.Int32
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
@@ -225,19 +230,19 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	// registers — QA publishing afterwards is what actually exercises "DevOps's board wait wakes" live,
 	// instead of Wait() itself immediately returning Ready for an already-published key.
 	doMsg := "verify once ready"
-	doRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{ProfileID: "devops", Title: "DevOps", FirstMessage: &doMsg, Actor: state.Actor{Kind: "user"}})
+	doRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-devops", ProfileID: "devops", Title: "DevOps", FirstMessage: &doMsg, Actor: state.Actor{Kind: "user"}})
 	if err != nil {
 		t.Fatalf("AddRunAgent (devops): %v", err)
 	}
 	waitForTaskStatus(t, store, doRes.TaskID, assistants.StatusWaitingPeer, 5*time.Second)
 
 	qaMsg := "publish your result"
-	qaRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{ProfileID: "qa", Title: "QA", FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"}})
+	qaRes, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa", ProfileID: "qa", Title: "QA", FirstMessage: &qaMsg, Actor: state.Actor{Kind: "user"}})
 	if err != nil {
 		t.Fatalf("AddRunAgent (qa): %v", err)
 	}
-	waitForTaskStatus(t, store, qaRes.TaskID, assistants.StatusCompleted, 5*time.Second)
-	waitForTaskStatus(t, store, doRes.TaskID, assistants.StatusCompleted, 5*time.Second)
+	waitForRunAgentTurnExternal(t, store, qaRes.TaskID, 5*time.Second)
+	waitForRunAgentTurnExternal(t, store, doRes.TaskID, 5*time.Second)
 
 	if got := qaCalls.Load(); got != 1 {
 		t.Fatalf("qa invoked %d times, want exactly 1", got)
@@ -250,4 +255,18 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	if entry, ok := rs.Assistants.Mesh.Board["qa.tests"]; !ok || entry.Status != "ready" {
 		t.Fatalf("board entry = %+v, want ready", entry)
 	}
+}
+
+// waitForRunAgentTurnExternal waits until a run agent finished a turn: back to idle (queued — a standing role
+// never completes) with that turn's result recorded.
+func waitForRunAgentTurnExternal(t *testing.T, store *state.Store, taskID assistants.TaskID, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if tk, ok := store.Snapshot().Assistants.Tasks[taskID]; ok && tk.Status == assistants.StatusQueued && tk.LastVerdict != "" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("run agent %s did not finish a turn", taskID)
 }

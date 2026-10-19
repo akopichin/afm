@@ -59,6 +59,8 @@ export type MeshParticipant = {
   stage_id?: string
   reachable: boolean
   unreachable_reason?: string
+  // activity — what a run agent or helper is doing now (working, waiting, idle, paused, done).
+  activity?: string
 }
 
 export type MeshThreadBudgets = {
@@ -152,6 +154,14 @@ export async function getMeshThread(threadId: string, cursor = 0, limit = 0): Pr
   const url = `/api/mesh/threads/${encodeURIComponent(threadId)}${qs ? `?${qs}` : ''}`
   const body = await meshGet<{ messages?: MeshMessage[] | null; next_cursor?: number }>(url)
   return { messages: body.messages ?? [], next_cursor: body.next_cursor ?? cursor }
+}
+
+// publishMeshBoard posts a board entry as the human operator — POST /api/mesh/board (e.g. a task for the agents).
+// notify — participant ids the server messages about the new entry; sent only when non-empty.
+export async function publishMeshBoard(req: { requestId: string; key: string; status: string; notify?: string[] }): Promise<MeshBoardEntry> {
+  const body: Record<string, unknown> = { request_id: req.requestId, key: req.key, status: req.status }
+  if (req.notify !== undefined && req.notify.length > 0) body.notify = req.notify
+  return meshPost<MeshBoardEntry>('/api/mesh/board', body)
 }
 
 // getMeshBoard reads the shared board — GET /api/mesh/board. An empty/omitted key returns every entry

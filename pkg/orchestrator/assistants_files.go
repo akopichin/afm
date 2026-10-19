@@ -5,6 +5,7 @@
 //	    context.md        # the context actually handed to the helper (T3.5's buildTaskContext output)
 //	    result.json        # the accepted result, once completed
 //	    result.json.raw    # the model's raw final-turn text, cleared before each turn (see rawResultFileName)
+//	    turn-inbox.json    # <inbox> message ids of a turn that has not finished yet (turnInboxFileName)
 //	    agent.log          # human-readable log
 //	    agent.jsonl        # raw stream
 //	    scratch/           # the ONLY writable directory given to the helper

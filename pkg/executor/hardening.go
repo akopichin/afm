@@ -60,6 +60,9 @@ type HelperOutcome struct {
 	Interrupted bool
 	// TimedOut is true when the executor's idle timeout fired.
 	TimedOut bool
+	// ProcessErr is why the process did not finish cleanly when it was neither interrupted nor timed out
+	// (e.g. it could not even start) — surfaced as the task's failure reason.
+	ProcessErr error
 	// ProtocolErr is set when the process reported ProcessOK but produced no usable final text block at all
 	// (empty/missing) — it says nothing about whether RawText, if present, actually decodes as a valid
 	// assistants envelope.
@@ -159,7 +162,8 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		outcome.ProcessOK = true
 	default:
 		// Other run error (not timeout, not interrupt): process just didn't finish cleanly; all three flags
-		// stay false.
+		// stay false, the error itself is kept for the failure reason.
+		outcome.ProcessErr = runErr
 	}
 
 	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
