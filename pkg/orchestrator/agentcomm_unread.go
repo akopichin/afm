@@ -126,9 +126,10 @@ func (o *Orchestrator) releaseUnreadMessages(ctx context.Context, stageID string
 			log.Printf("WARN: mesh: release unread message %s of stage %q: %v", id, stageID, err)
 			continue
 		}
+		rs := o.opts.Store.Snapshot()
 		for _, waitID := range ended {
-			if waiter, won := o.meshWaitResolvedTo(waitID, agentcomm.WaitCancelled); won {
-				wake(ctx, waiter)
+			if w := rs.Assistants.Mesh.Waits[waitID]; w != nil {
+				wake(ctx, w.Waiter)
 			}
 		}
 	}
@@ -146,17 +147,20 @@ const maxUnreadReleaseAttempts = 10
 
 // markUnreadUndeliverable commits, in one operation, message id becoming undeliverable to recipient and the
 // cancellation of every pending wait of its sender that waited for an answer to it — only when nobody else can
-// answer the message any more. It returns the waits it cancelled. The operation id is fixed per (message,
+// answer the message any more. It returns the waits its own commit cancelled (state.OperationResult.EndedWaits):
+// a wait another resolution ended first is neither announced nor returned for waking. The operation id is fixed per (message,
 // recipient), so a repeat after a restart is an idempotent replay.
 func (o *Orchestrator) markUnreadUndeliverable(id agentcomm.MessageID, recipient agentcomm.ParticipantID, stageID string) ([]agentcomm.WaitID, error) {
 	reason := fmt.Sprintf("stage %s finished without reading message %s", stageID, id)
 	for range maxUnreadReleaseAttempts {
-		op, ended, err := unreadReleaseOp(o.opts.Store.Snapshot(), id, recipient, reason)
+		op, _, err := unreadReleaseOp(o.opts.Store.Snapshot(), id, recipient, reason)
 		if err != nil || op == nil {
 			return nil, err
 		}
-		_, err = o.opts.Store.ApplyRunOperation(*op, func(state.OperationResult) {
-			for _, waitID := range ended {
+		var won []agentcomm.WaitID
+		_, err = o.opts.Store.ApplyRunOperation(*op, func(res state.OperationResult) {
+			won = res.EndedWaits
+			for _, waitID := range won {
 				o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
 					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": reason}})
 			}
@@ -164,7 +168,7 @@ func (o *Orchestrator) markUnreadUndeliverable(id agentcomm.MessageID, recipient
 		if errors.Is(err, errUnreadReleaseStale) {
 			continue // another recipient finished or a wait was registered meanwhile: decide again
 		}
-		return ended, err
+		return won, err
 	}
 	return nil, fmt.Errorf("release unread message %s: %w", id, errUnreadReleaseStale)
 }

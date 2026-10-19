@@ -268,7 +268,7 @@ func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
 // cancelling a WaitID it merely learned about (it is never exposed to callers other than the waiter today,
 // but ownership is still enforced at the single admission point, not by obscurity).
 //
-// T5.6: once the cancellation durably sticks (meshWaitResolvedTo confirms THIS call's resolution — not a
+// T5.6: once the cancellation durably sticks (resolveMeshWaitDurable reports THIS call's resolution — not a
 // reply that raced in and won instead — is what the wait's status actually holds now), the waiter is woken
 // via resumeWaiterAfterTerminalWait. Previously CancelWait never did this at all (see dev-plan.md's own
 // "Review decisions" note), stranding a stage parked in awaiting_peer until the next restart — fixed here,
@@ -287,49 +287,56 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 	if reason == "" {
 		reason = "cancelled"
 	}
-	if err := o.resolveMeshWaitDurable(req.OperationID, req.WaitID, req.Actor, agentcomm.WaitCancelled, reason); err != nil {
+	waiter, changed, err := o.resolveMeshWaitDurable(req.OperationID, req.WaitID, req.Actor, agentcomm.WaitCancelled, reason)
+	if err != nil {
 		return err
 	}
-	if waiter, won := o.meshWaitResolvedTo(req.WaitID, agentcomm.WaitCancelled); won {
+	if changed {
 		o.resumeWaiterAfterTerminalWait(o.runContext(ctx), waiter) // must not die with the HTTP request
 	}
 	return nil
 }
 
 // resolveMeshWaitDurable is the SINGLE commit path for every non-Ready wait resolution this package produces
-// (CancelWait above, a firing deadline timer, startup deadline recovery, and the run-shutdown sweep) — one
-// mesh_wait_resolved effect through the same ApplyRunOperation/notice shape CancelWait always used, never a
-// second resolution code path. opID must be a stable, deterministic key per resolution ATTEMPT (not merely per
-// wait): ApplyRunOperation's own idempotency means a repeat of the SAME opID with the SAME status/reason is a
-// safe no-op replay, which is exactly what lets the live timer and the startup-recovery sweep share one key
-// (mesh-wait-expire:<id>) without double-committing if both ever somehow ran for the same wait.
-func (o *Orchestrator) resolveMeshWaitDurable(opID string, waitID agentcomm.WaitID, actor state.Actor, status agentcomm.WaitStatus, reason string) error {
+// (CancelWait above, a firing deadline timer, startup deadline recovery, the run-shutdown sweep, and the
+// release of a wait nobody can answer) — one mesh_wait_resolved effect through the same ApplyRunOperation/notice
+// shape CancelWait always used, never a second resolution code path. opID must be a stable, deterministic key
+// per resolution ATTEMPT (not merely per wait): ApplyRunOperation's own idempotency means a repeat of the SAME
+// opID with the SAME status/reason is a safe no-op replay, which is exactly what lets the live timer and the
+// startup-recovery sweep share one key (mesh-wait-expire:<id>) without double-committing if both ever somehow
+// ran for the same wait.
+//
+// changed reports whether THIS commit moved the wait out of pending (state.OperationResult.EndedWaits, decided
+// under the store lock). A reply or another resolution that landed first leaves the wait as it was, and then
+// this call neither announces it nor may its caller wake the waiter: the outcome that won owns both. waiter is
+// the wait's waiter either way.
+func (o *Orchestrator) resolveMeshWaitDurable(opID string, waitID agentcomm.WaitID, actor state.Actor, status agentcomm.WaitStatus, reason string) (agentcomm.ParticipantID, bool, error) {
+	return o.resolveMeshWaitChecked(opID, waitID, actor, status, reason, nil)
+}
+
+// resolveMeshWaitChecked is resolveMeshWaitDurable with a commit-time check (nil: none).
+func (o *Orchestrator) resolveMeshWaitChecked(opID string, waitID agentcomm.WaitID, actor state.Actor, status agentcomm.WaitStatus, reason string, check func(*state.RunState) error) (agentcomm.ParticipantID, bool, error) {
 	eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(waitID)},
 		state.MeshWaitResolvedPayload{Status: string(status), Reason: reason})
 	if err != nil {
-		return err
+		return "", false, err
 	}
-	op := state.Operation{ID: opID, Kind: "mesh_resolve_wait", Actor: actor, Effects: []state.Effect{eff}}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "status": string(status), "reason": reason}})
+	op := state.Operation{ID: opID, Kind: "mesh_resolve_wait", Actor: actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{Check: check}}
+	var changed bool
+	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		changed = slices.Contains(res.EndedWaits, waitID)
+		if changed {
+			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "status": string(status), "reason": reason}})
+		}
 	})
-	return err
-}
-
-// meshWaitResolvedTo re-reads the current snapshot and reports whether waitID's status is now exactly want,
-// returning its waiter either way. This is T5.6's "did I actually win this resolution" check: a successful
-// ApplyRunOperation only means the OPERATION committed, not that THIS call's target status is what stuck —
-// applyMeshWaitResolved is a no-op once the wait is no longer Pending (see its own doc comment), so a reply or
-// another resolution landing first leaves the wait in some OTHER status. Every caller that would otherwise
-// wake a waiter for an outcome that was not actually theirs (CancelWait, a firing deadline timer, startup
-// recovery) checks this first — the other outcome's own resume path already owns waking it.
-func (o *Orchestrator) meshWaitResolvedTo(waitID agentcomm.WaitID, want agentcomm.WaitStatus) (agentcomm.ParticipantID, bool) {
-	rs := o.opts.Store.Snapshot()
-	w, ok := rs.Assistants.Mesh.Waits[waitID]
-	if !ok {
-		return "", false
+	if err != nil {
+		return "", false, err
 	}
-	return w.Waiter, w.Status == want
+	var waiter agentcomm.ParticipantID
+	if w := o.opts.Store.Snapshot().Assistants.Mesh.Waits[waitID]; w != nil {
+		waiter = w.Waiter
+	}
+	return waiter, changed, nil
 }
 
 // armMeshWaitDeadline starts a background timer for waitID, riding o.clk() like hooks.go's retry backoff and
@@ -358,16 +365,17 @@ func (o *Orchestrator) armMeshWaitDeadline(waitID agentcomm.WaitID, deadline tim
 // expireMeshWait is armMeshWaitDeadline's firing handler (the LIVE path — the process is still up). It
 // re-reads the durable wait record as the source of truth: resolving to WaitExpired is attempted
 // unconditionally (resolveMeshWaitDurable's own Pending-only guard makes this safe even if the wait already
-// resolved another way), and the waiter is woken ONLY if meshWaitResolvedTo confirms Expired is what actually
+// resolved another way), and the waiter is woken ONLY if resolveMeshWaitDurable reports that Expired is what actually
 // stuck — never a fake ack, never a synthesised answer: if a reply won the race instead, that reply's own
 // resume path (resumeWaitersAfterCommit) already owns waking the waiter, and the reply's own message/board
 // record was never affected by this call at all.
 func (o *Orchestrator) expireMeshWait(ctx context.Context, waitID agentcomm.WaitID) {
-	if err := o.resolveMeshWaitDurable(meshWaitExpireOpID(waitID), waitID, state.Actor{Kind: "system"}, agentcomm.WaitExpired, meshWaitExpiredReason); err != nil {
+	waiter, changed, err := o.resolveMeshWaitDurable(meshWaitExpireOpID(waitID), waitID, state.Actor{Kind: "system"}, agentcomm.WaitExpired, meshWaitExpiredReason)
+	if err != nil {
 		log.Printf("WARN: mesh: expire wait %s: %v", waitID, err)
 		return
 	}
-	if waiter, won := o.meshWaitResolvedTo(waitID, agentcomm.WaitExpired); won {
+	if changed {
 		o.resumeWaiterAfterTerminalWait(ctx, waiter)
 	}
 }
@@ -400,11 +408,12 @@ func (o *Orchestrator) recoverMeshWaitDeadlines(ctx context.Context) {
 			o.armMeshWaitDeadline(id, *w.Deadline)
 			continue
 		}
-		if err := o.resolveMeshWaitDurable(meshWaitExpireOpID(id), id, state.Actor{Kind: "system"}, agentcomm.WaitExpired, meshWaitExpiredReason); err != nil {
+		waiter, changed, err := o.resolveMeshWaitDurable(meshWaitExpireOpID(id), id, state.Actor{Kind: "system"}, agentcomm.WaitExpired, meshWaitExpiredReason)
+		if err != nil {
 			log.Printf("WARN: mesh: recover overdue wait %s: %v", id, err)
 			continue
 		}
-		if waiter, won := o.meshWaitResolvedTo(id, agentcomm.WaitExpired); won {
+		if changed {
 			o.resumeWaiterAfterTerminalWaitAtStartup(ctx, waiter)
 		}
 	}
@@ -434,7 +443,7 @@ func (o *Orchestrator) closeRemainingMeshWaits() {
 		if rs.Assistants.Mesh.Waits[id].Status != agentcomm.WaitPending {
 			continue
 		}
-		if err := o.resolveMeshWaitDurable("mesh-wait-run-closed:"+string(id), id, state.Actor{Kind: "system"}, agentcomm.WaitRunClosed, meshWaitRunClosedReason); err != nil {
+		if _, _, err := o.resolveMeshWaitDurable("mesh-wait-run-closed:"+string(id), id, state.Actor{Kind: "system"}, agentcomm.WaitRunClosed, meshWaitRunClosedReason); err != nil {
 			log.Printf("WARN: mesh: close remaining wait %s at shutdown: %v", id, err)
 		}
 	}

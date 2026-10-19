@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
-	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -36,48 +35,38 @@ func (o *Orchestrator) releaseUnanswerableWaitsAfterFinish() {
 	})
 }
 
-// releaseUnanswerableWaits cancels every pending wait nobody left can answer and wakes its waiter through wake.
+// releaseUnanswerableWaits cancels every pending wait nobody left can answer and wakes its waiter through wake —
+// only when this call's own commit ended the wait (resolveMeshWaitChecked), so a concurrent CancelWait or reply
+// that won is never announced or woken twice.
 func (o *Orchestrator) releaseUnanswerableWaits(ctx context.Context, wake func(context.Context, agentcomm.ParticipantID)) {
+	if o.opts.Store == nil {
+		return
+	}
 	rs := o.opts.Store.Snapshot()
 	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
 		reason, ok := unanswerableWait(rs, id)
 		if !ok {
 			continue
 		}
-		if err := o.cancelUnanswerableWait(id, reason); err != nil {
+		stillUnanswerable := func(cur *state.RunState) error {
+			if _, ok := unanswerableWait(*cur, id); !ok {
+				return errWaitStillAnswerable
+			}
+			return nil
+		}
+		waiter, changed, err := o.resolveMeshWaitChecked("mesh-unanswerable:"+string(id)+":"+randomOpSuffix(), id,
+			state.Actor{Kind: "system"}, agentcomm.WaitCancelled, reason, stillUnanswerable)
+		if err != nil {
 			if !errors.Is(err, errWaitStillAnswerable) {
 				log.Printf("WARN: mesh: release unanswerable wait %s: %v", id, err)
 			}
 			o.handleTaskOperationErr(err)
 			continue
 		}
-		wake(ctx, rs.Assistants.Mesh.Waits[id].Waiter)
+		if changed {
+			wake(ctx, waiter)
+		}
 	}
-}
-
-// cancelUnanswerableWait commits waitID's cancellation, re-checking under the commit's lock that nobody can
-// still answer it. Only the call whose commit wins returns nil, so a waiter is woken once.
-func (o *Orchestrator) cancelUnanswerableWait(waitID agentcomm.WaitID, reason string) error {
-	eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(waitID)},
-		state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: reason})
-	if err != nil {
-		return err
-	}
-	op := state.Operation{
-		ID:   "mesh-unanswerable:" + string(waitID) + ":" + randomOpSuffix(),
-		Kind: "mesh_release_unanswerable", Actor: state.Actor{Kind: "system"}, Effects: []state.Effect{eff},
-		Expect: state.Preconditions{Check: func(cur *state.RunState) error {
-			if _, ok := unanswerableWait(*cur, waitID); !ok {
-				return errWaitStillAnswerable
-			}
-			return nil
-		}},
-	}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
-			"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": reason}})
-	})
-	return err
 }
 
 // unanswerableWait reports whether waitID is a pending wait for an answer that nobody left can send — every

@@ -406,7 +406,7 @@ func TestUnreadMessage_RecoverStageWhoseWaitWasCancelled(t *testing.T) {
 	}
 	parkStageAwaitingPeer(t, o, assistantsTestStageID)
 	// Committed, but the process stopped before waking the stage.
-	if err := o.resolveMeshWaitDurable("ended-cancel", receipt.WaitID, state.Actor{Kind: "system"}, agentcomm.WaitCancelled, "nobody will answer"); err != nil {
+	if _, _, err := o.resolveMeshWaitDurable("ended-cancel", receipt.WaitID, state.Actor{Kind: "system"}, agentcomm.WaitCancelled, "nobody will answer"); err != nil {
 		t.Fatal(err)
 	}
 
