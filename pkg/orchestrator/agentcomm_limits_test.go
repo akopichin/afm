@@ -155,7 +155,8 @@ func TestMesh_FanOutRecipientLimitProducesExplicitRefusal(t *testing.T) {
 // TestMesh_ThreadMemberFanOutLimitProducesExplicitRefusal is T8.4's fan-out clause for a thread's own FIXED
 // member set (agentcomm.MaxThreadMembers): unlike Send's recipient check, this one needs genuinely resolvable
 // participant ids (ensureParticipantEffects resolves each member against the live roster before the
-// operation is even built) — eight real, terminal helper tasks plus the human make nine, one over the limit.
+// operation is even built). The human does not take a slot (D1: it joins every conversation): eight agents
+// plus the human open, nine agents are one over the limit.
 func TestMesh_ThreadMemberFanOutLimitProducesExplicitRefusal(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()
@@ -165,12 +166,12 @@ func TestMesh_ThreadMemberFanOutLimitProducesExplicitRefusal(t *testing.T) {
 	}
 
 	members := []agentcomm.ParticipantID{meshUserParticipantID}
-	for i := 0; i < agentcomm.MaxThreadMembers; i++ {
+	for i := 0; i <= agentcomm.MaxThreadMembers; i++ {
 		taskID := attachTestTask(ctx, t, o, fmt.Sprintf("op-members-%d", i))
 		members = append(members, meshHelperParticipantID(taskID))
 	}
-	if len(members) != agentcomm.MaxThreadMembers+1 {
-		t.Fatalf("test setup: built %d members, want %d", len(members), agentcomm.MaxThreadMembers+1)
+	if _, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-members-fit", Members: members[:agentcomm.MaxThreadMembers+1], Scope: agentcomm.ScopeStage}); err != nil {
+		t.Fatalf("OpenThread with %d agents and the human: %v", agentcomm.MaxThreadMembers, err)
 	}
 
 	before := len(store.Snapshot().Assistants.Mesh.ThreadOrder)

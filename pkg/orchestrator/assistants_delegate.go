@@ -285,19 +285,16 @@ func (o *Orchestrator) childResultMeshEffects(rs state.RunState, parentID, child
 	}
 
 	members := []agentcomm.ParticipantID{meshHelperParticipantID(parentID), meshHelperParticipantID(childID)}
-	effects, err := ensureParticipantEffects(rs, members)
-	if err != nil {
-		return nil, fmt.Errorf("child result mesh mirror: %w", err)
-	}
-
-	memberStrs := []string{string(members[0]), string(members[1])}
 	threadID := deriveMeshThreadID("delegate-thread:" + string(parentID) + ":" + string(childID))
-	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: memberStrs})
-	if err != nil {
-		return nil, err
+	// The human reads along (D1). A thread opened before that keeps its members: it is not re-opened.
+	var effects []state.Effect
+	if _, exists := rs.Assistants.Mesh.Threads[threadID]; !exists {
+		var err error
+		effects, err = threadOpenEffects(rs, threadID, "", agentcomm.ScopeStage, append([]agentcomm.ParticipantID{meshUserParticipantID}, members...), 0)
+		if err != nil {
+			return nil, fmt.Errorf("child result mesh mirror: %w", err)
+		}
 	}
-	effects = append(effects, threadEff)
 
 	// The message body carries the SAME content collectChildResultsJSON would show for this child: its
 	// decoded task_result payload when one exists (located by Kind among extra — finishTaskFrom's success

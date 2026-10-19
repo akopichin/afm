@@ -9,7 +9,8 @@ const (
 	MaxBodyBytes = 16 * 1024
 	// MaxRecipients is the most explicit recipients a single Message may name.
 	MaxRecipients = 8
-	// MaxThreadMembers is the most participants a single Thread may fix at open time.
+	// MaxThreadMembers is the most agents a single Thread may fix at open time; the human, who joins every
+	// conversation, does not count.
 	MaxThreadMembers = 8
 	// MaxArtifactRefs is the most artifact references a single Message or BoardEntry may carry.
 	MaxArtifactRefs = 8

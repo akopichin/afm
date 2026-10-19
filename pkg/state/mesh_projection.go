@@ -288,16 +288,22 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode mesh_thread_opened payload: %w", err)
 	}
-	if len(p.Members) > agentcomm.MaxThreadMembers {
-		return meshRejected(assistants.CodeInvalidRequest, "a conversation can have at most %d members (MaxThreadMembers), got %d", agentcomm.MaxThreadMembers, len(p.Members))
-	}
 	members := make([]agentcomm.ParticipantID, 0, len(p.Members))
+	agents := 0
 	for _, m := range p.Members {
 		pid := agentcomm.ParticipantID(m)
-		if _, ok := as.Mesh.Participants[pid]; !ok {
+		participant, ok := as.Mesh.Participants[pid]
+		if !ok {
 			return meshRejected(assistants.CodeNotFound, "unknown participant %q — `afm agent list` shows who is in this run", m)
 		}
+		if participant.Kind != agentcomm.KindUser {
+			agents++
+		}
 		members = append(members, pid)
+	}
+	// The human joins every conversation, so only agents count toward the limit.
+	if agents > agentcomm.MaxThreadMembers {
+		return meshRejected(assistants.CodeInvalidRequest, "a conversation can have at most %d agents (MaxThreadMembers), got %d", agentcomm.MaxThreadMembers, agents)
 	}
 	thread := agentcomm.Thread{
 		ID: id, Title: p.Title, Scope: agentcomm.Scope(p.Scope), Members: members, Status: agentcomm.ThreadOpen,

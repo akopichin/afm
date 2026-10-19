@@ -159,7 +159,8 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 
 	runIDs := make([]string, 0, len(rs.Assistants.Mesh.Participants))
 	for id, p := range rs.Assistants.Mesh.Participants {
-		if p.Scope == agentcomm.ScopeRun {
+		// The human is registered once it joins a thread, but it already heads the roster.
+		if p.Scope == agentcomm.ScopeRun && p.Kind != agentcomm.KindUser {
 			runIDs = append(runIDs, string(id))
 		}
 	}
