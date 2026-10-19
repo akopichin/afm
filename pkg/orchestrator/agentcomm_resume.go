@@ -467,3 +467,45 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 		}
 	}
 }
+
+// meshWaitStatusesOf is the status of every wait of waiter right now — the "before the turn" side of
+// turnWaitAnswered.
+func (o *Orchestrator) meshWaitStatusesOf(waiter agentcomm.ParticipantID) map[agentcomm.WaitID]agentcomm.WaitStatus {
+	out := map[agentcomm.WaitID]agentcomm.WaitStatus{}
+	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter == waiter {
+			out[id] = w.Status
+		}
+	}
+	return out
+}
+
+// turnWaitAnswered reports whether a wait the turn was ended for became ready while the process was still
+// running: one already pending when the turn started (an earlier yield, as in a counter-question turn), or one
+// registered during the turn that `afm agent wait` reported as a yield. A wait ready at registration is not
+// one — the agent read its answer in the same turn — and neither is an older wait that was already ready.
+func (o *Orchestrator) turnWaitAnswered(waiter agentcomm.ParticipantID, before map[agentcomm.WaitID]agentcomm.WaitStatus) bool {
+	for id, status := range o.meshWaitStatusesOf(waiter) {
+		if status != agentcomm.WaitReady {
+			continue
+		}
+		prev, existed := before[id]
+		_, yielded := o.yieldedWaits.Load(id)
+		if prev == agentcomm.WaitPending || (!existed && yielded) {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeParkedStage closes the window between a stage's exit and its park in awaiting_peer: a reply (or a
+// counter-question) that landed in between found the stage running, and nobody else will resume it now. It
+// goes through the same CAS-protected resumes Send uses, so a resume that already won makes these no-ops.
+func (o *Orchestrator) resumeParkedStage(ctx context.Context, stageID string, before map[agentcomm.WaitID]agentcomm.WaitStatus) {
+	participant := meshStageParticipantID(stageID)
+	if o.turnWaitAnswered(participant, before) {
+		o.resumeAfterPeerReply(ctx, stageID)
+		return
+	}
+	o.maybeResumeAwaitingPeerQuestion(ctx, participant)
+}

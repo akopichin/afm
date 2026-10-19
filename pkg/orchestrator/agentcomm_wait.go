@@ -98,6 +98,9 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	// facility (dev-plan.md's own Review decision), so a crash/restart before this fires is recovered purely
 	// from the durable Deadline by recoverMeshWaitDeadlines at startup, never from this goroutine surviving.
 	// Already-Ready (condition satisfied at registration) needs no timer: there is nothing left to time out.
+	if status == agentcomm.WaitPending {
+		o.yieldedWaits.Store(waitID, struct{}{})
+	}
 	if status == agentcomm.WaitPending && req.Deadline != nil {
 		o.armMeshWaitDeadline(waitID, *req.Deadline)
 	}

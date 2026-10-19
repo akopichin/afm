@@ -257,6 +257,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			return // a pause landed in the shouldRun->register gap; do not start the subprocess
 		}
 
+		waitsBefore := o.meshWaitStatusesOf(meshStageParticipantID(s.ID))
 		err := agentFn(retryCtx)
 		if err == nil {
 			// The turn ran to its end, so its <inbox> messages were handed over. The executor marks them at
@@ -284,7 +285,9 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// work machinery below. This is NOT a false completion, NOT an IncompleteWorkError retry, and NOT
 			// a user question: the lease this invocation held is released simply by this function returning,
 			// exactly like the awaiting_user_input branch above.
-			if o.hasOpenMeshWait(s.ID) {
+			// A wait the turn yielded on may also have been answered before the process exited: the live resume
+			// found the stage still running and did nothing, so this exit is the only place left to continue it.
+			if o.hasOpenMeshWait(s.ID) || o.turnWaitAnswered(meshStageParticipantID(s.ID), waitsBefore) {
 				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingPeer {
 					o.prePeerPhase.Store(s.ID, phase)
 					// prePeerPhase is in-memory only (sync.Map) — a restart loses it exactly like
@@ -294,6 +297,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 					// never create.
 					saveMeshPeerWaitPhase(o.stageDir(s.ID), phase)
 					o.Trigger(s.ID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase}, "")
+					o.resumeParkedStage(ctx, s.ID, waitsBefore)
 					return
 				}
 				if completionCheck == nil || completionCheck() == nil {
