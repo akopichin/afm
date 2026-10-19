@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactElement } from 'react'
 import type { Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { mergeById } from '../../lib/mesh-roster'
 import { RunTeamList, teamStagesOf } from './RunTeamList'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 
@@ -10,7 +9,8 @@ export const STAGE_PEOPLE_ID = 'stage-people'
 
 export type StagePeoplePanelProps = {
   stageId: string
-  // participants — the SAME roster poll App.tsx owns (useMeshRoster), not a second one.
+  // participants — the SAME roster poll App.tsx owns (useMeshRoster), not a second one, merged with run
+  // agents added here that the poll has not reported yet (the composer resolves picks against the same list).
   participants: MeshParticipant[]
   stages: Stage[]
   profiles: AssistantProfile[]
@@ -20,16 +20,16 @@ export type StagePeoplePanelProps = {
   // onPick — address the person in the Feed composer. Undefined while this stage has no composer: the
   // rows are disabled and a hint says when one appears.
   onPick?: (participant: MeshParticipant) => void
+  // onAgentAdded — a run agent was just added: the owner shows it (and lets it be picked) before the next
+  // roster poll.
+  onAgentAdded: (participant: MeshParticipant) => void
 }
 
 // StagePeoplePanel — the stage Feed's right side panel: who this stage can talk to (RunTeamList in focus
 // mode). A click puts the person's @handle into the Feed composer; "+ Add agent" opens the same dialog as the
 // Team tab. A wide screen shows it next to the feed, a narrow one as a drawer.
-export function StagePeoplePanel({ stageId, participants, stages, profiles, open, onClose, onPick }: StagePeoplePanelProps): ReactElement {
+export function StagePeoplePanel({ stageId, participants, stages, profiles, open, onClose, onPick, onAgentAdded }: StagePeoplePanelProps): ReactElement {
   const [addOpen, setAddOpen] = useState(false)
-  // localParticipants — run agents added here that the next roster poll has not reported yet, shown by name
-  // right away (the same merge as the Team tab).
-  const [localParticipants, setLocalParticipants] = useState<MeshParticipant[]>([])
 
   // Escape closes the drawer, like the scrim.
   useEffect(() => {
@@ -49,7 +49,7 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
           id={`${STAGE_PEOPLE_ID}-roster`}
           drawer={false}
           focusStageId={stageId}
-          participants={mergeById(participants, localParticipants)}
+          participants={participants}
           stages={teamStagesOf(stages)}
           onPick={
             onPick === undefined
@@ -72,10 +72,7 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
           profiles={profiles}
           onAttached={(result, name) => {
             setAddOpen(false)
-            setLocalParticipants((prev) => [
-              ...prev,
-              { id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true },
-            ])
+            onAgentAdded({ id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true })
           }}
           onCancel={() => setAddOpen(false)}
         />

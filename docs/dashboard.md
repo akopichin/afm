@@ -230,13 +230,17 @@ with the selected stage on top; conversations stay in the **Team** tab.
   for a stage agent, the profile's command for a run agent or helper. A run agent
   or helper also shows its read-only guarantee: **read-only** (an OS sandbox
   enforces it) or **no sandbox** (only the container or the prompt limits it).
-  Both come from the server, as recorded when the agent was added.
+  Both come from the server. For a live agent the guarantee is the one the
+  current environment gives its command; if the agent was added under a
+  different one (for example, a host run resumed in Docker), the badge's tooltip
+  says so. A finished agent shows the guarantee it ran under.
 - Click a person to put their `@handle` into the composer and address them, the
   same as picking them from the `@` menu; the composer switches to **Message**.
   You can do this while the stage is `running` and its composer is shown.
 - A finished stage or task stays listed but is disabled (*Finished — can't
-  write*). A stage that has not started yet can be addressed: it reads the
-  message when it starts.
+  write*). A script stage is listed but disabled too: no agent reads its
+  messages. A stage that has not started yet can be addressed: it reads the
+  message when it starts. An agent you just added can be picked right away.
 - **+ Add agent** opens the same dialog as **Add run agent** in Team.
 
 On a narrower window the panel becomes a drawer: open it with the 👥 button at

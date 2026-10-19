@@ -62,10 +62,13 @@ export type MeshParticipant = {
   // activity — what a run agent or helper is doing now (working, waiting, idle, paused, done).
   activity?: string
   // command — the agent command this participant runs (a stage's effective command, a task's frozen profile
-  // command); readonly_enforcement — a run agent's or helper's read-only guarantee ("os" | "none"). Both are
-  // server-derived on every roster read; absent for the user, the Side agent and script stages.
+  // command). readonly_enforcement — a run agent's or helper's read-only guarantee ("os" | "none"): for a live
+  // task what the current environment gives it, for a finished one what it ran under;
+  // admitted_readonly_enforcement — the guarantee recorded when the task was admitted. All server-derived on
+  // every roster read; absent for the user, the Side agent and script stages.
   command?: string
   readonly_enforcement?: string
+  admitted_readonly_enforcement?: string
 }
 
 export type MeshThreadBudgets = {

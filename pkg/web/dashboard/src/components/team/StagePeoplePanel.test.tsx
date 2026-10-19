@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import * as meshClient from '../../api/mesh-client'
 import { StagePeoplePanel } from './StagePeoplePanel'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { Stage } from '../../types'
@@ -20,6 +21,7 @@ const participants: MeshParticipant[] = [
 function renderPanel(overrides: Partial<Parameters<typeof StagePeoplePanel>[0]> = {}) {
   const onPick = vi.fn()
   const onClose = vi.fn()
+  const onAgentAdded = vi.fn()
   render(
     <StagePeoplePanel
       stageId="impl"
@@ -29,13 +31,29 @@ function renderPanel(overrides: Partial<Parameters<typeof StagePeoplePanel>[0]> 
       open
       onClose={onClose}
       onPick={onPick}
+      onAgentAdded={onAgentAdded}
       {...overrides}
     />,
   )
-  return { onPick, onClose }
+  return { onPick, onClose, onAgentAdded }
 }
 
 describe('StagePeoplePanel', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('an added agent is handed to the owner right away, before the roster poll has it', async () => {
+    vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't9', participant_id: 'run:t9', thread_id: 'mt-9' })
+    const { onAgentAdded } = renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() =>
+      expect(onAgentAdded).toHaveBeenCalledWith({ id: 'run:t9', kind: 'run_agent', scope: 'run', display_name: 'QA', reachable: true }),
+    )
+  })
+
   test('a pick addresses the person and closes the drawer', () => {
     const { onPick, onClose } = renderPanel()
     fireEvent.click(screen.getByText('QA reviewer'))

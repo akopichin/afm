@@ -2029,6 +2029,58 @@ describe('App', () => {
     expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
   })
 
+  test('people panel: an agent just added can be picked before the next roster poll', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', 'running')],
+            capabilities: { collaboration: true },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/assistant-profiles')) {
+        return { ok: true, json: async () => ({ profiles: [{ id: 'qa', title: 'QA role', command: 'claude', available: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/attach-and-send')) {
+        return { ok: true, json: async () => ({ task_id: 't-new', participant_id: 'run:t-new', thread_id: 'mt-new' }) } as Response
+      }
+      // The roster poll never learns about the new agent during this test.
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    fireEvent.click(within(people).getByRole('button', { name: 'Add agent' }))
+    fireEvent.change(await screen.findByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+
+    const added = await within(people).findByText('QA role')
+    fireEvent.click(added)
+
+    const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
+    expect(composer.value).toBe('@run:t-new ')
+  })
+
   test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

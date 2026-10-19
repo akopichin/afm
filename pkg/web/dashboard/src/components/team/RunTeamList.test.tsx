@@ -249,6 +249,33 @@ describe('RunTeamList with focusStageId', () => {
     expect(within(commit).getByText('Not started — reads it when it starts')).toBeInTheDocument()
   })
 
+  test('a script stage the server marks unreachable is disabled with the server reason, not "finished"', () => {
+    renderFocused({
+      participants: [
+        ...focusParticipants.filter((p) => p.id !== 'stage:commit'),
+        { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', stage_id: 'commit', display_name: 'Commit & cleanup', reachable: false, unreachable_reason: 'script stage: no agent reads messages' },
+      ],
+    })
+    const commit = screen.getByText('Commit & cleanup').closest('button') as HTMLElement
+    expect(commit).toBeDisabled()
+    expect(within(commit).getByText('Script stage: no agent reads messages')).toBeInTheDocument()
+  })
+
+  test('the sandbox badge shows the current guarantee; a different admission-time one is in its tooltip', () => {
+    renderFocused({
+      participants: [
+        ...focusParticipants.filter((p) => p.id !== 'run:sec'),
+        { id: 'run:sec', kind: 'run_agent', scope: 'run', display_name: 'Security', reachable: true, command: 'codex', readonly_enforcement: 'none', admitted_readonly_enforcement: 'os' },
+      ],
+    })
+    const badge = within(screen.getByText('Security').closest('button') as HTMLElement).getByText('no sandbox')
+    expect(badge).toHaveAttribute('data-enforcement', 'none')
+    expect(badge.getAttribute('title')).toMatch(/^No OS read-only sandbox.*When it was added: read-only, enforced by an OS sandbox$/)
+    // Same value at admission and now: no history note.
+    const docs = within(screen.getByText('Docs helper').closest('button') as HTMLElement).getByText('no sandbox')
+    expect(docs.getAttribute('title')).not.toMatch(/When it was added/)
+  })
+
   test('the command chip and the sandbox come from the roster fields', () => {
     renderFocused()
     const sec = screen.getByText('Security').closest('button') as HTMLElement

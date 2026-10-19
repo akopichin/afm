@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
@@ -21,6 +21,8 @@ import { useSelectedStage } from '../hooks/use-selected-stage'
 import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshRoster } from '../hooks/use-mesh'
+import { mergeById } from '../lib/mesh-roster'
+import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
@@ -148,6 +150,11 @@ export function App(): ReactElement {
   const [peopleOpen, setPeopleOpen] = useState(false)
   const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
   const closePeople = useCallback(() => setPeopleOpen(false), [])
+  // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
+  // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it.
+  const [addedParticipants, setAddedParticipants] = useState<MeshParticipant[]>([])
+  const meshParticipants = useMemo(() => mergeById(meshRoster.participants, addedParticipants), [meshRoster.participants, addedParticipants])
+  const addParticipant = useCallback((p: MeshParticipant) => setAddedParticipants((prev) => [...prev, p]), [])
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
@@ -610,14 +617,15 @@ export function App(): ReactElement {
                       // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team
                       // (meshRoster.enabled mirrors TeamView's own capability gate: no tab/toggle until the
                       // first roster probe confirms the capability is actually on).
-                      mesh={meshRoster.enabled ? { roster: meshRoster, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
+                      mesh={meshRoster.enabled ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
                     />
                     {showPeople && workspaceStage !== null && (
                       <StagePeoplePanel
                         stageId={workspaceStage.id}
-                        participants={meshRoster.participants}
+                        participants={meshParticipants}
                         stages={stages}
                         profiles={assistantProfiles}
+                        onAgentAdded={addParticipant}
                         open={peopleOpen}
                         onClose={closePeople}
                         // The click goes to the Feed composer, which exists only while noteTarget is set.

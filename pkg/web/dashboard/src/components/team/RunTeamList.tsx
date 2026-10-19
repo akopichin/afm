@@ -66,25 +66,41 @@ function participantPresence(p: MeshParticipant, stage: RunTeamListStage | undef
   return activityPresence(p.activity, p.reachable)
 }
 
+// isFinished — the participant's stage or task has ended. The server marks a task unreachable only once it
+// is terminal; a stage can also be unreachable for another reason (a script stage has no agent).
+function isFinished(p: MeshParticipant, stage: RunTeamListStage | undefined): boolean {
+  if (p.kind === 'stage_agent') return stage?.status === 'done' || stage?.status === 'failed'
+  return true
+}
+
 // focusStatus — a row's status in the stage people panel: whether a message can reach this person now.
-// Finished participants cannot be written to; a stage not started yet reads it when it starts.
+// Finished participants cannot be written to; anyone else the server marks unreachable (a script stage has
+// no agent) shows the server's reason; a stage not started yet reads it when it starts.
 function focusStatus(p: MeshParticipant, stage: RunTeamListStage | undefined): string | null {
-  if (!p.reachable) return "Finished — can't write"
+  if (!p.reachable) {
+    if (isFinished(p, stage)) return "Finished — can't write"
+    const reason = p.unreachable_reason ?? ''
+    return reason === '' ? "Can't write" : reason.charAt(0).toUpperCase() + reason.slice(1)
+  }
   if (p.kind === 'stage_agent' && stage?.status === 'pending') return 'Not started — reads it when it starts'
   return participantStatus(p, stage)
 }
 
 // sandboxLabel — the read-only guarantee the server froze into a run agent's or helper's task: an OS sandbox,
 // or none (only the container or the prompt limits it). Stage agents write the project and carry none.
-function sandboxLabel(enforcement: string | undefined): { text: string; title: string } | null {
-  switch (enforcement) {
-    case 'os':
-      return { text: 'read-only', title: 'Read-only, enforced by an OS sandbox' }
-    case 'none':
-      return { text: 'no sandbox', title: 'No OS read-only sandbox: only the container or the prompt limits it' }
-    default:
-      return null
-  }
+// The badge shows the server's current guarantee; when the task was admitted under a different one (a host
+// run resumed in a container), the tooltip says so.
+const SANDBOX_TEXT: Record<string, { text: string; title: string }> = {
+  os: { text: 'read-only', title: 'Read-only, enforced by an OS sandbox' },
+  none: { text: 'no sandbox', title: 'No OS read-only sandbox: only the container or the prompt limits it' },
+}
+
+function sandboxLabel(p: MeshParticipant): { text: string; title: string } | null {
+  const current = SANDBOX_TEXT[p.readonly_enforcement ?? '']
+  if (current === undefined) return null
+  const admitted = SANDBOX_TEXT[p.admitted_readonly_enforcement ?? '']
+  if (admitted === undefined || p.admitted_readonly_enforcement === p.readonly_enforcement) return current
+  return { text: current.text, title: `${current.title}. When it was added: ${admitted.title.charAt(0).toLowerCase()}${admitted.title.slice(1)}` }
 }
 
 // stageOrder — stage ids in flow order; stages the roster knows but /api/status doesn't (yet) go last, in
@@ -116,7 +132,7 @@ export function RunTeamList({
     const name = participantLabel(p)
     const status = focused ? focusStatus(p, stage) : participantStatus(p, stage)
     const detail = status ?? (p.scope === 'run' ? participantRole(p.kind) : null)
-    const sandbox = focused ? sandboxLabel(p.readonly_enforcement) : null
+    const sandbox = focused ? sandboxLabel(p) : null
     const disabled = focused && (onPick === undefined || !p.reachable)
     return (
       <li key={p.id}>

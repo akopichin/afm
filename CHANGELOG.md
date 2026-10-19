@@ -11,9 +11,13 @@ The stage **Feed** now shows who the stage can talk to on the right: this
 stage's agent and helpers first, then run agents and the Side agent, then the
 other stages in flow order. Each person shows the command they run and, for run
 agents and helpers, whether an OS sandbox keeps them read-only; both come from
-the server's participant list (`command`, `readonly_enforcement`). Clicking a
-person puts their `@handle` into the feed composer and addresses them. Finished
-participants are listed but cannot be picked; stages that have not started can.
+the server's participant list (`command`, `readonly_enforcement`). A live
+agent's guarantee is the one the current environment gives it; the value
+recorded when it was added is kept as `admitted_readonly_enforcement`. Clicking
+a person puts their `@handle` into the feed composer and addresses them, also
+for an agent added a moment ago. Finished participants and script stages (no
+agent reads their messages) are listed but cannot be picked; stages that have
+not started can.
 **+ Add agent** opens the Add run agent dialog. On a narrow window the panel is
 a drawer behind the 👥 button.
 
