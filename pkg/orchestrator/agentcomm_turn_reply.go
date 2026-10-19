@@ -49,10 +49,11 @@ func answeredBy(ms state.MeshState, sender agentcomm.ParticipantID, messageID ag
 	return false
 }
 
-// planTurnReply plans the reply that ends taskID's turn with result: to the message that woke the turn, back to
-// its sender, in its thread — through planMessage, so a reply to a Discussion post is mirrored into the
-// Discussion too. nil: the turn had no waking input, or the agent already answered it itself.
-func (o *Orchestrator) planTurnReply(taskID assistants.TaskID, turn uint64, result assistants.Result) *plannedMessage {
+// planTurnReply plans the reply that ends taskID's turn with body (turnReplyBody, or turnFailureBody for a turn
+// whose answer was rejected): to the message that woke the turn, back to its sender, in its thread — through
+// planMessage, so a reply to a Discussion post is mirrored into the Discussion too. nil: the turn had no waking
+// input, or the agent already answered it itself.
+func (o *Orchestrator) planTurnReply(taskID assistants.TaskID, turn uint64, body string) *plannedMessage {
 	rs := o.opts.Store.Snapshot()
 	t, ok := rs.Assistants.Tasks[taskID]
 	if !ok || turn == 0 {
@@ -69,7 +70,7 @@ func (o *Orchestrator) planTurnReply(taskID assistants.TaskID, turn uint64, resu
 	inReplyTo := waking.ID
 	msg, err := o.planMessage(rs, SendRequest{
 		ThreadID: waking.ThreadID, Sender: agent, Recipients: []agentcomm.ParticipantID{waking.Sender},
-		Kind: agentcomm.MessageKindReply, InReplyTo: &inReplyTo, Body: turnReplyBody(taskID, turn, result), AutoResult: true,
+		Kind: agentcomm.MessageKindReply, InReplyTo: &inReplyTo, Body: body, AutoResult: true,
 	}, turnReplyMessageID(taskID, turn), nil)
 	if err != nil {
 		log.Printf("WARN: assistants: plan the turn reply of task %s: %v", taskID, err)
@@ -108,6 +109,28 @@ func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) s
 		summary = "(no summary)"
 	}
 	return truncateText(summary, agentcomm.MaxBodyBytes-len(footer)) + footer
+}
+
+// turnFailureBody is the text of the reply that ends a run agent's turn whose answer could not be accepted:
+// who could not answer, why, and that writing again starts a new turn.
+func turnFailureBody(taskID assistants.TaskID, turn uint64, agent, reason string) string {
+	footer := fmt.Sprintf("\n\n— turn failed; write again to retry; task %s, turn %d", taskID, turn)
+	text := fmt.Sprintf("%s could not produce a valid result: %s", agent, describeTaskFailure(reason))
+	return truncateText(text, agentcomm.MaxBodyBytes-len(footer)) + footer
+}
+
+// protocolErrorPrefix starts the status reason of a turn whose answer broke the result protocol.
+const protocolErrorPrefix = "protocol_error: "
+
+// describeTaskFailure says in plain words why a task's turn failed: a protocol error is an invalid result.
+func describeTaskFailure(reason string) string {
+	if detail, ok := strings.CutPrefix(reason, protocolErrorPrefix); ok {
+		return "invalid result — " + detail
+	}
+	if reason == "" {
+		return "no reason recorded"
+	}
+	return reason
 }
 
 // truncateText cuts s to at most maxBytes bytes on a character boundary, marking the cut with an ellipsis.

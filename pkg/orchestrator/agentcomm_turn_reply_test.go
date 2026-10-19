@@ -216,7 +216,7 @@ func TestTurnReply_OwnReplyRacingTheFinishWins(t *testing.T) {
 	<-started
 
 	result := assistants.Result{Verdict: assistants.VerdictPass, Summary: "done"}
-	reply := o.planTurnReply(res.TaskID, 1, result)
+	reply := o.planTurnReply(res.TaskID, 1, turnReplyBody(res.TaskID, 1, result))
 	if reply == nil {
 		t.Fatal("no turn reply planned")
 	}

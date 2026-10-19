@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -321,7 +322,13 @@ func (o *Orchestrator) CancelTask(ctx context.Context, taskID assistants.TaskID)
 }
 
 // runAgentIdleReason is the status reason of a run agent that finished a turn and waits for its next message.
+// A turn whose answer was rejected adds why after it (runAgentIdleAfterFailure); both mean idle.
 const runAgentIdleReason = "idle: waiting for a message"
+
+// runAgentIdleAfterFailure is the status reason of a run agent idle again after a turn that failed for reason.
+func runAgentIdleAfterFailure(reason string) string {
+	return runAgentIdleReason + " (last turn failed: " + describeTaskFailure(reason) + ")"
+}
 
 // idleRunAgent reports whether t is a standing run agent with nothing to do: queued because it was attached
 // without a first message or finished its last turn (not because a wait resumed it), and nobody has written
@@ -330,7 +337,7 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 	if t.Scope != assistants.ScopeRun || t.Status != assistants.StatusQueued {
 		return false
 	}
-	if t.StatusReason != "" && t.StatusReason != runAgentIdleReason {
+	if t.StatusReason != "" && !strings.HasPrefix(t.StatusReason, runAgentIdleReason) {
 		return false
 	}
 	return !rs.Assistants.Mesh.HasWakingUnreadFor(meshParticipantForTask(rs, t.Task))
@@ -522,6 +529,8 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
 			// no-op for a stage that isn't currently awaiting_assistants.
 			if to.Terminal() {
+				// A finished task answers nobody any more: waits only it could answer end now.
+				o.releaseUnanswerableWaitsAfterFinish()
 				o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
 				// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
 				// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a

@@ -647,6 +647,7 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		}
 		if bus.IsTerminal(to) {
 			o.noticeUnansweredHumanPosts(stageID)
+			o.releaseUnanswerableWaitsAfterFinish()
 		}
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
@@ -756,6 +757,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		o.recoverFeedbackIntents(ctx)
 		o.recoverMeshWaits(ctx)
 		o.recoverUnreadOfFinishedStages(ctx)
+		o.releaseUnanswerableWaits(ctx, o.resumeWaiterAfterTerminalWaitAtStartup)
 		o.recoverMeshWaitDeadlines(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller

@@ -5,6 +5,21 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: a reviewer's invalid answer no longer leaves the stage waiting forever
+
+A run agent whose answer failed the result contract (for example `limitations`
+written as a list) used to become failed for good, shown as finished, and a
+stage waiting for its reply stayed in `awaiting_peer` forever. Now the free-text
+fields `summary`, `evidence`, `suggested_change` and `limitations` accept either
+a string or a list of strings; a run agent whose answer is still invalid goes
+back to idle and replies to the message that woke it with why it could not
+produce a result, so the waiting stage continues and the agent can be asked
+again. A wait whose every possible answerer has finished — failed, cancelled, or
+a stage done without answering — is cancelled and its waiter continues, also
+after a restart. The People list and conversations say how a finished agent
+ended (*"failed: invalid result — …"*, *"was cancelled by user"*) instead of
+only that it finished.
+
 ### Fix: a stage continued after a colleague's reply no longer starts over
 
 A stage agent resumed by a reviewer's answer used to begin its task again in a

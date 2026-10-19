@@ -346,7 +346,13 @@ on an unknown message, task or stage, on a closed thread, on a stage that alread
 finished in another status, one only the waiter itself could satisfy, one for an
 answer nobody can send any more (every recipient of the message, or every other
 member of the thread, has finished or gave the message up as undeliverable), or
-one that would close a cycle of agents waiting on each other is refused. A wait whose
+one that would close a cycle of agents waiting on each other is refused. A wait
+registered while someone could still answer ends the same way once they can no
+longer do so: when every recipient of the message (or every other member of the
+thread) has finished — a helper or run agent failed or was cancelled, a stage
+finished without answering — the wait is cancelled with a reason naming them,
+and the waiter continues; a stage parked in `awaiting_peer` gets its next turn
+as "wait ended". A restart checks this again. A wait whose
 producer is not known yet (a board key nobody has published, a thread not opened
 yet) needs `--deadline-seconds`. When a run is interrupted (Ctrl+C), pending waits
 stay pending and their deadlines keep running after `afm run` resumes it; only a
@@ -394,7 +400,18 @@ The repaired object still has to pass the same schema and verdict checks; repair
 cannot change its verdict. An accepted result shows a **repaired** badge in the
 helper view and a warning in the stage feed. If the answer still fails, the
 helper gets a `protocol_error`. Open **Show the assistant's raw answer** in the
-helper view to inspect its final text, when available.
+helper view to inspect its final text, when available. The free-text fields
+`summary`, `evidence`, `suggested_change` and `limitations` may be either a
+string or an array of strings; anything else in them is still a protocol error.
+
+A run agent is a standing role, so a turn with an invalid answer does not end
+it: the agent goes back to idle (its status says the last turn failed and why),
+and the message that woke the turn gets a reply such as *"QA could not produce
+a valid result: invalid result — …"*, which also answers a colleague waiting for
+that reply. Write to the agent again to retry. A stage helper fails as before
+and can be retried from its view. In the People list and in a conversation with
+it, a finished agent shows how it ended, for example *"task … failed: invalid
+result — …"* or *"task … was cancelled by user"*.
 
 A turn that ends by waiting for a colleague (`afm agent wait` answered
 `yield`) needs no answer: the task waits in `waiting_peer` and continues in a
