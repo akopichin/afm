@@ -148,3 +148,26 @@ func TestDiscussionQuestionBlock_FramesAQuestionNotFeedback(t *testing.T) {
 		t.Errorf("body must be tag-escaped and the block must not look like a Revise note:\n%s", got)
 	}
 }
+
+// The block is bounded: newest questions are quoted while they fit, older ones are named by id with how to
+// read them, so many long questions cannot crowd the task out of every prompt.
+func TestDiscussionQuestionBlock_BoundedNewestFirst(t *testing.T) {
+	long := strings.Repeat("x", 6000)
+	questions := []DiscussionQuestion{
+		{MessageID: "dm-oldest", Body: long}, {MessageID: "dm-old", Body: long},
+		{MessageID: "dm-mid", Body: long}, {MessageID: "dm-new", Body: long},
+	}
+	got := DiscussionQuestionBlock(questions)
+	if len(got) > maxDiscussionQuestionBytes+2048 {
+		t.Fatalf("block is %d bytes, want it bounded near %d", len(got), maxDiscussionQuestionBytes)
+	}
+	if !strings.Contains(got, "message dm-new:") || !strings.Contains(got, "message dm-mid:") {
+		t.Fatalf("the newest questions must be quoted:\n%.400s", got)
+	}
+	if strings.Index(got, "message dm-new:") > strings.Index(got, "message dm-mid:") {
+		t.Fatal("newest question must come first")
+	}
+	if !strings.Contains(got, "2 older question(s) did not fit here: dm-old, dm-oldest") || !strings.Contains(got, "afm agent inbox --all") {
+		t.Fatalf("omitted questions must be named with how to read them:\n%s", got[len(got)-300:])
+	}
+}
