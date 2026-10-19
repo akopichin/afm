@@ -4,7 +4,7 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
 import { toFeedItems, buildFeedTimeline, feedFilterCounts, isForYou, type FeedActor, type FeedFilter, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
-import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
+import { FeedComposer, type FeedComposerMeshProps, type MeshReplyTarget } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
@@ -12,6 +12,7 @@ import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
 import { useStageConversation, type StageConversation } from '../../hooks/use-mesh'
 import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
+import { messageText } from '../../lib/agent-result'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -47,9 +48,9 @@ type FeedWorkspaceProps = {
   // imagePolicy — как трактовать маркеры [AFM image: …] в прозе агента. 'stage' (дефолт) — разбирать в
   // <FeedImage> с per-stage URL (лента стадий).
   imagePolicy?: 'stage' | 'none'
-  // onReplyInConversation — «↩ Reply in conversation» on a conversation message: the composer answers it in
-  // its thread. undefined → no reply link (no composer to answer with).
-  onReplyInConversation?: (message: MeshMessage) => void
+  // reviseAvailable — with mesh: the composer's stage takes a Revise now (its tab and replies to thoughts).
+  // Without mesh the composer is the Revise note itself and is shown only when it is available.
+  reviseAvailable?: boolean
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -81,7 +82,7 @@ export function FeedWorkspace({
   systemAuthorLabel = 'Flow',
   imagePolicy = 'stage',
   mesh,
-  onReplyInConversation,
+  reviseAvailable = true,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   const sectionRef = useRef<HTMLElement | null>(null)
@@ -132,8 +133,21 @@ export function FeedWorkspace({
   const activeReply = replyTo !== null && replyTo.stageId === noteTarget ? replyTo : null
   const activeReplyKey = activeReply?.key ?? null
 
-  // Смена стадии — сбрасываем reply-таргет (композер и так ремаунтится по key).
-  useEffect(() => setReplyTo(null), [noteTarget])
+  // The one conversation message being answered ("↩ Reply in conversation", Message mode) — separate from the
+  // thought answered with Revise above, and stored with its stage the same way.
+  const [meshReplyTo, setMeshReplyTo] = useState<{ stageId: string; target: MeshReplyTarget } | null>(null)
+  const activeMeshReply = meshReplyTo !== null && meshReplyTo.stageId === noteTarget ? meshReplyTo.target : null
+
+  // Смена стадии — сбрасываем reply-таргеты (композер и так ремаунтится по key).
+  useEffect(() => {
+    setReplyTo(null)
+    setMeshReplyTo(null)
+  }, [noteTarget])
+
+  const composerMounted = noteTarget !== null && onSendNote !== undefined
+  // Reply in conversation needs the Message composer; a reply to a thought needs Revise.
+  const canAnswerInConversation = composerMounted && mesh !== undefined
+  const canAnswerThought = composerMounted && (mesh === undefined || reviseAvailable)
 
   return (
     <section className="feed-workspace" aria-label="Feed" ref={sectionRef}>
@@ -154,9 +168,14 @@ export function FeedWorkspace({
                     participants={participants}
                     answered={m.in_reply_to !== undefined ? messageById.get(m.in_reply_to) : undefined}
                     onJumpToQuote={jumpTo}
+                    replyActive={activeMeshReply?.messageId === m.id}
                     onReply={
-                      onReplyInConversation !== undefined && canReplyInConversation(m, conversation, participants)
-                        ? () => onReplyInConversation(m)
+                      canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation, participants)
+                        ? () =>
+                            setMeshReplyTo({
+                              stageId: noteTarget,
+                              target: { messageId: m.id, threadId: m.thread_id, senderId: m.sender_id, preview: messageText(m.body, true).slice(0, 120) },
+                            })
                         : undefined
                     }
                   />
@@ -175,7 +194,7 @@ export function FeedWorkspace({
                 // Репляибл только per-stage Feed с живым композером: мысль выбирается
                 // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
                 onReplyToThought={
-                  noteTarget !== null && onSendNote !== undefined
+                  canAnswerThought && noteTarget !== null
                     ? (key, text) => setReplyTo({ stageId: noteTarget, key, text })
                     : undefined
                 }
@@ -192,7 +211,7 @@ export function FeedWorkspace({
           стадия принимает заметки (noteTarget != null: running и не скрипт).
           key=noteTarget: смена стадии даёт свежий пустой черновик (черновик не
           «переедет» в другую стадию). */}
-      {noteTarget !== null && onSendNote !== undefined && (
+      {composerMounted && (
         <FeedComposer
           key={noteTarget}
           stageId={noteTarget}
@@ -210,6 +229,12 @@ export function FeedWorkspace({
           onBlur={onComposerBlur}
           onResumeNow={onComposerResumeNow}
           mesh={mesh}
+          reviseAvailable={reviseAvailable}
+          conversationMessages={conversation.messages}
+          meshReply={activeMeshReply}
+          onCancelMeshReply={() => setMeshReplyTo(null)}
+          // Reset only if the same message is still being answered (another may have been picked meanwhile).
+          onMeshReplySent={(id) => setMeshReplyTo((cur) => (cur?.target.messageId === id ? null : cur))}
         />
       )}
     </section>

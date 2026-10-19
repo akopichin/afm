@@ -30,15 +30,6 @@ function toParticipantItem(p: MeshParticipant, handle: string): MeshMentionItem 
   }
 }
 
-// participantMentionItem — the mention of one roster participant (by id) under its roster-wide unique
-// @handle, e.g. to re-address the sender of a message the user answers with Reply. null for an id the roster
-// does not know or for the operator itself.
-export function participantMentionItem(participants: MeshParticipant[], id: string): MeshMentionItem | null {
-  const p = participants.find((x) => x.id === id)
-  if (p === undefined || p.kind === 'user') return null
-  return toParticipantItem(p, mentionHandles(participants).get(p.id) ?? p.id)
-}
-
 // buildMeshMentionGroups — the feed composer's `@`-mention source, grouped per dev-plan.md T7.4: "This run"
 // (standing run-scoped roles and the Side agent), "This stage" (THIS composer's own stage agent and any
 // helper already attached to it) and "Attach to stage" (configured profiles — picking one and sending goes

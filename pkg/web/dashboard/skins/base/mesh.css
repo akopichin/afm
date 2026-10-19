@@ -1089,9 +1089,15 @@
   background: transparent;
 }
 
+/* People panel: "Add run agent…" (the whole run) and "Attach helper to stage…" (this stage), side by side. */
 .team-add-agent-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin: 14px 8px 0;
-  width: auto;
+}
+.team-add-agent-bottom .btn {
+  flex: 1 1 auto;
   min-height: 34px;
   justify-content: center;
 }

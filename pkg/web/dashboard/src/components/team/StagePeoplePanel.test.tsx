@@ -43,15 +43,16 @@ describe('StagePeoplePanel', () => {
     vi.restoreAllMocks()
   })
 
-  test('an added agent is handed to the owner right away, before the roster poll has it', async () => {
-    const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't9', participant_id: 'run:t9', thread_id: 'mt-9' })
+  test('an added agent is handed to the owner right away, with its alias, before the roster poll has it', async () => {
+    const added: MeshParticipant = { id: 'run:t9', kind: 'run_agent', scope: 'run', alias: 'qa-2', display_name: 'QA', reachable: true }
+    const attachSpy = vi
+      .spyOn(meshClient, 'attachAndSendMesh')
+      .mockResolvedValue({ task_id: 't9', participant_id: 'run:t9', thread_id: 'mt-9', participant: added })
     const { onAgentAdded } = renderPanel()
-    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent…' }))
     fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
-    await waitFor(() =>
-      expect(onAgentAdded).toHaveBeenCalledWith({ id: 'run:t9', kind: 'run_agent', scope: 'run', display_name: 'QA', reachable: true }),
-    )
+    await waitFor(() => expect(onAgentAdded).toHaveBeenCalledWith(added))
     // Its first conversation shows in this stage's feed.
     expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({ originStage: 'impl' }))
   })
@@ -66,13 +67,26 @@ describe('StagePeoplePanel', () => {
   test('without a composer the rows are disabled and a hint says when writing is possible', () => {
     renderPanel({ onPick: undefined })
     expect(screen.getByText('QA reviewer').closest('button')).toBeDisabled()
-    expect(screen.getByText(/while this stage is running/)).toBeInTheDocument()
+    expect(screen.getByText(/while the run is going/)).toBeInTheDocument()
   })
 
-  test('"+ Add agent" opens the Team tab\'s Add run agent dialog', () => {
+  test('"Add run agent…" opens the Team tab\'s Add run agent dialog', () => {
     renderPanel()
-    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent…' }))
     expect(screen.getByRole('dialog', { name: 'Add run agent' })).toBeInTheDocument()
+  })
+
+  test('"Attach helper to stage…" sits next to it and opens the stage\'s helper dialog; without it there is no button', () => {
+    const onAttachHelper = vi.fn()
+    const { onClose } = renderPanel({ onAttachHelper })
+    fireEvent.click(screen.getByRole('button', { name: 'Attach helper to stage…' }))
+    expect(onAttachHelper).toHaveBeenCalledWith('impl')
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  test('without onAttachHelper there is no attach button', () => {
+    renderPanel()
+    expect(screen.queryByRole('button', { name: 'Attach helper to stage…' })).toBeNull()
   })
 
   test('the drawer closes on Escape and on its scrim', () => {

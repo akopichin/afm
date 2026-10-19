@@ -1,1 +1,1 @@
-export { StagesList } from './StagesList'
+export { StagesList, canAttachHelper } from './StagesList'

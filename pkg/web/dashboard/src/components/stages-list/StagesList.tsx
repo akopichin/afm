@@ -127,7 +127,7 @@ function canPause(stage: Stage): boolean {
 
 // Прикрепить помощника можно к любой не-скрипт стадии, которая ещё не достигла терминального статуса
 // (сервер отвергает done/failed и script — см. orchestrator.Attach). Совпадает с гейтом пункта в JSX.
-function canAttachHelper(stage: Stage, collaborationEnabled: boolean): boolean {
+export function canAttachHelper(stage: Stage, collaborationEnabled: boolean): boolean {
   return collaborationEnabled && !stage.isScript && stage.status !== 'done' && stage.status !== 'failed'
 }
 

@@ -304,14 +304,11 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
       {addRunAgentOpen && (
         <AddRunAgentDialog
           profiles={profiles}
-          onAttached={(result, name) => {
+          onAttached={(result, participant) => {
             setAddRunAgentOpen(false)
-            // Show the new agent by name and open its conversation right away (the next poll confirms both).
-            setLocalParticipants((prev) => [
-              ...prev,
-              { id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true },
-            ])
-            openThread({ id: result.thread_id, title: name, scope: 'run', members: ['user', result.participant_id], status: 'open' })
+            // Show the new agent and open its conversation right away (the next poll confirms both).
+            setLocalParticipants((prev) => [...prev, participant])
+            openThread({ id: result.thread_id, title: participantLabel(participant), scope: 'run', members: ['user', result.participant_id], status: 'open' })
             setTab('messages')
           }}
           onCancel={() => setAddRunAgentOpen(false)}

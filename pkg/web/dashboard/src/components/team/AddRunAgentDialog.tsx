@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { attachAndSendMesh, type MeshAttachAndSendResult } from '../../api/mesh-client'
+import { attachAndSendMesh, type MeshAttachAndSendResult, type MeshParticipant } from '../../api/mesh-client'
 import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { visibleFocusables } from '../../lib/focus-trap'
 
 export type AddRunAgentDialogProps = {
   profiles: AssistantProfile[]
-  // onAttached — name is how the new agent should be shown: its title, else the role's title.
-  onAttached: (result: MeshAttachAndSendResult, name: string) => void
+  // onAttached — participant is the new agent as the roster will list it: the server's entry (alias included),
+  // else one named by its title or the role's title, so it shows and can be addressed before the next poll.
+  onAttached: (result: MeshAttachAndSendResult, participant: MeshParticipant) => void
   onCancel: () => void
   // originStage — the stage whose feed the agent is added from: its first conversation shows in that feed.
   originStage?: string
@@ -80,7 +81,10 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage 
           ...(p.firstMessage !== '' ? { firstMessage: p.firstMessage } : {}),
           ...(originStage !== undefined ? { originStage } : {}),
         }),
-      { onSuccess: (result) => onAttached(result, name) },
+      {
+        onSuccess: (result) =>
+          onAttached(result, result.participant ?? { id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true }),
+      },
     )
   }
 

@@ -290,15 +290,16 @@ describe('RunTeamList with focusStageId', () => {
   })
 
   test('without onPick the rows are disabled and the hint says when writing is possible', () => {
-    renderFocused({ onPick: undefined, pickHint: 'You can write to them here while this stage is running.' })
-    expect(screen.getByText('You can write to them here while this stage is running.')).toBeInTheDocument()
+    renderFocused({ onPick: undefined, pickHint: 'You can write to them here while the run is going.' })
+    expect(screen.getByText('You can write to them here while the run is going.')).toBeInTheDocument()
     expect(screen.getByText('Security').closest('button')).toBeDisabled()
   })
 
-  test('"+ Add agent" calls onAddRunAgent', () => {
+  test('"Add run agent…" calls onAddRunAgent; "Attach helper to stage…" shows only with onAttachHelper', () => {
     const { onAddRunAgent } = renderFocused()
-    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent…' }))
     expect(onAddRunAgent).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Attach helper to stage…' })).toBeNull()
   })
 })
 

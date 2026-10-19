@@ -25,6 +25,9 @@ export type RunTeamListProps = {
   onSelectParticipant?: (participant: MeshParticipant) => void
   onSelectThread?: (thread: MeshThread) => void
   onAddRunAgent: () => void
+  // onAttachHelper — focus mode only: "Attach helper to stage…" next to "Add run agent…" (a helper works for
+  // this stage, a run agent for the whole run). Undefined — no such button.
+  onAttachHelper?: () => void
   // id — the root element's id (a drawer toggle's aria-controls) and the prefix of its group headings' ids,
   // so a second embedded roster never duplicates the Team tab's ids.
   id?: string
@@ -121,7 +124,7 @@ function stageOrder(stageParticipants: MeshParticipant[], stages: RunTeamListSta
 export function RunTeamList({
   participants, threads = [], stages, selectedParticipantId = null, selectedThreadId = null,
   onSelectParticipant, onSelectThread, onAddRunAgent, id = 'team-roster', drawer = true, open = false,
-  focusStageId, onPick, pickHint,
+  focusStageId, onPick, pickHint, onAttachHelper,
 }: RunTeamListProps): ReactElement {
   const focused = focusStageId !== undefined
   const runParticipants = participants.filter((p) => p.scope === 'run' && p.kind !== 'user')
@@ -203,9 +206,16 @@ export function RunTeamList({
             <ul className="team-roster-list">{otherStages.flatMap(renderStage)}</ul>
           </RosterGroup>
         )}
-        <button type="button" className="btn team-add-run-agent team-add-agent-bottom" onClick={onAddRunAgent}>
-          <span aria-hidden="true">+</span> Add agent
-        </button>
+        <div className="team-add-agent-bottom">
+          <button type="button" className="btn team-add-run-agent" onClick={onAddRunAgent} title="An agent of the whole run: it talks to every stage">
+            <span aria-hidden="true">+ </span>Add run agent…
+          </button>
+          {onAttachHelper !== undefined && (
+            <button type="button" className="btn team-attach-helper" onClick={onAttachHelper} title="A helper of this stage: it works for the stage's agent">
+              <span aria-hidden="true">+ </span>Attach helper to stage…
+            </button>
+          )}
+        </div>
       </nav>
     )
   }

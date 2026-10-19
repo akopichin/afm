@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
-import { StagesList } from '../components/stages-list'
+import { StagesList, canAttachHelper } from '../components/stages-list'
 import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, StageProposals, AddStageDialog } from '../components/assistants'
 import { StagePeoplePanel, STAGE_PEOPLE_ID, TeamView } from '../components/team'
 import { AgentNoteModal } from '../components/agent-note-modal'
@@ -22,7 +22,6 @@ import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assista
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
-import { messageText } from '../lib/agent-result'
 import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -59,13 +58,16 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
   assistants: 'Assistant decision needed',
 }
 
+// REVISE_STATUSES — the statuses POST /api/stages/{id}/revise accepts (pkg/server handleRevise).
+const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants'])
+
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, runCost,
-    runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
+    runOverheadCost, coverageIssues, accounting, statusAvailable, refresh, runStatus,
   } = useStatus()
 
   // Модалка ревью-раунда — открывается по клику ReviewBanner's "Send notes".
@@ -298,7 +300,7 @@ export function App(): ReactElement {
   // не скрипт, ЛИБО есть незавершённая Pause-on-focus операция (hasActiveOp) — композер остаётся
   // смонтированным на всём цикле pause→набор→send→resume, иначе поле и черновик исчезли бы, когда стадия
   // мигнула в paused/resuming. Прочие статусы/скрипты и flowPauseState!=='none' → null (поле не показываем).
-  const noteTarget =
+  const legacyNoteTarget =
     workspaceStage !== null &&
     flowPauseState === 'none' &&
     !workspaceStage.isScript &&
@@ -310,6 +312,18 @@ export function App(): ReactElement {
   // both the mesh and collaboration: with collaboration off the stage Feed is the plain pre-mesh Feed. (The
   // Team tab keeps its own gate, the mesh probe alone.)
   const stageMesh = meshRoster.enabled && capabilities.collaboration
+  // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
+  // statuses the Revise API accepts (or a Pause-on-focus operation still in flight), outside a review pause.
+  const runAlive = runStatus !== 'finished' && runStatus !== 'failed' && runStatus !== 'interrupted'
+  const reviseAvailable =
+    workspaceStage !== null &&
+    flowPauseState === 'none' &&
+    (REVISE_STATUSES.has(workspaceStage.status) || pauseOnFocus.hasActiveOp(workspaceStage.id))
+  const noteTarget = stageMesh
+    ? workspaceStage !== null && !workspaceStage.isScript && runAlive
+      ? workspaceStage.id
+      : null
+    : legacyNoteTarget
   // showPeople — the stage Feed shows who this stage can talk to.
   const showPeople = stageMesh && workspaceStage !== null && wsState.view === 'feed'
 
@@ -623,18 +637,7 @@ export function App(): ReactElement {
                       // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
                       // and the plain note-to-agent composer (no Message/Revise tabs).
                       mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
-                      // "↩ Reply in conversation" on a conversation message: the Feed composer (which exists only
-                      // while noteTarget is set) answers it in its thread, addressed back to its author.
-                      onReplyInConversation={
-                        stageMesh && noteTarget !== null
-                          ? (m) =>
-                              setPeoplePick((prev) => ({
-                                participantId: m.sender_id,
-                                seq: (prev?.seq ?? 0) + 1,
-                                reply: { messageId: m.id, threadId: m.thread_id, preview: messageText(m.body, true).slice(0, 120) },
-                              }))
-                          : undefined
-                      }
+                      reviseAvailable={reviseAvailable}
                     />
                     {showPeople && workspaceStage !== null && (
                       <StagePeoplePanel
@@ -643,9 +646,10 @@ export function App(): ReactElement {
                         stages={stages}
                         profiles={assistantProfiles}
                         onAgentAdded={addParticipant}
+                        onAttachHelper={canAttachHelper(workspaceStage, capabilities.collaboration) ? setAttachHelperStageId : undefined}
                         open={peopleOpen}
                         onClose={closePeople}
-                        // The click goes to the Feed composer, which exists only while noteTarget is set.
+                        // The click adds a recipient in the Feed composer, which exists only while noteTarget is set.
                         onPick={
                           noteTarget !== null
                             ? (p) => setPeoplePick((prev) => ({ participantId: p.id, seq: (prev?.seq ?? 0) + 1 }))

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMentionTrigger, draftMentions, filterMentionGroups, filterMentionProfiles, readdressDraft } from './mention-match'
+import { detectMentionTrigger, draftMentions, filterMentionGroups, filterMentionProfiles, removeMention } from './mention-match'
 
 describe('detectMentionTrigger', () => {
   it('detects an in-progress mention right after @', () => {
@@ -82,16 +82,10 @@ describe('draftMentions', () => {
   })
 })
 
-describe('readdressDraft', () => {
-  it.each([
-    ['replaces the previous recipient', '@qa please check', 'qa', 'impl', '@impl please check'],
-    ['replaces the previous recipient anywhere in the text', 'hi @qa, please check', 'qa', 'impl', 'hi @impl, please check'],
-    ['replaces a handle the draft starts with', '@someone hi', '', 'impl', '@impl hi'],
-    ['puts the handle in front of plain text', 'please check', '', 'impl', '@impl please check'],
-    ['an empty draft gets the handle and a space', '', 'qa', 'impl', '@impl '],
-    ['keeps a draft that already mentions the recipient', 'cc @impl: check', '', 'impl', 'cc @impl: check'],
-    ['the same recipient again changes nothing', '@impl hi', 'impl', 'impl', '@impl hi'],
-  ])('%s', (_, draft, previous, next, want) => {
-    expect(readdressDraft(draft, previous, next)).toBe(want)
+describe('removeMention', () => {
+  it('removes the whole @handle token and the space after it, case-insensitively, leaving the rest', () => {
+    expect(removeMention('@qa please look', 'qa')).toBe('please look')
+    expect(removeMention('ask @QA, then @docs', 'qa')).toBe('ask , then @docs')
+    expect(removeMention('@qaa stays', 'qa')).toBe('@qaa stays')
   })
 })

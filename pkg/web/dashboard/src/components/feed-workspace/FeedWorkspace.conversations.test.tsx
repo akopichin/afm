@@ -33,9 +33,19 @@ function meshProps(): FeedComposerMeshProps {
   return { roster: { enabled: true, probed: true, participants, threads: [] }, profiles: [], stages: [], pick: null }
 }
 
-function renderFeed(onReplyInConversation?: (m: MeshMessage) => void) {
+// renderFeed — the stage feed; withComposer — the stage takes messages, so the composer is there to answer with.
+function renderFeed({ withComposer = false, reviseAvailable = true }: { withComposer?: boolean; reviseAvailable?: boolean } = {}) {
   vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages, threads: [withUser, legacy], next_cursor: 6, has_more: false })
-  render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps()} onReplyInConversation={onReplyInConversation} />)
+  render(
+    <FeedWorkspace
+      events={events}
+      stageId="impl"
+      mesh={meshProps()}
+      noteTarget={withComposer ? 'impl' : null}
+      onSendNote={withComposer ? vi.fn().mockResolvedValue(undefined) : undefined}
+      reviseAvailable={reviseAvailable}
+    />,
+  )
 }
 
 const row = (id: string) => document.querySelector(`[data-message-id="${id}"]`) as HTMLElement
@@ -75,14 +85,60 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(screen.getByText('Please decide')).toBeInTheDocument() // addressed to you: always visible
   })
 
-  it('Reply in conversation is offered where the human is a member, and hands the message to the composer', async () => {
-    const onReply = vi.fn()
-    renderFeed(onReply)
+  it('Reply in conversation is offered where the human is a member, and answers the message from the Message composer', async () => {
+    const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm7', seq: 7, thread_id: 'mt-1' })
+    renderFeed({ withComposer: true })
     await waitFor(() => expect(row('m1')).not.toBeNull())
-    fireEvent.click(within(row('m1')).getByRole('button', { name: '↩ Reply in conversation' }))
-    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ id: 'm1' }))
     // An older thread the agents opened among themselves is read-only.
     expect(within(row('m4')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
+
+    fireEvent.click(within(row('m1')).getByRole('button', { name: '↩ Reply in conversation' }))
+    expect(row('m1')).toHaveClass('is-reply-target')
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    const recipients = screen.getByRole('group', { name: 'Recipients' })
+    expect(within(recipients).getByText('@qa')).toBeInTheDocument()
+    expect(screen.getByText('Found a bug', { selector: '.feed-reply-chip-src' })).toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: 'which one?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:qa'], inReplyTo: 'm1', body: 'which one?', originStage: 'impl' })),
+    )
+    // Answered: the reply target goes.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel reply in conversation' })).toBeNull())
+    expect(row('m1')).not.toHaveClass('is-reply-target')
+  })
+
+  it('one conversation reply at a time; a Revise reply to a thought is separate and looks different', async () => {
+    renderFeed({ withComposer: true })
+    await waitFor(() => expect(row('m1')).not.toBeNull())
+    fireEvent.click(within(row('m1')).getByRole('button', { name: '↩ Reply in conversation' }))
+    fireEvent.click(within(row('m3')).getByRole('button', { name: '↩ Reply in conversation' }))
+    expect(row('m1')).not.toHaveClass('is-reply-target')
+    expect(row('m3')).toHaveClass('is-reply-target')
+    expect(document.querySelectorAll('.feed-reply-chip--conversation')).toHaveLength(1)
+
+    // The thought's reply opens Revise with its own chip; the conversation reply waits in Message.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Reply to this thought' })[0] as HTMLElement)
+    expect(screen.getByRole('tab', { name: 'Revise' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Cancel reply to thought' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
+    expect(screen.getByRole('button', { name: 'Cancel reply in conversation' })).toBeInTheDocument()
+  })
+
+  it('without Revise there is no Revise tab and no reply to a thought; Message stays', async () => {
+    renderFeed({ withComposer: true, reviseAvailable: false })
+    await waitFor(() => expect(row('m1')).not.toBeNull())
+    expect(screen.queryByRole('tab', { name: 'Revise' })).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByRole('button', { name: 'Reply to this thought' })).toBeNull()
+    expect(within(row('m1')).getByRole('button', { name: '↩ Reply in conversation' })).toBeInTheDocument()
+  })
+
+  it('Reply in conversation is not offered without a composer', async () => {
+    renderFeed()
+    await waitFor(() => expect(row('m1')).not.toBeNull())
+    expect(within(row('m1')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
   })
 
   it('Reply in conversation is not offered in a closed conversation', async () => {
@@ -90,7 +146,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
       messages: [msg('m9', 2, { thread_id: 'mt-closed', body: 'A closed one' })], threads: [closed], next_cursor: 2, has_more: false,
     })
-    render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps()} onReplyInConversation={vi.fn()} />)
+    render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps()} noteTarget="impl" onSendNote={vi.fn()} />)
     await waitFor(() => expect(row('m9')).not.toBeNull())
     expect(within(row('m9')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
   })

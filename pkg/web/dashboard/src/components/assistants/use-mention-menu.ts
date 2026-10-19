@@ -4,8 +4,9 @@ import { detectMentionTrigger, type MentionTrigger } from './mention-match'
 export type UseMentionMenuOptions<T> = {
   // matchesFor — candidates for the text typed after `@`, in the order the menu shows them.
   matchesFor: (query: string) => T[]
-  // textFor — what replaces `@query` in the draft (without the `@` and trailing space).
-  textFor: (item: T) => string
+  // textFor — what replaces `@query` in the draft (without the `@` and trailing space); null removes `@query`
+  // and inserts nothing (the pick is shown elsewhere, e.g. as a chip).
+  textFor: (item: T) => string | null
   // replaceRange — splices the draft (useCaretInsert's replaceRange).
   replaceRange: (start: number, end: number, text: string) => void
   // onPicked — called after an item was inserted, e.g. to remember the chosen recipient.
@@ -53,7 +54,8 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
 
   function pick(item: T): void {
     if (mention === null) return
-    replaceRange(mention.start, mention.start + 1 + mention.query.length, `@${textFor(item)} `)
+    const text = textFor(item)
+    replaceRange(mention.start, mention.start + 1 + mention.query.length, text === null ? '' : `@${text} `)
     setMention(null)
     onPicked?.(item)
   }

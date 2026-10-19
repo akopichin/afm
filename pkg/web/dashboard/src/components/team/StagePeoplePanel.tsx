@@ -24,12 +24,16 @@ export type StagePeoplePanelProps = {
   // onAgentAdded — a run agent was just added: the owner shows it (and lets it be picked) before the next
   // roster poll.
   onAgentAdded: (participant: MeshParticipant) => void
+  // onAttachHelper — open the stage's "Attach helper" dialog (a helper of this stage, not a run agent).
+  // Undefined while the stage cannot take one: no button.
+  onAttachHelper?: (stageId: string) => void
 }
 
 // StagePeoplePanel — the stage Feed's right side panel: who this stage can talk to (RunTeamList in focus
-// mode). A click puts the person's @handle into the Feed composer; "+ Add agent" opens the same dialog as the
-// Team tab. A wide screen shows it next to the feed, a narrow one as a drawer.
-export function StagePeoplePanel({ stageId, participants, stages, profiles, open, onClose, onPick, onAgentAdded }: StagePeoplePanelProps): ReactElement {
+// mode). A click adds the person to the Feed composer's recipients; "Add run agent…" opens the same dialog as
+// the Team tab, "Attach helper to stage…" the stage's helper dialog. A wide screen shows it next to the feed, a
+// narrow one as a drawer.
+export function StagePeoplePanel({ stageId, participants, stages, profiles, open, onClose, onPick, onAgentAdded, onAttachHelper }: StagePeoplePanelProps): ReactElement {
   const [addOpen, setAddOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement | null>(null)
   const openerRef = useRef<HTMLElement | null>(null)
@@ -93,11 +97,19 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
                   onClose()
                 }
           }
-          pickHint={onPick === undefined ? 'You can write to them here while this stage is running.' : undefined}
+          pickHint={onPick === undefined ? 'You can write to them here while the run is going.' : undefined}
           onAddRunAgent={() => {
             onClose()
             setAddOpen(true)
           }}
+          onAttachHelper={
+            onAttachHelper === undefined
+              ? undefined
+              : () => {
+                  onClose()
+                  onAttachHelper(stageId)
+                }
+          }
         />
       </div>
       {open && <button type="button" className="stage-people-scrim" aria-label="Close people" onClick={onClose} />}
@@ -105,9 +117,9 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
         <AddRunAgentDialog
           profiles={profiles}
           originStage={stageId}
-          onAttached={(result, name) => {
+          onAttached={(_, participant) => {
             setAddOpen(false)
-            onAgentAdded({ id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true })
+            onAgentAdded(participant)
           }}
           onCancel={() => setAddOpen(false)}
         />

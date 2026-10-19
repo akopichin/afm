@@ -14,6 +14,8 @@ export type ConversationMessageProps = {
   onJumpToQuote?: (messageId: string) => void
   // onReply — shows "↩ Reply in conversation" under the bubble (the stage feed's composer answers in the thread).
   onReply?: () => void
+  // replyActive — this is the message the composer is answering now.
+  replyActive?: boolean
 }
 
 function messageTime(createdAt: string): string {
@@ -24,7 +26,7 @@ function messageTime(createdAt: string): string {
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply, replyActive = false }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
@@ -38,7 +40,11 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
       </>
     )
   return (
-    <li className={`team-conversation-message${fromYou ? ' from-you' : ''}`} data-sender={message.sender_id} data-message-id={message.id}>
+    <li
+      className={`team-conversation-message${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}`}
+      data-sender={message.sender_id}
+      data-message-id={message.id}
+    >
       <MeshAvatar name={author} kind={kind} />
       <div className="team-conversation-message-content">
         <div className="team-conversation-message-header">
@@ -67,7 +73,7 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
         </div>
         {onReply !== undefined && (
           <div className="conversation-message-actions">
-            <button type="button" className="conversation-reply-link" onClick={onReply}>
+            <button type="button" className="conversation-reply-link" aria-pressed={replyActive} onClick={onReply}>
               ↩ Reply in conversation
             </button>
           </div>

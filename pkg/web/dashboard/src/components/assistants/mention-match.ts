@@ -64,15 +64,8 @@ function mentionPattern(handle: string): RegExp {
   return new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,;:!?)])`, 'i')
 }
 
-// readdressDraft points the draft at a single recipient, next: the previous recipient's `@previous` becomes
-// `@next`, else an `@handle` the draft starts with does, else `@next ` is put in front — unless the draft
-// already mentions next. The rest of the text stays as it is.
-export function readdressDraft(draft: string, previous: string, next: string): string {
-  if (previous !== '' && previous.toLowerCase() !== next.toLowerCase() && draftMentions(draft, previous)) {
-    return draft.replace(mentionPattern(previous), (_, lead: string) => `${lead}@${next}`)
-  }
-  if (draftMentions(draft, next)) return draft
-  const leading = /^@[^\s@]+/.exec(draft)
-  if (leading !== null) return `@${next}${draft.slice(leading[0].length)}`
-  return `@${next} ${draft}`
+// removeMention — the draft without its `@handle` token (and the space after it): un-addressing a typed
+// recipient from its chip.
+export function removeMention(draft: string, handle: string): string {
+  return draft.replace(new RegExp(mentionPattern(handle).source + '\\s?', 'i'), (_, lead: string) => lead)
 }
