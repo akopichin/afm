@@ -379,9 +379,11 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	}
 	// A run agent is a standing role: its turn ends idle (queued, which never holds the run open — see
 	// state.RunBlocker) rather than completed, and the next message addressed to it starts its next turn
-	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away.
+	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away. Its result also
+	// answers the message that woke the turn: a passive reply in the same commit (agentcomm_turn_reply.go).
 	if task.Scope == assistants.ScopeRun {
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, resultEff)
+		reply := o.planTurnReply(taskID, consumed, result)
+		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, reply, resultEff)
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}

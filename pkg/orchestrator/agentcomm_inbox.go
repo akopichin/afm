@@ -86,7 +86,7 @@ func inboxMessageView(m *agentcomm.Message) prompts.AgentCommInboxMessage {
 	}
 	return prompts.AgentCommInboxMessage{
 		MessageID: string(m.ID), ThreadID: string(m.ThreadID), From: string(m.Sender),
-		Recipients: recipients, InReplyTo: inReplyTo, Body: m.Body,
+		Recipients: recipients, InReplyTo: inReplyTo, Body: m.Body, AutoResult: m.AutoResult,
 	}
 }
 

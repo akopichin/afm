@@ -29,6 +29,8 @@ type DiscussionMessagePayload struct {
 	// Interrupt — the human asked the running stage agent to stop its turn and answer this post. Recorded in
 	// the same operation as the post, so the request survives a crash before the agent was interrupted.
 	Interrupt bool `json:"interrupt,omitempty"`
+	// AutoResult — the mirror of an agent's turn result afm posted as a reply (agentcomm.Message.AutoResult).
+	AutoResult bool `json:"auto_result,omitempty"`
 }
 
 // discussionMessagesForStage returns stageID's discussion messages in commit order (as.Discussions.ByStage —
@@ -87,6 +89,7 @@ func applyDiscussionMessage(as *AssistantsState, c *Control, dryRun bool) error 
 		Result:          p.Result,
 		Mentions:        p.Mentions,
 		Interrupt:       p.Interrupt,
+		AutoResult:      p.AutoResult,
 		CreatedAt:       c.Time,
 	}
 	as.Discussions.Messages[id] = &msg

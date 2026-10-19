@@ -183,6 +183,10 @@ type Message struct {
 	InReplyTo    *MessageID `json:"in_reply_to,omitempty"`
 	Body         string     `json:"body"`
 	ArtifactRefs []string   `json:"artifact_refs,omitempty"`
+	// AutoResult marks a PASSIVE message: afm posted an agent's turn result as a reply to the message that woke
+	// that turn. It waits in the recipient's inbox for its next turn but never wakes it (state.MeshState's
+	// HasWakingUnreadFor).
+	AutoResult bool `json:"auto_result,omitempty"`
 	// Seq is assigned by the journal writer, sharing the run's single event-log sequence.
 	Seq uint64 `json:"seq"`
 	// CreatedAt is stamped from the control record's own time, never time.Now(), so replay stays

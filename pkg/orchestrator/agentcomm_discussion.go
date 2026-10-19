@@ -191,7 +191,7 @@ func discussionMirrorOfReply(rs state.RunState, req SendRequest, messageID agent
 	}
 	eff, err := discussionMessageEffect(stageID, string(messageID), state.DiscussionMessagePayload{
 		AuthorKind: string(author), AuthorID: string(req.Sender), Role: role,
-		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body,
+		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body, AutoResult: req.AutoResult,
 	})
 	return eff, err == nil, err
 }

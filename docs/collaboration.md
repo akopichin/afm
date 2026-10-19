@@ -186,6 +186,29 @@ message waits until somebody writes to it. Messages to a stage or helper that ha
 already finished are refused with a clear error instead of going unanswered. This
 agent belongs to the run rather than one stage.
 
+When a run agent's turn ends with a result, afm posts the result's summary as a
+reply to the message that woke that turn — the newest message it was handed — in
+that message's conversation. The reply is plain text: the summary, cut to fit a
+message, then the verdict, the number of findings and the task and turn whose
+full result it is. Team, the feed's conversation preview and the Discussion mark
+it with a **turn result** tag. A turn result does not wake its recipient: it
+waits in the inbox and is handed over at the recipient's next turn, so it does
+not start an idle run agent, give a stage an extra turn, resume an agent that
+waits for "any message" (`addressed_message` without a thread), or keep the run
+open. An agent that waits for an answer to that very message (`reply_to`) is
+resumed by it. afm skips the reply when the agent already answered the waking
+message itself during the turn; a question to someone else or a reply to a
+different message does not count. A turn with no waking message posts nothing.
+If the reply cannot be delivered — the conversation is closed or full, the
+recipient's inbox is full, or the recipient has finished — the result is still
+recorded, the agent goes idle as usual, and the feed shows *"turn result of task
+… not delivered: <reason>"*. The same holds for a delegated child's result
+mirrored to its parent, which is a turn result too. When the waking message was
+your Discussion post that mentioned the agent, the reply appears in the
+Discussion as the answer, so the post is not shown as **Not answered**. Run
+agents are told this in their prompt; to continue a conversation they write
+explicitly with `afm agent send` or `afm agent reply`.
+
 The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to
 put a task on the board: choose under **Notify** which working agents get a

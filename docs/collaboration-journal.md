@@ -47,3 +47,15 @@ stop blocking root-stage completion). Concretely:
   ordinary, unremarkable kind of forward compatibility every `events.jsonl`
   consumer already relies on. The strict rule above is specifically about the
   *discriminators* (`kind`, `schema_version`), not about every field on a record.
+
+## Additive fields
+
+Fields added to an existing record kind are optional: a journal written before a
+field existed simply lacks it, and afm reads the record with the field's zero
+value.
+
+- `auto_result` on `mesh_message_sent` and on `discussion_message` (a boolean,
+  omitted when false) marks a run agent's turn result that afm posted as a reply
+  on the agent's behalf. Such a message waits in the recipient's inbox but never
+  wakes it. A message from an older journal has no `auto_result` and is an
+  ordinary message that wakes its recipient, exactly as before.

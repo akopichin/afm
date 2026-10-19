@@ -346,28 +346,27 @@ func (o *Orchestrator) tryResumePeerForQuestion(ctx context.Context, taskID assi
 	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, "resumed: peer question while waiting")
 }
 
-// hasUndeliveredInbox reports whether participant has at least one inbox message still at DeliveryAccepted —
-// i.e. one that has never been included in any of its own spawned turns' <inbox> block. agentCommInboxFor's
-// OnDelivered closure (T4.4) marks every CURRENTLY pending message Delivered as soon as a fresh process for
-// that participant actually starts, unconditionally — so in practice this is only ever true for a message
-// that arrived strictly AFTER the participant's most recent turn began, exactly the "a colleague has
-// something for you that you have not had a chance to see yet" signal T5.5 needs, with no separate watermark:
-// reusing the delivery receipt the prompt-building code already maintains means there is nothing new to keep
-// consistent across a restart.
-func (o *Orchestrator) hasUndeliveredInbox(participant agentcomm.ParticipantID) bool {
-	return o.opts.Store.Snapshot().Assistants.Mesh.HasUnseenMessageFor(participant)
+// hasWakingUnread reports whether participant has a message that should wake it (state.MeshState's
+// HasWakingUnreadFor): one still at DeliveryAccepted — never included in any of its own spawned turns' <inbox>
+// block — and not a passive turn result. agentCommInboxFor's OnDelivered closure (T4.4) marks every CURRENTLY
+// pending message Delivered as soon as a fresh process for that participant actually starts — so in practice
+// this is only ever true for a message that arrived strictly AFTER the participant's most recent turn began,
+// exactly the "a colleague has something for you that you have not had a chance to see yet" signal T5.5 needs,
+// with no separate watermark.
+func (o *Orchestrator) hasWakingUnread(participant agentcomm.ParticipantID) bool {
+	return o.opts.Store.Snapshot().Assistants.Mesh.HasWakingUnreadFor(participant)
 }
 
 // maybeResumeAwaitingPeerQuestion resumes participant for a bounded T5.5 counter-question turn if, and only
 // if, it is CURRENTLY parked with its own wait still pending (hasOpenMeshWaitFor) AND has at least one
-// undelivered message (hasUndeliveredInbox) — both conditions re-derived fresh from durable state, so this is
+// undelivered message (hasWakingUnread) — both conditions re-derived fresh from durable state, so this is
 // safe to call redundantly from anywhere: Send's own externalWork tail (the live path, right after the
 // message that might BE a counter-question commits) and recoverMeshWaits/recoverAssistants' waiting_peer
 // branch (startup recovery, T5.5's "crash in the middle of the clarification recovers to exactly one pending
 // turn" — the resume this triggers is CAS-protected exactly like T5.3's, so a redundant call here racing a
 // live trigger, or a second recovery pass, is always a silent no-op, never a second turn).
 func (o *Orchestrator) maybeResumeAwaitingPeerQuestion(ctx context.Context, participant agentcomm.ParticipantID) {
-	if !o.hasOpenMeshWaitFor(participant) || !o.hasUndeliveredInbox(participant) {
+	if !o.hasOpenMeshWaitFor(participant) || !o.hasWakingUnread(participant) {
 		return
 	}
 	if stageID, ok := stageIDFromMeshParticipant(participant); ok {
@@ -418,7 +417,7 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 			// The ORIGINAL wait has not resolved — but a colleague may have asked a counter-question while the
 			// process was down; recover that as a bounded T5.5 turn instead of leaving it stranded until the
 			// original wait happens to resolve on its own.
-			if o.hasUndeliveredInbox(waiter) {
+			if o.hasWakingUnread(waiter) {
 				if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
 					log.Printf("WARN: mesh: recover awaiting_peer counter-question for stage %q: %v", s.ID, err)
 				}
@@ -444,7 +443,7 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 			if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: s.ID}); err != nil {
 				log.Printf("WARN: mesh: recover awaiting_peer stage %q after its wait ended: %v", s.ID, err)
 			}
-		case o.hasUndeliveredInbox(waiter):
+		case o.hasWakingUnread(waiter):
 			// Parked for unread messages with no wait at all (agentcomm_unread.go), and the process stopped
 			// before the extra turn started.
 			if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {

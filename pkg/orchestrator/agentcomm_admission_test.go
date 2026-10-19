@@ -144,7 +144,7 @@ func TestDiscussion_PostToFinishedStageIsUndeliverable(t *testing.T) {
 	if got := rs.Assistants.Mesh.Receipts[agentcomm.MessageID(msgID)][stage]; got != agentcomm.DeliveryUndeliverable {
 		t.Fatalf("receipt for the finished stage = %s, want undeliverable", got)
 	}
-	if rs.Assistants.Mesh.HasUnseenMessageFor(stage) {
+	if rs.Assistants.Mesh.HasWakingUnreadFor(stage) {
 		t.Fatal("a finished stage must not have an unread message")
 	}
 }

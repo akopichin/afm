@@ -104,7 +104,10 @@ type SendRequest struct {
 	InReplyTo    *agentcomm.MessageID
 	Body         string
 	ArtifactRefs []string
-	Actor        state.Actor
+	// AutoResult marks the message as a passive turn result afm posts on the sender's behalf
+	// (agentcomm.Message.AutoResult). Never set from an HTTP or CLI request: only afm itself posts one.
+	AutoResult bool
+	Actor      state.Actor
 }
 
 type SendReceipt struct {

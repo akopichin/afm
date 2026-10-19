@@ -346,7 +346,7 @@ func TestMesh_HasUndeliveredInbox(t *testing.T) {
 	waiter := meshStageParticipantID("s1")
 	colleague := agentcomm.ParticipantID("user")
 
-	if o.hasUndeliveredInbox(waiter) {
+	if o.hasWakingUnread(waiter) {
 		t.Fatal("no message sent yet: want false")
 	}
 
@@ -361,14 +361,14 @@ func TestMesh_HasUndeliveredInbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if !o.hasUndeliveredInbox(waiter) {
+	if !o.hasWakingUnread(waiter) {
 		t.Fatal("a message was just sent and never delivered: want true")
 	}
 
 	if err := o.MarkMessageDelivered(ctx, send.MessageID, waiter); err != nil {
 		t.Fatalf("MarkMessageDelivered: %v", err)
 	}
-	if o.hasUndeliveredInbox(waiter) {
+	if o.hasWakingUnread(waiter) {
 		t.Fatal("the only message was just marked delivered: want false")
 	}
 }

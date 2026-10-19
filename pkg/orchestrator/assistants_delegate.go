@@ -263,6 +263,11 @@ func currentChildren(rs state.RunState, parentID assistants.TaskID, currentParen
 // a resumed parent's own "Results from the children you delegated to" section — no existing delegation
 // test's expected prompt text changes because of this mirror.
 //
+// The mirror is a passive turn result (AutoResult): the parent is resumed by its children finishing
+// (tryResumeParent), never by this message, and its own turn result is never posted back to a finished child.
+// Its effects are message effects of the finish operation: a rejection (the parent's inbox is full) commits the
+// child's outcome without them (finishTaskTurnReplying).
+//
 // Returns (nil, nil) — no error, no effects — for a task with no parent, or for a STALE child (currentChildren's
 // own rule: one from a generation the parent has since superseded via RetryTask/BumpRootGeneration) — a dead
 // branch's outcome must never be injected into the parent's LIVE inbox after it has already moved on.
@@ -307,7 +312,7 @@ func (o *Orchestrator) childResultMeshEffects(rs state.RunState, parentID, child
 
 	msgEff, err := messageSentEffect(SendRequest{
 		ThreadID: threadID, Sender: members[1], Recipients: []agentcomm.ParticipantID{members[0]},
-		Kind: agentcomm.MessageKindMessage, Body: body,
+		Kind: agentcomm.MessageKindMessage, Body: body, AutoResult: true,
 	}, deriveMeshMessageID("delegate-result:"+string(childID)))
 	if err != nil {
 		return nil, err
@@ -517,7 +522,7 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 			// T5.5: that still-pending wait does not rule out a counter-question whose own live trigger was
 			// lost to the SAME crash — recover it the same way recoverMeshWaits does for a stage. Safe to call
 			// unconditionally for the same reason tryResumePeer above is: both conditions it checks
-			// (hasOpenMeshWaitFor, hasUndeliveredInbox) are re-derived fresh, and the resume it triggers is
+			// (hasOpenMeshWaitFor, hasWakingUnread) are re-derived fresh, and the resume it triggers is
 			// CAS-protected, so finding nothing to do (or racing tryResumePeer's own resume above) is a no-op.
 			o.maybeResumeAwaitingPeerQuestion(ctx, meshParticipantForTask(o.opts.Store.Snapshot(), t.Task))
 		default:

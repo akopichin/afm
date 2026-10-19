@@ -65,8 +65,10 @@ type DiscussionMessage struct {
 	// Mentions — mesh participant ids the post was also addressed to (besides the stage agent).
 	Mentions []string `json:"mentions,omitempty"`
 	// Interrupt — a human post that asked the running stage agent to answer it right away.
-	Interrupt bool      `json:"interrupt,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Interrupt bool `json:"interrupt,omitempty"`
+	// AutoResult — an agent's turn result afm posted as a reply on its behalf.
+	AutoResult bool      `json:"auto_result,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ErrRoundLimitExceeded is returned by RoundUsage.Allow when a round has already been used, or the requested

@@ -128,15 +128,15 @@ func (ms MeshState) MessageAnswered(id agentcomm.MessageID) bool {
 	return false
 }
 
-// hasMessageAddressedTo reports whether some message already in threadID names recipient among its
-// Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
-// condition is already satisfied at registration time.
-// HasUnseenMessageFor reports whether recipient has a message it has not seen yet (still only accepted, not
-// delivered to it through <inbox> or `afm agent inbox`) — what a thread-less addressed_message wait waits for,
-// and what wakes an idle run agent.
-func (ms MeshState) HasUnseenMessageFor(recipient agentcomm.ParticipantID) bool {
+// HasWakingUnreadFor is THE "waking unread" rule: whether recipient has a message it has not seen yet (still
+// only accepted, not delivered to it through <inbox> or `afm agent inbox`) that should wake it. A passive turn
+// result (Message.AutoResult) never does: it waits in the inbox for the recipient's next turn. Everything that
+// decides whether an agent is woken goes through it — a thread-less addressed_message wait, an idle run agent's
+// next turn, the run-finalization blocker, a stage's extra turns for unread messages and the counter-question
+// resume.
+func (ms MeshState) HasWakingUnreadFor(recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.Inbox[recipient] {
-		if ms.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
+		if m := ms.Messages[id]; m != nil && !m.AutoResult && ms.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
 			return true
 		}
 	}
@@ -178,6 +178,9 @@ func (ms *MeshState) appendToInbox(recipient agentcomm.ParticipantID, id agentco
 	ms.Inbox[recipient] = ids
 }
 
+// hasMessageAddressedTo reports whether some message already in threadID names recipient among its
+// Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
+// condition is already satisfied at registration time.
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]
@@ -354,6 +357,9 @@ type MeshMessageSentPayload struct {
 	InReplyTo    *string  `json:"in_reply_to,omitempty"`
 	Body         string   `json:"body"`
 	ArtifactRefs []string `json:"artifact_refs,omitempty"`
+	// AutoResult — afm posted an agent's turn result as this reply (see agentcomm.Message.AutoResult). Absent in
+	// journals written before it existed.
+	AutoResult bool `json:"auto_result,omitempty"`
 }
 
 // meshRejected is a typed rejection for a mesh operation the caller can fix (unknown thread, bad recipients,
@@ -402,7 +408,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	msg := agentcomm.Message{
 		ID: id, ThreadID: threadID, Sender: agentcomm.ParticipantID(p.Sender), Recipients: recipients,
 		Kind: agentcomm.MessageKind(p.Kind), InReplyTo: inReplyTo, Body: p.Body, ArtifactRefs: p.ArtifactRefs,
-		Seq: c.Seq, CreatedAt: c.Time,
+		AutoResult: p.AutoResult, Seq: c.Seq, CreatedAt: c.Time,
 	}
 
 	known := make(map[agentcomm.MessageID]bool, len(as.Mesh.MessagesByThread[threadID]))

@@ -266,7 +266,7 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Ef
 	return marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
-			InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs,
+			InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs, AutoResult: req.AutoResult,
 		})
 }
 

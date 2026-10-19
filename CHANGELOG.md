@@ -5,6 +5,22 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: a run agent's turn result answers the message that woke it
+
+When a run agent finishes a turn, afm posts the result's summary as a reply to
+the message that started that turn, in the same conversation, marked with a
+**turn result** tag in Team, the feed preview and the Discussion. The reply does
+not wake its recipient: it waits for the recipient's next turn, so two agents
+cannot keep each other busy with turn results, and it never keeps the run open.
+An agent waiting for an answer to that very message is still resumed. The reply
+is skipped when the agent already answered the message itself. A reply that
+cannot be delivered (closed or full conversation, full inbox, finished
+recipient) no longer matters for the turn: the result is recorded and the feed
+says why it was not delivered. This also fixes a delegated child that could stay
+running when its result could not be mirrored to its parent. Answering a
+Discussion post that mentioned the agent clears its **Not answered** mark.
+Journals written before this change load unchanged.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was

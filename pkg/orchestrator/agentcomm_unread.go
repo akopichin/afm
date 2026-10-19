@@ -236,7 +236,7 @@ func waitsForAnswerTo(cond agentcomm.WaitCondition, m *agentcomm.Message) bool {
 // released them yet, and a sender may be waiting for an answer. The run must not finish before that.
 func finishedStageHasUnread(rs state.RunState) bool {
 	for id, st := range rs.Stages {
-		if bus.IsTerminal(st.Status) && rs.Assistants.Mesh.HasUnseenMessageFor(meshStageParticipantID(id)) {
+		if bus.IsTerminal(st.Status) && rs.Assistants.Mesh.HasWakingUnreadFor(meshStageParticipantID(id)) {
 			return true
 		}
 	}
@@ -245,5 +245,5 @@ func finishedStageHasUnread(rs state.RunState) bool {
 
 // stageHasUnreadMessages reports whether stageID's inbox holds a message no turn has been handed yet.
 func (o *Orchestrator) stageHasUnreadMessages(stageID string) bool {
-	return o.opts.Store != nil && o.hasUndeliveredInbox(meshStageParticipantID(stageID))
+	return o.opts.Store != nil && o.hasWakingUnread(meshStageParticipantID(stageID))
 }
