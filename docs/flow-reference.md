@@ -157,9 +157,10 @@ team:
 
 `id`, `profile` and `title` are required; `instruction` is optional. `id` must
 be unique in the team and match `[A-Za-z0-9._-]`. The `@name` is made from
-`title`; when it is taken, the agent gets `-2`, `-3` and so on. An unknown
-profile stops `afm run` at preflight, and `afm validate` reports it too. Team
-agents get no first message: each one waits until somebody writes to it. See
+`title`; when it is taken, the agent gets `-2`, `-3` and so on. With
+collaboration enabled, an unknown profile stops `afm run` at preflight and fails
+`afm validate`; with collaboration disabled, both only warn. Team agents get no
+first message: each one waits until somebody writes to it. See
 [Declare a team in flow.yaml](collaboration.md#declare-a-team-in-flowyaml) for
 resume and disabled-collaboration behavior. Full example:
 [`examples/agent-team-review/`](https://github.com/akopichin/afm/tree/main/examples/agent-team-review).

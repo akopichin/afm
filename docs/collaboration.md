@@ -139,11 +139,16 @@ version; afm logs a warning and writes a `team_warning` notice: *"changed in
 flow.yaml; using the saved version, the new one applies to a new run"*. A member
 removed from `flow.yaml` keeps its agent until the run ends.
 
-Profiles must exist in `collaboration.profiles`: an unknown one stops `afm run`
-at preflight and fails `afm validate`. A profile that is unavailable when the
-run starts is logged, reported as a `team_warning` notice and skipped, and the
-stages run anyway. When collaboration is disabled, afm warns that the team will
-not be added and runs the flow without it, as with `assistants:`.
+With collaboration enabled, every member the run has not added yet needs a
+profile in `collaboration.profiles`: an unknown one stops `afm run` at preflight
+and fails `afm validate`. An agent the run already added keeps the profile it
+was created with, so a resume still works after that profile is removed from
+config. A profile that is unavailable when the run starts is logged, reported as
+a `team_warning` notice and skipped, and the stages run anyway. If the run's
+journal cannot be read or written while the team is being added, the run stops
+before any stage starts. When collaboration is disabled, `afm run` and
+`afm validate` only warn that the team will not be added, and the flow runs
+without it, as with `assistants:`.
 
 Full example: [`examples/agent-team-review/`](https://github.com/akopichin/afm/tree/main/examples/agent-team-review)
 — a stage agent sends its change to two reviewer agents from `team:`, waits for

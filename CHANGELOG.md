@@ -48,9 +48,10 @@ stage agents can write to them from their first turn; each `@name` is made from
 the title, with `-2`, `-3` on a collision. A resumed run reuses the agents it
 already added (Ctrl+C and resume never add one twice) and adds only new ids; a
 member changed in `flow.yaml` keeps its saved version with a `team_warning`
-notice, and a removed one stays until the run ends. An unknown profile stops
-`afm run` at preflight and fails `afm validate`; with collaboration disabled,
-afm warns and runs the flow without the team. The flow schema covers the new
+notice, and a removed one stays until the run ends. With collaboration on, an
+unknown profile of a member not added yet stops `afm run` at preflight and fails
+`afm validate`; with collaboration disabled, afm warns and runs the flow without
+the team. The flow schema covers the new
 key.
 
 ### Fix: the stage Feed with collaboration off
