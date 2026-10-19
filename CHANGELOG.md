@@ -5,6 +5,37 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: the stage conversation lives in the Feed
+
+With collaboration on, the **Discussion** tab is gone: your conversation with a
+stage's agent is in its Feed. A new **Message** whose recipients include the
+stage's agent is posted in that conversation (the others you named join it), so
+it keeps everything the Discussion had — **Interrupt agent** (a switch in the
+**To** row while the stage is running, chosen per send), the **Not answered**
+mark on a post the stage finished without answering, the question in the
+agent's next prompt, and safe retries. Replies and messages without the stage
+agent go to exactly their recipients as before. `@` also lists **Other stages**.
+Conversation bubbles in the stage feed render Markdown. Runs recorded earlier
+show their old stage conversation posts, helper results with their evidence
+included, as read-only bubbles in journal order, each once. The proposal cards
+are removed with the tab; proposals are still recorded. Agents are told their
+reply appears in the stage feed. A `team_warning` notice shows in the Full feed
+as a warning line.
+
+### Fix: the Feed composer never changes who gets a message
+
+A picked recipient who left the run stays as a chip with the reason and blocks
+Send instead of the stage agent taking over. **↩ Reply in conversation** is
+addressed to that conversation only: earlier picks wait and picks made during
+the reply end with it. **×** on a chip removes every mention of that person,
+also a full id shown by its alias. A reply ends when its conversation closes. A
+recipient shows *Delivered* only after afm actually hands it the message; until
+then *Accepted · waiting for an inbox check*. On the server, a conversation you
+start from a stage's feed is that feed's own (two feeds writing to the same agent
+at once no longer share one), an older conversation of agents you are not a
+member of is not reused for your message, and retrying a request id from another
+feed is a conflict instead of the first send's receipt.
+
 ### Improvement: the stage Feed composer writes to several people
 
 With Agent Mesh and collaboration on, the stage Feed composer opens in

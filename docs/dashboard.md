@@ -23,8 +23,7 @@ right (there is no three-column layout or bottom progress bar).
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
   *selected stage's own* event history, capped at its last 200 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
-  plan or Q&A history to reopen — and, when collaboration is enabled, a
-  **Discussion** tab. When Agent Mesh is available, a run-wide **Team** tab
+  plan or Q&A history to reopen. When Agent Mesh is available, a run-wide **Team** tab
   opens the participant roster and conversations (see
   [Team conversations](collaboration.md#team-conversations)). The workspace also has a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
@@ -58,12 +57,13 @@ right (there is no three-column layout or bottom progress bar).
   cost and opens a **Cost** tab with a per-stage/overhead/total breakdown; the stage
   rail shows a quiet per-stage cost. All of it can be switched off — see
   [Cost tracking](#cost-tracking) below.
-- **Helpers and Discussion** — attached helper tasks appear beneath their stage.
+- **Helpers** — attached helper tasks appear beneath their stage.
   Select one to see its result and controls, including a **repaired** badge for an
   answer whose JSON needed repair or the raw answer behind a protocol error when
-  available. The **Discussion** tab shows stage
-  messages and pending agent proposals; **+ Stage** can add a stage to a live run.
-  See [Helpers and collaboration](collaboration.md).
+  available. With collaboration on, your conversation with a stage's agent lives
+  in its **Feed** (see [Message](#message) and
+  [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
+  can add a stage to a live run. See [Helpers and collaboration](collaboration.md).
 
 ## Side agent — a free-form chat alongside the run
 
@@ -233,7 +233,7 @@ The **To** row above the input lists who the message goes to:
 - People you click in the [People panel](#people-panel) — each click adds a
   recipient chip; your text is left as it is.
 - `@handles` you type in the text. Type `@` (or click **+** in the **To** row) to
-  pick someone under **This run** or **This stage**; their `@handle` goes into
+  pick someone under **This run**, **This stage** or **Other stages**; their `@handle` goes into
   the text and shows as a chip. A handle typed by hand counts too.
 - Nobody named — the stage's own agent, shown as a dashed **stage agent** chip.
   If it cannot read a message (the stage has finished, or it waits for its
@@ -247,9 +247,22 @@ longer receive messages, or a picked person who has left the run is marked on
 its chip and explained under the input; nothing is sent until you fix it. afm
 never sends to someone else instead.
 
-Sending posts **one** message to all recipients. It goes into your open
-conversation with exactly those people that this stage's feed shows, or opens a
-new one there in the same step. A failed send keeps the draft and shows the
+Sending posts **one** message to all recipients:
+
+- A new message whose recipients include **the stage's own agent** is a post in
+  your conversation with that agent; anyone else you named joins that same
+  conversation. This is the path that can interrupt the agent and that marks a
+  post the stage finished without answering (**Not answered**). While the stage
+  is `running`, an **Interrupt agent** switch appears in the **To** row: switched
+  on, the agent stops its current turn, answers your message, then continues its
+  work; off, it reads the message at its next inbox check. You choose it for each
+  send.
+- Any other message — without the stage agent, or a **↩ Reply in conversation** —
+  goes to exactly its recipients: into your open conversation with those people
+  that this stage's feed shows (a reply stays in the conversation it answers), or
+  a new one there, opened in the same step.
+
+A failed send keeps the draft and shows the
 server's reason; sending it again is the same message, never a duplicate. Under
 the input each recipient gets its own delivery state: *Accepted · waiting for an
 inbox check* until afm actually hands the message to that agent's turn or inbox
@@ -305,11 +318,18 @@ With Agent Mesh and collaboration on, a stage's **Feed** also shows its conversa
 between the stage's own events in time order: conversations the stage opened
 (its agent or helpers wrote first, you started one from this feed, or you added a
 run agent from this stage's People panel), conversations its agent or one of its
-helpers is in, and the stage's Discussion. A message from the Discussion appears
-once, as its message bubble; a post that reached nobody's inbox appears as a line
-such as *"You posted in the Discussion"*. Each message shows its author, the command they run, **→** whom it is
-addressed to, the time, a quote of the message it answers (click the quote to
-jump to that message) and a **turn result** tag on a turn result.
+helpers is in, and your conversation with the stage's agent. Each message
+appears once, as its bubble, with Markdown rendered. Each message shows its
+author, the command they run, **→** whom it is addressed to, the time, a quote of
+the message it answers (click the quote to jump to that message) and a **turn
+result** tag on a turn result. A post of yours that the stage finished without
+anyone answering is marked **Not answered** (the mark goes once a reply arrives).
+
+Runs recorded before conversations lived in the feed keep their stage
+conversation log: its posts — including helper results with the evidence they
+cited, which reached no inbox — show as read-only bubbles in journal order, once
+each, next to the newer messages. Until that log is read, such a post shows as a
+line such as *"reviewer posted in the stage conversation"*.
 
 - Filter the feed with **All**, **Conversations** (only the messages) or
   **Author's work** (only the stage's own events). Each chip shows how many

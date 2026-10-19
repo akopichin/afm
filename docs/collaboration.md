@@ -149,7 +149,9 @@ a `team_warning` notice and skipped, and the stages run anyway. If the run's
 journal cannot be read or written while the team is being added, the run stops
 before any stage starts. When collaboration is disabled, `afm run` and
 `afm validate` only warn that the team will not be added, and the flow runs
-without it, as with `assistants:`.
+without it, as with `assistants:`. A `team_warning` notice shows in the
+dashboard's **Full feed** as a warning line naming the member and the reason,
+also after a reload.
 
 Full example: [`examples/agent-team-review/`](https://github.com/akopichin/afm/tree/main/examples/agent-team-review)
 — a stage agent sends its change to two reviewer agents from `team:`, waits for
@@ -182,27 +184,30 @@ If a required helper cannot pass, **Waive…** lets a human unblock the stage by
 recording a reason. Required tasks with `needs_changes` or `inconclusive` do not
 pass the gate; a `pass` verdict does.
 
-The **Discussion** tab shows the stage's discussion and lets you post a human
-message; replies appear there too, and authors are named as in the Team roster.
-Posting does not change the stage's status. A post normally waits until the
+Your conversation with a stage's agent lives in the stage's **Feed**: write a
+**Message** to the stage agent from its composer (see
+[Message](dashboard.md#message)); replies appear in the same feed, and authors are
+named as in the Team roster. Posting does not change the stage's status. A post normally waits until the
 stage agent next reads its inbox or ends its turn. Agents are asked to answer
 every message from you, even with a short status update, but this is not
 guaranteed: if a stage finishes without replying, the post is marked **Not
 answered** and the feed gets a notice. A post to a stage that has already
 finished does not reach its agent, though it still reaches anyone you mention.
-While the stage is running, you can turn on **Interrupt agent** before you send.
+While the stage is running, you can turn on **Interrupt agent** before you send
+a new message to the stage agent.
 If the agent is working, it stops its current turn, answers your post as a
 question with `afm agent reply`, and then continues. It does not treat the post
 as a revision of its plan. If the agent has not started yet, for example during
 a `script_before` hook, the question is in its first prompt instead. Until the
 agent replies, the question is repeated in each new prompt, also after a
-restart. For any other status the switch is not shown. Type `@` to bring other
-agents into a post, such as run agents, helpers or other stages' agents. Agents
-that have finished are not offered. They receive the post together with the
-stage agent, the post shows who it went to (`→ QA, DevOps`), and their replies
-to it appear in this Discussion under their own names.
-Pending agent proposals also appear there; **Accept** confirms a supported
-proposal before its change is applied, while **Dismiss** discards it. In the Side agent, type `@` to choose a
+restart. For any other status — and for a reply, which stays in the
+conversation it answers — the switch is not shown. Name other agents too (`@`,
+or a pick in the People panel), such as run agents, helpers or other stages'
+agents: they receive the post together with the stage agent, in the same
+conversation; the post shows who it went to (`→ QA, DevOps`), and their replies
+to it appear under their own names. Agents that have finished cannot be sent
+to. The dashboard has no separate Discussion tab and no proposal cards; agent
+proposals are still recorded by the run. In the Side agent, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
@@ -244,8 +249,7 @@ When a run agent's turn ends with a result, afm posts the result's summary as a
 reply to the message that woke that turn — the newest message it was handed — in
 that message's conversation. The reply is plain text: the summary, cut to fit a
 message, then the verdict, the number of findings and the task and turn whose
-full result it is. Team, the feed's conversation preview and the Discussion mark
-it with a **turn result** tag. A turn result does not wake its recipient: it
+full result it is. Team and the stage feed mark it with a **turn result** tag. A turn result does not wake its recipient: it
 waits in the inbox and is handed over at the recipient's next turn, so it does
 not start an idle run agent, give a stage an extra turn, resume an agent that
 waits for a message (`addressed_message`, in one conversation or any), or keep
@@ -266,8 +270,8 @@ recorded, the agent goes idle as usual, and the feed shows *"turn result of task
 … not delivered: <reason>"* — the feed of the addressed stage, else of the
 agent's own stage, else of the stage its conversation was opened from. The same holds for a delegated child's result
 mirrored to its parent, which is a turn result too. When the waking message was
-your Discussion post that mentioned the agent, the reply appears in the
-Discussion as the answer, so the post is not shown as **Not answered**. Run
+your post to a stage agent that named the agent too, the reply appears as its
+answer, so the post is not shown as **Not answered**. Run
 agents are told this in their prompt; to continue a conversation they write
 explicitly with `afm agent send` or `afm agent reply`.
 
@@ -278,14 +282,17 @@ parent. You read along and can answer in the conversation; you are not addressed
 by its messages and your inbox does not fill with them. The human does not count
 toward the limit of 8 agents per conversation. An agent that writes to the same
 colleagues again continues their conversation, also one opened before you
-joined every conversation, so resuming an older run does not split it. A stage's
-Discussion thread is never picked for this: what agents say among themselves
-stays out of the Discussion tab.
+joined every conversation, so resuming an older run does not split it. Your
+conversation with a stage's agent is never picked for this: what agents say
+among themselves stays out of it. A conversation you start from a stage's feed
+is that feed's own: two feeds writing to the same agent at the same time get a
+conversation each, and an older conversation of those agents you are not a
+member of is not reused for your message.
 
 Each stage's **Feed** shows its conversations: those opened from that stage (by
 its agent or one of its helpers, from its feed's composer, or by adding a run
 agent from its People panel), those its agent or one of its helpers takes part
-in, and its Discussion. See [the stage feed](dashboard.md#conversations-in-the-stage-feed).
+in, and your conversation with its agent. See [the stage feed](dashboard.md#conversations-in-the-stage-feed).
 
 The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to

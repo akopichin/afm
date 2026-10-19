@@ -74,3 +74,8 @@ value.
   the same conversation at once, or a post re-opening a Discussion thread from an
   older journal, do not conflict. A thread from an older journal has no
   `origin_stage` and shows in a stage's feed by its members alone.
+- `origin_stage` on `mesh_message_sent` (a stage id, omitted when empty) is the
+  stage feed the human wrote a message from without naming a thread. It records
+  the request's intent so that a retry under the same request id from another
+  feed is rejected as a conflict instead of replaying the first send. Projection
+  ignores it; a message from an older journal has none.
