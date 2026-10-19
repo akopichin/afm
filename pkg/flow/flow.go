@@ -330,7 +330,9 @@ type Flow struct {
 	// AFM_COLLABORATION), not something an individual flow can turn on for itself — see
 	// FlowCollaboration.UnmarshalYAML.
 	Collaboration *FlowCollaboration `yaml:"collaboration,omitempty"`
-	Stages        []Stage            `yaml:"stages"`
+	// Team declares run agents created before the stages start (see TeamMember). Needs collaboration.
+	Team   Team    `yaml:"team,omitempty"`
+	Stages []Stage `yaml:"stages"`
 }
 
 // FlowCollaboration is the per-flow override of collaboration.max_depth only.
@@ -532,6 +534,10 @@ func (f *Flow) validate() error {
 			return fmt.Errorf("stage ids %q and %q collide case-insensitively (they map to the same session/profile on a case-insensitive filesystem)", prev, s.ID)
 		}
 		folded[fold] = s.ID
+	}
+
+	if err := f.Team.validate(); err != nil {
+		return err
 	}
 
 	// stage.ID входит в пути и URL; допускаем только [A-Za-z0-9._-], исключая пустую строку, "." и "..".

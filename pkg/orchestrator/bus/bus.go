@@ -103,6 +103,10 @@ const (
 	EventMeshReceipt     EventType = "mesh_receipt"
 	EventMeshWait        EventType = "mesh_wait"
 	EventMeshBoard       EventType = "mesh_board"
+	// EventTeamWarning fires when a flow's team: declaration could not be applied as written — on resume,
+	// a member changed in flow.yaml keeps its saved version; or its agent could not be added. Run-level,
+	// non-FSM, live + durable (notices.jsonl). Data: {"member_id", "message"}.
+	EventTeamWarning EventType = "team_warning"
 	// EventPeerReplied (Agent Mesh Phase 5, T5.3) fires once a mesh wait a stage registered becomes ready —
 	// the peer twin of EventUserAnswered. Routed through the critical bus exactly like EventUserAnswered when
 	// the stage's own process has already exited, so onPeerReplied can respawn it.

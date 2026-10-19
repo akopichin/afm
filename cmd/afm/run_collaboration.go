@@ -110,6 +110,9 @@ func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *co
 // between host and container, and a hard check here would break Docker runs where the profile's command
 // only exists inside the image. An unavailable profile is instead rejected, best-effort, by Attach itself at
 // runtime (attachDeclaredAssistants already logs and moves on without blocking the stage).
+//
+// The flow's team: follows the same rules: warned about and skipped when collaboration is disabled, an unknown
+// profile stops startup (checkTeamProfiles, shared with afm validate).
 func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
 	if !collab.policy.Enabled || collab.registry == nil {
 		for _, s := range f.Stages {
@@ -118,7 +121,14 @@ func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
 			}
 			fmt.Fprintf(os.Stderr, "warning: stage %q declares \"assistants\" but collaboration is disabled — they will not be attached\n", s.ID)
 		}
+		warnTeamWithoutCollaboration(f.Team)
 		return nil
+	}
+	if err := checkTeamProfiles(f.Team, func(id string) bool {
+		_, ok := collab.registry.Get(assistants.ProfileID(id))
+		return ok
+	}); err != nil {
+		return err
 	}
 	for _, s := range f.Stages {
 		for _, a := range s.Assistants {
@@ -128,6 +138,24 @@ func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
 		}
 	}
 	return nil
+}
+
+// checkTeamProfiles reports the first team member whose profile is not configured.
+func checkTeamProfiles(team flow.Team, known func(profileID string) bool) error {
+	for _, m := range team {
+		if !known(m.Profile) {
+			return fmt.Errorf("team member %q: unknown assistant profile %q (not in collaboration.profiles)", m.ID, m.Profile)
+		}
+	}
+	return nil
+}
+
+// warnTeamWithoutCollaboration warns that a declared team will not be created: like stage assistants, a
+// team never blocks a run with collaboration off, so AFM_COLLABORATION=0 still runs the flow.
+func warnTeamWithoutCollaboration(team flow.Team) {
+	if len(team) > 0 {
+		fmt.Fprintln(os.Stderr, "warning: the flow declares \"team\" but collaboration is disabled — its agents will not be added")
+	}
 }
 
 // assistantProfileCommands returns the distinct, non-empty commands named by this process's configured

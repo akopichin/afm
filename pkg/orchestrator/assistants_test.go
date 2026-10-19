@@ -59,16 +59,43 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 		t.Fatalf("BuildRegistry: %v", err)
 	}
 
+	return assembleAssistantsTestOrchestrator(t, Options{
+		RunDir: dir, Stages: stages, Store: store, RunID: "run1",
+		AssistantsEnabled: enabled, AssistantsRegistry: reg,
+	}), store
+}
+
+// reopenAssistantsTestOrchestrator simulates a resume of prev's run in a fresh process: prev's store must
+// already be closed; a new store replays the same journal and a new orchestrator gets prev's options.
+func reopenAssistantsTestOrchestrator(t *testing.T, prev *Orchestrator) (*Orchestrator, *state.Store) {
+	t.Helper()
+	stageIDs := make([]string, len(prev.opts.Stages))
+	for i, s := range prev.opts.Stages {
+		stageIDs[i] = s.ID
+	}
+	store, err := state.Open(prev.opts.RunDir, stageIDs)
+	if err != nil {
+		t.Fatalf("state.Open (resume): %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	opts := prev.opts
+	opts.Store = store
+	opts.Resumed = true
+	o := assembleAssistantsTestOrchestrator(t, opts)
+	o.runHelperAgent = prev.runHelperAgent
+	return o, store
+}
+
+// assembleAssistantsTestOrchestrator wires an Orchestrator around opts without New's production setup.
+func assembleAssistantsTestOrchestrator(t *testing.T, opts Options) *Orchestrator {
+	t.Helper()
 	o := &Orchestrator{
-		opts: Options{
-			RunDir: dir, Stages: stages, Store: store, RunID: "run1",
-			AssistantsEnabled: enabled, AssistantsRegistry: reg,
-		},
-		graph:         graph.NewStore(graph.NewRegistry(stages)),
+		opts:          opts,
+		graph:         graph.NewStore(graph.NewRegistry(opts.Stages)),
 		ui:            bus.NewUIBus(),
 		critical:      bus.NewCriticalBus(16),
-		fsm:           bus.NewFSM(store),
-		concurrency:   concurrency.New(bus.NewCriticalBus(16), stages, "claude", 0, nil),
+		fsm:           bus.NewFSM(opts.Store),
+		concurrency:   concurrency.New(bus.NewCriticalBus(16), opts.Stages, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
 	}
 	// Clean shutdown, as in a real run: cancel the run context and wait for the helper agents BEFORE the store
@@ -80,7 +107,7 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 		cancelRun()
 		o.concurrency.WaitAgents()
 	})
-	return o, store
+	return o
 }
 
 // awaitRelease blocks a fake agent, helper or hook until the test closes release or the test ends, then lets

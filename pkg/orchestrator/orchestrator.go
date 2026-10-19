@@ -111,6 +111,9 @@ type Options struct {
 	// its own (Инвариант 9).
 	AssistantsEnabled  bool
 	AssistantsRegistry *assistants.Registry
+	// Team — the flow's team: declarations, run agents initTeam creates before the stages start. Read from
+	// the CURRENT flow.yaml on every start; on resume the agents the run already created are kept as saved.
+	Team flow.Team
 	// Clock — часы рана. Пусто (nil) означает clock.Real(): прод-код и большинство тестов, конструирующих
 	// Orchestrator через New, не задают его явно и получают реальное время без дополнительных действий.
 	// Fake-часы инжектируют только тесты, которым нужно проматывать паузы вручную.
@@ -731,6 +734,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		poisoned = errors.Is(err, errReviewPausePoisoned)
 	}
 	if !poisoned {
+		o.initTeam(ctx) // before any stage starts: the authors can address the team from their first turn
 		o.startPlanningForPending(ctx)
 		o.recoverAssistants(ctx)
 		o.recoverFeedbackIntents(ctx)

@@ -56,6 +56,11 @@
         }
       }
     },
+    "team": {
+      "type": "array",
+      "description": "Run agents created before the stages start, in this order — the same agents the dashboard's Add run agent creates. Needs collaboration: with it disabled, afm warns and runs without them. A resumed run keeps the agents it already created.",
+      "items": { "$ref": "#/definitions/teamMember" }
+    },
     "stages": {
       "type": "array",
       "description": "The stages of the flow.",
@@ -442,6 +447,23 @@
           "enum": ["r", "w", "rw"],
           "description": "Access mode for this stage's file: r/w/rw. Default rw."
         }
+      }
+    },
+    "teamMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "profile", "title"],
+      "description": "One run agent of the flow's team.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Declaration key, unique in the team, restricted to [A-Za-z0-9._-]. Identifies the agent across resumes; it is not the agent's @name.",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "not": { "enum": [".", ".."] }
+        },
+        "profile": { "type": "string", "minLength": 1, "description": "Assistant profile id (a key under collaboration.profiles)." },
+        "title": { "type": "string", "minLength": 1, "description": "Display name; the agent's @name is made from it (a taken name gets a -2, -3 suffix)." },
+        "instruction": { "type": "string", "description": "Instruction given to the agent, as in Add run agent." }
       }
     },
     "stageAssistant": {

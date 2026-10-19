@@ -92,15 +92,15 @@ func (a *StageAssistant) unmarshalMapping(value *yaml.Node) error {
 		key := value.Content[i].Value
 		val := value.Content[i+1]
 		switch key {
-		case "profile":
+		case keyProfile:
 			if err := val.Decode(&a.Profile); err != nil {
 				return fmt.Errorf("assistants: profile: %w", err)
 			}
-		case "title":
+		case keyTitle:
 			if err := val.Decode(&a.Title); err != nil {
 				return fmt.Errorf("assistants: title: %w", err)
 			}
-		case "instruction":
+		case keyInstruction:
 			if err := val.Decode(&a.Instruction); err != nil {
 				return fmt.Errorf("assistants: instruction: %w", err)
 			}

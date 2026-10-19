@@ -322,3 +322,37 @@ func TestCheckDeclaredAssistants_NoStageDeclaresAssistants(t *testing.T) {
 		})
 	}
 }
+
+// ---- Этап 6: team: preflight ----
+
+func TestCheckDeclaredAssistants_TeamUnknownProfileErrors(t *testing.T) {
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{"reviewer": {Command: "frontend-reviewer"}},
+	}}
+	f := &flow.Flow{
+		Team:   flow.Team{{ID: "arch", Profile: "reviewer", Title: "Architecture"}, {ID: "qa", Profile: "ghost", Title: "QA"}},
+		Stages: []flow.Stage{{ID: "s1"}},
+	}
+	collab := startCollaboration(newCollabTestStore(t), cfg, f)
+
+	err := checkDeclaredAssistants(f, collab)
+	if err == nil || !strings.Contains(err.Error(), `team member "qa"`) || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("checkDeclaredAssistants = %v, want an error naming team member qa and profile ghost", err)
+	}
+}
+
+func TestCheckDeclaredAssistants_TeamWithDisabledCollaborationWarns(t *testing.T) {
+	off := false
+	cfg := config.Config{Collaboration: config.CollaborationConfig{Enabled: &off}}
+	f := &flow.Flow{Team: flow.Team{{ID: "qa", Profile: "ghost", Title: "QA"}}, Stages: []flow.Stage{{ID: "s1"}}}
+	collab := startCollaboration(newCollabTestStore(t), cfg, f)
+
+	var err error
+	stderr := captureStderr(t, func() { err = checkDeclaredAssistants(f, collab) })
+	if err != nil {
+		t.Fatalf("checkDeclaredAssistants: %v, want nil (disabled collaboration must not block the run)", err)
+	}
+	if !strings.Contains(stderr, `"team"`) || !strings.Contains(stderr, "collaboration is disabled") {
+		t.Fatalf("stderr = %q, want a warning about the team", stderr)
+	}
+}
