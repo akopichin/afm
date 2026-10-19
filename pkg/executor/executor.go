@@ -396,9 +396,6 @@ func contentToAction(c streamContent, limit int) (toolName, detail string, ok bo
 	}
 }
 
-// stderrPipeWaitDelay bounds how long Wait keeps copying a piped stderr after the agent has exited.
-const stderrPipeWaitDelay = 2 * time.Second
-
 // openStderrLog opens <logBase>.stderr.log for appending so the agent's stderr is captured instead of
 // lost. Returns nil on error — stderr is diagnostic only, callers fall back to io.Discard.
 func openStderrLog(logFile string) *os.File {
@@ -996,6 +993,12 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	setProcessGroup(cmd)
+	// A cancelled context stops the agent's whole process group, not just the agent: a descendant must not
+	// outlive the call that started it.
+	cmd.Cancel = func() error {
+		killAgent(cmd)
+		return nil
+	}
 	cmd.Stdin = strings.NewReader(prompt)
 	// Пин рабочей директории агента к project root (flow.root_dir), чтобы
 	// относительные пути проекта резолвились в одном корне для всех стадий.
@@ -1038,16 +1041,11 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 	cmd.Env = filtered
 
-	stdout, err := cmd.StdoutPipe()
+	pipes, err := attachOutputPipes(cmd, stderr)
 	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
+		return err
 	}
-	cmd.Stderr = stderr
-	if _, isFile := stderr.(*os.File); !isFile {
-		// A non-file writer is fed through a pipe. A background process the agent left behind may keep that pipe
-		// open; once the agent itself has exited, Wait must not wait for it.
-		cmd.WaitDelay = stderrPipeWaitDelay
-	}
+	defer pipes.close()
 
 	// Перед запуском процесса повторно проверяем ctx и interrupt, чтобы не спавнить уже отменённый вызов.
 	select {
@@ -1068,58 +1066,50 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	idleTimer := e.clk().NewTimer(e.cfg.IdleTimeout)
 	defer idleTimer.Stop()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- lineReader(stdout, func(line string) bool {
-			lineCallback(line)
-			idleTimer.Reset(e.cfg.IdleTimeout)
-			return true
-		})
-	}()
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	pipes.startReading(stderr, func(line string) bool {
+		lineCallback(line)
+		idleTimer.Reset(e.cfg.IdleTimeout)
+		return true
+	})
 
 	select {
-	case readErr := <-done:
-		waitErr := cmd.Wait()
+	case waitErr := <-exited:
+		readErr := pipes.drain(cmd)
+		if waitErr != nil && ctx.Err() != nil {
+			return ctx.Err() // the context's cancellation killed the agent
+		}
 		if readErr != nil {
 			return readErr
 		}
-		if errors.Is(waitErr, exec.ErrWaitDelay) {
-			// The agent exited cleanly, but a leftover descendant still held its stderr pipe. Kill the group so
-			// it cannot keep working after the turn is reported complete.
-			killProcessGroup(cmd, syscall.SIGKILL)
-			return nil
-		}
 		return waitErr
 	case <-idleTimer.C():
-		killProcessGroup(cmd, syscall.SIGKILL)
-		<-done // wait for stdout reader to finish
-		_ = cmd.Wait()
+		killAgent(cmd)
+		<-exited
+		_ = pipes.drain(cmd)
 		return fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
 	case <-ctx.Done():
-		killProcessGroup(cmd, syscall.SIGKILL)
-		<-done // wait for stdout reader to finish
-		_ = cmd.Wait()
+		killAgent(cmd)
+		<-exited
+		_ = pipes.drain(cmd)
 		return ctx.Err()
 	case <-e.cfg.InterruptCh:
 		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно завершает текущую атомарную операцию
 		// (запись файла — один syscall, его практически не рвёт сигналом на середине) и выходит.
 		killProcessGroup(cmd, syscall.SIGINT)
 		select {
-		case <-done:
-			_ = cmd.Wait()
-			return ErrUserInterrupted
+		case <-exited:
 		case <-e.clk().After(interruptGracePeriod):
 			// Не среагировал на SIGINT вовремя — принудительно, как страховка.
 			killProcessGroup(cmd, syscall.SIGKILL)
-			<-done
-			_ = cmd.Wait()
-			return ErrUserInterrupted
+			<-exited
 		}
+		_ = pipes.drain(cmd)
+		return ErrUserInterrupted
 	}
 }
 
-// logAgentInput пишет точный промпт, уходящий в агента, в debug-логи — единый <RunDir>/debug.log и
-// по-стейджно <RunDir>/<StageID>/<phase>.prompt.log. Активно только при Config.Debug.
 func (e *Executor) logAgentInput(phase, prompt string) {
 	if !e.cfg.Debug {
 		return

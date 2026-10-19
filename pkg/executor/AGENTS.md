@@ -2,6 +2,9 @@
 
 - Завершай всю process group, не только прямого потомка: внуки могут удерживать
   stdout-pipe и навсегда заблокировать reader/shutdown. Устанавливай группу до Start.
+- Pipes stdout/stderr принадлежат afm (`outputPipes`), не `exec.Cmd`: `Wait` сообщает
+  только выход агента. Потомок, держащий pipe дольше `pipeGracePeriod` после выхода,
+  убивается вместе с группой при любом exit code; отмена ctx тоже бьёт по группе.
 - `Config.Dir` — CWD агента; абсолютный `Config.StageDir` передаётся как
   `AFM_STAGE_DIR`. Эти пути независимы.
 - Verify и helper запуски используют свежую изолированную сессию без stage

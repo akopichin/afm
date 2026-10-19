@@ -67,6 +67,14 @@ A paused agent or helper with work waiting — a message it has not read yet or
 a turn it was in — now keeps the run open until you continue or cancel it.
 Before, the run could finish with the message never read.
 
+### Fix: processes an agent leaves behind end with its turn
+
+When an agent exits, a background process it started that still holds its
+output is stopped two seconds later, whether the agent succeeded or failed.
+Before, such a process could keep the turn open until the idle timeout or keep
+changing the project after a failed turn. Cancelling a run stops an agent's
+background processes too.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was
