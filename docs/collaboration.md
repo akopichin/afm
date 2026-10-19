@@ -396,8 +396,13 @@ A turn that ends by waiting for a colleague (`afm agent wait` answered
 `yield`) needs no answer: the task waits in `waiting_peer` and continues in a
 new turn when the reply arrives, even if it arrives while the agent process is
 still exiting. A stage agent works the same way: when a wait its turn yielded
-on is answered before its process exits, the stage continues in a new turn
-instead of finishing or being retried as incomplete.
+on is answered, or ends without an answer, before its process exits, the stage
+continues in a new turn instead of finishing or being retried as incomplete.
+The park remembers which waits the turn ended for, so after a restart the stage
+continues on the same rule, also when one of them was answered by a turn
+result and another is still open. If you pause, continue or revise the stage
+while that process is exiting, your action wins: the old process does not park
+the stage, and a revise starts its feedback turn.
 
 ## Add a stage during a run
 

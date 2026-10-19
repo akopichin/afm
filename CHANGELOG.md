@@ -92,16 +92,24 @@ A stage agent that registered waits (`afm agent wait` answered `yield`) and got
 the answers while its process was still exiting — for example two reviewers'
 turn results arriving right after the yield — went to the completion check or
 an incomplete-work retry. It now continues in a new turn, exactly once, as if
-the answers had arrived after it parked. A wait that was already answered when
-it was registered (`ready`) still lets the turn finish normally.
+the answers had arrived after it parked; a yielded wait that was cancelled or
+expired meanwhile continues it as a wait that ended without an answer. A wait
+that was already answered when it was registered (`ready`) still lets the turn
+finish normally. The park records the waits it depends on (`peer_waits`), and
+the exit, the live reply paths and recovery after a restart decide the
+continuation by the same rule, so a crash right after the park no longer loses
+it when one wait was answered by a turn result and another is still open. A
+Pause, Continue or Revise that lands while the process is exiting wins: the
+stale exit no longer parks the stage, and a Revise runs its feedback turn.
 
 ### Fix: only a recipient answers a `reply_to` wait
 
 A `reply_to` wait now resolves on a reply from a recipient of the awaited
 message. The human takes part in every conversation, and their reply to a
 message for a reviewer no longer counts as the reviewer's answer; a reply to a
-message addressed to the human still does. Journals replay with the same rule,
-so waits answered by an addressed agent evaluate as before.
+message addressed to the human still does. New `reply_to` waits carry the rule
+(`recipient_reply_only`); a wait from an older journal keeps the old one, so
+replaying it resolves its waits exactly as before.
 
 ### Fix: the stage Feed with collaboration off
 
