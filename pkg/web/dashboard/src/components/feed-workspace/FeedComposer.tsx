@@ -21,6 +21,8 @@ import {
 } from '../../api/mesh-client'
 import { buildMeshMentionGroups, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
 import { findExistingDirectThread, senderLabel } from '../../lib/mesh-roster'
+import { messageText } from '../../lib/agent-result'
+import { AgentMessageBody } from '../agent-message/AgentMessageBody'
 import { computeReceiptPhase, RECEIPT_LABEL, type ReceiptPhase } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
@@ -435,11 +437,13 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
           {threadMessages.map((m: MeshMessage) => (
             <li key={m.id} className="mesh-message-thread-item">
               <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
-              <span className="mesh-message-thread-body">{m.body}</span>
+              <span className="mesh-message-thread-body">
+                <AgentMessageBody body={m.body} />
+              </span>
               <button
                 type="button"
                 className="mesh-message-thread-reply"
-                onClick={() => setReplyTo({ messageId: m.id, preview: m.body.slice(0, 120) })}
+                onClick={() => setReplyTo({ messageId: m.id, preview: messageText(m.body).slice(0, 120) })}
               >
                 Reply
               </button>

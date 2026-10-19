@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import { participantRole, senderLabel } from '../../lib/mesh-roster'
-import { MarkdownRenderer } from '../plan-panel'
+import { AgentMessageBody } from '../agent-message/AgentMessageBody'
 
 // DiscussionMessage mirrors the server's DiscussionMessageView (pkg/server/discussion.go) one field at a
 // time — see GET /api/stages/{id}/discussion.
@@ -79,7 +79,7 @@ export function StageDiscussion({ messages, participants = [] }: StageDiscussion
               <span className="stage-discussion-message-mentions">→ {m.mentions.map((id) => senderLabel(id, participants)).join(', ')}</span>
             )}
           </div>
-          <MarkdownRenderer source={m.body} />
+          <AgentMessageBody body={m.body} markdown />
           {m.evidence && m.evidence.length > 0 && (
             <ul className="stage-discussion-message-evidence">
               {m.evidence.map((e) => (

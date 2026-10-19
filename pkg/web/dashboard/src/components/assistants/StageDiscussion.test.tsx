@@ -91,4 +91,15 @@ describe('StageDiscussion', () => {
     expect(screen.getByText('→ QA, gone')).toBeInTheDocument()
     expect(screen.getByText('Run agent')).toBeInTheDocument()
   })
+
+  test('a pasted JSON result shows as its summary with a verdict chip', () => {
+    render(
+      <StageDiscussion
+        messages={[makeMessage({ body: '{"schema_version":1,"kind":"result","verdict":"pass","summary":"All checks green."}' })]}
+      />,
+    )
+    expect(screen.getByText('All checks green.')).toBeInTheDocument()
+    expect(screen.getByText('Pass')).toBeInTheDocument()
+    expect(screen.queryByText(/schema_version/)).toBeNull()
+  })
 })
