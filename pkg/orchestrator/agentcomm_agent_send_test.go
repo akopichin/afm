@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -295,5 +296,88 @@ func TestStageAgentReplyToTeamMessageInDiscussionThread(t *testing.T) {
 		if m.Body == "answered" {
 			t.Fatalf("a reply to a Team-only message must not appear in the Discussion: %+v", m)
 		}
+	}
+}
+
+// userSend is the human's send from a stage feed's composer: recipients by alias or id, no thread.
+func userSend(o *Orchestrator, opID, originStage string, to []string, body string) (SendReceipt, error) {
+	recipients := make([]agentcomm.ParticipantID, len(to))
+	for i, r := range to {
+		recipients[i] = agentcomm.ParticipantID(r)
+	}
+	return o.SendFromAgent(context.Background(), SendRequest{
+		OperationID: opID, Sender: meshUserParticipantID, Recipients: recipients, OriginStage: originStage,
+		Kind: agentcomm.MessageKindMessage, Body: body, Actor: state.Actor{Kind: "user"},
+	})
+}
+
+// The human writes to several people at once from a stage feed: one message to all of them, in one
+// conversation opened in the same operation and shown in that feed; writing to the same people again continues it.
+func TestSendFromAgent_UserSendsToASetFromAStageFeed(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	impl := meshStageParticipantID(assistantsTestStageID)
+
+	r, err := userSend(o, "op-user-set", "docs", []string{"@docs", string(impl)}, "please both look at the API")
+	if err != nil {
+		t.Fatalf("user send to a set: %v", err)
+	}
+	rs := store.Snapshot()
+	th := rs.Assistants.Mesh.Threads[r.ThreadID]
+	if th == nil || th.OriginStage != "docs" {
+		t.Fatalf("thread = %+v, want one opened from the docs feed", th)
+	}
+	if got := sortedMemberSet(th.Members); !slices.Equal(got, sortedMemberSet([]agentcomm.ParticipantID{meshUserParticipantID, "stage:docs", impl})) {
+		t.Fatalf("members = %v, want the human and both stage agents", got)
+	}
+	msg := rs.Assistants.Mesh.Messages[r.MessageID]
+	if msg == nil || !slices.Equal(sortedMemberSet(msg.Recipients), sortedMemberSet([]agentcomm.ParticipantID{"stage:docs", impl})) {
+		t.Fatalf("message = %+v, want one message to both", msg)
+	}
+
+	again, err := userSend(o, "op-user-set-2", "docs", []string{"docs", "impl"}, "and one more thing")
+	if err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	if again.ThreadID != r.ThreadID {
+		t.Fatalf("second send went to %s, want the same conversation %s", again.ThreadID, r.ThreadID)
+	}
+}
+
+// A conversation with the same people that the stage's feed does not show is not reused for the human's send
+// from that feed: the message would vanish from where it was written. A new conversation opens there instead.
+func TestSendFromAgent_UserSendReusesOnlyAConversationTheFeedShows(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	first, err := userSend(o, "op-from-docs", "docs", []string{"docs"}, "hi from the docs feed")
+	if err != nil {
+		t.Fatalf("send from docs: %v", err)
+	}
+	fromImpl, err := userSend(o, "op-from-impl", assistantsTestStageID, []string{"docs"}, "hi from the impl feed")
+	if err != nil {
+		t.Fatalf("send from impl: %v", err)
+	}
+	if fromImpl.ThreadID == first.ThreadID {
+		t.Fatalf("the impl feed's send went into the docs feed's conversation %s", first.ThreadID)
+	}
+	if th := store.Snapshot().Assistants.Mesh.Threads[fromImpl.ThreadID]; th == nil || th.OriginStage != assistantsTestStageID {
+		t.Fatalf("thread = %+v, want one opened from the impl feed", th)
+	}
+	again, err := userSend(o, "op-from-impl-2", assistantsTestStageID, []string{"docs"}, "again")
+	if err != nil {
+		t.Fatalf("second send from impl: %v", err)
+	}
+	if again.ThreadID != fromImpl.ThreadID {
+		t.Fatalf("second send from impl went to %s, want %s", again.ThreadID, fromImpl.ThreadID)
+	}
+}
+
+func TestSendFromAgent_UnknownOriginStageIsRejected(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	_, err := userSend(o, "op-ghost-origin", "ghost", []string{"docs"}, "hi")
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeInvalidRequest {
+		t.Fatalf("err = %v, want invalid_request", err)
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Threads); n != 0 {
+		t.Fatalf("threads = %d, want none opened", n)
 	}
 }

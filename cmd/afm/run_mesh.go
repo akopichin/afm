@@ -72,7 +72,11 @@ func (a meshActions) CloseThread(ctx context.Context, requestID, threadID string
 	})
 }
 
-func (a meshActions) Send(ctx context.Context, requestID, threadID string, req server.MeshSendRequest) (server.MeshSendReceipt, error) {
+// Send is the human's message, through the same name-resolving send agents use (orchestrator.SendFromAgent):
+// recipients may be aliases; without a thread it goes into the open conversation of exactly those people that
+// the origin stage's feed shows, or opens one in the same operation. A retry under the same request id
+// replays the committed message.
+func (a meshActions) Send(ctx context.Context, requestID string, req server.MeshUserSendRequest) (server.MeshSendReceipt, error) {
 	var inReplyTo *agentcomm.MessageID
 	if req.InReplyTo != "" {
 		id := agentcomm.MessageID(req.InReplyTo)
@@ -82,15 +86,15 @@ func (a meshActions) Send(ctx context.Context, requestID, threadID string, req s
 	if kind == "" {
 		kind = agentcomm.MessageKindMessage
 	}
-	receipt, err := a.orch.Send(ctx, orchestrator.SendRequest{
-		OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Sender: meshUIParticipant,
+	receipt, err := a.orch.SendFromAgent(ctx, orchestrator.SendRequest{
+		OperationID: requestID, ThreadID: agentcomm.ThreadID(req.ThreadID), Sender: meshUIParticipant,
 		Recipients: toParticipantIDs(req.Recipients), Kind: kind, InReplyTo: inReplyTo,
-		Body: req.Body, ArtifactRefs: req.ArtifactRefs, Actor: meshUIActor,
+		Body: req.Body, ArtifactRefs: req.ArtifactRefs, OriginStage: req.OriginStage, Actor: meshUIActor,
 	})
 	if err != nil {
 		return server.MeshSendReceipt{}, err
 	}
-	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq}, nil
+	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq, ThreadID: string(receipt.ThreadID)}, nil
 }
 
 func (a meshActions) Thread(ctx context.Context, threadID string, cursor uint64, limit int) (server.MeshMessagePage, error) {
@@ -167,6 +171,19 @@ func (a meshActions) AttachAndSend(ctx context.Context, requestID string, req se
 	}
 	return server.MeshAttachAndSendResult{
 		TaskID: string(result.TaskID), ParticipantID: string(result.ParticipantID),
-		ThreadID: string(result.ThreadID), MessageID: msgID,
+		ThreadID: string(result.ThreadID), MessageID: msgID, Participant: a.participant(ctx, result.ParticipantID),
 	}, nil
+}
+
+// participant is id's current roster entry (with its alias), or nil when the roster does not list it.
+func (a meshActions) participant(ctx context.Context, id agentcomm.ParticipantID) *agentcomm.Participant {
+	roster, err := a.ListParticipants(ctx)
+	if err != nil {
+		return nil
+	}
+	i := slices.IndexFunc(roster, func(p agentcomm.Participant) bool { return p.ID == id })
+	if i < 0 {
+		return nil
+	}
+	return &roster[i]
 }

@@ -441,6 +441,26 @@ func TestHandleRevise(t *testing.T) {
 	}
 }
 
+// An author waiting for its helpers (awaiting_assistants) has finished its turn: a note reaches it only as a
+// Revise, which the orchestrator accepts in that status — so the HTTP layer must not refuse it first.
+func TestHandleRevise_AwaitingAssistants(t *testing.T) {
+	srv, _ := setupPendingServer(t, false)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingAssistants, Event: "main_done"}); err != nil {
+		t.Fatal(err)
+	}
+	revised := ""
+	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
+		revised = id
+		return true, 1, nil
+	}}
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", strings.NewReader(`{"feedback":"also cover the edge case"}`))
+	w := httptest.NewRecorder()
+	srv.handleRevise(w, req)
+	if w.Code != http.StatusOK || revised != testStageID {
+		t.Fatalf("status %d (body %q), revised %q: want the Revise delivered", w.Code, w.Body.String(), revised)
+	}
+}
+
 // setupPendingServer builds a server whose single stage stays pending (no
 // transition applied), for pre-note handler tests. isScript configures the stage type.
 func setupPendingServer(t *testing.T, isScript bool) (*Server, string) {

@@ -183,7 +183,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 		send := SendRequest{Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}
 		var open []state.Effect
 		members := conversationMembers(req.Author, []agentcomm.ParticipantID{recipient})
-		if th := openThreadWithMembers(rs, members); th != "" {
+		if th := openThreadWithMembers(rs, members, ""); th != "" {
 			if rs.Assistants.Mesh.ThreadFull(th) {
 				log.Printf("WARN: mesh: board key %s: not notifying %s: conversation %s is full", req.Key, recipient, th)
 				continue

@@ -30,7 +30,9 @@ type MeshActions interface {
 	Threads(ctx context.Context) ([]agentcomm.Thread, error)
 	OpenThread(ctx context.Context, requestID string, req MeshOpenThreadRequest) (agentcomm.Thread, error)
 	CloseThread(ctx context.Context, requestID, threadID string) error
-	Send(ctx context.Context, requestID, threadID string, req MeshSendRequest) (MeshSendReceipt, error)
+	// Send is the human's message: into req.ThreadID, or — without one — to req.Recipients (aliases or ids)
+	// in the conversation the Service picks or opens for them (orchestrator.SendFromAgent).
+	Send(ctx context.Context, requestID string, req MeshUserSendRequest) (MeshSendReceipt, error)
 	Thread(ctx context.Context, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Inbox(ctx context.Context, cursor uint64, limit int) (MeshMessagePage, error)
 	// StageMessages pages the conversation messages a stage's feed shows, in journal order, after cursor.
@@ -51,6 +53,15 @@ type MeshOpenThreadRequest struct {
 	Members     []string `json:"member_ids"`
 	MaxMessages int      `json:"max_messages,omitempty"`
 	// OriginStage — the stage whose feed the thread is opened from, so it shows in that feed.
+	OriginStage string `json:"origin_stage,omitempty"`
+}
+
+// MeshUserSendRequest is the body of the human's sends: POST /api/mesh/messages (no thread — the server
+// resolves the recipients' names and picks or opens their conversation in the same operation) and POST
+// /api/mesh/threads/{id}/messages (the path names the thread). OriginStage — the stage feed the message is
+// written from: the conversation it goes into shows in that feed.
+type MeshUserSendRequest struct {
+	MeshSendRequest
 	OriginStage string `json:"origin_stage,omitempty"`
 }
 
@@ -98,6 +109,9 @@ type MeshAttachAndSendResult struct {
 	ParticipantID string  `json:"participant_id"`
 	ThreadID      string  `json:"thread_id"`
 	MessageID     *string `json:"message_id,omitempty"`
+	// Participant — the new participant's roster entry (alias included), so the dashboard can show and
+	// address it before its next roster poll.
+	Participant *agentcomm.Participant `json:"participant,omitempty"`
 }
 
 // Route segment names for /api/mesh/* — named constants so routeMesh's repeated literals (the bare
@@ -139,6 +153,8 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshOpenThread(w, r)
 	case path == meshSegAttachAndSend && r.Method == http.MethodPost:
 		s.handleMeshAttachAndSend(w, r)
+	case path == meshSegThreadMessages && r.Method == http.MethodPost:
+		s.handleMeshSend(w, r, "")
 	case len(segs) == 2 && segs[0] == meshSegThreads && segs[1] != "" && r.Method == http.MethodGet:
 		s.handleMeshReadThread(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == meshSegThreads && segs[1] != "" && segs[2] == meshSegThreadMessages && r.Method == http.MethodPost:
@@ -249,21 +265,22 @@ func (s *Server) handleMeshOpenThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, thread)
 }
 
-// handleMeshSend's thread id ALWAYS comes from the path, never the body: a MeshSendRequest.ThreadID the
-// client might set is silently overwritten below, the same "path wins" rule handleAttachAssistant documents
-// for stage id.
-func (s *Server) handleMeshSend(w http.ResponseWriter, r *http.Request, threadID string) {
+// handleMeshSend is both of the human's sends. With a path thread id (POST /api/mesh/threads/{id}/messages)
+// that id ALWAYS wins: a body thread_id the client might set is overwritten, the same "path wins" rule
+// handleAttachAssistant documents for stage id. Without one (POST /api/mesh/messages) the body may name a
+// thread, or leave it to the Service to pick or open the recipients' conversation.
+func (s *Server) handleMeshSend(w http.ResponseWriter, r *http.Request, pathThreadID string) {
 	if !sameOriginOK(r) {
 		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
 		return
 	}
-	if !isValidStageID(threadID) {
+	if pathThreadID != "" && !isValidStageID(pathThreadID) {
 		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_thread_id")
 		return
 	}
 	var body struct {
 		RequestID string `json:"request_id"`
-		MeshSendRequest
+		MeshUserSendRequest
 	}
 	if !decodeAgentMeshBody(w, r, &body) {
 		return
@@ -272,8 +289,18 @@ func (s *Server) handleMeshSend(w http.ResponseWriter, r *http.Request, threadID
 		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
 		return
 	}
-	body.ThreadID = threadID
-	receipt, err := s.mesh.Send(r.Context(), body.RequestID, threadID, body.MeshSendRequest)
+	if pathThreadID != "" {
+		body.ThreadID = pathThreadID
+	}
+	if body.ThreadID != "" && !isValidStageID(body.ThreadID) {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_thread_id")
+		return
+	}
+	if body.OriginStage != "" && !isValidStageID(body.OriginStage) {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_stage_id")
+		return
+	}
+	receipt, err := s.mesh.Send(r.Context(), body.RequestID, body.MeshUserSendRequest)
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return

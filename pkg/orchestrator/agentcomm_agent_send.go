@@ -11,14 +11,14 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// SendFromAgent is Send for an agent's own `afm agent send` / `afm agent reply`, which knows names, not
-// thread ids:
+// SendFromAgent is Send for a sender that knows names, not thread ids: an agent's own `afm agent send` /
+// `afm agent reply`, and the human writing from a stage feed's composer (Sender "user", OriginStage set):
 //   - recipients may be short aliases ("docs", "@docs") as well as participant ids;
 //   - a reply without a thread goes into the thread of the message it answers (and, without recipients,
 //     back to that message's sender);
 //   - any other send without a thread goes into the open conversation with exactly the sender and those
-//     recipients, or opens one IN THE SAME operation as the message, so a send that is rejected leaves no
-//     empty conversation behind. The new thread's id is derived from the member set, so two agents starting
+//     recipients (and, with OriginStage, shown in that stage's feed), or opens one IN THE SAME operation as
+//     the message, so a send that is rejected leaves no empty conversation behind. The new thread's id is derived from the member set, so two agents starting
 //     the same conversation at once open the same thread.
 func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (SendReceipt, error) {
 	rs := o.opts.Store.Snapshot()
@@ -53,13 +53,20 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 	if len(req.Recipients) == 0 {
 		return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "no recipients — pass --to (see `afm agent list`)"}
 	}
+	originStage := req.OriginStage
+	if _, known := rs.Stages[originStage]; originStage != "" && !known {
+		return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("unknown origin stage %q", originStage)}
+	}
 	members := conversationMembers(req.Sender, req.Recipients)
-	if th := openThreadWithMembers(rs, members); th != "" {
+	if th := openThreadWithMembers(rs, members, originStage); th != "" {
 		req.ThreadID = th
 		return o.Send(ctx, req)
 	}
+	if originStage == "" {
+		originStage = participantStage(rs, req.Sender)
+	}
 	req.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
-	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, req.Sender))
+	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, members, 0, originStage)
 	if err != nil {
 		return SendReceipt{}, err
 	}
@@ -199,12 +206,17 @@ func agentMemberSet(members []agentcomm.ParticipantID) []agentcomm.ParticipantID
 // "" — the conversation an agent continues when it messages the same colleagues again. The human does not
 // count: a conversation opened before the human joined every new thread (D1) is still the one those agents
 // continue after a resume. A stage's discussion thread is never picked — it belongs to the human's Discussion
-// with the stage, and the agents' own conversation must not end up there.
-func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID) agentcomm.ThreadID {
+// with the stage, and the agents' own conversation must not end up there. shownIn — a stage feed the
+// conversation must show in (threadInStageFeed), so a message written from that feed never lands in a
+// conversation it does not show; "" — any conversation.
+func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID, shownIn string) agentcomm.ThreadID {
 	want := agentMemberSet(members)
 	for _, id := range rs.Assistants.Mesh.ThreadOrder {
 		th := rs.Assistants.Mesh.Threads[id]
 		if th == nil || th.Status != agentcomm.ThreadOpen || !slices.Equal(agentMemberSet(th.Members), want) {
+			continue
+		}
+		if shownIn != "" && !threadInStageFeed(rs, th, shownIn) {
 			continue
 		}
 		if _, discussion := discussionStageOfThread(rs, id); discussion {

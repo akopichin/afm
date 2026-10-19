@@ -205,9 +205,11 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning
+	// The statuses Orchestrator.Revise acts on; awaiting_assistants — the author finished and waits for its
+	// helpers, a note reaches it only this way.
+	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning || st.Status == state.StatusAwaitingAssistants
 	if !allowed {
-		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("stage is %s, not running, awaiting_approval or awaiting_assistants", st.Status), http.StatusBadRequest)
 		return
 	}
 	// A script stage has no live agent to revise; Revise would move it to `revising`, after which script

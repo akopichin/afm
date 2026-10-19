@@ -109,7 +109,11 @@ type SendRequest struct {
 	// AutoResult marks the message as a passive turn result afm posts on the sender's behalf
 	// (agentcomm.Message.AutoResult). Never set from an HTTP or CLI request: only afm itself posts one.
 	AutoResult bool
-	Actor      state.Actor
+	// OriginStage — for a send without a thread (SendFromAgent): the stage feed it is written from. The
+	// conversation it continues must show in that feed, and one it opens is shown there (Thread.OriginStage).
+	// Empty — the sender's own stage, if any.
+	OriginStage string
+	Actor       state.Actor
 }
 
 type SendReceipt struct {
