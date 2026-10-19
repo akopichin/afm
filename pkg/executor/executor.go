@@ -941,7 +941,9 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 }
 
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls
-// lineCallback for each stdout line. Respects idle timeout.
+// lineCallback for each stdout line. Respects idle timeout. lineCallback must not block for long: once the agent
+// has exited, run stops waiting for a callback stuck past pipeFlushPeriod after the group kill and returns; that
+// one call still finishes on its own, and no further call is made.
 func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) error {
 	e.logAgentInput(phase, prompt)
 	args := append([]string{}, e.cfg.ExtraArgs...)
@@ -1079,8 +1081,9 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	idleErr := fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
 	select {
 	case waitErr := <-exited:
-		// Cancellation and the idle timeout keep working while drain reads the agent's last output.
-		drainErr := pipes.drain(ctx, idleTimer.C(), group, stderr)
+		// Cancellation, the idle timeout and a user interrupt keep working while drain reads the agent's last
+		// output; an interrupt there returns ErrUserInterrupted, as before the exit.
+		drainErr := pipes.drain(ctx, idleTimer.C(), e.cfg.InterruptCh, group, stderr)
 		if waitErr != nil && ctx.Err() != nil {
 			return ctx.Err() // the context's cancellation killed the agent
 		}
@@ -1094,12 +1097,12 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	case <-idleTimer.C():
 		killAgent(cmd, group)
 		<-exited
-		_ = pipes.drain(ctx, nil, group, stderr)
+		_ = pipes.drain(ctx, nil, nil, group, stderr)
 		return idleErr
 	case <-ctx.Done():
 		killAgent(cmd, group)
 		<-exited
-		_ = pipes.drain(ctx, nil, group, stderr)
+		_ = pipes.drain(ctx, nil, nil, group, stderr)
 		return ctx.Err()
 	case <-e.cfg.InterruptCh:
 		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно завершает текущую атомарную операцию
@@ -1112,7 +1115,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			group.signal(syscall.SIGKILL)
 			<-exited
 		}
-		_ = pipes.drain(ctx, nil, group, stderr)
+		_ = pipes.drain(ctx, nil, nil, group, stderr)
 		return ErrUserInterrupted
 	}
 }

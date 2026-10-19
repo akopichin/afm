@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -209,10 +208,22 @@ type exitedAgent struct {
 // descendants may still run and hold the output pipes. The group is released when the test ends.
 func startExitedAgent(t *testing.T, body string) exitedAgent {
 	t.Helper()
-	cmd := exec.Command("/bin/bash", "-c", body)
 	a := exitedAgent{stderr: &bytes.Buffer{}, lines: &atomic.Int64{}}
+	started := startExitedAgentWith(t, body, a.stderr, func(string) bool {
+		a.lines.Add(1)
+		return true
+	})
+	a.pipes, a.group = started.pipes, started.group
+	return a
+}
+
+// startExitedAgentWith is startExitedAgent with the caller's stderr writer and output callback.
+func startExitedAgentWith(t *testing.T, body string, stderr io.Writer, onLine func(string) bool) exitedAgent {
+	t.Helper()
+	cmd := exec.Command("/bin/bash", "-c", body)
+	var a exitedAgent
 	var err error
-	if a.pipes, err = attachAgentPipes(cmd, a.stderr); err != nil {
+	if a.pipes, err = attachAgentPipes(cmd, stderr); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.pipes.close)
@@ -222,10 +233,7 @@ func startExitedAgent(t *testing.T, body string) exitedAgent {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	a.pipes.start("", a.stderr, func(string) bool {
-		a.lines.Add(1)
-		return true
-	})
+	a.pipes.start("", stderr, onLine)
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("agent: %v", err)
 	}
@@ -246,7 +254,7 @@ func TestDrain_DescendantWritingForeverIsKilledAtTheDrainLimit(t *testing.T) {
 	a.pipes.drainLimit = 500 * time.Millisecond
 
 	start := time.Now()
-	err := a.pipes.drain(context.Background(), nil, a.group, a.stderr)
+	err := a.pipes.drain(context.Background(), nil, nil, a.group, a.stderr)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("drain: %v", err)
@@ -266,16 +274,17 @@ func TestDrain_DescendantWritingForeverIsKilledAtTheDrainLimit(t *testing.T) {
 	}
 }
 
-// Cancellation and the idle timeout stop a drain that a busy descendant keeps going: drain kills the group at
+// Cancellation, the idle timeout and a user interrupt stop a drain that a busy descendant keeps going: drain kills the group at
 // once and reports why it stopped.
 func TestDrain_CancellationAndIdleTimeoutStopTheDrain(t *testing.T) {
 	tests := []struct {
 		name    string
-		stop    func(cancel context.CancelFunc, idle chan time.Time)
+		stop    func(cancel context.CancelFunc, idle chan time.Time, interrupt chan struct{})
 		wantErr error
 	}{
-		{"cancellation", func(cancel context.CancelFunc, _ chan time.Time) { cancel() }, context.Canceled},
-		{"idle timeout", func(_ context.CancelFunc, idle chan time.Time) { idle <- time.Now() }, ErrIdleTimeout},
+		{"cancellation", func(cancel context.CancelFunc, _ chan time.Time, _ chan struct{}) { cancel() }, context.Canceled},
+		{"idle timeout", func(_ context.CancelFunc, idle chan time.Time, _ chan struct{}) { idle <- time.Now() }, ErrIdleTimeout},
+		{"interrupt", func(_ context.CancelFunc, _ chan time.Time, interrupt chan struct{}) { interrupt <- struct{}{} }, ErrUserInterrupted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -284,10 +293,11 @@ func TestDrain_CancellationAndIdleTimeoutStopTheDrain(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			idle := make(chan time.Time, 1)
-			time.AfterFunc(200*time.Millisecond, func() { tt.stop(cancel, idle) })
+			interrupt := make(chan struct{}, 1)
+			time.AfterFunc(200*time.Millisecond, func() { tt.stop(cancel, idle, interrupt) })
 
 			start := time.Now()
-			err := a.pipes.drain(ctx, idle, a.group, a.stderr)
+			err := a.pipes.drain(ctx, idle, interrupt, a.group, a.stderr)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("drain = %v, want %v", err, tt.wantErr)
 			}
@@ -299,8 +309,8 @@ func TestDrain_CancellationAndIdleTimeoutStopTheDrain(t *testing.T) {
 	}
 }
 
-// When the anchor cannot start, the agent still runs: it leads its own group, which afm signals through the
-// agent's pid, and the warning goes to the agent's stderr log.
+// When the anchor cannot start, the agent still runs: it leads its own group, and the warning goes to the
+// agent's stderr log. afm then signals only the agent itself, while it is unreaped.
 func TestProcessGroup_WithoutAnchorTheAgentLeadsItsGroup(t *testing.T) {
 	var log bytes.Buffer
 	g := newProcessGroup(filepath.Join(t.TempDir(), "missing-afm"), &log)
@@ -310,31 +320,55 @@ func TestProcessGroup_WithoutAnchorTheAgentLeadsItsGroup(t *testing.T) {
 	if !strings.Contains(log.String(), "process group anchor did not start") {
 		t.Fatalf("stderr log = %q, want the fallback warning", log.String())
 	}
-	agent := exec.Command("/bin/sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!; sleep 30")
+	agent := exec.Command("/bin/sh", "-c", "sleep 30")
 	g.join(agent)
-	out, err := agent.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := agent.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = agent.Wait() })
-	var member int
-	if _, err := fmt.Fscan(out, &member); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = syscall.Kill(member, syscall.SIGKILL) })
+	waited := make(chan error, 1)
+	go func() { waited <- agent.Wait() }()
 	if pgid, _ := syscall.Getpgid(agent.Process.Pid); pgid != agent.Process.Pid {
 		t.Fatalf("agent pgid = %d, want its own pid %d", pgid, agent.Process.Pid)
 	}
 
-	g.release() // the agent is unreaped, so its group id is still ours
-	requireGone(t, member)
+	g.release() // the agent is unreaped: release kills it
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release did not kill the unreaped agent")
+	}
 }
 
-// A full turn with no anchor binary available: the agent starts, its output arrives, and the descendant it
-// leaves behind is killed with the turn.
+// Without an anchor the agent's pid is the group id, and afm reaps the agent itself: once it is reaped, that
+// number may already name an unrelated group. afm never signals a group by that number — not before the reap
+// (it could race the reap) and not after it.
+func TestProcessGroup_WithoutAnchorNeverSignalsTheGroupId(t *testing.T) {
+	g := newProcessGroup("", io.Discard)
+	var sent []int
+	g.kill = func(pid int, sig syscall.Signal) error {
+		sent = append(sent, pid)
+		return nil
+	}
+	agent := exec.Command("/bin/sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!")
+	g.join(agent)
+	out, err := agent.Output() // starts and reaps the group's leader
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(member, syscall.SIGKILL) })
+
+	g.signal(syscall.SIGKILL)
+	g.release()
+	if len(sent) != 0 {
+		t.Fatalf("raw group signals sent = %v, want none once the leader may be reaped", sent)
+	}
+}
+
+// A full turn with no anchor binary available: the agent starts and its output arrives.
 func TestRun_AgentStartsWhenTheAnchorIsUnavailable(t *testing.T) {
 	saved := anchorExecutable
 	anchorExecutable = filepath.Join(t.TempDir(), "missing-afm")
@@ -343,11 +377,117 @@ func TestRun_AgentStartsWhenTheAnchorIsUnavailable(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	body := "sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > " + pidFile + "\necho done\n"
 	run := runTurnScript(t, body, "", nil, 5*time.Second)
+	pidFrom(t, pidFile) // without an anchor afm cannot safely kill the descendant; the test does
 	if run.err != nil {
 		t.Fatalf("run: %v", run.err)
 	}
 	if got := strings.Join(run.lines, ","); got != "done" {
 		t.Fatalf("lines = %q, want the agent's output", got)
 	}
+}
+
+// A Pause or Revise that arrives while afm still reads a descendant's output after the agent exited stops the
+// turn at once, as before the exit: the group is killed and the turn reports the interrupt.
+func TestRun_InterruptWhileDrainingStopsTheTurn(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	script := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/bash\n"+writeForever(pidFile)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	interrupt := make(chan struct{}, 1)
+	e := New(Config{Command: script, IdleTimeout: time.Minute, InterruptCh: interrupt})
+	done := make(chan error, 1)
+	var exited atomic.Bool
+	go func() {
+		done <- e.run(context.Background(), "", "test", io.Discard, func(line string) {
+			if line == "final" {
+				exited.Store(true)
+			}
+		})
+	}()
+	for !exited.Load() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // the agent has exited; afm reads the child's output
+	start := time.Now()
+	interrupt <- struct{}{}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrUserInterrupted) {
+			t.Fatalf("run = %v, want ErrUserInterrupted", err)
+		}
+		if elapsed := time.Since(start); elapsed > pipeFlushPeriod+time.Second {
+			t.Fatalf("run returned %s after the interrupt", elapsed)
+		}
+	case <-time.After(pipeDrainLimit):
+		t.Fatal("the interrupt did not stop the drain")
+	}
 	requireGone(t, pidFrom(t, pidFile))
+}
+
+// blockingWriter is a stderr writer whose every Write blocks until unblock closes.
+type blockingWriter struct {
+	unblock chan struct{}
+	writes  atomic.Int64
+}
+
+func (w *blockingWriter) Write(b []byte) (int, error) {
+	w.writes.Add(1)
+	<-w.unblock
+	return len(b), nil
+}
+
+// An output consumer that blocks — a stuck output callback or stderr writer — does not keep drain waiting:
+// drain gives up after the flush period and returns, and the reader hands nothing more to the consumer once it
+// unblocks.
+func TestDrain_BlockedConsumerDoesNotHoldTheDrain(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		stuck func(unblock chan struct{}) (stderr io.Writer, onLine func(string) bool, calls func() int64)
+	}{
+		{
+			name: "output callback",
+			body: "echo first\necho second\n",
+			stuck: func(unblock chan struct{}) (io.Writer, func(string) bool, func() int64) {
+				var calls atomic.Int64
+				return &bytes.Buffer{}, func(string) bool {
+					calls.Add(1)
+					<-unblock
+					return true
+				}, calls.Load
+			},
+		},
+		{
+			name: "stderr writer",
+			body: "echo first >&2\nsleep 0.2\necho second >&2\n",
+			stuck: func(unblock chan struct{}) (io.Writer, func(string) bool, func() int64) {
+				w := &blockingWriter{unblock: unblock}
+				return w, func(string) bool { return true }, w.writes.Load
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unblock := make(chan struct{})
+			stderr, onLine, calls := tt.stuck(unblock)
+			a := startExitedAgentWith(t, tt.body, stderr, onLine)
+			a.pipes.drainLimit = 300 * time.Millisecond
+
+			drained := make(chan error, 1)
+			go func() { drained <- a.pipes.drain(context.Background(), nil, nil, a.group, stderr) }()
+			select {
+			case <-drained:
+			case <-time.After(a.pipes.drainLimit + pipeFlushPeriod + 2*time.Second):
+				close(unblock)
+				t.Fatal("drain waits for a blocked consumer")
+			}
+			close(unblock)
+			time.Sleep(100 * time.Millisecond)
+			if n := calls(); n != 1 {
+				t.Fatalf("consumer called %d times, want only the call in progress when drain gave up", n)
+			}
+		})
+	}
 }

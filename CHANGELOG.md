@@ -92,7 +92,9 @@ process holds the agent's input. Before, such a process could keep the turn
 open until the idle timeout or keep changing the project after a failed turn.
 Cancelling a run stops an agent's background processes too. A background
 process that keeps writing after the agent exits holds the turn open for at most
-ten seconds; cancelling or the idle timeout stop it at once. In Docker the
+ten seconds; cancelling, **Pause**, **Revise** or the idle timeout stop it at
+once. A single output line longer than 16 MiB is cut there and marked
+`…[truncated]` instead of growing afm's memory. In Docker the
 container runs with `--init`, so stopped processes do not pile up as zombies,
 and agents start in images without `/bin/sh`.
 

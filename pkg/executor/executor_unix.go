@@ -46,15 +46,16 @@ func ServeProcessGroupAnchor(args []string) bool {
 // same on macOS and Linux and needs no waitid/WNOWAIT or kqueue.
 //
 // Without an anchor (the binary did not call ServeProcessGroupAnchor, or the anchor failed to start) the agent
-// leads its own group, as before anchors existed. Signals then go to the agent's pid as a group id: safe while
-// the agent or any member of its group lives; once all are gone and the agent is reaped, the id may in theory
-// be reused before release's final kill.
+// leads its own group, as before anchors existed. afm reaps the agent itself, in cmd.Wait on another goroutine,
+// so it can never be sure the group id is still the agent's: afm then signals only the agent, through
+// os.Process, which sends nothing once the agent is reaped — never the group. The price: descendants are not
+// killed with the turn; a descendant holding the output pipes only makes drain stop reading.
 type processGroup struct {
-	anchor   *exec.Cmd // nil without an anchor
-	hold     *os.File  // write end of the anchor's stdin; closing it lets the anchor exit
-	leader   *exec.Cmd // the agent, when it leads the group itself
-	pgid     int       // the anchor's pid; 0 without an anchor
-	kill     func(pid int, sig syscall.Signal) error
+	anchor   *exec.Cmd                               // nil without an anchor
+	hold     *os.File                                // write end of the anchor's stdin; closing it lets the anchor exit
+	leader   *exec.Cmd                               // the agent, when it leads the group itself
+	pgid     int                                     // the anchor's pid; 0 without an anchor
+	kill     func(pid int, sig syscall.Signal) error // signals the anchored group; never used without an anchor
 	released bool
 }
 
@@ -105,19 +106,19 @@ func (g *processGroup) join(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: g.pgid}
 }
 
-// signal sends sig to every process still in the group. It is a no-op after release.
+// signal sends sig to every process still in the group — without an anchor, only to the agent while it is
+// unreaped. It is a no-op after release.
 func (g *processGroup) signal(sig syscall.Signal) {
 	if g.released {
 		return
 	}
-	pgid := g.pgid
 	if g.anchor == nil {
-		if g.leader == nil || g.leader.Process == nil {
-			return
+		if g.leader != nil && g.leader.Process != nil {
+			_ = g.leader.Process.Signal(sig) // os.ErrProcessDone once the agent is reaped: nothing is sent
 		}
-		pgid = g.leader.Process.Pid
+		return
 	}
-	_ = g.kill(-pgid, sig) // ESRCH only means the group is already empty
+	_ = g.kill(-g.pgid, sig) // ESRCH only means the group is already empty
 }
 
 // release kills whatever is left in the group, then reaps the anchor. Safe to call more than once.
