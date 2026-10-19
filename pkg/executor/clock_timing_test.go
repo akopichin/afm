@@ -118,6 +118,7 @@ func TestIdleTimeout_ResetDefersDeadlineOnOutput(t *testing.T) {
 func TestInterruptGrace_SIGKILLAfterGraceElapsed(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "sigint-ignored-but-ran-to-completion")
+	trapped := filepath.Join(dir, "sigint-trap-installed")
 	logFile := filepath.Join(dir, "grace.log")
 
 	fc := clock.NewFake(time.Unix(0, 0))
@@ -126,7 +127,7 @@ func TestInterruptGrace_SIGKILLAfterGraceElapsed(t *testing.T) {
 		Command: testCmdShell,
 		// trap '' TERM — ignore SIGINT's default disposition is already "terminate", so explicitly trap it
 		// to nothing, forcing the executor down the SIGKILL grace-timeout path.
-		ExtraArgs:   []string{testFlagC, "trap '' INT; sleep 300 && touch " + marker},
+		ExtraArgs:   []string{testFlagC, "trap '' INT; touch " + trapped + "; sleep 300 && touch " + marker},
 		IdleTimeout: time.Hour,
 		Clock:       fc,
 		InterruptCh: interruptCh,
@@ -136,6 +137,9 @@ func TestInterruptGrace_SIGKILLAfterGraceElapsed(t *testing.T) {
 	go func() { done <- ex.RunAgent(context.Background(), "implementation", "test-stage", "do work", logFile) }()
 
 	fc.BlockUntil(1) // idle timer armed — the process has started
+	// A SIGINT that arrives before the shell has installed its trap kills it, and the run would end without
+	// ever reaching the grace timer.
+	waitForFile(t, trapped)
 
 	interruptCh <- struct{}{}
 
@@ -165,3 +169,18 @@ func TestInterruptGrace_SIGKILLAfterGraceElapsed(t *testing.T) {
 // because the constant is not exported; advancing by exactly this much is what proves the grace period
 // itself, not some unrelated larger duration.
 const interruptGraceForTest = 15 * time.Second
+
+// waitForFile fails the test unless path exists within a few seconds.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not appear", path)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

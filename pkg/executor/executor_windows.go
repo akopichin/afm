@@ -7,14 +7,19 @@ import (
 	"syscall"
 )
 
-// killProcessGroup has no process-group/negative-PID equivalent wired up on Windows, so it just signals
-// the direct child.
-func killProcessGroup(cmd *exec.Cmd, sig syscall.Signal) {
-	if cmd.Process == nil {
-		return
-	}
-	_ = cmd.Process.Signal(sig)
+// processGroup has no process-group equivalent wired up on Windows: signal reaches only the agent itself.
+type processGroup struct {
+	cmd *exec.Cmd
 }
 
-// setProcessGroup is a no-op on Windows — there's no equivalent set up.
-func setProcessGroup(cmd *exec.Cmd) {}
+func newProcessGroup() (*processGroup, error) { return &processGroup{}, nil }
+
+func (g *processGroup) join(cmd *exec.Cmd) { g.cmd = cmd }
+
+func (g *processGroup) signal(sig syscall.Signal) {
+	if g.cmd != nil && g.cmd.Process != nil {
+		_ = g.cmd.Process.Signal(sig)
+	}
+}
+
+func (g *processGroup) release() {}

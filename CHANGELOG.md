@@ -71,11 +71,15 @@ Before, the run could finish with the message never read.
 
 ### Fix: processes an agent leaves behind end with its turn
 
-When an agent exits, a background process it started that still holds its
-output is stopped two seconds later, whether the agent succeeded or failed.
-Before, such a process could keep the turn open until the idle timeout or keep
-changing the project after a failed turn. Cancelling a run stops an agent's
-background processes too.
+When an agent's turn ends, every background process it started is stopped,
+whether the agent succeeded or failed and whether the process still holds the
+agent's output or not. afm keeps reading output for as long as it flows, so a
+slow consumer no longer loses the agent's last lines; output is cut off only
+when a process that left the agent's process group keeps it open, and the agent
+log then says so. A large prompt no longer keeps the turn open when a background
+process holds the agent's input. Before, such a process could keep the turn
+open until the idle timeout or keep changing the project after a failed turn.
+Cancelling a run stops an agent's background processes too.
 
 ### Fix: the sandbox a helper is told about is the one it runs in
 

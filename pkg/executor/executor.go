@@ -905,8 +905,6 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 	return out, nil
 }
 
-// killProcessGroup and setProcessGroup are OS-specific — see executor_unix.go and executor_windows.go.
-
 // filterInheritedEnv strips control/browser vars and, for verify, foreign credentials. Callers re-add
 // allowed invocation vars.
 func (e *Executor) filterInheritedEnv(ambient []string) []string {
@@ -992,14 +990,6 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		}
 	}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
-	setProcessGroup(cmd)
-	// A cancelled context stops the agent's whole process group, not just the agent: a descendant must not
-	// outlive the call that started it.
-	cmd.Cancel = func() error {
-		killAgent(cmd)
-		return nil
-	}
-	cmd.Stdin = strings.NewReader(prompt)
 	// Пин рабочей директории агента к project root (flow.root_dir), чтобы
 	// относительные пути проекта резолвились в одном корне для всех стадий.
 	if e.cfg.Dir != "" {
@@ -1041,7 +1031,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 	cmd.Env = filtered
 
-	pipes, err := attachOutputPipes(cmd, stderr)
+	pipes, err := attachAgentPipes(cmd, stderr)
 	if err != nil {
 		return err
 	}
@@ -1056,6 +1046,21 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	default:
 	}
 
+	// The agent and every descendant run in one process group. release, deferred here, kills whatever is still
+	// in it when the turn ends — also descendants that closed their pipes — before the call returns.
+	group, err := newProcessGroup()
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
+	}
+	defer group.release()
+	group.join(cmd)
+	// A cancelled context stops the agent's whole process group, not just the agent: a descendant must not
+	// outlive the call that started it.
+	cmd.Cancel = func() error {
+		killAgent(cmd, group)
+		return nil
+	}
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
 	}
@@ -1068,7 +1073,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	pipes.startReading(stderr, func(line string) bool {
+	pipes.start(prompt, stderr, func(line string) bool {
 		lineCallback(line)
 		idleTimer.Reset(e.cfg.IdleTimeout)
 		return true
@@ -1076,7 +1081,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 
 	select {
 	case waitErr := <-exited:
-		readErr := pipes.drain(cmd)
+		readErr := pipes.drain(group, stderr)
 		if waitErr != nil && ctx.Err() != nil {
 			return ctx.Err() // the context's cancellation killed the agent
 		}
@@ -1085,27 +1090,27 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		}
 		return waitErr
 	case <-idleTimer.C():
-		killAgent(cmd)
+		killAgent(cmd, group)
 		<-exited
-		_ = pipes.drain(cmd)
+		_ = pipes.drain(group, stderr)
 		return fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
 	case <-ctx.Done():
-		killAgent(cmd)
+		killAgent(cmd, group)
 		<-exited
-		_ = pipes.drain(cmd)
+		_ = pipes.drain(group, stderr)
 		return ctx.Err()
 	case <-e.cfg.InterruptCh:
 		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно завершает текущую атомарную операцию
 		// (запись файла — один syscall, его практически не рвёт сигналом на середине) и выходит.
-		killProcessGroup(cmd, syscall.SIGINT)
+		group.signal(syscall.SIGINT)
 		select {
 		case <-exited:
 		case <-e.clk().After(interruptGracePeriod):
 			// Не среагировал на SIGINT вовремя — принудительно, как страховка.
-			killProcessGroup(cmd, syscall.SIGKILL)
+			group.signal(syscall.SIGKILL)
 			<-exited
 		}
-		_ = pipes.drain(cmd)
+		_ = pipes.drain(group, stderr)
 		return ErrUserInterrupted
 	}
 }
