@@ -302,7 +302,8 @@ describe('FeedComposer', () => {
 
       await waitFor(() => expect(sendSpy).toHaveBeenCalled())
       expect(onSend).not.toHaveBeenCalled()
-      expect(openSpy).toHaveBeenCalled()
+      // The new conversation belongs to the feed it was started from.
+      expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ originStage: 's1' }))
       expect(sendSpy).toHaveBeenCalledWith('mt-new', expect.objectContaining({ body: '@run:qa fix this bug' }))
     })
 

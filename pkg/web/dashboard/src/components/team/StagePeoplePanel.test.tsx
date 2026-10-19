@@ -44,7 +44,7 @@ describe('StagePeoplePanel', () => {
   })
 
   test('an added agent is handed to the owner right away, before the roster poll has it', async () => {
-    vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't9', participant_id: 'run:t9', thread_id: 'mt-9' })
+    const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't9', participant_id: 'run:t9', thread_id: 'mt-9' })
     const { onAgentAdded } = renderPanel()
     fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
     fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
@@ -52,6 +52,8 @@ describe('StagePeoplePanel', () => {
     await waitFor(() =>
       expect(onAgentAdded).toHaveBeenCalledWith({ id: 'run:t9', kind: 'run_agent', scope: 'run', display_name: 'QA', reachable: true }),
     )
+    // Its first conversation shows in this stage's feed.
+    expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({ originStage: 'impl' }))
   })
 
   test('a pick addresses the person and closes the drawer', () => {

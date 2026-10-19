@@ -431,6 +431,8 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated, pic
             title: '',
             scope: recipient.scope,
             memberIds: [recipient.id],
+            // The conversation shows in the feed it was started from.
+            originStage: stageId,
           })
           onThreadCreated(thread)
           threadId = thread.id

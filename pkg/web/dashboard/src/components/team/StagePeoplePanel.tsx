@@ -70,6 +70,7 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
       {addOpen && (
         <AddRunAgentDialog
           profiles={profiles}
+          originStage={stageId}
           onAttached={(result, name) => {
             setAddOpen(false)
             onAgentAdded({ id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true })

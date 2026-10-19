@@ -9,6 +9,8 @@ export type AddRunAgentDialogProps = {
   // onAttached — name is how the new agent should be shown: its title, else the role's title.
   onAttached: (result: MeshAttachAndSendResult, name: string) => void
   onCancel: () => void
+  // originStage — the stage whose feed the agent is added from: its first conversation shows in that feed.
+  originStage?: string
 }
 
 // AddRunAgentDialog — the Team view's entry point for a STANDING run-scoped agent (as opposed to
@@ -17,7 +19,7 @@ export type AddRunAgentDialogProps = {
 // client-side, it only picks WHICH configured role to run; scope is always "run" with no stage id, the same
 // convention orchestrator.AddRunAgent's own thin wrapper uses. Mirrors AttachHelperDialog's focus-trap
 // (Escape/Tab via visibleFocusables) and modal-overlay/modal-content classes rather than reinventing them.
-export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgentDialogProps): ReactElement {
+export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage }: AddRunAgentDialogProps): ReactElement {
   const available = profiles.filter((p) => p.available)
   const [profileId, setProfileId] = useState(available[0]?.id ?? '')
   const [title, setTitle] = useState('')
@@ -76,6 +78,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel }: AddRunAgen
           title: p.title,
           instruction: p.instruction,
           ...(p.firstMessage !== '' ? { firstMessage: p.firstMessage } : {}),
+          ...(originStage !== undefined ? { originStage } : {}),
         }),
       { onSuccess: (result) => onAttached(result, name) },
     )
