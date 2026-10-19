@@ -128,7 +128,7 @@ completion gates and behavior when collaboration is disabled.
 directory; see below),
 `memory` ([agent-memory config](agent-memory.md)), `hooks`
 ([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `collaboration`,
-`worktrees`, `stages`.
+`team` (see below), `worktrees`, `stages`.
 
 `side_agent: true|false` overrides the dashboard
 [side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) toggle for
@@ -139,6 +139,29 @@ to those (default ON).
 flow. It has no `enabled` field; use `collaboration.enabled` in `config.yaml` or
 `AFM_COLLABORATION` to switch helpers on or off. See
 [Helpers and collaboration](collaboration.md).
+
+### `team` — run agents of the flow
+
+`team:` lists [run agents](collaboration.md#team-conversations) that afm adds
+before the first stage starts, in the listed order — the same agents
+**Add run agent** creates in the dashboard. Stage agents can write to them from
+their first turn:
+
+```yaml
+team:
+  - id: arch              # declaration key, not the @name
+    profile: rev-arch     # a profile from collaboration.profiles
+    title: Architecture   # the @name is made from it: @architecture
+    instruction: Review changes for simplicity and duplication when asked.
+```
+
+`id`, `profile` and `title` are required; `instruction` is optional. `id` must
+be unique in the team and match `[A-Za-z0-9._-]`. The `@name` is made from
+`title`; when it is taken, the agent gets `-2`, `-3` and so on. An unknown
+profile stops `afm run` at preflight, and `afm validate` reports it too. Team
+agents get no first message: each one waits until somebody writes to it. See
+[Declare a team in flow.yaml](collaboration.md#declare-a-team-in-flowyaml) for
+resume and disabled-collaboration behavior.
 
 ### `root_dir` — the project root for agents
 

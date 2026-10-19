@@ -109,6 +109,42 @@ When collaboration is disabled, afm warns about declared helpers and runs the
 stage without attaching them. This also lets `AFM_COLLABORATION=0` temporarily
 disable a flow's helpers.
 
+## Declare a team in flow.yaml
+
+Add `team:` at the top level of `flow.yaml` to start run agents with the run,
+without clicking **Add run agent**:
+
+```yaml
+team:
+  - id: arch
+    profile: rev-arch
+    title: Architecture
+    instruction: Review changes for simplicity and duplication when asked.
+  - id: qa
+    profile: qa
+    title: QA
+```
+
+afm adds them in the listed order before any stage starts, so the order decides
+who gets `@qa` and who gets `@qa-2` when titles collide. They are ordinary run
+agents (see [Team conversations](#team-conversations)): idle until someone
+writes to them, and they never keep the run open on their own. `id` names the
+declaration, not the agent: it is how a resumed run recognizes an agent it has
+already added.
+
+On resume, afm reuses every agent the run already added and adds only members
+with a new `id`, so stopping with Ctrl+C and resuming never adds an agent twice.
+A member whose `title`, `instruction` or `profile` changed since keeps its saved
+version; afm logs a warning and writes a `team_warning` notice: *"changed in
+flow.yaml; using the saved version, the new one applies to a new run"*. A member
+removed from `flow.yaml` keeps its agent until the run ends.
+
+Profiles must exist in `collaboration.profiles`: an unknown one stops `afm run`
+at preflight and fails `afm validate`. A profile that is unavailable when the
+run starts is logged, reported as a `team_warning` notice and skipped, and the
+stages run anyway. When collaboration is disabled, afm warns that the team will
+not be added and runs the flow without it, as with `assistants:`.
+
 ## Use helpers in the dashboard
 
 Open a stage's **⋯ → Attach helper…** menu, select an available role, and give

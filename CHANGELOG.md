@@ -5,6 +5,20 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: a team of run agents in flow.yaml
+
+A flow can declare its run agents with a top-level `team:` list (`id`,
+`profile`, `title`, optional `instruction`). afm adds them in the listed order
+before the first stage starts, through the same path as **Add run agent**, so
+stage agents can write to them from their first turn; each `@name` is made from
+the title, with `-2`, `-3` on a collision. A resumed run reuses the agents it
+already added (Ctrl+C and resume never add one twice) and adds only new ids; a
+member changed in `flow.yaml` keeps its saved version with a `team_warning`
+notice, and a removed one stays until the run ends. An unknown profile stops
+`afm run` at preflight and fails `afm validate`; with collaboration disabled,
+afm warns and runs the flow without the team. The flow schema covers the new
+key.
+
 ### Fix: the stage Feed with collaboration off
 
 With collaboration off (`AFM_COLLABORATION=0`) the stage **Feed** is the plain
