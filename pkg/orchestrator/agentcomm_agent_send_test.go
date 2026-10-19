@@ -237,7 +237,7 @@ func TestMesh_CorrectableErrorsAreTyped(t *testing.T) {
 }
 
 // The stage agent's answer in its stage's discussion thread also shows up in the stage's Discussion (it used to
-// stay only in the mesh, so the Discussion tab showed the human's question and never the answer).
+// stay only in the mesh, so the stage conversation log showed the human's question and never the answer).
 func TestStageAgentReplyInDiscussionThreadIsMirroredToDiscussion(t *testing.T) {
 	o, _ := newTwoStageMeshOrchestrator(t)
 	ctx := context.Background()

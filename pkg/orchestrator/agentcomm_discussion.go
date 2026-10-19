@@ -166,7 +166,7 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 // discussionMirrorOfReply is the way back of the discussion mirror: when any member but the human REPLIES to a
 // discussion message of a stage (typically the human's post) in one of that stage's discussion threads, the
 // same message — same id, in the same operation — is also recorded as that stage's discussion message, under
-// that parent, so the Discussion tab shows the answer and not only the question. The stage agent appears as
+// that parent, so the stage feed's conversation log shows the answer and not only the question. The stage agent appears as
 // the main agent; anybody the human mentioned appears under their own participant id, with their mesh kind as
 // the role. Anything else said in the thread — a new topic, or an answer to a message written straight into
 // the thread from the Team view, which exists only in the mesh — stays in the Team conversation (ok=false).
