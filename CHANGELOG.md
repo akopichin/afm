@@ -80,7 +80,11 @@ when a process that left the agent's process group keeps it open, and the agent
 log then says so. A large prompt no longer keeps the turn open when a background
 process holds the agent's input. Before, such a process could keep the turn
 open until the idle timeout or keep changing the project after a failed turn.
-Cancelling a run stops an agent's background processes too.
+Cancelling a run stops an agent's background processes too. A background
+process that keeps writing after the agent exits holds the turn open for at most
+ten seconds; cancelling or the idle timeout stop it at once. In Docker the
+container runs with `--init`, so stopped processes do not pile up as zombies,
+and agents start in images without `/bin/sh`.
 
 ### Fix: the sandbox a helper is told about is the one it runs in
 
