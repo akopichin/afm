@@ -182,7 +182,7 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 	}
 
 	effects := append(slices.Clone(openThread), eff)
-	if mirror, ok, merr := discussionMirrorOfStageReply(rs, req, messageID, body); merr != nil {
+	if mirror, ok, merr := discussionMirrorOfReply(rs, req, messageID, body); merr != nil {
 		return SendReceipt{}, merr
 	} else if ok {
 		effects = append(effects, mirror)

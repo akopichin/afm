@@ -23,6 +23,9 @@ type DiscussionMessagePayload struct {
 	Evidence        []string           `json:"evidence,omitempty"`
 	Body            string             `json:"body,omitempty"`
 	Result          *assistants.Result `json:"result,omitempty"`
+	// Mentions — the mesh participants the human pulled into this post with `@`, besides the stage agent.
+	// Absent in journals written before mentions existed.
+	Mentions []string `json:"mentions,omitempty"`
 }
 
 // discussionMessagesForStage returns stageID's discussion messages in commit order (as.Discussions.ByStage —
@@ -79,6 +82,7 @@ func applyDiscussionMessage(as *AssistantsState, c *Control, dryRun bool) error 
 		Evidence:        p.Evidence,
 		Body:            p.Body,
 		Result:          p.Result,
+		Mentions:        p.Mentions,
 		CreatedAt:       c.Time,
 	}
 	as.Discussions.Messages[id] = &msg

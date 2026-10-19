@@ -221,7 +221,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			return nil, err
 		}
 		n.effects = append(n.effects, msg)
-		if mirror, ok, err := discussionMirrorOfStageReply(rs, n.send, n.messageID, body); err != nil {
+		if mirror, ok, err := discussionMirrorOfReply(rs, n.send, n.messageID, body); err != nil {
 			return nil, err
 		} else if ok {
 			n.effects = append(n.effects, mirror)

@@ -61,7 +61,9 @@ type DiscussionMessage struct {
 	Body     string   `json:"body,omitempty"`
 	// Result carries the full structured verdict/findings for an independent-round (Round==RoundIndependent)
 	// contribution. nil for a plain prose reply/synthesis note.
-	Result    *Result   `json:"result,omitempty"`
+	Result *Result `json:"result,omitempty"`
+	// Mentions — mesh participant ids the post was also addressed to (besides the stage agent).
+	Mentions  []string  `json:"mentions,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
