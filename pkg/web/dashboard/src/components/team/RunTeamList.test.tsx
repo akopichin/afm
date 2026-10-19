@@ -106,6 +106,20 @@ describe('RunTeamList', () => {
     expect(helper.querySelector('.team-presence')).toHaveAttribute('data-presence', 'idle')
   })
 
+  test('a finished task row says how it ended when the server gives the reason', () => {
+    renderList({
+      participants: [
+        ...participants.filter((p) => p.id !== 'helper:h1'),
+        {
+          id: 'helper:h1', kind: 'helper', scope: 'stage', stage_id: 'implement', display_name: 'Correctness helper', reachable: false,
+          activity: 'done', unreachable_reason: 'task h1 failed: invalid result — invalid verdict value "approved"',
+        },
+      ],
+    })
+    const helper = screen.getByText('Correctness helper').closest('button') as HTMLElement
+    expect(within(helper).getByText('task h1 failed: invalid result — invalid verdict value "approved"')).toBeInTheDocument()
+  })
+
   test("a stage's helpers are listed right under that stage", () => {
     renderList()
     const names = within(screen.getByRole('region', { name: 'Stages' }))

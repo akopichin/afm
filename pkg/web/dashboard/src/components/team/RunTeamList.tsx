@@ -56,6 +56,8 @@ function participantStatus(p: MeshParticipant, stage: RunTeamListStage | undefin
   // "Awaiting colleague" is the rail's wording; the narrow roster row says it shorter.
   if (p.kind === 'stage_agent' && stage !== undefined) return stage.status === 'awaiting_peer' ? 'Waiting' : stageStatusLabel(stage.status)
   if (stage?.status === 'paused') return 'Paused'
+  // A finished task says how it ended (failed and why, cancelled) when the server gives the reason.
+  if (p.activity === 'done' && p.unreachable_reason !== undefined && p.unreachable_reason !== '') return p.unreachable_reason
   const activity = activityLabel(p.activity)
   if (activity !== null) return activity
   if (!p.reachable) return p.unreachable_reason && p.unreachable_reason !== '' ? p.unreachable_reason : 'Unreachable'
