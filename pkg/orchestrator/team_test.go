@@ -316,3 +316,46 @@ func TestInitTeam_AliasContentionStopsStartup(t *testing.T) {
 		t.Fatal("arch was added despite the error")
 	}
 }
+
+// The team/ request-id namespace belongs to the flow's team: a dashboard/API attach cannot use it to stand in
+// for a declared member.
+func TestAddRunAgent_TeamRequestIDsAreReserved(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	_, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{
+		OperationID: "team/arch", ProfileID: "qa", Title: "Architecture", Actor: state.Actor{Kind: "user"},
+	})
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, "team/") {
+		t.Fatalf("AddRunAgent with a team/ request id: err = %v, want a rejection", err)
+	}
+	if n := len(store.Snapshot().Assistants.Tasks); n != 0 {
+		t.Fatalf("tasks = %d, want none", n)
+	}
+}
+
+// A team/<id> operation that was not created by the flow's team (a journal written before the namespace was
+// reserved) is not taken for the member's saved agent: initTeam reports it and adds nothing in its name.
+func TestInitTeam_ForeignOperationUnderTheTeamIDIsNotTheMember(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	created, err := taskCreatedEffect(deriveTaskID("team/arch"), "", state.TaskCreatedPayload{
+		Scope: string(assistants.ScopeRun), ProfileID: "qa", ProfileSnapshot: assistants.Profile{ID: "qa", Title: "QA", Command: "helper-cmd"},
+		Title: "Architecture", Mode: string(assistants.ModeAdvisory), Trigger: string(assistants.TriggerOneShot), CreatedBy: "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyRunOperation(state.Operation{ID: "team/arch", Kind: opKindAttachAndSend, Actor: state.Actor{Kind: "user"}, Effects: []state.Effect{created}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	o.opts.Team = flow.Team{{ID: "arch", Profile: "reviewer", Title: "Architecture"}}
+
+	if got, err := TeamMembersToCreate(store, o.opts.Team); err != nil || len(got) != 0 {
+		t.Fatalf("TeamMembersToCreate = %v, %v; want the member left to initTeam's report", got, err)
+	}
+	mustInitTeam(t, o)
+
+	notices, err := os.ReadFile(filepath.Join(o.opts.RunDir, "notices.jsonl"))
+	if err != nil || !strings.Contains(string(notices), `"member_id":"arch"`) || !strings.Contains(string(notices), "not this flow's team") {
+		t.Fatalf("notices = %s (%v), want a team_warning that the id is taken", notices, err)
+	}
+}

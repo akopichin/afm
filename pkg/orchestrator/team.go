@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
@@ -18,15 +19,44 @@ const teamAliasAttempts = 3
 // errTeamAliasContention: every attempt to add a member lost its @name to a concurrent attach.
 var errTeamAliasContention = errors.New("its @name was taken by a concurrent attach on every attempt")
 
+// teamOperationPrefix is the request-id namespace of the flow's team (teamOperationID). It is reserved:
+// only teamActor attaches under it (AttachAndSend), so a dashboard or API request cannot stand in for a member.
+const teamOperationPrefix = "team/"
+
+// teamActor is who adds the flow's team agents.
+var teamActor = state.Actor{Kind: "system", ID: "flow"}
+
+// errTeamIDTaken: the member's request id was committed by something other than the flow's team.
+var errTeamIDTaken = errors.New("its request id was used by a request that is not this flow's team")
+
 // teamOperationID names the AddRunAgent operation that creates a team member's agent. It depends only on
 // the declaration id, so a resumed run finds the agent it already created instead of adding a second one.
 func teamOperationID(memberID string) string {
-	return "team/" + memberID
+	return teamOperationPrefix + memberID
 }
 
-// savedTeamAgent reads the committed operation that created a member's agent, if any.
+// rejectReservedRequestID refuses a team/ request id from anyone but the flow's team.
+func rejectReservedRequestID(opID string, actor state.Actor) error {
+	if strings.HasPrefix(opID, teamOperationPrefix) && actor != teamActor {
+		return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved for the flow's team", teamOperationPrefix)
+	}
+	return nil
+}
+
+// savedTeamAgent reads the committed operation that created a member's agent, if any. An operation under the
+// member's id that the flow's team did not create (one journaled before the namespace was reserved) is not
+// the member's agent: errTeamIDTaken.
 func savedTeamAgent(store *state.Store, memberID string) (state.CommittedOperation, bool, error) {
-	return store.CommittedOperation(teamOperationID(memberID), opKindAttachAndSend)
+	op, saved, err := store.CommittedOperation(teamOperationID(memberID), opKindAttachAndSend)
+	if err != nil || !saved {
+		return op, saved, err
+	}
+	var created state.TaskCreatedPayload
+	if _, found, err := op.Effect("task_created", &created); err != nil || !found ||
+		created.CreatedBy != teamActor.Kind || created.Scope != string(assistants.ScopeRun) {
+		return op, true, errTeamIDTaken
+	}
+	return op, true, nil
 }
 
 // TeamMembersToCreate returns the members whose agent the run has not created yet — the only ones whose
@@ -37,7 +67,7 @@ func TeamMembersToCreate(store *state.Store, team flow.Team) (flow.Team, error) 
 	var out flow.Team
 	for _, m := range team {
 		_, saved, err := savedTeamAgent(store, m.ID)
-		if errors.Is(err, state.ErrOperationIDConflict) {
+		if errors.Is(err, state.ErrOperationIDConflict) || errors.Is(err, errTeamIDTaken) {
 			continue
 		}
 		if err != nil {
@@ -65,7 +95,7 @@ func (o *Orchestrator) initTeam(ctx context.Context) error {
 	for _, m := range o.opts.Team {
 		op, saved, err := savedTeamAgent(o.opts.Store, m.ID)
 		switch {
-		case errors.Is(err, state.ErrOperationIDConflict):
+		case errors.Is(err, state.ErrOperationIDConflict) || errors.Is(err, errTeamIDTaken):
 			o.teamWarning(m.ID, fmt.Sprintf("not added: %v", err))
 		case err != nil:
 			return fmt.Errorf("team member %q: %w", m.ID, err)
@@ -94,7 +124,7 @@ func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) erro
 			ProfileID:   assistants.ProfileID(m.Profile),
 			Title:       m.Title,
 			Instruction: m.Instruction,
-			Actor:       state.Actor{Kind: "system", ID: "flow"},
+			Actor:       teamActor,
 		})
 		var rejected *state.OperationRejectedError
 		if !errors.As(err, &rejected) || rejected.Code != assistants.CodeStaleRevision {
