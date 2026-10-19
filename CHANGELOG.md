@@ -8,32 +8,47 @@ older ones further down. Dates follow the commits that shipped each change.
 ### Improvement: ask a running stage agent a question from the Discussion tab
 
 The Discussion composer has an **Interrupt agent** switch, shown while the stage
-is running and off by default. When it is on, the post interrupts the agent's
-current turn. The agent gets the post as a question from the human, answers it
-with `afm agent reply` (the answer appears in the Discussion), and then continues
-its work. The post is not treated as a revision of the plan. Agents are also told
-to always answer a message from the human, even briefly, by their next step.
+is running and off by default. When it is on and the agent is working, the post
+interrupts its current turn. The agent gets the post as a question from the
+human, answers it with `afm agent reply` (the answer appears in the Discussion),
+and then continues its work. If the agent has not started yet, the question is
+in its first prompt. The question stays in the agent's prompts until it replies,
+also across a restart, and the post is not treated as a revision of the plan.
+Agents are also told to answer every message from the human, even briefly. If a
+stage finishes without replying, the post is marked **Not answered** and a feed
+notice says so.
+
+### Fix: Revise and Pause no longer race
+
+A Revise (from the feed, a stage button, an accepted proposal or a discussion
+question) now applies only if the stage is still in the status it was decided
+for, and manual Revise is decided together with the flow review pause. A Pause
+that lands first is no longer undone by a Revise moving the stage back to
+`revising`.
 
 ### Improvement: `@` mentions in the stage Discussion
 
 Type `@` in the Discussion composer to bring run agents, helpers or other
-stages' agents into a post. They receive it together with the stage agent. The
-post shows who it was addressed to, and their replies appear in that stage's
-Discussion under their own names. Discussions from earlier runs load unchanged.
+stages' agents into a post. Agents that have finished are not offered. Mentioned
+agents receive the post together with the stage agent. The post shows who it
+was addressed to, and their replies to it appear in that stage's Discussion
+under their own names. Discussions from earlier runs load unchanged.
 
 ### Fix: the feed's conversation preview stays when you erase the mention
 
 In the feed's **Message** mode, erasing the `@name` no longer hides the
 conversation above the input. The conversation stays until you pick someone else
-or close it with ×. **Reply** on a message addresses its sender again, so you
-don't have to retype the mention.
+or close it with ×. **Reply** on an agent's message addresses its sender again,
+so you don't have to retype the mention. A response that arrives after you
+switched recipients and back no longer updates the current conversation.
 
 ### Fix: agent messages show text, not a raw JSON result
 
 Agents are told that messages they send are plain text, and that the JSON result
 object is only for their final turn output. If a message still arrives as that
 object, Team, the feed preview and the Discussion show its summary with a
-verdict chip (pass, needs changes, inconclusive) instead of the raw JSON.
+verdict chip (pass, needs changes, inconclusive) instead of the raw JSON; the
+original text is under **Raw**. JSON that you write yourself is shown as is.
 
 
 ### Fix: a stage no longer finishes with a teammate's question unread
