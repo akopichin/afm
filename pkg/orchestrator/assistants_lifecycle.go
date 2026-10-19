@@ -226,6 +226,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		if agent == "" {
 			agent = string(task.ProfileID)
 		}
+		agent = o.RedactSecrets(agent) // a title journaled before titles were redacted
 		o.publishNotice(bus.Event{Type: bus.EventHelperTreeModified, StageID: task.RootStageID, Data: map[string]any{
 			"task_id": string(taskID), "agent": agent,
 		}})

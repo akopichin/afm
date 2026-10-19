@@ -155,7 +155,7 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 		created, err := taskCreatedEffect(childID, parent.RootStageID, state.TaskCreatedPayload{
 			ParentTaskID:             &parentIDStr,
 			ProfileID:                string(child.ProfileID),
-			ProfileSnapshot:          profile,
+			ProfileSnapshot:          o.redactProfile(profile),
 			Title:                    o.RedactSecrets(child.Title),
 			Instruction:              o.RedactSecrets(child.Instruction),
 			Mode:                     string(mode),
@@ -195,7 +195,9 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 		effects = append(effects, parentEff)
 	}
 	if continuation != nil {
-		contEff, err := taskContinuationEffect(parentTaskID, continuation)
+		redacted := *continuation
+		redacted.Note = o.RedactSecrets(redacted.Note) // the model's own text, journaled
+		contEff, err := taskContinuationEffect(parentTaskID, &redacted)
 		if err != nil {
 			return nil, err
 		}
