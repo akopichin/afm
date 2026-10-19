@@ -33,6 +33,8 @@ type MeshActions interface {
 	Send(ctx context.Context, requestID, threadID string, req MeshSendRequest) (MeshSendReceipt, error)
 	Thread(ctx context.Context, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Inbox(ctx context.Context, cursor uint64, limit int) (MeshMessagePage, error)
+	// StageMessages pages the conversation messages a stage's feed shows, in journal order, after cursor.
+	StageMessages(ctx context.Context, stageID string, cursor uint64, limit int) (MeshStageMessagePage, error)
 	Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error)
 	// PublishBoard posts an entry to the shared board as the human operator (e.g. a task for the agents) and
 	// tells req.Notify about it with one message.
@@ -48,6 +50,17 @@ type MeshOpenThreadRequest struct {
 	Scope       string   `json:"scope"` // "stage" or "run" — required, no default (agentcomm.Scope has none)
 	Members     []string `json:"member_ids"`
 	MaxMessages int      `json:"max_messages,omitempty"`
+	// OriginStage — the stage whose feed the thread is opened from, so it shows in that feed.
+	OriginStage string `json:"origin_stage,omitempty"`
+}
+
+// MeshStageMessagePage is GET /api/mesh/stages/{id}/messages' response: a page of the stage feed's
+// conversation messages in journal order, the threads they belong to, and the cursor of the next page.
+type MeshStageMessagePage struct {
+	Messages   []agentcomm.Message `json:"messages"`
+	Threads    []agentcomm.Thread  `json:"threads"`
+	NextCursor uint64              `json:"next_cursor"`
+	HasMore    bool                `json:"has_more"`
 }
 
 // MeshBoardPublishRequest is POST /api/mesh/board's body: the entry the human publishes (a key is only ever
@@ -73,6 +86,8 @@ type MeshAttachAndSendRequest struct {
 	Instruction  string   `json:"instruction,omitempty"`
 	FirstMessage *string  `json:"first_message,omitempty"`
 	Recipients   []string `json:"recipient_ids,omitempty"`
+	// OriginStage — for a run agent, the stage whose feed it was added from (its first thread shows there).
+	OriginStage string `json:"origin_stage,omitempty"`
 }
 
 // MeshAttachAndSendResult is attach-and-send's response — string-ids mirror AttachAndSendResult's typed ids
@@ -95,6 +110,7 @@ const (
 	meshSegAttachAndSend  = "attach-and-send"
 	meshSegThreadMessages = "messages"
 	meshSegThreadClose    = "close"
+	meshSegStages         = "stages"
 )
 
 // routeMesh handles every /api/mesh/* route. Capability-off (s.mesh == nil) 404s before anything else, the
@@ -128,6 +144,8 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshSend(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == meshSegThreads && segs[1] != "" && segs[2] == meshSegThreadClose && r.Method == http.MethodPost:
 		s.handleMeshCloseThread(w, r, segs[1])
+	case len(segs) == 3 && segs[0] == meshSegStages && segs[2] == meshSegThreadMessages && r.Method == http.MethodGet:
+		s.handleMeshStageMessages(w, r, segs[1])
 	default:
 		http.NotFound(w, r)
 	}
@@ -181,6 +199,22 @@ func (s *Server) handleMeshReadThread(w http.ResponseWriter, r *http.Request, th
 	}
 	cursor, limit := parseCursorLimit(r)
 	page, err := s.mesh.Thread(r.Context(), threadID, cursor, limit)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, page)
+}
+
+// handleMeshStageMessages is GET /api/mesh/stages/{id}/messages?cursor=&limit= — the conversations a stage's
+// feed shows, paged forward by cursor (the seq of the last message read).
+func (s *Server) handleMeshStageMessages(w http.ResponseWriter, r *http.Request, stageID string) {
+	if !isValidStageID(stageID) {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_stage_id")
+		return
+	}
+	cursor, limit := parseCursorLimit(r)
+	page, err := s.mesh.StageMessages(r.Context(), stageID, cursor, limit)
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return

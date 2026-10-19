@@ -53,6 +53,11 @@ type fakeMeshActions struct {
 	lastPublishReq string
 	board          []agentcomm.BoardEntry
 
+	stagePage       MeshStageMessagePage
+	lastStageRead   string
+	lastStageCursor uint64
+	lastStageLimit  int
+
 	attachByReq map[string]MeshAttachAndSendResult
 	attachCalls int
 	lastAttach  MeshAttachAndSendRequest
@@ -128,6 +133,13 @@ func (f *fakeMeshActions) Thread(ctx context.Context, threadID string, cursor ui
 		return MeshMessagePage{}, f.threadErr
 	}
 	return f.threadPage, nil
+}
+
+func (f *fakeMeshActions) StageMessages(ctx context.Context, stageID string, cursor uint64, limit int) (MeshStageMessagePage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastStageRead, f.lastStageCursor, f.lastStageLimit = stageID, cursor, limit
+	return f.stagePage, nil
 }
 
 func (f *fakeMeshActions) Inbox(ctx context.Context, cursor uint64, limit int) (MeshMessagePage, error) {
@@ -324,10 +336,13 @@ func TestMesh_OpenThread_AlwaysIncludesTheHuman(t *testing.T) {
 	fake := newFakeMeshActions()
 	srv := newTestServer(t, Config{Mesh: fake})
 	doMeshJSON(t, srv, http.MethodPost, "/api/mesh/threads", map[string]any{
-		"request_id": "req-1", "title": "t", "scope": "stage", "member_ids": []string{"stage:s1"},
+		"request_id": "req-1", "title": "t", "scope": "stage", "member_ids": []string{"stage:s1"}, "origin_stage": "s1",
 	}, true)
 	if len(fake.lastOpen.Members) != 1 || fake.lastOpen.Members[0] != "stage:s1" {
 		t.Fatalf("members = %v, want [stage:s1]", fake.lastOpen.Members)
+	}
+	if fake.lastOpen.OriginStage != "s1" {
+		t.Fatalf("origin_stage = %q, want the stage whose feed opened the thread", fake.lastOpen.OriginStage)
 	}
 }
 
@@ -431,6 +446,34 @@ func TestMesh_ReadThread_CursorAndLimitPassThrough(t *testing.T) {
 	}
 	if len(page.Messages) != 1 || page.NextCursor != 3 {
 		t.Fatalf("page = %+v, want the fake's page", page)
+	}
+}
+
+// GET /api/mesh/stages/{id}/messages — the conversations of a stage's feed, paged by cursor.
+func TestMesh_StageMessages(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.stagePage = MeshStageMessagePage{
+		Messages:   []agentcomm.Message{{ID: "m1", ThreadID: "mt-1", Sender: "stage:docs", Recipients: []agentcomm.ParticipantID{"stage:impl"}, Kind: agentcomm.MessageKindMessage, Seq: 5}},
+		Threads:    []agentcomm.Thread{{ID: "mt-1", Scope: agentcomm.ScopeRun, Members: []agentcomm.ParticipantID{"user", "stage:docs", "stage:impl"}, Status: agentcomm.ThreadOpen, OriginStage: "docs"}},
+		NextCursor: 5, HasMore: true,
+	}
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/stages/impl/messages?cursor=2&limit=10", nil, false)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.lastStageRead != "impl" || fake.lastStageCursor != 2 || fake.lastStageLimit != 10 {
+		t.Fatalf("read stage=%q cursor=%d limit=%d, want impl/2/10", fake.lastStageRead, fake.lastStageCursor, fake.lastStageLimit)
+	}
+	threads, _ := resp["threads"].([]any)
+	thread, _ := threads[0].(map[string]any)
+	hasMore, _ := resp["has_more"].(bool)
+	if msgs, _ := resp["messages"].([]any); len(msgs) != 1 || resp["next_cursor"] != float64(5) || !hasMore || thread["origin_stage"] != "docs" {
+		t.Fatalf("response = %v, want the fake's page", resp)
+	}
+
+	if w, _ := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/stages/bad%20id/messages", nil, false); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid stage id: HTTP %d, want 400", w.Code)
 	}
 }
 
