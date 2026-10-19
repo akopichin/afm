@@ -3,15 +3,18 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/progress"
+	"github.com/akopichin/afm/pkg/redact"
 )
 
 // RunMode names the isolation/behavior policy a subprocess is launched under. ModeAuthor is the default
@@ -92,19 +95,14 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 	defer jf.Close()
 
-	redactText := func(s string) string {
-		if e.cfg.Redact == nil {
-			return s
-		}
-		return e.cfg.Redact(s)
-	}
+	red := helperRedactor{redact: e.cfg.Redact, secrets: e.cfg.Secrets}
 
 	var stderr = io.Discard
 	if sf := openStderrLog(logFile); sf != nil {
 		defer sf.Close()
-		lines := &lineRedactor{w: sf, redact: redactText}
-		defer func() { _ = lines.Flush() }() // deferred after sf.Close, so it runs first; a lost log tail is not fatal
-		stderr = lines
+		stream := red.stream(sf)
+		defer func() { _ = stream.Close() }() // deferred after sf.Close, so it runs first; a lost log tail is not fatal
+		stderr = stream
 	}
 
 	lg.LogStart(profileID, taskID)
@@ -127,13 +125,16 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	collector := accounting.NewCollector(he.cfg.UsageHint)
 	runErr := he.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
-		jf.WriteString(redactText(line) + "\n") //nolint:errcheck
+		// Everything below reads the redacted line, so no field of the event — text, tool name, tool input —
+		// can carry a secret to a sink.
+		line = red.jsonText(line)
+		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
 			if isErrorLine(line) {
-				lg.LogAction("error", redactText(line))
+				lg.LogAction("error", line)
 				if firstErr == "" {
-					firstErr = redactText(line)
+					firstErr = line
 				}
 			}
 			return
@@ -146,7 +147,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 				haveFinalText = true
 			}
 			if tool, detail, actionOK := contentToAction(c, he.cfg.TruncateOutput); actionOK {
-				detail = redactText(detail)
+				tool, detail = red.text(tool), red.text(detail)
 				lg.LogAction(tool, detail)
 				if he.cfg.OnAction != nil {
 					he.cfg.OnAction(tool, detail)
@@ -178,7 +179,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 
 	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
-		outcome.RawText = redactText(finalText.String())
+		outcome.RawText = red.jsonText(finalText.String())
 		if werr := os.WriteFile(resultFile, []byte(outcome.RawText), 0644); werr != nil {
 			return outcome, fmt.Errorf("write result file: %w", werr)
 		}
@@ -193,8 +194,146 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	return outcome, nil
 }
 
-// lineRedactor writes whole lines through redact, so a secret is never split across two writes; Flush writes a
-// last line that has no newline. A line longer than maxRedactedLine is written in pieces rather than held.
+// helperRedactor masks known secrets in everything RunHelperAgent writes or reports. Either source may be nil.
+type helperRedactor struct {
+	redact  func(string) string // Config.Redact
+	secrets func() []string     // Config.Secrets
+}
+
+// text masks secrets in plain text — with known values, their JSON-escaped spellings too.
+func (r helperRedactor) text(s string) string {
+	if r.secrets != nil {
+		s = redact.String(s, withJSONSpellings(r.secrets()))
+	}
+	if r.redact != nil {
+		s = r.redact(s)
+	}
+	return s
+}
+
+// jsonText is text for a string that may hold JSON: the decoded strings are masked first, including JSON nested
+// inside a string (the answer inside a stream line), so a secret the encoder escaped is masked by its real value.
+func (r helperRedactor) jsonText(s string) string {
+	return r.text(redactJSONStrings(s, r.jsonText))
+}
+
+// stream wraps w so a byte stream is masked before it reaches w. With known values a secret split across writes
+// or lines is still caught; Redact alone can only mask line by line.
+func (r helperRedactor) stream(w io.Writer) io.WriteCloser {
+	var out io.WriteCloser = &lineRedactor{w: w, redact: r.text}
+	if r.secrets != nil {
+		out = &secretStream{next: out, secrets: r.secrets}
+	}
+	return out
+}
+
+// redactJSONStrings decodes s as one JSON value, masks every string in it (object keys too) with redactString and
+// re-encodes it. s comes back unchanged when it is not a single JSON object, array or string, or nothing in it
+// changed — so an ordinary line keeps its exact bytes.
+func redactJSONStrings(s string, redactString func(string) string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || !strings.ContainsAny(trimmed[:1], `{["`) {
+		return s
+	}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return s
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return s // trailing text: not a single JSON value
+	}
+	v, changed := redactJSONValue(v, redactString)
+	if !changed {
+		return s
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return s // cannot happen for a decoded value; the caller still masks s as plain text
+	}
+	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+// redactJSONValue masks every string in a decoded JSON value and reports whether anything changed.
+func redactJSONValue(v any, redactString func(string) string) (any, bool) {
+	switch t := v.(type) {
+	case string:
+		r := redactString(t)
+		return r, r != t
+	case []any:
+		changed := false
+		for i, e := range t {
+			var c bool
+			t[i], c = redactJSONValue(e, redactString)
+			changed = changed || c
+		}
+		return t, changed
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		changed := false
+		for k, e := range t {
+			rk := redactString(k)
+			re, c := redactJSONValue(e, redactString)
+			out[rk] = re
+			changed = changed || c || rk != k
+		}
+		return out, changed
+	}
+	return v, false
+}
+
+// withJSONSpellings adds each secret's JSON-escaped spelling, with and without HTML escaping, so a secret
+// quoted inside JSON that does not decode as a whole (an answer wrapped in prose) is still masked.
+func withJSONSpellings(secrets []string) []string {
+	out := slices.Clone(secrets)
+	for _, s := range secrets {
+		for _, escapeHTML := range []bool{false, true} {
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(escapeHTML)
+			if err := enc.Encode(s); err != nil {
+				continue
+			}
+			quoted := strings.TrimSuffix(buf.String(), "\n")
+			if escaped := quoted[1 : len(quoted)-1]; escaped != s {
+				out = append(out, escaped)
+			}
+		}
+	}
+	return out
+}
+
+// secretStream masks known secret values in a byte stream. redact.Writer holds back at most the longest secret
+// minus one byte, so a secret split across writes, lines or a flush is caught with bounded memory. The values
+// are read on the first write: by then the process, and its own mesh token, exist.
+type secretStream struct {
+	next    io.WriteCloser
+	secrets func() []string
+	w       *redact.Writer
+}
+
+func (s *secretStream) Write(p []byte) (int, error) {
+	if s.w == nil {
+		s.w = redact.NewWriter(s.next, withJSONSpellings(s.secrets()))
+	}
+	return s.w.Write(p)
+}
+
+// Close writes the held-back tail, then closes next.
+func (s *secretStream) Close() error {
+	var err error
+	if s.w != nil {
+		err = s.w.Close()
+	}
+	return errors.Join(err, s.next.Close())
+}
+
+// lineRedactor writes whole lines through redact, so a secret within one line is never split across two
+// writes; Close writes a last line that has no newline. A line longer than maxRedactedLine is written in pieces
+// rather than held, so only secretStream catches a secret across lines or that flush.
 type lineRedactor struct {
 	w      io.Writer
 	redact func(string) string
@@ -216,15 +355,15 @@ func (l *lineRedactor) Write(p []byte) (int, error) {
 		l.buf = l.buf[i+1:]
 	}
 	if len(l.buf) > maxRedactedLine {
-		if err := l.Flush(); err != nil {
+		if err := l.Close(); err != nil {
 			return 0, err
 		}
 	}
 	return len(p), nil
 }
 
-// Flush writes whatever is buffered.
-func (l *lineRedactor) Flush() error {
+// Close writes whatever is buffered; it does not close the underlying writer.
+func (l *lineRedactor) Close() error {
 	if len(l.buf) == 0 {
 		return nil
 	}

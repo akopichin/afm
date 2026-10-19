@@ -133,7 +133,12 @@ type Config struct {
 	// Redact, if set, masks secrets in everything RunHelperAgent writes or reports: the raw stream (*.jsonl),
 	// the action log and OnAction details, stderr and the raw answer. It is called at write time, so a secret
 	// that appears only after the executor was configured (the agent's own mesh token) is masked too.
-	Redact     func(string) string
+	Redact func(string) string
+	// Secrets, if set, returns the secret values Redact masks. Knowing the values (and so the longest one) lets
+	// RunHelperAgent redact stderr as a stream — a secret split across writes or lines is still caught — and
+	// mask their JSON-escaped spellings. It is read when the process starts writing, after its own mesh token
+	// exists.
+	Secrets    func() []string
 	WrapperDir string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
 	Dir        string                       // if set, agent runs with this working directory (project root from flow.root_dir)
 	Debug      bool                         // if true, log the exact agent input (prompt) to debug logs

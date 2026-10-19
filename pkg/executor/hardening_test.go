@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -352,5 +353,150 @@ func TestRunHelperAgent_BackgroundChildHoldingStderrDoesNotHang(t *testing.T) {
 	}
 	if !outcome.ProcessOK {
 		t.Fatalf("outcome = %+v, want a clean finish", outcome)
+	}
+}
+
+// runHelperScript runs body as a helper agent in a fresh directory and returns the outcome and that directory.
+func runHelperScript(t *testing.T, cfg executor.Config, body string) (executor.HelperOutcome, string) {
+	t.Helper()
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Command = scriptPath
+	cfg.IdleTimeout = 10 * time.Second
+	outcome, err := executor.New(cfg).RunHelperAgent(context.Background(), "t1", "reviewer", "review",
+		filepath.Join(dir, "agent.log"), filepath.Join(dir, "result.json.raw"))
+	if err != nil {
+		t.Fatalf("RunHelperAgent: %v", err)
+	}
+	return outcome, dir
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(raw)
+}
+
+// TestRunHelperAgent_RedactsJSONEscapedSecrets: a secret with a quote or a backslash is written JSON-escaped
+// — once in the inner answer, twice in the stream line that carries it. Neither escaped form, nor the decoded
+// value, may survive in agent.jsonl, the raw answer file or RawText. Redact here is a plain text replacer, so
+// only decoding the JSON can find the escaped forms.
+func TestRunHelperAgent_RedactsJSONEscapedSecrets(t *testing.T) {
+	for name, secret := range map[string]string{"quote": `ab"cd-tok`, "backslash": `ab\cd-tok`} {
+		t.Run(name, func(t *testing.T) {
+			answer, err := json.Marshal(map[string]any{"schema_version": 1, "kind": "result", "verdict": "pass", "summary": "saw " + secret})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := executor.Config{Redact: func(s string) string { return strings.ReplaceAll(s, secret, "[REDACTED]") }}
+			outcome, dir := runHelperScript(t, cfg, emitAssistantTextScript(t, string(answer))+"\n"+resultSuccessLine()+"\n")
+
+			escaped, err := json.Marshal(secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			once := string(escaped[1 : len(escaped)-1])
+			twice, err := json.Marshal(once)
+			if err != nil {
+				t.Fatal(err)
+			}
+			forms := []string{secret, once, string(twice[1 : len(twice)-1])}
+			sinks := map[string]string{
+				"RawText":     outcome.RawText,
+				"raw answer":  readFile(t, filepath.Join(dir, "result.json.raw")),
+				"agent.jsonl": readFile(t, filepath.Join(dir, "agent.jsonl")),
+			}
+			for sink, got := range sinks {
+				for _, form := range forms {
+					if strings.Contains(got, form) {
+						t.Errorf("%s carries the secret as %q:\n%s", sink, form, got)
+					}
+				}
+				if !strings.Contains(got, "[REDACTED]") {
+					t.Errorf("%s lacks the redaction marker:\n%s", sink, got)
+				}
+			}
+			if !json.Valid([]byte(outcome.RawText)) {
+				t.Errorf("the redacted answer is no longer JSON: %s", outcome.RawText)
+			}
+		})
+	}
+}
+
+// TestRunHelperAgent_RedactsSecretsAcrossStderrFraming: with Secrets known, stderr is redacted as a stream,
+// not line by line — a secret split across two writes, one split across the old 64 KiB flush point, and a
+// multiline secret never reach agent.stderr.log.
+func TestRunHelperAgent_RedactsSecretsAcrossStderrFraming(t *testing.T) {
+	cases := map[string]struct {
+		secret string
+		stderr string // bash that writes the secret to stderr
+	}{
+		"split across writes": {
+			secret: "split-secret-value",
+			stderr: "printf 'before split-sec' >&2\nsleep 0.2\nprintf 'ret-value after\\n' >&2\n",
+		},
+		"split across the 64 KiB flush": {
+			secret: "flush-secret-value",
+			stderr: "head -c 65530 /dev/zero | tr '\\0' x >&2\nprintf 'flush-sec' >&2\nsleep 0.2\nprintf 'ret-value\\n' >&2\n",
+		},
+		"multiline": {
+			secret: "first-line\nsecond-line",
+			stderr: "printf 'key: first-line\\nsecond-line end\\n' >&2\n",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := executor.Config{Secrets: func() []string { return []string{tc.secret} }}
+			_, dir := runHelperScript(t, cfg, tc.stderr+emitAssistantTextScript(t, helperValidResultJSON)+"\n"+resultSuccessLine()+"\n")
+			got := readFile(t, filepath.Join(dir, "agent.stderr.log"))
+			if strings.Contains(got, tc.secret) {
+				t.Errorf("agent.stderr.log carries the secret:\n%.300s", got[max(0, len(got)-300):])
+			}
+			if !strings.Contains(got, "[REDACTED]") {
+				t.Errorf("agent.stderr.log lacks the redaction marker:\n%.300s", got[max(0, len(got)-300):])
+			}
+		})
+	}
+}
+
+// TestRunHelperAgent_RedactsToolNames: a model-supplied tool name carrying a secret is masked before both
+// agent.log and OnAction.
+func TestRunHelperAgent_RedactsToolNames(t *testing.T) {
+	const secret = "tool-secret-value"
+	toolLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash` + secret + `","input":{"command":"ls"}}]}}`
+	var actions []string
+	cfg := executor.Config{
+		Redact:   func(s string) string { return strings.ReplaceAll(s, secret, "[REDACTED]") },
+		OnAction: func(tool, detail string) { actions = append(actions, tool+" "+detail) },
+	}
+	_, dir := runHelperScript(t, cfg, "cat <<'EOF'\n"+toolLine+"\nEOF\n"+emitAssistantTextScript(t, helperValidResultJSON)+"\n"+resultSuccessLine()+"\n")
+	if len(actions) == 0 {
+		t.Fatal("OnAction was never called")
+	}
+	for _, a := range actions {
+		if strings.Contains(a, secret) {
+			t.Errorf("OnAction got the secret: %s", a)
+		}
+	}
+	if got := readFile(t, filepath.Join(dir, "agent.log")); strings.Contains(got, secret) {
+		t.Errorf("agent.log carries the secret:\n%s", got)
+	}
+}
+
+// TestRunHelperAgent_RedactsEscapedSecretInProse: an answer that is not one JSON value (prose around the
+// envelope) cannot be decoded, so with known values the JSON-escaped spelling of a secret is masked as text.
+func TestRunHelperAgent_RedactsEscapedSecretInProse(t *testing.T) {
+	const value = `ab"cd\ef-tok`
+	answer := `Here is my answer: {"summary":"saw ab\"cd\\ef-tok"}`
+	cfg := executor.Config{Secrets: func() []string { return []string{value} }}
+	outcome, _ := runHelperScript(t, cfg, emitAssistantTextScript(t, answer)+"\n"+resultSuccessLine()+"\n")
+	if strings.Contains(outcome.RawText, `ab\"cd\\ef-tok`) || !strings.Contains(outcome.RawText, "[REDACTED]") {
+		t.Errorf("RawText = %s, want the escaped secret masked", outcome.RawText)
 	}
 }
