@@ -315,13 +315,13 @@ func TestDelegateMirror_RejectedMirrorStillFinishesTheChild(t *testing.T) {
 	waitForTaskStatus(t, store, parentID, assistants.StatusWaitingChildren, 2*time.Second)
 	childID := store.Snapshot().Assistants.ByParent[parentID][0]
 
-	// Fill the parent's inbox to MaxInboxUnread in one operation.
+	// Fill the parent's inbox with turn results (the mirror is one) up to MaxInboxPassive, in one operation.
 	parent := meshHelperParticipantID(parentID)
 	thread := openThread(t, o, "op-fill-thread", 0, meshUserParticipantID, parent)
 	var effects []state.Effect
-	for i := range agentcomm.MaxInboxUnread {
+	for i := range agentcomm.MaxInboxPassive {
 		eff, err := messageSentEffect(SendRequest{ThreadID: thread, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{parent},
-			Kind: agentcomm.MessageKindMessage, Body: "x"}, deriveMeshMessageID(fmt.Sprintf("fill-%d", i)))
+			Kind: agentcomm.MessageKindMessage, Body: "x", AutoResult: true}, deriveMeshMessageID(fmt.Sprintf("fill-%d", i)))
 		if err != nil {
 			t.Fatal(err)
 		}
