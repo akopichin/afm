@@ -163,8 +163,8 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	return effects, nil
 }
 
-// discussionMirrorOfReply is the way back of the discussion mirror: when any member but the human writes in
-// one of a stage's discussion threads (typically answering the human's discussion post), the same message —
+// discussionMirrorOfReply is the way back of the discussion mirror: when any member but the human REPLIES to a
+// message of one of a stage's discussion threads (typically the human's discussion post), the same message —
 // same id, in the same operation — is also recorded as that stage's discussion message, so the Discussion tab
 // shows the answer and not only the question. The stage agent appears as the main agent; anybody the human
 // mentioned appears under their own participant id, with their mesh kind as the role. Anything else is not
@@ -178,14 +178,17 @@ func discussionMirrorOfReply(rs state.RunState, req SendRequest, messageID agent
 		return state.Effect{}, false, nil
 	}
 	stageID, ok := discussionStageOfThread(rs, req.ThreadID)
-	if !ok {
+	if !ok || req.InReplyTo == nil {
+		return state.Effect{}, false, nil
+	}
+	// Only an answer to a message of this very thread is part of the discussion; anything else said there (a
+	// colleague starting a side topic) stays in the Team conversation.
+	if answered, known := rs.Assistants.Mesh.Messages[*req.InReplyTo]; !known || answered.ThreadID != req.ThreadID {
 		return state.Effect{}, false, nil
 	}
 	var parent string
-	if req.InReplyTo != nil {
-		if _, inDiscussion := rs.Assistants.Discussions.Messages[string(*req.InReplyTo)]; inDiscussion {
-			parent = string(*req.InReplyTo)
-		}
+	if _, inDiscussion := rs.Assistants.Discussions.Messages[string(*req.InReplyTo)]; inDiscussion {
+		parent = string(*req.InReplyTo)
 	}
 	author, role := assistants.AuthorMainAgent, string(assistants.AuthorMainAgent)
 	if req.Sender != meshStageParticipantID(stageID) {

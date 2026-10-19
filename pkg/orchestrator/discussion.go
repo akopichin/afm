@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"reflect"
 	"slices"
 
@@ -87,6 +86,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	// Redacted once, before either copy of the post (the discussion message and its mesh mirror) is built.
 	req.Body = o.RedactSecrets(req.Body)
 	req.Mentions = normalizeDiscussionMentions(req.StageID, req.Mentions)
+	req.Interrupt = interruptRequested(req)
 	rs := o.opts.Store.Snapshot()
 	st := o.reg().Stage(req.StageID)
 	if st == nil {
@@ -96,7 +96,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 	eff, err := discussionMessageEffect(req.StageID, messageID, state.DiscussionMessagePayload{
 		AuthorKind: string(req.AuthorKind), AuthorID: req.AuthorID, Role: req.Role,
 		Round: req.Round, ParentMessageID: req.ParentMessageID, ContextVersion: req.ContextVersion,
-		Evidence: req.Evidence, Body: req.Body, Mentions: mentionStrings(req.Mentions),
+		Evidence: req.Evidence, Body: req.Body, Mentions: mentionStrings(req.Mentions), Interrupt: req.Interrupt,
 	})
 	if err != nil {
 		return "", err
@@ -145,10 +145,12 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 		// addressed_message wait on this very thread) is waiting for — resume it the SAME way Send/Publish do
 		// (agentcomm_resume.go), rather than leaving it stranded until something else happens to wake it.
 		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
-		// A mentioned colleague gets the turn it needs to read the post, exactly as a Team message gives it.
-		o.wakeRecipients(runCtx, req.Mentions)
-		if req.Interrupt && req.AuthorKind == assistants.AuthorHuman {
-			o.interruptForDiscussionQuestion(req.StageID, messageID, req.Body)
+		// Every recipient gets the turn it needs to read the post, exactly as a Team message gives it: a stage
+		// parked waiting for one colleague gets a bounded turn to answer the human, a queued mentioned helper
+		// starts.
+		o.wakeRecipients(runCtx, append([]agentcomm.ParticipantID{meshStageParticipantID(req.StageID)}, req.Mentions...))
+		if req.Interrupt {
+			o.interruptForDiscussionQuestion(req.StageID, messageID)
 		}
 	})
 	if err != nil {
@@ -173,7 +175,8 @@ func (o *Orchestrator) replayedDiscussionPost(messageID string, req PostMessageR
 		p.AuthorKind == string(req.AuthorKind) && p.AuthorID == req.AuthorID && p.Role == req.Role && p.Round == req.Round &&
 		p.ParentMessageID == req.ParentMessageID && p.ContextVersion == req.ContextVersion &&
 		slices.Equal(p.Evidence, req.Evidence) && o.sameRedactedText(p.Body, req.Body) &&
-		slices.Equal(p.Mentions, mentionStrings(normalizeDiscussionMentions(req.StageID, req.Mentions)))
+		slices.Equal(p.Mentions, mentionStrings(normalizeDiscussionMentions(req.StageID, req.Mentions))) &&
+		p.Interrupt == interruptRequested(req)
 	if !same {
 		return true, state.OperationIDConflictError(req.OperationID)
 	}
@@ -189,29 +192,6 @@ func mentionStrings(ids []agentcomm.ParticipantID) []string {
 		out[i] = string(id)
 	}
 	return out
-}
-
-// interruptForDiscussionQuestion interrupts the running stage agent so it answers the human's discussion post
-// now instead of at its next inbox read. It reuses Revise's running path (reviseRunning: the durable EvRevise
-// transition, then the interrupt signal; the agent restarts with the stage's notes), but the post is saved
-// as a discussion question, not as feedback: the restarted prompt frames it as a question to answer before
-// going on (prompts.DiscussionQuestionBlock), never as a revision of the plan or the work. Runs only after the
-// post committed, before the API returns; any status other than running — or a script stage, which has no
-// agent to ask — leaves the post queued in the inbox, as without Interrupt.
-func (o *Orchestrator) interruptForDiscussionQuestion(stageID, messageID, body string) {
-	if o.rejectIfReviewPaused() != nil || o.currentStatus(stageID) != state.StatusRunning {
-		return
-	}
-	if st := o.reg().Stage(stageID); st == nil || st.IsScript() {
-		return
-	}
-	question := state.DiscussionQuestion{MessageID: messageID, Body: body}
-	_, _, err := o.reviseRunning(stageID, "discussion question "+messageID, func(stageDir string) error {
-		return state.SaveDiscussionQuestion(stageDir, question)
-	})
-	if err != nil {
-		log.Printf("WARN: discussion %s: interrupt stage %s for question: %v", messageID, stageID, err)
-	}
 }
 
 // DiscussionMessages returns stageID's discussion log in commit order (never re-sorted by timestamp —

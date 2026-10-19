@@ -57,21 +57,6 @@ func (o *Orchestrator) feedbackNoteBlock(stageDir string) string {
 	return "\n\n## User note (added while this stage was running)\n\n" + string(feedbackData)
 }
 
-// restartNoteBlock is the context of an execution agent restarted after Revise: the user's notes on the work
-// (feedback.md) plus any discussion questions that interrupted it. The questions are consumed — each reaches
-// exactly one restarted prompt — and stay unread in the agent's inbox until it answers them.
-func (o *Orchestrator) restartNoteBlock(stageDir string) string {
-	questions, err := state.TakeDiscussionQuestions(stageDir)
-	if err != nil {
-		log.Printf("WARN: %s: read discussion questions: %v", stageDir, err)
-	}
-	asked := make([]prompts.DiscussionQuestion, len(questions))
-	for i, q := range questions {
-		asked[i] = prompts.DiscussionQuestion{MessageID: q.MessageID, Body: q.Body}
-	}
-	return o.feedbackNoteBlock(stageDir) + prompts.DiscussionQuestionBlock(asked)
-}
-
 // phaseScript identifies a script-stage's own log namespace (script.log),
 // distinct from the before/after hook logs.
 const phaseScript = "script"
@@ -333,7 +318,7 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			Plan:            string(planData),
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + note + verifyNote + verifyCmdNote + contract,
+			RetryContext:    retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + verifyCmdNote + contract,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			BrowserRuntime:  o.browserRuntimeFor(s),
@@ -390,7 +375,7 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 			Artifacts:       artCtx,
 			StageDir:        stageDir,
 			Interactive:     s.Interactive,
-			RetryContext:    retryContext + note + verifyNote + contract,
+			RetryContext:    retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + contract,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
 			BrowserRuntime:  o.browserRuntimeFor(s),
@@ -442,7 +427,7 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 			StageDir:        stageDir,
 			GlobalPrompt:    o.opts.GlobalPrompt,
 			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + note + verifyNote + contract,
+			RetryContext:    retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + contract,
 			BrowserRuntime:  o.browserRuntimeFor(s),
 			AgentComm:       o.agentCommBlockFor(s),
 			AgentCommInbox:  o.agentCommInboxBlock(s),
@@ -463,7 +448,7 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	// Возвращаемся в Running. Без этого onAgentCompleted и EvComplete не увидели бы подходящий статус, и
 	// стадия зависла бы в Revising даже после успешного завершения агента.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
-	feedbackNote := o.restartNoteBlock(stageDir)
+	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runImplementationAttempt(ctx, s, stageDir, feedbackNote, "implementation-feedback.log", "impl (feedback restart)")
 }
@@ -474,7 +459,7 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
-	feedbackNote := o.restartNoteBlock(stageDir)
+	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	depPlans := o.collectDependencyPlansNoticing(s)
 	artCtx := o.collectArtifactsNoticing(s, "review (feedback restart)")
@@ -488,7 +473,7 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
-	feedbackNote := o.restartNoteBlock(stageDir)
+	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runAutonomousAttempt(ctx, s, stageDir, feedbackNote, "autonomous-feedback.log", "autonomous (feedback restart)")
 }

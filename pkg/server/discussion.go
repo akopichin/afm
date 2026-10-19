@@ -22,8 +22,12 @@ type DiscussionMessageView struct {
 	Evidence        []string `json:"evidence,omitempty"`
 	Body            string   `json:"body,omitempty"`
 	// Mentions — mesh participant ids the post was also addressed to with `@`.
-	Mentions  []string  `json:"mentions,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Mentions []string `json:"mentions,omitempty"`
+	// Interrupt — the human asked the running stage agent to answer this post right away.
+	Interrupt bool `json:"interrupt,omitempty"`
+	// Unanswered — a human post of a finished stage that nobody replied to.
+	Unanswered bool      `json:"unanswered,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // DiscussionPost is one human post to a stage's discussion — the body of POST /api/stages/{id}/discussion.

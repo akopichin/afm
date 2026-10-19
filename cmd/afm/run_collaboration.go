@@ -348,11 +348,13 @@ func (d collaborationDiscussion) Messages(stageID string, cursor uint64, limit i
 		end = len(all)
 	}
 	out := make([]server.DiscussionMessageView, 0, end-start)
+	unanswered := d.orch.UnansweredDiscussionPosts(stageID)
 	for _, m := range all[start:end] {
 		out = append(out, server.DiscussionMessageView{
 			ID: m.ID, AuthorKind: string(m.Author.Kind), AuthorID: m.Author.ID, Role: m.Role,
 			Executor: m.Executor, Round: m.Round, ParentMessageID: m.ParentMessageID,
-			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, Mentions: m.Mentions, CreatedAt: m.CreatedAt,
+			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, Mentions: m.Mentions,
+			Interrupt: m.Interrupt, Unanswered: unanswered[m.ID], CreatedAt: m.CreatedAt,
 		})
 	}
 	return out, uint64(end), end < len(all), nil

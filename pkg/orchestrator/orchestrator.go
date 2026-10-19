@@ -631,6 +631,9 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		if bus.IsTerminal(to) && o.stageHasUnreadMessages(stageID) {
 			o.releaseUnreadAfterTransition(stageID)
 		}
+		if bus.IsTerminal(to) {
+			o.noticeUnansweredHumanPosts(stageID)
+		}
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
 		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)

@@ -26,6 +26,9 @@ type DiscussionMessagePayload struct {
 	// Mentions — the mesh participants the human pulled into this post with `@`, besides the stage agent.
 	// Absent in journals written before mentions existed.
 	Mentions []string `json:"mentions,omitempty"`
+	// Interrupt — the human asked the running stage agent to stop its turn and answer this post. Recorded in
+	// the same operation as the post, so the request survives a crash before the agent was interrupted.
+	Interrupt bool `json:"interrupt,omitempty"`
 }
 
 // discussionMessagesForStage returns stageID's discussion messages in commit order (as.Discussions.ByStage —
@@ -83,6 +86,7 @@ func applyDiscussionMessage(as *AssistantsState, c *Control, dryRun bool) error 
 		Body:            p.Body,
 		Result:          p.Result,
 		Mentions:        p.Mentions,
+		Interrupt:       p.Interrupt,
 		CreatedAt:       c.Time,
 	}
 	as.Discussions.Messages[id] = &msg
