@@ -43,7 +43,11 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
       <div className="team-conversation-message-content">
         <div className="team-conversation-message-header">
           <span className="team-conversation-message-sender">{author}</span>
-          {sender?.command !== undefined && sender.command !== '' && <span className="conversation-command-chip">{sender.command}</span>}
+          {sender?.command !== undefined && sender.command !== '' && (
+            <span className="conversation-command-chip" title={`Command: ${sender.command}`}>
+              {sender.command}
+            </span>
+          )}
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
           <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
         </div>

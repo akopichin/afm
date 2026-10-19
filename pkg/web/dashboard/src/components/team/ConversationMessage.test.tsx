@@ -23,7 +23,7 @@ describe('ConversationMessage', () => {
   test('shows the author, the command it runs, the recipients and the quoted message', () => {
     renderMessage()
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()
-    expect(screen.getByText('codex')).toBeInTheDocument()
+    expect(screen.getByText('codex')).toHaveAttribute('title', 'Command: codex') // a long one is clipped; the tooltip keeps it whole
     expect(screen.getByText('→ You')).toBeInTheDocument()
     expect(screen.getByText('Replying to You')).toBeInTheDocument()
     expect(screen.queryByRole('button')).toBeNull() // Team: no reply link, the quote is not a link
