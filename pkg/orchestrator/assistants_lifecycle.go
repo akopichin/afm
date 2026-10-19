@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -421,7 +422,9 @@ func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.Ta
 
 // turnYielded reports whether a helper turn that ran to its end yielded into a mesh wait instead of answering:
 // a wait of waiter is still pending, or the turn registered a new wait (one not in waitsBefore) and left no
-// usable answer — the awaited reply arrived before the turn could park, so that wait is already ready.
+// final text — the awaited reply arrived before the turn could park, so that wait is already ready. A
+// non-empty answer is never taken for a yield on the strength of a ready wait: if it does not decode, it is a
+// protocol error, or the agent would be rerun on the same malformed output again and again.
 func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool, rawText string) bool {
 	if o.hasOpenMeshWaitFor(waiter) {
 		return true
@@ -430,11 +433,7 @@ func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore m
 	for id := range o.meshWaitIDsOf(waiter) {
 		registered = registered || !waitsBefore[id]
 	}
-	if !registered {
-		return false
-	}
-	_, _, err := assistants.DecodeResultWithRepair([]byte(rawText))
-	return err != nil
+	return registered && strings.TrimSpace(rawText) == ""
 }
 
 // redactResult masks secrets in every free-text field of a helper's result before it is written to result.json
