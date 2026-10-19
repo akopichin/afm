@@ -82,4 +82,43 @@ describe('StagePeoplePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close people' }))
     expect(onClose).toHaveBeenCalledTimes(2)
   })
+
+  test('the drawer takes the focus when opened, keeps Tab inside, and gives it back when closed', () => {
+    const props = {
+      stageId: 'impl', participants, stages: [stage('impl', 'running')], onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn(),
+      profiles: [{ id: 'qa', title: 'QA', command: 'claude', available: true, unavailableReason: '' }],
+    }
+    const { rerender } = render(
+      <>
+        <button type="button">Show people</button>
+        <StagePeoplePanel {...props} open={false} />
+      </>,
+    )
+    const opener = screen.getByRole('button', { name: 'Show people' })
+    opener.focus()
+    rerender(
+      <>
+        <button type="button">Show people</button>
+        <StagePeoplePanel {...props} open />
+      </>,
+    )
+    const drawer = document.getElementById('stage-people') as HTMLElement
+    expect(drawer.contains(document.activeElement)).toBe(true)
+
+    // Tab from the last control wraps to the first one; Shift+Tab from the first goes to the last.
+    const focusables = [...drawer.querySelectorAll<HTMLElement>('button:not([disabled])')]
+    focusables.at(-1)?.focus()
+    fireEvent.keyDown(drawer, { key: 'Tab' })
+    expect(document.activeElement).toBe(focusables[0])
+    fireEvent.keyDown(drawer, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(focusables.at(-1))
+
+    rerender(
+      <>
+        <button type="button">Show people</button>
+        <StagePeoplePanel {...props} open={false} />
+      </>,
+    )
+    expect(document.activeElement).toBe(opener)
+  })
 })
