@@ -172,7 +172,7 @@ type Config struct {
 
 // ErrUserInterrupted signals that the agent process was stopped because the user requested an interrupt —
 // not a real failure.
-var ErrUserInterrupted = errors.New("user interrupted")
+var ErrUserInterrupted = progress.ErrUserInterrupted
 
 // ErrIdleTimeout — сигнальная ошибка простоя.
 var ErrIdleTimeout = errors.New("idle timeout")

@@ -171,6 +171,8 @@ func TestLoggerEndInterrupted(t *testing.T) {
 	}
 	lg.LogStart("implementation", "checkout")
 	lg.LogEnd(fmt.Errorf("run agent: %w", context.Canceled))
+	lg.LogStart("implementation", "checkout")
+	lg.LogEnd(fmt.Errorf("agent: %w", progress.ErrUserInterrupted))
 	lg.Close()
 
 	data, err := os.ReadFile(path)
