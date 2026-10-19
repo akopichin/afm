@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/akopichin/afm/pkg/agentcomm"
 )
 
 // StageStatus represents the lifecycle state of a single stage.
@@ -83,7 +85,17 @@ type StageState struct {
 	// PausedFrom хранит исходный статус паузы и навсегда остаётся маркером пройденного pause-цикла для
 	// auto_run:false.
 	PausedFrom StageStatus `json:"paused_from,omitempty"`
+	// Epoch counts the takeovers of the stage from outside its running process — pause, continue, revise
+	// (stageTakeoverEvents). A process remembers the epoch it started in; a transition it fences with that value
+	// (Transition.ExpectEpoch) is refused once someone else took the stage over. Derived on replay.
+	Epoch uint64 `json:"epoch,omitempty"`
+	// PeerWaits — while parked in awaiting_peer: the waits its continuation depends on (Transition.PeerWaits).
+	PeerWaits []agentcomm.WaitID `json:"peer_waits,omitempty"`
 }
+
+// stageTakeoverEvents are the FSM events (pkg/orchestrator/bus) by which someone other than the stage's running
+// process takes the stage over or hands it to a new process; each one starts a new StageState.Epoch.
+var stageTakeoverEvents = map[string]bool{"pause": true, "continue": true, "revise": true}
 
 // RunState is the snapshot cache; events.jsonl is authoritative.
 type RunState struct {
@@ -147,11 +159,12 @@ func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
 
 // SetStageStatusAt updates a stage status, stamping it with the given time t instead of time.Now.
 func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
-	pausedFrom := rs.Stages[stageID].PausedFrom
+	st := rs.Stages[stageID]
 	if status == StatusPaused {
-		pausedFrom = rs.Stages[stageID].Status // статус ДО этого перехода
+		st.PausedFrom = st.Status // статус ДО этого перехода
 	}
-	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t, PausedFrom: pausedFrom}
+	st.Status, st.UpdatedAt, st.PeerWaits = status, t, nil
+	rs.Stages[stageID] = st
 }
 
 // isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое состояние на весь флоу.
@@ -264,6 +277,12 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 func (rs *RunState) applyTransition(t *Transition) {
 	accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
 	rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+	st := rs.Stages[t.StageID]
+	if stageTakeoverEvents[t.Event] {
+		st.Epoch++
+	}
+	st.PeerWaits = slices.Clone(t.PeerWaits)
+	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()
 }
 

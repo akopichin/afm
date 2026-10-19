@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -198,6 +199,27 @@ func jittered(d time.Duration, frac float64) time.Duration {
 	return d - cut
 }
 
+// parkForPeers parks a stage whose turn yielded on waits (episode) in awaiting_peer and, if an answer already
+// arrived, continues it at once. The park is fenced with the execution epoch the turn started in: if Pause,
+// Continue or Revise took the stage over while the process was exiting, this exit is stale and moves nothing —
+// a Revise is then carried out through onUserInterrupted, the path a revised turn takes.
+func (o *Orchestrator) parkForPeers(ctx context.Context, stageID, phase string, epoch uint64, episode []agentcomm.WaitID, onUserInterrupted func()) {
+	o.prePeerPhase.Store(stageID, phase)
+	// prePeerPhase is in-memory only (sync.Map) — a restart loses it exactly like preAskPhase. Persist the
+	// phase durably too, so recoverMeshWaits can resume into the right phase after a crash, mirroring
+	// detectInterruptedPhase's role for awaiting_user_input but without depending on a session file that
+	// non-interactive stages never create.
+	saveMeshPeerWaitPhase(o.stageDir(stageID), phase)
+	if _, ok := o.Trigger(stageID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase, ExpectEpoch: &epoch, PeerWaits: episode}, ""); !ok {
+		o.prePeerPhase.CompareAndDelete(stageID, phase)
+		if o.currentStatus(stageID) == state.StatusRevising {
+			onUserInterrupted()
+		}
+		return
+	}
+	o.continueParkedStage(ctx, stageID)
+}
+
 // runWithRetry wraps an agent function with automatic retry on rate limit errors. After exhausting all
 // retries: publishes EventRetryExhausted.
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
@@ -257,6 +279,8 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			return // a pause landed in the shouldRun->register gap; do not start the subprocess
 		}
 
+		// The turn's ownership and its waits as it starts: the exit decides on both (parkForPeers).
+		epoch := o.opts.Store.Snapshot().Stages[s.ID].Epoch
 		waitsBefore := o.meshWaitStatusesOf(meshStageParticipantID(s.ID))
 		err := agentFn(retryCtx)
 		if err == nil {
@@ -285,19 +309,11 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// work machinery below. This is NOT a false completion, NOT an IncompleteWorkError retry, and NOT
 			// a user question: the lease this invocation held is released simply by this function returning,
 			// exactly like the awaiting_user_input branch above.
-			// A wait the turn yielded on may also have been answered before the process exited: the live resume
-			// found the stage still running and did nothing, so this exit is the only place left to continue it.
-			if o.hasOpenMeshWait(s.ID) || o.turnWaitAnswered(meshStageParticipantID(s.ID), waitsBefore) {
+			// The turn yielded when it ended for waits — still pending, or already answered or ended while the
+			// process was exiting (the live resume then found the stage running and did nothing).
+			if episode := o.turnEpisode(meshStageParticipantID(s.ID), waitsBefore); len(episode) > 0 {
 				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingPeer {
-					o.prePeerPhase.Store(s.ID, phase)
-					// prePeerPhase is in-memory only (sync.Map) — a restart loses it exactly like
-					// preAskPhase. Persist the phase durably too, so recoverMeshWaits (orchestrator.go) can
-					// resume into the right phase after a crash, mirroring detectInterruptedPhase's role for
-					// awaiting_user_input but without depending on a session file that non-interactive stages
-					// never create.
-					saveMeshPeerWaitPhase(o.stageDir(s.ID), phase)
-					o.Trigger(s.ID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase}, "")
-					o.resumeParkedStage(ctx, s.ID, waitsBefore)
+					o.parkForPeers(ctx, s.ID, phase, epoch, episode, onUserInterrupted)
 					return
 				}
 				if completionCheck == nil || completionCheck() == nil {

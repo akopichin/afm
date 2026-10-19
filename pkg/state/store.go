@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/progress"
 )
@@ -24,6 +25,13 @@ type Transition struct {
 	To      StageStatus `json:"to"`
 	Event   string      `json:"event"`
 	Reason  string      `json:"reason,omitempty"`
+	// PeerWaits — on a park in awaiting_peer: the waits this park's continuation depends on (the waits the
+	// exiting turn yielded on). Projected onto StageState.PeerWaits until the stage's next transition. Absent
+	// in journals written before it, and on a park for unread messages.
+	PeerWaits []agentcomm.WaitID `json:"peer_waits,omitempty"`
+	// ExpectEpoch, when set, fences the transition: it commits only while the stage's StageState.Epoch still
+	// has this value — the process that decided it still owns the stage. Never journaled.
+	ExpectEpoch *uint64 `json:"-"`
 }
 
 // ErrRunLocked означает, что run-директория уже открыта другим процессом afm. flock освобождается ОС при
@@ -489,10 +497,14 @@ func (s *Store) Apply(t *Transition) error {
 		return ErrStoreClosed
 	}
 
-	current := s.snapshot.Stages[t.StageID].Status
-	if current != t.From {
+	current := s.snapshot.Stages[t.StageID]
+	if current.Status != t.From {
 		return fmt.Errorf("%w: stage %q is in %q, expected %q",
-			ErrConcurrentChange, t.StageID, current, t.From)
+			ErrConcurrentChange, t.StageID, current.Status, t.From)
+	}
+	if t.ExpectEpoch != nil && current.Epoch != *t.ExpectEpoch {
+		return fmt.Errorf("%w: stage %q was taken over (execution epoch %d, expected %d)",
+			ErrConcurrentChange, t.StageID, current.Epoch, *t.ExpectEpoch)
 	}
 
 	s.lastSeq++

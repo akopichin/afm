@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -160,11 +162,109 @@ func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (ass
 // T5.2 means) — the only paths are "resume it" or "a concurrent resume already won" (o.Trigger's CAS
 // decides, never a mutex, so two replies — or two counter-questions, or one of each — arriving simultaneously
 // still make exactly one continuation).
+//
+// Whether — and with which event — the stage continues is peerContinuation's decision, the same one the exit
+// path (retry.go) and recovery (recoverMeshWaits) make; evType is only the caller's reason, used for a park
+// that recorded no waits.
 func (o *Orchestrator) resumeAwaitingPeerStage(ctx context.Context, stageID string, evType bus.EventType) {
 	if o.currentStatus(stageID) != state.StatusAwaitingPeer {
 		return
 	}
-	o.publishCritical(ctx, bus.Event{Type: evType, StageID: stageID})
+	if ev, ok := peerContinuation(o.opts.Store.Snapshot(), stageID, evType); ok {
+		o.publishCritical(ctx, bus.Event{Type: ev, StageID: stageID})
+	}
+}
+
+// peerContinuation is THE decision whether a stage parked in awaiting_peer continues now, and how: shared by
+// the exit path (a park whose answer already arrived), the live paths (a reply, a counter-question, a wait that
+// ended) and recovery after a restart, so they never disagree.
+//
+// A park made by retry.go records its episode — the waits the exiting turn yielded on (StageState.PeerWaits).
+// The stage continues when any of them is answered (EventPeerReplied), else when any of them ended without an
+// answer (EventPeerWaitEnded), else when a message that should wake it is waiting (EventPeerQuestion: a
+// counter-question while it still waits). Waits outside the episode — older, already handled ones — never
+// count.
+//
+// A park without recorded waits — one for unread messages (agentcomm_unread.go), or one journaled before
+// episodes existed — falls back to the earlier rules: a live caller's own reason (hint) decides; recovery
+// (hint "") resumes on a waking message while a wait is still pending, else on any ready or ended wait of the
+// stage, else on a waking message.
+func peerContinuation(rs state.RunState, stageID string, hint bus.EventType) (bus.EventType, bool) {
+	waiter := meshStageParticipantID(stageID)
+	episode := rs.Stages[stageID].PeerWaits
+	waking := rs.Assistants.Mesh.HasWakingUnreadFor(waiter)
+	if len(episode) == 0 {
+		if hint != "" {
+			return hint, true
+		}
+		return legacyPeerContinuation(rs, waiter, waking)
+	}
+	ready, ended := false, false
+	for _, id := range episode {
+		if w := rs.Assistants.Mesh.Waits[id]; w != nil {
+			ready = ready || w.Status == agentcomm.WaitReady
+			ended = ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
+		}
+	}
+	switch {
+	case ready:
+		return bus.EventPeerReplied, true
+	case ended:
+		return bus.EventPeerWaitEnded, true
+	case waking:
+		return bus.EventPeerQuestion, true
+	default:
+		return "", false
+	}
+}
+
+// legacyPeerContinuation is recovery's rule for a park without recorded waits. A wait still pending is the one
+// the stage waits for: only a waking message resumes it. Otherwise any ready or ended wait of the stage counts
+// — without an episode an older episode's ready wait cannot be told apart.
+func legacyPeerContinuation(rs state.RunState, waiter agentcomm.ParticipantID, waking bool) (bus.EventType, bool) {
+	pending, ready, ended := false, false, false
+	for _, w := range rs.Assistants.Mesh.Waits {
+		if w.Waiter != waiter {
+			continue
+		}
+		pending = pending || w.Status == agentcomm.WaitPending
+		ready = ready || w.Status == agentcomm.WaitReady
+		ended = ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
+	}
+	switch {
+	case pending:
+		return bus.EventPeerQuestion, waking
+	case ready:
+		return bus.EventPeerReplied, true
+	case ended:
+		return bus.EventPeerWaitEnded, true
+	case waking:
+		return bus.EventPeerQuestion, true
+	default:
+		return "", false
+	}
+}
+
+// continueParkedStage is the exit path's live resume, right after its own park: an answer that arrived while the
+// process was still exiting found the stage running, and nobody else will resume it now.
+func (o *Orchestrator) continueParkedStage(ctx context.Context, stageID string) {
+	o.resumeAwaitingPeerStage(ctx, stageID, "")
+}
+
+// dispatchPeerContinuation runs the handler of a continuation event directly — recovery's path, before the
+// event loop drains the critical bus.
+func (o *Orchestrator) dispatchPeerContinuation(ctx context.Context, stageID string, ev bus.EventType) error {
+	e := bus.Event{StageID: stageID}
+	switch ev {
+	case bus.EventPeerReplied:
+		return o.onPeerReplied(ctx, e)
+	case bus.EventPeerWaitEnded:
+		return o.onPeerWaitEnded(ctx, e)
+	case bus.EventPeerQuestion:
+		return o.onPeerQuestion(ctx, e)
+	default:
+		return fmt.Errorf("not a peer continuation event: %q", ev)
+	}
 }
 
 // resumeAfterPeerReply is resumeAwaitingPeerStage's T5.3 entry point: stageID's OWN wait just became ready.
@@ -426,44 +526,12 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 		if o.currentStatus(s.ID) != state.StatusAwaitingPeer {
 			continue
 		}
-		waiter := meshStageParticipantID(s.ID)
-		if o.hasOpenMeshWait(s.ID) {
-			// The ORIGINAL wait has not resolved — but a colleague may have asked a counter-question while the
-			// process was down; recover that as a bounded T5.5 turn instead of leaving it stranded until the
-			// original wait happens to resolve on its own.
-			if o.hasWakingUnread(waiter) {
-				if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
-					log.Printf("WARN: mesh: recover awaiting_peer counter-question for stage %q: %v", s.ID, err)
-				}
-			}
+		ev, ok := peerContinuation(rs, s.ID, "")
+		if !ok {
 			continue
 		}
-		ready, ended := false, false
-		for _, w := range rs.Assistants.Mesh.Waits {
-			if w.Waiter != waiter {
-				continue
-			}
-			ready = ready || w.Status == agentcomm.WaitReady
-			ended = ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
-		}
-		switch {
-		case ready:
-			if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
-				log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
-			}
-		case ended:
-			// The wait was cancelled or expired (e.g. its colleague finished without reading the question) and
-			// the process stopped before the waiter was woken.
-			if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: s.ID}); err != nil {
-				log.Printf("WARN: mesh: recover awaiting_peer stage %q after its wait ended: %v", s.ID, err)
-			}
-		case o.hasWakingUnread(waiter):
-			// Parked for unread messages with no wait at all (agentcomm_unread.go), and the process stopped
-			// before the extra turn started.
-			if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
-				log.Printf("WARN: mesh: recover awaiting_peer stage %q for unread messages: %v", s.ID, err)
-			}
-		default:
+		if err := o.dispatchPeerContinuation(ctx, s.ID, ev); err != nil {
+			log.Printf("WARN: mesh: recover awaiting_peer stage %q (%s): %v", s.ID, ev, err)
 		}
 	}
 }
@@ -480,32 +548,20 @@ func (o *Orchestrator) meshWaitStatusesOf(waiter agentcomm.ParticipantID) map[ag
 	return out
 }
 
-// turnWaitAnswered reports whether a wait the turn was ended for became ready while the process was still
-// running: one already pending when the turn started (an earlier yield, as in a counter-question turn), or one
-// registered during the turn that `afm agent wait` reported as a yield. A wait ready at registration is not
-// one — the agent read its answer in the same turn — and neither is an older wait that was already ready.
-func (o *Orchestrator) turnWaitAnswered(waiter agentcomm.ParticipantID, before map[agentcomm.WaitID]agentcomm.WaitStatus) bool {
+// turnEpisode returns the waits the exiting turn ended for — the episode its park records and its continuation
+// depends on (peerContinuation): every wait of waiter that is still pending, was pending when the turn started
+// (an earlier yield, as in a counter-question turn), or was registered during the turn with `afm agent wait`
+// answering "yield" — whatever has become of it since. A wait ready at registration is not one (the agent read
+// its answer in the same turn), and neither is an older wait already resolved before the turn. Sorted.
+func (o *Orchestrator) turnEpisode(waiter agentcomm.ParticipantID, before map[agentcomm.WaitID]agentcomm.WaitStatus) []agentcomm.WaitID {
+	var episode []agentcomm.WaitID
 	for id, status := range o.meshWaitStatusesOf(waiter) {
-		if status != agentcomm.WaitReady {
-			continue
-		}
 		prev, existed := before[id]
 		_, yielded := o.yieldedWaits.Load(id)
-		if prev == agentcomm.WaitPending || (!existed && yielded) {
-			return true
+		if status == agentcomm.WaitPending || prev == agentcomm.WaitPending || (!existed && yielded) {
+			episode = append(episode, id)
 		}
 	}
-	return false
-}
-
-// resumeParkedStage closes the window between a stage's exit and its park in awaiting_peer: a reply (or a
-// counter-question) that landed in between found the stage running, and nobody else will resume it now. It
-// goes through the same CAS-protected resumes Send uses, so a resume that already won makes these no-ops.
-func (o *Orchestrator) resumeParkedStage(ctx context.Context, stageID string, before map[agentcomm.WaitID]agentcomm.WaitStatus) {
-	participant := meshStageParticipantID(stageID)
-	if o.turnWaitAnswered(participant, before) {
-		o.resumeAfterPeerReply(ctx, stageID)
-		return
-	}
-	o.maybeResumeAwaitingPeerQuestion(ctx, participant)
+	slices.Sort(episode)
+	return episode
 }

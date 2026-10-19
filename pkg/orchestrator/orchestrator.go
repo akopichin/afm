@@ -1040,16 +1040,24 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 func (o *Orchestrator) resumeStageForPhase(ctx context.Context, stage flow.Stage, phase string, ev bus.FSMEvent) error {
 	switch phase {
 	case phasePlanning:
-		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phasePlanning}, "")
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phasePlanning}, ""); !ok {
+			return nil // another resume won the transition — or the stage left the status: nothing to spawn
+		}
 		o.spawnKind(ctx, stage, kindPlanning, o.runPlanningAgent)
 	case phaseImplementation:
-		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseImplementation}, "")
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseImplementation}, ""); !ok {
+			return nil // another resume won the transition — or the stage left the status: nothing to spawn
+		}
 		o.spawnKind(ctx, stage, kindImplementation, o.runImplementationAgent)
 	case phaseReview:
-		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseReview}, "")
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseReview}, ""); !ok {
+			return nil // another resume won the transition — or the stage left the status: nothing to spawn
+		}
 		o.spawnKind(ctx, stage, kindReview, o.runReviewAgent)
 	case phaseAutonomous:
-		o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseAutonomous}, "")
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseAutonomous}, ""); !ok {
+			return nil // another resume won the transition — or the stage left the status: nothing to spawn
+		}
 		o.spawnKind(ctx, stage, kindAutonomous, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)

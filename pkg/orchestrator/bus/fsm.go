@@ -3,6 +3,7 @@ package bus
 import (
 	"errors"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -76,6 +77,11 @@ type GuardCtx struct {
 	// the write one atomic step, so e.g. a Revise decided for a running agent never moves a stage that a
 	// concurrent Pause has just paused.
 	ExpectFrom state.StageStatus
+	// ExpectEpoch, when set, fences the transition to the stage's execution epoch (state.Transition.ExpectEpoch):
+	// a process that exits after someone else took the stage over (Pause, Continue, Revise) cannot move it.
+	ExpectEpoch *uint64
+	// PeerWaits is recorded on an EvAwaitPeer park: the waits its continuation depends on.
+	PeerWaits []agentcomm.WaitID
 }
 
 type Rule struct {
@@ -188,6 +194,9 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		To:      to,
 		Event:   string(ev),
 		Reason:  reason,
+
+		PeerWaits:   ctx.PeerWaits,
+		ExpectEpoch: ctx.ExpectEpoch,
 	}
 	if err := f.store.Apply(tr); err != nil {
 		if errors.Is(err, state.ErrConcurrentChange) {
