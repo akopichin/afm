@@ -402,6 +402,12 @@ new turn when the reply arrives, even if it arrives while the agent process is
 still exiting. A stage agent works the same way: when a wait its turn yielded
 on is answered, or ends without an answer, before its process exits, the stage
 continues in a new turn instead of finishing or being retried as incomplete.
+An answer the agent already read in that turn (with `afm agent inbox`) is not a
+reason for another turn. Every turn's prompt lists the requests the stage agent
+sent in earlier turns with their answers and whether a wait for one is still
+open, and a continuation that is not a resumed agent session also gets the
+earlier turns' actions, so the agent goes on where it stopped instead of asking
+its colleagues again.
 The park remembers which waits the turn ended for, so after a restart the stage
 continues on the same rule, also when one of them was answered by a turn
 result and another is still open. If you pause, continue or revise the stage

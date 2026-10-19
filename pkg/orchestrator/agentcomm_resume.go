@@ -308,6 +308,11 @@ func (o *Orchestrator) resumeAwaitingPeerPhase(ctx context.Context, ev bus.Event
 	if stage == nil {
 		return nil
 	}
+	// A continuation that does not resume the agent's session is a fresh one: like a Continue, it gets the
+	// earlier turns' actions, so it goes on from where they stopped instead of starting its task over.
+	if !willResume(*stage, o.stageDir(stage.ID), phase) {
+		o.armResumeContext(stage.ID)
+	}
 	return o.resumeStageForPhase(ctx, *stage, phase, fsmEv, ev.ParkSeq)
 }
 
@@ -561,20 +566,43 @@ func (o *Orchestrator) meshWaitStatusesOf(waiter agentcomm.ParticipantID) map[ag
 // depends on (peerContinuation): every wait of waiter that is still pending, was pending when the turn started
 // (an earlier yield, as in a counter-question turn), or was registered during the turn with `afm agent wait`
 // answering "yield" — whatever has become of it since. A wait ready at registration is not one (the agent read
-// its answer in the same turn), and neither is an older wait already resolved before the turn. Sorted.
+// its answer in the same turn), and neither is an older wait already resolved before the turn, nor one whose
+// answer the turn has already read (answerRead). Sorted.
 func (o *Orchestrator) turnEpisode(waiter agentcomm.ParticipantID, before map[agentcomm.WaitID]agentcomm.WaitStatus) []agentcomm.WaitID {
+	mesh := o.opts.Store.Snapshot().Assistants.Mesh
 	var episode []agentcomm.WaitID
-	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+	for id, w := range mesh.Waits {
 		if w.Waiter != waiter {
 			continue
 		}
 		prev, existed := before[id]
-		if w.Status == agentcomm.WaitPending || prev == agentcomm.WaitPending || (!existed && w.Yielded) {
+		if w.Status == agentcomm.WaitPending || (prev == agentcomm.WaitPending || (!existed && w.Yielded)) && !answerRead(mesh, w) {
 			episode = append(episode, id)
 		}
 	}
 	slices.Sort(episode)
 	return episode
+}
+
+// answerRead reports whether w is a satisfied reply_to wait whose every answer its waiter has already been handed
+// (through `afm agent inbox` during the turn): the turn has seen what it waited for, and resuming the stage for it
+// would only start a turn with nothing new.
+func answerRead(mesh state.MeshState, w *state.MeshWait) bool {
+	if w.Status != agentcomm.WaitReady || w.Condition.Kind != agentcomm.WaitOnReplyTo {
+		return false
+	}
+	answers := 0
+	for _, id := range mesh.Inbox[w.Waiter] {
+		m := mesh.Messages[id]
+		if m == nil || m.InReplyTo == nil || *m.InReplyTo != w.Condition.MessageID {
+			continue
+		}
+		if mesh.Receipts[id][w.Waiter] == agentcomm.DeliveryAccepted {
+			return false
+		}
+		answers++
+	}
+	return answers > 0
 }
 
 // interruptedTurnEpisode is turnEpisode for a turn whose process is gone without an exit (a crash, or a Pause

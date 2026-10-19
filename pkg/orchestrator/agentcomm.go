@@ -227,10 +227,17 @@ func deriveMeshWaitID(operationID string) agentcomm.WaitID {
 // agentCommInboxBlock renders stage s's <inbox> block (T4.4) — the prompt-text half of
 // agentCommInboxFor; runner_factory.go's agentCommOnDeliveredForStage wires the matching OnDelivered
 // callback into the SAME stage's executor.Config.
+//
+// The stage's <your_requests> block follows it: a continuation turn of a non-interactive stage is a fresh agent
+// session, and without that record of what it already asked it starts asking all over again.
 func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
-	block, _ := o.agentCommInboxFor(meshStageParticipantID(s.ID))
+	participant := meshStageParticipantID(s.ID)
+	block, _ := o.agentCommInboxFor(participant)
 	if note := o.unreadTurnNote(s.ID); block != "" {
 		block += note
+	}
+	if o.opts.Store != nil {
+		block += agentCommRequestsBlock(o.opts.Store.Snapshot().Assistants.Mesh, participant)
 	}
 	return block
 }

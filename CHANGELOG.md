@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: a stage continued after a colleague's reply no longer starts over
+
+A stage agent resumed by a reviewer's answer used to begin its task again in a
+fresh session and ask the same colleagues once more, round after round. Every
+turn's prompt now lists the requests the stage sent earlier with their answers
+and the waits still open, a continuation without a resumed session also gets
+the earlier turns' actions, and an answer the agent already read during its
+turn no longer earns the stage another turn. The `agent-team-review` example
+checks where the review stands at the start of each turn.
+
 ### Improvement: the stage conversation lives in the Feed
 
 With collaboration on, the **Discussion** tab is gone: your conversation with a

@@ -258,6 +258,8 @@ var tagReplacer = strings.NewReplacer(
 	"<project_memory>", "<\u200bproject_memory>",
 	"</inbox>", "</\u200binbox>",
 	"<inbox>", "<\u200binbox>",
+	"</your_requests>", "</\u200byour_requests>",
+	"<your_requests>", "<\u200byour_requests>",
 	"</agent_communication>", "</\u200bagent_communication>",
 	"<agent_communication>", "<\u200bagent_communication>",
 )

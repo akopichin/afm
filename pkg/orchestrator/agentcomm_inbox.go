@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -85,6 +86,68 @@ func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinish
 
 	o.renderedInbox.Store(participant, rendered)
 	return prompts.AgentCommInboxBlock(msgs, more), rendered, func() { o.markInboxDelivered(participant, rendered) }
+}
+
+// Bounds of the <your_requests> block, which repeats on every turn: the newest requests, the start of each request
+// and of each answer.
+const (
+	maxListedRequests   = 20
+	requestExcerptBytes = 300
+	answerExcerptBytes  = 2 << 10
+)
+
+// agentCommRequestsBlock renders participant's <your_requests> block (prompts.AgentCommRequestsBlock): the
+// requests it sent — messages of kind request, or ones it registered a reply_to wait on — the newest
+// maxListedRequests, each with the replies to it and whether a wait for one is still open.
+func agentCommRequestsBlock(mesh state.MeshState, participant agentcomm.ParticipantID) string {
+	// awaited: the messages participant waits for a reply to — true while one such wait is still open.
+	awaited := map[agentcomm.MessageID]bool{}
+	for _, w := range mesh.Waits {
+		if w.Waiter == participant && w.Condition.Kind == agentcomm.WaitOnReplyTo {
+			awaited[w.Condition.MessageID] = awaited[w.Condition.MessageID] || w.Status == agentcomm.WaitPending
+		}
+	}
+	answers := map[agentcomm.MessageID][]*agentcomm.Message{}
+	var sent []*agentcomm.Message
+	for _, m := range mesh.Messages {
+		if m.InReplyTo != nil && m.Sender != participant {
+			answers[*m.InReplyTo] = append(answers[*m.InReplyTo], m)
+		}
+		if _, waited := awaited[m.ID]; m.Sender == participant && (m.Kind == agentcomm.MessageKindRequest || waited) {
+			sent = append(sent, m)
+		}
+	}
+	bySeq := func(a, b *agentcomm.Message) int { return cmp.Compare(a.Seq, b.Seq) }
+	slices.SortFunc(sent, bySeq)
+	if len(sent) > maxListedRequests {
+		sent = sent[len(sent)-maxListedRequests:]
+	}
+	requests := make([]prompts.AgentCommRequest, 0, len(sent))
+	for _, m := range sent {
+		r := prompts.AgentCommRequest{
+			MessageID: string(m.ID), Body: truncateText(m.Body, requestExcerptBytes), Waiting: awaited[m.ID],
+		}
+		for _, to := range m.Recipients {
+			r.To = append(r.To, participantLabel(mesh, to))
+		}
+		replies := answers[m.ID]
+		slices.SortFunc(replies, bySeq)
+		for _, a := range replies {
+			view := inboxMessageView(a)
+			view.Body = truncateText(view.Body, answerExcerptBytes)
+			r.Answers = append(r.Answers, view)
+		}
+		requests = append(requests, r)
+	}
+	return prompts.AgentCommRequestsBlock(requests)
+}
+
+// participantLabel names id the way `afm agent send --to` takes it: its alias, or the id when it has none.
+func participantLabel(mesh state.MeshState, id agentcomm.ParticipantID) string {
+	if p := mesh.Participants[id]; p != nil && p.Alias != "" {
+		return p.Alias
+	}
+	return string(id)
 }
 
 func inboxMessageView(m *agentcomm.Message) prompts.AgentCommInboxMessage {

@@ -356,3 +356,61 @@ func TestYieldExit_RecoveryAfterCrashContinuesOnTheRecordedEpisode(t *testing.T)
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// answerAndRead has the human answer request and the stage read that answer with `afm agent inbox` (the
+// handler marks it delivered) — all inside the stage's turn.
+func (f *exitFixture) answerAndRead(t *testing.T, opID string, request agentcomm.MessageID) {
+	t.Helper()
+	ctx := context.Background()
+	sent, err := f.o.Send(ctx, SendRequest{
+		OperationID: opID, ThreadID: f.thread, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{f.stage},
+		Kind: agentcomm.MessageKindReply, InReplyTo: &request, Body: "JSON",
+	})
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if err := f.o.MarkMessageDelivered(ctx, sent.MessageID, f.stage); err != nil {
+		t.Fatalf("MarkMessageDelivered: %v", err)
+	}
+}
+
+// The answer to a wait arrived during the turn and the agent read it (`afm agent inbox`) before it ended the
+// turn: it has seen the answer, so the exit completes normally instead of resuming the stage for it. Live run:
+// a reviewer's reply read in the turn earned the stage one more fresh turn, which started the review over.
+func TestYieldExit_AnswerReadInTheTurnIsNotAContinuation(t *testing.T) {
+	t.Run("wait yielded in this turn", func(t *testing.T) {
+		f := newExitFixture(t)
+		out := f.runTurn(t, func() {
+			request, _ := f.askUser(t, "op-ask")
+			f.answerAndRead(t, "op-answer", request)
+		})
+		if !out.completionChecked || len(out.continuations) != 0 {
+			t.Fatalf("outcome = %+v, want a normal completion", out)
+		}
+	})
+	t.Run("wait pending since an earlier turn", func(t *testing.T) {
+		f := newExitFixture(t)
+		request, _ := f.askUser(t, "op-ask")
+		out := f.runTurn(t, func() { f.answerAndRead(t, "op-answer", request) })
+		if !out.completionChecked || len(out.continuations) != 0 {
+			t.Fatalf("outcome = %+v, want a normal completion", out)
+		}
+	})
+}
+
+// An answer that arrived during the turn but was not read still resumes the stage: the agent has not seen it.
+func TestYieldExit_AnswerNotReadInTheTurnContinues(t *testing.T) {
+	f := newExitFixture(t)
+	request, _ := f.askUser(t, "op-ask")
+	out := f.runTurn(t, func() {
+		if _, err := f.o.Send(context.Background(), SendRequest{
+			OperationID: "op-answer", ThreadID: f.thread, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{f.stage},
+			Kind: agentcomm.MessageKindReply, InReplyTo: &request, Body: "JSON",
+		}); err != nil {
+			t.Fatalf("answer: %v", err)
+		}
+	})
+	if out.completionChecked || out.continuations[bus.EventPeerReplied] != 1 {
+		t.Fatalf("outcome = %+v, want one peer_replied continuation", out)
+	}
+}
