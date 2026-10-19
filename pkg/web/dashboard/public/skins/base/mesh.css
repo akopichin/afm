@@ -913,3 +913,8 @@
   font-size: 12px;
   color: var(--attention);
 }
+
+/* An agents-only conversation is read-only for you — information, not a warning. */
+.team-conversation-notice.readonly {
+  color: var(--text-muted);
+}

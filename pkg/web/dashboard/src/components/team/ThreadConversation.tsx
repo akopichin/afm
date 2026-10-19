@@ -243,7 +243,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         )}
       </div>
       {readOnly ? (
-        <p className="team-conversation-notice" role="status">
+        <p className="team-conversation-notice readonly" role="status">
           The agents are talking between themselves — you can read along. To weigh in, message them directly or
           start a conversation with them.
         </p>
