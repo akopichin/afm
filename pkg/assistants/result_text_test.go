@@ -39,8 +39,8 @@ func TestDecodeResult_FreeTextFieldsAcceptStringOrList(t *testing.T) {
 			want: assistants.Result{Verdict: assistants.VerdictPass, Summary: "ok", Evidence: []string{"ran go test ./..."}},
 		},
 		{
-			name: "empty arrays and null",
-			raw:  `{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok","evidence":[],"limitations":null}`,
+			name: "empty array",
+			raw:  `{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok","evidence":[]}`,
 			want: assistants.Result{Verdict: assistants.VerdictPass, Summary: "ok", Evidence: []string{}},
 		},
 		{
@@ -120,6 +120,11 @@ func TestFreeTextShapes_SchemaMatchesDecoder(t *testing.T) {
 		{"nested list", fmt.Sprintf(result, `"evidence":[["a"]]`), false},
 		{"number as summary", `{"schema_version":1,"kind":"result","verdict":"pass","summary":42}`, false},
 		{"delegate summary as a number", fmt.Sprintf(delegate, `"summary":1`), false},
+		{"null limitations", fmt.Sprintf(result, `"limitations":null`), false},
+		{"null summary", `{"schema_version":1,"kind":"result","verdict":"pass","summary":null}`, false},
+		{"null in an evidence list", fmt.Sprintf(result, `"evidence":["a",null]`), false},
+		{"null in a limitations list", fmt.Sprintf(result, `"limitations":[null]`), false},
+		{"null delegate summary", fmt.Sprintf(delegate, `"summary":null`), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
