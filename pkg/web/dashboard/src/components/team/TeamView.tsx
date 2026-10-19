@@ -27,8 +27,7 @@ type TeamTab = 'messages' | 'board' | 'activity'
 
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
-// use-workspace-view/workspace-view.ts's openTeam — the same "manual read-only-ish view owns its own detail
-// state" posture 'discussion' already established for StageDiscussionPanel/StageProposals).
+// use-workspace-view/workspace-view.ts's openTeam — a manual view that owns its own detail state).
 export function TeamView({ roster, stages, events, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
   const tabsId = useId()

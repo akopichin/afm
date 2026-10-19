@@ -172,7 +172,7 @@ describe('skins CSS contract — Team view leans ONLY on the semantic token laye
   })
 })
 
-describe('skins CSS contract — shared chat composer (feed, discussion, Team, side agent)', () => {
+describe('skins CSS contract — shared chat composer (feed, Team, side agent)', () => {
   it('the composer row is the positioning anchor for the @-mention menu', () => {
     expect(rule(chatComposerCss, '.chat-composer-row')).toMatch(/position:\s*relative/)
   })
@@ -294,9 +294,6 @@ describe('skins CSS contract — helper-agents UI surfaces lean ONLY on the sema
     ['helper-task rail row (nested delegation uses the SAME row + --assistant-depth, no per-depth variant)', '.assistant-task-item'],
     ['selected child row', '.assistant-task-item.active'],
     ['delegation breadcrumb (depth up to effective_max_depth)', '.assistant-breadcrumb-depth'],
-    ['discussion', '.stage-discussion'],
-    ['proposal card', '.proposal-card'],
-    ['proposal card — stale shows refresh, not accept', '.proposal-card-refresh'],
     ['required task pill (active/required state)', '.assistant-task-mode[data-mode="required"]'],
     ['failed/cancelled task dot', '.assistant-task-status-dot[data-status="failed"]'],
     ['paused task dot', '.assistant-task-status-dot[data-status="paused"]'],

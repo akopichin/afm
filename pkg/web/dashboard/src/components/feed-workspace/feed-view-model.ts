@@ -180,6 +180,10 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // Финальный сбой lifecycle хука — чисто информационное предупреждение: FSM/стадию/ран оно не
       // трогает, поэтому tone 'warning', а не 'danger', как у блокирующего hook_failed выше.
       return { actor: 'system', tone: 'warning', kind: 'status', text: `lifecycle hook ${str(obj.hook_id)} failed: ${str(obj.error)}`, mono: false }
+    case 'team_warning':
+      // The flow's team: declaration could not be applied as written for one member (a durable run-level notice,
+      // pkg/orchestrator/team.go) — the run goes on, so a warning, not an error.
+      return { actor: 'system', tone: 'warning', kind: 'status', text: `team member ${str(obj.member_id)}: ${str(obj.message)}`, mono: false }
     case 'verify_started':
     case 'verify_result':
     case 'verify_retry':
@@ -331,15 +335,16 @@ function mapEvent(event: AfmEvent): Mapped | null {
       return { actor: 'system', tone, kind: 'status', text: `wait ${str(obj.wait_id)} ${outcome}`, mono: false }
     }
     case 'discussion_message': {
-      // A Discussion post. Its text lives in the Discussion and, for a post that reached the stage agent, in
-      // its mirrored conversation bubble — then this row is dropped (buildFeedTimeline).
+      // A post in the stage's conversation with its agent. The stage feed shows it as a conversation bubble (its
+      // mesh mirror, or the post itself from the stage's log) and drops this row then (buildFeedTimeline); the
+      // row stays where no bubble is shown (the Full feed, or before the stage's log was read).
       const author = str(obj.author_kind) === 'human' ? 'You' : str(obj.author_id)
       const messageId = str(obj.message_id)
       return {
         actor: 'system',
         tone: 'neutral',
         kind: 'status',
-        text: `${author} posted in the Discussion`,
+        text: `${author} posted in the stage conversation`,
         mono: false,
         dedupeId: `discussion:${messageId}`,
         meshMessageId: messageId,

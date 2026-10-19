@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { composerRecipients, recipientFence, typedMentionHandles, withoutRecipient } from './composer-recipients'
+import { composerRecipients, messageRoute, recipientFence, typedMentionHandles, withoutRecipient } from './composer-recipients'
 import type { MeshParticipant } from '../../api/mesh-client'
 
 const impl: MeshParticipant = { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', stage_id: 'impl', alias: 'impl', display_name: 'Backend', reachable: true }
@@ -102,5 +102,17 @@ describe('recipientFence', () => {
     expect(recipientFence(['b', 'a'], 'mt-1', 'mm-2')).toBe(recipientFence(['a', 'b'], 'mt-1', 'mm-2'))
     expect(recipientFence(['a'], '', '')).not.toBe(recipientFence(['a', 'b'], '', ''))
     expect(recipientFence(['a'], 'mt-1', '')).not.toBe(recipientFence(['a'], 'mt-1', 'mm-2'))
+  })
+})
+
+describe('messageRoute', () => {
+  it("a new message naming the stage's own agent goes to the stage conversation, the others joining it", () => {
+    expect(messageRoute('impl', ['run:t-1', 'stage:impl', 'stage:docs'], false)).toEqual({ kind: 'stage', mentions: ['run:t-1', 'stage:docs'] })
+    expect(messageRoute('impl', ['stage:impl'], false)).toEqual({ kind: 'stage', mentions: [] })
+  })
+
+  it('a message without the stage agent, or any reply, goes to exactly its recipients', () => {
+    expect(messageRoute('impl', ['run:t-1', 'stage:docs'], false)).toEqual({ kind: 'set' })
+    expect(messageRoute('impl', ['stage:impl'], true)).toEqual({ kind: 'set' })
   })
 })

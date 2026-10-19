@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
 import { FeedWorkspace } from './FeedWorkspace'
 import type { FeedComposerMeshProps } from './FeedComposer'
 import * as meshClient from '../../api/mesh-client'
+import * as runClient from '../../api/run-client'
+import type { DiscussionMessageWire } from '../../api/run-client'
 import type { MeshMessage, MeshParticipant, MeshThread } from '../../api/mesh-client'
 
 const at = (s: number) => `2026-10-19T10:00:${String(s).padStart(2, '0')}Z`
@@ -29,8 +31,13 @@ const messages = [
   msg('m4', 6, { thread_id: 'mt-old', sender_id: 'run:old', body: 'An old conversation' }),
 ]
 
-function meshProps(): FeedComposerMeshProps {
-  return { roster: { enabled: true, probed: true, participants, threads: [] }, profiles: [], stages: [], pick: null }
+function meshProps(stages: FeedComposerMeshProps['stages'] = []): FeedComposerMeshProps {
+  return { roster: { enabled: true, probed: true, participants, threads: [] }, profiles: [], stages, pick: null }
+}
+
+// stageLog — the stage's conversation log with its agent (GET /api/stages/{id}/discussion) the feed also reads.
+function stageLog(messages: DiscussionMessageWire[]) {
+  return vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages, nextCursor: messages.length, hasMore: false })
 }
 
 // renderFeed — the stage feed; withComposer — the stage takes messages, so the composer is there to answer with.
@@ -52,6 +59,9 @@ const row = (id: string) => document.querySelector(`[data-message-id="${id}"]`) 
 const feedText = () => screen.getByRole('region', { name: 'Feed' }).textContent ?? ''
 
 describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
+  beforeEach(() => {
+    stageLog([])
+  })
   afterEach(() => vi.restoreAllMocks())
 
   it('interleaves conversation messages with the stage events in time order', async () => {
@@ -171,7 +181,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(within(row('m9')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
   })
 
-  it('a Discussion post shows once — as its conversation bubble — and a post without one as a readable line', async () => {
+  it('a post in the stage conversation shows once — as its bubble — and a post only the old log has as its own bubble', async () => {
     const posts = [
       ev('discussion_message', { message_id: 'm5', author_kind: 'human', author_id: 'user', round: 1 }, 7),
       ev('discussion_message', { message_id: 'd-only', author_kind: 'assistant', author_id: 'reviewer', round: 1 }, 8),
@@ -179,15 +189,77 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
       messages: [msg('m5', 7, { sender_id: 'user', recipient_ids: ['stage:impl'], body: 'Mirrored post' })], threads: [withUser], next_cursor: 7, has_more: false,
     })
-    render(<FeedWorkspace events={[...events, ...posts]} stageId="impl" mesh={meshProps()} />)
-    await waitFor(() => expect(row('m5')).not.toBeNull())
+    stageLog([
+      { id: 'm5', author_kind: 'human', round: 1, body: 'Mirrored post', created_at: at(7) },
+      { id: 'd-only', author_kind: 'assistant', author_id: 'reviewer', round: 1, body: 'An old helper verdict', evidence: ['f-1'], created_at: at(8) },
+    ])
+    render(<FeedWorkspace events={[...events, ...posts]} stageId="impl" mesh={meshProps()} noteTarget="impl" onSendNote={vi.fn()} />)
+    await waitFor(() => expect(row('d-only')).not.toBeNull())
     const text = feedText()
     expect(text).not.toContain('discussion_message')
+    expect(text).not.toContain('posted in the stage conversation')
     expect(text.split('Mirrored post')).toHaveLength(2)
-    expect(text).toContain('reviewer posted in the Discussion')
-    expect(text).not.toContain('You posted in the Discussion')
-    // All counts what is shown: two events, the bubble and the post without one.
+    // In journal order after the mirrored one, with its author, its text and the evidence it cited; read-only.
+    expect(text.indexOf('Mirrored post')).toBeLessThan(text.indexOf('An old helper verdict'))
+    expect(within(row('d-only')).getByText('reviewer')).toBeInTheDocument()
+    expect(within(row('d-only')).getByText(/Evidence: f-1/)).toBeInTheDocument()
+    expect(within(row('d-only')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
+    // All counts what is shown: two events and the two bubbles.
     expect(screen.getByRole('button', { name: /^All/ })).toHaveTextContent('4')
+  })
+
+  it('before the log is read, a post without a bubble is a readable line — never the raw event type', async () => {
+    vi.spyOn(runClient, 'listStageDiscussion').mockRejectedValue(new Error('offline'))
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [msg('m1', 2)], threads: [withUser], next_cursor: 2, has_more: false })
+    const post = ev('discussion_message', { message_id: 'd-only', author_kind: 'assistant', author_id: 'reviewer', round: 1 }, 8)
+    render(<FeedWorkspace events={[...events, post]} stageId="impl" mesh={meshProps()} />)
+    await waitFor(() => expect(row('m1')).not.toBeNull())
+    expect(feedText()).toContain('reviewer posted in the stage conversation')
+  })
+
+  it('"Not answered" marks your post the finished stage never answered, until a reply arrives', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
+        messages: [msg('dm-q', 2, { sender_id: 'user', recipient_ids: ['stage:impl'], body: 'Any news?' })], threads: [withUser], next_cursor: 2, has_more: false,
+      })
+      vi.spyOn(runClient, 'listStageDiscussion')
+        .mockResolvedValueOnce({ messages: [{ id: 'dm-q', author_kind: 'human', round: 0, body: 'Any news?', unanswered: true, created_at: at(2) }], nextCursor: 1, hasMore: false })
+        .mockResolvedValue({
+          messages: [{ id: 'dm-a', author_kind: 'assistant', author_id: 'run:qa', round: 0, parent_message_id: 'dm-q', body: 'Yes', created_at: at(3) }],
+          nextCursor: 2,
+          hasMore: false,
+        })
+      const done = [{ id: 'impl', name: 'Implement', status: 'done' }] as unknown as FeedComposerMeshProps['stages']
+      render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps(done)} />)
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(within(row('dm-q')).getByText('Not answered')).toBeInTheDocument()
+      await act(async () => vi.advanceTimersByTime(3000))
+      expect(row('dm-a')).not.toBeNull()
+      expect(screen.queryByText('Not answered')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a log-only post renders like any bubble: the author by name, its recipients, markdown and a result's summary", async () => {
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [], threads: [], next_cursor: 0, has_more: false })
+    stageLog([
+      { id: 'q', author_kind: 'human', round: 0, body: 'ask', mentions: ['run:qa', 'run:gone'], created_at: at(1) },
+      { id: 'a', author_kind: 'main_agent', author_id: 'stage:impl', round: 0, body: '# Found an issue\n\nThe **retry loop** never backs off.', created_at: at(2) },
+      { id: 'r', author_kind: 'assistant', author_id: 'run:qa', round: 0, body: '{"schema_version":1,"kind":"result","verdict":"pass","summary":"All checks green."}', created_at: at(3) },
+    ])
+    render(<FeedWorkspace events={[]} stageId="impl" mesh={meshProps()} />)
+    await waitFor(() => expect(row('r')).not.toBeNull())
+    expect(row('q')).toHaveClass('from-you')
+    expect(within(row('q')).getByText('→ Implement, QA reviewer, gone')).toBeInTheDocument()
+    expect(within(row('a')).getByText('Implement')).toBeInTheDocument()
+    expect(row('a').querySelector('.md h1')).toHaveTextContent('Found an issue')
+    expect(row('a').querySelector('.md strong')).toHaveTextContent('retry loop')
+    expect(within(row('r')).getByText('All checks green.')).toBeInTheDocument()
+    expect(within(row('r')).getByText('Pass')).toBeInTheDocument()
+    // Only real messages: nobody who stayed silent gets a synthesized entry.
+    expect(document.querySelectorAll('[data-message-id]')).toHaveLength(3)
   })
 
   it('a click on the quote jumps to the quoted message, even from a filter that hides it', async () => {
@@ -206,8 +278,10 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
 
   it('without the mesh (the Full feed) there are no conversations and no requests', () => {
     const spy = vi.spyOn(meshClient, 'getStageMessages')
+    const log = vi.spyOn(runClient, 'listStageDiscussion')
     render(<FeedWorkspace events={events} stageId="impl" />)
     expect(spy).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalled()
     expect(screen.queryByRole('group', { name: 'Show in the feed' })).toBeNull()
   })
 })

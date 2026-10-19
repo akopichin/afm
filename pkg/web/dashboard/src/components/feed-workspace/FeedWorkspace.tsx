@@ -10,6 +10,8 @@ import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
 import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
 import { useStageConversation, type StageConversation } from '../../hooks/use-mesh'
+import { useStageDiscussion } from '../../hooks/use-stage-discussion'
+import { withStageDiscussion } from './stage-discussion-feed'
 import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
@@ -88,14 +90,21 @@ export function FeedWorkspace({
   const sectionRef = useRef<HTMLElement | null>(null)
 
   const items = useMemo(() => toFeedItems(events), [events])
-  // The stage's conversations, interleaved with its events — only in a stage feed with the mesh on.
+  // The stage's conversations, interleaved with its events — only in a stage feed with the mesh on — together
+  // with its conversation log with its agent: the "Not answered" marks and the posts only that log has.
   const conversation = useStageConversation(mesh !== undefined ? stageId : null)
+  const stageStatus = mesh?.stages.find((s) => s.id === stageId)?.status
+  const discussionLog = useStageDiscussion(mesh !== undefined ? stageId : null, stageStatus === 'done' || stageStatus === 'failed')
+  const { messages: conversationMessages, unanswered } = useMemo(
+    () => withStageDiscussion(conversation.messages, discussionLog, stageId ?? ''),
+    [conversation.messages, discussionLog, stageId],
+  )
   const participants = mesh?.roster.participants ?? EMPTY_PARTICIPANTS
   const [filter, setFilter] = useState<FeedFilter>('all')
   useEffect(() => setFilter('all'), [stageId])
-  const timeline = useMemo(() => buildFeedTimeline(items, conversation.messages, filter), [items, conversation.messages, filter])
-  const filterCounts = useMemo(() => feedFilterCounts(items, conversation.messages), [items, conversation.messages])
-  const messageById = useMemo(() => new Map(conversation.messages.map((m) => [m.id, m])), [conversation.messages])
+  const timeline = useMemo(() => buildFeedTimeline(items, conversationMessages, filter), [items, conversationMessages, filter])
+  const filterCounts = useMemo(() => feedFilterCounts(items, conversationMessages), [items, conversationMessages])
+  const messageById = useMemo(() => new Map(conversationMessages.map((m) => [m.id, m])), [conversationMessages])
 
   // Jump to a quoted message: show it (Author's work may hide it), scroll to it and flash it.
   const [jump, setJump] = useState<{ id: string; n: number } | null>(null)
@@ -156,12 +165,12 @@ export function FeedWorkspace({
 
   return (
     <section className="feed-workspace" aria-label="Feed" ref={sectionRef}>
-      {conversation.messages.length > 0 && (
+      {conversationMessages.length > 0 && (
         <FeedFilterChips filter={filter} onChange={setFilter} counts={filterCounts} />
       )}
       <div id="feed-content" className="feed-scroll" ref={feed.ref}>
         {timeline.length === 0 ? (
-          <div className="empty-hint feed-empty">{items.length + conversation.messages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>
+          <div className="empty-hint feed-empty">{items.length + conversationMessages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>
         ) : (
           timeline.map((entry) =>
             entry.kind === 'conversation' ? (
@@ -174,6 +183,8 @@ export function FeedWorkspace({
                     answered={m.in_reply_to !== undefined ? messageById.get(m.in_reply_to) : undefined}
                     onJumpToQuote={jumpTo}
                     replyActive={activeMeshReply?.messageId === m.id}
+                    notAnswered={unanswered.has(m.id)}
+                    markdown
                     onReply={
                       canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation, participants)
                         ? () =>
@@ -235,7 +246,7 @@ export function FeedWorkspace({
           onResumeNow={onComposerResumeNow}
           mesh={mesh}
           reviseAvailable={reviseAvailable}
-          conversationMessages={conversation.messages}
+          conversationMessages={conversationMessages}
           meshReply={activeMeshReply}
           onCancelMeshReply={() => setMeshReplyTo(null)}
           // Reset only if the same message is still being answered (another may have been picked meanwhile).

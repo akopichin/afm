@@ -398,48 +398,6 @@ export async function postStageDiscussionMessage(stageId: string, requestId: str
   return { messageId: resp.message_id }
 }
 
-// ProposalWire mirrors pkg/server/proposals.go's ProposalView.
-export type ProposalWire = {
-  id: string
-  stage_id: string
-  task_id?: string
-  type: string
-  title: string
-  rationale?: string
-  authors?: string[]
-  source_message_ids?: string[]
-  source_finding_ids?: string[]
-  expected_stage_generation: number
-  status: string
-  created_at: string
-}
-
-// listStageProposals reads a stage's proposals — GET /api/stages/{id}/proposals.
-export async function listStageProposals(stageId: string): Promise<{ proposals: ProposalWire[] }> {
-  const url = stageUrl(stageId, 'proposals')
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
-  }
-  const body = (await response.json()) as { proposals?: ProposalWire[] | null }
-  return { proposals: body.proposals ?? [] }
-}
-
-// acceptProposal durably accepts a proposal and starts its delivery — POST /api/proposals/{id}/accept.
-// requestId is the idempotency key: resending the SAME id after a timeout/double-click is always safe.
-export async function acceptProposal(proposalId: string, requestId: string): Promise<void> {
-  await jsonRequest<{ status: string }>(`/api/proposals/${encodeURIComponent(proposalId)}/accept`, 'POST', { request_id: requestId })
-}
-
-// dismissProposal durably dismisses a pending proposal — POST /api/proposals/{id}/dismiss. Never touches the
-// main agent in any way.
-export async function dismissProposal(proposalId: string, requestId: string, reason = ''): Promise<void> {
-  await jsonRequest<{ status: string }>(`/api/proposals/${encodeURIComponent(proposalId)}/dismiss`, 'POST', {
-    request_id: requestId,
-    reason,
-  })
-}
-
 // --- Этап 9 (T9.6): dynamic "add a regular stage" dialog — POST /api/run/graph/{preview|commit}. Same wire
 // shape for both calls (addStageRequest, pkg/server/graph.go); preview never mutates anything, commit is the
 // idempotent write (request_id required).

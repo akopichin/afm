@@ -20,7 +20,6 @@ export interface UseWorkspaceView {
   openAttention: (stageId?: string) => void
   openHistory: (view: 'plan-history' | 'dialog-history') => void
   openAssistant: () => void
-  openDiscussion: () => void
   openTeam: () => void
 }
 
@@ -50,10 +49,9 @@ export function useWorkspaceView(
     [],
   )
   const openAssistant = useCallback(() => dispatch({ type: 'openAssistant' }), [])
-  const openDiscussion = useCallback(() => dispatch({ type: 'openDiscussion' }), [])
   const openTeam = useCallback(() => dispatch({ type: 'openTeam' }), [])
 
-  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openDiscussion, openTeam }
+  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam }
 }
 
 export type { WorkspaceState, WorkspaceView }

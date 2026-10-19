@@ -14,7 +14,8 @@ import { TabList, tabPanelProps } from '../tab-list'
 import { MeshAvatar } from '../team/MeshAvatar'
 import { sendMeshMessageTo, type MeshAttachAndSendResult, type MeshMessage, type MeshParticipant } from '../../api/mesh-client'
 import { buildMeshMentionGroups, type MeshMentionItem } from './mesh-recipients'
-import { composerRecipients, recipientFence, withoutRecipient, type ComposerRecipient } from './composer-recipients'
+import { composerRecipients, messageRoute, recipientFence, withoutRecipient, type ComposerRecipient, type MessageRoute } from './composer-recipients'
+import { postStageDiscussionMessage } from '../../api/run-client'
 import { participantLabel } from '../../lib/mesh-roster'
 import { computeReceiptPhase, deliveryKey, RECEIPT_LABEL } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
@@ -305,8 +306,9 @@ type LastSend = { messageId: string | null; recipientIds: string[] }
 
 // MeshMessageComposer — Message mode: "To" chips (people picked in the People panel, the sender of the message
 // being answered, `@handles` typed in the text, or — with nobody named — the stage agent), the text, Send. One
-// request (POST /api/mesh/messages) sends ONE message to all recipients; the server picks or opens their
-// conversation, shown in this stage's feed. Free text here NEVER reaches the Revise path.
+// request sends ONE message to all recipients, shown in this stage's feed (messageRoute picks the request: a new
+// message to the stage agent is a post in its stage conversation, with "Interrupt agent"; anything else goes to
+// exactly its recipients). Free text here NEVER reaches the Revise path.
 function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCancelReply, onReplySent, onUseRevise, shown }: MeshMessageComposerProps): ReactElement {
   const participants = mesh.roster.participants
   const [draft, setDraft] = useState('')
@@ -324,6 +326,9 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
   const [attachPreview, setAttachPreview] = useState<{ profileId: string; instruction: string } | null>(null)
   const [lastSend, setLastSend] = useState<LastSend | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
+  // interrupt — "Interrupt agent": the running stage agent stops its turn to answer this post, then continues.
+  // Chosen per send, offered only for a post to the stage agent while it runs.
+  const [interrupt, setInterrupt] = useState(false)
 
   const { recipients, defaultProblem } = useMemo(
     () => composerRecipients({ participants, stages: mesh.stages, stageId, picked: activePicked, draft, replyTo: reply?.senderId ?? null }),
@@ -335,7 +340,8 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
   // the message answered: a send that finishes after any of them changed neither clears the new draft nor
   // shows a receipt for the old recipients.
   const fence = recipientFence(recipientIds, reply?.threadId ?? '', reply?.messageId ?? '')
-  const submitter = useRetryableSubmit<{ recipientIds: string[]; inReplyTo?: string; body: string }>('mesh-feed-send', fence)
+  const submitter = useRetryableSubmit<{ recipientIds: string[]; inReplyTo?: string; body: string; route: MessageRoute; interrupt: boolean }>('mesh-feed-send', fence)
+  const route = messageRoute(stageId, recipientIds, reply !== null)
 
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_MESSAGE_TEXTAREA_HEIGHT)
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
@@ -440,12 +446,16 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
     if (recipientIds.length === 0 || problems.length > 0) return
     const submittedReply = reply
     submitter.submit(
-      { recipientIds, inReplyTo: reply?.messageId, body: text },
+      { recipientIds, inReplyTo: reply?.messageId, body: text, route, interrupt: offerInterrupt && interrupt },
       (p, requestId) =>
-        sendMeshMessageTo({ requestId, recipientIds: p.recipientIds, inReplyTo: p.inReplyTo, body: p.body, originStage: stageId }),
+        p.route.kind === 'stage'
+          ? postStageDiscussionMessage(stageId, requestId, { body: p.body, mentions: p.route.mentions, interrupt: p.interrupt })
+          : sendMeshMessageTo({ requestId, recipientIds: p.recipientIds, inReplyTo: p.inReplyTo, body: p.body, originStage: stageId }).then((r) => ({
+              messageId: r.message_id,
+            })),
       {
         onSuccess: (receipt) => {
-          setLastSend({ messageId: receipt.message_id, recipientIds })
+          setLastSend({ messageId: receipt.messageId, recipientIds })
           setDraft((cur) => removeSubmittedText(cur, submitted))
           if (submittedReply !== null) onReplySent?.(submittedReply.messageId)
         },
@@ -480,6 +490,7 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
         })
 
   const canSend = draft.trim() !== '' && (attaching !== null || (recipientIds.length > 0 && problems.length === 0))
+  const offerInterrupt = attaching === null && route.kind === 'stage' && stageStatus(stageId) === 'running'
   // The stage agent waiting for its helpers reads only a Revise: offer the switch.
   const offerRevise = onUseRevise !== undefined && recipients.length === 0 && stageStatus(stageId) === 'awaiting_assistants'
 
@@ -534,6 +545,13 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
           <button type="button" className="mesh-recipients-use-revise" onClick={onUseRevise}>
             Use Revise
           </button>
+        )}
+        {offerInterrupt && (
+          <label className="switch mesh-recipients-interrupt" title="The agent stops its current turn, answers this message, then continues its work">
+            <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
+            <span className="track" aria-hidden="true" />
+            <span className="switch-label">Interrupt agent</span>
+          </label>
         )}
       </div>
 

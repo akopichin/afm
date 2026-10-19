@@ -2264,6 +2264,8 @@ describe('App', () => {
     expect(screen.queryByRole('combobox', { name: /message the mesh/i })).toBeNull()
     expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
     expect(requests.some((r) => r.includes('/api/mesh/stages/'))).toBe(false)
+    expect(requests.some((r) => r.includes('/discussion'))).toBe(false)
+    expect(screen.queryByRole('tab', { name: 'Discussion' })).toBeNull()
 
     fireEvent.change(note, { target: { value: 'tighten the tests' } })
     fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
@@ -2282,6 +2284,9 @@ describe('App', () => {
     expect(screen.getByRole('group', { name: 'Show in the feed' })).toBeInTheDocument()
     expect(screen.getByRole('tablist', { name: 'Composer mode' })).toBeInTheDocument()
     expect(requests.some((r) => r.includes('/api/mesh/stages/s1/messages'))).toBe(true)
+    // The stage conversation lives in the Feed: its log is read there, and there is no Discussion tab.
+    await waitFor(() => expect(requests.some((r) => r.startsWith('GET') && r.includes('/api/stages/s1/discussion'))).toBe(true))
+    expect(screen.queryByRole('tab', { name: 'Discussion' })).toBeNull()
   })
 
   test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {

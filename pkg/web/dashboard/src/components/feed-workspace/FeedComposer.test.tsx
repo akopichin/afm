@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import * as meshClient from '../../api/mesh-client'
+import * as runClient from '../../api/run-client'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshRoster } from '../../hooks/use-mesh'
 import type { AssistantProfile } from '../../types/assistant-profile'
@@ -303,14 +304,57 @@ describe('FeedComposer', () => {
       expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Message'])
     })
 
-    it('with nobody named the message goes to the stage agent, from this feed, never as a Revise', async () => {
-      const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm1', seq: 1, thread_id: 'mt-1' })
+    it('with nobody named the message is a post to the stage agent in its conversation, never a Revise', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
       const { onSend } = renderComposer()
       type('fix this bug')
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['stage:s1'], body: 'fix this bug', originStage: 's1' })))
+      await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: 'fix this bug', mentions: [], interrupt: false }))
+      expect(send).not.toHaveBeenCalled()
       expect(onSend).not.toHaveBeenCalled()
       await waitFor(() => expect(input().value).toBe(''))
+    })
+
+    it('the stage agent and others together: ONE post in the stage conversation, the others joining it', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
+      renderComposer()
+      type('@s1 @qa please both check')
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+      expect(post.mock.calls[0]?.[2]).toEqual({ body: '@s1 @qa please both check', mentions: ['run:t-1'], interrupt: false })
+      expect(send).not.toHaveBeenCalled()
+    })
+
+    it('Interrupt agent: offered while the stage runs and its agent is a recipient of a new message; sent with the post', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+      const { rerender } = renderComposer(meshProps({ stages: [makeStage({ status: 'awaiting_approval' })] }))
+      expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
+
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
+      type('@qa only you')
+      expect(screen.queryByLabelText('Interrupt agent')).toBeNull() // the stage agent is not addressed
+      type('how is it going?')
+      const toggle = screen.getByLabelText('Interrupt agent') as HTMLInputElement
+      expect(toggle.checked).toBe(false)
+      fireEvent.click(toggle)
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: 'how is it going?', mentions: [], interrupt: true }))
+
+      // A reply stays in its conversation: no Interrupt there.
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={{ messageId: 'm5', threadId: 'mt-1', senderId: 'stage:s1', preview: 'x' }} />)
+      expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
+    })
+
+    it('@ lists the agents of other stages too', () => {
+      const other: MeshParticipant = { id: 'stage:docs', kind: 'stage_agent', scope: 'stage', stage_id: 'docs', alias: 'docs-stage', display_name: 'Docs stage', reachable: true }
+      renderComposer(meshProps({ roster: roster({ participants: [runAgent, stageAgent, other] }) }))
+      type('@')
+      expect(screen.getByText('Other stages')).toBeInTheDocument()
+      fireEvent.click(screen.getByText('@docs-stage'))
+      expect(input().value).toBe('@docs-stage ')
+      expect(within(recipients()).getByText('@docs-stage')).toBeInTheDocument()
     })
 
     it('one message to several people: typed @handles and picked chips together', async () => {
@@ -486,14 +530,14 @@ describe('FeedComposer', () => {
     })
 
     it('receipts per recipient: in flight, then each one\'s own state, "Answered" once that one replied', async () => {
-      let resolveSend: (v: meshClient.MeshSendReceipt) => void = () => {}
-      vi.spyOn(meshClient, 'sendMeshMessageTo').mockReturnValue(new Promise((res) => { resolveSend = res }))
+      let resolveSend: (v: { messageId: string }) => void = () => {}
+      vi.spyOn(runClient, 'postStageDiscussionMessage').mockReturnValue(new Promise((res) => { resolveSend = res }))
       const mesh = meshProps({ stages: [makeStage()] })
       const { rerender } = renderComposer(mesh)
       type('@qa @s1 status?')
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
       expect(screen.getByRole('status')).toHaveTextContent('Awaiting delivery')
-      await act(async () => resolveSend({ message_id: 'm1', seq: 1, thread_id: 'mt-1' }))
+      await act(async () => resolveSend({ messageId: 'm1' }))
       const delivery = screen.getByRole('status', { name: 'Delivery' })
       // Accepted by the API is not delivered: nobody is "Delivered" before its own delivery receipt.
       expect(delivery).toHaveTextContent('QA reviewer · Accepted · waiting for an inbox check')
@@ -507,7 +551,7 @@ describe('FeedComposer', () => {
     })
 
     it('receipts: "Paused · waiting for Continue" when the recipient\'s own stage is paused', async () => {
-      vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm1', seq: 1, thread_id: 'mt-1' })
+      vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'm1' })
       renderComposer(meshProps({ stages: [makeStage({ status: 'paused' })] }))
       type('@s1 hi')
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))

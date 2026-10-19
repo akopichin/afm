@@ -16,6 +16,10 @@ export type ConversationMessageProps = {
   onReply?: () => void
   // replyActive — this is the message the composer is answering now.
   replyActive?: boolean
+  // notAnswered — your post to a stage that finished without anyone answering it.
+  notAnswered?: boolean
+  // markdown — render the text as Markdown (the stage feed, where the stage conversation always did).
+  markdown?: boolean
 }
 
 function messageTime(createdAt: string): string {
@@ -26,7 +30,7 @@ function messageTime(createdAt: string): string {
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply, replyActive = false }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
@@ -56,6 +60,11 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
           )}
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
           <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
+          {notAnswered && (
+            <span className="conversation-not-answered" title="The stage finished without replying to this message">
+              Not answered
+            </span>
+          )}
         </div>
         <div className="team-conversation-message-body">
           {answered !== undefined && (
@@ -69,7 +78,7 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
               )}
             </blockquote>
           )}
-          <AgentMessageBody body={message.body} fromAgent={!fromYou} autoResult={message.auto_result === true} />
+          <AgentMessageBody body={message.body} fromAgent={!fromYou} markdown={markdown} autoResult={message.auto_result === true} />
         </div>
         {onReply !== undefined && (
           <div className="conversation-message-actions">

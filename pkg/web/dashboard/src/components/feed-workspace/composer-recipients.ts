@@ -144,3 +144,18 @@ export function withoutRecipient(r: ComposerRecipient, current: { picked: string
 export function recipientFence(recipientIds: string[], threadId: string, replyTo: string): string {
   return JSON.stringify([[...recipientIds].sort(), threadId, replyTo])
 }
+
+// MessageRoute — how a Message is delivered.
+//   - 'stage': a new message that names the feed stage's own agent is a post in the stage's conversation with
+//     its agent (POST /api/stages/{id}/discussion) — the path that can interrupt a running agent, marks a post the
+//     stage finished without answering, and puts the question into the agent's next turn; everybody else named
+//     (mentions) joins that same conversation, so the message is still ONE message to all of them.
+//   - 'set': anything else — a message without the stage agent, or a reply, which stays in the conversation of
+//     the message it answers — goes to exactly its recipients (POST /api/mesh/messages).
+export type MessageRoute = { kind: 'stage'; mentions: string[] } | { kind: 'set' }
+
+export function messageRoute(stageId: string, recipientIds: string[], replying: boolean): MessageRoute {
+  const stageAgent = `stage:${stageId}`
+  if (replying || !recipientIds.includes(stageAgent)) return { kind: 'set' }
+  return { kind: 'stage', mentions: recipientIds.filter((id) => id !== stageAgent) }
+}

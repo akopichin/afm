@@ -548,6 +548,16 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A stage-feed bubble renders Markdown: its blocks lay out normally, without the plain text's pre-wrap gaps. */
+.team-conversation-message-body .md {
+  white-space: normal;
+}
+.team-conversation-message-body .md > :first-child {
+  margin-top: 0;
+}
+.team-conversation-message-body .md > :last-child {
+  margin-bottom: 0;
+}
 .team-conversation-message.from-you .team-conversation-message-body {
   background: color-mix(in srgb, var(--accent-primary) 9%, var(--surface-canvas));
   border-color: rgba(var(--accent-primary-rgb), 0.16);
@@ -580,6 +590,14 @@
 
 /* The agent command a message's author runs (claude, codex, a recipe), next to its name. A long command (an
    absolute path) is clipped with an ellipsis; its title keeps the whole value. */
+.conversation-not-answered {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--attention);
+  border: 1px solid rgba(var(--attention-rgb), 0.4);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
 .conversation-command-chip {
   flex: 0 1 auto;
   min-width: 0;
