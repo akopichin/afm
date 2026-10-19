@@ -590,6 +590,32 @@
 
 /* The agent command a message's author runs (claude, codex, a recipe), next to its name. A long command (an
    absolute path) is clipped with an ellipsis; its title keeps the whole value. */
+.conversation-role-chip {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--separator-subtle);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+/* The ids a post from an older run's stage conversation cited (findings, messages). */
+.conversation-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  white-space: normal;
+}
+.conversation-evidence li {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 .conversation-not-answered {
   flex: 0 0 auto;
   font-size: 10px;
