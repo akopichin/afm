@@ -193,14 +193,16 @@ Criteria` sections are collapsible. The same per-element commenting works on an 
 ## Sending a note to a running stage
 
 While a stage is actively `running`, a messenger-style composer is pinned to the
-bottom of its **Feed**. With Agent Mesh available it has **Revise** and **Message**
-modes; **Revise** is selected by default and keeps the existing note behavior:
+bottom of its **Feed**. With Agent Mesh and collaboration on it has **Revise** and
+**Message** modes; **Revise** is selected by default and keeps the existing note
+behavior. With collaboration off (`AFM_COLLABORATION=0`) the composer is the plain
+note field, without modes, and sends a Revise:
 
 1. Select the `running` stage and open its **Feed** tab. A note input sits at the
    bottom: a growing textarea, an **Attach** button, and a send button. It
    appears only for a `running`, non-script stage.
-2. Type your note and send it — click **Apply Revise** when Agent Mesh is
-   available (otherwise the send button), or press **Cmd/Ctrl+Enter**
+2. Type your note and send it — click **Apply Revise** when the composer has
+   modes (otherwise the send button), or press **Cmd/Ctrl+Enter**
    (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file.
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
@@ -219,7 +221,7 @@ available to retry. See [Team conversations](collaboration.md#team-conversations
 
 ### People panel
 
-With Agent Mesh available, the stage **Feed** has a **People** panel on the right:
+With Agent Mesh and collaboration on, the stage **Feed** has a **People** panel on the right:
 everyone this stage can talk to, in three groups — **This stage** (the stage's
 agent and its helpers), **Run agents** (run agents and the Side agent) and
 **Other stages** (in flow order, each with its helpers). It is the Team roster
@@ -255,7 +257,7 @@ the full value.
 
 ### Conversations in the stage feed
 
-With Agent Mesh available, a stage's **Feed** also shows its conversations,
+With Agent Mesh and collaboration on, a stage's **Feed** also shows its conversations,
 between the stage's own events in time order: conversations the stage opened
 (its agent or helpers wrote first, you started one from this feed, or you added a
 run agent from this stage's People panel), conversations its agent or one of its

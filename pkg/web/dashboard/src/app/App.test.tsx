@@ -1991,6 +1991,7 @@ describe('App', () => {
           json: async () => ({
             flow_name: 'demo',
             stages: [stageView('s1', 'Propose', 'running'), stageView('s2', 'Review', 'pending')],
+            capabilities: { collaboration: true },
             accounting: { health: 'ok', has_data: false, show_money: true },
           }),
         } as Response
@@ -2037,7 +2038,7 @@ describe('App', () => {
       if (url.includes('/api/status')) {
         return {
           ok: true,
-          json: async () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }),
+          json: async () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')], capabilities: { collaboration: true }, accounting: { health: 'ok', has_data: false, show_money: true } }),
         } as Response
       }
       if (url.includes('/api/mesh/participants')) {
@@ -2129,6 +2130,95 @@ describe('App', () => {
 
     const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
     expect(composer.value).toBe('@run:t-new ')
+  })
+
+  // Collaboration off (AFM_COLLABORATION=0) with the mesh still answering: the stage Feed looks as before the
+  // mesh — no People panel, no 👥 toggle, no conversations (not even requested), and the composer is the plain
+  // note-to-agent field (no Message/Revise tabs) that sends a Revise.
+  function mockMeshRun(collaboration: boolean, requests: string[]) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      requests.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', 'running')],
+            capabilities: { collaboration },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+              { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/stages/s1/messages')) {
+        return {
+          ok: true,
+          json: async () => ({
+            messages: [{ id: 'm1', thread_id: 'mt-1', sender_id: 'run:t-1', recipient_ids: ['stage:s1'], kind: 'message', body: 'Found a bug in parse()', seq: 4, created_at: '2026-10-19T10:00:00Z' }],
+            threads: [{ id: 'mt-1', scope: 'run', members: ['user', 'stage:s1', 'run:t-1'], status: 'open' }],
+            next_cursor: 4,
+            has_more: false,
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/revise')) return { ok: true, json: async () => ({ applied: true, seq: 1 }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+
+  test('collaboration off: the stage Feed has no people, no conversations and a plain Revise composer', async () => {
+    const requests: string[] = []
+    mockMeshRun(false, requests)
+
+    render(<App />)
+    const note = await screen.findByPlaceholderText(/note to agent/i)
+    // Give the roster probe and any stage-messages poll time to happen.
+    await waitFor(() => expect(requests.some((r) => r.includes('/api/mesh/participants'))).toBe(true))
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(screen.queryByRole('navigation', { name: 'People' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show people' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add agent' })).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Show in the feed' })).toBeNull()
+    expect(screen.queryByText('Found a bug in parse()')).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Message' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: /message the mesh/i })).toBeNull()
+    expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
+    expect(requests.some((r) => r.includes('/api/mesh/stages/'))).toBe(false)
+
+    fireEvent.change(note, { target: { value: 'tighten the tests' } })
+    fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+    await waitFor(() => expect(requests.some((r) => r.startsWith('POST') && r.includes('/api/stages/s1/revise'))).toBe(true))
+  })
+
+  test('collaboration on: the stage Feed shows people, its conversations and the Message/Revise composer', async () => {
+    const requests: string[] = []
+    mockMeshRun(true, requests)
+
+    render(<App />)
+
+    expect(await screen.findByRole('navigation', { name: 'People' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show people' })).toBeInTheDocument()
+    expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Show in the feed' })).toBeInTheDocument()
+    expect(screen.getByRole('tablist', { name: 'Composer mode' })).toBeInTheDocument()
+    expect(requests.some((r) => r.includes('/api/mesh/stages/s1/messages'))).toBe(true)
   })
 
   test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {

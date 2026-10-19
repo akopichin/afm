@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: the stage Feed with collaboration off
+
+With collaboration off (`AFM_COLLABORATION=0`) the stage **Feed** is the plain
+feed again: no **People** panel or 👥 button, no **+ Add agent**, no
+conversation chips or bubbles (the dashboard does not request them), and the
+composer is the note-to-agent field without the **Message** / **Revise** tabs
+or `@` mentions, sending a Revise. Earlier releases showed the composer tabs
+whenever Agent Mesh answered, even with collaboration off. The **Team** tab is
+unchanged.
+
 ### Improvement: a stage's conversations in its feed
 
 The stage **Feed** now shows the stage's conversations between its own events,

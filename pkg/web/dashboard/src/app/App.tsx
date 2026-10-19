@@ -306,8 +306,12 @@ export function App(): ReactElement {
       ? workspaceStage.id
       : null
 
-  // showPeople — the stage Feed shows who this stage can talk to (needs the mesh).
-  const showPeople = meshRoster.enabled && workspaceStage !== null && wsState.view === 'feed'
+  // stageMesh — the stage Feed's mesh UI (People panel, its conversations, the Message composer mode). It needs
+  // both the mesh and collaboration: with collaboration off the stage Feed is the plain pre-mesh Feed. (The
+  // Team tab keeps its own gate, the mesh probe alone.)
+  const stageMesh = meshRoster.enabled && capabilities.collaboration
+  // showPeople — the stage Feed shows who this stage can talk to.
+  const showPeople = stageMesh && workspaceStage !== null && wsState.view === 'feed'
 
   const statusLive = statusAvailable
   const elapsedMs = useElapsed(startedAt, endedAt, statusLive, elapsedAccumulatedMs, elapsedSince)
@@ -615,14 +619,14 @@ export function App(): ReactElement {
                       onComposerResumeNow={() =>
                         workspaceStage !== null && pauseOnFocus.resumeNow(workspaceStage.id)
                       }
-                      // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team
-                      // (meshRoster.enabled mirrors TeamView's own capability gate: no tab/toggle until the
-                      // first roster probe confirms the capability is actually on).
-                      mesh={meshRoster.enabled ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
+                      // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
+                      // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
+                      // and the plain note-to-agent composer (no Message/Revise tabs).
+                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
                       // "↩ Reply in conversation" on a conversation message: the Feed composer (which exists only
                       // while noteTarget is set) answers it in its thread, addressed back to its author.
                       onReplyInConversation={
-                        noteTarget !== null
+                        stageMesh && noteTarget !== null
                           ? (m) =>
                               setPeoplePick((prev) => ({
                                 participantId: m.sender_id,
