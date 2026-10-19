@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/gitcmd"
 )
 
 // workspaceSection tells a helper where it works: the project root (its working directory, the same as the
@@ -34,35 +35,21 @@ func (o *Orchestrator) workspaceSection(task assistants.Task) string {
 	return b.String()
 }
 
-// diffBaseRevision returns the commit to diff dir's checkout against: in a linked git worktree, the branch's
-// fork point — merge-base of its HEAD and the main worktree's HEAD — so committed branch work shows, the same
-// baseline the dashboard's diff view uses; in an ordinary checkout, HEAD. "" when dir is not a git checkout or
-// git fails.
+// diffBaseRevision returns the commit to diff dir's checkout against, resolved to its id: gitcmd.DiffBaseRef,
+// the same policy the dashboard's diff view uses — in a linked git worktree the branch's fork point, so
+// committed branch work shows; otherwise HEAD. "" when dir is not a git checkout or git fails.
 func diffBaseRevision(dir string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), fingerprintTimeout)
 	defer cancel()
-	git := func(at string, args ...string) string {
-		out, ok := gitCapture(ctx, at, args...)
-		if !ok {
-			return ""
-		}
-		return strings.TrimSpace(out)
-	}
-	head := git(dir, "rev-parse", "HEAD")
-	if head == "" {
+	out, ok := gitCapture(ctx, dir, "rev-parse", "--path-format=absolute", "--git-dir")
+	gitDir := strings.TrimSpace(out)
+	if !ok || gitDir == "" {
 		return ""
 	}
-	gitDir := git(dir, "rev-parse", "--path-format=absolute", "--git-dir")
-	commonDir := git(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if gitDir == "" || commonDir == "" || filepath.Clean(gitDir) == filepath.Clean(commonDir) {
-		return head // an ordinary checkout, not a linked worktree
+	ref := gitcmd.DiffBaseRef(ctx, gitcmd.RunGitDir, gitDir, "")
+	id, ok, err := gitcmd.RunGitDir(ctx, gitDir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil || !ok {
+		return ""
 	}
-	mainHead := git(commonDir, "rev-parse", "HEAD")
-	if mainHead == "" {
-		return head
-	}
-	if base := git(dir, "merge-base", "HEAD", mainHead); base != "" {
-		return base
-	}
-	return head
+	return strings.TrimSpace(string(id))
 }
