@@ -578,8 +578,15 @@
   white-space: nowrap;
 }
 
-/* The agent command a message's author runs (claude, codex, a recipe), next to its name. */
+/* The agent command a message's author runs (claude, codex, a recipe), next to its name. A long command (an
+   absolute path) is clipped with an ellipsis; its title keeps the whole value. */
 .conversation-command-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 2px 5px;
   border-radius: var(--radius-sm);
   background: var(--surface-hover);
@@ -1047,6 +1054,7 @@
 .team-person-chip {
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 24ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
