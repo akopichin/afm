@@ -297,6 +297,9 @@ type Orchestrator struct {
 	// still-"accepted" intent and recurse into attemptFeedbackDelivery again before the outer call ever gets a
 	// chance to mark it delivered.
 	inFlightFeedbackIntents sync.Map
+	// feedbackWakeups — intent ids with a delivery request not yet handled by the deliverer holding
+	// inFlightFeedbackIntents (see attemptFeedbackDelivery): no request that arrives during a delivery is lost.
+	feedbackWakeups sync.Map
 
 	// runnerKind хранит, каким раннером сейчас активирована стадия — stageID -> одна из констант
 	// kindPlanning/kindImplementation/kindReview/kindAutonomous.

@@ -147,6 +147,40 @@ func TestFeedbackIntent_PauseRacingDeliveryLeavesIntentPending(t *testing.T) {
 	}
 }
 
+// The lost-wakeup interleaving: Pause beats the Revise, the re-decision reads "paused" and defers, and right
+// then Continue moves the stage back to running. Continue's own redelivery runs while this delivery is still
+// in flight; its request must not be lost — the intent is delivered to the running stage.
+func TestFeedbackIntent_ContinueDuringDeferredRedecisionStillDelivers(t *testing.T) {
+	o, store := newFeedbackIntentTestOrchestrator(t)
+	ctx := context.Background()
+	activateStage(t, o, feedbackIntentTestStageID)
+	gen := store.StageGeneration(feedbackIntentTestStageID)
+	decisions := 0
+	o.feedbackDeliveryDecidedHook = func(stageID string) {
+		decisions++
+		switch decisions {
+		case 1: // decided "interrupt running"; a Pause lands before the Revise
+			o.Trigger(stageID, bus.EvPause, bus.GuardCtx{}, "user pause")
+		case 2: // decided "defer" for paused; Continue lands before this attempt finishes
+			o.Trigger(stageID, bus.EvContinue, bus.GuardCtx{PausedFrom: state.StatusRunning}, "user continue")
+		default: // later decisions act on the running stage normally
+		}
+	}
+
+	proposalID := seedAcceptedFeedbackProposal(ctx, t, o, feedbackIntentTestStageID, "please fix the retry loop", gen)
+	if err := o.AcceptProposal(ctx, proposalID, "accept-continue", state.Actor{Kind: "user"}); err != nil {
+		t.Fatalf("AcceptProposal: %v", err)
+	}
+
+	waitForProposalStatus(t, o, proposalID, assistants.ProposalDelivered, time.Second)
+	if got := o.currentStatus(feedbackIntentTestStageID); got != state.StatusRevising {
+		t.Fatalf("status = %v, want revising: the feedback reached the running stage", got)
+	}
+	if decisions < 3 {
+		t.Fatalf("decisions = %d, want a third one after Continue", decisions)
+	}
+}
+
 func TestFeedbackIntent_ParentStatus_AwaitingApproval(t *testing.T) {
 	o, store := newFeedbackIntentTestOrchestrator(t)
 	ctx := context.Background()
