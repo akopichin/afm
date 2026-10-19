@@ -19,8 +19,10 @@ import {
   type MeshMessage,
   type MeshThread,
 } from '../../api/mesh-client'
-import { buildMeshMentionGroups, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
+import { buildMeshMentionGroups, participantMentionItem, type MeshMentionItem, type MeshMentionTarget } from './mesh-recipients'
 import { findExistingDirectThread, senderLabel } from '../../lib/mesh-roster'
+import { messageText } from '../../lib/agent-result'
+import { AgentMessageBody } from '../agent-message/AgentMessageBody'
 import { computeReceiptPhase, RECEIPT_LABEL, type ReceiptPhase } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
@@ -272,7 +274,11 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
   // openRequestIdRef — one id for opening the target's thread, reused by retries: a lost response must not
   // open a second thread. A new target gets a new id.
   const openRequestIdRef = useRef(genMeshRequestId('mesh-feed-open'))
+  // openedThreadId — the conversation shown above the input. It is sticky: erasing the @mention un-addresses
+  // the recipient but keeps the conversation in view; only picking someone else or its × replaces/closes it.
   const [openedThreadId, setOpenedThreadId] = useState<string | null>(null)
+  // addressedRef — the last recipient addressed (targetKey), which the shown conversation belongs to.
+  const addressedRef = useRef('')
   const [replyTo, setReplyTo] = useState<{ messageId: string; preview: string } | null>(null)
   // attachPreview — an "Attach to stage" pick is never sent straight away (T7.5): Send opens this preview
   // instead, and only the dialog's OWN "Attach and send" click actually calls attachAndSendMesh. Cancel clears
@@ -307,25 +313,41 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
     textFor: mentionText,
     replaceRange,
     onPicked: (item) => {
+      if (targetKey(item.target) !== addressedRef.current) addressNewTarget(item.target)
       setTarget(item.target)
       setTargetHandle(mentionText(item))
     },
   })
   const matchGroups = mention.query !== null ? filterMentionGroups(groups, mention.query) : []
 
-  // Switching target drops whatever thread/reply context the previous one carried — addressing someone new
-  // never inherits an unrelated open conversation.
-  useEffect(() => {
-    if (target?.kind === 'participant') {
-      setOpenedThreadId(findExistingDirectThread(knownThreads, target.id)?.id ?? null)
-    } else {
-      setOpenedThreadId(null)
-    }
+  // addressNewTarget — picking someone new drops whatever thread/reply context the previous conversation
+  // carried: addressing someone never inherits an unrelated open conversation. Re-picking the same recipient
+  // after erasing its mention keeps the conversation and the reply.
+  function addressNewTarget(next: MeshMentionTarget): void {
+    addressedRef.current = targetKey(next)
+    setOpenedThreadId(next.kind === 'participant' ? (findExistingDirectThread(knownThreads, next.id)?.id ?? null) : null)
     setReplyTo(null)
     openRequestIdRef.current = genMeshRequestId('mesh-feed-open')
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- key IS the target identity; knownThreads
-    // intentionally excluded so a later poll tick doesn't silently re-pick a thread mid-compose.
-  }, [key])
+  }
+
+  // replyToMessage — Reply on a message of the shown conversation: answer it there, addressed back to its
+  // sender, whose @handle goes into the draft (so the user never re-types the mention).
+  function replyToMessage(m: MeshMessage): void {
+    setReplyTo({ messageId: m.id, preview: messageText(m.body, m.sender_id !== 'user').slice(0, 120) })
+    const sender = participantMentionItem(mesh.roster.participants, m.sender_id)
+    if (sender === null) return
+    const handle = mentionText(sender)
+    addressedRef.current = targetKey(sender.target)
+    setTarget(sender.target)
+    setTargetHandle(handle)
+    setDraft((cur) => (draftMentions(cur, handle) ? cur : `@${handle} ${cur}`))
+    textareaRef.current?.focus()
+  }
+
+  function closeConversation(): void {
+    setOpenedThreadId(null)
+    setReplyTo(null)
+  }
 
   const threadMessages = useMeshThread(openedThreadId)
 
@@ -431,21 +453,30 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
         />
       )}
       {openedThreadId !== null && threadMessages.length > 0 && (
-        <ul className="mesh-message-thread" aria-label="Conversation">
-          {threadMessages.map((m: MeshMessage) => (
-            <li key={m.id} className="mesh-message-thread-item">
-              <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
-              <span className="mesh-message-thread-body">{m.body}</span>
-              <button
-                type="button"
-                className="mesh-message-thread-reply"
-                onClick={() => setReplyTo({ messageId: m.id, preview: m.body.slice(0, 120) })}
-              >
-                Reply
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="mesh-message-thread-frame">
+          <div className="mesh-message-thread-header">
+            <span>Conversation</span>
+            <button type="button" className="mesh-message-thread-close" aria-label="Close conversation" onClick={closeConversation}>
+              ✕
+            </button>
+          </div>
+          <ul className="mesh-message-thread" aria-label="Conversation">
+            {threadMessages.map((m: MeshMessage) => (
+              <li key={m.id} className="mesh-message-thread-item">
+                <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
+                <span className="mesh-message-thread-body">
+                  <AgentMessageBody body={m.body} fromAgent={m.sender_id !== 'user'} />
+                </span>
+                {/* Your own message has nobody to address back: Reply is offered on others' messages only. */}
+                {m.sender_id !== 'user' && (
+                  <button type="button" className="mesh-message-thread-reply" onClick={() => replyToMessage(m)}>
+                    Reply
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {replyTo !== null && (
@@ -458,8 +489,10 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
         </div>
       )}
 
+      {target === null && <div className="mesh-message-route">Pick someone with @ or press Reply</div>}
       <div className="chat-composer-row">
         <textarea
+          {...mention.inputAria}
           ref={setRefs}
           className="chat-composer-input"
           value={draft}
@@ -471,6 +504,7 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
         />
         {mention.open && (
           <MentionMenu
+            id={mention.listboxId}
             groups={matchGroups}
             highlightIndex={mention.highlightIndex}
             onHover={mention.setHighlightIndex}

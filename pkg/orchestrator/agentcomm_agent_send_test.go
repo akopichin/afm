@@ -266,8 +266,8 @@ func TestStageAgentReplyInDiscussionThreadIsMirroredToDiscussion(t *testing.T) {
 }
 
 // The Team view can write straight into a stage's discussion thread; that message exists only in the mesh.
-// The stage agent's reply to it is still mirrored into the Discussion — without a parent the Discussion does
-// not have — instead of the whole reply being refused.
+// The stage agent's reply to it is accepted, but it is a Team side conversation: it stays out of the
+// Discussion, which shows only answers to its own messages.
 func TestStageAgentReplyToTeamMessageInDiscussionThread(t *testing.T) {
 	o, _ := newTwoStageMeshOrchestrator(t)
 	ctx := context.Background()
@@ -291,9 +291,9 @@ func TestStageAgentReplyToTeamMessageInDiscussionThread(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reply to a Team message in the discussion thread: %v", err)
 	}
-	msgs := o.DiscussionMessages(assistantsTestStageID)
-	last := msgs[len(msgs)-1]
-	if last.Body != "answered" || last.ParentMessageID != "" {
-		t.Fatalf("mirrored reply = %+v, want the answer without a parent outside the Discussion", last)
+	for _, m := range o.DiscussionMessages(assistantsTestStageID) {
+		if m.Body == "answered" {
+			t.Fatalf("a reply to a Team-only message must not appear in the Discussion: %+v", m)
+		}
 	}
 }

@@ -11,6 +11,8 @@ import { useMentionMenu } from '../assistants/use-mention-menu'
 import { directPeer, findExistingDirectThread, mentionHandles, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { AgentMessageBody } from '../agent-message/AgentMessageBody'
+import { messageText } from '../../lib/agent-result'
 
 // ThreadConversationTarget — what the Messages pane is currently pointed at: an ALREADY open thread (picked
 // from the roster's "Conversations" group), or a person row with no thread yet ("direct" — opening one is
@@ -260,6 +262,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         </div>
         <div className="chat-composer-row">
           <textarea
+            {...mention.inputAria}
             ref={setInputRef}
             className="chat-composer-input"
             placeholder={`Message ${label}…`}
@@ -279,6 +282,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
           />
           {mention.open && (
             <MentionMenu
+              id={mention.listboxId}
               groups={[{ label: '', items: mention.matches }]}
               highlightIndex={mention.highlightIndex}
               onHover={mention.setHighlightIndex}
@@ -319,10 +323,10 @@ function MessageRow({ message, participants, answered }: { message: MeshMessage;
           {answered !== undefined && (
             <blockquote className="team-conversation-reply-quote">
               <span className="team-conversation-reply-quote-author">Replying to {senderLabel(answered.sender_id, participants)}</span>
-              <span className="team-conversation-reply-quote-text">{answered.body}</span>
+              <span className="team-conversation-reply-quote-text">{messageText(answered.body, answered.sender_id !== 'user')}</span>
             </blockquote>
           )}
-          {message.body}
+          <AgentMessageBody body={message.body} fromAgent={!fromYou} />
         </div>
       </div>
     </li>

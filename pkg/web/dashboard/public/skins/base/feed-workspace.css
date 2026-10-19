@@ -518,3 +518,28 @@
 
 .mesh-message-error { color: var(--danger); font-size: 12px; }
 .mesh-message-receipt { color: var(--text-muted); font-size: 11px; }
+
+/* The conversation shown above the Message input stays after its @mention is erased; × closes it. The close
+   button sits in its own header row, so it never covers a message's Reply. */
+.mesh-message-thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.mesh-message-thread-close {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.mesh-message-thread-close:hover { color: var(--text-primary); }
+.mesh-message-thread-close:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.mesh-message-route {
+  font-size: 11px;
+  color: var(--text-muted);
+}

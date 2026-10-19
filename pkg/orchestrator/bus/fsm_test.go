@@ -132,6 +132,22 @@ func TestFSM_Apply_ReviseFromRunning(t *testing.T) {
 	}
 }
 
+// ExpectFrom narrows a transition to the status the caller decided on: a Revise meant for a running agent does
+// not move a stage that a concurrent Pause has already paused (EvRevise itself accepts paused).
+func TestFSM_Apply_ExpectFromRefusesAnotherStatus(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusPaused, Event: "test_setup"})
+
+	_, to, _, ok, err := fsm.Apply("a", EvRevise, GuardCtx{ExpectFrom: state.StatusRunning}, "question")
+	if err != nil || ok || to != state.StatusPaused {
+		t.Fatalf("got (%v, %v, %v), want the paused stage untouched", to, ok, err)
+	}
+	if got := store.Get("a"); got != state.StatusPaused {
+		t.Fatalf("status = %v, want paused", got)
+	}
+}
+
 func TestEvRevise_FromPaused(t *testing.T) {
 	fsm, store := newTestFSM(t, []string{"a"})
 	defer store.Close()

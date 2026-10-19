@@ -3,46 +3,92 @@
 // one PostDiscussionMessage call durably writes both records, under the SAME message id, and
 // DiscussionMessages(stageID)/Service.ReadThread agree on identity without any reconciliation step.
 //
-// One stage thread per stage, created lazily: the thread id is derived from the stage id ALONE (not the
-// posting operation's id), and every post rebuilds the identical mesh_thread_opened/mesh_participant_added
+// One stage thread per stage and mention set, created lazily: the thread id is derived from the stage id and
+// the sorted set of participants the human mentioned (not the posting operation's id; no mentions is the
+// original per-stage thread), and every post rebuilds the identical mesh_thread_opened/mesh_participant_added
 // effects from scratch — the same "re-derive on every call, let the projection dedupe a byte-identical
 // re-add" discipline agentcomm_roster.go's ensureParticipantEffects already documents. applyMeshThreadOpened
 // (pkg/state/mesh_projection.go) was extended to treat a byte-identical re-open as a no-op for exactly this
-// reason: only the FIRST post to a given stage actually creates its thread, every later one is harmless.
+// reason: only the FIRST post to a given thread actually creates it, every later one is harmless.
 package orchestrator
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// discussionThreadMembers is the fixed member set of stageID's discussion mesh thread: the human and the
-// stage's own main agent — the two roles every stage discussion already has by construction, long before any
-// helper is ever attached. See discussionMeshSender's doc comment for why mirroring stops there for now.
-func discussionThreadMembers(stageID string) []agentcomm.ParticipantID {
-	return []agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(stageID)}
+// discussionThreadMembers is the member set of a stage discussion thread: the human, the stage's own main
+// agent and the participants the human mentioned (already normalized by normalizeDiscussionMentions). A
+// thread can never grow members, so every distinct mention set is a thread of its own.
+func discussionThreadMembers(stageID string, mentions []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	return append([]agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(stageID)}, mentions...)
 }
 
-// deriveDiscussionThreadID returns stageID's one, permanent discussion-thread id — deterministic from the
-// stage id alone (unlike deriveMeshThreadID, which is keyed on a caller-supplied OPERATION id and so mints a
-// fresh thread per OpenThread call). Sharing the same namespace helper (deriveMeshID) as deriveMeshThreadID/
-// deriveMeshMessageID/deriveMeshWaitID keeps this one more hash convention, not a new one.
+// deriveDiscussionThreadID returns stageID's base discussion-thread id (the human and the stage agent) —
+// deterministic from the stage id alone (unlike deriveMeshThreadID, which is keyed on a caller-supplied
+// OPERATION id and so mints a fresh thread per OpenThread call).
 func deriveDiscussionThreadID(stageID string) agentcomm.ThreadID {
 	return agentcomm.ThreadID("mt-" + deriveMeshID("discussion-thread", stageID))
 }
 
+// discussionThreadID returns the discussion thread of stageID with these extra members. No mentions is the
+// base thread, so posts written before mentions existed keep their thread; otherwise the id also hashes the
+// sorted mention set, so the same set always meets in the same thread.
+func discussionThreadID(stageID string, mentions []agentcomm.ParticipantID) agentcomm.ThreadID {
+	if len(mentions) == 0 {
+		return deriveDiscussionThreadID(stageID)
+	}
+	ids := make([]string, len(mentions))
+	for i, m := range mentions {
+		ids[i] = string(m)
+	}
+	return agentcomm.ThreadID("mt-" + deriveMeshID("discussion-thread", stageID+"|"+strings.Join(ids, ",")))
+}
+
+// normalizeDiscussionMentions returns the mentions as a sorted set without the human and the stage agent
+// itself — both are members of every discussion thread anyway.
+func normalizeDiscussionMentions(stageID string, mentions []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	var out []agentcomm.ParticipantID
+	for _, m := range mentions {
+		if m == "" || m == meshUserParticipantID || m == meshStageParticipantID(stageID) || slices.Contains(out, m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// discussionStageOfThread maps a mesh thread back to the stage whose discussion it is: a thread is stage S's
+// discussion thread when its id is the one discussionThreadID derives for S and the thread's other members.
+// Recomputed from the projection, so no extra state is journaled for the reverse lookup.
+func discussionStageOfThread(rs state.RunState, threadID agentcomm.ThreadID) (string, bool) {
+	thread, ok := rs.Assistants.Mesh.Threads[threadID]
+	if !ok || !slices.Contains(thread.Members, meshUserParticipantID) {
+		return "", false
+	}
+	for _, m := range thread.Members {
+		stageID, isStage := stageIDFromMeshParticipant(m)
+		if !isStage {
+			continue
+		}
+		extra := normalizeDiscussionMentions(stageID, thread.Members)
+		if discussionThreadID(stageID, extra) == threadID {
+			return stageID, true
+		}
+	}
+	return "", false
+}
+
 // discussionMeshSender maps a discussion message's author onto the mesh identity that should appear as the
-// mirrored mesh message's Sender. ok=false means "do not mirror this post into the mesh" — today that is
-// every AuthorKind except the two stable, always-known roles discussionThreadMembers fixes the thread's
-// membership to. AuthorAssistant (a helper's own result) and AuthorAFM (system/synthesis bookkeeping) are not
-// yet addressable under their own identity from a two-member thread with no mechanism to grow its member set
-// after creation (agentcomm.Thread's own doc comment: "adding a colleague means opening a new thread, never
-// mutating this one's Members") — widening the discussion thread to more roles is left to a later phase, not
-// invented speculatively here. A post whose author does not map onto a mesh identity still durably records
-// its discussion_message exactly as it did before this file existed — nothing about it is skipped or weakened.
+// mirrored mesh message's Sender. ok=false means "do not mirror this post into the mesh": AuthorAssistant (a
+// helper's own result) and AuthorAFM (system/synthesis bookkeeping) posts are recorded in the discussion
+// only. A post whose author does not map onto a mesh identity still durably records its discussion_message.
 func discussionMeshSender(stageID string, kind assistants.MessageAuthorKind) (agentcomm.ParticipantID, bool) {
 	switch kind {
 	case assistants.AuthorHuman:
@@ -68,7 +114,8 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 		return nil, nil
 	}
 
-	members := discussionThreadMembers(stageID)
+	mentions := normalizeDiscussionMentions(stageID, req.Mentions)
+	members := discussionThreadMembers(stageID, mentions)
 	effects, err := ensureParticipantEffects(rs, members)
 	if err != nil {
 		return nil, fmt.Errorf("discussion mesh mirror: %w", err)
@@ -78,7 +125,7 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	for i, m := range members {
 		memberStrs[i] = string(m)
 	}
-	threadID := deriveDiscussionThreadID(stageID)
+	threadID := discussionThreadID(stageID, mentions)
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
 		state.MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: memberStrs})
 	if err != nil {
@@ -116,27 +163,34 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	return effects, nil
 }
 
-// discussionMirrorOfStageReply is the way back of the discussion mirror: when a stage agent writes in its own
-// stage's discussion thread (typically answering the human's discussion post), the same message — same id, in
-// the same operation — is also recorded as the stage's discussion message, so the Discussion tab shows the
-// answer and not only the question. Anything else is not mirrored (ok=false).
-//
-// The reply keeps its parent only when the parent is itself a discussion message: the Team view can write into
-// this thread directly, and such a message exists only in the mesh — naming it as the discussion parent would
-// make the discussion projection reject the agent's whole reply.
-func discussionMirrorOfStageReply(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, bool, error) {
-	stageID, ok := stageIDFromMeshParticipant(req.Sender)
-	if !ok || req.ThreadID != deriveDiscussionThreadID(stageID) {
+// discussionMirrorOfReply is the way back of the discussion mirror: when any member but the human REPLIES to a
+// discussion message of a stage (typically the human's post) in one of that stage's discussion threads, the
+// same message — same id, in the same operation — is also recorded as that stage's discussion message, under
+// that parent, so the Discussion tab shows the answer and not only the question. The stage agent appears as
+// the main agent; anybody the human mentioned appears under their own participant id, with their mesh kind as
+// the role. Anything else said in the thread — a new topic, or an answer to a message written straight into
+// the thread from the Team view, which exists only in the mesh — stays in the Team conversation (ok=false).
+func discussionMirrorOfReply(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, bool, error) {
+	if req.Sender == meshUserParticipantID || req.InReplyTo == nil {
 		return state.Effect{}, false, nil
 	}
-	var parent string
-	if req.InReplyTo != nil {
-		if _, inDiscussion := rs.Assistants.Discussions.Messages[string(*req.InReplyTo)]; inDiscussion {
-			parent = string(*req.InReplyTo)
+	stageID, ok := discussionStageOfThread(rs, req.ThreadID)
+	if !ok {
+		return state.Effect{}, false, nil
+	}
+	parent := string(*req.InReplyTo)
+	if !slices.Contains(rs.Assistants.Discussions.ByStage[stageID], parent) {
+		return state.Effect{}, false, nil
+	}
+	author, role := assistants.AuthorMainAgent, string(assistants.AuthorMainAgent)
+	if req.Sender != meshStageParticipantID(stageID) {
+		author, role = assistants.AuthorAssistant, string(assistants.AuthorAssistant)
+		if p, known := resolveParticipant(rs, req.Sender); known {
+			role = string(p.Kind)
 		}
 	}
 	eff, err := discussionMessageEffect(stageID, string(messageID), state.DiscussionMessagePayload{
-		AuthorKind: string(assistants.AuthorMainAgent), AuthorID: string(req.Sender), Role: string(assistants.AuthorMainAgent),
+		AuthorKind: string(author), AuthorID: string(req.Sender), Role: role,
 		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body,
 	})
 	return eff, err == nil, err

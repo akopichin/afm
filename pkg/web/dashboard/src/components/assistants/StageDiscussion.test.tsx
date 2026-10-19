@@ -76,4 +76,31 @@ describe('StageDiscussion', () => {
     const item = screen.getByText('looks fine').closest('li')
     expect(item).toHaveAttribute('data-author-kind', 'human')
   })
+
+  test('names the agents a post was also addressed to, and a mentioned agent by its role', () => {
+    const participants = [{ id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true }]
+    render(
+      <StageDiscussion
+        participants={participants}
+        messages={[
+          makeMessage({ id: 'q', authorKind: 'human', authorId: undefined, role: undefined, round: 0, body: 'ask', mentions: ['run:t-1', 'run:gone'] }),
+          makeMessage({ id: 'a', authorKind: 'assistant', authorId: 'run:t-1', role: 'run_agent', round: 0, body: 'answer' }),
+        ]}
+      />,
+    )
+    expect(screen.getByText('→ QA, gone')).toBeInTheDocument()
+    expect(screen.getByText('Run agent')).toBeInTheDocument()
+  })
+
+  test('a pasted JSON result shows as its summary with a verdict chip', () => {
+    render(
+      <StageDiscussion
+        messages={[makeMessage({ body: '{"schema_version":1,"kind":"result","verdict":"pass","summary":"All checks green."}' })]}
+      />,
+    )
+    expect(screen.getByText('All checks green.')).toBeInTheDocument()
+    expect(screen.getByText('Pass')).toBeInTheDocument()
+    // The raw JSON is only inside the collapsed "Raw" details, never the visible text.
+    expect(screen.getByText(/schema_version/).closest('details')).not.toBeNull()
+  })
 })

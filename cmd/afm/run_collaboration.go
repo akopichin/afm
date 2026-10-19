@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
@@ -347,20 +348,27 @@ func (d collaborationDiscussion) Messages(stageID string, cursor uint64, limit i
 		end = len(all)
 	}
 	out := make([]server.DiscussionMessageView, 0, end-start)
+	unanswered := d.orch.UnansweredDiscussionPosts(stageID)
 	for _, m := range all[start:end] {
 		out = append(out, server.DiscussionMessageView{
 			ID: m.ID, AuthorKind: string(m.Author.Kind), AuthorID: m.Author.ID, Role: m.Role,
 			Executor: m.Executor, Round: m.Round, ParentMessageID: m.ParentMessageID,
-			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, CreatedAt: m.CreatedAt,
+			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, Mentions: m.Mentions,
+			Interrupt: m.Interrupt, Unanswered: unanswered[m.ID], CreatedAt: m.CreatedAt,
 		})
 	}
 	return out, uint64(end), end < len(all), nil
 }
 
-func (d collaborationDiscussion) PostMessage(ctx context.Context, stageID, requestID, body string) (string, error) {
+func (d collaborationDiscussion) PostMessage(ctx context.Context, stageID string, post server.DiscussionPost) (string, error) {
+	mentions := make([]agentcomm.ParticipantID, len(post.Mentions))
+	for i, m := range post.Mentions {
+		mentions[i] = agentcomm.ParticipantID(m)
+	}
 	return d.orch.PostDiscussionMessage(ctx, orchestrator.PostMessageRequest{
-		OperationID: requestID, StageID: stageID, AuthorKind: assistants.AuthorHuman,
-		Round: assistants.RoundFreeform, Body: body, Actor: state.Actor{Kind: "user"},
+		OperationID: post.RequestID, StageID: stageID, AuthorKind: assistants.AuthorHuman,
+		Round: assistants.RoundFreeform, Body: post.Body, Actor: state.Actor{Kind: "user"},
+		Mentions: mentions, Interrupt: post.Interrupt,
 	})
 }
 

@@ -497,7 +497,9 @@ func (s *Store) Apply(t *Transition) error {
 
 	s.lastSeq++
 	t.Seq = s.lastSeq
-	t.Time = clk().Now()
+	// Round(0) drops the monotonic reading: durations computed live (accountIdleAndBackoff) then match the ones
+	// computed from the journal on replay, which only has wall-clock time.
+	t.Time = clk().Now().Round(0)
 
 	data, err := json.Marshal(t)
 	if err != nil {
@@ -585,7 +587,7 @@ func (s *Store) appendControlLocked(c *Control) error {
 
 	nextSeq := s.lastSeq + 1
 	c.Seq = nextSeq
-	c.Time = clk().Now()
+	c.Time = clk().Now().Round(0) // wall clock only, as on replay (see Apply)
 
 	// Validate BEFORE ever touching the journal: a record that fails projection must never be durably
 	// written, or every future replay of this run would fail the exact same way forever (unlike a torn tail

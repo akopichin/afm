@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -18,6 +19,7 @@ type fakeDiscussionService struct {
 	lastStage string
 	lastBody  string
 	lastReqID string
+	lastPost  DiscussionPost
 	postErr   error
 }
 
@@ -38,18 +40,19 @@ func (f *fakeDiscussionService) Messages(stageID string, cursor uint64, limit in
 	return page, next, hasMore, nil
 }
 
-func (f *fakeDiscussionService) PostMessage(ctx context.Context, stageID, requestID, body string) (string, error) {
+func (f *fakeDiscussionService) PostMessage(ctx context.Context, stageID string, post DiscussionPost) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.postCalls++
 	f.lastStage = stageID
-	f.lastBody = body
-	f.lastReqID = requestID
+	f.lastBody = post.Body
+	f.lastReqID = post.RequestID
+	f.lastPost = post
 	if f.postErr != nil {
 		return "", f.postErr
 	}
 	id := "dm-test"
-	f.messages = append(f.messages, DiscussionMessageView{ID: id, AuthorKind: "human", Body: body})
+	f.messages = append(f.messages, DiscussionMessageView{ID: id, AuthorKind: "human", Body: post.Body})
 	return id, nil
 }
 
@@ -83,6 +86,30 @@ func TestDiscussion_UserMessageIsNotAutoRevise(t *testing.T) {
 	}
 	if tracker.reviseCalls != 0 {
 		t.Fatalf("a discussion message must never auto-trigger Revise, got %d Revise calls", tracker.reviseCalls)
+	}
+}
+
+// TestDiscussion_PostPassesMentionsAndInterrupt: the composer's `@` mentions and its "Interrupt agent" toggle
+// reach the discussion service unchanged; the handler itself never decides about Revise.
+func TestDiscussion_PostPassesMentionsAndInterrupt(t *testing.T) {
+	tracker := &reviseTrackingStageActions{}
+	fake := &fakeDiscussionService{}
+	srv := newTestServer(t, Config{Actions: tracker, DiscussionService: fake})
+
+	body, _ := json.Marshal(map[string]any{"request_id": "req-2", "body": "how is the plan going?", "mentions": []string{"run:t-qa"}, "interrupt": true})
+	req := httptest.NewRequest(http.MethodPost, "/api/stages/"+testStageID+"/discussion", bytes.NewReader(body))
+	req.Header.Set("Origin", "http://"+req.Host)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	want := DiscussionPost{RequestID: "req-2", Body: "how is the plan going?", Mentions: []string{"run:t-qa"}, Interrupt: true}
+	if !reflect.DeepEqual(fake.lastPost, want) {
+		t.Fatalf("post = %+v, want %+v", fake.lastPost, want)
+	}
+	if tracker.reviseCalls != 0 {
+		t.Fatalf("the handler must not call Revise itself, got %d calls", tracker.reviseCalls)
 	}
 }
 

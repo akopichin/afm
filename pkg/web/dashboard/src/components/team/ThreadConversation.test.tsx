@@ -55,6 +55,23 @@ describe('ThreadConversation', () => {
     expect(screen.queryByText(/run:qa/)).toBeNull()
   })
 
+  test('a pasted JSON result shows as its summary with a verdict chip, never raw JSON', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+      messages: [
+        {
+          id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', seq: 1, created_at: '2026-10-18T00:00:01Z',
+          body: '{"schema_version":1,"kind":"result","verdict":"inconclusive","summary":"Could not run the e2e suite."}',
+        },
+      ],
+      next_cursor: 1,
+    })
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    await waitFor(() => expect(screen.getByText('Could not run the e2e suite.')).toBeInTheDocument())
+    expect(screen.getByText('Inconclusive')).toBeInTheDocument()
+    // The raw JSON is only inside the collapsed "Raw" details, never the visible text.
+    expect(screen.getByText(/schema_version/).closest('details')).not.toBeNull()
+  })
+
   test('a reply quotes the message it answers, inside its bubble', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
       messages: [
@@ -75,7 +92,7 @@ describe('ThreadConversation', () => {
     const agentsOnly: MeshThread = { id: 'mt-7', title: '', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: agentsOnly }} participants={[qa]} />)
     expect(screen.getByText(/talking between themselves/)).toBeInTheDocument()
-    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
   })
 
   test('a conversation opens at its latest message, not at the top', async () => {

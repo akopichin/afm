@@ -56,6 +56,11 @@ func (l *Logger) LogAction(toolName, detail string) {
 	fmt.Print(line)
 }
 
+// ErrUserInterrupted — the agent was stopped on purpose (Revise, a Discussion question, Pause) and is resumed
+// right after; its log says "interrupted", not FAILED. Declared here, not in executor (which imports this
+// package), so LogEnd can recognise it.
+var ErrUserInterrupted = errors.New("user interrupted")
+
 // LogEnd writes a completion or failure banner with elapsed duration.
 func (l *Logger) LogEnd(err error) {
 	duration := time.Since(l.startTime).Round(time.Second)
@@ -64,8 +69,9 @@ func (l *Logger) LogEnd(err error) {
 	case err == nil:
 		line = fmt.Sprintf("=== completed | %s | duration: %s ===\n",
 			time.Now().Format("2006-01-02 15:04:05"), duration)
-	case errors.Is(err, context.Canceled):
-		// The run was stopped (Ctrl+C) — not a failure: the agent is retried when the run resumes.
+	case errors.Is(err, context.Canceled), errors.Is(err, ErrUserInterrupted):
+		// Stopped on purpose — the run (Ctrl+C) or the user (Revise, a Discussion question): not a failure,
+		// the agent is resumed.
 		line = fmt.Sprintf("=== interrupted | %s | duration: %s ===\n",
 			time.Now().Format("2006-01-02 15:04:05"), duration)
 	default:

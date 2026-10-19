@@ -11,17 +11,33 @@ import (
 
 // DiscussionMessageView is one entry of a stage's discussion log — GET /api/stages/{id}/discussion.
 type DiscussionMessageView struct {
-	ID              string    `json:"id"`
-	AuthorKind      string    `json:"author_kind"`
-	AuthorID        string    `json:"author_id,omitempty"`
-	Role            string    `json:"role,omitempty"`
-	Executor        string    `json:"executor,omitempty"`
-	Round           int       `json:"round"`
-	ParentMessageID string    `json:"parent_message_id,omitempty"`
-	ContextVersion  string    `json:"context_version,omitempty"`
-	Evidence        []string  `json:"evidence,omitempty"`
-	Body            string    `json:"body,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              string   `json:"id"`
+	AuthorKind      string   `json:"author_kind"`
+	AuthorID        string   `json:"author_id,omitempty"`
+	Role            string   `json:"role,omitempty"`
+	Executor        string   `json:"executor,omitempty"`
+	Round           int      `json:"round"`
+	ParentMessageID string   `json:"parent_message_id,omitempty"`
+	ContextVersion  string   `json:"context_version,omitempty"`
+	Evidence        []string `json:"evidence,omitempty"`
+	Body            string   `json:"body,omitempty"`
+	// Mentions — mesh participant ids the post was also addressed to with `@`.
+	Mentions []string `json:"mentions,omitempty"`
+	// Interrupt — the human asked the running stage agent to answer this post right away.
+	Interrupt bool `json:"interrupt,omitempty"`
+	// Unanswered — a human post of a finished stage that nobody replied to.
+	Unanswered bool      `json:"unanswered,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// DiscussionPost is one human post to a stage's discussion — the body of POST /api/stages/{id}/discussion.
+type DiscussionPost struct {
+	RequestID string
+	Body      string
+	// Mentions — mesh participant ids pulled into the post with `@`; they receive it besides the stage agent.
+	Mentions []string
+	// Interrupt — interrupt the running stage agent so it answers now; no effect for a stage not running.
+	Interrupt bool
 }
 
 // DiscussionService is the read+write service for one stage's discussion log (T6.7, §13.1) — a SEPARATE,
@@ -33,7 +49,7 @@ type DiscussionService interface {
 	Messages(stageID string, cursor uint64, limit int) (messages []DiscussionMessageView, nextCursor uint64, hasMore bool, err error)
 	// PostMessage appends one human (or forwarded) message to the discussion. This NEVER touches the parent
 	// stage's FSM — a discussion message is purely observational (TestDiscussion_UserMessageIsNotAutoRevise).
-	PostMessage(ctx context.Context, stageID, requestID, body string) (messageID string, err error)
+	PostMessage(ctx context.Context, stageID string, post DiscussionPost) (messageID string, err error)
 }
 
 const (
@@ -91,8 +107,10 @@ func (s *Server) handleDiscussionPost(w http.ResponseWriter, r *http.Request, st
 		return
 	}
 	var body struct {
-		RequestID string `json:"request_id"`
-		Body      string `json:"body"`
+		RequestID string   `json:"request_id"`
+		Body      string   `json:"body"`
+		Mentions  []string `json:"mentions"`
+		Interrupt bool     `json:"interrupt"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDiscussionMessageBodyByte)).Decode(&body); err != nil {
 		var maxErr *http.MaxBytesError
@@ -111,7 +129,9 @@ func (s *Server) handleDiscussionPost(w http.ResponseWriter, r *http.Request, st
 		writeAssistantErrCode(w, http.StatusBadRequest, "body_required")
 		return
 	}
-	id, err := s.discussionService.PostMessage(r.Context(), stageID, body.RequestID, body.Body)
+	id, err := s.discussionService.PostMessage(r.Context(), stageID, DiscussionPost{
+		RequestID: body.RequestID, Body: body.Body, Mentions: body.Mentions, Interrupt: body.Interrupt,
+	})
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return

@@ -2,6 +2,8 @@
 
 Your final message must be EXACTLY ONE JSON object and nothing else: no markdown code fence, no prose before or after it. Any commentary you want to give belongs inside the JSON fields themselves.
 
+This JSON object is ONLY your final turn output. Messages you send to the human or to colleagues with `afm agent send`/`afm agent reply` are plain, human-readable text — never this JSON object.
+
 Rules:
 - `schema_version` is always `1`.
 - `kind` is always `"result"`.

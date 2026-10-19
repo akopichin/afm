@@ -297,6 +297,9 @@ type Orchestrator struct {
 	// still-"accepted" intent and recurse into attemptFeedbackDelivery again before the outer call ever gets a
 	// chance to mark it delivered.
 	inFlightFeedbackIntents sync.Map
+	// feedbackWakeups — intent ids with a delivery request not yet handled by the deliverer holding
+	// inFlightFeedbackIntents (see attemptFeedbackDelivery): no request that arrives during a delivery is lost.
+	feedbackWakeups sync.Map
 
 	// runnerKind хранит, каким раннером сейчас активирована стадия — stageID -> одна из констант
 	// kindPlanning/kindImplementation/kindReview/kindAutonomous.
@@ -313,6 +316,9 @@ type Orchestrator struct {
 	// verifyOutcomeGuardHook — тест-сейм: вызывается в retry.go's commitVerifyFailure НЕПОСРЕДСТВЕННО ПЕРЕД
 	// атомарным Trigger — т.е. ПОСЛЕ дешёвого fast-path чтения, но ДО самого CAS.
 	verifyOutcomeGuardHook func(stageID string)
+	// feedbackDeliveryDecidedHook — тест-сейм: вызывается в deliverFeedbackIntentOnce между выбором пути по
+	// статусу и самим Revise, чтобы тест мог вклинить конкурентный Pause. nil в продакшене.
+	feedbackDeliveryDecidedHook func(stageID string)
 
 	// taskRequeueBarrier — тест-сейм: вызывается в spawnTask's run body СРАЗУ после того, как taskHeld
 	// вернул true (held), но ДО finishTaskFrom's requeue-commit (running->queued) — позволяет тесту
@@ -630,6 +636,9 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		}
 		if bus.IsTerminal(to) && o.stageHasUnreadMessages(stageID) {
 			o.releaseUnreadAfterTransition(stageID)
+		}
+		if bus.IsTerminal(to) {
+			o.noticeUnansweredHumanPosts(stageID)
 		}
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)

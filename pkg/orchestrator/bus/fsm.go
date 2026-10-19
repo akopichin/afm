@@ -71,6 +71,11 @@ type GuardCtx struct {
 	// PausedFrom используется только EvContinue — вызывающий код читает его
 	// заранее из Store.PausedFrom(stageID) (см. Orchestrator.Continue).
 	PausedFrom state.StageStatus
+	// ExpectFrom, when set, narrows the event's From-set to exactly this status: the transition happens only
+	// if the stage is STILL in the status the caller decided on. The store's CAS on From makes the read and
+	// the write one atomic step, so e.g. a Revise decided for a running agent never moves a stage that a
+	// concurrent Pause has just paused.
+	ExpectFrom state.StageStatus
 }
 
 type Rule struct {
@@ -170,6 +175,9 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		return current, current, 0, false, ErrNoRule
 	}
 	from = current
+	if ctx.ExpectFrom != "" && from != ctx.ExpectFrom {
+		return from, from, 0, false, nil
+	}
 	if !ruleAllowsFrom(rule.From, from) {
 		return from, from, 0, false, nil
 	}

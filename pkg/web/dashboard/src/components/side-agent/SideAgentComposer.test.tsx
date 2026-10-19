@@ -32,7 +32,7 @@ describe('SideAgentComposer', () => {
   it('sends on Cmd/Ctrl+Enter when non-empty and idle', () => {
     const onSend = vi.fn()
     render(<SideAgentComposer draft="hello" onDraftChange={vi.fn()} onSend={onSend} onStop={vi.fn()} running={false} />)
-    const ta = screen.getByRole('textbox')
+    const ta = screen.getByRole('combobox')
     fireEvent.keyDown(ta, { key: 'Enter', metaKey: true })
     expect(onSend).toHaveBeenCalledTimes(1)
     fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true })
@@ -42,7 +42,7 @@ describe('SideAgentComposer', () => {
   it('plain Enter does not send (newline)', () => {
     const onSend = vi.fn()
     render(<SideAgentComposer draft="hello" onDraftChange={vi.fn()} onSend={onSend} onStop={vi.fn()} running={false} />)
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
     expect(onSend).not.toHaveBeenCalled()
   })
 
@@ -50,7 +50,7 @@ describe('SideAgentComposer', () => {
     const onSend = vi.fn()
     render(<SideAgentComposer draft="   " onDraftChange={vi.fn()} onSend={onSend} onStop={vi.fn()} running={false} />)
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true })
     expect(onSend).not.toHaveBeenCalled()
   })
 
@@ -58,9 +58,9 @@ describe('SideAgentComposer', () => {
     const onStop = vi.fn()
     const onSend = vi.fn()
     render(<SideAgentComposer draft="next" onDraftChange={vi.fn()} onSend={onSend} onStop={onStop} running />)
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByRole('combobox')).not.toBeDisabled()
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true })
     expect(onSend).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(onStop).toHaveBeenCalledTimes(1)
@@ -74,7 +74,7 @@ describe('SideAgentComposer', () => {
   it('propagates typing through onDraftChange', () => {
     const onDraftChange = vi.fn()
     render(<SideAgentComposer draft="" onDraftChange={onDraftChange} onSend={vi.fn()} onStop={vi.fn()} running={false} />)
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'typed' } })
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'typed' } })
     expect(onDraftChange).toHaveBeenCalledWith('typed')
   })
 
@@ -129,7 +129,7 @@ describe('SideAgentComposer', () => {
 
   it('opens the mention menu on @ and filters as the query narrows', () => {
     render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    const ta = screen.getByRole('textbox')
+    const ta = screen.getByRole('combobox')
     fireEvent.change(ta, { target: { value: '@', selectionStart: 1 } })
     expect(screen.getByRole('listbox')).toBeInTheDocument()
     expect(screen.getAllByRole('option')).toHaveLength(2)
@@ -142,7 +142,7 @@ describe('SideAgentComposer', () => {
   it('Enter inside the mention list selects the profile and does not send', () => {
     const onSend = vi.fn()
     render(<ControlledComposer onSend={onSend} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    const ta = screen.getByRole('combobox') as HTMLTextAreaElement
     fireEvent.change(ta, { target: { value: '@fro', selectionStart: 4 } })
     fireEvent.keyDown(ta, { key: 'Enter' })
     expect(onSend).not.toHaveBeenCalled()
@@ -152,7 +152,7 @@ describe('SideAgentComposer', () => {
   it('Cmd/Ctrl+Enter still sends once there is no open mention list', () => {
     const onSend = vi.fn()
     render(<ControlledComposer initialDraft="hello" onSend={onSend} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true })
     expect(onSend).toHaveBeenCalledTimes(1)
   })
 
@@ -163,7 +163,7 @@ describe('SideAgentComposer', () => {
         <ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />
       </div>,
     )
-    const ta = screen.getByRole('textbox')
+    const ta = screen.getByRole('combobox')
     fireEvent.change(ta, { target: { value: '@fro', selectionStart: 4 } })
     expect(screen.getByRole('listbox')).toBeInTheDocument()
 
@@ -177,14 +177,14 @@ describe('SideAgentComposer', () => {
 
   it('does not open the mention menu for an email-like @ (no preceding whitespace)', () => {
     render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    const ta = screen.getByRole('textbox')
+    const ta = screen.getByRole('combobox')
     fireEvent.change(ta, { target: { value: 'contact user@example.com', selectionStart: 25 } })
     expect(screen.queryByRole('listbox')).toBeNull()
   })
 
   it('inserting a mention mid-text preserves surrounding text and places the caret after it', () => {
     render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    const ta = screen.getByRole('combobox') as HTMLTextAreaElement
     fireEvent.change(ta, { target: { value: 'ask @fro please', selectionStart: 8 } })
     fireEvent.keyDown(ta, { key: 'Enter' })
     expect(ta.value).toBe('ask @frontendDeveloper  please')
@@ -192,7 +192,7 @@ describe('SideAgentComposer', () => {
 
   it('supports multiple mentions in one message', () => {
     render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    const ta = screen.getByRole('combobox') as HTMLTextAreaElement
 
     fireEvent.change(ta, { target: { value: '@fro', selectionStart: 4 } })
     fireEvent.keyDown(ta, { key: 'Enter' })
@@ -206,7 +206,7 @@ describe('SideAgentComposer', () => {
 
   it('composition (IME) keystrokes do not break typing or get mistaken for a mention selection', () => {
     render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
-    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    const ta = screen.getByRole('combobox') as HTMLTextAreaElement
     fireEvent.change(ta, { target: { value: '@fro', selectionStart: 4 } })
     fireEvent.compositionStart(ta)
     // Enter fired while composing (e.g. confirming an IME candidate) must not be treated as "select mention".
@@ -220,7 +220,7 @@ describe('SideAgentComposer', () => {
 
   it('hides the mention menu entirely when no assistant profiles are available (capability off)', () => {
     render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} />)
-    const ta = screen.getByRole('textbox')
+    const ta = screen.getByRole('combobox')
     fireEvent.change(ta, { target: { value: '@fro', selectionStart: 4 } })
     expect(screen.queryByRole('listbox')).toBeNull()
   })

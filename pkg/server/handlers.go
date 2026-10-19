@@ -35,6 +35,10 @@ func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fall
 		writeFlowError(w, http.StatusConflict, "flow_paused")
 		return
 	}
+	if errors.Is(err, orchestrator.ErrNotApplied) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	http.Error(w, fallbackMsg+": "+err.Error(), fallbackStatus)
 }
 

@@ -88,7 +88,7 @@ describe('SideAgentModal', () => {
 
   it('focuses the composer textarea on open', () => {
     renderModal({ isOpen: true })
-    expect(document.activeElement).toBe(screen.getByRole('textbox'))
+    expect(document.activeElement).toBe(screen.getByRole('combobox'))
   })
 
   it('clears inert before focusing the composer (real browsers refuse focus inside inert)', () => {
@@ -214,7 +214,7 @@ describe('SideAgentModal', () => {
     renderModal({ isOpen: true, contextStageId: 'frontend' })
     expect(screen.getByText('Context:')).toBeInTheDocument()
     expect(screen.getByText('frontend')).toBeInTheDocument()
-    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(document.querySelector('select')).toBeNull() // no stage picker (the composer is a combobox too)
   })
 
   it('offers a selector to change the context before sending when stages are known', () => {
