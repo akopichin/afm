@@ -146,12 +146,19 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	}
 	effects = append(effects, msgEff)
 
-	// A post to a stage that has already finished keeps its place in the thread's history, but nobody will
-	// ever read it: its receipt is undeliverable from the start, so it never counts as an unread message.
+	// A post to the feed's own stage after it finished keeps its place in the thread's history, but nobody will
+	// ever read it: its receipt is undeliverable from the start, so it never counts as an unread message. Anyone
+	// else the post names explicitly must still be able to read it: such a post is refused with the reason — it
+	// is decided again under the commit's lock (PostDiscussionMessage), so a mention that finished after the
+	// sender looked at the roster is refused too, never reported as sent.
 	for _, r := range recipients {
 		p, ok := resolveParticipant(rs, agentcomm.ParticipantID(r))
 		if !ok || p.Reachable {
 			continue
+		}
+		if agentcomm.ParticipantID(r) != meshStageParticipantID(stageID) {
+			return nil, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf(
+				"@%s cannot read this post (%s) — remove the mention and send again", p.Alias, p.UnreachableReason)}
 		}
 		undeliverable, err := marshalEffect("mesh_message_undeliverable", state.Target{MessageID: messageID, ParticipantID: r},
 			state.MeshMessageReceiptPayload{Reason: p.UnreachableReason})
