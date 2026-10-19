@@ -354,6 +354,7 @@ export type DiscussionMessageWire = {
   context_version?: string
   evidence?: string[]
   body?: string
+  mentions?: string[]
   created_at: string
 }
 
@@ -373,10 +374,24 @@ export async function listStageDiscussion(
   return { messages: body.messages ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
 }
 
+// DiscussionPost — one human post: its text, the mesh participants pulled in with `@` (they receive it besides
+// the stage agent), and whether to interrupt the running stage agent so it answers now.
+export type DiscussionPost = {
+  body: string
+  mentions: string[]
+  interrupt: boolean
+}
+
 // postStageDiscussionMessage appends one human message to a stage's discussion — POST
-// /api/stages/{id}/discussion. This NEVER triggers Revise/affects the stage's status on its own.
-export async function postStageDiscussionMessage(stageId: string, requestId: string, body: string): Promise<{ messageId: string }> {
-  const resp = await jsonRequest<{ message_id: string }>(stageUrl(stageId, 'discussion'), 'POST', { request_id: requestId, body })
+// /api/stages/{id}/discussion. It never revises the stage's work; with `interrupt` a RUNNING stage agent stops
+// its turn to answer the post and then continues (no effect for any other status).
+export async function postStageDiscussionMessage(stageId: string, requestId: string, post: DiscussionPost): Promise<{ messageId: string }> {
+  const resp = await jsonRequest<{ message_id: string }>(stageUrl(stageId, 'discussion'), 'POST', {
+    request_id: requestId,
+    body: post.body,
+    mentions: post.mentions,
+    interrupt: post.interrupt,
+  })
   return { messageId: resp.message_id }
 }
 

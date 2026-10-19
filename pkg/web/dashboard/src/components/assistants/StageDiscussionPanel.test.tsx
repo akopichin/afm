@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { StageDiscussionPanel } from './StageDiscussionPanel'
 import * as runClient from '../../api/run-client'
@@ -27,7 +27,8 @@ describe('StageDiscussionPanel', () => {
     render(<StageDiscussionPanel stageId="implement" />)
     const log = screen.getByRole('log', { name: 'Discussion' })
     await waitFor(() => expect(log).toHaveTextContent(/can the reviewer re-check/i))
-    expect(log.nextElementSibling).toHaveClass('chat-composer-row')
+    expect(log.nextElementSibling).toHaveClass('stage-discussion-route')
+    expect(log.nextElementSibling?.nextElementSibling).toHaveClass('chat-composer-row')
   })
 
   test('posts a human message and clears the input', async () => {
@@ -39,7 +40,9 @@ describe('StageDiscussionPanel', () => {
     fireEvent.change(input, { target: { value: 'please look at the backoff too' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    await waitFor(() => expect(post).toHaveBeenCalledWith('implement', expect.any(String), 'please look at the backoff too'))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('implement', expect.any(String), { body: 'please look at the backoff too', mentions: [], interrupt: false }),
+    )
     await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''))
   })
 
@@ -84,5 +87,53 @@ describe('StageDiscussionPanel', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  test('Interrupt agent is offered only while the stage runs, and is sent with the post', async () => {
+    const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'm2' })
+    const { rerender } = render(<StageDiscussionPanel stageId="implement" stageStatus="awaiting_approval" />)
+    expect(screen.queryByLabelText('Interrupt agent')).not.toBeInTheDocument()
+
+    rerender(<StageDiscussionPanel stageId="implement" stageStatus="running" />)
+    const toggle = screen.getByLabelText('Interrupt agent') as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    fireEvent.click(toggle)
+
+    fireEvent.change(screen.getByPlaceholderText(/add a message to this stage/i), { target: { value: 'how is the plan going?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('implement', expect.any(String), { body: 'how is the plan going?', mentions: [], interrupt: true }),
+    )
+  })
+
+  test('@ inserts a unique handle, lists only other agents, and sends their ids as mentions', async () => {
+    const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'm2' })
+    const participants = [
+      { id: 'user', kind: 'user', scope: 'run', alias: 'user', display_name: 'You', reachable: true },
+      { id: 'stage:implement', kind: 'stage_agent', scope: 'stage', alias: 'implement', reachable: true },
+      { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
+      { id: 'run:t-2', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA 2', reachable: true },
+    ]
+    render(<StageDiscussionPanel stageId="implement" participants={participants} stageStatus="running" />)
+    const input = screen.getByPlaceholderText(/add a message to this stage/i) as HTMLTextAreaElement
+
+    fireEvent.change(input, { target: { value: '@', selectionStart: 1 } })
+    const menu = screen.getByRole('listbox', { name: /bring another agent/i })
+    expect(menu).not.toHaveTextContent('You')
+    expect(menu).not.toHaveTextContent('implement')
+    fireEvent.click(within(menu).getByRole('button', { name: /QA 2/ }))
+    // Both run agents share the alias `qa`, so the pick is written as its full id — one mention, one agent.
+    expect(input.value).toBe('@run:t-2 ')
+    expect(screen.getByText(/and QA 2/)).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: '@run:t-2 please check the tests' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('implement', expect.any(String), {
+        body: '@run:t-2 please check the tests',
+        mentions: ['run:t-2'],
+        interrupt: false,
+      }),
+    )
   })
 })

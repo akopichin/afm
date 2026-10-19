@@ -594,7 +594,7 @@ export function App(): ReactElement {
                   workspaceStage !== null ? (
                     <div className="stage-collab-view">
                       <StageProposals stageId={workspaceStage.id} />
-                      <StageDiscussionPanel stageId={workspaceStage.id} participants={meshRoster.participants} />
+                      <StageDiscussionPanel stageId={workspaceStage.id} participants={meshRoster.participants} stageStatus={workspaceStage.status} />
                     </div>
                   ) : (
                     <div className="detail-empty empty-hint">Select a stage to see its discussion</div>

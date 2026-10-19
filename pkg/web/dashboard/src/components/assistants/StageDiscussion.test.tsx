@@ -76,4 +76,19 @@ describe('StageDiscussion', () => {
     const item = screen.getByText('looks fine').closest('li')
     expect(item).toHaveAttribute('data-author-kind', 'human')
   })
+
+  test('names the agents a post was also addressed to, and a mentioned agent by its role', () => {
+    const participants = [{ id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true }]
+    render(
+      <StageDiscussion
+        participants={participants}
+        messages={[
+          makeMessage({ id: 'q', authorKind: 'human', authorId: undefined, role: undefined, round: 0, body: 'ask', mentions: ['run:t-1', 'run:gone'] }),
+          makeMessage({ id: 'a', authorKind: 'assistant', authorId: 'run:t-1', role: 'run_agent', round: 0, body: 'answer' }),
+        ]}
+      />,
+    )
+    expect(screen.getByText('→ QA, gone')).toBeInTheDocument()
+    expect(screen.getByText('Run agent')).toBeInTheDocument()
+  })
 })

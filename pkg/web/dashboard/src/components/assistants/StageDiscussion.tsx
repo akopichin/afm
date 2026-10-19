@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
-import { MarkdownRenderer } from '../plan-panel'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { senderLabel } from '../../lib/mesh-roster'
+import { participantRole, senderLabel } from '../../lib/mesh-roster'
+import { MarkdownRenderer } from '../plan-panel'
 
 // DiscussionMessage mirrors the server's DiscussionMessageView (pkg/server/discussion.go) one field at a
 // time — see GET /api/stages/{id}/discussion.
@@ -16,6 +16,8 @@ export type DiscussionMessage = {
   contextVersion?: string
   evidence?: string[]
   body: string
+  // mentions — mesh participant ids the human also addressed with `@`.
+  mentions?: string[]
   createdAt: string
 }
 
@@ -35,7 +37,8 @@ function authorLabel(m: DiscussionMessage, participants: MeshParticipant[]): str
   }
 }
 
-// roleLabel — the author's role in words; the wire values (main_agent, assistant) are not for people.
+// roleLabel — the author's role in words; the wire values (main_agent, assistant, a mentioned participant's
+// mesh kind such as run_agent) are not for people.
 function roleLabel(role: string): string {
   switch (role) {
     case 'main_agent':
@@ -43,7 +46,7 @@ function roleLabel(role: string): string {
     case 'assistant':
       return 'Helper'
     default:
-      return role
+      return participantRole(role)
   }
 }
 
@@ -72,6 +75,9 @@ export function StageDiscussion({ messages, participants = [] }: StageDiscussion
           <div className="stage-discussion-message-header">
             <span className="stage-discussion-message-author">{authorLabel(m, participants)}</span>
             {m.role && <span className="stage-discussion-message-role">{roleLabel(m.role)}</span>}
+            {m.mentions && m.mentions.length > 0 && (
+              <span className="stage-discussion-message-mentions">→ {m.mentions.map((id) => senderLabel(id, participants)).join(', ')}</span>
+            )}
           </div>
           <MarkdownRenderer source={m.body} />
           {m.evidence && m.evidence.length > 0 && (
