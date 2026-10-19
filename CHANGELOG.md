@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: secrets no longer leak through helper results, logs and artifact references
+
+Secret values were replaced in message bodies but not everywhere else. They are
+now also replaced in message and board artifact references, a helper's title
+and instruction, every text field of a helper's result (`result.json` and the
+journal), and the helper's own logs (`agent.log`, `agent.jsonl`,
+`agent.stderr.log`) and raw answer. A retry of the same request still matches
+the stored, redacted copy. A background process left by a helper that holds its
+stderr open no longer keeps the turn from ending.
+
 ### Improvement: helpers work in the project root and know where the changes are
 
 Helpers and run agents now start in the project root, like the stage agent,

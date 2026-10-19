@@ -106,7 +106,7 @@ func committedMessage(target state.Target, p state.MeshMessageSentPayload) agent
 // ambiguous (a new agent with the same alias) still names whom it named then.
 func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
 	if m.Sender != req.Sender || m.Kind != req.Kind || !o.sameRedactedText(m.Body, req.Body) ||
-		!slices.Equal(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
+		!o.sameRedactedList(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
 		return false
 	}
 	if req.ThreadID != "" && req.ThreadID != m.ThreadID {

@@ -138,7 +138,7 @@ func attachThreadMembers(newParticipant agentcomm.ParticipantID, recipients []ag
 // operation: its task, its thread's exact member set and its first message (or its absence) must all be what
 // req asks for, otherwise the request id was reused for another request — a conflict.
 func (o *Orchestrator) replayedAttachAndSend(op state.CommittedOperation, treq topLevelTaskRequest, req AttachAndSendRequest) (AttachAndSendResult, error) {
-	taskID, err := replayedTopLevelTask(op, treq)
+	taskID, err := o.replayedTopLevelTask(op, treq)
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}

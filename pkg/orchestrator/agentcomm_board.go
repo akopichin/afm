@@ -51,9 +51,10 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		notify[i] = string(n)
 	}
 	status := o.RedactSecrets(req.Status)
+	refs := o.redactAll(req.ArtifactRefs)
 	publishEff, err := marshalEffect("mesh_board_published",
 		state.Target{BoardKey: req.Key, ParticipantID: string(req.Author)},
-		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, Notify: &notify})
+		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: refs, ExpectedVersion: req.ExpectedVersion, Notify: &notify})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
 	}
@@ -83,7 +84,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		})
 		if err == nil {
 			return agentcomm.BoardEntry{
-				AuthorID: req.Author, Key: req.Key, Version: req.ExpectedVersion + 1, Status: status, ArtifactRefs: req.ArtifactRefs,
+				AuthorID: req.Author, Key: req.Key, Version: req.ExpectedVersion + 1, Status: status, ArtifactRefs: refs,
 				Seq: res.Seq, Ts: res.Time,
 			}, nil
 		}
@@ -125,7 +126,7 @@ func (o *Orchestrator) replayedPublish(req PublishRequest, notify []string) (age
 		return agentcomm.BoardEntry{}, true, err
 	}
 	if !found || target.BoardKey != req.Key || target.ParticipantID != string(req.Author) || !o.sameRedactedText(p.Status, req.Status) ||
-		!slices.Equal(p.ArtifactRefs, req.ArtifactRefs) || p.ExpectedVersion != req.ExpectedVersion || (p.Notify != nil && !slices.Equal(*p.Notify, notify)) {
+		!o.sameRedactedList(p.ArtifactRefs, req.ArtifactRefs) || p.ExpectedVersion != req.ExpectedVersion || (p.Notify != nil && !slices.Equal(*p.Notify, notify)) {
 		return agentcomm.BoardEntry{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return agentcomm.BoardEntry{

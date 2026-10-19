@@ -280,6 +280,31 @@ func (o *Orchestrator) RedactSecrets(s string) string {
 	return redact.String(s, o.secretValues())
 }
 
+// redactAll is RedactSecrets for every element of ss (a list of artifact references, evidence lines, ...).
+func (o *Orchestrator) redactAll(ss []string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = o.RedactSecrets(s)
+	}
+	return out
+}
+
+// sameRedactedList is sameRedactedText for lists: the same length and the same text at every position.
+func (o *Orchestrator) sameRedactedList(stored, requested []string) bool {
+	if len(stored) != len(requested) {
+		return false
+	}
+	for i := range stored {
+		if !o.sameRedactedText(stored[i], requested[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // sameRedactedText reports whether stored — text redacted when its operation committed — is the text requested
 // in a retry of that operation. Both sides are redacted with the CURRENT secret set, so a secret added since
 // (a newly minted mesh token) does not turn a faithful retry into a conflict.

@@ -205,11 +205,12 @@ type plannedMessage struct {
 
 // planMessage is the one place a message's effects are assembled — for Send, for board notices, and for any
 // other operation that carries a message: openThread (the effects opening req.ThreadID in the same operation,
-// if any), the mesh_message_sent itself with its body redacted, and its Discussion mirror when it answers a
+// if any), the mesh_message_sent itself with its body and artifact references redacted, and its Discussion mirror when it answers a
 // discussion message. The operation commits them with recipientsReachable as its Preconditions.Check, and its
 // post-commit work calls deliverCommittedMessages.
 func (o *Orchestrator) planMessage(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, openThread []state.Effect) (plannedMessage, error) {
 	req.Body = o.RedactSecrets(req.Body)
+	req.ArtifactRefs = o.redactAll(req.ArtifactRefs)
 	eff, err := messageSentEffect(req, messageID)
 	if err != nil {
 		return plannedMessage{}, err
@@ -250,7 +251,8 @@ func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []p
 	o.wakeRecipients(runCtx, recipientsOf(msgs))
 }
 
-// messageSentEffect builds the mesh_message_sent effect of req; req.Body must already be redacted.
+// messageSentEffect builds the mesh_message_sent effect of req; req.Body and req.ArtifactRefs must already be
+// redacted.
 func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Effect, error) {
 	recipients := make([]string, len(req.Recipients))
 	for i, r := range req.Recipients {

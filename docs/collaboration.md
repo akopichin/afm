@@ -238,8 +238,12 @@ stay pending and their deadlines keep running after `afm run` resumes it; only a
 run that finishes closes them. A rejected call reports why
 (for example an unknown recipient) instead of a generic server error.
 
-Secret values are replaced before message bodies, board statuses and discussion
-posts are stored or shown: every value of the global and project `secrets.env`
+Secret values are replaced before they are stored or shown. This covers message
+bodies and artifact references, board statuses and artifact references,
+discussion posts, a helper's title and instruction, every text field of its
+result (`result.json` and the journal), and what the helper process writes:
+`agent.log`, `agent.jsonl`, `agent.stderr.log` and the raw answer. The values
+replaced are every value of the global and project `secrets.env`
 and of `docker.secrets_file`, the values recipe and lifecycle-hook references
 resolve to (including from the environment), provider credentials in afm's
 environment, and the agents' mesh tokens. Values shorter than 4 characters are

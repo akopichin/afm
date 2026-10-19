@@ -217,7 +217,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		if err != nil {
 			return "", err
 		}
-		return replayedTopLevelTask(op, treq)
+		return o.replayedTopLevelTask(op, treq)
 	}
 
 	task, err := o.admitTopLevelTask(o.opts.Store.Snapshot(), treq)
