@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: a stage no longer finishes with a teammate's question unread
+
+A stage agent whose turn ended while a message to it was still unread used to go
+to `done` with the question unanswered, leaving the asking agent waiting forever
+and the run open. Now the stage gets one more turn with the unread messages in
+its prompt and a note to answer them before finishing, at most 5 times per
+stage. If a stage still finishes with unread messages (the limit was reached, or
+the stage failed), a notice lists them, they are marked undeliverable, and the
+senders' waits for an answer to them are cancelled and the senders resumed, so
+the run can finish.
+
 ### Fix: an interrupted run keeps its team's coordination
 
 Stopping `afm run` (Ctrl+C) no longer fails a run agent or helper that was in the

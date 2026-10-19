@@ -355,13 +355,7 @@ func (o *Orchestrator) tryResumePeerForQuestion(ctx context.Context, taskID assi
 // reusing the delivery receipt the prompt-building code already maintains means there is nothing new to keep
 // consistent across a restart.
 func (o *Orchestrator) hasUndeliveredInbox(participant agentcomm.ParticipantID) bool {
-	rs := o.opts.Store.Snapshot()
-	for _, id := range rs.Assistants.Mesh.Inbox[participant] {
-		if rs.Assistants.Mesh.Receipts[id][participant] == agentcomm.DeliveryAccepted {
-			return true
-		}
-	}
-	return false
+	return o.opts.Store.Snapshot().Assistants.Mesh.HasUnseenMessageFor(participant)
 }
 
 // maybeResumeAwaitingPeerQuestion resumes participant for a bounded T5.5 counter-question turn if, and only
@@ -438,11 +432,18 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 				break
 			}
 		}
-		if !ready {
-			continue
-		}
-		if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
-			log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
+		switch {
+		case ready:
+			if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
+				log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
+			}
+		case o.hasUndeliveredInbox(waiter):
+			// Parked for unread messages with no wait at all (agentcomm_unread.go), and the process stopped
+			// before the extra turn started.
+			if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
+				log.Printf("WARN: mesh: recover awaiting_peer stage %q for unread messages: %v", s.ID, err)
+			}
+		default:
 		}
 	}
 }

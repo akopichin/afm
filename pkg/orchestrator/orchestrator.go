@@ -164,6 +164,11 @@ type Orchestrator struct {
 	// was running when it registered a mesh Wait and parked in awaiting_peer, so onPeerReplied knows which
 	// kind of agent to respawn.
 	prePeerPhase sync.Map
+	// unreadTurns counts, per stageID, the extra turns given because the stage agent finished with unread
+	// messages (int); unreadNotePending marks a stage whose next prompt gets the "answer them, then finish" note.
+	// See agentcomm_unread.go.
+	unreadTurns       sync.Map
+	unreadNotePending sync.Map
 	// hookWaiters holds, per stageID, the channel a blocked before/after hook is waiting on for a user
 	// decision. Only populated while a hook is actually blocked.
 	hookWaiters sync.Map
@@ -623,6 +628,9 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		if stageWaitsPending {
 			o.resumeWaitersAfterTransition(beforeReady)
 		}
+		if bus.IsTerminal(to) && o.stageHasUnreadMessages(stageID) {
+			o.releaseUnreadAfterTransition(stageID)
+		}
 		// Wake the event loop so it can check shouldExit(). Non-blocking to avoid deadlock.
 		o.critical.TryPublish(pubEv)
 		o.emitLifecycleTransition(stageID, from, to, seq, ev, reason)
@@ -717,6 +725,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		o.recoverAssistants(ctx)
 		o.recoverFeedbackIntents(ctx)
 		o.recoverMeshWaits(ctx)
+		o.recoverUnreadOfFinishedStages(ctx)
 		o.recoverMeshWaitDeadlines(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
@@ -878,6 +887,10 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 			}
 			return nil
 		}
+		// A teammate wrote while the agent was working: one more turn to answer instead of done.
+		if o.continueForUnreadMessages(ctx, ev.StageID, agentType) {
+			return nil
+		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
 		o.completeStage(ctx, ev.StageID, current, "")
@@ -889,6 +902,9 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// Standalone review публикует собственный completion; встроенный review завершается через implementation
 		// и сюда не попадает.
 		if current == state.StatusRunning || current == state.StatusRevising {
+			if o.continueForUnreadMessages(ctx, ev.StageID, agentType) {
+				return nil
+			}
 			o.completeStage(ctx, ev.StageID, current, "review complete")
 		}
 	default:

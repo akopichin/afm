@@ -166,6 +166,17 @@ waiting; an agent can hold at most 200 messages it has not been handed yet. Your
 own inbox is not capped that way; it lists the newest 1000 messages sent to you,
 and older ones stay readable in their threads.
 
+A stage agent does not finish while a message to it is still unread. If a
+teammate writes while the agent is working and the agent ends its turn without
+reading it, the stage does not complete: the agent gets one more turn with the
+new messages in its prompt and a note to answer them, then finish. A stage gets
+at most 5 such extra turns. A stage that finishes anyway with unread messages
+(the limit was reached, or the stage failed) shows a notice listing them; those
+messages are marked undeliverable, and a sender waiting for an answer to one of
+them (`reply_to` that message, or `addressed_message` on its thread or on any
+thread) has that wait cancelled and is resumed, so it is not left waiting for an
+answer that cannot come and the run can finish.
+
 Agents talk to each other with the `afm agent` CLI. `afm agent send --to docs
 --body "..."` continues the sender's open conversation with exactly those
 recipients or opens a new one, and prints its `thread_id`; recipients can be

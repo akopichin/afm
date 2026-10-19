@@ -348,6 +348,9 @@ func (o *Orchestrator) runStateAllowsExit(rs *state.RunState) bool {
 			return false
 		}
 	}
+	if finishedStageHasUnread(*rs) {
+		return false // released right after the stage finished (agentcomm_unread.go)
+	}
 	if o.opts.DashboardURL == "" {
 		return true
 	}

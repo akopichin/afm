@@ -220,6 +220,9 @@ func deriveMeshWaitID(operationID string) agentcomm.WaitID {
 // callback into the SAME stage's executor.Config.
 func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 	block, _ := o.agentCommInboxFor(meshStageParticipantID(s.ID))
+	if note := o.unreadTurnNote(s.ID); block != "" {
+		block += note
+	}
 	return block
 }
 
