@@ -7,16 +7,16 @@ import { useCaretInsert } from '../../hooks/use-caret-insert'
 import type { MeshRoster } from '../../hooks/use-mesh'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { MentionMenu, mentionText } from '../assistants/AssistantMentionMenu'
-import { filterMentionGroups, removeMention } from '../assistants/mention-match'
+import { filterMentionGroups } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
 import { TabList, tabPanelProps } from '../tab-list'
 import { MeshAvatar } from '../team/MeshAvatar'
 import { sendMeshMessageTo, type MeshAttachAndSendResult, type MeshMessage, type MeshParticipant } from '../../api/mesh-client'
 import { buildMeshMentionGroups, type MeshMentionItem } from './mesh-recipients'
-import { composerRecipients, recipientFence, type ComposerRecipient } from './composer-recipients'
+import { composerRecipients, recipientFence, withoutRecipient, type ComposerRecipient } from './composer-recipients'
 import { participantLabel } from '../../lib/mesh-roster'
-import { computeReceiptPhase, RECEIPT_LABEL } from './mesh-receipt'
+import { computeReceiptPhase, deliveryKey, RECEIPT_LABEL } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
 
@@ -35,6 +35,8 @@ export type FeedComposerMeshProps = {
   // composer switches to Message and adds them to the recipients. A pick made before this composer mounted
   // (another stage, no composer yet) is ignored.
   pick?: MeshPick | null
+  // deliveries — the run's real delivery receipts (meshDeliveries over the run events), for "Delivered".
+  deliveries?: ReadonlySet<string>
 }
 
 // MeshPick — someone to add to the recipients.
@@ -308,7 +310,14 @@ type LastSend = { messageId: string | null; recipientIds: string[] }
 function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCancelReply, onReplySent, onUseRevise, shown }: MeshMessageComposerProps): ReactElement {
   const participants = mesh.roster.participants
   const [draft, setDraft] = useState('')
+  // picked — people added from the People panel. While a message is answered they go to replyPicked instead:
+  // the reply is addressed to that conversation's people only, and its additions end with it.
   const [picked, setPicked] = useState<string[]>([])
+  const [replyPicked, setReplyPicked] = useState<string[]>([])
+  const replyId = reply?.messageId
+  useEffect(() => setReplyPicked([]), [replyId])
+  const activePicked = reply !== null ? replyPicked : picked
+  const setActivePicked = reply !== null ? setReplyPicked : setPicked
   const [attaching, setAttaching] = useState<Attaching | null>(null)
   // attachPreview — an "Attach to stage" pick is never sent straight away: Send opens this preview, and only
   // the dialog's own "Attach and send" click calls attachAndSendMesh. Cancel keeps the draft.
@@ -317,8 +326,8 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
   const [localError, setLocalError] = useState<string | null>(null)
 
   const { recipients, defaultProblem } = useMemo(
-    () => composerRecipients({ participants, stages: mesh.stages, stageId, picked, draft }),
-    [participants, mesh.stages, stageId, picked, draft],
+    () => composerRecipients({ participants, stages: mesh.stages, stageId, picked: activePicked, draft, replyTo: reply?.senderId ?? null }),
+    [participants, mesh.stages, stageId, activePicked, draft, reply?.senderId],
   )
   const recipientIds = recipients.flatMap((r) => (r.participantId !== null ? [r.participantId] : [])).sort()
   const problems = recipients.flatMap((r) => (r.problem !== null ? [r.problem] : []))
@@ -358,10 +367,13 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
   useEffect(() => {
     if (focusRequest > 0 && shown) textareaRef.current?.focus()
   }, [focusRequest, shown])
-  const addRecipient = useCallback((id: string): void => {
-    setPicked((prev) => (prev.includes(id) ? prev : [...prev, id]))
-    setFocusRequest((n) => n + 1)
-  }, [])
+  const addRecipient = useCallback(
+    (id: string): void => {
+      setActivePicked((prev) => (prev.includes(id) ? prev : [...prev, id]))
+      setFocusRequest((n) => n + 1)
+    },
+    [setActivePicked],
+  )
 
   // A people-panel pick adds that person to the recipients.
   const pick = mesh.pick ?? null
@@ -372,16 +384,16 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
     addRecipient(pick.participantId)
   }, [pick, addRecipient])
 
-  // Answering a message makes its sender a recipient (the server keeps it in that message's thread).
-  const replyId = reply?.messageId
-  const replySender = reply?.senderId
+  // Answering a message makes its sender a recipient (composerRecipients' replyTo; the server keeps it in that
+  // message's thread) and takes the focus.
   useEffect(() => {
-    if (replyId !== undefined && replySender !== undefined && replySender !== 'user') addRecipient(replySender)
-  }, [replyId, replySender, addRecipient])
+    if (replyId !== undefined) setFocusRequest((n) => n + 1)
+  }, [replyId])
 
   function removeRecipient(r: ComposerRecipient): void {
-    if (r.source === 'picked') setPicked((prev) => prev.filter((id) => id !== r.key))
-    else if (r.source === 'typed') setDraft((cur) => removeMention(cur, r.handle))
+    const next = withoutRecipient(r, { picked: activePicked, draft })
+    setActivePicked(next.picked)
+    setDraft(next.draft)
   }
 
   // openPicker — "+" opens the same @ list at the caret.
@@ -462,6 +474,7 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
             stagePaused: participant?.stage_id !== undefined && stageStatus(participant.stage_id) === 'paused',
             answered: lastSend.messageId !== null && conversationMessages.some((m) => m.in_reply_to === lastSend.messageId && m.sender_id === id),
             inFlight: lastSend.messageId === null,
+            delivered: lastSend.messageId !== null && mesh.deliveries?.has(deliveryKey(lastSend.messageId, id)) === true,
           })
           return { id, name: participant !== undefined ? participantLabel(participant) : 'New agent', label: RECEIPT_LABEL[phase] }
         })
@@ -497,7 +510,13 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
       <div className="mesh-recipients" role="group" aria-label="Recipients">
         <span className="mesh-recipients-label">To</span>
         {recipients.map((r) => (
-          <RecipientChip key={r.key} recipient={r} participants={participants} onRemove={r.source === 'default' ? undefined : () => removeRecipient(r)} />
+          <RecipientChip
+            key={r.key}
+            recipient={r}
+            participants={participants}
+            // The stage agent by default and the sender of the message answered (cancel the reply) have no ×.
+            onRemove={r.source === 'default' || r.source === 'reply' ? undefined : () => removeRecipient(r)}
+          />
         ))}
         {attaching !== null && (
           <span className="mesh-recipient-chip is-attach" title="A new helper of this stage; the text is its assignment">

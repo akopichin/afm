@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { composerRecipients, recipientFence, typedMentionHandles } from './composer-recipients'
+import { composerRecipients, recipientFence, typedMentionHandles, withoutRecipient } from './composer-recipients'
 import type { MeshParticipant } from '../../api/mesh-client'
 
 const impl: MeshParticipant = { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', stage_id: 'impl', alias: 'impl', display_name: 'Backend', reachable: true }
@@ -22,7 +22,7 @@ describe('typedMentionHandles', () => {
 describe('composerRecipients', () => {
   it('without anyone named, the message goes to the stage agent by default', () => {
     const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: [], draft: 'hello' })
-    expect(r.recipients).toEqual([{ key: 'stage:impl', handle: 'impl', participantId: 'stage:impl', source: 'default', problem: null }])
+    expect(r.recipients).toEqual([{ key: 'stage:impl', handle: 'impl', participantId: 'stage:impl', source: 'default', picked: false, typedTokens: [], problem: null }])
     expect(r.defaultProblem).toBeNull()
   })
 
@@ -62,6 +62,38 @@ describe('composerRecipients', () => {
     const twin: MeshParticipant = { ...qa, id: 'run:t-3' }
     const r = composerRecipients({ participants: [...participants, twin], stages: running, stageId: 'impl', picked: [], draft: '@qa @user' })
     expect(r.recipients.map((x) => x.problem)).toEqual(['@qa matches several people — pick one from the list', "@user is you — you can't write to yourself"])
+  })
+})
+
+describe('composerRecipients — chips that must not silently change who gets the message', () => {
+  it('a picked person who left the roster stays as a problem chip; the stage agent does not take over', () => {
+    const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: ['run:gone'], draft: 'hi' })
+    expect(r.recipients).toEqual([
+      { key: 'run:gone', handle: 'run:gone', participantId: null, source: 'picked', picked: true, typedTokens: [], problem: '@run:gone is no longer available in this run' },
+    ])
+  })
+
+  it('a chip remembers every token that named it, as typed — a full id shown by its alias included', () => {
+    const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: ['stage:docs'], draft: '@stage:docs and @DOCS, again' })
+    expect(r.recipients).toHaveLength(1)
+    expect(r.recipients[0]).toMatchObject({ key: 'stage:docs', handle: 'docs', source: 'picked', picked: true, typedTokens: ['stage:docs', 'DOCS'] })
+  })
+
+  it('answering a message: its sender comes first, from the reply alone', () => {
+    const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: [], draft: '@qa ok', replyTo: 'stage:docs' })
+    expect(r.recipients.map((x) => [x.participantId, x.source])).toEqual([
+      ['stage:docs', 'reply'],
+      ['run:t-1', 'typed'],
+    ])
+  })
+})
+
+describe('withoutRecipient', () => {
+  it('removes every source of a chip: the pick and each typed token naming it', () => {
+    const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: ['stage:docs'], draft: '@stage:docs and @docs please' })
+    const chip = r.recipients[0]
+    if (chip === undefined) throw new Error('no chip')
+    expect(withoutRecipient(chip, { picked: ['stage:docs', 'run:t-1'], draft: '@stage:docs and @docs please' })).toEqual({ picked: ['run:t-1'], draft: 'and please' })
   })
 })
 

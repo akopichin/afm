@@ -240,18 +240,21 @@ The **To** row above the input lists who the message goes to:
   helpers and reads a note only as a Revise), the row says why and you must pick
   someone; **Use Revise** switches modes when Revise is available.
 
-**×** on a chip removes that recipient (a typed one is removed from the text). A
-name nobody in the run has, an alias several people share, or someone who can no
-longer receive messages is marked on its chip and explained under the input;
-nothing is sent until you fix it. afm never sends to someone else instead.
+**×** on a chip removes that recipient everywhere it came from: the pick and
+every mention of them in the text (a full id such as `@stage:docs` included). A
+name nobody in the run has, an alias several people share, someone who can no
+longer receive messages, or a picked person who has left the run is marked on
+its chip and explained under the input; nothing is sent until you fix it. afm
+never sends to someone else instead.
 
 Sending posts **one** message to all recipients. It goes into your open
 conversation with exactly those people that this stage's feed shows, or opens a
 new one there in the same step. A failed send keeps the draft and shows the
 server's reason; sending it again is the same message, never a duplicate. Under
-the input each recipient gets its own delivery state (*Delivered*, *Waiting for
-an inbox check*, *Paused · waiting for Continue*, *Answered* once that recipient
-replies, …).
+the input each recipient gets its own delivery state: *Accepted · waiting for an
+inbox check* until afm actually hands the message to that agent's turn or inbox
+read, then *Delivered*; *Paused · waiting for Continue*, *Unavailable*, and
+*Answered* once that recipient replies.
 
 **Attach to stage** in the `@` list lists available configured roles: picking one
 adds an *Attach helper* chip, and Send opens the attach preview with your text as
@@ -315,11 +318,13 @@ jump to that message) and a **turn result** tag on a turn result.
 - **↩ Reply in conversation** answers that message in its conversation: the
   composer switches to **Message**, the author becomes a recipient and a
   **↩ Reply in conversation** chip quotes the message, which is highlighted in
-  the feed. One message is answered at a time — choosing another replaces it;
-  **✕** cancels. It is told apart from answering a thought with Revise by its
-  colour. It is offered while the composer is shown, on open conversations you
-  are a member of, and while the author can still read it; a conversation closed
-  meanwhile loses it on the next poll.
+  the feed. The reply goes to that conversation's people only: people you picked
+  before wait until the reply ends, and anyone you add during it is dropped with
+  it. One message is answered at a time — choosing another replaces it; **✕**
+  cancels. It is told apart from answering a thought with Revise by its colour.
+  It is offered while the composer is shown, on open conversations you are a
+  member of, and while the author can still read it; if the conversation closes
+  meanwhile, the reply ends on the next poll.
 - A line such as *@qa is working* at the bottom shows who among the people in
   this stage's conversations, and its helpers, is in a turn right now.
 

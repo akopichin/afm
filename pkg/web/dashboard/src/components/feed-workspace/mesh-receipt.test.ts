@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeReceiptPhase, RECEIPT_LABEL } from './mesh-receipt'
+import { computeReceiptPhase, meshDeliveries, RECEIPT_LABEL } from './mesh-receipt'
 import type { MeshParticipant } from '../../api/mesh-client'
 
 const reachable: MeshParticipant = { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', reachable: true }
@@ -8,7 +8,7 @@ const runAgent: MeshParticipant = { id: 'run:qa', kind: 'run_agent', scope: 'run
 const terminal: MeshParticipant = { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', reachable: false, unreachable_reason: 'stage s1 has reached a terminal status' }
 const noMeshCapability: MeshParticipant = { id: 'stage:s2', kind: 'stage_agent', scope: 'stage', stage_id: 's2', reachable: false, unreachable_reason: 'executor lacks mesh capability' }
 
-const base = { participant: reachable, stagePaused: false, answered: false, inFlight: false }
+const base = { participant: reachable, stagePaused: false, answered: false, inFlight: false, delivered: false }
 
 describe('computeReceiptPhase', () => {
   it('an answer wins over every other signal', () => {
@@ -43,17 +43,36 @@ describe('computeReceiptPhase', () => {
     expect(computeReceiptPhase({ ...base, participant: undefined })).toBe('waiting_inbox')
   })
 
-  it('a reachable, actively-running participant shows "delivered"', () => {
-    expect(computeReceiptPhase({ ...base, participant: reachable })).toBe('delivered')
+  it('a reachable stage agent without a delivery receipt is only accepted — never "delivered" from the roster', () => {
+    expect(computeReceiptPhase({ ...base, participant: reachable })).toBe('waiting_inbox')
+  })
+
+  it('"delivered" only with the real delivery receipt of that recipient', () => {
+    expect(computeReceiptPhase({ ...base, participant: reachable, delivered: true })).toBe('delivered')
+    expect(computeReceiptPhase({ ...base, participant: helper, delivered: true })).toBe('delivered')
   })
 
   it('every phase has a literal label', () => {
     expect(RECEIPT_LABEL.awaiting).toBe('Awaiting delivery')
     expect(RECEIPT_LABEL.delivered).toBe('Delivered')
-    expect(RECEIPT_LABEL.waiting_inbox).toBe('Waiting for an inbox check')
+    expect(RECEIPT_LABEL.waiting_inbox).toBe('Accepted · waiting for an inbox check')
     expect(RECEIPT_LABEL.answered).toBe('Answered')
     expect(RECEIPT_LABEL.paused).toBe('Paused · waiting for Continue')
     expect(RECEIPT_LABEL.unavailable).toBe('Unavailable')
     expect(RECEIPT_LABEL.messaging_unavailable).toBe('Messaging unavailable')
+  })
+})
+
+describe('meshDeliveries', () => {
+  it('collects the delivered/acknowledged receipts of each message and recipient from the run events', () => {
+    const ev = (payload: unknown) => ({ type: 'mesh_receipt', payload, stageId: '', timestamp: '' })
+    const d = meshDeliveries([
+      ev({ message_id: 'm1', participant_id: 'stage:s1', status: 'delivered' }),
+      ev({ message_id: 'm1', participant_id: 'run:qa', status: 'acknowledged' }),
+      { type: 'mesh_message', payload: { message_id: 'm2' }, stageId: '', timestamp: '' },
+    ])
+    expect(d.has('m1|stage:s1')).toBe(true)
+    expect(d.has('m1|run:qa')).toBe(true)
+    expect(d.has('m2|stage:s1')).toBe(false)
   })
 })

@@ -1,11 +1,13 @@
-// composer-recipients — who a stage Feed composer's message goes to (the "To" chips): people picked from the
-// People panel or the conversation being answered, `@handles` typed in the text, and — when nobody is named —
-// the stage's own agent. Pure functions, so FeedComposer only renders what they decide.
+// composer-recipients — who a stage Feed composer's message goes to (the "To" chips): the sender of the
+// conversation message being answered, people picked from the People panel, `@handles` typed in the text, and —
+// when nobody is named — the stage's own agent. Pure functions, so FeedComposer only renders what they decide.
 
 import type { MeshParticipant } from '../../api/mesh-client'
 import { mentionHandles } from '../../lib/mesh-roster'
+import { removeMention } from '../assistants/mention-match'
 
-export type RecipientSource = 'picked' | 'typed' | 'default'
+// RecipientSource — where a chip came from first: the message being answered, a pick, the text, or the default.
+export type RecipientSource = 'reply' | 'picked' | 'typed' | 'default'
 
 export type ComposerRecipient = {
   // key — the participant id, or `@handle` for a typed name nobody in the run has.
@@ -14,6 +16,10 @@ export type ComposerRecipient = {
   handle: string
   participantId: string | null
   source: RecipientSource
+  // picked — the person is also in the picked list; typedTokens — every `@token` of the draft naming them, as
+  // typed (a full id shown by its alias too). Removing the chip removes all of them, so one × un-addresses them.
+  picked: boolean
+  typedTokens: string[]
   // problem — why the message cannot go to them; Send stays off while any recipient has one.
   problem: string | null
 }
@@ -66,38 +72,50 @@ export type ComposerRecipientsInput = {
   stages: StageStatusLike[]
   // stageId — the feed's stage, whose agent is the default recipient.
   stageId: string
-  // picked — participant ids added as chips (People panel, the sender of the message being answered).
+  // picked — participant ids added as chips from the People panel.
   picked: string[]
   draft: string
+  // replyTo — the sender of the conversation message being answered: a recipient for that reply only.
+  replyTo?: string | null
 }
 
-// composerRecipients — the message's recipients: picked people first, then typed @handles, each person once;
-// without either, the stage agent if it can read the message. Unknown, ambiguous and unreachable names stay in
-// the list with their problem: an explicit recipient is never dropped or replaced by someone else.
-export function composerRecipients({ participants, stages, stageId, picked, draft }: ComposerRecipientsInput): ComposerRecipients {
+// composerRecipients — the message's recipients: the sender of the message answered first, then picked
+// people, then typed @handles, each person once; without any of them, the stage agent if it can read the
+// message. Unknown, ambiguous, unreachable and departed names stay in the list with their problem: an explicit
+// recipient is never dropped or replaced by someone else.
+export function composerRecipients({ participants, stages, stageId, picked, draft, replyTo = null }: ComposerRecipientsInput): ComposerRecipients {
   const handles = mentionHandles(participants)
   const handleOf = (p: MeshParticipant): string => handles.get(p.id) ?? p.id
   const recipients: ComposerRecipient[] = []
-  const seen = new Set<string>()
-  const add = (r: ComposerRecipient): void => {
-    if (seen.has(r.key)) return
-    seen.add(r.key)
-    recipients.push(r)
+  const byKey = new Map<string, ComposerRecipient>()
+  const add = (key: string, from: RecipientSource, found: () => Pick<ComposerRecipient, 'handle' | 'participantId' | 'problem'>, token?: string): void => {
+    let r = byKey.get(key)
+    if (r === undefined) {
+      r = { key, ...found(), source: from, picked: false, typedTokens: [] }
+      byKey.set(key, r)
+      recipients.push(r)
+    }
+    if (from === 'picked') r.picked = true
+    if (token !== undefined) r.typedTokens.push(token)
+  }
+  const known = (p: MeshParticipant) => () => ({ handle: handleOf(p), participantId: p.id, problem: recipientProblem(p, handleOf(p), stages) })
+  // A person named by id who left the roster: still a chip, with the reason, so Send cannot quietly go elsewhere.
+  const departed = (id: string) => () => ({ handle: id, participantId: null, problem: `@${id} is no longer available in this run` })
+  const byId = (id: string, from: RecipientSource): void => {
+    const p = participants.find((x) => x.id === id)
+    add(id, from, p !== undefined ? known(p) : departed(id))
   }
 
-  for (const id of picked) {
-    const p = participants.find((x) => x.id === id)
-    if (p === undefined) continue
-    add({ key: p.id, handle: handleOf(p), participantId: p.id, source: 'picked', problem: recipientProblem(p, handleOf(p), stages) })
-  }
+  if (replyTo !== null && replyTo !== 'user') byId(replyTo, 'reply')
+  for (const id of picked) byId(id, 'picked')
   for (const handle of typedMentionHandles(draft)) {
     const p = resolveTyped(handle, participants, handles)
     if (p === 'ambiguous') {
-      add({ key: `@${handle.toLowerCase()}`, handle, participantId: null, source: 'typed', problem: `@${handle} matches several people — pick one from the list` })
+      add(`@${handle.toLowerCase()}`, 'typed', () => ({ handle, participantId: null, problem: `@${handle} matches several people — pick one from the list` }), handle)
     } else if (p === null) {
-      add({ key: `@${handle.toLowerCase()}`, handle, participantId: null, source: 'typed', problem: `No one is called @${handle} in this run` })
+      add(`@${handle.toLowerCase()}`, 'typed', () => ({ handle, participantId: null, problem: `No one is called @${handle} in this run` }), handle)
     } else {
-      add({ key: p.id, handle: handleOf(p), participantId: p.id, source: 'typed', problem: recipientProblem(p, handleOf(p), stages) })
+      add(p.id, 'typed', known(p), handle)
     }
   }
   if (recipients.length > 0) return { recipients, defaultProblem: null }
@@ -107,8 +125,17 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
   const problem = recipientProblem(stageAgent, handleOf(stageAgent), stages)
   if (problem !== null) return { recipients, defaultProblem: problem }
   return {
-    recipients: [{ key: stageAgent.id, handle: handleOf(stageAgent), participantId: stageAgent.id, source: 'default', problem: null }],
+    recipients: [{ key: stageAgent.id, handle: handleOf(stageAgent), participantId: stageAgent.id, source: 'default', picked: false, typedTokens: [], problem: null }],
     defaultProblem: null,
+  }
+}
+
+// withoutRecipient — the picked list and draft after × on chip r: its pick goes and every token naming it is
+// cut from the text. The message being answered keeps its sender (cancel the reply instead).
+export function withoutRecipient(r: ComposerRecipient, current: { picked: string[]; draft: string }): { picked: string[]; draft: string } {
+  return {
+    picked: r.picked ? current.picked.filter((id) => id !== r.key) : current.picked,
+    draft: r.typedTokens.reduce((d, token) => removeMention(d, token), current.draft),
   }
 }
 

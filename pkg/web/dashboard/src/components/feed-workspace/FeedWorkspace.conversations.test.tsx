@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
 import { FeedWorkspace } from './FeedWorkspace'
@@ -139,6 +139,26 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     renderFeed()
     await waitFor(() => expect(row('m1')).not.toBeNull())
     expect(within(row('m1')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
+  })
+
+  it('an active Reply ends when its conversation closes', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(meshClient, 'getStageMessages')
+        .mockResolvedValueOnce({ messages, threads: [withUser, legacy], next_cursor: 6, has_more: false })
+        .mockResolvedValue({ messages: [], threads: [{ ...withUser, status: 'closed' }], next_cursor: 6, has_more: false })
+      render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps()} noteTarget="impl" onSendNote={vi.fn()} />)
+      await act(async () => vi.advanceTimersByTime(0))
+      fireEvent.click(within(row('m1')).getByRole('button', { name: '↩ Reply in conversation' }))
+      expect(screen.getByRole('button', { name: 'Cancel reply in conversation' })).toBeInTheDocument()
+
+      await act(async () => vi.advanceTimersByTime(3000))
+      expect(screen.queryByRole('button', { name: 'Cancel reply in conversation' })).toBeNull()
+      expect(row('m1')).not.toHaveClass('is-reply-target')
+      expect(within(screen.getByRole('group', { name: 'Recipients' })).queryByText('@qa')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('Reply in conversation is not offered in a closed conversation', async () => {

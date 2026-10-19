@@ -136,7 +136,12 @@ export function FeedWorkspace({
   // The one conversation message being answered ("↩ Reply in conversation", Message mode) — separate from the
   // thought answered with Revise above, and stored with its stage the same way.
   const [meshReplyTo, setMeshReplyTo] = useState<{ stageId: string; target: MeshReplyTarget } | null>(null)
-  const activeMeshReply = meshReplyTo !== null && meshReplyTo.stageId === noteTarget ? meshReplyTo.target : null
+  // A reply whose conversation has since closed is over: nothing can be added to that thread any more.
+  const replyThreadClosed = meshReplyTo !== null && conversation.threads[meshReplyTo.target.threadId]?.status === 'closed'
+  const activeMeshReply = meshReplyTo !== null && meshReplyTo.stageId === noteTarget && !replyThreadClosed ? meshReplyTo.target : null
+  useEffect(() => {
+    if (replyThreadClosed) setMeshReplyTo(null)
+  }, [replyThreadClosed])
 
   // Смена стадии — сбрасываем reply-таргеты (композер и так ремаунтится по key).
   useEffect(() => {

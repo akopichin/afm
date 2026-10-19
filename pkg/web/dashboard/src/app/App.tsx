@@ -8,7 +8,7 @@ import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { FeedWorkspace, type MeshPick } from '../components/feed-workspace'
+import { FeedWorkspace, meshDeliveries, type MeshPick } from '../components/feed-workspace'
 import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
@@ -60,6 +60,8 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 
 // REVISE_STATUSES — the statuses POST /api/stages/{id}/revise accepts (pkg/server handleRevise).
 const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants'])
+// NO_DELIVERIES — no delivery receipts (the stage Feed's mesh UI is off).
+const NO_DELIVERIES: ReadonlySet<string> = new Set()
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 export function App(): ReactElement {
@@ -312,6 +314,8 @@ export function App(): ReactElement {
   // both the mesh and collaboration: with collaboration off the stage Feed is the plain pre-mesh Feed. (The
   // Team tab keeps its own gate, the mesh probe alone.)
   const stageMesh = meshRoster.enabled && capabilities.collaboration
+  // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
+  const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
   // statuses the Revise API accepts (or a Pause-on-focus operation still in flight), outside a review pause.
   const runAlive = runStatus !== 'finished' && runStatus !== 'failed' && runStatus !== 'interrupted'
@@ -636,7 +640,7 @@ export function App(): ReactElement {
                       // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
                       // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
                       // and the plain note-to-agent composer (no Message/Revise tabs).
-                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
+                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts } : undefined}
                       reviseAvailable={reviseAvailable}
                     />
                     {showPeople && workspaceStage !== null && (

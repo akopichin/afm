@@ -419,6 +419,51 @@ describe('FeedComposer', () => {
       expect(onCancel).toHaveBeenCalled()
     })
 
+    it('a picked person who left the roster stays as a problem chip and Send stays off — the stage agent never takes over', () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo')
+      const { rerender } = renderComposer()
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 1 } })} />)
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 1 }, roster: roster({ participants: [runAgent, stageAgent] }) })} />)
+      type('hi')
+      expect(within(recipients()).queryByText('stage agent')).toBeNull()
+      expect(screen.getByRole('alert')).toHaveTextContent('@run:t-2 is no longer available in this run')
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+      fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+      expect(send).not.toHaveBeenCalled()
+    })
+
+    it('× removes every source of a chip: a full id shown by its alias, and the same person also picked', () => {
+      const { rerender } = renderComposer()
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 1 } })} />)
+      type('@run:t-2 and @docs hello')
+      expect(within(recipients()).getAllByText('@docs')).toHaveLength(1)
+      fireEvent.click(screen.getByRole('button', { name: 'Remove @docs' }))
+      expect(input().value).toBe('and hello')
+      expect(within(recipients()).queryByText('@docs')).toBeNull()
+      expect(within(recipients()).getByText('stage agent')).toBeInTheDocument()
+    })
+
+    it('a reply is addressed to that conversation only: earlier picks wait, and picks made during it end with it', async () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-docs' })
+      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question' }
+      const { rerender } = renderComposer()
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
+      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} meshReply={reply} />)
+      expect(within(recipients()).getByText('@docs')).toBeInTheDocument()
+      expect(within(recipients()).queryByText('@qa')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Remove @docs' })).toBeNull()
+      type('answer')
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-2'], inReplyTo: 'm5' })))
+
+      // The reply ended: its sender is no longer a recipient, the earlier pick is back.
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} meshReply={null} />)
+      expect(within(recipients()).queryByText('@docs')).toBeNull()
+      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+    })
+
     it('a retry of the same message reuses its request id; another recipient set is a new message', async () => {
       const send = vi
         .spyOn(meshClient, 'sendMeshMessageTo')
@@ -450,11 +495,13 @@ describe('FeedComposer', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Awaiting delivery')
       await act(async () => resolveSend({ message_id: 'm1', seq: 1, thread_id: 'mt-1' }))
       const delivery = screen.getByRole('status', { name: 'Delivery' })
-      expect(delivery).toHaveTextContent('QA reviewer · Waiting for an inbox check')
-      expect(delivery).toHaveTextContent('Backend agent · Delivered')
+      // Accepted by the API is not delivered: nobody is "Delivered" before its own delivery receipt.
+      expect(delivery).toHaveTextContent('QA reviewer · Accepted · waiting for an inbox check')
+      expect(delivery).toHaveTextContent('Backend agent · Accepted · waiting for an inbox check')
 
       const answer = { id: 'm2', thread_id: 'mt-1', sender_id: 'run:t-1', recipient_ids: ['user'], kind: 'message', in_reply_to: 'm1', body: 'ok', seq: 2, created_at: '' }
-      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={mesh} conversationMessages={[answer]} />)
+      const delivered = { ...mesh, deliveries: new Set(['m1|stage:s1']) }
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={delivered} conversationMessages={[answer]} />)
       expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('QA reviewer · Answered')
       expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Backend agent · Delivered')
     })
@@ -526,7 +573,7 @@ describe('FeedComposer', () => {
           profileId: 'frontendDeveloper', scope: 'stage', stageId: 's1', instruction: 'please take a look', firstMessage: 'please take a look',
         }))
         await waitFor(() => expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull())
-        expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Waiting for an inbox check')
+        expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Accepted · waiting for an inbox check')
         expect(within(recipients()).queryByText(/Attach helper/)).toBeNull()
         expect(input().value).toBe('')
       })
