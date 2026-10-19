@@ -113,6 +113,51 @@ func TestMesh_InboxBlockStaysWithinByteBudget(t *testing.T) {
 	}
 }
 
+// TestMesh_InboxBudgetPutsUnfinishedThenWakingBeforePassive: passive turn results never starve the waking message
+// that starts a turn. The budget goes first to the unfinished turn's input, then to waking messages, and only
+// what is left to passive results — even when many large results arrived before the waking message.
+func TestMesh_InboxBudgetPutsUnfinishedThenWakingBeforePassive(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	h1 := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-iw-a"))
+	h2 := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-iw-b"))
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-iw-open", Members: []agentcomm.ParticipantID{h1, h2}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	send := func(op, body string, passive bool) agentcomm.MessageID {
+		t.Helper()
+		r, err := o.Send(ctx, SendRequest{OperationID: op, ThreadID: thread.ID, Sender: h1, Recipients: []agentcomm.ParticipantID{h2},
+			Kind: agentcomm.MessageKindMessage, Body: body, AutoResult: passive})
+		if err != nil {
+			t.Fatalf("Send %s: %v", op, err)
+		}
+		return r.MessageID
+	}
+	big := strings.Repeat("r", agentcomm.MaxBodyBytes)
+	var passive []agentcomm.MessageID
+	for i := range 10 {
+		passive = append(passive, send(fmt.Sprintf("op-iw-p%d", i), big, true))
+	}
+	waking := send("op-iw-wake", "please look at the login page", false)
+
+	_, rendered, _ := o.renderInbox(h2, nil)
+	if len(rendered) == 0 || rendered[0] != waking {
+		t.Fatalf("rendered = %v, want the waking message %s first", rendered, waking)
+	}
+	if len(rendered) == len(passive)+1 {
+		t.Fatal("the budget must leave some passive results for the next turn")
+	}
+
+	// A retry hands the unfinished turn's input again before anything new, even if it was a passive result.
+	unfinished := passive[len(passive)-1]
+	_, rendered, _ = o.renderInbox(h2, []agentcomm.MessageID{unfinished})
+	if len(rendered) < 2 || rendered[0] != unfinished || rendered[1] != waking {
+		t.Fatalf("rendered = %v, want the unfinished %s, then the waking %s", rendered, unfinished, waking)
+	}
+}
+
 // TestMesh_DeliveryJournalFailureEndsRun: the handover of a rendered inbox is durable. If writing it fails,
 // the messages are already in the agent's prompt but would stay accepted and be handed over again — so the
 // failure is storage-fatal, like every other journal write failure.

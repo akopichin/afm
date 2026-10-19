@@ -204,7 +204,11 @@ not start an idle run agent, give a stage an extra turn, resume an agent that
 waits for a message (`addressed_message`, in one conversation or any), or keep
 the run open. An agent that waits for an answer to that very message
 (`reply_to`) is resumed by it. Turn results waiting in an inbox have their own
-limit of 200, so they never take the room an ordinary message needs; a stage
+limit of 200, so they never take the room an ordinary message needs. A turn's
+prompt carries up to 64 KiB of messages: first whatever an interrupted turn was
+handed, then the messages that wake the agent, and only then turn results, so a
+pile of results never delays the message that starts the turn. What does not
+fit waits for the next turn or `afm agent inbox`. A stage
 that finishes without reading one marks it undeliverable without listing it as
 unanswered. afm skips the reply when the agent already answered the waking
 message itself during the turn; a question to someone else or a reply to a

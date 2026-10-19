@@ -84,6 +84,13 @@ that guarantee (`readonly_enforcement` on the turn's `task_status_changed`),
 and People and Team show a finished task with the guarantee its last turn ran
 under.
 
+### Fix: turn results no longer push the waking message out of a turn's prompt
+
+A turn's inbox now fills its 64 KiB with the messages an interrupted turn was
+handed first, then the messages that wake the agent, and only then turn
+results. Before, an idle run agent with many large turn results waiting could
+take several turns before your message reached its prompt.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was

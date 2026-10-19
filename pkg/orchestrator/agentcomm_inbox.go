@@ -30,9 +30,9 @@ const (
 	inboxMessageOverhead = 256
 )
 
-// agentCommInboxFor renders participant's pending (not-yet-delivered) inbox messages, oldest first and within
-// inboxBlockByteBudget, and returns a closure that marks exactly those messages delivered. The same set is
-// remembered as the participant's rendered inbox for deliverRenderedInbox — executor.Config.OnDelivered,
+// agentCommInboxFor renders participant's pending (not-yet-delivered) inbox messages within inboxBlockByteBudget
+// (see renderInbox for the order), and returns a closure that marks exactly those messages delivered. The same
+// set is remembered as the participant's rendered inbox for deliverRenderedInbox — executor.Config.OnDelivered,
 // called only after cmd.Start() succeeds (pkg/executor/executor.go). Marking never happens at
 // prompt-assembly time, so a crash or a failed start between building this prompt and spawning the process
 // leaves the messages at "accepted" and they are re-injected, unchanged, on the next attempt.
@@ -43,7 +43,10 @@ func (o *Orchestrator) agentCommInboxFor(participant agentcomm.ParticipantID) (b
 
 // renderInbox is agentCommInboxFor that also re-renders unfinished: the messages an earlier turn of the same
 // agent was handed but never finished (see turnInboxFileName). They are already delivered, yet that turn's
-// input would otherwise be lost to its retry. It returns the ids it rendered, in inbox order.
+// input would otherwise be lost to its retry. The budget goes to three groups in turn — the unfinished input,
+// then waking messages, then passive turn results (Message.AutoResult) — each oldest first, so results that
+// arrived while the agent was idle never push out the message that starts its turn. It returns the ids it
+// rendered, in that order.
 func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinished []agentcomm.MessageID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
 	if o.opts.Store == nil {
 		// Some tests build a bare Orchestrator literal to exercise a single concern (e.g. browser/mesh Config
@@ -51,23 +54,32 @@ func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinish
 		return "", nil, func() {}
 	}
 	rs := o.opts.Store.Snapshot()
+	mesh := rs.Assistants.Mesh
+
+	var again, waking, passive []*agentcomm.Message
+	for _, id := range mesh.Inbox[participant] {
+		m := mesh.Messages[id]
+		switch {
+		case m == nil:
+		case slices.Contains(unfinished, id):
+			again = append(again, m)
+		case mesh.Receipts[id][participant] != agentcomm.DeliveryAccepted:
+		case m.AutoResult:
+			passive = append(passive, m)
+		default:
+			waking = append(waking, m)
+		}
+	}
 
 	var msgs []prompts.AgentCommInboxMessage
 	size, more := 0, 0
-	for _, id := range rs.Assistants.Mesh.Inbox[participant] {
-		m := rs.Assistants.Mesh.Messages[id]
-		if m == nil {
-			continue
-		}
-		if rs.Assistants.Mesh.Receipts[id][participant] != agentcomm.DeliveryAccepted && !slices.Contains(unfinished, id) {
-			continue
-		}
+	for _, m := range slices.Concat(again, waking, passive) {
 		size += len(m.Body) + inboxMessageOverhead
 		if len(msgs) > 0 && size > inboxBlockByteBudget {
 			more++
 			continue
 		}
-		rendered = append(rendered, id)
+		rendered = append(rendered, m.ID)
 		msgs = append(msgs, inboxMessageView(m))
 	}
 
