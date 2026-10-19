@@ -381,3 +381,72 @@ func TestSendFromAgent_UnknownOriginStageIsRejected(t *testing.T) {
 		t.Fatalf("threads = %d, want none opened", n)
 	}
 }
+
+// Two stage feeds writing to the same agent at the same time each get a conversation their own feed shows:
+// a new conversation's id also names the feed it is opened from, so the second open is never a no-op that
+// drops its message into the other feed's thread.
+func TestSendFromAgent_ConcurrentSendsFromTwoFeedsEachShowInTheirFeed(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	origins := []string{"docs", assistantsTestStageID}
+	receipts := make([]SendReceipt, len(origins))
+	errs := make([]error, len(origins))
+	var wg sync.WaitGroup
+	for i, origin := range origins {
+		wg.Go(func() {
+			receipts[i], errs[i] = userSend(o, "op-feed-"+origin, origin, []string{"docs"}, "hi from "+origin)
+		})
+	}
+	wg.Wait()
+	rs := store.Snapshot()
+	for i, origin := range origins {
+		if errs[i] != nil {
+			t.Fatalf("send from %s: %v", origin, errs[i])
+		}
+		th := rs.Assistants.Mesh.Threads[receipts[i].ThreadID]
+		if th == nil || !threadInStageFeed(rs, th, origin) {
+			t.Fatalf("the message written from the %s feed went into %+v, which that feed does not show", origin, th)
+		}
+	}
+	members := conversationMembers(meshUserParticipantID, []agentcomm.ParticipantID{"stage:docs"})
+	if conversationOpenID(rs, members, "docs") == conversationOpenID(rs, members, assistantsTestStageID) {
+		t.Fatal("a new conversation's id does not depend on the feed it is opened from")
+	}
+}
+
+// An open conversation of the same agents that the human is not in (opened before D1) cannot take the human's
+// message: the human's send from a feed opens a new conversation instead of failing the membership check.
+func TestSendFromAgent_UserSendSkipsALegacyThreadWithoutTheHuman(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	legacy, err := o.OpenThread(context.Background(), OpenThreadRequest{
+		OperationID: "op-legacy", Scope: agentcomm.ScopeRun, Members: []agentcomm.ParticipantID{"stage:docs", meshStageParticipantID(assistantsTestStageID)},
+		OriginStage: "docs",
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	r, err := userSend(o, "op-user-legacy", "docs", []string{"docs", assistantsTestStageID}, "both of you")
+	if err != nil {
+		t.Fatalf("user send: %v", err)
+	}
+	if r.ThreadID == legacy.ID {
+		t.Fatalf("the human's message went into the legacy conversation %s it is not a member of", legacy.ID)
+	}
+	if th := store.Snapshot().Assistants.Mesh.Threads[r.ThreadID]; th == nil || !slices.Contains(th.Members, meshUserParticipantID) {
+		t.Fatalf("thread = %+v, want a new conversation with the human in it", th)
+	}
+}
+
+// A retry under the same request id from another feed is another intent: a conflict, never the first send's
+// receipt (its message shows in a different feed).
+func TestSendFromAgent_SameRequestFromAnotherFeedIsAConflict(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	if _, err := userSend(o, "op-same", "docs", []string{"docs"}, "hi"); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if _, err := userSend(o, "op-same", "docs", []string{"docs"}, "hi"); err != nil {
+		t.Fatalf("retry from the same feed: %v", err)
+	}
+	if _, err := userSend(o, "op-same", assistantsTestStageID, []string{"docs"}, "hi"); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("err = %v, want an operation id conflict", err)
+	}
+}

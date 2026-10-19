@@ -284,10 +284,22 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Ef
 		inReplyTo = &s
 	}
 	return marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
-		state.MeshMessageSentPayload{
-			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
-			InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs, AutoResult: req.AutoResult,
+		meshMessageSentRecord{
+			MeshMessageSentPayload: state.MeshMessageSentPayload{
+				Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
+				InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs, AutoResult: req.AutoResult,
+			},
+			OriginStage: req.OriginStage,
 		})
+}
+
+// meshMessageSentRecord is the mesh_message_sent payload as the orchestrator journals it: the projection's
+// payload plus the request's intent the projection does not need — OriginStage, the stage feed a send without a
+// thread was written from, so a retry under the same request id from another feed is a conflict, not a replay.
+// An additive omitempty field: older journals and readers are unaffected.
+type meshMessageSentRecord struct {
+	state.MeshMessageSentPayload
+	OriginStage string `json:"origin_stage,omitempty"`
 }
 
 // announceMessage publishes the live notices of a committed message — and of its thread, when the same

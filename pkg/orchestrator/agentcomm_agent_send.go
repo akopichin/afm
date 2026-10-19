@@ -58,14 +58,17 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 		return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("unknown origin stage %q", originStage)}
 	}
 	members := conversationMembers(req.Sender, req.Recipients)
-	if th := openThreadWithMembers(rs, members, originStage); th != "" {
+	if th := openThreadWithMembers(rs, members, req.Sender, originStage); th != "" {
 		req.ThreadID = th
 		return o.Send(ctx, req)
 	}
 	if originStage == "" {
 		originStage = participantStage(rs, req.Sender)
 	}
-	req.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
+	// The requested feed is part of a new conversation's identity: two feeds opening a conversation with the
+	// same people at once get two threads, each shown in its own feed (one shared id would make the second open
+	// a no-op that drops its message into the first feed's thread).
+	req.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members, req.OriginStage))
 	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, members, 0, originStage)
 	if err != nil {
 		return SendReceipt{}, err
@@ -80,12 +83,12 @@ func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Partic
 	if err != nil || !committed {
 		return SendReceipt{}, err != nil, err // a storage error answers the request too
 	}
-	var p state.MeshMessageSentPayload
+	var p meshMessageSentRecord
 	target, found, err := op.Effect("mesh_message_sent", &p)
 	if err != nil {
 		return SendReceipt{}, true, err
 	}
-	if !found || !o.committedSendMatches(rs, roster, committedMessage(target, p), req) {
+	if !found || p.OriginStage != req.OriginStage || !o.committedSendMatches(rs, roster, committedMessage(target, p.MeshMessageSentPayload), req) {
 		return SendReceipt{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return SendReceipt{MessageID: agentcomm.MessageID(target.MessageID), Seq: op.Result.Seq, ThreadID: agentcomm.ThreadID(target.ThreadID)}, true, nil
@@ -173,9 +176,10 @@ func conversationMembers(sender agentcomm.ParticipantID, recipients []agentcomm.
 }
 
 // conversationOpenID is the key a new conversation of exactly members derives its thread id from: the sorted
-// member set plus how many threads with the same agents exist already (so a conversation opened after an
-// earlier one was closed gets a fresh id).
-func conversationOpenID(rs state.RunState, members []agentcomm.ParticipantID) string {
+// member set, the stage feed it is opened from (originStage, "" for an agent's own send — two agents starting
+// the same conversation still meet in one thread) and how many threads with the same agents exist already (so
+// a conversation opened after an earlier one was closed gets a fresh id).
+func conversationOpenID(rs state.RunState, members []agentcomm.ParticipantID, originStage string) string {
 	set := sortedMemberSet(members)
 	agents := agentMemberSet(members)
 	n := 0
@@ -187,6 +191,9 @@ func conversationOpenID(rs state.RunState, members []agentcomm.ParticipantID) st
 	key := ""
 	for _, m := range set {
 		key += string(m) + "\x00"
+	}
+	if originStage != "" {
+		key += "origin:" + originStage
 	}
 	return fmt.Sprintf("agent-conversation:%s:%d", deriveMeshID("agent-conversation", key), n)
 }
@@ -208,12 +215,13 @@ func agentMemberSet(members []agentcomm.ParticipantID) []agentcomm.ParticipantID
 // continue after a resume. A stage's discussion thread is never picked — it belongs to the human's Discussion
 // with the stage, and the agents' own conversation must not end up there. shownIn — a stage feed the
 // conversation must show in (threadInStageFeed), so a message written from that feed never lands in a
-// conversation it does not show; "" — any conversation.
-func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID, shownIn string) agentcomm.ThreadID {
+// conversation it does not show; "" — any conversation. sender — who writes: a conversation it is not a member
+// of cannot take its message (the human is not in the agents' conversations opened before D1).
+func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID, sender agentcomm.ParticipantID, shownIn string) agentcomm.ThreadID {
 	want := agentMemberSet(members)
 	for _, id := range rs.Assistants.Mesh.ThreadOrder {
 		th := rs.Assistants.Mesh.Threads[id]
-		if th == nil || th.Status != agentcomm.ThreadOpen || !slices.Equal(agentMemberSet(th.Members), want) {
+		if th == nil || th.Status != agentcomm.ThreadOpen || !slices.Equal(agentMemberSet(th.Members), want) || !slices.Contains(th.Members, sender) {
 			continue
 		}
 		if shownIn != "" && !threadInStageFeed(rs, th, shownIn) {
