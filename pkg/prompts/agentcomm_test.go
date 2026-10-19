@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -169,5 +170,21 @@ func TestDiscussionQuestionBlock_BoundedNewestFirst(t *testing.T) {
 	}
 	if !strings.Contains(got, "2 older question(s) did not fit here: dm-old, dm-oldest") || !strings.Contains(got, "afm agent inbox --all") {
 		t.Fatalf("omitted questions must be named with how to read them:\n%s", got[len(got)-300:])
+	}
+}
+
+// The list of questions that did not fit is bounded too: at most maxOmittedQuestionIDs ids, then a count.
+func TestDiscussionQuestionBlock_OmittedIDsCapped(t *testing.T) {
+	big := strings.Repeat("x", maxDiscussionQuestionBytes)
+	var questions []DiscussionQuestion
+	for i := range 50 {
+		questions = append(questions, DiscussionQuestion{MessageID: fmt.Sprintf("dm-%02d", i), Body: big})
+	}
+	got := DiscussionQuestionBlock(questions)
+	if !strings.Contains(got, "50 older question(s) did not fit here: dm-49, dm-48") || !strings.Contains(got, "dm-30 and 30 more.") {
+		t.Fatalf("want the 20 newest ids and a count of the rest:\n%s", got[strings.Index(got, "older question"):])
+	}
+	if strings.Contains(got, "dm-29") {
+		t.Fatal("ids beyond the cap must not be listed")
 	}
 }

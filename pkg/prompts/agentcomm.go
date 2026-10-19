@@ -116,6 +116,9 @@ type DiscussionQuestion struct {
 // block repeats on every attempt until each question is answered, so it must never crowd out the task.
 const maxDiscussionQuestionBytes = 16 << 10
 
+// maxOmittedQuestionIDs bounds the ids listed for questions that did not fit, newest first.
+const maxOmittedQuestionIDs = 20
+
 // DiscussionQuestionBlock renders the questions that interrupted the agent's turn. It frames them as
 // questions to answer and then return to the work — never as feedback on the plan or the work itself, which
 // is what the "User note" block of a Revise is for. Newest questions come first and are quoted in full while
@@ -143,8 +146,14 @@ func DiscussionQuestionBlock(questions []DiscussionQuestion) string {
 		sb.WriteString(entry)
 	}
 	if len(omitted) > 0 {
-		fmt.Fprintf(&sb, "\n%d older question(s) did not fit here: %s. Read them with `afm agent inbox --all` and answer each the same way.\n",
-			len(omitted), strings.Join(omitted, ", "))
+		named := omitted
+		more := ""
+		if len(named) > maxOmittedQuestionIDs {
+			more = fmt.Sprintf(" and %d more", len(named)-maxOmittedQuestionIDs)
+			named = named[:maxOmittedQuestionIDs]
+		}
+		fmt.Fprintf(&sb, "\n%d older question(s) did not fit here: %s%s. Read them with `afm agent inbox --all` and answer each the same way.\n",
+			len(omitted), strings.Join(named, ", "), more)
 	}
 	return sb.String()
 }
