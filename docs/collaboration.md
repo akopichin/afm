@@ -216,7 +216,8 @@ different message does not count. A turn with no waking message posts nothing.
 If the reply cannot be delivered — the conversation is closed or full, the
 recipient's inbox is full, or the recipient has finished — the result is still
 recorded, the agent goes idle as usual, and the feed shows *"turn result of task
-… not delivered: <reason>"*. The same holds for a delegated child's result
+… not delivered: <reason>"* — the feed of the addressed stage, else of the
+agent's own stage, else of the stage its conversation was opened from. The same holds for a delegated child's result
 mirrored to its parent, which is a turn result too. When the waking message was
 your Discussion post that mentioned the agent, the reply appears in the
 Discussion as the answer, so the post is not shown as **Not answered**. Run

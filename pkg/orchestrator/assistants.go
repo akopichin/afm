@@ -552,7 +552,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		dropped := err
 		_, err = o.opts.Store.ApplyRunOperation(finishOp(effects, nil), afterFinish(nil))
 		if err == nil && !errors.Is(dropped, errTurnAlreadyAnswered) {
-			o.noticeResultNotDelivered(taskID, resultNoticeStage(rootStage, reply), dropped)
+			o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, reply), dropped)
 		}
 	}
 	if err == nil && turn > 0 {
@@ -564,12 +564,20 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 }
 
 // resultNoticeStage is the stage whose feed hears that a result was not delivered: the stage the turn reply was
-// addressed to, if any, else the task's own root stage.
-func resultNoticeStage(rootStage string, reply *plannedMessage) string {
-	if reply != nil {
-		if stageID, ok := stageIDFromMeshParticipant(reply.send.Recipients[0]); ok {
-			return stageID
-		}
+// addressed to, if any, else the task's own root stage, else — for a run agent answering the human or another
+// run agent — the stage the reply's conversation was opened from, whose feed shows that conversation.
+func resultNoticeStage(rs state.RunState, rootStage string, reply *plannedMessage) string {
+	if reply == nil {
+		return rootStage
 	}
-	return rootStage
+	if stageID, ok := stageIDFromMeshParticipant(reply.send.Recipients[0]); ok {
+		return stageID
+	}
+	if rootStage != "" {
+		return rootStage
+	}
+	if th := rs.Assistants.Mesh.Threads[reply.send.ThreadID]; th != nil {
+		return th.OriginStage
+	}
+	return ""
 }
