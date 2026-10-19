@@ -391,6 +391,49 @@ func TestTurnReply_UndeliveredAnswerEndsTheRequestersWait(t *testing.T) {
 // A turn owes replies to two requesters, and one of their conversations is full. The reply that fits is still
 // posted and answers its requester; only the wait whose reply cannot be delivered is cancelled.
 func TestTurnReply_OneFullConversationDoesNotDropTheOtherReply(t *testing.T) {
+	store, stage, peer := twoRequestersRun(t, false)
+	if got := stage.wait(store); got.Status != agentcomm.WaitCancelled || !strings.Contains(got.Reason, "could not be delivered") {
+		t.Fatalf("stage wait = %s %q, want cancelled: its conversation is full", got.Status, got.Reason)
+	}
+	if got := peer.wait(store).Status; got != agentcomm.WaitReady {
+		t.Fatalf("peer wait = %s, want ready: its reply fits", got)
+	}
+	if len(repliesTo(store, stage.request)) != 0 || len(repliesTo(store, peer.request)) != 1 {
+		t.Fatal("want exactly the peer's reply")
+	}
+}
+
+// Both requests are in one conversation with room for one more message: each reply fits on its own, not both
+// together. The first is delivered; only the second requester's wait is cancelled.
+func TestTurnReply_TwoRepliesForTheLastSlotDeliverOne(t *testing.T) {
+	store, stage, peer := twoRequestersRun(t, true)
+	if got := stage.wait(store).Status; got != agentcomm.WaitReady {
+		t.Fatalf("stage wait = %s, want ready: its reply took the last slot", got)
+	}
+	if got := peer.wait(store); got.Status != agentcomm.WaitCancelled || !strings.Contains(got.Reason, "could not be delivered") {
+		t.Fatalf("peer wait = %s %q, want cancelled: no room was left for its reply", got.Status, got.Reason)
+	}
+	if len(repliesTo(store, stage.request)) != 1 || len(repliesTo(store, peer.request)) != 0 {
+		t.Fatal("want exactly the stage's reply")
+	}
+}
+
+// requester is one side of twoRequestersRun: the request it sent and its reply_to wait on it.
+type requester struct {
+	request agentcomm.MessageID
+	waitID  agentcomm.WaitID
+}
+
+func (r requester) wait(store *state.Store) *state.MeshWait {
+	return store.Snapshot().Assistants.Mesh.Waits[r.waitID]
+}
+
+// twoRequestersRun has a reviewer owe replies to two requesters in one turn: the stage asks, the reviewer asks
+// the human and yields, the peer asks while it waits (another yield), and the human's passive answer wakes the
+// turn that answers both. sharedThread: both requests are in one conversation with room for one more message;
+// otherwise the stage's conversation is full and the peer's has room. Returns once both waits have ended.
+func twoRequestersRun(t *testing.T, sharedThread bool) (*state.Store, requester, requester) {
+	t.Helper()
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()
 	activateStage(t, o, assistantsTestStageID)
@@ -403,8 +446,12 @@ func TestTurnReply_OneFullConversationDoesNotDropTheOtherReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	full := openThread(t, o, "op-full-thread", 1, stage, rev.ParticipantID)
-	roomy := openThread(t, o, "op-roomy-thread", 0, peer.ParticipantID, rev.ParticipantID)
+	stageThread := openThread(t, o, "op-full-thread", 1, stage, rev.ParticipantID)
+	peerThread := openThread(t, o, "op-roomy-thread", 0, peer.ParticipantID, rev.ParticipantID)
+	if sharedThread {
+		stageThread = openThread(t, o, "op-shared-thread", 3, stage, peer.ParticipantID, rev.ParticipantID)
+		peerThread = stageThread
+	}
 	userThread := openThread(t, o, "op-user-thread", 0, rev.ParticipantID, meshUserParticipantID)
 
 	var revCalls atomic.Int32
@@ -430,13 +477,13 @@ func TestTurnReply_OneFullConversationDoesNotDropTheOtherReply(t *testing.T) {
 		}
 	}
 
-	stageRequest := sendAs(t, o, "op-stage-request", full, stage, rev.ParticipantID, "please review", nil, false)
+	stageRequest := sendAs(t, o, "op-stage-request", stageThread, stage, rev.ParticipantID, "please review", nil, false)
 	stageWait, err := o.Wait(ctx, WaitRequest{OperationID: "op-stage-wait", Waiter: stage, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: stageRequest}})
 	if err != nil {
 		t.Fatalf("stage Wait: %v", err)
 	}
 	waitForTaskStatus(t, store, rev.TaskID, assistants.StatusWaitingPeer, 2*time.Second)
-	peerRequest := sendAs(t, o, "op-peer-request", roomy, peer.ParticipantID, rev.ParticipantID, "and mine?", nil, false)
+	peerRequest := sendAs(t, o, "op-peer-request", peerThread, peer.ParticipantID, rev.ParticipantID, "and mine?", nil, false)
 	peerWait, err := o.Wait(ctx, WaitRequest{OperationID: "op-peer-wait", Waiter: peer.ParticipantID, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: peerRequest}})
 	if err != nil {
 		t.Fatalf("peer Wait: %v", err)
@@ -448,20 +495,10 @@ func TestTurnReply_OneFullConversationDoesNotDropTheOtherReply(t *testing.T) {
 	q := question.Load().(agentcomm.MessageID)
 	sendAs(t, o, "op-user-answer", userThread, meshUserParticipantID, rev.ParticipantID, "HEAD~1", &q, true)
 
-	waitUntil(t, "the peer's reply", func() bool { return len(repliesTo(store, peerRequest)) == 1 })
-	waitUntil(t, "the stage's wait to end", func() bool {
-		return store.Snapshot().Assistants.Mesh.Waits[stageWait.WaitID].Status != agentcomm.WaitPending
+	waitUntil(t, "both waits to end", func() bool {
+		waits := store.Snapshot().Assistants.Mesh.Waits
+		return waits[stageWait.WaitID].Status != agentcomm.WaitPending && waits[peerWait.WaitID].Status != agentcomm.WaitPending
 	})
 	o.concurrency.WaitAgents()
-
-	waits := store.Snapshot().Assistants.Mesh.Waits
-	if got := waits[peerWait.WaitID].Status; got != agentcomm.WaitReady {
-		t.Fatalf("peer wait = %s, want ready: its reply fits", got)
-	}
-	if got := waits[stageWait.WaitID]; got.Status != agentcomm.WaitCancelled || !strings.Contains(got.Reason, "could not be delivered") {
-		t.Fatalf("stage wait = %s %q, want cancelled: its conversation is full", got.Status, got.Reason)
-	}
-	if len(repliesTo(store, stageRequest)) != 0 {
-		t.Fatal("a reply landed in the full conversation")
-	}
+	return store, requester{request: stageRequest, waitID: stageWait.WaitID}, requester{request: peerRequest, waitID: peerWait.WaitID}
 }

@@ -138,22 +138,27 @@ type undeliveredReply struct {
 	reason string
 }
 
-// splitDeliverable splits replies into those that can still be delivered against rs and those that cannot,
-// each checked on its own — turnRepliesCheck's commit-time rule and the projection's own limits (a full
-// conversation or inbox) — so one full conversation never costs another requester its answer.
+// splitDeliverable splits replies into those that can still be delivered against rs and those that cannot, so
+// one full conversation never costs another requester its answer. Replies are accepted one by one, in order,
+// each checked together with those already accepted — turnRepliesCheck's commit-time rule and the projection's
+// own limits (RunState.CheckEffects: a full conversation or inbox) — so two replies competing for a
+// conversation's last slot deliver one, not neither. The commit validates the accepted set again.
 func (o *Orchestrator) splitDeliverable(rs state.RunState, replies []plannedMessage) ([]plannedMessage, []undeliveredReply) {
 	var good []plannedMessage
 	var bad []undeliveredReply
+	var accepted []state.Effect
 	for _, r := range replies {
-		err := o.turnRepliesCheck([]plannedMessage{r})(&rs)
+		candidate := append(slices.Clone(good), r)
+		err := o.turnRepliesCheck(candidate)(&rs)
 		if err == nil {
-			err = rs.CheckEffects(r.effects)
+			err = rs.CheckEffects(append(slices.Clone(accepted), r.effects...))
 		}
 		if err != nil {
 			bad = append(bad, undeliveredReply{reply: r, reason: "the answer to it could not be delivered: " + o.RedactSecrets(rejectionReason(err))})
 			continue
 		}
-		good = append(good, r)
+		good = candidate
+		accepted = append(accepted, r.effects...)
 	}
 	return good, bad
 }
