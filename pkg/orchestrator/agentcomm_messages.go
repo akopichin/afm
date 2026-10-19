@@ -118,7 +118,9 @@ func (o *Orchestrator) publishThreadOpened(threadID agentcomm.ThreadID, title st
 // CloseThread implements Service.CloseThread. Every still-pending wait whose condition names this thread (an
 // addressed-message wait on it, or a reply-to wait on one of its messages) is resolved in the SAME commit —
 // decided by applyMeshThreadClosed itself (pkg/state/mesh_projection.go), not precomputed here from a
-// snapshot, so the resolution can never race a concurrent Wait registration nor break idempotent replay.
+// snapshot, so the resolution can never race a concurrent Wait registration nor break idempotent replay. The
+// waits this commit cancelled are announced and their waiters resumed (announceAndWakeEnded): a stage parked
+// in awaiting_peer on one continues as "wait ended".
 func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) error {
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
@@ -130,8 +132,10 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 	}
 
 	op := state.Operation{ID: req.OperationID, Kind: "mesh_close_thread", Actor: req.Actor, Effects: []state.Effect{closeEff}}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(req.ThreadID), "status": "closed"}})
+		reason := fmt.Sprintf("thread %s was closed", req.ThreadID)
+		o.announceAndWakeEnded(res.EndedWaits, func(agentcomm.WaitID) string { return reason })
 	})
 	return err
 }

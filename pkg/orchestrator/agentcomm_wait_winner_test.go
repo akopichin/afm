@@ -60,3 +60,43 @@ func TestWaitResolution_OnlyTheWinnerAnnouncesAndWakes(t *testing.T) {
 		})
 	}
 }
+
+// Closing a thread cancels the waits for answers in it. A stage parked in awaiting_peer on one of them is woken
+// and continues as "wait ended" — not left parked until a restart.
+func TestCloseThread_WakesTheStageParkedOnItsReply(t *testing.T) {
+	o, _ := setupHookOrch(t, "s1")
+	events := o.critical.Recv()
+	ctx := context.Background()
+	stage := meshStageParticipantID("s1")
+	th, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-close-open", Members: []agentcomm.ParticipantID{stage, meshUserParticipantID}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	sent, err := o.Send(ctx, SendRequest{
+		OperationID: "op-close-ask", ThreadID: th.ID, Sender: stage, Recipients: []agentcomm.ParticipantID{meshUserParticipantID},
+		Kind: agentcomm.MessageKindMessage, Body: "which format?",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	w, err := o.Wait(ctx, WaitRequest{OperationID: "op-close-wait", Waiter: stage, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: sent.MessageID}})
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	parkStageAwaitingPeer(t, o, "s1")
+	<-events
+	o.prePeerPhase.Store("s1", phaseImplementation)
+
+	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "op-close", ThreadID: th.ID, Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatalf("CloseThread: %v", err)
+	}
+	waitForCriticalEvent(t, events, bus.EventPeerWaitEnded, "s1", 2*time.Second)
+	if !strings.Contains(noticesText(t, o), string(w.WaitID)) {
+		t.Fatal("the cancelled wait was not announced")
+	}
+	// A repeat of the same close is a replay: nothing ended again, nobody woken again.
+	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "op-close", ThreadID: th.ID, Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatalf("CloseThread replay: %v", err)
+	}
+	requireNoCriticalEvent(t, events, bus.EventPeerWaitEnded, "s1", 150*time.Millisecond)
+}

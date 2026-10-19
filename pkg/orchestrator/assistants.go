@@ -529,13 +529,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 				o.announceMessage(d.send, d.messageID, false)
 			}
 			// The waits this commit cancelled because their answer was dropped: their waiters continue.
-			for _, waitID := range res.EndedWaits {
-				o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
-					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": endedReasons[waitID]}})
-				if w := o.opts.Store.Snapshot().Assistants.Mesh.Waits[waitID]; w != nil {
-					o.resumeWaiterAfterTerminalWait(o.runContext(context.Background()), w.Waiter)
-				}
-			}
+			o.announceAndWakeEnded(res.EndedWaits, func(id agentcomm.WaitID) string { return endedReasons[id] })
 			// T4a.5: a terminal child (pass, needs_changes, failure, or cancel — ANY terminal outcome, see
 			// TestWaitingChildren_FailedChildDelivered) is the ONLY trigger that re-checks whether its parent's
 			// whole waiting_children group just became ready. tryResumeParent's own CAS (not this check) is what

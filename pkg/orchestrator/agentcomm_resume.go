@@ -338,8 +338,9 @@ func (o *Orchestrator) onPeerWaitEnded(ctx context.Context, ev bus.Event) error 
 
 // resumeWaiterAfterTerminalWait wakes waiter — LIVE path — once one of its waits has resolved to a terminal-
 // but-UNSATISFIED status (WaitCancelled or WaitExpired, never WaitReady). Callers (CancelWait, a firing
-// deadline timer) must first confirm via meshWaitResolvedTo that THEIR OWN resolution attempt is the one that
-// actually stuck — a reply landing first resolves the SAME wait to WaitReady instead, and that outcome's own
+// deadline timer, announceAndWakeEnded) must first confirm that THEIR OWN commit ended the wait
+// (state.OperationResult.EndedWaits, as resolveMeshWaitDurable reports it) — a reply or another resolution
+// landing first leaves the SAME wait in another status (a reply makes it WaitReady), and that outcome's own
 // resume path (resumeWaitersAfterCommit) already owns waking the waiter; calling this one too would fire a
 // second, contradictory resume for the same episode. A stage goes through the critical bus exactly like
 // resumeAfterPeerReply/resumeAfterPeerQuestion (CAS-protected by resumeAwaitingPeerStage's own currentStatus

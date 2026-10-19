@@ -326,7 +326,7 @@ func (o *Orchestrator) resolveMeshWaitChecked(opID string, waitID agentcomm.Wait
 	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		changed = slices.Contains(res.EndedWaits, waitID)
 		if changed {
-			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "status": string(status), "reason": reason}})
+			o.announceEndedWait(waitID, status, reason)
 		}
 	})
 	if err != nil {
@@ -377,6 +377,28 @@ func (o *Orchestrator) expireMeshWait(ctx context.Context, waitID agentcomm.Wait
 	}
 	if changed {
 		o.resumeWaiterAfterTerminalWait(ctx, waiter)
+	}
+}
+
+// announceEndedWait publishes that waitID ended without an answer (status, reason). Only the operation whose
+// commit ended it (state.OperationResult.EndedWaits) calls it.
+func (o *Orchestrator) announceEndedWait(waitID agentcomm.WaitID, status agentcomm.WaitStatus, reason string) {
+	o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "status": string(status), "reason": reason}})
+}
+
+// announceAndWakeEnded is the tail of an operation that may end waits as a side effect of its own facts (a
+// thread closing, a finish dropping a reply it cannot deliver): for each wait its commit ended (EndedWaits — a
+// replay ends none), it announces the end with reason(waitID) and resumes the waiter as "wait ended", like
+// CancelWait does for its one wait.
+func (o *Orchestrator) announceAndWakeEnded(ended []agentcomm.WaitID, reason func(agentcomm.WaitID) string) {
+	rs := o.opts.Store.Snapshot()
+	for _, waitID := range ended {
+		w := rs.Assistants.Mesh.Waits[waitID]
+		if w == nil {
+			continue
+		}
+		o.announceEndedWait(waitID, w.Status, reason(waitID))
+		o.resumeWaiterAfterTerminalWait(o.runContext(context.Background()), w.Waiter)
 	}
 }
 
