@@ -88,7 +88,7 @@ func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Partic
 func committedMessage(target state.Target, p state.MeshMessageSentPayload) agentcomm.Message {
 	m := agentcomm.Message{
 		ID: agentcomm.MessageID(target.MessageID), ThreadID: agentcomm.ThreadID(target.ThreadID), Sender: agentcomm.ParticipantID(p.Sender),
-		Kind: agentcomm.MessageKind(p.Kind), Body: p.Body, ArtifactRefs: p.ArtifactRefs,
+		Kind: agentcomm.MessageKind(p.Kind), Body: p.Body, ArtifactRefs: p.ArtifactRefs, AutoResult: p.AutoResult,
 	}
 	for _, r := range p.Recipients {
 		m.Recipients = append(m.Recipients, agentcomm.ParticipantID(r))
@@ -101,11 +101,11 @@ func committedMessage(target state.Target, p state.MeshMessageSentPayload) agent
 }
 
 // committedSendMatches reports whether m — the message already committed under req's request id — is the
-// message req asks to send: same sender, kind, body, reply target, artifacts, thread (when req names one) and
-// recipients. Recipient names are resolved against m's own recipients, so an alias that has since become
+// message req asks to send: same sender, kind, body, passive flag, reply target, artifacts, thread (when req
+// names one) and recipients. Recipient names are resolved against m's own recipients, so an alias that has since become
 // ambiguous (a new agent with the same alias) still names whom it named then.
 func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
-	if m.Sender != req.Sender || m.Kind != req.Kind || !o.sameRedactedText(m.Body, req.Body) ||
+	if m.Sender != req.Sender || m.Kind != req.Kind || m.AutoResult != req.AutoResult || !o.sameRedactedText(m.Body, req.Body) ||
 		!o.sameRedactedList(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
 		return false
 	}
