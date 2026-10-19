@@ -327,6 +327,7 @@ func (o *Orchestrator) sameRedactedText(stored, requested string) bool {
 const (
 	opKindAttachTask            = "attach_task"
 	opKindAttachAndSend         = "attach_and_send"
+	opKindMeshWait              = "mesh_wait"
 	opKindMeshSend              = "mesh_send"
 	opKindMeshPublish           = "mesh_publish"
 	opKindMeshOpenThread        = "mesh_open_thread"

@@ -57,6 +57,26 @@ func waitConditionHint(kind agentcomm.WaitConditionKind) string {
 	}
 }
 
+// waitRules are the rule flags a wait is registered with: a task_result wait wants a fresh result, a reply_to
+// wait a reply from a recipient. A retry of a request committed before a flag existed is the same request: it
+// keeps the committed record's flags, so it replays the original wait instead of conflicting with it.
+func (o *Orchestrator) waitRules(req WaitRequest) (freshOnly, recipientOnly bool, err error) {
+	freshOnly = req.Condition.Kind == agentcomm.WaitOnTaskResult
+	recipientOnly = req.Condition.Kind == agentcomm.WaitOnReplyTo
+	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshWait)
+	if errors.Is(err, state.ErrOperationIDConflict) || (err == nil && !committed) {
+		return freshOnly, recipientOnly, nil // a new request, or one the commit itself will reject as a conflict
+	}
+	if err != nil {
+		return false, false, err
+	}
+	var p state.MeshWaitRegisteredPayload
+	if _, found, err := op.Effect("mesh_wait_registered", &p); err != nil || !found {
+		return freshOnly, recipientOnly, err
+	}
+	return p.FreshResultOnly, p.RecipientReplyOnly, nil
+}
+
 // Wait implements Service.Wait.
 func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, error) {
 	if req.OperationID == "" {
@@ -70,15 +90,18 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	}
 
 	waitID := deriveMeshWaitID(req.OperationID)
+	freshOnly, recipientOnly, err := o.waitRules(req)
+	if err != nil {
+		return WaitReceipt{}, err
+	}
 	eff, err := marshalEffect("mesh_wait_registered", state.Target{WaitID: string(waitID)}, state.MeshWaitRegisteredPayload{
 		Waiter: string(req.Waiter), Condition: req.Condition, Deadline: req.Deadline, ContinuationNote: req.ContinuationNote,
-		FreshResultOnly:    req.Condition.Kind == agentcomm.WaitOnTaskResult,
-		RecipientReplyOnly: req.Condition.Kind == agentcomm.WaitOnReplyTo,
+		FreshResultOnly: freshOnly, RecipientReplyOnly: recipientOnly,
 	})
 	if err != nil {
 		return WaitReceipt{}, err
 	}
-	op := state.Operation{ID: req.OperationID, Kind: "mesh_wait", Actor: req.Actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshWait, Actor: req.Actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{
 		// Decided under the commit's lock: two waits registered at the same time must not both pass the cycle
 		// check against a snapshot that has neither of them.
 		Check: func(rs *state.RunState) error { return validateWaitAdmission(*rs, req) },
