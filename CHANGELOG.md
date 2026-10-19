@@ -5,6 +5,18 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: helpers work in the project root and know where the changes are
+
+Helpers and run agents now start in the project root, like the stage agent,
+instead of their own scratch directory. Their task context names the project
+root, a base revision for `git diff <base>` (the fork point in a worktree,
+otherwise `HEAD`), and the scratch directory, which is also passed as
+`AFM_SCRATCH_DIR` for notes. The protection of project files depends on the
+environment: the host codex adapter is read-only, a Docker run is not. The
+collaboration docs list these guarantees. The stage feed now shows *"The
+working tree changed during <agent>'s turn"* when a helper turn saw the tree
+change.
+
 ### Fix: a helper that waits for a colleague no longer fails with protocol_error
 
 A helper or run agent that ends its turn with `afm agent wait` prints no final

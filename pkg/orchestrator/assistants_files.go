@@ -8,7 +8,7 @@
 //	    turn-inbox.json    # <inbox> message ids of a turn that has not finished yet (turnInboxFileName)
 //	    agent.log          # human-readable log
 //	    agent.jsonl        # raw stream
-//	    scratch/           # the ONLY writable directory given to the helper
+//	    scratch/           # the helper's own notes directory, passed as AFM_SCRATCH_DIR (its CWD is the project root)
 //
 // Anchored to the run directory (RunDir) regardless of root_dir — same discipline as AFM_STAGE_DIR: the
 // agent's actual project-root CWD can be anywhere, but its OWN bookkeeping files always live under the run.
@@ -73,7 +73,7 @@ func (o *Orchestrator) taskDir(taskID assistants.TaskID) string {
 	return filepath.Join(o.opts.RunDir, assistantsNamespaceDir, safeTaskDirName(string(taskID)))
 }
 
-// taskScratchDir returns the ONE writable directory a helper task's subprocess is given.
+// taskScratchDir returns the helper task's own notes directory (AFM_SCRATCH_DIR).
 func (o *Orchestrator) taskScratchDir(taskID assistants.TaskID) string {
 	return filepath.Join(o.taskDir(taskID), taskScratchDirName)
 }

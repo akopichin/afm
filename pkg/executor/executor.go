@@ -129,6 +129,7 @@ type Config struct {
 	SessionID     string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
 	Resume        bool                         // if true, --resume <SessionID> is used instead of --session-id
 	StageDir      string                       // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	ScratchDir    string                       // passed to a helper agent as AFM_SCRATCH_DIR: its own directory for notes
 	WrapperDir    string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
 	Dir           string                       // if set, agent runs with this working directory (project root from flow.root_dir)
 	Debug         bool                         // if true, log the exact agent input (prompt) to debug logs
@@ -906,8 +907,8 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 		switch {
 		case strings.HasPrefix(kv, "CLAUDECODE="):
 			// always strip for nested sessions
-		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
-			// always strip inherited; re-added by caller only if cfg.StageDir != ""
+		case strings.HasPrefix(kv, "AFM_STAGE_DIR="), strings.HasPrefix(kv, "AFM_SCRATCH_DIR="):
+			// always strip inherited; re-added by caller only if cfg.StageDir/cfg.ScratchDir is set
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added by caller only if mode.isolated()
 		case IsBrowserTransportEnv(kv):
@@ -995,6 +996,9 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	filtered := e.filterInheritedEnv(os.Environ())
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
+	}
+	if e.cfg.ScratchDir != "" {
+		filtered = append(filtered, "AFM_SCRATCH_DIR="+e.cfg.ScratchDir)
 	}
 	if e.cfg.effectiveMode().isolated() {
 		// CODEX_VERIFY сообщает адаптеру о verify/helper-режиме; одного поля Config.VerifyMode недостаточно.

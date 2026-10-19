@@ -22,11 +22,12 @@ import (
 // Production is execHelperAgent; tests inject a fake (see assistants_test.go).
 type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error)
 
-// helperExecutorConfig builds the executor.Config for one helper task's run — pulled out of execHelperAgent
-// so T3.6's TestScratch_IsOnlyWritablePath can assert Dir == taskScratchDir without spawning a real process.
-// Dir is the task's own scratch/ directory, NOT o.opts.RootDir: a helper's context (T3.5) already carries
-// everything it is entitled to read as inline TEXT (plan/artifacts), so it needs no live write access to the
-// project tree — scratch/ is the only directory it can write to.
+// helperExecutorConfig builds the executor.Config for one helper task's run — pulled out of execHelperAgent so
+// a test can check it without spawning a process. Dir is the project root, exactly like the stage agent's and
+// the verifier's (o.opts.RootDir, already worktree-aware; empty = afm's own CWD): a helper reviews code, so it
+// must be able to read it where it lives. Its own scratch/ is handed over as AFM_SCRATCH_DIR, a place for
+// notes. Whether the helper can also write to the project is up to its environment (a host codex sandbox is
+// read-only, a container is not) — this config promises nothing about it.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
 	participant := o.taskMeshParticipant(taskID)
 	return executor.Config{
@@ -34,7 +35,8 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		Dir:            o.taskScratchDir(taskID),
+		Dir:            o.opts.RootDir,
+		ScratchDir:     o.taskScratchDir(taskID),
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
@@ -216,9 +218,14 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		}
 	}
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
-		// Observation only — never changes the task's verdict (mirrors verify_tree_modified exactly).
+		// Observation only — never changes the task's verdict (mirrors verify_tree_modified). Not an accusation
+		// either: the tree may have been changed by anybody while the helper ran, so the notice only says when.
+		agent := task.Title
+		if agent == "" {
+			agent = string(task.ProfileID)
+		}
 		o.publishNotice(bus.Event{Type: bus.EventHelperTreeModified, StageID: task.RootStageID, Data: map[string]any{
-			"task_id": string(taskID),
+			"task_id": string(taskID), "agent": agent,
 		}})
 	}
 

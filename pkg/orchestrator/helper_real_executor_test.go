@@ -186,3 +186,51 @@ func TestHelperYield_RealExecutor_ReplyBeforeParkResumes(t *testing.T) {
 	}
 	o.concurrency.WaitAgents()
 }
+
+// TestHelperTurn_RealExecutor_RunsInProjectRootWithScratchEnv: a helper turn runs with the project root as its
+// working directory and gets its scratch directory as AFM_SCRATCH_DIR — checked on the real executor.
+func TestHelperTurn_RealExecutor_RunsInProjectRootWithScratchEnv(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	root := t.TempDir()
+	o.opts.RootDir = root
+	out := t.TempDir()
+	answer := mustJSONLine(t, map[string]any{"type": "assistant", "message": map[string]any{"content": []map[string]any{
+		{"type": "text", "text": `{"schema_version":1,"kind":"result","verdict":"pass","summary":"looks fine"}`},
+	}}})
+	script := filepath.Join(out, "agent.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/bash\n"+
+		`pwd -P > '`+out+`/pwd'`+"\n"+
+		`printf '%s' "$AFM_SCRATCH_DIR" > '`+out+`/scratch'`+"\n"+
+		"cat <<'EOF'\n"+answer+"\nEOF\n"+
+		`echo '{"type":"result","subtype":"success"}'`+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, _, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return o.execHelperAgent(ctx, taskID, profileID, script, prompt, logFile, resultFile)
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-workspace")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 5*time.Second)
+	o.concurrency.WaitAgents()
+
+	wantRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readTrimmed(t, filepath.Join(out, "pwd")); got != wantRoot {
+		t.Fatalf("helper CWD = %q, want the project root %q", got, wantRoot)
+	}
+	if got := readTrimmed(t, filepath.Join(out, "scratch")); got != o.taskScratchDir(taskID) {
+		t.Fatalf("AFM_SCRATCH_DIR = %q, want %q", got, o.taskScratchDir(taskID))
+	}
+}
+
+func readTrimmed(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(raw))
+}

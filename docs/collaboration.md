@@ -48,6 +48,29 @@ whole-run `limits.max_tasks` limits. `max_tasks` counts every task of the run:
 helpers and run agents you attach as well as their children. A flow cannot re-enable collaboration when
 config or the environment disables it.
 
+## Where helpers work
+
+A helper or run agent runs in the project root, the same working directory as
+the stage agent (`root_dir`, or the run's worktree). Its task context names
+that directory, a **base revision** for `git diff <base>` (in a worktree, the
+commit the branch forked from; otherwise `HEAD`), and its own scratch directory.
+The scratch directory is also in `$AFM_SCRATCH_DIR`; it is meant for the
+helper's notes and temporary files.
+
+What stops a helper from changing project files depends on where it runs, not
+on its prompt:
+
+| Where the helper runs | Guarantee | Can it write to the project? |
+|---|---|---|
+| Host, `codex-as-claude` adapter | OS read-only sandbox (`-s read-only`) | No |
+| Inside afm's Docker container | Only the container boundary | Yes |
+| Host, any other command | None (afm does not admit these commands) | — |
+
+afm compares the working tree before and after each helper turn. If it
+changed, the stage feed shows *"The working tree changed during <agent>'s
+turn"*. This is an observation: the stage agent works in the same tree, so it
+does not say who made the change, and it never changes the helper's verdict.
+
 ## Attach helpers from flow.yaml
 
 Add `assistants:` to an execution stage to attach configured roles when that
@@ -243,6 +266,11 @@ cannot change its verdict. An accepted result shows a **repaired** badge in the
 helper view and a warning in the stage feed. If the answer still fails, the
 helper gets a `protocol_error`. Open **Show the assistant's raw answer** in the
 helper view to inspect its final text, when available.
+
+A turn that ends by waiting for a colleague (`afm agent wait` answered
+`yield`) needs no answer: the task waits in `waiting_peer` and continues in a
+new turn when the reply arrives, even if it arrives while the agent process is
+still exiting.
 
 ## Add a stage during a run
 

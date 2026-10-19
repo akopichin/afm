@@ -33,9 +33,10 @@
 //     new task/participant) in the first place; every AttachAndSend call, from whatever caller, always
 //     computes `assistants.ComputeDepth(nil)` (agentcomm_attach.go) — top-level, never nested under whatever
 //     task triggered it — so there is no depth to "dodge" even in principle.
-//   - a read-only helper keeps its file limits: TestScratch_IsOnlyWritablePath (assistants_files_test.go) —
-//     helperExecutorConfig (the ONE executor.Config builder every helper task uses, mesh-attached or not) is
-//     keyed purely on taskID, so a mesh-created task gets the identical scratch-dir restriction.
+//   - a helper keeps the same workspace whatever created it: TestHelperExecutorConfig_ProjectRootAndScratch
+//     (assistants_files_test.go) — helperExecutorConfig (the ONE executor.Config builder every helper task
+//     uses, mesh-attached or not) is keyed purely on taskID, so a mesh-created task gets the identical project
+//     root and scratch directory; write protection comes from its environment, never from this config.
 //   - secrets are absent from persisted messages and from notices: TestMesh_SendRedactsSecretsInBody
 //     (agentcomm_messages_test.go) for the persisted message body, and
 //     TestMesh_SecretsAbsentFromLiveNoticeAndNoticesJournal (below) for both the live bus notice and the

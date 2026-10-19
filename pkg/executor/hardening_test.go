@@ -94,6 +94,32 @@ func TestHelperEnv_KeepsOwnSecret(t *testing.T) {
 	}
 }
 
+// TestHelperEnv_ScratchDir: a helper learns where its own notes directory is through AFM_SCRATCH_DIR; a
+// helper without one gets no such variable, even if afm's own environment carries it.
+func TestHelperEnv_ScratchDir(t *testing.T) {
+	t.Setenv("AFM_SCRATCH_DIR", "/inherited/scratch")
+	for _, scratch := range []string{"/run/assistants/t1/scratch", ""} {
+		dir := t.TempDir()
+		envFile := filepath.Join(dir, "env.txt")
+		scriptPath := helperScript(t, filepath.Join(dir, "args.txt"), envFile, helperValidResultJSON)
+		ex := executor.New(executor.Config{Command: scriptPath, IdleTimeout: 5 * time.Second, ScratchDir: scratch})
+		if _, err := ex.RunHelperAgent(context.Background(), "t1", "reviewer", "do the thing", filepath.Join(dir, "helper.log"), filepath.Join(dir, "result.json")); err != nil {
+			t.Fatalf("RunHelperAgent: %v", err)
+		}
+		envData, err := os.ReadFile(envFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(envData)
+		if scratch != "" && !envContainsLine(got, "AFM_SCRATCH_DIR="+scratch) {
+			t.Errorf("AFM_SCRATCH_DIR=%s missing from the helper env:\n%s", scratch, got)
+		}
+		if strings.Contains(got, "/inherited/scratch") {
+			t.Errorf("an inherited AFM_SCRATCH_DIR must not reach the helper:\n%s", got)
+		}
+	}
+}
+
 func TestHelperEnv_DropsBrowserTransport(t *testing.T) {
 	t.Setenv("AFM_BROWSER_DESCRIPTOR", "/leaked/descriptor")
 	t.Setenv("AFM_BROWSER_TRANSPORT_TOKEN", "leaked-token")
