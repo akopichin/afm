@@ -37,10 +37,12 @@ does not count as a reviewer's answer to the stage's `reply_to` wait.
   Docker container). To use another agent, set `client.command` in
   `.afm/config.yaml` or `command:` on the stage.
 - Collaboration on (the default). With `AFM_COLLABORATION=0` afm warns that the
-  team will not be added, `afm agent list` reports that messaging is
-  unavailable, and the stage follows the prompt's fallback: it implements and
-  tests the function without a review, notes that in its summary, and the
-  `verify:` gate still runs.
+  team will not be added. Messaging itself stays available, but
+  `afm agent list` shows no reviewers, so the stage follows the prompt's
+  fallback: it implements and tests the function without a review, notes that
+  in its summary, and the `verify:` gate still runs. The same fallback applies
+  when only one reviewer is listed (the stage asks that one) and when messaging
+  is unavailable because the dashboard HTTP server is off.
 - The dashboard HTTP server on, which Agent Mesh needs.
 - On the host, a `codex` CLI on `PATH`: the reviewers and the verify step use the
   read-only `codex-as-claude` adapter (see [`../verify/`](../verify/)).
