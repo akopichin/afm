@@ -4,7 +4,6 @@ package executor_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -93,7 +92,7 @@ func requireKilled(t *testing.T, pidFile string) {
 	}
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	deadline := time.Now().Add(3 * time.Second)
-	for !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+	for !executor.ProcessDead(pid) {
 		if time.Now().After(deadline) {
 			t.Fatalf("descendant %d still runs after the turn completed", pid)
 		}

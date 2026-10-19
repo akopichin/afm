@@ -76,7 +76,7 @@ func pidFrom(t *testing.T, path string) int {
 func requireGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
-	for !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+	for !ProcessDead(pid) {
 		if time.Now().After(deadline) {
 			t.Fatalf("descendant %d still runs after the turn returned", pid)
 		}
