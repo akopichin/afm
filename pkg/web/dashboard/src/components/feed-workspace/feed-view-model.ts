@@ -260,6 +260,12 @@ function mapEvent(event: AfmEvent): Mapped | null {
         dedupeId: `helper:${taskId}:repaired`,
       }
     }
+    case 'helper_tree_modified': {
+      // The working tree changed while a helper's turn ran — observational only. Anybody may have changed it
+      // (the stage agent works in the same tree), so the line says when, not who.
+      const agent = str(obj.agent) !== '' ? str(obj.agent) : str(obj.task_id)
+      return { actor: 'system', tone: 'warning', kind: 'status', text: `The working tree changed during ${agent}'s turn`, mono: false }
+    }
     case 'context_warning':
       return { actor: 'system', tone: 'warning', kind: 'status', text: `context warning: ${str(data)}`, mono: false }
     case 'mesh_participant':

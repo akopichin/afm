@@ -255,6 +255,22 @@ describe('helper_result_repaired — a helper answer needed mechanical repair', 
   })
 })
 
+describe('helper_tree_modified — the working tree changed during a helper turn', () => {
+  it('renders a neutral warning naming the agent, without blaming it', () => {
+    const items = toFeedItems([
+      ev('helper_tree_modified', { task_id: 't-1', agent: 'Reviewer' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toBe("The working tree changed during Reviewer's turn")
+  })
+
+  it('falls back to the task id for a notice without an agent name', () => {
+    const items = toFeedItems([ev('helper_tree_modified', { task_id: 't-1' }, 's1', '2026-07-10T10:00:00Z')])
+    expect(items[0]?.text).toBe("The working tree changed during t-1's turn")
+  })
+})
+
 describe('dialog_question/dialog_answer — реальный текст диалога, ask_user/user_answered вытеснены', () => {
   it('dialog_question maps to a navigable agent item carrying phase/id from the payload', () => {
     const items = toFeedItems([
