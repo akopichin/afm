@@ -267,7 +267,11 @@ Each helper or run-agent turn is numbered in the run's journal together with
 the messages it was handed, before its process starts. A turn cut short by
 Pause, Ctrl+C or a crash, before its outcome was recorded, is retried with the
 same messages; a turn whose outcome was recorded does not get them again.
-`turn-inbox.json` in the task directory is only a copy for inspection.
+`turn-inbox.json` in the task directory is only a copy for inspection, removed
+when the turn's outcome (a result, a wait, a delegation) is recorded. Do not
+resume a run with an older afm: it reads that copy instead of the journal, and
+if afm stopped between recording a turn's outcome and removing the copy, the
+older binary would hand the turn's messages over again.
 
 Secret values are replaced before they are stored or shown. This covers message
 bodies and artifact references, board statuses and artifact references,

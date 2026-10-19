@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strconv"
 
@@ -376,6 +377,12 @@ func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.Tas
 	// Successful delegation resets the consecutive-rejection guard: the task reacted correctly, so a future
 	// rejection starts counting from zero again.
 	o.taskDelegationRejects.Delete(taskID)
+	// The commit consumed the turn's input: drop its cache, as finishTaskTurn does for every other outcome.
+	if turn > 0 {
+		if err := o.clearTurnInbox(taskID); err != nil {
+			log.Printf("assistants: task %s: drop the delegating turn's inbox cache: %v", taskID, err)
+		}
+	}
 }
 
 // requiredChildOpen reports whether taskID has at least one DIRECT required child that has not (yet, or

@@ -212,3 +212,33 @@ func TestTurnInventory_PreInventoryJournalResumes(t *testing.T) {
 		t.Fatalf("after the retried turn: turn %d, inbox %v; want turn 1 with its input consumed", turn, inbox)
 	}
 }
+
+// TestTurnInventory_DelegationClearsTheCache: a turn that ends by delegating consumed its input; its
+// turn-inbox.json cache goes too, so an older binary reading the cache cannot hand the messages over again.
+func TestTurnInventory_DelegationClearsTheCache(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	var calls atomic.Int32
+	release := make(chan struct{})
+	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
+		switch calls.Add(1) {
+		case 1:
+			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
+		case 2:
+			<-release // the child holds the parent in waiting_children
+		default:
+		}
+		return passResultOutcome(), nil
+	}
+	msg := "split this up"
+	res := addTestRunAgent(t, o, "op-delegate-cache", &msg)
+	waitForTaskStatus(t, store, res.TaskID, assistants.StatusWaitingChildren, 2*time.Second)
+	// The cache is dropped right after the delegation commits, on the turn's own goroutine.
+	waitUntil(t, "the delegating turn's inbox cache is gone", func() bool {
+		_, err := os.Stat(filepath.Join(o.taskDir(res.TaskID), turnInboxFileName))
+		return os.IsNotExist(err)
+	})
+	close(release)
+	waitForRunAgentTurn(t, store, res.TaskID, 3*time.Second)
+	o.concurrency.WaitAgents()
+}
