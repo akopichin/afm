@@ -188,10 +188,28 @@ func (o *Orchestrator) attemptFeedbackDelivery(ctx context.Context, intentID str
 	}
 	defer o.inFlightFeedbackIntents.Delete(intentID)
 
+	// A Revise that applied nothing lost a race: the stage left the status this attempt was decided for (a
+	// Pause, a completion). The intent stays "accepted" and is dispatched again against the NEW status — here,
+	// because that transition's own redelivery hook was skipped by the reentrancy guard above. Each lost race
+	// means the status moved on, so a few rounds are plenty; anything later is redelivered by the next
+	// transition or at startup.
+	for range maxFeedbackDeliveryRounds {
+		if !o.deliverFeedbackIntentOnce(ctx, intentID) {
+			return
+		}
+	}
+}
+
+// maxFeedbackDeliveryRounds bounds attemptFeedbackDelivery's re-dispatch after Revise no-ops.
+const maxFeedbackDeliveryRounds = 3
+
+// deliverFeedbackIntentOnce makes one delivery decision for the intent against the stage's current status.
+// It reports whether the Revise it chose applied nothing, so the caller should decide again.
+func (o *Orchestrator) deliverFeedbackIntentOnce(ctx context.Context, intentID string) (raced bool) {
 	rs := o.opts.Store.Snapshot()
 	fi, ok := rs.Assistants.FeedbackIntents[intentID]
 	if !ok || fi.Status != state.FeedbackIntentAccepted {
-		return // already consumed (delivered/rejected) by a concurrent attempt, or genuinely unknown
+		return false // already consumed (delivered/rejected) by a concurrent attempt, or genuinely unknown
 	}
 
 	// Re-validate generation IMMEDIATELY before acting — TestDeferredIntent_RevalidatedBeforeExecution: a
@@ -204,41 +222,54 @@ func (o *Orchestrator) attemptFeedbackDelivery(ctx context.Context, intentID str
 	ownResume := strings.Contains(o.opts.Store.LastReviseReason(fi.StageID), fi.ID)
 	if currentGen != fi.ExpectedStageGeneration && !ownResume {
 		o.rejectFeedbackIntent(fi, "stale: stage generation changed since this intent was accepted")
-		return
+		return false
 	}
 
-	switch feedbackDeliveryPlanForStatus(o.currentStatus(fi.StageID)) {
+	plan := feedbackDeliveryPlanForStatus(o.currentStatus(fi.StageID))
+	if o.feedbackDeliveryDecidedHook != nil {
+		o.feedbackDeliveryDecidedHook(fi.StageID)
+	}
+	switch plan {
 	case deliverInterruptRunning:
 		body := renderForwardedFeedback(fi)
-		_, _, err := o.reviseRunning(fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
+		applied, _, err := o.reviseRunning(fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
 			_, err := state.SaveFeedbackOnce(stageDir, fi.ID, body)
 			return err
 		})
 		if err != nil {
 			log.Printf("feedback intent %s: deliver (running) failed: %v", fi.ID, err)
-			return // leave "accepted" — a later retry (recovery/next transition) tries again
+			return false
+		}
+		if !applied {
+			return true // lost the race: never mark delivered what was not delivered
 		}
 		o.finishFeedbackDelivery(fi)
 	case deliverAwaitingApproval:
 		body := renderForwardedFeedback(fi)
-		_, _, err := o.reviseAwaitingApproval(ctx, fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
+		applied, _, err := o.reviseAwaitingApproval(ctx, fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
 			_, err := state.SaveFeedbackOnce(stageDir, fi.ID, body)
 			return err
 		})
 		if err != nil {
 			log.Printf("feedback intent %s: deliver (awaiting_approval) failed: %v", fi.ID, err)
-			return
+			return false
+		}
+		if !applied {
+			return true // lost the race: never mark delivered what was not delivered
 		}
 		o.finishFeedbackDelivery(fi)
 	case deliverStartWithFeedback:
 		body := renderForwardedFeedback(fi)
-		_, _, err := o.reviseAwaitingAssistants(ctx, fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
+		applied, _, err := o.reviseAwaitingAssistants(ctx, fi.StageID, "feedback intent "+fi.ID, func(stageDir string) error {
 			_, err := state.SaveFeedbackOnce(stageDir, fi.ID, body)
 			return err
 		})
 		if err != nil {
 			log.Printf("feedback intent %s: deliver (awaiting_assistants) failed: %v", fi.ID, err)
-			return
+			return false
+		}
+		if !applied {
+			return true // lost the race: never mark delivered what was not delivered
 		}
 		o.finishFeedbackDelivery(fi)
 	case deliverPreNote:
@@ -246,13 +277,13 @@ func (o *Orchestrator) attemptFeedbackDelivery(ctx context.Context, intentID str
 		body := renderForwardedFeedback(fi)
 		if err := state.SavePreNote(stageDir, body); err != nil {
 			log.Printf("feedback intent %s: save pre-note failed: %v", fi.ID, err)
-			return
+			return false
 		}
 		// A stage that started between the status read above and this write would have its prenote.md
 		// consumed differently (prenote only applies on fresh start) — re-check and fall through to the
 		// interruptible path if it is now live, rather than leaving a note that may never be read.
 		if o.currentStatus(fi.StageID) != state.StatusPending {
-			return // next transition (or the caller's own retry) re-dispatches against the new status
+			return false // next transition (or the caller's own retry) re-dispatches against the new status
 		}
 		o.finishFeedbackDelivery(fi)
 	case deliverRejectTerminal:
@@ -262,6 +293,7 @@ func (o *Orchestrator) attemptFeedbackDelivery(ctx context.Context, intentID str
 		// user (paused/awaiting_user_input/hook_failed). Stays "accepted"; re-dispatched by the next relevant
 		// stage transition or by recoverFeedbackIntents after a restart.
 	}
+	return false
 }
 
 // finishFeedbackDelivery durably marks fi delivered and publishes the feed-facing notice. Called ONLY after

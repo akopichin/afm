@@ -244,9 +244,19 @@ func (o *Orchestrator) Button(ctx context.Context, stageID, name string) error {
 	if prompt == "" {
 		return nil
 	}
-	_, _, err := o.Revise(ctx, stageID, prompt)
-	return err
+	applied, _, err := o.Revise(ctx, stageID, prompt)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return ErrNotApplied // e.g. a Pause won the race: the button's prompt reached nobody
+	}
+	return nil
 }
+
+// ErrNotApplied — the action changed nothing: the stage left the status it was decided for (a concurrent
+// Pause or transition won). The dashboard answers 409 so the user knows the action did not happen.
+var ErrNotApplied = errors.New("stage no longer accepts this action")
 
 // Pause commits paused before signaling live agents or retry backoff; interrupted agents remain paused.
 func (o *Orchestrator) Pause(_ context.Context, stageID string) error {

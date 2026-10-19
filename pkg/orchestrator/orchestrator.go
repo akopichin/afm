@@ -313,6 +313,9 @@ type Orchestrator struct {
 	// verifyOutcomeGuardHook — тест-сейм: вызывается в retry.go's commitVerifyFailure НЕПОСРЕДСТВЕННО ПЕРЕД
 	// атомарным Trigger — т.е. ПОСЛЕ дешёвого fast-path чтения, но ДО самого CAS.
 	verifyOutcomeGuardHook func(stageID string)
+	// feedbackDeliveryDecidedHook — тест-сейм: вызывается в deliverFeedbackIntentOnce между выбором пути по
+	// статусу и самим Revise, чтобы тест мог вклинить конкурентный Pause. nil в продакшене.
+	feedbackDeliveryDecidedHook func(stageID string)
 
 	// taskRequeueBarrier — тест-сейм: вызывается в spawnTask's run body СРАЗУ после того, как taskHeld
 	// вернул true (held), но ДО finishTaskFrom's requeue-commit (running->queued) — позволяет тесту

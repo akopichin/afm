@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -534,6 +535,20 @@ func TestHandleStageButton_Success(t *testing.T) {
 	}
 	if gotStage != testStageID || gotName != "Run linter" {
 		t.Errorf("Button called with (%q, %q), want (%q, %q)", gotStage, gotName, testStageID, "Run linter")
+	}
+}
+
+// A button whose Revise changed nothing (a Pause won the race) is a conflict, not a silent success.
+func TestHandleStageButton_NotAppliedIsConflict(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	srv.stages = StaticStageConfigs{testStageID: {Buttons: []string{"Run linter"}}}
+	srv.actions = fakeStageActions{button: func(context.Context, string, string) error { return orchestrator.ErrNotApplied }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/button", strings.NewReader(`{"name":"Run linter"}`))
+	w := httptest.NewRecorder()
+	srv.handleStageButton(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 (%s)", w.Code, w.Body.String())
 	}
 }
 
