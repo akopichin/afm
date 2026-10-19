@@ -47,8 +47,8 @@ func TestSendFromAgent_WithoutThreadStartsAConversation(t *testing.T) {
 		t.Fatalf("receipt = %+v, want the thread it went into and the message id", r)
 	}
 	th := store.Snapshot().Assistants.Mesh.Threads[r.ThreadID]
-	if th == nil || len(th.Members) != 2 {
-		t.Fatalf("opened thread = %+v, want exactly the two agents", th)
+	if th == nil || len(agentMemberSet(th.Members)) != 2 {
+		t.Fatalf("opened thread = %+v, want exactly the two agents (and the human)", th)
 	}
 
 	// The answer (no thread either) lands in the SAME conversation, not a second one.

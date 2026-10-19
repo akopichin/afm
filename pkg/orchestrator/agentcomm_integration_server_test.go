@@ -106,6 +106,11 @@ func (a meshServerActionsForTest) Inbox(ctx context.Context, cursor uint64, limi
 	return server.MeshMessagePage{Messages: page.Messages, NextCursor: page.NextCursor}, nil
 }
 
+func (a meshServerActionsForTest) StageMessages(ctx context.Context, stageID string, cursor uint64, limit int) (server.MeshStageMessagePage, error) {
+	p := a.orch.StageMessages(stageID, cursor, limit)
+	return server.MeshStageMessagePage{Messages: p.Messages, Threads: p.Threads, NextCursor: p.NextCursor, HasMore: p.HasMore}, nil
+}
+
 func (a meshServerActionsForTest) PublishBoard(ctx context.Context, requestID string, req server.MeshBoardPublishRequest) (agentcomm.BoardEntry, error) {
 	return a.orch.Publish(ctx, orchestrator.PublishRequest{
 		OperationID: requestID, Author: "user", Key: req.Key, Status: req.Status, ExpectedVersion: req.ExpectedVersion,

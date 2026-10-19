@@ -55,7 +55,24 @@ export function filterMentionGroups<T extends { id: string; title: string }>(
 // draftMentions reports whether the draft still contains `@handle` as a whole token. Recipients picked with
 // `@` are derived from the text at send time, so deleting the mention from the draft also un-addresses it.
 export function draftMentions(draft: string, handle: string): boolean {
-  if (handle === '') return false
+  return handle !== '' && mentionPattern(handle).test(draft)
+}
+
+// mentionPattern matches `@handle` as a whole token; group 1 is what precedes it (start or whitespace).
+function mentionPattern(handle: string): RegExp {
   const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,;:!?)])`, 'i').test(draft)
+  return new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,;:!?)])`, 'i')
+}
+
+// readdressDraft points the draft at a single recipient, next: the previous recipient's `@previous` becomes
+// `@next`, else an `@handle` the draft starts with does, else `@next ` is put in front — unless the draft
+// already mentions next. The rest of the text stays as it is.
+export function readdressDraft(draft: string, previous: string, next: string): string {
+  if (previous !== '' && previous.toLowerCase() !== next.toLowerCase() && draftMentions(draft, previous)) {
+    return draft.replace(mentionPattern(previous), (_, lead: string) => `${lead}@${next}`)
+  }
+  if (draftMentions(draft, next)) return draft
+  const leading = /^@[^\s@]+/.exec(draft)
+  if (leading !== null) return `@${next}${draft.slice(leading[0].length)}`
+  return `@${next} ${draft}`
 }

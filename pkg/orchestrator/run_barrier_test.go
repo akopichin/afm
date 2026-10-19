@@ -163,7 +163,7 @@ func TestRunBarrier_AcceptedWorkHoldsRun_ShutdownBounded(t *testing.T) {
 	release := make(chan struct{})
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		started <- taskID
-		<-release
+		orchestrator.AwaitReleaseForTest(t, release)
 		return passResultOutcome(), nil
 	})
 
@@ -237,8 +237,9 @@ func TestRunBarrier_RegisteredWaitHoldsRun_WakesOnCancel(t *testing.T) {
 	dispatcher := newFlowRecorderDispatcher(t, rec)
 	// A brief sleep (not an instant "true") gives this test a safe window to attach the role WHILE the stage is
 	// still running — see TestRunBarrier_IdleRoleDoesNotHoldRun's identical comment for why both "before the
-	// stage reaches Running" and "after the stage is already Done" are each their own race.
-	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 0.2")
+	// stage reaches Running" and "after the stage is already Done" are each their own race. One second, not less:
+	// the role must register its wait on the stage before the stage finishes, even on a loaded machine.
+	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 1")
 
 	registered := make(chan struct{})
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
@@ -309,4 +310,76 @@ func TestRunBarrier_RegisteredWaitHoldsRun_WakesOnCancel(t *testing.T) {
 		t.Fatal("Run did not return after the blocking wait's task was cancelled (WakeEventLoop regression?)")
 	}
 	waitForFlowEvent(t, rec, lifecyclehooks.EventFlowFinished, 2*time.Second)
+}
+
+// TestRunBarrier_HeldRunAgentWithAcceptedMessageHoldsRun: a run agent paused by the human, then written to, has
+// accepted work it has not started — the hold only defers it. The run must not finalize under that message once
+// the stage is done: it stays open until the human resolves the hold (here Continue), and the turn then runs.
+func TestRunBarrier_HeldRunAgentWithAcceptedMessageHoldsRun(t *testing.T) {
+	rec := &flowEventRecorder{}
+	dispatcher := newFlowRecorderDispatcher(t, rec)
+	orch, store, stateFile := newRunBarrierTestOrch(t, dispatcher, "sleep 1")
+
+	started := make(chan string, 4)
+	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		started <- taskID
+		return passResultOutcome(), nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	runDone := make(chan struct{})
+	go func() { _ = orch.Run(ctx); close(runDone) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(10 * time.Second):
+			t.Error("orch.Run did not return within 10s of cancellation")
+		}
+	})
+
+	waitForStatus(t, stateFile, runBarrierStageID, state.StatusRunning, 10*time.Second)
+	res, err := orch.AddRunAgent(ctx, orchestrator.AddRunAgentRequest{OperationID: "op-add-qa",
+		ProfileID: "qa", Title: "My QA", Instruction: "watch for regressions", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	if err := orch.PauseTask(ctx, res.TaskID); err != nil {
+		t.Fatalf("PauseTask: %v", err)
+	}
+	if _, err := orch.Send(ctx, orchestrator.SendRequest{
+		OperationID: "op-ping", ThreadID: res.ThreadID, Sender: "user",
+		Recipients: []agentcomm.ParticipantID{res.ParticipantID}, Kind: agentcomm.MessageKindMessage,
+		Body: "please check the login page", Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	waitForStatus(t, stateFile, runBarrierStageID, state.StatusDone, 10*time.Second)
+	select {
+	case <-runDone:
+		t.Fatal("Run finalized while a held run agent still had an accepted message to read")
+	case id := <-started:
+		t.Fatalf("held task %s started a turn", id)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	if err := orch.ContinueTask(ctx, res.TaskID); err != nil {
+		t.Fatalf("ContinueTask: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run agent never took its turn after Continue")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the held run agent read its message")
+	}
+	waitForFlowEvent(t, rec, lifecyclehooks.EventFlowFinished, 2*time.Second)
+	if store.Snapshot().Assistants.Mesh.HasWakingUnreadFor(res.ParticipantID) {
+		t.Fatal("the message must have been handed to the agent's turn")
+	}
 }

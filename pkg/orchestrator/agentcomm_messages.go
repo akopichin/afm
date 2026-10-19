@@ -36,7 +36,10 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		return th, err
 	}
 	rs := o.opts.Store.Snapshot()
-	effects, err := threadOpenEffects(rs, threadID, req.Title, req.Scope, req.Members, req.MaxMessages)
+	if _, known := rs.Stages[req.OriginStage]; req.OriginStage != "" && !known {
+		return agentcomm.Thread{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("unknown origin stage %q", req.OriginStage)}
+	}
+	effects, err := threadOpenEffects(rs, threadID, req.Title, req.Scope, req.Members, req.MaxMessages, req.OriginStage)
 	if err != nil {
 		return agentcomm.Thread{}, err
 	}
@@ -56,7 +59,7 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 func openedThread(threadID agentcomm.ThreadID, req OpenThreadRequest) agentcomm.Thread {
 	return agentcomm.Thread{
 		ID: threadID, Title: req.Title, Scope: req.Scope, Members: req.Members, Status: agentcomm.ThreadOpen,
-		Budgets: agentcomm.ThreadBudgets{MaxMessages: req.MaxMessages},
+		Budgets: agentcomm.ThreadBudgets{MaxMessages: req.MaxMessages}, OriginStage: req.OriginStage,
 	}
 }
 
@@ -78,7 +81,7 @@ func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenT
 		members[i] = string(m)
 	}
 	if !found || agentcomm.ThreadID(target.ThreadID) != threadID || p.Title != req.Title || p.Scope != string(req.Scope) ||
-		p.MaxMessages != req.MaxMessages || !slices.Equal(p.Members, members) {
+		p.MaxMessages != req.MaxMessages || p.OriginStage != req.OriginStage || !slices.Equal(p.Members, members) {
 		return agentcomm.Thread{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return openedThread(threadID, req), true, nil
@@ -86,8 +89,9 @@ func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenT
 
 // threadOpenEffects builds the effects that open threadID with members: registering every member the mesh
 // roster does not hold yet, then the thread itself — shared by OpenThread and SendFromAgent, which opens a
-// conversation in the same operation as its first message.
-func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title string, scope agentcomm.Scope, members []agentcomm.ParticipantID, maxMessages int) ([]state.Effect, error) {
+// conversation in the same operation as its first message. originStage is the stage the thread is opened
+// from (agentcomm.Thread.OriginStage).
+func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title string, scope agentcomm.Scope, members []agentcomm.ParticipantID, maxMessages int, originStage string) ([]state.Effect, error) {
 	effects, err := ensureParticipantEffects(rs, members)
 	if err != nil {
 		return nil, err
@@ -97,7 +101,7 @@ func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title str
 		memberIDs[i] = string(m)
 	}
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: title, Scope: string(scope), Members: memberIDs, MaxMessages: maxMessages})
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(scope), Members: memberIDs, MaxMessages: maxMessages, OriginStage: originStage})
 	if err != nil {
 		return nil, err
 	}
@@ -132,19 +136,36 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 	return err
 }
 
-// rejectUnreachableRecipients refuses a message to a participant whose stage or task has finished — nobody would
-// ever read it. Senders run it as their operation's Preconditions.Check, against the state under the commit's
-// own lock (a recipient can finish between any earlier snapshot and the commit); an idempotent replay of an
-// already-committed send skips it, like every precondition, and returns its original outcome.
-func rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.ParticipantID) error {
+// rejectUnreachableRecipients refuses a message to a participant nobody will read for: its stage or task has
+// finished, or it is a script stage, which runs no agent. Reachability is the full roster's (o.liveParticipant),
+// so a send by exact id is refused for exactly what the roster shows as unreachable. Senders run it as their
+// operation's Preconditions.Check, against the state under the commit's own lock (a recipient can finish between
+// any earlier snapshot and the commit); an idempotent replay of an already-committed send skips it, like every
+// precondition, and returns its original outcome.
+func (o *Orchestrator) rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.ParticipantID) error {
 	for _, r := range recipients {
-		if p, ok := resolveParticipant(rs, r); ok && !p.Reachable {
+		if p, ok := o.liveParticipant(rs, r); ok && !p.Reachable {
 			return &state.OperationRejectedError{
-				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s has finished and cannot receive messages (%s)", r, p.UnreachableReason),
+				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s cannot receive messages (%s)", r, p.UnreachableReason),
 			}
 		}
 	}
 	return nil
+}
+
+// liveParticipant is resolveParticipant with what only the stage config knows (withStageConfig) — the same
+// derivation the full roster (liveRoster) uses, for one id.
+func (o *Orchestrator) liveParticipant(rs state.RunState, id agentcomm.ParticipantID) (agentcomm.Participant, bool) {
+	p, ok := resolveParticipant(rs, id)
+	if !ok {
+		return p, false
+	}
+	if stageID, isStage := stageIDFromMeshParticipant(id); isStage && o.reg() != nil {
+		if s := o.reg().Stage(stageID); s != nil {
+			p = o.withStageConfig(p, *s)
+		}
+	}
+	return p, true
 }
 
 // Send implements Service.Send. One ApplyRunOperation commits the message plus one accepted receipt/inbox
@@ -152,8 +173,8 @@ func rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.Parti
 // rejects (not a member, or the thread is closed) fails the WHOLE call, nothing is written. Any PENDING wait
 // this message satisfies (reply_to the message it answers, or addressed_message in its thread for one of its
 // recipients — Agent Mesh Phase 5, T5.3: "a reply arriving makes exactly one continuation") is resolved by
-// applyMeshMessageSent itself, in the SAME commit; beforeReady below only tells notifyAndResumeNewlyReadyWaits
-// which waits to skip because they were already ready before this call.
+// applyMeshMessageSent itself, in the SAME commit, and the commit's result names them
+// (OperationResult.ReadyWaits) for deliverCommittedMessages to announce and resume.
 func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, error) {
 	return o.sendWithOpen(ctx, req, nil)
 }
@@ -174,39 +195,85 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		return receipt, err
 	}
 
-	messageID := deriveMeshMessageID(req.OperationID)
-	body := o.RedactSecrets(req.Body)
-	eff, err := messageSentEffect(req, messageID, body)
+	msg, err := o.planMessage(rs, req, deriveMeshMessageID(req.OperationID), openThread)
 	if err != nil {
 		return SendReceipt{}, err
 	}
-
-	effects := append(slices.Clone(openThread), eff)
-	if mirror, ok, merr := discussionMirrorOfReply(rs, req, messageID, body); merr != nil {
-		return SendReceipt{}, merr
-	} else if ok {
-		effects = append(effects, mirror)
-	}
-
-	beforeReady := readyWaitSet(rs)
+	msgs := []plannedMessage{msg}
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
-	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
-		Check: func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) },
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: msg.effects, Expect: state.Preconditions{
+		Check: o.recipientsReachable(msgs),
 	}}
-	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.announceMessage(req, messageID, len(openThread) > 0)
-		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
-		o.wakeRecipients(runCtx, req.Recipients)
+	res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		o.deliverCommittedMessages(runCtx, msgs, res.ReadyWaits)
 	})
 	if err != nil {
 		return SendReceipt{}, err
 	}
-	return SendReceipt{MessageID: messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
+	return SendReceipt{MessageID: msg.messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
 }
 
-// messageSentEffect builds the mesh_message_sent effect of req, with body already redacted.
-func messageSentEffect(req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, error) {
+// plannedMessage is one message an operation commits: the request it was built from (body already redacted),
+// its id, and the effects that record it.
+type plannedMessage struct {
+	send         SendRequest
+	messageID    agentcomm.MessageID
+	openedThread bool
+	effects      []state.Effect
+}
+
+// planMessage is the one place a message's effects are assembled — for Send, for board notices, and for any
+// other operation that carries a message: openThread (the effects opening req.ThreadID in the same operation,
+// if any), the mesh_message_sent itself with its body and artifact references redacted, and its Discussion mirror when it answers a
+// discussion message. The operation commits them with recipientsReachable as its Preconditions.Check, and its
+// post-commit work calls deliverCommittedMessages.
+func (o *Orchestrator) planMessage(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, openThread []state.Effect) (plannedMessage, error) {
+	req.Body = o.RedactSecrets(req.Body)
+	req.ArtifactRefs = o.redactAll(req.ArtifactRefs)
+	eff, err := messageSentEffect(req, messageID)
+	if err != nil {
+		return plannedMessage{}, err
+	}
+	effects := append(slices.Clone(openThread), eff)
+	if mirror, ok, err := discussionMirrorOfReply(rs, req, messageID, req.Body); err != nil {
+		return plannedMessage{}, err
+	} else if ok {
+		effects = append(effects, mirror)
+	}
+	return plannedMessage{send: req, messageID: messageID, openedThread: len(openThread) > 0, effects: effects}, nil
+}
+
+// recipientsOf lists every recipient of msgs, in order.
+func recipientsOf(msgs []plannedMessage) []agentcomm.ParticipantID {
+	var out []agentcomm.ParticipantID
+	for _, m := range msgs {
+		out = append(out, m.send.Recipients...)
+	}
+	return out
+}
+
+// recipientsReachable is the commit-time check of an operation carrying msgs: rejectUnreachableRecipients over
+// all their recipients, against the state under the commit's lock.
+func (o *Orchestrator) recipientsReachable(msgs []plannedMessage) func(*state.RunState) error {
+	recipients := recipientsOf(msgs)
+	return func(rs *state.RunState) error { return o.rejectUnreachableRecipients(*rs, recipients) }
+}
+
+// deliverCommittedMessages is the post-commit tail of every operation that commits messages: publish each
+// message's live notices, resume the waits the commit made ready (readyWaits, OperationResult.ReadyWaits), and
+// give the recipients the turn they may need.
+func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []plannedMessage, readyWaits []agentcomm.WaitID) {
+	for _, m := range msgs {
+		o.announceMessage(m.send, m.messageID, m.openedThread)
+	}
+	o.notifyAndResumeWaits(runCtx, readyWaits)
+	o.wakeRecipients(runCtx, recipientsOf(msgs))
+}
+
+// messageSentEffect builds the mesh_message_sent effect of req; req.Body and req.ArtifactRefs must already be
+// redacted.
+func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Effect, error) {
 	recipients := make([]string, len(req.Recipients))
 	for i, r := range req.Recipients {
 		recipients[i] = string(r)
@@ -219,7 +286,7 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID, body stri
 	return marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
-			InReplyTo: inReplyTo, Body: body, ArtifactRefs: req.ArtifactRefs,
+			InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs, AutoResult: req.AutoResult,
 		})
 }
 

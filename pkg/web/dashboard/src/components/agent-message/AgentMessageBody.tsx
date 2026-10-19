@@ -9,16 +9,27 @@ type AgentMessageBodyProps = {
   fromAgent: boolean
   // markdown — render the text through the shared safe Markdown renderer (Discussion); plain text otherwise.
   markdown?: boolean
+  // autoResult — afm posted this message as the agent's turn result (auto_result); it woke nobody.
+  autoResult?: boolean
 }
+
+export const TURN_RESULT_TOOLTIP = "afm posted the agent's turn result as a reply; it does not wake the recipient"
+
 
 // AgentMessageBody — the ONE renderer of a mesh/discussion message text for Team, the feed's conversation
 // preview and the stage Discussion. An agent's body that is its pasted v1 JSON result object shows as its
-// summary with a small verdict chip; the original text stays one click away ("Raw").
-export function AgentMessageBody({ body, fromAgent, markdown = false }: AgentMessageBodyProps): ReactElement {
+// summary with a small verdict chip; the original text stays one click away ("Raw"). A turn result afm posted
+// for the agent carries a small "turn result" tag.
+export function AgentMessageBody({ body, fromAgent, markdown = false, autoResult = false }: AgentMessageBodyProps): ReactElement {
   const result = fromAgent ? parseAgentResultBody(body) : null
   const text = result?.summary ?? body
   return (
     <>
+      {autoResult && (
+        <span className="agent-turn-result-tag" title={TURN_RESULT_TOOLTIP}>
+          turn result
+        </span>
+      )}
       {result !== null && (
         <span className="agent-result-verdict" data-verdict={result.verdict}>
           {verdictLabel(result.verdict)}

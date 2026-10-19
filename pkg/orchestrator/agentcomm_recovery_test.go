@@ -251,7 +251,7 @@ func TestMesh_ParentChildMeshWaitCycleRejected(t *testing.T) {
 			// normally — only the first turn delegates.
 			return passResultOutcome(), nil
 		}
-		<-childRelease // the child's own turn: stays non-terminal until the test is done with it
+		awaitRelease(t, childRelease) // the child's own turn: stays non-terminal until the test is done with it
 		return passResultOutcome(), nil
 	}
 

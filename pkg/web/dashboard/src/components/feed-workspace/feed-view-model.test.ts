@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { AfmEvent } from '../../types'
-import { toFeedItems, groupFeedItems, formatEventGap } from './feed-view-model'
+import { toFeedItems, groupFeedItems, formatEventGap, buildFeedTimeline } from './feed-view-model'
+import type { MeshMessage } from '../../api/mesh-client'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string, seq?: number): AfmEvent =>
   ({ type, payload, stageId, timestamp, ...(seq !== undefined ? { seq } : {}) }) as AfmEvent
@@ -252,6 +253,22 @@ describe('helper_result_repaired — a helper answer needed mechanical repair', 
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
     expect(items[0]?.text).toContain('t-1')
+  })
+})
+
+describe('helper_tree_modified — the working tree changed during a helper turn', () => {
+  it('renders a neutral warning naming the agent, without blaming it', () => {
+    const items = toFeedItems([
+      ev('helper_tree_modified', { task_id: 't-1', agent: 'Reviewer' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toBe("The working tree changed during Reviewer's turn")
+  })
+
+  it('falls back to the task id for a notice without an agent name', () => {
+    const items = toFeedItems([ev('helper_tree_modified', { task_id: 't-1' }, 's1', '2026-07-10T10:00:00Z')])
+    expect(items[0]?.text).toBe("The working tree changed during t-1's turn")
   })
 })
 
@@ -695,5 +712,30 @@ describe('formatEventGap', () => {
     expect(formatEventGap(7_200_000, 0)).toBe('2h')
     expect(formatEventGap(172_800_000, 0)).toBe('2d')
     expect(formatEventGap(NaN, 0)).toBe('—')
+  })
+})
+
+describe('buildFeedTimeline — stage events and conversation messages in one feed', () => {
+  const at = (s: number) => `2026-10-19T10:00:${String(s).padStart(2, '0')}Z`
+  const msg = (id: string, s: number, recipients = ['stage:s1']): MeshMessage => ({
+    id, thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: recipients, kind: 'message', body: id, seq: s, created_at: at(s),
+  })
+  const items = toFeedItems([
+    ev('stage_status_changed', 'running', 's1', at(1)),
+    ev('agent_action', { tool: 'text', detail: 'working' }, 's1', at(3)),
+    ev('agent_action', { tool: 'text', detail: 'done' }, 's1', at(5)),
+  ])
+  const shape = (entries: ReturnType<typeof buildFeedTimeline>) =>
+    entries.map((e) => (e.kind === 'group' ? e.group.items.map((i) => i.text).join('+') : e.messages.map((m) => m.id).join('+')))
+
+  it('interleaves by time: an event first on a tie, consecutive messages in one block', () => {
+    const entries = buildFeedTimeline(items, [msg('a', 3), msg('b', 4), msg('c', 6)], 'all')
+    expect(shape(entries)).toEqual(['→ running', 'working', 'a+b', 'done', 'c'])
+  })
+
+  it('Conversations hides the author\'s work; Author\'s work keeps only messages addressed to you', () => {
+    const messages = [msg('a', 2), msg('b', 4, ['user'])]
+    expect(shape(buildFeedTimeline(items, messages, 'conversations'))).toEqual(['a+b'])
+    expect(shape(buildFeedTimeline(items, messages, 'author'))).toEqual(['→ running', 'working', 'b', 'done'])
   })
 })

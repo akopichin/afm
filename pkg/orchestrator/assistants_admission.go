@@ -93,7 +93,9 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 		return admittedTask{}, attachRejected(assistants.CodeDelegationDepthExceeded, "max_depth=%d", rs.Assistants.Policy.MaxDepth)
 	}
 
+	profile = o.redactProfile(profile)
 	req = req.withDefaults(profile.Title)
+	req.Title, req.Instruction = o.RedactSecrets(req.Title), o.RedactSecrets(req.Instruction)
 	task := admittedTask{ID: deriveTaskID(req.OperationID), Scope: scope, Title: req.Title, Trigger: req.Trigger}
 	payload := state.TaskCreatedPayload{
 		ProfileID: string(req.ProfileID), ProfileSnapshot: profile, Title: req.Title, Instruction: req.Instruction,
@@ -154,8 +156,9 @@ func (req topLevelTaskRequest) withDefaults(profileTitle string) topLevelTaskReq
 // replayedTopLevelTask answers a top-level attach whose request id already committed, from the committed
 // task_created effect: the same task is its answer; another profile, stage, scope, title, instruction, mode or
 // trigger under that id is a conflict. An omitted title, mode or trigger is compared with the default admission
-// gave it (the title of the profile snapshot the task was created with), never treated as "any".
-func replayedTopLevelTask(op state.CommittedOperation, req topLevelTaskRequest) (assistants.TaskID, error) {
+// gave it (the title of the profile snapshot the task was created with), never treated as "any". The stored
+// title and instruction were redacted when they committed, so they are compared as redacted text.
+func (o *Orchestrator) replayedTopLevelTask(op state.CommittedOperation, req topLevelTaskRequest) (assistants.TaskID, error) {
 	var p state.TaskCreatedPayload
 	target, found, err := op.Effect("task_created", &p)
 	if err != nil {
@@ -164,7 +167,7 @@ func replayedTopLevelTask(op state.CommittedOperation, req topLevelTaskRequest) 
 	req = req.withDefaults(p.ProfileSnapshot.Title)
 	same := found && assistants.TaskID(target.TaskID) == deriveTaskID(req.OperationID) && target.StageID == req.StageID &&
 		p.ProfileID == string(req.ProfileID) && normalizeScope(assistants.Scope(p.Scope)) == normalizeScope(req.Scope) &&
-		p.Instruction == req.Instruction && p.Title == req.Title && p.Mode == string(req.Mode) && p.Trigger == string(req.Trigger)
+		o.sameRedactedText(p.Instruction, req.Instruction) && o.sameRedactedText(p.Title, req.Title) && p.Mode == string(req.Mode) && p.Trigger == string(req.Trigger)
 	if !same {
 		return "", state.OperationIDConflictError(req.OperationID)
 	}
@@ -176,4 +179,11 @@ func normalizeScope(s assistants.Scope) assistants.Scope {
 		return assistants.ScopeStage
 	}
 	return s
+}
+
+// redactProfile masks secrets in the human-readable text of a profile before it is frozen into a task's
+// journaled snapshot: its title and instructions. The command is left as configured — it is what runs.
+func (o *Orchestrator) redactProfile(p assistants.Profile) assistants.Profile {
+	p.Title, p.Instructions = o.RedactSecrets(p.Title), o.RedactSecrets(p.Instructions)
+	return p
 }

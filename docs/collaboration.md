@@ -48,6 +48,34 @@ whole-run `limits.max_tasks` limits. `max_tasks` counts every task of the run:
 helpers and run agents you attach as well as their children. A flow cannot re-enable collaboration when
 config or the environment disables it.
 
+## Where helpers work
+
+A helper or run agent runs in the project root, the same working directory as
+the stage agent (`root_dir`, or the run's worktree). Its task context names
+that directory, a **base revision** for `git diff <base>` (in a worktree, the
+commit the branch forked from; otherwise `HEAD`), and its own scratch directory.
+The scratch directory is also in `$AFM_SCRATCH_DIR`; it is meant for the
+helper's notes and temporary files. A helper in the host's read-only sandbox
+(the `codex-as-claude` adapter) cannot write it — nor anything else — so its
+prompt says so and asks for notes in its answer instead. This follows the
+environment each turn runs in: a task admitted on the host and resumed in a
+container is told it can write, and a finished task's badge shows the
+guarantee its last turn ran under.
+
+What stops a helper from changing project files depends on where it runs, not
+on its prompt:
+
+| Where the helper runs | Guarantee | Can it write to the project? |
+|---|---|---|
+| Host, `codex-as-claude` adapter | OS read-only sandbox (`-s read-only`) | No |
+| Inside afm's Docker container | Only the container boundary | Yes |
+| Host, any other command | None (afm does not admit these commands) | — |
+
+afm compares the working tree before and after each helper turn. If it
+changed, the stage feed shows *"The working tree changed during <agent>'s
+turn"*. This is an observation: the stage agent works in the same tree, so it
+does not say who made the change, and it never changes the helper's verdict.
+
 ## Attach helpers from flow.yaml
 
 Add `assistants:` to an execution stage to attach configured roles when that
@@ -101,6 +129,8 @@ Choose when it runs:
 Attached helpers appear as child rows in the stage rail. Select one to see its
 status, verdict, findings, delegation breadcrumb, and, for watchers, pass count.
 The task view offers **Pause**, **Continue**, and **Cancel** while applicable.
+A paused task with work waiting — a message it has not read yet or a turn it was
+in — keeps the run open until you continue or cancel it.
 If a required helper cannot pass, **Waive…** lets a human unblock the stage by
 recording a reason. Required tasks with `needs_changes` or `inconclusive` do not
 pass the gate; a `pass` verdict does.
@@ -163,6 +193,53 @@ message waits until somebody writes to it. Messages to a stage or helper that ha
 already finished are refused with a clear error instead of going unanswered. This
 agent belongs to the run rather than one stage.
 
+When a run agent's turn ends with a result, afm posts the result's summary as a
+reply to the message that woke that turn — the newest message it was handed — in
+that message's conversation. The reply is plain text: the summary, cut to fit a
+message, then the verdict, the number of findings and the task and turn whose
+full result it is. Team, the feed's conversation preview and the Discussion mark
+it with a **turn result** tag. A turn result does not wake its recipient: it
+waits in the inbox and is handed over at the recipient's next turn, so it does
+not start an idle run agent, give a stage an extra turn, resume an agent that
+waits for a message (`addressed_message`, in one conversation or any), or keep
+the run open. An agent that waits for an answer to that very message
+(`reply_to`) is resumed by it. Turn results waiting in an inbox have their own
+limit of 200, so they never take the room an ordinary message needs. A turn's
+prompt carries up to 64 KiB of messages: first whatever an interrupted turn was
+handed, then the messages that wake the agent, and only then turn results, so a
+pile of results never delays the message that starts the turn. What does not
+fit waits for the next turn or `afm agent inbox`. A stage
+that finishes without reading one marks it undeliverable without listing it as
+unanswered. afm skips the reply when the agent already answered the waking
+message itself during the turn; a question to someone else or a reply to a
+different message does not count. A turn with no waking message posts nothing.
+If the reply cannot be delivered — the conversation is closed or full, the
+recipient's inbox is full, or the recipient has finished — the result is still
+recorded, the agent goes idle as usual, and the feed shows *"turn result of task
+… not delivered: <reason>"* — the feed of the addressed stage, else of the
+agent's own stage, else of the stage its conversation was opened from. The same holds for a delegated child's result
+mirrored to its parent, which is a turn result too. When the waking message was
+your Discussion post that mentioned the agent, the reply appears in the
+Discussion as the answer, so the post is not shown as **Not answered**. Run
+agents are told this in their prompt; to continue a conversation they write
+explicitly with `afm agent send` or `afm agent reply`.
+
+The human is a member of every conversation (except some opened before this
+rule): one an agent starts with `afm agent send`, the message telling an agent
+about a board task, and the thread where a delegated child's result reaches its
+parent. You read along and can answer in the conversation; you are not addressed
+by its messages and your inbox does not fill with them. The human does not count
+toward the limit of 8 agents per conversation. An agent that writes to the same
+colleagues again continues their conversation, also one opened before you
+joined every conversation, so resuming an older run does not split it. A stage's
+Discussion thread is never picked for this: what agents say among themselves
+stays out of the Discussion tab.
+
+Each stage's **Feed** shows its conversations: those opened from that stage (by
+its agent or one of its helpers, from its feed's composer, or by adding a run
+agent from its People panel), those its agent or one of its helpers takes part
+in, and its Discussion. See [the stage feed](dashboard.md#conversations-in-the-stage-feed).
+
 The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to
 put a task on the board: choose under **Notify** which working agents get a
@@ -215,8 +292,22 @@ stay pending and their deadlines keep running after `afm run` resumes it; only a
 run that finishes closes them. A rejected call reports why
 (for example an unknown recipient) instead of a generic server error.
 
-Secret values are replaced before message bodies, board statuses and discussion
-posts are stored or shown: every value of the global and project `secrets.env`
+Each helper or run-agent turn is numbered in the run's journal together with
+the messages it was handed, before its process starts. A turn cut short by
+Pause, Ctrl+C or a crash, before its outcome was recorded, is retried with the
+same messages; a turn whose outcome was recorded does not get them again.
+`turn-inbox.json` in the task directory is only a copy for inspection, removed
+when the turn's outcome (a result, a wait, a delegation) is recorded. Do not
+resume a run with an older afm: it reads that copy instead of the journal, and
+if afm stopped between recording a turn's outcome and removing the copy, the
+older binary would hand the turn's messages over again.
+
+Secret values are replaced before they are stored or shown. This covers message
+bodies and artifact references, board statuses and artifact references,
+discussion posts, a helper's title and instruction, every text field of its
+result (`result.json` and the journal), and what the helper process writes:
+`agent.log`, `agent.jsonl`, `agent.stderr.log` and the raw answer. The values
+replaced are every value of the global and project `secrets.env`
 and of `docker.secrets_file`, the values recipe and lifecycle-hook references
 resolve to (including from the environment), provider credentials in afm's
 environment, and the agents' mesh tokens. Values shorter than 4 characters are
@@ -243,6 +334,11 @@ cannot change its verdict. An accepted result shows a **repaired** badge in the
 helper view and a warning in the stage feed. If the answer still fails, the
 helper gets a `protocol_error`. Open **Show the assistant's raw answer** in the
 helper view to inspect its final text, when available.
+
+A turn that ends by waiting for a colleague (`afm agent wait` answered
+`yield`) needs no answer: the task waits in `waiting_peer` and continues in a
+new turn when the reply arrives, even if it arrives while the agent process is
+still exiting.
 
 ## Add a stage during a run
 

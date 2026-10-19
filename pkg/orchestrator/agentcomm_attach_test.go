@@ -552,3 +552,61 @@ func TestCommittedRequestReplaysAfterStateChange(t *testing.T) {
 		t.Fatalf("the same request id for a different attach: err = %v, want a conflict", err)
 	}
 }
+
+// AttachAndSend's first message is delivered like any other message to EVERY recipient: an existing idle run
+// agent among the extra recipients gets its turn, besides the newly attached one.
+func TestAttachAndSend_FirstMessageWakesExistingRecipients(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+	existing := addTestRunAgent(t, o, "op-existing", nil) // idle: no first message
+	first := "both of you: review the checkout"
+	if _, err := o.AttachAndSend(context.Background(), AttachAndSendRequest{
+		OperationID: "op-attach-both", ProfileID: "reviewer", StageID: assistantsTestStageID, Instruction: "review",
+		FirstMessage: &first, Recipients: []agentcomm.ParticipantID{existing.ParticipantID}, Actor: state.Actor{Kind: actorKindUser},
+	}); err != nil {
+		t.Fatalf("AttachAndSend: %v", err)
+	}
+	waitForRunAgentTurn(t, store, existing.TaskID, 2*time.Second)
+	o.concurrency.WaitAgents()
+}
+
+// A wait the first message satisfies resumes its waiter at once, like a Send.
+func TestAttachAndSend_FirstMessageResumesASatisfiedWait(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	var calls atomic.Int32
+	var waiter AttachAndSendResult
+	ready := make(chan struct{})
+	o.runHelperAgent = func(_ context.Context, taskID, _, _, _, _, _ string) (executor.HelperOutcome, error) {
+		awaitRelease(t, ready)
+		if assistants.TaskID(taskID) == waiter.TaskID && calls.Add(1) == 1 {
+			o.deliverRenderedInbox(waiter.ParticipantID)()
+			if _, err := o.Wait(context.Background(), WaitRequest{OperationID: "op-wait-any", Waiter: waiter.ParticipantID,
+				Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage}, Deadline: testFarDeadline()}); err != nil {
+				t.Errorf("Wait: %v", err)
+			}
+			return executor.HelperOutcome{ProcessOK: true}, nil
+		}
+		return passResultOutcome(), nil
+	}
+	msg := "wait for news"
+	waiter = addTestRunAgent(t, o, "op-waiter", &msg)
+	close(ready)
+	waitForTaskStatus(t, store, waiter.TaskID, assistants.StatusWaitingPeer, 2*time.Second)
+
+	first := "news for both of you"
+	if _, err := o.AttachAndSend(context.Background(), AttachAndSendRequest{
+		OperationID: "op-attach-news", ProfileID: "reviewer", StageID: assistantsTestStageID, Instruction: "review",
+		FirstMessage: &first, Recipients: []agentcomm.ParticipantID{waiter.ParticipantID}, Actor: state.Actor{Kind: actorKindUser},
+	}); err != nil {
+		t.Fatalf("AttachAndSend: %v", err)
+	}
+	waitForRunAgentTurn(t, store, waiter.TaskID, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if calls.Load() != 2 {
+		t.Fatalf("waiter turns = %d, want 2 (resumed by the first message)", calls.Load())
+	}
+}

@@ -12,6 +12,12 @@ export function participantLabel(p: MeshParticipant): string {
   return p.id
 }
 
+// mergeById — the roster's list plus local items it does not know yet (the roster wins once it has them).
+export function mergeById<T extends { id: string }>(fromRoster: T[], local: T[]): T[] {
+  const missing = local.filter((l) => !fromRoster.some((r) => r.id === l.id))
+  return missing.length === 0 ? fromRoster : [...fromRoster, ...missing]
+}
+
 // mentionHandle — короткое имя для `@`: сервер даёт alias (`side`, id стадии), полный id — запасной вариант.
 export function mentionHandle(p: MeshParticipant): string {
   return p.alias !== undefined && p.alias !== '' ? p.alias : p.id

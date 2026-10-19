@@ -9,6 +9,12 @@
 wrappers, hook secrets и file-root manifest. Маркер чужого контейнера не даёт
 этих данных; не подменяй один predicate другим.
 
+## PID 1
+
+`docker run` идёт с `--init`: PID 1 — tini, он reap'ает осиротевших потомков
+агентов. afm не ждёт процессы, которых не запускал; без `--init` убитые в конце
+хода потомки копились бы зомби. tini пробрасывает сигналы и код выхода afm.
+
 ## Mounts and wrappers
 
 - Пути mount и file-root manifest должны вычисляться одним резолвером. Legacy

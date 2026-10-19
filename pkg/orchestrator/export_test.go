@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
@@ -93,3 +94,6 @@ func AgentCommInboxBlockForTest(o *Orchestrator, participant agentcomm.Participa
 func RunAgentParticipantIDForTest(operationID string) agentcomm.ParticipantID {
 	return meshRunParticipantID(deriveTaskID(operationID))
 }
+
+// AwaitReleaseForTest is awaitRelease for the external test package's fakes.
+func AwaitReleaseForTest(t testing.TB, release <-chan struct{}) { awaitRelease(t, release) }

@@ -71,6 +71,32 @@ func TestSend_ReusedRequestIDIsTypedConflict(t *testing.T) {
 	requireRejected(t, err, assistants.CodeInvalidStatus)
 }
 
+// The passive flag is part of the message: the same text under the same request id with the flag flipped wakes
+// its recipient differently, so it is a conflict, while the identical request still replays.
+func TestSend_ReusedRequestIDWithOtherPassiveFlagConflicts(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	impl := meshStageParticipantID(assistantsTestStageID)
+	r, err := agentSend(o, "op-first", "stage:docs", []string{string(impl)}, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := SendRequest{
+		OperationID: "op-passive", ThreadID: r.ThreadID, Sender: "stage:docs", Recipients: []agentcomm.ParticipantID{impl},
+		Kind: agentcomm.MessageKindMessage, Body: "result", AutoResult: true, Actor: state.Actor{Kind: "agent", ID: "stage:docs"},
+	}
+	if _, err := o.Send(ctx, req); err != nil {
+		t.Fatalf("passive send: %v", err)
+	}
+	if _, err := o.Send(ctx, req); err != nil {
+		t.Fatalf("replay of the same passive send: %v", err)
+	}
+	req.AutoResult = false
+	if _, err := o.Send(ctx, req); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("flipped passive flag: err = %v, want ErrOperationIDConflict", err)
+	}
+}
+
 // A conversation is opened only for a message that can be sent: a finished recipient leaves no empty thread.
 func TestSendFromAgent_UnreachableRecipientOpensNothing(t *testing.T) {
 	o, store := newTwoStageMeshOrchestrator(t)
@@ -144,7 +170,7 @@ func TestDiscussion_PostToFinishedStageIsUndeliverable(t *testing.T) {
 	if got := rs.Assistants.Mesh.Receipts[agentcomm.MessageID(msgID)][stage]; got != agentcomm.DeliveryUndeliverable {
 		t.Fatalf("receipt for the finished stage = %s, want undeliverable", got)
 	}
-	if rs.Assistants.Mesh.HasUnseenMessageFor(stage) {
+	if rs.Assistants.Mesh.HasWakingUnreadFor(stage) {
 		t.Fatal("a finished stage must not have an unread message")
 	}
 }

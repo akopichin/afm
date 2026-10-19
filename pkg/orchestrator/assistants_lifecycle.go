@@ -8,8 +8,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -21,11 +23,12 @@ import (
 // Production is execHelperAgent; tests inject a fake (see assistants_test.go).
 type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error)
 
-// helperExecutorConfig builds the executor.Config for one helper task's run — pulled out of execHelperAgent
-// so T3.6's TestScratch_IsOnlyWritablePath can assert Dir == taskScratchDir without spawning a real process.
-// Dir is the task's own scratch/ directory, NOT o.opts.RootDir: a helper's context (T3.5) already carries
-// everything it is entitled to read as inline TEXT (plan/artifacts), so it needs no live write access to the
-// project tree — scratch/ is the only directory it can write to.
+// helperExecutorConfig builds the executor.Config for one helper task's run — pulled out of execHelperAgent so
+// a test can check it without spawning a process. Dir is the project root, exactly like the stage agent's and
+// the verifier's (o.opts.RootDir, already worktree-aware; empty = afm's own CWD): a helper reviews code, so it
+// must be able to read it where it lives. Its own scratch/ is handed over as AFM_SCRATCH_DIR, a place for
+// notes. Whether the helper can also write to the project is up to its environment (a host codex sandbox is
+// read-only, a container is not) — this config promises nothing about it.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
 	participant := o.taskMeshParticipant(taskID)
 	return executor.Config{
@@ -33,11 +36,14 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		Dir:            o.taskScratchDir(taskID),
+		Dir:            o.opts.RootDir,
+		ScratchDir:     o.taskScratchDir(taskID),
 		Debug:          o.opts.Debug,
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
+		Redact:         o.RedactSecrets,
+		Secrets:        o.secretValues,
 		MeshClient:     o.meshClientFor(participant),
 		OnDelivered:    o.deliverRenderedInbox(participant),
 	}
@@ -179,8 +185,8 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
 		return
 	}
-	if werr := o.saveTurnInbox(taskID, tc.inboxIDs); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist turn inbox: "+werr.Error())
+	turn, started := o.startTurn(taskID, tc.inboxIDs)
+	if !started {
 		return
 	}
 
@@ -196,26 +202,34 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
+	waiter := o.taskMeshParticipant(taskID)
+	waitsBefore := o.meshWaitIDsOf(waiter)
 	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
 	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
 	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
 	// a helperAgentRunner that never calls OnDelivered — otherwise a run agent would see them as unseen forever
 	// and restart itself after every turn. A process that never started leaves them accepted for the next turn.
-	// Only a turn that ran to its end consumed its input: a cut-short one (run shutdown, Pause) keeps the
-	// turn-inbox record, so its retry is handed the same messages again.
+	// Only a turn that ran to its end consumed its input — and only together with the commit of its outcome
+	// (finishTaskTurn with consumed): a cut-short turn (run shutdown, Pause), or a crash before that commit,
+	// keeps the turn's inventory in the journal, so its retry is handed the same messages again.
+	var consumed uint64
 	if err == nil && outcome.ProcessOK {
 		if tc.markInboxDelivered != nil {
 			tc.markInboxDelivered()
 		}
-		if cerr := o.clearTurnInbox(taskID); cerr != nil {
-			log.Printf("assistants: task %s: forget finished turn input: %v", taskID, cerr)
-		}
+		consumed = turn
 	}
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
-		// Observation only — never changes the task's verdict (mirrors verify_tree_modified exactly).
+		// Observation only — never changes the task's verdict (mirrors verify_tree_modified). Not an accusation
+		// either: the tree may have been changed by anybody while the helper ran, so the notice only says when.
+		agent := task.Title
+		if agent == "" {
+			agent = string(task.ProfileID)
+		}
+		agent = o.RedactSecrets(agent) // a title journaled before titles were redacted
 		o.publishNotice(bus.Event{Type: bus.EventHelperTreeModified, StageID: task.RootStageID, Data: map[string]any{
-			"task_id": string(taskID),
+			"task_id": string(taskID), "agent": agent,
 		}})
 	}
 
@@ -245,7 +259,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		if finalizedByOther {
 			return
 		}
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
 		return
 	}
 	switch {
@@ -254,7 +268,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// subprocess reaching here must not clobber it with a second, contradictory status.
 		return
 	case outcome.TimedOut:
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
 		return
 	case !outcome.ProcessOK:
 		// A PauseTask (or StopAndClarify, T4.7) on an ALREADY-RUNNING task cancels runCtx directly (not via
@@ -274,7 +288,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		_, pausedBeforeClassification := o.taskPausePending.LoadAndDelete(taskID)
 		_, clarifying := o.taskClarifyPending.LoadAndDelete(taskID)
 		if pausedBeforeClassification || clarifying || o.taskHeld(taskID) {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
+			o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
 			if !o.taskHeld(taskID) {
 				o.maybeScheduleTask(ctx, taskID)
 			}
@@ -283,22 +297,21 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			}
 			return
 		}
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
-		return
-	case outcome.ProtocolErr != nil:
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
 		return
 	}
 
 	// Agent Mesh Phase 5, T5.4: the subprocess registered a mesh Wait on a colleague (another helper, a
-	// stage, or the human) and exited cooperatively — mirrors retry.go's stage-level T5.2 branch exactly, and
-	// for the same reason: this is NOT a false completion, NOT a protocol error, and must not run through
-	// DecodeResultWithRepair at all — a yielding agent is not expected to have produced a kind:"result"/
-	// kind:"delegate" envelope, and treating its (expected) empty/absent RawText as malformed would be wrong.
-	// This task's own concurrency lease is released simply by this function returning next, exactly like
-	// runWithRetry's awaiting_peer branch releases a stage's.
-	if o.hasOpenMeshWaitFor(meshParticipantForTask(o.opts.Store.Snapshot(), task)) {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+	// stage, or the human) and exited cooperatively — mirrors retry.go's stage-level T5.2 branch. This is NOT a
+	// false completion and NOT a protocol error: a yielding agent prints no final answer, so the yield is
+	// classified BEFORE the executor's "no final answer" protocol error is looked at. This task's own
+	// concurrency lease is released simply by this function returning next.
+	if o.turnYielded(waiter, waitsBefore, outcome.RawText) {
+		o.parkYieldedTurn(ctx, taskID, consumed, waiter, waitsBefore)
+		return
+	}
+	if outcome.ProtocolErr != nil {
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
 		return
 	}
 
@@ -307,7 +320,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's
 		// §9.3 acceptance criterion), regardless of how plausible the raw text looks. Mechanical repair has
 		// already been tried and failed — decErr is the ORIGINAL strict decode error.
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
 		return
 	}
 	if repaired {
@@ -320,29 +333,29 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// T4a.3: admit the requested children and move this task to waiting_children — never treated as a
 		// completed check (assistants.Envelope.ClosesRequiredGate is false for kind:"delegate" by
 		// construction, T4a.1).
-		o.handleDelegate(ctx, taskID, tc.Version, *env.Delegate)
+		o.handleDelegate(ctx, taskID, consumed, tc.Version, *env.Delegate)
 		return
 	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind")
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind")
 		return
 	}
 	if env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
 		// dev-plan.md's TestResult_ConsistencyWithRequiredChildren: a required child that has not (yet, or
 		// ever will) reached verdict:"pass" keeps this gate closed — the model's own claimed "pass" text does
 		// not override it.
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: verdict:\"pass\" with an unresolved required child")
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: verdict:\"pass\" with an unresolved required child")
 		return
 	}
 
 	// Stamp the SERVER's own ContextVersion rather than trusting whatever (if anything) the model echoed
 	// back — a result must always reference the actual context it was computed against, not a model's
 	// possibly-stale or fabricated claim about it.
-	result := *env.Result
+	result := o.redactResult(*env.Result)
 	result.ContextVersion = tc.Version
 	result.Repaired = repaired
 	if werr := o.persistTaskResult(dir, result); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
 		return
 	}
 	// The decoded result is attached as a SECOND effect of the SAME finish operation — never a separate
@@ -350,7 +363,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// result event does not exist yet (see finishTaskFrom's extra doc comment).
 	resultEff, eerr := taskResultEffect(taskID, result)
 	if eerr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
 		return
 	}
 
@@ -363,19 +376,86 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	if isWatcherTrigger(task.Trigger) {
 		_, final := o.taskFinalPass.LoadAndDelete(taskID)
 		if !final {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWatching, "", resultEff)
+			o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusWatching, "", resultEff)
 			return
 		}
 	}
 	// A run agent is a standing role: its turn ends idle (queued, which never holds the run open — see
 	// state.RunBlocker) rather than completed, and the next message addressed to it starts its next turn
-	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away.
+	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away. Its result also
+	// answers the message that woke the turn: a passive reply in the same commit (agentcomm_turn_reply.go).
 	if task.Scope == assistants.ScopeRun {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, resultEff)
+		reply := o.planTurnReply(taskID, consumed, result)
+		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, reply, resultEff)
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}
-	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+	o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+}
+
+// meshWaitIDsOf returns the ids of every mesh wait waiter has registered so far, whatever their status.
+func (o *Orchestrator) meshWaitIDsOf(waiter agentcomm.ParticipantID) map[agentcomm.WaitID]bool {
+	ids := map[agentcomm.WaitID]bool{}
+	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter == waiter {
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
+// parkYieldedTurn parks a yielded task in waiting_peer — ending turn, which consumed its input — and closes the ready-before-park window: a reply (or a
+// counter-question) may have landed while the process was finishing, when the task was still running and the
+// resume Send attempted was a no-op. Nobody else will resume it now, so it re-checks through the same
+// CAS-protected resumes Send uses — a resume that already won makes them no-ops. A wait the run closed
+// (closeRemainingMeshWaits) never resumes anybody.
+func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, turn uint64, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool) {
+	o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter == waiter && !waitsBefore[id] && w.Status == agentcomm.WaitRunClosed {
+			return
+		}
+	}
+	o.tryResumePeer(ctx, taskID)
+	o.maybeResumeAwaitingPeerQuestion(ctx, waiter)
+}
+
+// turnYielded reports whether a helper turn that ran to its end yielded into a mesh wait instead of answering:
+// a wait of waiter is still pending, or the turn registered a new wait (one not in waitsBefore) and left no
+// final text — the awaited reply arrived before the turn could park, so that wait is already ready. A
+// non-empty answer is never taken for a yield on the strength of a ready wait: if it does not decode, it is a
+// protocol error, or the agent would be rerun on the same malformed output again and again.
+func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool, rawText string) bool {
+	if o.hasOpenMeshWaitFor(waiter) {
+		return true
+	}
+	registered := false
+	for id := range o.meshWaitIDsOf(waiter) {
+		registered = registered || !waitsBefore[id]
+	}
+	return registered && strings.TrimSpace(rawText) == ""
+}
+
+// redactResult masks secrets in every free-text field of a helper's result before it is written to result.json
+// or the journal's task_result: summary, findings, evidence, suggested change and limitations.
+func (o *Orchestrator) redactResult(r assistants.Result) assistants.Result {
+	r.Summary = o.RedactSecrets(r.Summary)
+	r.Evidence = o.redactAll(r.Evidence)
+	r.SuggestedChange = o.RedactSecrets(r.SuggestedChange)
+	r.Limitations = o.RedactSecrets(r.Limitations)
+	findings := make([]assistants.Finding, len(r.Findings))
+	for i, f := range r.Findings {
+		f.ID, f.Severity, f.Detail = o.RedactSecrets(f.ID), o.RedactSecrets(f.Severity), o.RedactSecrets(f.Detail)
+		if f.Path != nil {
+			path := o.RedactSecrets(*f.Path)
+			f.Path = &path
+		}
+		findings[i] = f
+	}
+	if r.Findings != nil {
+		r.Findings = findings
+	}
+	return r
 }
 
 // maxFailureReasonLen (in characters, ellipsis included) keeps a failure reason short enough for the task list

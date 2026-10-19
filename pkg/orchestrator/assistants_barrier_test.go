@@ -97,7 +97,7 @@ func TestBarrier_AfterHookNotRunEarly(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -177,7 +177,7 @@ func TestBarrier_SlotReleasedWhileWaiting(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -237,7 +237,7 @@ func TestBarrier_RestoredAfterRestart(t *testing.T) {
 		o.concurrency.WaitAgents()
 	})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return executor.HelperOutcome{}, context.Canceled
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -352,7 +352,7 @@ func TestResumeByDoneMarkerDoesNotBypassBarrier(t *testing.T) {
 		o.concurrency.WaitAgents()
 	})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return executor.HelperOutcome{}, context.Canceled
 	}
 	_ = attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -435,7 +435,7 @@ func TestAttachRequiredRacesWithComplete(t *testing.T) {
 		o.concurrency.WaitAgents()
 	})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -480,7 +480,7 @@ func TestCollaborationDisabledBeforeResumeDoesNotSkipRequirement(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -505,7 +505,7 @@ func TestPause_AllowedFromAwaitingAssistants(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return executor.HelperOutcome{}, context.Canceled
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -532,7 +532,7 @@ func TestContinueDoesNotDoubleSpawnOrBypass(t *testing.T) {
 	spawnCount := 0
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		spawnCount++
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")
@@ -590,7 +590,7 @@ func TestChain_ExplainedInApi(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")

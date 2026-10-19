@@ -47,3 +47,30 @@ stop blocking root-stage completion). Concretely:
   ordinary, unremarkable kind of forward compatibility every `events.jsonl`
   consumer already relies on. The strict rule above is specifically about the
   *discriminators* (`kind`, `schema_version`), not about every field on a record.
+
+## Additive fields
+
+Fields added to an existing record kind are optional: a journal written before a
+field existed simply lacks it, and afm reads the record with the field's zero
+value.
+
+- `auto_result` on `mesh_message_sent` and on `discussion_message` (a boolean,
+  omitted when false) marks a run agent's turn result that afm posted as a reply
+  on the agent's behalf. Such a message waits in the recipient's inbox but never
+  wakes it. A message from an older journal has no `auto_result` and is an
+  ordinary message that wakes its recipient, exactly as before.
+- `readonly_enforcement` on the `task_status_changed` record that starts a
+  helper turn (`os` or `none`, omitted when empty) is the read-only guarantee
+  the environment gave that turn. It can differ from the guarantee recorded
+  when the task was admitted: a task admitted on the host under the Codex
+  sandbox and resumed in a container has none. The roster shows a finished
+  task with the value of its last turn; a task from an older journal shows the
+  admission-time value.
+- `origin_stage` on `mesh_thread_opened` (a stage id, omitted when empty) is the
+  stage the conversation was opened from: the sending agent's stage, the stage
+  whose feed the human opened it in, or the stage of a Discussion thread. The
+  first open decides it: a later open of the same thread with another (or no)
+  `origin_stage` is still a no-op, so two agents of different stages starting
+  the same conversation at once, or a post re-opening a Discussion thread from an
+  older journal, do not conflict. A thread from an older journal has no
+  `origin_stage` and shows in a stage's feed by its members alone.

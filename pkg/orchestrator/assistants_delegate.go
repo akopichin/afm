@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strconv"
 
@@ -63,6 +64,21 @@ func (o *Orchestrator) admitChildren(
 	children []assistants.DelegateRequest,
 	actor state.Actor,
 	parentToStatus assistants.TaskStatus,
+	continuation *assistants.Continuation,
+) ([]assistants.TaskID, error) {
+	return o.admitChildrenWithParentChange(ctx, operationID, parentTaskID, children, actor,
+		state.TaskStatusChangedPayload{Status: string(parentToStatus)}, continuation)
+}
+
+// admitChildrenWithParentChange is admitChildren with the parent's whole status change — handleDelegate's
+// change also ends the delegating turn (TaskStatusChangedPayload.Turn). An empty Status skips it.
+func (o *Orchestrator) admitChildrenWithParentChange(
+	ctx context.Context,
+	operationID string,
+	parentTaskID assistants.TaskID,
+	children []assistants.DelegateRequest,
+	actor state.Actor,
+	parentTo state.TaskStatusChangedPayload,
 	continuation *assistants.Continuation,
 ) ([]assistants.TaskID, error) {
 	if !o.opts.AssistantsEnabled {
@@ -140,9 +156,9 @@ func (o *Orchestrator) admitChildren(
 		created, err := taskCreatedEffect(childID, parent.RootStageID, state.TaskCreatedPayload{
 			ParentTaskID:             &parentIDStr,
 			ProfileID:                string(child.ProfileID),
-			ProfileSnapshot:          profile,
-			Title:                    child.Title,
-			Instruction:              child.Instruction,
+			ProfileSnapshot:          o.redactProfile(profile),
+			Title:                    o.RedactSecrets(child.Title),
+			Instruction:              o.RedactSecrets(child.Instruction),
 			Mode:                     string(mode),
 			Trigger:                  string(trigger),
 			PolicyRev:                rs.Assistants.Policy.Revision,
@@ -172,15 +188,17 @@ func (o *Orchestrator) admitChildren(
 	}
 	effects = append(effects, quotaEff)
 
-	if parentToStatus != "" {
-		parentEff, err := taskStatusEffect(parentTaskID, parentToStatus, "")
+	if parentTo.Status != "" {
+		parentEff, err := taskStatusChangeEffect(parentTaskID, parentTo)
 		if err != nil {
 			return nil, err
 		}
 		effects = append(effects, parentEff)
 	}
 	if continuation != nil {
-		contEff, err := taskContinuationEffect(parentTaskID, continuation)
+		redacted := *continuation
+		redacted.Note = o.RedactSecrets(redacted.Note) // the model's own text, journaled
+		contEff, err := taskContinuationEffect(parentTaskID, &redacted)
 		if err != nil {
 			return nil, err
 		}
@@ -248,6 +266,11 @@ func currentChildren(rs state.RunState, parentID assistants.TaskID, currentParen
 // a resumed parent's own "Results from the children you delegated to" section — no existing delegation
 // test's expected prompt text changes because of this mirror.
 //
+// The mirror is a passive turn result (AutoResult): the parent is resumed by its children finishing
+// (tryResumeParent), never by this message, and its own turn result is never posted back to a finished child.
+// Its effects are message effects of the finish operation: a rejection (the parent's inbox is full) commits the
+// child's outcome without them (finishTaskTurnReplying).
+//
 // Returns (nil, nil) — no error, no effects — for a task with no parent, or for a STALE child (currentChildren's
 // own rule: one from a generation the parent has since superseded via RetryTask/BumpRootGeneration) — a dead
 // branch's outcome must never be injected into the parent's LIVE inbox after it has already moved on.
@@ -262,19 +285,16 @@ func (o *Orchestrator) childResultMeshEffects(rs state.RunState, parentID, child
 	}
 
 	members := []agentcomm.ParticipantID{meshHelperParticipantID(parentID), meshHelperParticipantID(childID)}
-	effects, err := ensureParticipantEffects(rs, members)
-	if err != nil {
-		return nil, fmt.Errorf("child result mesh mirror: %w", err)
-	}
-
-	memberStrs := []string{string(members[0]), string(members[1])}
 	threadID := deriveMeshThreadID("delegate-thread:" + string(parentID) + ":" + string(childID))
-	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: memberStrs})
-	if err != nil {
-		return nil, err
+	// The human reads along (D1). A thread opened before that keeps its members: it is not re-opened.
+	var effects []state.Effect
+	if _, exists := rs.Assistants.Mesh.Threads[threadID]; !exists {
+		var err error
+		effects, err = threadOpenEffects(rs, threadID, "", agentcomm.ScopeStage, append([]agentcomm.ParticipantID{meshUserParticipantID}, members...), 0, participantStage(rs, members[0]))
+		if err != nil {
+			return nil, fmt.Errorf("child result mesh mirror: %w", err)
+		}
 	}
-	effects = append(effects, threadEff)
 
 	// The message body carries the SAME content collectChildResultsJSON would show for this child: its
 	// decoded task_result payload when one exists (located by Kind among extra — finishTaskFrom's success
@@ -290,12 +310,10 @@ func (o *Orchestrator) childResultMeshEffects(rs state.RunState, parentID, child
 	}
 	body = truncateMeshBody(o.RedactSecrets(body))
 
-	messageID := deriveMeshMessageID("delegate-result:" + string(childID))
-	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(messageID)},
-		state.MeshMessageSentPayload{
-			Sender: string(members[1]), Recipients: []string{string(members[0])},
-			Kind: string(agentcomm.MessageKindMessage), Body: body,
-		})
+	msgEff, err := messageSentEffect(SendRequest{
+		ThreadID: threadID, Sender: members[1], Recipients: []agentcomm.ParticipantID{members[0]},
+		Kind: agentcomm.MessageKindMessage, Body: body, AutoResult: true,
+	}, deriveMeshMessageID("delegate-result:"+string(childID)))
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +353,8 @@ func delegateOperationID(taskID assistants.TaskID, contextVersion assistants.Con
 // returns — by construction that is also the moment spawnTask's SpawnOwned releases this task's command-slot
 // lease and clears its "task:" activity marker (T4a.4: no extra code needed here to "release the lease
 // before waiting", it falls out of handleDelegate doing nothing further after admitChildren commits).
-func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.TaskID, contextVersion assistants.ContextVersion, delegate assistants.Delegate) {
+// turn is the delegating turn, ended by the same commit (its input consumed); 0 ends none.
+func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.TaskID, turn uint64, contextVersion assistants.ContextVersion, delegate assistants.Delegate) {
 	continuation := delegate.Continuation
 	if continuation == nil {
 		// No explicit continuation trigger named — the only sensible default is "wake me once every
@@ -345,15 +364,22 @@ func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.Tas
 	}
 	actor := state.Actor{Kind: string(assistants.OriginAssistant), ID: string(taskID)}
 	opID := delegateOperationID(taskID, contextVersion)
-	if _, err := o.admitChildren(ctx, opID, taskID, delegate.Children, actor, assistants.StatusWaitingChildren, continuation); err != nil {
+	parentTo := state.TaskStatusChangedPayload{Status: string(assistants.StatusWaitingChildren), Turn: turn}
+	if _, err := o.admitChildrenWithParentChange(ctx, opID, taskID, delegate.Children, actor, parentTo, continuation); err != nil {
 		// T4a.7 gives the parent a typed, actionable rejection instead of a bare failure — see
 		// assistants_reject.go's deliverDelegationRejection.
-		o.deliverDelegationRejection(taskID, err)
+		o.deliverDelegationRejection(taskID, turn, err)
 		return
 	}
 	// Successful delegation resets the consecutive-rejection guard: the task reacted correctly, so a future
 	// rejection starts counting from zero again.
 	o.taskDelegationRejects.Delete(taskID)
+	// The commit consumed the turn's input: drop its cache, as finishTaskTurn does for every other outcome.
+	if turn > 0 {
+		if err := o.clearTurnInbox(taskID); err != nil {
+			log.Printf("assistants: task %s: drop the delegating turn's inbox cache: %v", taskID, err)
+		}
+	}
 }
 
 // requiredChildOpen reports whether taskID has at least one DIRECT required child that has not (yet, or
@@ -502,7 +528,7 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 			// T5.5: that still-pending wait does not rule out a counter-question whose own live trigger was
 			// lost to the SAME crash — recover it the same way recoverMeshWaits does for a stage. Safe to call
 			// unconditionally for the same reason tryResumePeer above is: both conditions it checks
-			// (hasOpenMeshWaitFor, hasUndeliveredInbox) are re-derived fresh, and the resume it triggers is
+			// (hasOpenMeshWaitFor, hasWakingUnread) are re-derived fresh, and the resume it triggers is
 			// CAS-protected, so finding nothing to do (or racing tryResumePeer's own resume above) is a no-op.
 			o.maybeResumeAwaitingPeerQuestion(ctx, meshParticipantForTask(o.opts.Store.Snapshot(), t.Task))
 		default:

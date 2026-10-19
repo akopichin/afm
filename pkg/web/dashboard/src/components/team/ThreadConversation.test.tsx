@@ -72,6 +72,18 @@ describe('ThreadConversation', () => {
     expect(screen.getByText(/schema_version/).closest('details')).not.toBeNull()
   })
 
+  test("an agent's turn result afm posted carries the turn result tag", async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
+      messages: [
+        { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'checked it', auto_result: true, seq: 1, created_at: '2026-10-18T00:00:01Z' },
+      ],
+      next_cursor: 1,
+    })
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    await waitFor(() => expect(screen.getByText('checked it')).toBeInTheDocument())
+    expect(screen.getByText('turn result')).toBeInTheDocument()
+  })
+
   test('a reply quotes the message it answers, inside its bubble', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({
       messages: [

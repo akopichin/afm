@@ -108,7 +108,6 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 		return "", err
 	}
 	effects = append(effects, meshEffects...)
-	beforeReady := readyWaitSet(rs)
 	runCtx := o.runContext(ctx) // a resumed waiter must not die with the HTTP request.
 
 	threadID := discussionThreadID(req.StageID, req.Mentions)
@@ -126,7 +125,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 			return nil
 		},
 	}}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventDiscussionMessage, StageID: req.StageID, Data: map[string]any{
 			"message_id": messageID, "author_kind": string(req.AuthorKind), "author_id": req.AuthorID, "round": req.Round,
 		}})
@@ -144,7 +143,7 @@ func (o *Orchestrator) PostDiscussionMessage(ctx context.Context, req PostMessag
 		// A discussion reply can be exactly what a stage agent parked on a mesh wait (e.g. an
 		// addressed_message wait on this very thread) is waiting for — resume it the SAME way Send/Publish do
 		// (agentcomm_resume.go), rather than leaving it stranded until something else happens to wake it.
-		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
+		o.notifyAndResumeWaits(runCtx, res.ReadyWaits)
 		// Every recipient gets the turn it needs to read the post, exactly as a Team message gives it: a stage
 		// parked waiting for one colleague gets a bounded turn to answer the human, a queued mentioned helper
 		// starts.

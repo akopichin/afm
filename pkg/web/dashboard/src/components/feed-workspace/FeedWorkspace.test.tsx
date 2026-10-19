@@ -385,6 +385,7 @@ describe('FeedWorkspace', () => {
     kind: 'message',
     text: 'мысль агента',
     gap: '—',
+    ts: 0,
     mono: false,
     markdown: true,
     ...over,

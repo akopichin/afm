@@ -48,10 +48,9 @@ func (o *Orchestrator) resumeWaitersAfterCommit(ctx context.Context, waiters []a
 	}
 }
 
-// readyWaitSet snapshots which wait ids are CURRENTLY WaitReady — used by Send/Publish as the "before" side
-// of a before/after diff (see notifyAndResumeNewlyReadyWaits): the resolution itself happens inside
-// applyMeshMessageSent/applyMeshBoardPublished under the commit's own lock, so this snapshot's only job is
-// telling that diff which waits were ALREADY ready and must not be re-notified/re-resumed.
+// readyWaitSet snapshots which wait ids are CURRENTLY WaitReady — the "before" side of a stage transition's
+// before/after diff (notifyAndResumeNewlyReadyWaits). An operation needs none: its result names the waits it
+// made ready.
 func readyWaitSet(rs state.RunState) map[agentcomm.WaitID]bool {
 	out := make(map[agentcomm.WaitID]bool, len(rs.Assistants.Mesh.Waits))
 	for id, w := range rs.Assistants.Mesh.Waits {
@@ -62,20 +61,35 @@ func readyWaitSet(rs state.RunState) map[agentcomm.WaitID]bool {
 	return out
 }
 
-// notifyAndResumeNewlyReadyWaits is Send/Publish's shared externalWork tail: it re-reads the store AFTER
-// their commit and, for every wait that is Ready now but was not in beforeReady, publishes the EventMeshWait
-// notice and resumes its waiter — exactly the waits THIS call's commit resolved, without either of them
-// needing to carry their own resolved-ids list out of the projection.
-func (o *Orchestrator) notifyAndResumeNewlyReadyWaits(ctx context.Context, beforeReady map[agentcomm.WaitID]bool) {
-	after := o.opts.Store.Snapshot()
-	for _, id := range sortedWaitIDs(after.Assistants.Mesh.Waits) {
-		w := after.Assistants.Mesh.Waits[id]
-		if w.Status != agentcomm.WaitReady || beforeReady[id] {
+// notifyAndResumeWaits is the shared post-commit tail of every operation that can resolve waits: for each wait
+// the commit made ready (state.OperationResult.ReadyWaits — decided under the store lock, so two concurrent
+// commits never both claim one), it publishes the EventMeshWait notice and resumes its waiter.
+func (o *Orchestrator) notifyAndResumeWaits(ctx context.Context, ready []agentcomm.WaitID) {
+	if len(ready) == 0 {
+		return
+	}
+	rs := o.opts.Store.Snapshot()
+	for _, id := range ready {
+		w, ok := rs.Assistants.Mesh.Waits[id]
+		if !ok {
 			continue
 		}
 		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(id), "status": string(agentcomm.WaitReady)}})
 		o.resumeWaitersAfterCommit(ctx, []agentcomm.ParticipantID{w.Waiter})
 	}
+}
+
+// notifyAndResumeNewlyReadyWaits is notifyAndResumeWaits for a stage transition, which is not an operation and
+// reports no ReadyWaits: every wait ready now but not in beforeReady.
+func (o *Orchestrator) notifyAndResumeNewlyReadyWaits(ctx context.Context, beforeReady map[agentcomm.WaitID]bool) {
+	after := o.opts.Store.Snapshot()
+	var ready []agentcomm.WaitID
+	for _, id := range sortedWaitIDs(after.Assistants.Mesh.Waits) {
+		if after.Assistants.Mesh.Waits[id].Status == agentcomm.WaitReady && !beforeReady[id] {
+			ready = append(ready, id)
+		}
+	}
+	o.notifyAndResumeWaits(ctx, ready)
 }
 
 // stageStatusWaitsPending reports whether some pending stage_status wait names stageID, with the waits ready
@@ -346,28 +360,27 @@ func (o *Orchestrator) tryResumePeerForQuestion(ctx context.Context, taskID assi
 	o.resumeTaskViaCAS(ctx, taskID, t.RootStageID, assistants.StatusWaitingPeer, "resumed: peer question while waiting")
 }
 
-// hasUndeliveredInbox reports whether participant has at least one inbox message still at DeliveryAccepted —
-// i.e. one that has never been included in any of its own spawned turns' <inbox> block. agentCommInboxFor's
-// OnDelivered closure (T4.4) marks every CURRENTLY pending message Delivered as soon as a fresh process for
-// that participant actually starts, unconditionally — so in practice this is only ever true for a message
-// that arrived strictly AFTER the participant's most recent turn began, exactly the "a colleague has
-// something for you that you have not had a chance to see yet" signal T5.5 needs, with no separate watermark:
-// reusing the delivery receipt the prompt-building code already maintains means there is nothing new to keep
-// consistent across a restart.
-func (o *Orchestrator) hasUndeliveredInbox(participant agentcomm.ParticipantID) bool {
-	return o.opts.Store.Snapshot().Assistants.Mesh.HasUnseenMessageFor(participant)
+// hasWakingUnread reports whether participant has a message that should wake it (state.MeshState's
+// HasWakingUnreadFor): one still at DeliveryAccepted — never included in any of its own spawned turns' <inbox>
+// block — and not a passive turn result. agentCommInboxFor's OnDelivered closure (T4.4) marks every CURRENTLY
+// pending message Delivered as soon as a fresh process for that participant actually starts — so in practice
+// this is only ever true for a message that arrived strictly AFTER the participant's most recent turn began,
+// exactly the "a colleague has something for you that you have not had a chance to see yet" signal T5.5 needs,
+// with no separate watermark.
+func (o *Orchestrator) hasWakingUnread(participant agentcomm.ParticipantID) bool {
+	return o.opts.Store.Snapshot().Assistants.Mesh.HasWakingUnreadFor(participant)
 }
 
 // maybeResumeAwaitingPeerQuestion resumes participant for a bounded T5.5 counter-question turn if, and only
 // if, it is CURRENTLY parked with its own wait still pending (hasOpenMeshWaitFor) AND has at least one
-// undelivered message (hasUndeliveredInbox) — both conditions re-derived fresh from durable state, so this is
+// undelivered message (hasWakingUnread) — both conditions re-derived fresh from durable state, so this is
 // safe to call redundantly from anywhere: Send's own externalWork tail (the live path, right after the
 // message that might BE a counter-question commits) and recoverMeshWaits/recoverAssistants' waiting_peer
 // branch (startup recovery, T5.5's "crash in the middle of the clarification recovers to exactly one pending
 // turn" — the resume this triggers is CAS-protected exactly like T5.3's, so a redundant call here racing a
 // live trigger, or a second recovery pass, is always a silent no-op, never a second turn).
 func (o *Orchestrator) maybeResumeAwaitingPeerQuestion(ctx context.Context, participant agentcomm.ParticipantID) {
-	if !o.hasOpenMeshWaitFor(participant) || !o.hasUndeliveredInbox(participant) {
+	if !o.hasOpenMeshWaitFor(participant) || !o.hasWakingUnread(participant) {
 		return
 	}
 	if stageID, ok := stageIDFromMeshParticipant(participant); ok {
@@ -418,7 +431,7 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 			// The ORIGINAL wait has not resolved — but a colleague may have asked a counter-question while the
 			// process was down; recover that as a bounded T5.5 turn instead of leaving it stranded until the
 			// original wait happens to resolve on its own.
-			if o.hasUndeliveredInbox(waiter) {
+			if o.hasWakingUnread(waiter) {
 				if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {
 					log.Printf("WARN: mesh: recover awaiting_peer counter-question for stage %q: %v", s.ID, err)
 				}
@@ -444,7 +457,7 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 			if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: s.ID}); err != nil {
 				log.Printf("WARN: mesh: recover awaiting_peer stage %q after its wait ended: %v", s.ID, err)
 			}
-		case o.hasUndeliveredInbox(waiter):
+		case o.hasWakingUnread(waiter):
 			// Parked for unread messages with no wait at all (agentcomm_unread.go), and the process stopped
 			// before the extra turn started.
 			if err := o.onPeerQuestion(ctx, bus.Event{StageID: s.ID}); err != nil {

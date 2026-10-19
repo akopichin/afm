@@ -663,6 +663,15 @@ func (s *Store) FinalizeIf(canFinish func(rs *RunState) bool) bool {
 	return true
 }
 
+// View runs read on the live projection under the store lock, without the full copy Snapshot makes — for a
+// frequent read of a small part of a large state (a dashboard poll). read must only read rs, must copy out
+// whatever it returns (nothing of rs may outlive the call), and must not call back into the Store.
+func (s *Store) View(read func(rs *RunState)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	read(s.snapshot)
+}
+
 // readControlAtSeq reads exactly the ONE control record at seq directly via its recorded byte offset
 // (T2.5) — no scan of the rest of the journal. Caller MUST hold s.mu (same lock as the operation deciding
 // whether to admit a repeat).

@@ -367,6 +367,12 @@
   padding-bottom: 10px;
   border-bottom: 1px solid var(--separator-subtle);
 }
+/* The view's own buttons (the Feed's people toggle) sit at the header's right end. */
+.workspace-header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
 .workspace-title {
   font-size: 14px;
   font-weight: 600;

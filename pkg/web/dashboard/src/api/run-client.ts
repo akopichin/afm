@@ -357,6 +357,7 @@ export type DiscussionMessageWire = {
   mentions?: string[]
   interrupt?: boolean
   unanswered?: boolean
+  auto_result?: boolean
   created_at: string
 }
 

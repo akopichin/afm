@@ -188,3 +188,23 @@ func TestDiscussionQuestionBlock_OmittedIDsCapped(t *testing.T) {
 		t.Fatal("ids beyond the cap must not be listed")
 	}
 }
+
+// A run agent learns that its summary answers the message that woke it, and how to keep a conversation going.
+func TestAgentComm_RunAgentTurnResultContract(t *testing.T) {
+	run := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "run:t-1", Scope: "run", Available: true})
+	if !strings.Contains(run, turnResultReplyRule) {
+		t.Fatalf("a run agent's block must explain its turn reply:\n%s", run)
+	}
+	stage := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true})
+	if strings.Contains(stage, turnResultReplyRule) {
+		t.Fatal("only a run agent's summary is posted as a reply")
+	}
+}
+
+// A passive turn result in <inbox> says so, so the agent does not answer it back.
+func TestAgentCommInbox_MarksTurnResults(t *testing.T) {
+	block := AgentCommInboxBlock([]AgentCommInboxMessage{{MessageID: "m1", ThreadID: "t", From: "run:a", Recipients: []string{"run:b"}, InReplyTo: "q", Body: "summary", AutoResult: true}}, 0)
+	if !strings.Contains(block, "turn result") {
+		t.Fatalf("a turn result must be marked in the inbox:\n%s", block)
+	}
+}

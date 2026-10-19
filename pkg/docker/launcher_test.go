@@ -336,7 +336,7 @@ func TestReExec_BuildsDockerArgs(t *testing.T) {
 	home, _ := os.UserHomeDir()
 
 	checks := []string{
-		"docker run --rm",
+		"docker run --rm --init", // tini as PID 1 reaps orphaned agent descendants
 		"-p 127.0.0.1:9876:9876", // dashboard всегда публикуется только на loopback
 		"-v /home/user/myproject:/home/user/myproject",
 		":/home/afm/.claude", // хост-путь зависит от ОС, проверяем контейнерную часть (= HOME контейнера)

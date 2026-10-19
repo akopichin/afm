@@ -61,6 +61,14 @@ export type MeshParticipant = {
   unreachable_reason?: string
   // activity — what a run agent or helper is doing now (working, waiting, idle, paused, done).
   activity?: string
+  // command — the agent command this participant runs (a stage's effective command, a task's frozen profile
+  // command). readonly_enforcement — a run agent's or helper's read-only guarantee ("os" | "none"): for a live
+  // task what the current environment gives it, for a finished one what it ran under;
+  // admitted_readonly_enforcement — the guarantee recorded when the task was admitted. All server-derived on
+  // every roster read; absent for the user, the Side agent and script stages.
+  command?: string
+  readonly_enforcement?: string
+  admitted_readonly_enforcement?: string
 }
 
 export type MeshThreadBudgets = {
@@ -75,6 +83,8 @@ export type MeshThread = {
   members: string[]
   status: string
   budgets?: MeshThreadBudgets
+  // origin_stage — the stage the thread was opened from (absent for older threads and run-level ones).
+  origin_stage?: string
 }
 
 // MeshMessage mirrors agentcomm.Message.
@@ -87,6 +97,8 @@ export type MeshMessage = {
   in_reply_to?: string
   body: string
   artifact_refs?: string[]
+  // auto_result — afm posted this as an agent's turn result (a passive reply that wakes nobody).
+  auto_result?: boolean
   seq: number
   created_at: string
 }
@@ -95,6 +107,15 @@ export type MeshMessage = {
 export type MeshMessagePage = {
   messages: MeshMessage[]
   next_cursor: number
+}
+
+// MeshStageMessagePage mirrors server.MeshStageMessagePage: a stage feed's conversation messages in journal
+// order, the threads they belong to, and the cursor of the next page.
+export type MeshStageMessagePage = {
+  messages: MeshMessage[]
+  threads: MeshThread[]
+  next_cursor: number
+  has_more: boolean
 }
 
 // MeshBoardEntry mirrors agentcomm.BoardEntry.
@@ -156,6 +177,14 @@ export async function getMeshThread(threadId: string, cursor = 0, limit = 0): Pr
   return { messages: body.messages ?? [], next_cursor: body.next_cursor ?? cursor }
 }
 
+// getStageMessages reads one page of the conversations a stage's feed shows — GET
+// /api/mesh/stages/{id}/messages, after cursor (the seq of the last message read).
+export async function getStageMessages(stageId: string, cursor: number, limit: number): Promise<MeshStageMessagePage> {
+  const url = `/api/mesh/stages/${encodeURIComponent(stageId)}/messages?cursor=${cursor}&limit=${limit}`
+  const body = await meshGet<Partial<Omit<MeshStageMessagePage, 'messages' | 'threads'>> & { messages?: MeshMessage[] | null; threads?: MeshThread[] | null }>(url)
+  return { messages: body.messages ?? [], threads: body.threads ?? [], next_cursor: body.next_cursor ?? cursor, has_more: body.has_more === true }
+}
+
 // publishMeshBoard posts a board entry as the human operator — POST /api/mesh/board (e.g. a task for the agents).
 // notify — participant ids the server messages about the new entry; sent only when non-empty.
 export async function publishMeshBoard(req: { requestId: string; key: string; status: string; notify?: string[] }): Promise<MeshBoardEntry> {
@@ -178,6 +207,8 @@ export type OpenMeshThreadRequest = {
   scope: 'stage' | 'run'
   memberIds: string[]
   maxMessages?: number
+  // originStage — the stage whose feed opens the thread, so the conversation shows in that feed.
+  originStage?: string
 }
 
 // openMeshThread opens a NEW conversation — POST /api/mesh/threads. The human operator ends up a member of
@@ -190,6 +221,7 @@ export async function openMeshThread(req: OpenMeshThreadRequest): Promise<MeshTh
     scope: req.scope,
     member_ids: req.memberIds,
     ...(req.maxMessages !== undefined ? { max_messages: req.maxMessages } : {}),
+    ...(req.originStage !== undefined ? { origin_stage: req.originStage } : {}),
   })
 }
 
@@ -226,6 +258,8 @@ export type AttachAndSendMeshRequest = {
   instruction?: string
   firstMessage?: string
   recipientIds?: string[]
+  // originStage — for a run agent, the stage whose feed it is added from (its first conversation shows there).
+  originStage?: string
 }
 
 // attachAndSendMesh is the T6.2 composite both the Team view's "Add run agent" dialog (T7.3) AND the Feed's
@@ -242,5 +276,6 @@ export async function attachAndSendMesh(req: AttachAndSendMeshRequest): Promise<
     ...(req.instruction !== undefined ? { instruction: req.instruction } : {}),
     ...(req.firstMessage !== undefined ? { first_message: req.firstMessage } : {}),
     ...(req.recipientIds !== undefined ? { recipient_ids: req.recipientIds } : {}),
+    ...(req.originStage !== undefined ? { origin_stage: req.originStage } : {}),
   })
 }

@@ -5,6 +5,177 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: the stage Feed with collaboration off
+
+With collaboration off (`AFM_COLLABORATION=0`) the stage **Feed** is the plain
+feed again: no **People** panel or 👥 button, no **+ Add agent**, no
+conversation chips or bubbles (the dashboard does not request them), and the
+composer is the note-to-agent field without the **Message** / **Revise** tabs
+or `@` mentions, sending a Revise. Earlier releases showed the composer tabs
+whenever Agent Mesh answered, even with collaboration off. The **Team** tab is
+unchanged.
+
+### Improvement: a stage's conversations in its feed
+
+The stage **Feed** now shows the stage's conversations between its own events,
+in time order, with the same message bubble as Team: author, the command they
+run, recipients, time, a quote of the answered message (click it to jump there)
+and the **turn result** tag. Chips filter the feed to **All**,
+**Conversations** or **Author's work**, with counts; messages addressed to you
+stay visible under every filter. **↩ Reply in conversation** fills the composer
+with the author's `@handle` and answers in that conversation, and a line such as
+*@qa is working* shows who is in a turn now. A conversation belongs to a stage
+when it was opened from that stage (recorded as `origin_stage` on
+`mesh_thread_opened`) or when the stage's agent or one of its helpers takes part;
+conversations from older runs show by their members. The server reads them from
+`GET /api/mesh/stages/{id}/messages`; each response carries the messages and
+the conversations opened or closed after the client's cursor, so a conversation
+closed without a new message shows as closed on the next poll, and a quiet poll
+returns nothing.
+
+### Improvement: you are in every new conversation
+
+Conversations agents start with `afm agent send`, board task notices and the
+thread where a delegated child's result reaches its parent now include you, so
+you can read along and answer there. You do not count toward the 8-agent limit
+of a conversation. Agents continue their conversations from before this change
+after a resume instead of opening second ones, and their own conversation never
+lands in a stage's Discussion. The Team roster no longer lists you twice.
+
+### Improvement: a People panel next to the stage feed
+
+The stage **Feed** now shows who the stage can talk to on the right: this
+stage's agent and helpers first, then run agents and the Side agent, then the
+other stages in flow order. Each person shows the command they run and, for run
+agents and helpers, whether an OS sandbox keeps them read-only; both come from
+the server's participant list (`command`, `readonly_enforcement`). A live
+agent's guarantee is the one the current environment gives it; the value
+recorded when it was added is kept as `admitted_readonly_enforcement`. Clicking
+a person puts their `@handle` into the feed composer and addresses them, also
+for an agent added a moment ago. Finished participants and script stages (no
+agent reads their messages) are listed but cannot be picked; stages that have
+not started can.
+**+ Add agent** opens the Add run agent dialog. On a narrow window the panel is
+a drawer behind the 👥 button.
+
+### Improvement: a run agent's turn result answers the message that woke it
+
+When a run agent finishes a turn, afm posts the result's summary as a reply to
+the message that started that turn, in the same conversation, marked with a
+**turn result** tag in Team, the feed preview and the Discussion. The reply does
+not wake its recipient: it waits for the recipient's next turn, so two agents
+cannot keep each other busy with turn results, and it never keeps the run open.
+An agent waiting for an answer to that very message is still resumed. The reply
+is skipped when the agent already answered the message itself. A reply that
+cannot be delivered (closed or full conversation, full inbox, finished
+recipient) no longer matters for the turn: the result is recorded and the feed
+says why it was not delivered. This also fixes a delegated child that could stay
+running when its result could not be mirrored to its parent. Answering a
+Discussion post that mentioned the agent clears its **Not answered** mark.
+Journals written before this change load unchanged.
+
+### Fix: a paused agent's unread message keeps the run open
+
+A paused agent or helper with work waiting — a message it has not read yet or
+a turn it was in — now keeps the run open until you continue or cancel it.
+Before, the run could finish with the message never read.
+
+### Fix: processes an agent leaves behind end with its turn
+
+When an agent's turn ends, every background process it started is stopped,
+whether the agent succeeded or failed and whether the process still holds the
+agent's output or not. afm keeps reading output for as long as it flows, so a
+slow consumer no longer loses the agent's last lines; output is cut off only
+when a process that left the agent's process group keeps it open, and the agent
+log then says so. A large prompt no longer keeps the turn open when a background
+process holds the agent's input. Before, such a process could keep the turn
+open until the idle timeout or keep changing the project after a failed turn.
+Cancelling a run stops an agent's background processes too. A background
+process that keeps writing after the agent exits holds the turn open for at most
+ten seconds; cancelling, **Pause**, **Revise** or the idle timeout stop it at
+once. A single output line longer than 16 MiB is cut there and marked
+`…[truncated]` instead of growing afm's memory. In Docker the
+container runs with `--init`, so stopped processes do not pile up as zombies,
+and agents start in images without `/bin/sh`.
+
+### Fix: the sandbox a helper is told about is the one it runs in
+
+A helper's prompt now states the read-only sandbox of the environment its turn
+runs in, not the one it was admitted under: a task admitted on the host and
+resumed in a container is no longer told it cannot write. Each turn records
+that guarantee (`readonly_enforcement` on the turn's `task_status_changed`),
+and People and Team show a finished task with the guarantee its last turn ran
+under.
+
+### Fix: turn results no longer push the waking message out of a turn's prompt
+
+A turn's inbox now fills its 64 KiB with the messages an interrupted turn was
+handed first, then the messages that wake the agent, and only then turn
+results. Before, an idle run agent with many large turn results waiting could
+take several turns before your message reached its prompt.
+
+### Fix: the stage feed shows a Discussion post once and counts what it shows
+
+A Discussion post that reached the stage agent no longer appears twice in the
+stage feed — once as its message and once as a raw `discussion_message` line;
+a post without a message shows as *"You posted in the Discussion"*. The
+**Author's work** chip counts the messages addressed to you that it also shows.
+**↩ Reply in conversation** is no longer offered on a closed conversation, and
+the feed keeps at most the newest 2,000 conversation messages of a stage.
+
+### Fix: picking a second person in People replaces the first
+
+Clicking a person in the stage's People panel while the composer already
+addresses someone now replaces that `@handle` instead of adding the new one in
+front and leaving the old one in the text, and puts the cursor at the end. A
+reply under way stays only when the new person is in that conversation. The
+People drawer on a narrow window takes the keyboard focus, keeps **Tab** inside
+and gives the focus back when it closes, and a long command chip is shortened
+with an ellipsis and a tooltip.
+
+### Fix: a helper turn interrupted after its process ended keeps its messages
+
+A helper's turn input used to live only in `turn-inbox.json`, and the file was
+deleted before the turn's result was recorded. If afm stopped in between, the
+retried turn lost the messages that had started it. Each turn is now numbered
+in the journal with the messages it was handed, before its process starts, and
+that input is consumed together with the turn's recorded outcome.
+`turn-inbox.json` is kept as a copy. Runs written by an older afm still resume
+from that file.
+
+### Fix: secrets no longer leak through helper results, logs and artifact references
+
+Secret values were replaced in message bodies but not everywhere else. They are
+now also replaced in message and board artifact references, a helper's title
+and instruction, every text field of a helper's result (`result.json` and the
+journal), and the helper's own logs (`agent.log`, `agent.jsonl`,
+`agent.stderr.log`) and raw answer. A retry of the same request still matches
+the stored, redacted copy. A background process left by a helper that holds its
+stderr open no longer keeps the turn from ending.
+
+### Improvement: helpers work in the project root and know where the changes are
+
+Helpers and run agents now start in the project root, like the stage agent,
+instead of their own scratch directory. Their task context names the project
+root, a base revision for `git diff <base>` (the fork point in a worktree,
+otherwise `HEAD`), and the scratch directory, which is also passed as
+`AFM_SCRATCH_DIR` for notes. The protection of project files depends on the
+environment: the host codex adapter is read-only, a Docker run is not. A helper
+in the host's read-only sandbox cannot write its scratch directory either; its
+prompt says so and asks for notes in its answer. The
+collaboration docs list these guarantees. The stage feed now shows *"The
+working tree changed during <agent>'s turn"* when a helper turn saw the tree
+change.
+
+### Fix: a helper that waits for a colleague no longer fails with protocol_error
+
+A helper or run agent that ends its turn with `afm agent wait` prints no final
+answer. afm used to check for the missing answer first and failed the task with
+`protocol_error: helper produced no final answer`. Now the wait is recognized
+first and the task parks in `waiting_peer` until the reply arrives. A reply that
+lands while the agent process is still exiting no longer leaves the task stuck:
+it resumes right after it parks.
+
 ### Improvement: ask a running stage agent a question from the Discussion tab
 
 The Discussion composer has an **Interrupt agent** switch, shown while the stage

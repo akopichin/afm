@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMentionTrigger, draftMentions, filterMentionGroups, filterMentionProfiles } from './mention-match'
+import { detectMentionTrigger, draftMentions, filterMentionGroups, filterMentionProfiles, readdressDraft } from './mention-match'
 
 describe('detectMentionTrigger', () => {
   it('detects an in-progress mention right after @', () => {
@@ -79,5 +79,19 @@ describe('draftMentions', () => {
     expect(draftMentions('@apiary', 'api')).toBe(false)
     expect(draftMentions('mail@api', 'api')).toBe(false)
     expect(draftMentions('@stage:api ok', 'stage:api')).toBe(true)
+  })
+})
+
+describe('readdressDraft', () => {
+  it.each([
+    ['replaces the previous recipient', '@qa please check', 'qa', 'impl', '@impl please check'],
+    ['replaces the previous recipient anywhere in the text', 'hi @qa, please check', 'qa', 'impl', 'hi @impl, please check'],
+    ['replaces a handle the draft starts with', '@someone hi', '', 'impl', '@impl hi'],
+    ['puts the handle in front of plain text', 'please check', '', 'impl', '@impl please check'],
+    ['an empty draft gets the handle and a space', '', 'qa', 'impl', '@impl '],
+    ['keeps a draft that already mentions the recipient', 'cc @impl: check', '', 'impl', 'cc @impl: check'],
+    ['the same recipient again changes nothing', '@impl hi', 'impl', 'impl', '@impl hi'],
+  ])('%s', (_, draft, previous, next, want) => {
+    expect(readdressDraft(draft, previous, next)).toBe(want)
   })
 })

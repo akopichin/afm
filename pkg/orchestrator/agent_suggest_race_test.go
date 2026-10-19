@@ -19,6 +19,7 @@ import (
 // naturalCompletionRaceRunner reproduces the OTHER agent_suggest race: the agent subprocess finishes
 // NATURALLY at almost the same instant Revise fires Running -> Revising.
 type naturalCompletionRaceRunner struct {
+	t       testing.TB
 	calls   int
 	proceed chan struct{} // test closes this only after Revise() has returned,
 	// Block completion until Revise has durably changed status and saved feedback.
@@ -34,7 +35,7 @@ func (r *naturalCompletionRaceRunner) RunAgent(_ context.Context, _, _, _, logFi
 	r.calls++
 	stageDir := filepath.Dir(logFile)
 	if r.calls == 1 {
-		<-r.proceed
+		orchestrator.AwaitReleaseForTest(r.t, r.proceed)
 		// Natural completion: the agent finished its work on its own, with no idea that Revise had already fire
 		// EvRevise and send a signal into interruptChans that nobody will ever read.
 		return os.WriteFile(filepath.Join(stageDir, ".done"), []byte("done\n"), 0644)
@@ -68,7 +69,7 @@ func TestAgentSuggest_NaturalCompletionRaceReconciles(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 	stateFile := filepath.Join(runDir, "state.json")
 
-	runner := &naturalCompletionRaceRunner{proceed: make(chan struct{})}
+	runner := &naturalCompletionRaceRunner{t: t, proceed: make(chan struct{})}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir:  runDir,
 		Stages:  stages,

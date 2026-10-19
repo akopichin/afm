@@ -6,7 +6,7 @@ environment with all their tooling preinstalled.
 ## Running in Docker
 
 ```bash
-docker run --rm -it \
+docker run --rm -it --init \
   -p 127.0.0.1:9876:9876 \
   -v $(pwd):/project \
   -v ~/.claude:/home/afm/.claude \
@@ -20,6 +20,10 @@ docker run --rm -it \
 
 Notes on the flags:
 
+- `--init` runs Docker's init as the container's PID 1. It reaps the background
+  processes an agent leaves behind once afm stops them at the end of a turn;
+  without it they stay as zombies until the container exits. afm adds this flag
+  itself when it starts the container.
 - `-p 127.0.0.1:9876:9876` maps the dashboard port so `http://localhost:9876` works
   from the host (use the same port as `server.port`).
 - `-e AFM_IN_DOCKER=1` tells afm it is already inside a container, so it does **not**

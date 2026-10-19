@@ -24,7 +24,7 @@ func TestSpawnAgentLeased_OverlappingGenerationsPreservesNewerLease(t *testing.T
 	releaseA := make(chan struct{})
 	o.spawnAgentLeased(context.Background(), s, func(context.Context, flow.Stage) {
 		close(aStarted)
-		<-releaseA
+		awaitRelease(t, releaseA)
 	})
 	<-aStarted
 
@@ -40,7 +40,7 @@ func TestSpawnAgentLeased_OverlappingGenerationsPreservesNewerLease(t *testing.T
 	releaseB := make(chan struct{})
 	o.spawnAgentLeased(context.Background(), s, func(context.Context, flow.Stage) {
 		close(bStarted)
-		<-releaseB
+		awaitRelease(t, releaseB)
 	})
 	<-bStarted
 

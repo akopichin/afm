@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -60,7 +61,13 @@ func taskCreatedEffect(taskID assistants.TaskID, stageID string, p state.TaskCre
 }
 
 func taskStatusEffect(taskID assistants.TaskID, status assistants.TaskStatus, reason string) (state.Effect, error) {
-	raw, err := json.Marshal(state.TaskStatusChangedPayload{Status: string(status), Reason: reason})
+	return taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(status), Reason: reason})
+}
+
+// taskStatusChangeEffect is taskStatusEffect with the whole payload — for a status change that also starts or
+// ends a turn (TaskStatusChangedPayload.Turn/TurnInbox).
+func taskStatusChangeEffect(taskID assistants.TaskID, p state.TaskStatusChangedPayload) (state.Effect, error) {
+	raw, err := json.Marshal(p)
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_status_changed payload: %w", err)
 	}
@@ -217,7 +224,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		if err != nil {
 			return "", err
 		}
-		return replayedTopLevelTask(op, treq)
+		return o.replayedTopLevelTask(op, treq)
 	}
 
 	task, err := o.admitTopLevelTask(o.opts.Store.Snapshot(), treq)
@@ -326,20 +333,26 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 	if t.StatusReason != "" && t.StatusReason != runAgentIdleReason {
 		return false
 	}
-	return !rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task))
+	return !rs.Assistants.Mesh.HasWakingUnreadFor(meshParticipantForTask(rs, t.Task))
 }
 
-// runAgentHasUnseenMessages reports whether some queued run agent has a message it has not seen yet: its next
-// turn is due (the message's Send, or its previous turn's own tail, schedules it), so the run must not finish
-// under it. state.RunBlocker deliberately ignores queued tasks — an idle run agent with nothing to read never
-// holds the run open — but without this check a message accepted during an agent's last turn could lose the
-// race to the run loop: the turn's running→queued commit wakes the loop before the next turn is scheduled.
-func runAgentHasUnseenMessages(rs state.RunState) bool {
+// queuedTurnDue reports whether some queued task still has a turn due, so the run must not finish under it.
+// state.RunBlocker deliberately ignores queued tasks — an idle run agent with nothing to read never holds the
+// run open — but queued is also the step between a commit that makes a task runnable and the commit that
+// starts it: a resume (waiting_peer/waiting_children → queued, then queued → running in a separate operation)
+// or a message accepted during a run agent's last turn. Without this check the run loop could finalize the run
+// in between, and the start would then be rejected run_finalizing, losing the turn. Only an idle run agent
+// (idleRunAgent) is exempt. A held (paused) task is not: the hold defers its accepted work, it does not drop
+// it, so the run stays open — like a paused stage — until the human continues or cancels the task.
+func queuedTurnDue(rs state.RunState) bool {
 	for _, t := range rs.Assistants.Tasks {
-		if t.Scope == assistants.ScopeRun && t.Status == assistants.StatusQueued &&
-			rs.Assistants.Mesh.HasUnseenMessageFor(meshParticipantForTask(rs, t.Task)) {
-			return true
+		if t.Status != assistants.StatusQueued {
+			continue
 		}
+		if t.Scope == assistants.ScopeRun && idleRunAgent(rs, t) {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -433,7 +446,25 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 // "completed" status land in one atomic control record (T2.4's "all effects of one operation commit
 // together" invariant). The failure/cancel/requeue call sites all pass none.
 func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assistants.TaskStatus, reason string, extra ...state.Effect) {
-	eff, err := taskStatusEffect(taskID, to, reason)
+	o.finishTaskTurn(taskID, 0, from, to, reason, extra...)
+}
+
+// finishTaskTurn is finishTaskFrom for a commit that also ends turn — a turn whose process ran to its end, so
+// its input is consumed together with the outcome this commit records (state.TaskState.TurnInbox). turn 0 ends
+// no turn: a cut-short turn keeps its input for the retry.
+func (o *Orchestrator) finishTaskTurn(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, extra ...state.Effect) {
+	o.finishTaskTurnReplying(taskID, turn, from, to, reason, nil, extra...)
+}
+
+// finishTaskTurnReplying is finishTaskTurn that also posts reply (planTurnReply; nil: none) in the same commit.
+//
+// The messages a finish carries — reply and a child's result mirrored to its delegating parent — never keep the
+// task from finishing: when the operation is rejected because of them (the recipient's inbox or the thread is
+// full, the thread is closed, the recipient has finished, or the agent already answered the waking message
+// itself), the finish is committed again without them, and a notice says why the result was not delivered. A
+// task never stays running without a process.
+func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, reply *plannedMessage, extra ...state.Effect) {
+	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
 	if err != nil {
 		return
 	}
@@ -447,58 +478,106 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 	// transition from landing, so it is logged and the finish proceeds without the mirror rather than failing
 	// the whole operation.
 	rs := o.opts.Store.Snapshot()
-	beforeReady := readyWaitSet(rs)
+	var messages []state.Effect
 	if to.Terminal() && hasParent {
 		if mirror, merr := o.childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
 			log.Printf("WARN: assistants: child result mesh mirror (task=%s parent=%s): %v", taskID, parentID, merr)
-		} else if len(mirror) > 0 {
-			effects = append(effects, mirror...)
+		} else {
+			messages = append(messages, mirror...)
+		}
+	}
+	var check func(*state.RunState) error
+	if reply != nil {
+		messages = append(messages, reply.effects...)
+		check = o.turnReplyCheck(*reply)
+	}
+
+	finishOp := func(effects []state.Effect, check func(*state.RunState) error) state.Operation {
+		return state.Operation{
+			ID:      "task-finish:" + string(taskID) + ":" + string(to) + ":" + randomOpSuffix(),
+			Kind:    "finish_task",
+			Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}, Check: check},
+			Effects: effects,
+		}
+	}
+	afterFinish := func(delivered *plannedMessage) func(state.OperationResult) {
+		return func(res state.OperationResult) {
+			o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
+				"task_id": string(taskID), "status": string(to), "reason": reason,
+			}})
+			// The turn reply is passive: announcing it is all its delivery needs — it wakes nobody, and the waits it
+			// resolves (a reply_to the message it answers) are resumed below with the rest of this commit's.
+			if delivered != nil {
+				o.announceMessage(delivered.send, delivered.messageID, false)
+			}
+			// T4a.5: a terminal child (pass, needs_changes, failure, or cancel — ANY terminal outcome, see
+			// TestWaitingChildren_FailedChildDelivered) is the ONLY trigger that re-checks whether its parent's
+			// whole waiting_children group just became ready. tryResumeParent's own CAS (not this check) is what
+			// makes a resume happen exactly once even when several siblings finish at the same time.
+			if to.Terminal() && hasParent {
+				o.tryResumeParent(o.runContext(context.Background()), parentID)
+			}
+			// Этап 7 (T7.2): ANY task reaching a terminal status could be exactly what just closed its root stage's
+			// required-completion barrier (directly, or transitively once tryResumeParent above settles an
+			// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
+			// no-op for a stage that isn't currently awaiting_assistants.
+			if to.Terminal() {
+				o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
+				// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
+				// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a
+				// scope=run task (no RootStageID at all) or an advisory task whose root stage already finished,
+				// neither of which maybeCompleteAfterAssistants above reaches (it only re-checks ONE stage's own
+				// awaiting_assistants gate). Without this, Run's event loop would have nothing left to wake it once
+				// every stage is already terminal, and would never re-evaluate shouldExit() again — the same
+				// no-op marker WakeEventLoop already exists for (after-hooks, which also do not publish
+				// EventAgentCompleted).
+				o.concurrency.WakeEventLoop()
+			}
+			if to == assistants.StatusQueued {
+				// queued never holds the run open either (state.RunBlocker): a run agent going idle after its turn
+				// may be the last thing the run-level barrier was waiting on.
+				o.concurrency.WakeEventLoop()
+			}
+			// Mirrors Send/PostDiscussionMessage's own tail: this commit can be exactly what a pending mesh Wait
+			// needed — a task_result wait on this task (its terminal status, or a run agent's recorded turn
+			// result), a reply_to wait answered by the turn reply, or an addressed_message wait on the delegate
+			// thread the result was mirrored into — resume it the same way any other mesh write does.
+			o.notifyAndResumeWaits(o.runContext(context.Background()), res.ReadyWaits)
 		}
 	}
 
-	op := state.Operation{
-		ID:      "task-finish:" + string(taskID) + ":" + string(to) + ":" + randomOpSuffix(),
-		Kind:    "finish_task",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}},
-		Effects: effects,
+	_, err = o.opts.Store.ApplyRunOperation(finishOp(append(slices.Clone(effects), messages...), check), afterFinish(reply))
+	var storageErr *state.StorageError
+	if err != nil && len(messages) > 0 && !errors.As(err, &storageErr) {
+		dropped := err
+		_, err = o.opts.Store.ApplyRunOperation(finishOp(effects, nil), afterFinish(nil))
+		if err == nil && !errors.Is(dropped, errTurnAlreadyAnswered) {
+			o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, reply), dropped)
+		}
 	}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
-			"task_id": string(taskID), "status": string(to), "reason": reason,
-		}})
-		// T4a.5: a terminal child (pass, needs_changes, failure, or cancel — ANY terminal outcome, see
-		// TestWaitingChildren_FailedChildDelivered) is the ONLY trigger that re-checks whether its parent's
-		// whole waiting_children group just became ready. tryResumeParent's own CAS (not this check) is what
-		// makes a resume happen exactly once even when several siblings finish at the same time.
-		if to.Terminal() && hasParent {
-			o.tryResumeParent(o.runContext(context.Background()), parentID)
+	if err == nil && turn > 0 {
+		if cerr := o.clearTurnInbox(taskID); cerr != nil {
+			log.Printf("assistants: task %s: drop the finished turn's inbox cache: %v", taskID, cerr)
 		}
-		// Этап 7 (T7.2): ANY task reaching a terminal status could be exactly what just closed its root stage's
-		// required-completion barrier (directly, or transitively once tryResumeParent above settles an
-		// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
-		// no-op for a stage that isn't currently awaiting_assistants.
-		if to.Terminal() {
-			o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
-			// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
-			// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a
-			// scope=run task (no RootStageID at all) or an advisory task whose root stage already finished,
-			// neither of which maybeCompleteAfterAssistants above reaches (it only re-checks ONE stage's own
-			// awaiting_assistants gate). Without this, Run's event loop would have nothing left to wake it once
-			// every stage is already terminal, and would never re-evaluate shouldExit() again — the same
-			// no-op marker WakeEventLoop already exists for (after-hooks, which also do not publish
-			// EventAgentCompleted).
-			o.concurrency.WakeEventLoop()
-		}
-		if to == assistants.StatusQueued {
-			// queued never holds the run open either (state.RunBlocker): a run agent going idle after its turn
-			// may be the last thing the run-level barrier was waiting on.
-			o.concurrency.WakeEventLoop()
-		}
-		// Mirrors Send/PostDiscussionMessage's own tail: this commit can be exactly what a pending mesh Wait
-		// needed — a task_result wait on this task (its terminal status, or a run agent's recorded turn
-		// result), or an addressed_message wait on the delegate thread the result was mirrored into — resume
-		// it the same way any other mesh write does.
-		o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
-	})
+	}
 	o.handleTaskOperationErr(err)
+}
+
+// resultNoticeStage is the stage whose feed hears that a result was not delivered: the stage the turn reply was
+// addressed to, if any, else the task's own root stage, else — for a run agent answering the human or another
+// run agent — the stage the reply's conversation was opened from, whose feed shows that conversation.
+func resultNoticeStage(rs state.RunState, rootStage string, reply *plannedMessage) string {
+	if reply == nil {
+		return rootStage
+	}
+	if stageID, ok := stageIDFromMeshParticipant(reply.send.Recipients[0]); ok {
+		return stageID
+	}
+	if rootStage != "" {
+		return rootStage
+	}
+	if th := rs.Assistants.Mesh.Threads[reply.send.ThreadID]; th != nil {
+		return th.OriginStage
+	}
+	return ""
 }

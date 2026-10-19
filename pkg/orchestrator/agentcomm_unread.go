@@ -102,19 +102,24 @@ func (o *Orchestrator) recoverUnreadOfFinishedStages(ctx context.Context) {
 func (o *Orchestrator) releaseUnreadMessages(ctx context.Context, stageID string, wake func(context.Context, agentcomm.ParticipantID)) {
 	recipient := meshStageParticipantID(stageID)
 	rs := o.opts.Store.Snapshot()
-	var unread []string
-	for _, id := range rs.Assistants.Mesh.Inbox[recipient] {
-		if rs.Assistants.Mesh.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
-			unread = append(unread, string(id))
-		}
-	}
+	unread := unreadOf(rs, recipient)
 	if len(unread) == 0 {
 		return
 	}
-	o.publishNotice(bus.Event{Type: bus.EventContextWarning, StageID: stageID, Data: fmt.Sprintf(
-		"stage finished with %d unread message(s): %s; teammates waiting for an answer were released", len(unread), strings.Join(unread, ", "))})
+	// The warning names unanswered work only: a passive turn result needed no answer, it is just marked
+	// undeliverable with the rest.
+	var waking []string
 	for _, id := range unread {
-		ended, err := o.markUnreadUndeliverable(agentcomm.MessageID(id), recipient, stageID)
+		if m := rs.Assistants.Mesh.Messages[id]; m != nil && !m.AutoResult {
+			waking = append(waking, string(id))
+		}
+	}
+	if len(waking) > 0 {
+		o.publishNotice(bus.Event{Type: bus.EventContextWarning, StageID: stageID, Data: fmt.Sprintf(
+			"stage finished with %d unread message(s): %s; teammates waiting for an answer were released", len(waking), strings.Join(waking, ", "))})
+	}
+	for _, id := range unread {
+		ended, err := o.markUnreadUndeliverable(id, recipient, stageID)
 		if err != nil {
 			log.Printf("WARN: mesh: release unread message %s of stage %q: %v", id, stageID, err)
 			continue
@@ -233,17 +238,30 @@ func waitsForAnswerTo(cond agentcomm.WaitCondition, m *agentcomm.Message) bool {
 }
 
 // finishedStageHasUnread reports whether some finished stage still has unread messages: part 2 above has not
-// released them yet, and a sender may be waiting for an answer. The run must not finish before that.
+// released them yet, and a sender may be waiting for an answer. The run must not finish before that. Passive turn
+// results count here too, although they never wake anybody: the release that marks them undeliverable runs
+// right after the stage finishes, and the run waits for it rather than leave them accepted forever.
 func finishedStageHasUnread(rs state.RunState) bool {
 	for id, st := range rs.Stages {
-		if bus.IsTerminal(st.Status) && rs.Assistants.Mesh.HasUnseenMessageFor(meshStageParticipantID(id)) {
+		if bus.IsTerminal(st.Status) && len(unreadOf(rs, meshStageParticipantID(id))) > 0 {
 			return true
 		}
 	}
 	return false
 }
 
+// unreadOf lists the messages recipient has not been handed yet (accepted), passive turn results included.
+func unreadOf(rs state.RunState, recipient agentcomm.ParticipantID) []agentcomm.MessageID {
+	var out []agentcomm.MessageID
+	for _, id := range rs.Assistants.Mesh.Inbox[recipient] {
+		if rs.Assistants.Mesh.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // stageHasUnreadMessages reports whether stageID's inbox holds a message no turn has been handed yet.
 func (o *Orchestrator) stageHasUnreadMessages(stageID string) bool {
-	return o.opts.Store != nil && o.hasUndeliveredInbox(meshStageParticipantID(stageID))
+	return o.opts.Store != nil && o.hasWakingUnread(meshStageParticipantID(stageID))
 }

@@ -312,7 +312,11 @@ func ReExec(cfg ReExecConfig) error {
 		return errors.New("cannot determine home directory for Docker mounts")
 	}
 
-	args := []string{"docker", "run", "--rm"}
+	// --init: Docker's init (tini) becomes PID 1 and reaps orphans. Agents leave background processes behind
+	// that afm kills at the end of a turn; orphaned ones are adopted by PID 1, and afm (which would otherwise be
+	// PID 1) never waits for them, so they would stay zombies. tini forwards signals to afm and exits with its
+	// exit code, so Ctrl-C, docker stop and SubprocessExitError work as before.
+	args := []string{"docker", "run", "--rm", "--init"}
 
 	if isTTY() {
 		args = append(args, "-it")

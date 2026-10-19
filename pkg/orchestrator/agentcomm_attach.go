@@ -47,7 +47,18 @@ type AttachAndSendRequest struct {
 	Instruction  string
 	FirstMessage *string // nil = no first message; the task is still created and addressable
 	Recipients   []agentcomm.ParticipantID
-	Actor        state.Actor
+	// OriginStage — for a run agent, the stage whose feed it was added from: its first thread shows there
+	// (agentcomm.Thread.OriginStage). A stage helper's thread always belongs to its StageID.
+	OriginStage string
+	Actor       state.Actor
+}
+
+// attachOriginStage is the origin stage of an attach's first thread.
+func attachOriginStage(req AttachAndSendRequest) string {
+	if normalizeScope(req.Scope) == assistants.ScopeRun {
+		return req.OriginStage
+	}
+	return req.StageID
 }
 
 // AttachAndSendResult names everything AttachAndSend's one operation created. MessageID is nil when the
@@ -138,7 +149,7 @@ func attachThreadMembers(newParticipant agentcomm.ParticipantID, recipients []ag
 // operation: its task, its thread's exact member set and its first message (or its absence) must all be what
 // req asks for, otherwise the request id was reused for another request — a conflict.
 func (o *Orchestrator) replayedAttachAndSend(op state.CommittedOperation, treq topLevelTaskRequest, req AttachAndSendRequest) (AttachAndSendResult, error) {
-	taskID, err := replayedTopLevelTask(op, treq)
+	taskID, err := o.replayedTopLevelTask(op, treq)
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}
@@ -154,7 +165,8 @@ func (o *Orchestrator) replayedAttachAndSend(op state.CommittedOperation, treq t
 	for i, m := range thread.Members {
 		got[i] = agentcomm.ParticipantID(m)
 	}
-	if !found || agentcomm.ThreadID(threadTarget.ThreadID) != res.ThreadID || !slices.Equal(sortedMemberSet(got), sortedMemberSet(want)) {
+	if !found || agentcomm.ThreadID(threadTarget.ThreadID) != res.ThreadID || !slices.Equal(sortedMemberSet(got), sortedMemberSet(want)) ||
+		thread.OriginStage != attachOriginStage(req) {
 		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
 	}
 
@@ -237,6 +249,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 
 	rs := o.opts.Store.Snapshot()
+	if _, known := rs.Stages[req.OriginStage]; req.OriginStage != "" && !known {
+		return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "unknown origin stage %q", req.OriginStage)
+	}
 	task, err := o.admitTopLevelTask(rs, treq)
 	if err != nil {
 		return AttachAndSendResult{}, err
@@ -282,54 +297,56 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 
 	threadID := deriveMeshThreadID(req.OperationID)
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs})
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs, OriginStage: attachOriginStage(req)})
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}
 	effects = append(effects, threadEff)
 
+	// The first message is planned and delivered like any other message (planMessage/deliverCommittedMessages):
+	// every recipient — the new task, and any existing participant among req.Recipients — gets the turn it may
+	// need, and a wait the message satisfies is resumed.
 	var messageID *agentcomm.MessageID
-	var senderID agentcomm.ParticipantID
+	var msgs []plannedMessage
 	if req.FirstMessage != nil {
-		senderID, err = meshActorSenderID(req.Actor)
+		senderID, err := meshActorSenderID(req.Actor)
 		if err != nil {
 			return AttachAndSendResult{}, err
 		}
 		mid := deriveMeshMessageID(req.OperationID)
 		messageID = &mid
-		msgRecipients := make([]string, 0, len(members)-1)
+		var msgRecipients []agentcomm.ParticipantID
 		for _, m := range members {
-			if m == senderID {
-				continue
+			if m != senderID {
+				msgRecipients = append(msgRecipients, m)
 			}
-			msgRecipients = append(msgRecipients, string(m))
 		}
-		body := o.RedactSecrets(*req.FirstMessage)
-		msgEff, merr := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(mid)},
-			state.MeshMessageSentPayload{Sender: string(senderID), Recipients: msgRecipients, Kind: string(agentcomm.MessageKindMessage), Body: body})
+		msg, merr := o.planMessage(rs, SendRequest{
+			ThreadID: threadID, Sender: senderID, Recipients: msgRecipients, Kind: agentcomm.MessageKindMessage,
+			Body: *req.FirstMessage, Actor: req.Actor,
+		}, mid, nil)
 		if merr != nil {
 			return AttachAndSendResult{}, merr
 		}
-		effects = append(effects, msgEff)
+		msgs = append(msgs, msg)
+		effects = append(effects, msg.effects...)
 	}
 
 	expect := task.Expect
+	reachable := o.recipientsReachable(msgs)
 	expect.Check = func(cur *state.RunState) error {
 		if scope == assistants.ScopeRun {
 			if err := aliasTaken(*cur, newParticipant.Alias); err != nil {
 				return err
 			}
 		}
-		if req.FirstMessage != nil {
-			// The first message also goes to every extra member — the same reachability rule as Send.
-			return rejectUnreachableRecipients(*cur, req.Recipients)
-		}
-		return nil
+		// The first message also goes to every extra member — the same reachability rule as Send.
+		return reachable(cur)
 	}
 
 	op := state.Operation{ID: req.OperationID, Kind: opKindAttachAndSend, Actor: req.Actor, Expect: expect, Effects: effects}
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: targetStageID, Data: map[string]any{
 			"task_id": string(taskID), "profile_id": string(req.ProfileID),
 		}})
@@ -337,18 +354,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 			o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
 		}
 		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": title}})
-		if messageID != nil {
-			o.publishNotice(bus.Event{Type: bus.EventMeshMessage, Data: map[string]any{
-				"message_id": string(*messageID), "thread_id": string(threadID), "sender_id": string(senderID), "kind": string(agentcomm.MessageKindMessage),
-			}})
-		}
-		// Scheduling (and so spawning the executor) only happens when there is actual work to do: a role
-		// attached with no FirstMessage must stay queued and addressable, never start its process — the
-		// committed effects are identical either way (the admitted initial status), only this externalWork step
-		// differs on whether a message was sent.
-		if task.Status == assistants.StatusQueued && messageID != nil {
-			o.maybeScheduleTask(runCtx, taskID)
-		}
+		// A role attached with no first message stays queued and addressable, never starting its process: only
+		// a message gives it (and every other recipient) work — deliverCommittedMessages schedules it.
+		o.deliverCommittedMessages(runCtx, msgs, res.ReadyWaits)
 	})
 	if err != nil {
 		return AttachAndSendResult{}, err

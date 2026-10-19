@@ -21,6 +21,9 @@ type MeshState struct {
 
 	Threads     map[agentcomm.ThreadID]*agentcomm.Thread `json:"threads,omitempty"`
 	ThreadOrder []agentcomm.ThreadID                     `json:"thread_order,omitempty"`
+	// ThreadChangedSeq is the seq of the record that last changed each thread (opened or closed it), so a
+	// poller can ask for the threads changed after its cursor instead of re-reading every thread.
+	ThreadChangedSeq map[agentcomm.ThreadID]uint64 `json:"thread_changed_seq,omitempty"`
 
 	Messages map[agentcomm.MessageID]*agentcomm.Message `json:"messages,omitempty"`
 	// MessagesByThread preserves each thread's commit order — the same role Discussions.ByStage plays for
@@ -43,6 +46,7 @@ func newMeshState() MeshState {
 	return MeshState{
 		Participants:     map[agentcomm.ParticipantID]*agentcomm.Participant{},
 		Threads:          map[agentcomm.ThreadID]*agentcomm.Thread{},
+		ThreadChangedSeq: map[agentcomm.ThreadID]uint64{},
 		Messages:         map[agentcomm.MessageID]*agentcomm.Message{},
 		MessagesByThread: map[agentcomm.ThreadID][]agentcomm.MessageID{},
 		Inbox:            map[agentcomm.ParticipantID][]agentcomm.MessageID{},
@@ -66,6 +70,9 @@ func (ms MeshState) clone() MeshState {
 		out.Threads[id] = th
 	}
 	out.ThreadOrder = append([]agentcomm.ThreadID(nil), ms.ThreadOrder...)
+	for id, seq := range ms.ThreadChangedSeq {
+		out.ThreadChangedSeq[id] = seq
+	}
 	for id, m := range ms.Messages {
 		out.Messages[id] = m
 	}
@@ -128,15 +135,15 @@ func (ms MeshState) MessageAnswered(id agentcomm.MessageID) bool {
 	return false
 }
 
-// hasMessageAddressedTo reports whether some message already in threadID names recipient among its
-// Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
-// condition is already satisfied at registration time.
-// HasUnseenMessageFor reports whether recipient has a message it has not seen yet (still only accepted, not
-// delivered to it through <inbox> or `afm agent inbox`) — what a thread-less addressed_message wait waits for,
-// and what wakes an idle run agent.
-func (ms MeshState) HasUnseenMessageFor(recipient agentcomm.ParticipantID) bool {
+// HasWakingUnreadFor is THE "waking unread" rule: whether recipient has a message it has not seen yet (still
+// only accepted, not delivered to it through <inbox> or `afm agent inbox`) that should wake it. A passive turn
+// result (Message.AutoResult) never does: it waits in the inbox for the recipient's next turn. Everything that
+// decides whether an agent is woken goes through it — a thread-less addressed_message wait, an idle run agent's
+// next turn, the run-finalization blocker, a stage's extra turns for unread messages and the counter-question
+// resume.
+func (ms MeshState) HasWakingUnreadFor(recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.Inbox[recipient] {
-		if ms.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
+		if m := ms.Messages[id]; m != nil && !m.AutoResult && ms.Receipts[id][recipient] == agentcomm.DeliveryAccepted {
 			return true
 		}
 	}
@@ -147,21 +154,28 @@ func (ms MeshState) HasUnseenMessageFor(recipient agentcomm.ParticipantID) bool 
 // messages it has not been handed yet (still accepted) — explicit rejection, never a silent truncation (T0.2).
 // The limit bounds what is still waiting to reach the recipient: a message handed over in a turn's <inbox> or
 // by `afm agent inbox` (delivered) no longer occupies it, so a recipient that keeps reading never fills up.
-// The human is not limited: the dashboard shows every thread in full, there is no queue to hand over. Exported
-// so a caller can check it before taking a step it would otherwise leave behind.
-func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID) error {
+// Passive turn results (passive=true, Message.AutoResult) are counted against their own
+// agentcomm.MaxInboxPassive instead: an idle recipient collects them without being woken, and they must never
+// crowd out the waking message that would start its next turn. The human is not limited: the dashboard shows
+// every thread in full, there is no queue to hand over. Exported so a caller can check it before taking a step
+// it would otherwise leave behind.
+func (ms MeshState) CheckInboxCapacity(recipients []agentcomm.ParticipantID, passive bool) error {
+	limit, what := agentcomm.MaxInboxUnread, "messages waiting to be read (MaxInboxUnread)"
+	if passive {
+		limit, what = agentcomm.MaxInboxPassive, "turn results waiting to be read (MaxInboxPassive)"
+	}
 	for _, r := range recipients {
 		if p, ok := ms.Participants[r]; ok && p.Kind == agentcomm.KindUser {
 			continue
 		}
 		waiting := 0
 		for _, mid := range ms.Inbox[r] {
-			if ms.Receipts[mid][r] == agentcomm.DeliveryAccepted {
+			if m := ms.Messages[mid]; m != nil && m.AutoResult == passive && ms.Receipts[mid][r] == agentcomm.DeliveryAccepted {
 				waiting++
 			}
 		}
-		if waiting >= agentcomm.MaxInboxUnread {
-			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d messages waiting to be read (MaxInboxUnread)", r, agentcomm.MaxInboxUnread)
+		if waiting >= limit {
+			return meshRejected(assistants.CodeBudgetExceeded, "recipient %s already has %d %s", r, limit, what)
 		}
 	}
 	return nil
@@ -178,9 +192,15 @@ func (ms *MeshState) appendToInbox(recipient agentcomm.ParticipantID, id agentco
 	ms.Inbox[recipient] = ids
 }
 
+// hasMessageAddressedTo reports whether some message already in threadID, other than a passive turn result,
+// names recipient among its Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
+// condition is already satisfied at registration time.
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]
+		if m.AutoResult {
+			continue // a passive turn result never wakes anybody
+		}
 		for _, r := range m.Recipients {
 			if r == recipient {
 				return true
@@ -253,6 +273,10 @@ type MeshThreadOpenedPayload struct {
 	Scope       string   `json:"scope"`
 	Members     []string `json:"members"`
 	MaxMessages int      `json:"max_messages,omitempty"`
+	// OriginStage — agentcomm.Thread.OriginStage. Not part of the descriptor a re-open compares: the first
+	// open decides it, so two agents of different stages opening the same derived conversation at once, or a
+	// post re-opening a discussion thread journaled before the field existed, stay no-ops.
+	OriginStage string `json:"origin_stage,omitempty"`
 }
 
 // applyMeshThreadOpened projects one mesh_thread_opened control record. Every named member must already be a
@@ -260,7 +284,8 @@ type MeshThreadOpenedPayload struct {
 // fail-closed posture applyDiscussionMessage uses for an unknown parent_message_id.
 //
 // A record naming an id that already exists with the SAME descriptor (Title/Scope/Members/MaxMessages — NOT
-// Status, which a later mesh_thread_closed may have changed independently) is a no-op, not an error — the
+// Status, which a later mesh_thread_closed may have changed independently, nor OriginStage, which the first
+// open decides) is a no-op, not an error — the
 // SAME "re-derive from scratch on every call, let the projection dedupe" discipline
 // applyMeshParticipantAdded already documents. Agent Mesh Phase 6, T6.4 relies on exactly this: a stage's
 // discussion thread uses one FIXED id+descriptor derived from the stage id alone (not the posting operation's
@@ -275,20 +300,26 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode mesh_thread_opened payload: %w", err)
 	}
-	if len(p.Members) > agentcomm.MaxThreadMembers {
-		return meshRejected(assistants.CodeInvalidRequest, "a conversation can have at most %d members (MaxThreadMembers), got %d", agentcomm.MaxThreadMembers, len(p.Members))
-	}
 	members := make([]agentcomm.ParticipantID, 0, len(p.Members))
+	agents := 0
 	for _, m := range p.Members {
 		pid := agentcomm.ParticipantID(m)
-		if _, ok := as.Mesh.Participants[pid]; !ok {
+		participant, ok := as.Mesh.Participants[pid]
+		if !ok {
 			return meshRejected(assistants.CodeNotFound, "unknown participant %q — `afm agent list` shows who is in this run", m)
+		}
+		if participant.Kind != agentcomm.KindUser {
+			agents++
 		}
 		members = append(members, pid)
 	}
+	// The human joins every conversation, so only agents count toward the limit.
+	if agents > agentcomm.MaxThreadMembers {
+		return meshRejected(assistants.CodeInvalidRequest, "a conversation can have at most %d agents (MaxThreadMembers), got %d", agentcomm.MaxThreadMembers, agents)
+	}
 	thread := agentcomm.Thread{
 		ID: id, Title: p.Title, Scope: agentcomm.Scope(p.Scope), Members: members, Status: agentcomm.ThreadOpen,
-		Budgets: agentcomm.ThreadBudgets{MaxMessages: p.MaxMessages},
+		Budgets: agentcomm.ThreadBudgets{MaxMessages: p.MaxMessages}, OriginStage: p.OriginStage,
 	}
 	if !thread.Valid() {
 		return fmt.Errorf("mesh_thread_opened %s: invalid thread", id)
@@ -305,6 +336,7 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	}
 	as.Mesh.Threads[id] = &thread
 	as.Mesh.ThreadOrder = append(as.Mesh.ThreadOrder, id)
+	as.Mesh.ThreadChangedSeq[id] = c.Seq
 	return nil
 }
 
@@ -330,6 +362,7 @@ func applyMeshThreadClosed(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	th.Status = agentcomm.ThreadClosed
+	as.Mesh.ThreadChangedSeq[id] = c.Seq
 
 	threadMessages := make(map[agentcomm.MessageID]bool, len(as.Mesh.MessagesByThread[id]))
 	for _, mid := range as.Mesh.MessagesByThread[id] {
@@ -354,6 +387,9 @@ type MeshMessageSentPayload struct {
 	InReplyTo    *string  `json:"in_reply_to,omitempty"`
 	Body         string   `json:"body"`
 	ArtifactRefs []string `json:"artifact_refs,omitempty"`
+	// AutoResult — afm posted an agent's turn result as this reply (see agentcomm.Message.AutoResult). Absent in
+	// journals written before it existed.
+	AutoResult bool `json:"auto_result,omitempty"`
 }
 
 // meshRejected is a typed rejection for a mesh operation the caller can fix (unknown thread, bad recipients,
@@ -402,7 +438,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	msg := agentcomm.Message{
 		ID: id, ThreadID: threadID, Sender: agentcomm.ParticipantID(p.Sender), Recipients: recipients,
 		Kind: agentcomm.MessageKind(p.Kind), InReplyTo: inReplyTo, Body: p.Body, ArtifactRefs: p.ArtifactRefs,
-		Seq: c.Seq, CreatedAt: c.Time,
+		AutoResult: p.AutoResult, Seq: c.Seq, CreatedAt: c.Time,
 	}
 
 	known := make(map[agentcomm.MessageID]bool, len(as.Mesh.MessagesByThread[threadID]))
@@ -426,7 +462,7 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	if len(as.Mesh.MessagesByThread[threadID]) >= limit {
 		return meshRejected(assistants.CodeBudgetExceeded, "thread %s has reached its limit of %d messages", threadID, limit)
 	}
-	if err := as.Mesh.CheckInboxCapacity(recipients); err != nil {
+	if err := as.Mesh.CheckInboxCapacity(recipients, msg.AutoResult); err != nil {
 		return err
 	}
 

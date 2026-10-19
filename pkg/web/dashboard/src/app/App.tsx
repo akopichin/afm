@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList } from '../components/stages-list'
 import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, StageProposals, AddStageDialog } from '../components/assistants'
-import { TeamView } from '../components/team'
+import { StagePeoplePanel, STAGE_PEOPLE_ID, TeamView } from '../components/team'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { FeedWorkspace } from '../components/feed-workspace'
+import { FeedWorkspace, type MeshPick } from '../components/feed-workspace'
 import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
@@ -21,6 +21,9 @@ import { useSelectedStage } from '../hooks/use-selected-stage'
 import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshRoster } from '../hooks/use-mesh'
+import { mergeById } from '../lib/mesh-roster'
+import { messageText } from '../lib/agent-result'
+import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
@@ -143,6 +146,16 @@ export function App(): ReactElement {
   // probe-the-first-fetch result IS the capability signal the Team tab gates on (see use-mesh-roster.ts's own
   // comment). TeamView receives the SAME roster as a prop rather than polling it a second time.
   const meshRoster = useMeshRoster()
+  // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
+  // composer (seq makes a second click on the same person a new pick).
+  const [peopleOpen, setPeopleOpen] = useState(false)
+  const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
+  const closePeople = useCallback(() => setPeopleOpen(false), [])
+  // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
+  // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it.
+  const [addedParticipants, setAddedParticipants] = useState<MeshParticipant[]>([])
+  const meshParticipants = useMemo(() => mergeById(meshRoster.participants, addedParticipants), [meshRoster.participants, addedParticipants])
+  const addParticipant = useCallback((p: MeshParticipant) => setAddedParticipants((prev) => [...prev, p]), [])
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
@@ -292,6 +305,13 @@ export function App(): ReactElement {
     (workspaceStage.status === 'running' || pauseOnFocus.hasActiveOp(workspaceStage.id))
       ? workspaceStage.id
       : null
+
+  // stageMesh — the stage Feed's mesh UI (People panel, its conversations, the Message composer mode). It needs
+  // both the mesh and collaboration: with collaboration off the stage Feed is the plain pre-mesh Feed. (The
+  // Team tab keeps its own gate, the mesh probe alone.)
+  const stageMesh = meshRoster.enabled && capabilities.collaboration
+  // showPeople — the stage Feed shows who this stage can talk to.
+  const showPeople = stageMesh && workspaceStage !== null && wsState.view === 'feed'
 
   const statusLive = statusAvailable
   const elapsedMs = useElapsed(startedAt, endedAt, statusLive, elapsedAccumulatedMs, elapsedSince)
@@ -533,6 +553,21 @@ export function App(): ReactElement {
                         ? { pos: attnIndex + 1, total: attnItems.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }
                         : undefined
                     }
+                    actions={
+                      showPeople ? (
+                        <button
+                          type="button"
+                          className="team-icon-btn stage-people-toggle"
+                          aria-label="Show people"
+                          title="People"
+                          aria-controls={STAGE_PEOPLE_ID}
+                          aria-expanded={peopleOpen}
+                          onClick={() => setPeopleOpen((v) => !v)}
+                        >
+                          <span aria-hidden="true">👥</span>
+                        </button>
+                      ) : undefined
+                    }
                   />
                 )}
                 {wsState.view === 'cost' ? (
@@ -558,36 +593,67 @@ export function App(): ReactElement {
                   // dependency at all (a never-selected stage must still show Team, not Feed).
                   <TeamView roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
-                  <FeedWorkspace
-                    events={stageEvents}
-                    stageId={workspaceStage?.id ?? null}
-                    // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно `scope:stage:<id>` / `scope:none`.
-                    // Явный токен нужен только Full-feed-сайту (scope:full), который переопределяет дефолт.
-                    emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
-                    onOpenDialog={handleOpenDialogFromFeed}
-                    noteTarget={noteTarget}
-                    onSendNote={pauseOnFocus.handleSend}
-                    pauseOnFocusEnabled={pauseOnFocus.enabled}
-                    onTogglePauseOnFocus={pauseOnFocus.setEnabled}
-                    composerPaused={
-                      workspaceStage !== null &&
-                      workspaceStage.status === 'paused' &&
-                      pauseOnFocus.isOwned(workspaceStage.id)
-                    }
-                    onComposerFocus={() =>
-                      workspaceStage !== null && pauseOnFocus.onFocus(workspaceStage.id, workspaceStage.status)
-                    }
-                    onComposerBlur={(hasDraft) =>
-                      workspaceStage !== null && pauseOnFocus.onBlur(workspaceStage.id, hasDraft)
-                    }
-                    onComposerResumeNow={() =>
-                      workspaceStage !== null && pauseOnFocus.resumeNow(workspaceStage.id)
-                    }
-                    // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team
-                    // (meshRoster.enabled mirrors TeamView's own capability gate: no tab/toggle until the
-                    // first roster probe confirms the capability is actually on).
-                    mesh={meshRoster.enabled ? { roster: meshRoster, profiles: assistantProfiles, stages } : undefined}
-                  />
+                  <div className="stage-feed-layout">
+                    <FeedWorkspace
+                      events={stageEvents}
+                      stageId={workspaceStage?.id ?? null}
+                      // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно `scope:stage:<id>` / `scope:none`.
+                      // Явный токен нужен только Full-feed-сайту (scope:full), который переопределяет дефолт.
+                      emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
+                      onOpenDialog={handleOpenDialogFromFeed}
+                      noteTarget={noteTarget}
+                      onSendNote={pauseOnFocus.handleSend}
+                      pauseOnFocusEnabled={pauseOnFocus.enabled}
+                      onTogglePauseOnFocus={pauseOnFocus.setEnabled}
+                      composerPaused={
+                        workspaceStage !== null &&
+                        workspaceStage.status === 'paused' &&
+                        pauseOnFocus.isOwned(workspaceStage.id)
+                      }
+                      onComposerFocus={() =>
+                        workspaceStage !== null && pauseOnFocus.onFocus(workspaceStage.id, workspaceStage.status)
+                      }
+                      onComposerBlur={(hasDraft) =>
+                        workspaceStage !== null && pauseOnFocus.onBlur(workspaceStage.id, hasDraft)
+                      }
+                      onComposerResumeNow={() =>
+                        workspaceStage !== null && pauseOnFocus.resumeNow(workspaceStage.id)
+                      }
+                      // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
+                      // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
+                      // and the plain note-to-agent composer (no Message/Revise tabs).
+                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
+                      // "↩ Reply in conversation" on a conversation message: the Feed composer (which exists only
+                      // while noteTarget is set) answers it in its thread, addressed back to its author.
+                      onReplyInConversation={
+                        stageMesh && noteTarget !== null
+                          ? (m) =>
+                              setPeoplePick((prev) => ({
+                                participantId: m.sender_id,
+                                seq: (prev?.seq ?? 0) + 1,
+                                reply: { messageId: m.id, threadId: m.thread_id, preview: messageText(m.body, true).slice(0, 120) },
+                              }))
+                          : undefined
+                      }
+                    />
+                    {showPeople && workspaceStage !== null && (
+                      <StagePeoplePanel
+                        stageId={workspaceStage.id}
+                        participants={meshParticipants}
+                        stages={stages}
+                        profiles={assistantProfiles}
+                        onAgentAdded={addParticipant}
+                        open={peopleOpen}
+                        onClose={closePeople}
+                        // The click goes to the Feed composer, which exists only while noteTarget is set.
+                        onPick={
+                          noteTarget !== null
+                            ? (p) => setPeoplePick((prev) => ({ participantId: p.id, seq: (prev?.seq ?? 0) + 1 }))
+                            : undefined
+                        }
+                      />
+                    )}
+                  </div>
                 ) : wsState.view === 'assistant' ? (
                   <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
                 ) : wsState.view === 'discussion' ? (

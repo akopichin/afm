@@ -42,7 +42,7 @@ func nChildren(n int) []assistants.DelegateRequest {
 func runningParentTask(t *testing.T, o *Orchestrator, store *state.Store, release <-chan struct{}) assistants.TaskID {
 	t.Helper()
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachTestTask(context.Background(), t, o, "op-parent")
@@ -203,7 +203,7 @@ func TestAdmission_AncestorHoldBlocksChild(t *testing.T) {
 	parentRelease := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if calls.Add(1) == 1 {
-			<-parentRelease
+			awaitRelease(t, parentRelease)
 			return passResultOutcome(), nil
 		}
 		childRan.Store(true)
@@ -251,7 +251,7 @@ func TestAdmission_AncestorHoldBlocksGrandchild(t *testing.T) {
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		switch calls.Add(1) {
 		case 1: // deterministically the root's turn — attached and spawned before anything else exists
-			<-rootRelease
+			awaitRelease(t, rootRelease)
 			return passResultOutcome(), nil
 		case 2:
 			childRan.Store(true)
@@ -316,7 +316,7 @@ func TestAdmission_ConcurrentParentsRespectSharedQuota(t *testing.T) {
 	parentA := runningParentTask(t, o, store, release)
 	// A second, independent top-level parent (its own Attach, same mechanism).
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	parentB := attachTestTask(context.Background(), t, o, "op-parent-b")

@@ -31,7 +31,7 @@ func TestCancelledTask_ActionRejected(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	t.Cleanup(func() { o.concurrency.WaitAgents() })

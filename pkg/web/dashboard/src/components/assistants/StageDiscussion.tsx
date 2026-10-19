@@ -20,6 +20,8 @@ export type DiscussionMessage = {
   mentions?: string[]
   // unanswered — a human post of a finished stage that nobody replied to.
   unanswered?: boolean
+  // autoResult — an agent's turn result afm posted as its reply.
+  autoResult?: boolean
   createdAt: string
 }
 
@@ -86,7 +88,7 @@ export function StageDiscussion({ messages, participants = [] }: StageDiscussion
               </span>
             )}
           </div>
-          <AgentMessageBody body={m.body} fromAgent={m.authorKind !== 'human'} markdown />
+          <AgentMessageBody body={m.body} fromAgent={m.authorKind !== 'human'} markdown autoResult={m.autoResult === true} />
           {m.evidence && m.evidence.length > 0 && (
             <ul className="stage-discussion-message-evidence">
               {m.evidence.map((e) => (

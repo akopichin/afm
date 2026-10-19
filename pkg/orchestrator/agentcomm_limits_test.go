@@ -33,9 +33,10 @@
 //     new task/participant) in the first place; every AttachAndSend call, from whatever caller, always
 //     computes `assistants.ComputeDepth(nil)` (agentcomm_attach.go) — top-level, never nested under whatever
 //     task triggered it — so there is no depth to "dodge" even in principle.
-//   - a read-only helper keeps its file limits: TestScratch_IsOnlyWritablePath (assistants_files_test.go) —
-//     helperExecutorConfig (the ONE executor.Config builder every helper task uses, mesh-attached or not) is
-//     keyed purely on taskID, so a mesh-created task gets the identical scratch-dir restriction.
+//   - a helper keeps the same workspace whatever created it: TestHelperExecutorConfig_ProjectRootAndScratch
+//     (assistants_files_test.go) — helperExecutorConfig (the ONE executor.Config builder every helper task
+//     uses, mesh-attached or not) is keyed purely on taskID, so a mesh-created task gets the identical project
+//     root and scratch directory; write protection comes from its environment, never from this config.
 //   - secrets are absent from persisted messages and from notices: TestMesh_SendRedactsSecretsInBody
 //     (agentcomm_messages_test.go) for the persisted message body, and
 //     TestMesh_SecretsAbsentFromLiveNoticeAndNoticesJournal (below) for both the live bus notice and the
@@ -154,7 +155,8 @@ func TestMesh_FanOutRecipientLimitProducesExplicitRefusal(t *testing.T) {
 // TestMesh_ThreadMemberFanOutLimitProducesExplicitRefusal is T8.4's fan-out clause for a thread's own FIXED
 // member set (agentcomm.MaxThreadMembers): unlike Send's recipient check, this one needs genuinely resolvable
 // participant ids (ensureParticipantEffects resolves each member against the live roster before the
-// operation is even built) — eight real, terminal helper tasks plus the human make nine, one over the limit.
+// operation is even built). The human does not take a slot (D1: it joins every conversation): eight agents
+// plus the human open, nine agents are one over the limit.
 func TestMesh_ThreadMemberFanOutLimitProducesExplicitRefusal(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	ctx := context.Background()
@@ -164,12 +166,12 @@ func TestMesh_ThreadMemberFanOutLimitProducesExplicitRefusal(t *testing.T) {
 	}
 
 	members := []agentcomm.ParticipantID{meshUserParticipantID}
-	for i := 0; i < agentcomm.MaxThreadMembers; i++ {
+	for i := 0; i <= agentcomm.MaxThreadMembers; i++ {
 		taskID := attachTestTask(ctx, t, o, fmt.Sprintf("op-members-%d", i))
 		members = append(members, meshHelperParticipantID(taskID))
 	}
-	if len(members) != agentcomm.MaxThreadMembers+1 {
-		t.Fatalf("test setup: built %d members, want %d", len(members), agentcomm.MaxThreadMembers+1)
+	if _, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-members-fit", Members: members[:agentcomm.MaxThreadMembers+1], Scope: agentcomm.ScopeStage}); err != nil {
+		t.Fatalf("OpenThread with %d agents and the human: %v", agentcomm.MaxThreadMembers, err)
 	}
 
 	before := len(store.Snapshot().Assistants.Mesh.ThreadOrder)

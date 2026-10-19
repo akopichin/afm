@@ -94,53 +94,10 @@ func (fs *fsImpl) Diff(ctx context.Context, rootID, relPath string) (Diff, error
 	return Diff{Path: clean, Baseline: baseRef, Status: status, Diff: body, Truncated: truncated}, nil
 }
 
-// diffBaselineRef returns the ref to diff relPath against. For a file inside a linked git worktree it is
-// the branch's fork point — merge-base(worktree HEAD, main-worktree HEAD) — so committed branch work shows.
-// A normal repo, or any failure (missing merge-base / unresolvable paths / git error), returns "HEAD", which
-// keeps non-worktree behavior byte-for-byte unchanged.
+// diffBaselineRef returns the ref to diff a file of the checkout at gitDir against — gitcmd.DiffBaseRef, the
+// policy a helper's task context shares, with the common git directory required to lie within the browse root.
 func diffBaselineRef(ctx context.Context, gitDir, rootAbs string) string {
-	const head = "HEAD"
-	common, ok, err := runGit(ctx, gitDir, "rev-parse", "--git-common-dir")
-	if err != nil || !ok {
-		return head
-	}
-	commonDir := strings.TrimSpace(string(common))
-	if commonDir == "" {
-		return head
-	}
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(gitDir, commonDir)
-	}
-	// Canonicalize BOTH sides before comparing: gitDir from a normal repo (a real ".git" dir) is not
-	// pre-resolved, so a repo reached through a symlinked root must not be mistaken for a linked worktree.
-	canonCommon, err := filepath.EvalSymlinks(commonDir)
-	if err != nil {
-		return head
-	}
-	canonGit, err := filepath.EvalSymlinks(gitDir)
-	if err != nil {
-		return head
-	}
-	if canonCommon == canonGit {
-		return head // common dir == git dir → an ordinary repo, not a linked worktree
-	}
-	if _, contained := verifyContained(rootAbs, canonCommon); !contained {
-		return head // the common ".git" must live within the browse root
-	}
-	mainHead, ok, err := runGit(ctx, canonCommon, "rev-parse", "HEAD")
-	if err != nil || !ok {
-		return head
-	}
-	mainRef := strings.TrimSpace(string(mainHead))
-	if mainRef == "" {
-		return head
-	}
-	// No merge-base (unrelated histories) or a git error both degrade to HEAD — a single-file diff against
-	// HEAD is still useful, so there is nothing to surface to the client here.
-	if ref, ferr := forkPoint(ctx, gitDir, "HEAD", mainRef); ferr == nil && ref != "" {
-		return ref
-	}
-	return head
+	return gitcmd.DiffBaseRef(ctx, runGit, gitDir, rootAbs)
 }
 
 // findGitDir walks up from clean's directory to the root, locating a `.git` entry through the secure fd at

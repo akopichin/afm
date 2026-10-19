@@ -4,8 +4,8 @@ import type { AssistantProfile } from '../../types/assistant-profile'
 import { openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshBoard, type MeshRoster } from '../../hooks/use-mesh'
 import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
-import { directPeer, findExistingDirectThread, participantLabel, participantRole } from '../../lib/mesh-roster'
-import { RunTeamList } from './RunTeamList'
+import { directPeer, findExistingDirectThread, mergeById, participantLabel, participantRole } from '../../lib/mesh-roster'
+import { RunTeamList, teamStagesOf } from './RunTeamList'
 import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
 import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
 import { BoardPanel, boardTaskCount } from './BoardPanel'
@@ -24,12 +24,6 @@ export type TeamViewProps = {
 }
 
 type TeamTab = 'messages' | 'board' | 'activity'
-
-// mergeById — the roster's list plus local items it does not know yet (the roster wins once it has them).
-function mergeById<T extends { id: string }>(fromRoster: T[], local: T[]): T[] {
-  const missing = local.filter((l) => !fromRoster.some((r) => r.id === l.id))
-  return missing.length === 0 ? fromRoster : [...fromRoster, ...missing]
-}
 
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
@@ -153,7 +147,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
 
   // addressable — who a new conversation can include: a finished stage or helper cannot answer any more.
   const addressable = participants.filter((p) => p.kind !== 'user' && p.reachable)
-  const teamStages = stages.map((s) => ({ id: s.id, title: s.name !== '' ? s.name : s.id, status: s.status }))
+  const teamStages = teamStagesOf(stages)
 
   return (
     <div className="team-view">

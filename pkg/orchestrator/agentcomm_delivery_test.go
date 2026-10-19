@@ -62,7 +62,7 @@ func TestInboxDelivery_MessageArrivingAfterPromptIsNotMarked(t *testing.T) {
 	)
 	ready := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-ready
+		awaitRelease(t, ready)
 		if calls.Add(1) == 1 {
 			receipt, err := o.Send(ctx, SendRequest{
 				OperationID: "op-late", ThreadID: res.ThreadID, Sender: meshUserParticipantID,

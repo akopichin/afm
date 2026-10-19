@@ -186,3 +186,29 @@ func mustApply(t *testing.T, as *AssistantsState, c *Control) {
 		t.Fatalf("dispatchControlKind(%s): %v", c.Kind, err)
 	}
 }
+
+// origin_stage is decided by the first open: a re-open that names another origin (or one journaled before the
+// field existed) is still the same thread, a no-op.
+func TestMeshThreadOpened_OriginStageDecidedByFirstOpen(t *testing.T) {
+	as := newAssistantsState()
+	mustApply(t, &as, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	mustApply(t, &as, meshParticipantAddedControl("b", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	open := func(origin string) *Control {
+		payload, _ := json.Marshal(MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeRun), Members: []string{"a", "b"}, OriginStage: origin})
+		return &Control{Kind: kindMeshThreadOpened, SchemaVersion: ControlSchemaVersion, Actor: Actor{Kind: "system"}, Target: Target{ThreadID: "th"}, Payload: payload}
+	}
+	mustApply(t, &as, open(""))
+	mustApply(t, &as, open("impl"))
+	if got := as.Mesh.Threads["th"].OriginStage; got != "" {
+		t.Fatalf("origin_stage = %q, want the first open's (empty)", got)
+	}
+
+	fresh := newAssistantsState()
+	mustApply(t, &fresh, meshParticipantAddedControl("a", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	mustApply(t, &fresh, meshParticipantAddedControl("b", string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage)))
+	mustApply(t, &fresh, open("impl"))
+	mustApply(t, &fresh, open("docs"))
+	if got := fresh.Mesh.Threads["th"].OriginStage; got != "impl" {
+		t.Fatalf("origin_stage = %q, want impl", got)
+	}
+}

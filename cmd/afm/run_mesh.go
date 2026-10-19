@@ -62,7 +62,7 @@ func (a meshActions) OpenThread(ctx context.Context, requestID string, req serve
 	}
 	return a.orch.OpenThread(ctx, orchestrator.OpenThreadRequest{
 		OperationID: requestID, Title: req.Title, Scope: agentcomm.Scope(req.Scope),
-		Members: members, MaxMessages: req.MaxMessages, Actor: meshUIActor,
+		Members: members, MaxMessages: req.MaxMessages, OriginStage: req.OriginStage, Actor: meshUIActor,
 	})
 }
 
@@ -113,6 +113,22 @@ func (a meshActions) Inbox(ctx context.Context, cursor uint64, limit int) (serve
 	return toMeshMessagePage(page), nil
 }
 
+// StageMessages is the stage feed's conversation page; empty lists, never null, for the dashboard.
+func (a meshActions) StageMessages(ctx context.Context, stageID string, cursor uint64, limit int) (server.MeshStageMessagePage, error) {
+	return toMeshStagePage(a.orch.StageMessages(stageID, cursor, limit)), nil
+}
+
+func toMeshStagePage(p orchestrator.StageMessagePage) server.MeshStageMessagePage {
+	page := server.MeshStageMessagePage{Messages: p.Messages, Threads: p.Threads, NextCursor: p.NextCursor, HasMore: p.HasMore}
+	if page.Messages == nil {
+		page.Messages = []agentcomm.Message{}
+	}
+	if page.Threads == nil {
+		page.Threads = []agentcomm.Thread{}
+	}
+	return page
+}
+
 func (a meshActions) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
 	page, err := a.orch.ReadBoard(ctx, orchestrator.ReadBoardRequest{Key: key})
 	if err != nil {
@@ -139,7 +155,7 @@ func (a meshActions) AttachAndSend(ctx context.Context, requestID string, req se
 	result, err := a.orch.AttachAndSend(ctx, orchestrator.AttachAndSendRequest{
 		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Scope: assistants.Scope(req.Scope),
 		StageID: req.StageID, Mode: assistants.Mode(req.Mode), Title: req.Title, Instruction: req.Instruction,
-		FirstMessage: req.FirstMessage, Recipients: toParticipantIDs(req.Recipients), Actor: meshUIActor,
+		FirstMessage: req.FirstMessage, Recipients: toParticipantIDs(req.Recipients), OriginStage: req.OriginStage, Actor: meshUIActor,
 	})
 	if err != nil {
 		return server.MeshAttachAndSendResult{}, err

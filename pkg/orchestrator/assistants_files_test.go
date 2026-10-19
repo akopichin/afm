@@ -57,13 +57,23 @@ func TestTaskDir_CreatedWithMkdirAll(t *testing.T) {
 	}
 }
 
-func TestScratch_IsOnlyWritablePath(t *testing.T) {
+// TestHelperExecutorConfig_ProjectRootAndScratch: a helper runs in the project root, like the stage agent and
+// the verifier, so it can read the code it is asked about; its own scratch/ is handed over as AFM_SCRATCH_DIR.
+// Whether it can WRITE to the project is decided by its environment (a host codex sandbox, a container), not
+// by this config — see docs/collaboration.md.
+func TestHelperExecutorConfig_ProjectRootAndScratch(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, true)
 	taskID := assistants.TaskID("t-scratch-test")
-	cfg := o.helperExecutorConfig(taskID, "helper-cmd")
-	want := o.taskScratchDir(taskID)
-	if cfg.Dir != want {
-		t.Fatalf("helper executor Dir = %q, want scratch dir %q", cfg.Dir, want)
+
+	for _, root := range []string{"/some/project/root", ""} {
+		o.opts.RootDir = root
+		cfg := o.helperExecutorConfig(taskID, "helper-cmd")
+		if cfg.Dir != root {
+			t.Fatalf("helper executor Dir = %q, want the project root %q (empty = afm's CWD, like the stage agent)", cfg.Dir, root)
+		}
+		if want := o.taskScratchDir(taskID); cfg.ScratchDir != want {
+			t.Fatalf("helper executor ScratchDir = %q, want the task's scratch dir %q", cfg.ScratchDir, want)
+		}
 	}
 }
 

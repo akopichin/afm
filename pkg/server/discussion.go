@@ -26,7 +26,9 @@ type DiscussionMessageView struct {
 	// Interrupt — the human asked the running stage agent to answer this post right away.
 	Interrupt bool `json:"interrupt,omitempty"`
 	// Unanswered — a human post of a finished stage that nobody replied to.
-	Unanswered bool      `json:"unanswered,omitempty"`
+	Unanswered bool `json:"unanswered,omitempty"`
+	// AutoResult — an agent's turn result afm posted as its reply; it woke nobody.
+	AutoResult bool      `json:"auto_result,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 

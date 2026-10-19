@@ -70,7 +70,8 @@ const (
 	EventAssistantTaskStatus EventType = "assistant_task_status"
 	// EventHelperTreeModified mirrors EventVerifyTreeModified for a helper task's run: a working-tree
 	// fingerprint taken before/after the helper's turn differed. Purely observational — never changes the
-	// task's verdict.
+	// task's verdict, and does not claim the helper made the change. Data: {"task_id", "agent"} (the task's
+	// title, or its profile id).
 	EventHelperTreeModified EventType = "helper_tree_modified"
 	// EventHelperResultRepaired fires when a helper task's raw answer needed mechanical repair
 	// (assistants.DecodeResultWithRepair) before it could be strictly decoded — e.g. wrapped in a markdown

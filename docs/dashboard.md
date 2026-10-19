@@ -193,14 +193,16 @@ Criteria` sections are collapsible. The same per-element commenting works on an 
 ## Sending a note to a running stage
 
 While a stage is actively `running`, a messenger-style composer is pinned to the
-bottom of its **Feed**. With Agent Mesh available it has **Revise** and **Message**
-modes; **Revise** is selected by default and keeps the existing note behavior:
+bottom of its **Feed**. With Agent Mesh and collaboration on it has **Revise** and
+**Message** modes; **Revise** is selected by default and keeps the existing note
+behavior. With collaboration off (`AFM_COLLABORATION=0`) the composer is the plain
+note field, without modes, and sends a Revise:
 
 1. Select the `running` stage and open its **Feed** tab. A note input sits at the
    bottom: a growing textarea, an **Attach** button, and a send button. It
    appears only for a `running`, non-script stage.
-2. Type your note and send it — click **Apply Revise** when Agent Mesh is
-   available (otherwise the send button), or press **Cmd/Ctrl+Enter**
+2. Type your note and send it — click **Apply Revise** when the composer has
+   modes (otherwise the send button), or press **Cmd/Ctrl+Enter**
    (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file.
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
@@ -216,6 +218,70 @@ direct conversation or opens one on the first message. **Attach to stage** lists
 available configured roles and opens an attach preview before sending. The message
 view shows its conversation and delivery status. A failed send leaves the draft
 available to retry. See [Team conversations](collaboration.md#team-conversations).
+
+### People panel
+
+With Agent Mesh and collaboration on, the stage **Feed** has a **People** panel on the right:
+everyone this stage can talk to, in three groups — **This stage** (the stage's
+agent and its helpers), **Run agents** (run agents and the Side agent) and
+**Other stages** (in flow order, each with its helpers). It is the Team roster
+with the selected stage on top; conversations stay in the **Team** tab.
+
+- Each row shows the person's `@handle`, what they are doing now and a presence
+  dot. A chip next to the name shows the command they run: the stage's command
+  for a stage agent, the profile's command for a run agent or helper. A run agent
+  or helper also shows its read-only guarantee: **read-only** (an OS sandbox
+  enforces it) or **no sandbox** (only the container or the prompt limits it).
+  Both come from the server. For a live agent the guarantee is the one the
+  current environment gives its command; if the agent was added under a
+  different one (for example, a host run resumed in Docker), the badge's tooltip
+  says so. A finished agent shows the guarantee it ran under.
+- Click a person to put their `@handle` into the composer and address them, the
+  same as picking them from the `@` menu; the composer switches to **Message**.
+  A message has one recipient, so picking someone else replaces the previous
+  `@handle` (or the one your draft starts with) and keeps the rest of your text,
+  with the cursor at its end. A reply under way stays only if the new person is
+  in that conversation. You can do this while the stage is `running` and its
+  composer is shown.
+- A finished stage or task stays listed but is disabled (*Finished — can't
+  write*). A script stage is listed but disabled too: no agent reads its
+  messages. A stage that has not started yet can be addressed: it reads the
+  message when it starts. An agent you just added can be picked right away.
+- **+ Add agent** opens the same dialog as **Add run agent** in Team.
+
+On a narrower window the panel becomes a drawer: open it with the 👥 button at
+the right of the stage header. The open drawer takes the keyboard focus and
+keeps **Tab** inside it; **Escape**, a click beside it or a pick closes it and
+returns the focus. A long command is shortened with an ellipsis; hover it for
+the full value.
+
+### Conversations in the stage feed
+
+With Agent Mesh and collaboration on, a stage's **Feed** also shows its conversations,
+between the stage's own events in time order: conversations the stage opened
+(its agent or helpers wrote first, you started one from this feed, or you added a
+run agent from this stage's People panel), conversations its agent or one of its
+helpers is in, and the stage's Discussion. A message from the Discussion appears
+once, as its message bubble; a post that reached nobody's inbox appears as a line
+such as *"You posted in the Discussion"*. Each message shows its author, the command they run, **→** whom it is
+addressed to, the time, a quote of the message it answers (click the quote to
+jump to that message) and a **turn result** tag on a turn result.
+
+- Filter the feed with **All**, **Conversations** (only the messages) or
+  **Author's work** (only the stage's own events). Each chip shows how many
+  rows that filter shows. Messages addressed to you stay visible under every
+  filter.
+- **↩ Reply in conversation** puts the author's `@handle` into the composer
+  (switching it to **Message**) and answers that message in its conversation.
+  It is offered while the composer is shown, on open conversations you are a
+  member of, and while the author can still read it; a conversation closed
+  meanwhile loses it on the next poll.
+- A line such as *@qa is working* at the bottom shows who among the people in
+  this stage's conversations, and its helpers, is in a turn right now.
+
+The feed reads conversations by itself every few seconds, so a message appears
+even when the live connection drops. It keeps the newest 2,000 conversation
+messages of a stage; Team shows every conversation in full.
 
 ### Hold the agent while you type
 

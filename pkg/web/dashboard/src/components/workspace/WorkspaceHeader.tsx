@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import type { Stage } from '../../types'
 import { STAGE_STATUS_LABELS } from '../../types'
 
@@ -15,11 +15,13 @@ type WorkspaceHeaderProps = {
   stage: Stage
   connected: boolean
   attentionNav?: AttentionNav
+  // actions — the view's own buttons at the header's right end (the Feed's 👥 people toggle).
+  actions?: ReactNode
 }
 
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + статус-бейдж +
 // «thinking»-индикатор во время running.
-export function WorkspaceHeader({ stage, connected, attentionNav }: WorkspaceHeaderProps): ReactElement {
+export function WorkspaceHeader({ stage, connected, attentionNav, actions }: WorkspaceHeaderProps): ReactElement {
   return (
     <div className="workspace-header">
       <h2 id="detail-title" className="workspace-title">{stage.name !== '' ? stage.name : stage.id}</h2>
@@ -48,6 +50,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav }: WorkspaceHea
           <button type="button" className="attention-nav-btn" aria-label="Next item" onClick={attentionNav.onNext}>›</button>
         </span>
       )}
+      {actions !== undefined && <span className="workspace-header-actions">{actions}</span>}
     </div>
   )
 }

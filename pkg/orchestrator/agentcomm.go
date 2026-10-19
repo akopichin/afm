@@ -83,6 +83,8 @@ type OpenThreadRequest struct {
 	Scope       agentcomm.Scope
 	Members     []agentcomm.ParticipantID
 	MaxMessages int
+	// OriginStage — the stage whose feed the thread is opened from (agentcomm.Thread.OriginStage); "" for none.
+	OriginStage string
 	Actor       state.Actor
 }
 
@@ -104,7 +106,10 @@ type SendRequest struct {
 	InReplyTo    *agentcomm.MessageID
 	Body         string
 	ArtifactRefs []string
-	Actor        state.Actor
+	// AutoResult marks the message as a passive turn result afm posts on the sender's behalf
+	// (agentcomm.Message.AutoResult). Never set from an HTTP or CLI request: only afm itself posts one.
+	AutoResult bool
+	Actor      state.Actor
 }
 
 type SendReceipt struct {
@@ -278,6 +283,31 @@ func (o *Orchestrator) secretValues() []string {
 // or a log verbatim.
 func (o *Orchestrator) RedactSecrets(s string) string {
 	return redact.String(s, o.secretValues())
+}
+
+// redactAll is RedactSecrets for every element of ss (a list of artifact references, evidence lines, ...).
+func (o *Orchestrator) redactAll(ss []string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = o.RedactSecrets(s)
+	}
+	return out
+}
+
+// sameRedactedList is sameRedactedText for lists: the same length and the same text at every position.
+func (o *Orchestrator) sameRedactedList(stored, requested []string) bool {
+	if len(stored) != len(requested) {
+		return false
+	}
+	for i := range stored {
+		if !o.sameRedactedText(stored[i], requested[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // sameRedactedText reports whether stored — text redacted when its operation committed — is the text requested

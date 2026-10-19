@@ -126,17 +126,27 @@ type Config struct {
 	// message is not main-agent output"). Synchronous and never selected/dropped — unlike bus.UIBus, there is
 	// no channel here to overflow (TestObservation_UIBusDropDoesNotAffectObservations).
 	OnObservation func(Observation)
-	SessionID     string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume        bool                         // if true, --resume <SessionID> is used instead of --session-id
-	StageDir      string                       // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	WrapperDir    string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
-	Dir           string                       // if set, agent runs with this working directory (project root from flow.root_dir)
-	Debug         bool                         // if true, log the exact agent input (prompt) to debug logs
-	RunDir        string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
-	StageID       string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
-	Phase         string                       // phase label for the accounting Observation this invocation produces
-	UsageHint     accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
-	OnUsage       func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
+	SessionID     string // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume        bool   // if true, --resume <SessionID> is used instead of --session-id
+	StageDir      string // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	ScratchDir    string // passed to a helper agent as AFM_SCRATCH_DIR: its own directory for notes
+	// Redact, if set, masks secrets in everything RunHelperAgent writes or reports: the raw stream (*.jsonl),
+	// the action log and OnAction details, stderr and the raw answer. It is called at write time, so a secret
+	// that appears only after the executor was configured (the agent's own mesh token) is masked too.
+	Redact func(string) string
+	// Secrets, if set, returns the secret values Redact masks. Knowing the values (and so the longest one) lets
+	// RunHelperAgent redact stderr as a stream — a secret split across writes or lines is still caught — and
+	// mask their JSON-escaped spellings. It is read when the process starts writing, after its own mesh token
+	// exists.
+	Secrets    func() []string
+	WrapperDir string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir        string                       // if set, agent runs with this working directory (project root from flow.root_dir)
+	Debug      bool                         // if true, log the exact agent input (prompt) to debug logs
+	RunDir     string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
+	StageID    string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	Phase      string                       // phase label for the accounting Observation this invocation produces
+	UsageHint  accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
+	OnUsage    func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
 	// InterruptCh, if set, is watched during RunAgent: a signal on this channel sends SIGINT to the
 	// subprocess — graceful, user-requested interrupt, distinct from idle timeout / full-run shutdown.
 	InterruptCh <-chan struct{}
@@ -895,8 +905,6 @@ func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, err
 	return out, nil
 }
 
-// killProcessGroup and setProcessGroup are OS-specific — see executor_unix.go and executor_windows.go.
-
 // filterInheritedEnv strips control/browser vars and, for verify, foreign credentials. Callers re-add
 // allowed invocation vars.
 func (e *Executor) filterInheritedEnv(ambient []string) []string {
@@ -906,8 +914,8 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 		switch {
 		case strings.HasPrefix(kv, "CLAUDECODE="):
 			// always strip for nested sessions
-		case strings.HasPrefix(kv, "AFM_STAGE_DIR="):
-			// always strip inherited; re-added by caller only if cfg.StageDir != ""
+		case strings.HasPrefix(kv, "AFM_STAGE_DIR="), strings.HasPrefix(kv, "AFM_SCRATCH_DIR="):
+			// always strip inherited; re-added by caller only if cfg.StageDir/cfg.ScratchDir is set
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added by caller only if mode.isolated()
 		case IsBrowserTransportEnv(kv):
@@ -933,7 +941,9 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 }
 
 // run spawns the AI client subprocess, feeds prompt via stdin, and calls
-// lineCallback for each stdout line. Respects idle timeout.
+// lineCallback for each stdout line. Respects idle timeout. lineCallback must not block for long: once the agent
+// has exited, run stops waiting for a callback stuck past pipeFlushPeriod after the group kill and returns; that
+// one call still finishes on its own, and no further call is made.
 func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) error {
 	e.logAgentInput(phase, prompt)
 	args := append([]string{}, e.cfg.ExtraArgs...)
@@ -982,8 +992,6 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		}
 	}
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
-	setProcessGroup(cmd)
-	cmd.Stdin = strings.NewReader(prompt)
 	// Пин рабочей директории агента к project root (flow.root_dir), чтобы
 	// относительные пути проекта резолвились в одном корне для всех стадий.
 	if e.cfg.Dir != "" {
@@ -995,6 +1003,9 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	filtered := e.filterInheritedEnv(os.Environ())
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
+	}
+	if e.cfg.ScratchDir != "" {
+		filtered = append(filtered, "AFM_SCRATCH_DIR="+e.cfg.ScratchDir)
 	}
 	if e.cfg.effectiveMode().isolated() {
 		// CODEX_VERIFY сообщает адаптеру о verify/helper-режиме; одного поля Config.VerifyMode недостаточно.
@@ -1022,11 +1033,11 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	}
 	cmd.Env = filtered
 
-	stdout, err := cmd.StdoutPipe()
+	pipes, err := attachAgentPipes(cmd, stderr)
 	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
+		return err
 	}
-	cmd.Stderr = stderr
+	defer pipes.close()
 
 	// Перед запуском процесса повторно проверяем ctx и interrupt, чтобы не спавнить уже отменённый вызов.
 	select {
@@ -1035,6 +1046,18 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	case <-e.cfg.InterruptCh:
 		return ErrUserInterrupted
 	default:
+	}
+
+	// The agent and every descendant run in one process group. release, deferred here, kills whatever is still
+	// in it when the turn ends — also descendants that closed their pipes — before the call returns.
+	group := newProcessGroup(anchorExecutable, stderr)
+	defer group.release()
+	group.join(cmd)
+	// A cancelled context stops the agent's whole process group, not just the agent: a descendant must not
+	// outlive the call that started it.
+	cmd.Cancel = func() error {
+		killAgent(cmd, group)
+		return nil
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -1047,52 +1070,56 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	idleTimer := e.clk().NewTimer(e.cfg.IdleTimeout)
 	defer idleTimer.Stop()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- lineReader(stdout, func(line string) bool {
-			lineCallback(line)
-			idleTimer.Reset(e.cfg.IdleTimeout)
-			return true
-		})
-	}()
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	pipes.start(prompt, stderr, func(line string) bool {
+		lineCallback(line)
+		idleTimer.Reset(e.cfg.IdleTimeout)
+		return true
+	})
 
+	idleErr := fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
 	select {
-	case readErr := <-done:
-		waitErr := cmd.Wait()
-		if readErr != nil {
-			return readErr
+	case waitErr := <-exited:
+		// Cancellation, the idle timeout and a user interrupt keep working while drain reads the agent's last
+		// output; an interrupt there returns ErrUserInterrupted, as before the exit.
+		drainErr := pipes.drain(ctx, idleTimer.C(), e.cfg.InterruptCh, group, stderr)
+		if waitErr != nil && ctx.Err() != nil {
+			return ctx.Err() // the context's cancellation killed the agent
+		}
+		if errors.Is(drainErr, ErrIdleTimeout) {
+			return idleErr
+		}
+		if drainErr != nil {
+			return drainErr
 		}
 		return waitErr
 	case <-idleTimer.C():
-		killProcessGroup(cmd, syscall.SIGKILL)
-		<-done // wait for stdout reader to finish
-		_ = cmd.Wait()
-		return fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
+		killAgent(cmd, group)
+		<-exited
+		_ = pipes.drain(ctx, nil, nil, group, stderr)
+		return idleErr
 	case <-ctx.Done():
-		killProcessGroup(cmd, syscall.SIGKILL)
-		<-done // wait for stdout reader to finish
-		_ = cmd.Wait()
+		killAgent(cmd, group)
+		<-exited
+		_ = pipes.drain(ctx, nil, nil, group, stderr)
 		return ctx.Err()
 	case <-e.cfg.InterruptCh:
 		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно завершает текущую атомарную операцию
 		// (запись файла — один syscall, его практически не рвёт сигналом на середине) и выходит.
-		killProcessGroup(cmd, syscall.SIGINT)
+		group.signal(syscall.SIGINT)
 		select {
-		case <-done:
-			_ = cmd.Wait()
-			return ErrUserInterrupted
+		case <-exited:
 		case <-e.clk().After(interruptGracePeriod):
 			// Не среагировал на SIGINT вовремя — принудительно, как страховка.
-			killProcessGroup(cmd, syscall.SIGKILL)
-			<-done
-			_ = cmd.Wait()
-			return ErrUserInterrupted
+			group.signal(syscall.SIGKILL)
+			<-exited
 		}
+		_ = pipes.drain(ctx, nil, nil, group, stderr)
+		return ErrUserInterrupted
 	}
 }
 
-// logAgentInput пишет точный промпт, уходящий в агента, в debug-логи — единый <RunDir>/debug.log и
-// по-стейджно <RunDir>/<StageID>/<phase>.prompt.log. Активно только при Config.Debug.
 func (e *Executor) logAgentInput(phase, prompt string) {
 	if !e.cfg.Debug {
 		return

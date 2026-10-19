@@ -634,7 +634,8 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		if stageWaitsPending {
 			o.resumeWaitersAfterTransition(beforeReady)
 		}
-		if bus.IsTerminal(to) && o.stageHasUnreadMessages(stageID) {
+		if bus.IsTerminal(to) && o.opts.Store != nil && len(unreadOf(o.opts.Store.Snapshot(), meshStageParticipantID(stageID))) > 0 {
+			// Every unread message is released, passive turn results included (they hold the run until then).
 			o.releaseUnreadAfterTransition(stageID)
 		}
 		if bus.IsTerminal(to) {

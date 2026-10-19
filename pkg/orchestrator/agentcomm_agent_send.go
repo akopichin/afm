@@ -53,13 +53,13 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 	if len(req.Recipients) == 0 {
 		return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "no recipients — pass --to (see `afm agent list`)"}
 	}
-	members := append([]agentcomm.ParticipantID{req.Sender}, req.Recipients...)
+	members := conversationMembers(req.Sender, req.Recipients)
 	if th := openThreadWithMembers(rs, members); th != "" {
 		req.ThreadID = th
 		return o.Send(ctx, req)
 	}
 	req.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
-	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, sortedMemberSet(members), 0)
+	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, req.Sender))
 	if err != nil {
 		return SendReceipt{}, err
 	}
@@ -88,7 +88,7 @@ func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Partic
 func committedMessage(target state.Target, p state.MeshMessageSentPayload) agentcomm.Message {
 	m := agentcomm.Message{
 		ID: agentcomm.MessageID(target.MessageID), ThreadID: agentcomm.ThreadID(target.ThreadID), Sender: agentcomm.ParticipantID(p.Sender),
-		Kind: agentcomm.MessageKind(p.Kind), Body: p.Body, ArtifactRefs: p.ArtifactRefs,
+		Kind: agentcomm.MessageKind(p.Kind), Body: p.Body, ArtifactRefs: p.ArtifactRefs, AutoResult: p.AutoResult,
 	}
 	for _, r := range p.Recipients {
 		m.Recipients = append(m.Recipients, agentcomm.ParticipantID(r))
@@ -101,12 +101,12 @@ func committedMessage(target state.Target, p state.MeshMessageSentPayload) agent
 }
 
 // committedSendMatches reports whether m — the message already committed under req's request id — is the
-// message req asks to send: same sender, kind, body, reply target, artifacts, thread (when req names one) and
-// recipients. Recipient names are resolved against m's own recipients, so an alias that has since become
+// message req asks to send: same sender, kind, body, passive flag, reply target, artifacts, thread (when req
+// names one) and recipients. Recipient names are resolved against m's own recipients, so an alias that has since become
 // ambiguous (a new agent with the same alias) still names whom it named then.
 func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
-	if m.Sender != req.Sender || m.Kind != req.Kind || !o.sameRedactedText(m.Body, req.Body) ||
-		!slices.Equal(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
+	if m.Sender != req.Sender || m.Kind != req.Kind || m.AutoResult != req.AutoResult || !o.sameRedactedText(m.Body, req.Body) ||
+		!o.sameRedactedList(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
 		return false
 	}
 	if req.ThreadID != "" && req.ThreadID != m.ThreadID {
@@ -159,14 +159,21 @@ func resolveRecipients(roster []agentcomm.Participant, names []agentcomm.Partici
 	return out, nil
 }
 
+// conversationMembers is the member set of a conversation sender starts with recipients: them and the human
+// (D1) — the human reads every conversation of the run and can answer in it, but is not addressed by it.
+func conversationMembers(sender agentcomm.ParticipantID, recipients []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	return sortedMemberSet(append([]agentcomm.ParticipantID{meshUserParticipantID, sender}, recipients...))
+}
+
 // conversationOpenID is the key a new conversation of exactly members derives its thread id from: the sorted
-// member set plus how many threads with that exact set exist already (so a conversation opened after an
+// member set plus how many threads with the same agents exist already (so a conversation opened after an
 // earlier one was closed gets a fresh id).
 func conversationOpenID(rs state.RunState, members []agentcomm.ParticipantID) string {
 	set := sortedMemberSet(members)
+	agents := agentMemberSet(members)
 	n := 0
 	for _, th := range rs.Assistants.Mesh.Threads {
-		if slices.Equal(sortedMemberSet(th.Members), set) {
+		if slices.Equal(agentMemberSet(th.Members), agents) {
 			n++
 		}
 	}
@@ -183,15 +190,27 @@ func sortedMemberSet(members []agentcomm.ParticipantID) []agentcomm.ParticipantI
 	return slices.Compact(set)
 }
 
-// openThreadWithMembers returns the open thread whose member set is exactly members (order-insensitive), or
-// "" — the conversation an agent continues when it messages the same colleagues again.
+// agentMemberSet is sortedMemberSet without the human: the agents of a conversation.
+func agentMemberSet(members []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	return slices.DeleteFunc(sortedMemberSet(members), func(m agentcomm.ParticipantID) bool { return m == meshUserParticipantID })
+}
+
+// openThreadWithMembers returns the open conversation of the same agents as members (order-insensitive), or
+// "" — the conversation an agent continues when it messages the same colleagues again. The human does not
+// count: a conversation opened before the human joined every new thread (D1) is still the one those agents
+// continue after a resume. A stage's discussion thread is never picked — it belongs to the human's Discussion
+// with the stage, and the agents' own conversation must not end up there.
 func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID) agentcomm.ThreadID {
-	want := sortedMemberSet(members)
+	want := agentMemberSet(members)
 	for _, id := range rs.Assistants.Mesh.ThreadOrder {
 		th := rs.Assistants.Mesh.Threads[id]
-		if th != nil && th.Status == agentcomm.ThreadOpen && slices.Equal(sortedMemberSet(th.Members), want) {
-			return id
+		if th == nil || th.Status != agentcomm.ThreadOpen || !slices.Equal(agentMemberSet(th.Members), want) {
+			continue
 		}
+		if _, discussion := discussionStageOfThread(rs, id); discussion {
+			continue
+		}
+		return id
 	}
 	return ""
 }

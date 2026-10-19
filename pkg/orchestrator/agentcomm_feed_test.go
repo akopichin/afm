@@ -175,8 +175,12 @@ func TestFeed_UserDiscussionThenQAClarification_NoRevisionNoHelperNoGate(t *test
 	}
 
 	qaThreadMsgs := messagesInThread(rsAfter, qaThreadID)
-	if len(qaThreadMsgs) != 2 {
-		t.Fatalf("qa-clarify thread has %d messages, want exactly 2 (ask, answer)", len(qaThreadMsgs))
+	// The third is QA's turn result, which afm posts as a passive reply to the answer that woke the turn.
+	if len(qaThreadMsgs) != 3 {
+		t.Fatalf("qa-clarify thread has %d messages, want exactly 3 (ask, answer, qa's turn result)", len(qaThreadMsgs))
+	}
+	if r := qaThreadMsgs[2]; r.Sender != qaParticipant || !r.AutoResult || r.InReplyTo == nil || *r.InReplyTo != qaThreadMsgs[1].ID {
+		t.Fatalf("qa's turn result = %+v, want a passive reply from qa to the stage's answer", r)
 	}
 	if qaThreadMsgs[0].Sender != qaParticipant || len(qaThreadMsgs[0].Recipients) != 1 || qaThreadMsgs[0].Recipients[0] != stageParticipant {
 		t.Fatalf("qa's question = %+v, want sender=qa recipient=stage", qaThreadMsgs[0])

@@ -127,7 +127,7 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	}
 	threadID := discussionThreadID(stageID, mentions)
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: memberStrs})
+		state.MeshThreadOpenedPayload{Scope: string(agentcomm.ScopeStage), Members: memberStrs, OriginStage: stageID})
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func discussionMirrorOfReply(rs state.RunState, req SendRequest, messageID agent
 	}
 	eff, err := discussionMessageEffect(stageID, string(messageID), state.DiscussionMessagePayload{
 		AuthorKind: string(author), AuthorID: string(req.Sender), Role: role,
-		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body,
+		Round: assistants.RoundFreeform, ParentMessageID: parent, Body: body, AutoResult: req.AutoResult,
 	})
 	return eff, err == nil, err
 }

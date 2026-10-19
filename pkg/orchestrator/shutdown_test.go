@@ -23,7 +23,7 @@ func TestSpawnAgent_WaitAgentsBlocksUntilDone(t *testing.T) {
 	var finished atomic.Bool
 	release := make(chan struct{})
 	o.concurrency.SpawnAgent(context.Background(), flow.Stage{ID: "a"}, func(ctx context.Context, s flow.Stage) {
-		<-release
+		awaitRelease(t, release)
 		finished.Store(true)
 	})
 

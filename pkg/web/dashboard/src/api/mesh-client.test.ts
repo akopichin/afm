@@ -5,6 +5,7 @@ import {
   genMeshRequestId,
   getMeshBoard,
   getMeshThread,
+  getStageMessages,
   listMeshParticipants,
   listMeshThreads,
   openMeshThread,
@@ -137,5 +138,29 @@ describe('mesh-client', () => {
     const b = genMeshRequestId('mesh-run-agent')
     expect(a).not.toBe(b)
     expect(a.startsWith('mesh-run-agent-')).toBe(true)
+  })
+
+  test('getStageMessages reads one page of a stage feed\'s conversations', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: null, threads: null, next_cursor: 9, has_more: true }),
+    } as Response)
+
+    const page = await getStageMessages('impl 1', 4, 50)
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/stages/impl%201/messages?cursor=4&limit=50')
+    expect(page).toEqual({ messages: [], threads: [], next_cursor: 9, has_more: true })
+  })
+
+  test('openMeshThread and attachAndSendMesh send origin_stage when given', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response)
+
+    await openMeshThread({ requestId: 'r1', title: '', scope: 'run', memberIds: ['run:qa'], originStage: 'impl' })
+    await attachAndSendMesh({ requestId: 'r2', profileId: 'qa', scope: 'run', originStage: 'impl' })
+
+    const bodies = fetchSpy.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Record<string, unknown>)
+    expect(bodies[0]?.origin_stage).toBe('impl')
+    expect(bodies[1]?.origin_stage).toBe('impl')
   })
 })

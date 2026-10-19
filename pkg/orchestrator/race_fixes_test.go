@@ -58,6 +58,7 @@ func TestCompleteStage_LostCASSkipsSideEffects(t *testing.T) {
 // barrierAutoRunner counts how many agent invocations ENTER RunAgent and holds each one in-flight until
 // release is closed.
 type barrierAutoRunner struct {
+	t       testing.TB
 	mu      sync.Mutex
 	entered int
 	release chan struct{}
@@ -69,7 +70,7 @@ func (r *barrierAutoRunner) RunAgent(_ context.Context, _, _, _, logFile string)
 	r.mu.Lock()
 	r.entered++
 	r.mu.Unlock()
-	<-r.release
+	orchestrator.AwaitReleaseForTest(r.t, r.release)
 	stageDir := filepath.Dir(logFile)
 	return os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644)
 }
@@ -103,7 +104,7 @@ func TestPauseContinue_DuringBeforeHook_LaunchesOnce(t *testing.T) {
 	cfg := config.Default()
 	cfg.Executor.MaxParallel = 4
 
-	runner := &barrierAutoRunner{release: make(chan struct{})}
+	runner := &barrierAutoRunner{t: t, release: make(chan struct{})}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir: runDir, Stages: stages, Store: store, Config: cfg,
 		Prompts: orchestrator.DefaultPrompts(), Runner: runner,

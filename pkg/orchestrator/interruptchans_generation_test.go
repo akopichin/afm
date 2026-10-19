@@ -21,7 +21,7 @@ func TestRunWithRetry_InterruptChans_OverlappingGenerationsPreservesNewerChannel
 		o.runWithRetry(context.Background(), s, phaseImplementation,
 			func(string) error {
 				close(aStarted)
-				<-releaseA
+				awaitRelease(t, releaseA)
 				return context.Canceled
 			},
 			nil,
@@ -46,7 +46,7 @@ func TestRunWithRetry_InterruptChans_OverlappingGenerationsPreservesNewerChannel
 		o.runWithRetry(context.Background(), s, phaseImplementation,
 			func(string) error {
 				close(bStarted)
-				<-releaseB
+				awaitRelease(t, releaseB)
 				return context.Canceled
 			},
 			nil,

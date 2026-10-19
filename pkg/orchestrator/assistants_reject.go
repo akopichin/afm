@@ -29,7 +29,8 @@ const maxConsecutiveDelegationRejections = 3
 // A rejection is information for the model to act on, not a crash — but after
 // maxConsecutiveDelegationRejections in a row the task is failed instead of requeued, so a model that keeps
 // re-sending the same rejected delegate cannot spin forever.
-func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, rejectErr error) {
+// turn is the rejected delegating turn, ended by the status change recorded here.
+func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn uint64, rejectErr error) {
 	code := assistants.ErrorCode("delegation_rejected")
 	reason := rejectErr.Error()
 	var rej *state.OperationRejectedError
@@ -45,7 +46,7 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, reje
 	o.taskDelegationRejects.Store(taskID, count)
 	if count >= maxConsecutiveDelegationRejections {
 		o.taskDelegationRejects.Delete(taskID)
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed,
+		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed,
 			fmt.Sprintf("delegation_rejected %d times in a row (%s): %s", count, code, reason))
 		return
 	}
@@ -57,9 +58,9 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, reje
 			"Either complete the remaining work yourself, or honestly report this limitation in your own "+
 			"result instead of repeating the same delegation request.", code, reason)
 	if werr := o.saveFollowUp(taskID, note); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist delegation rejection: "+werr.Error())
+		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist delegation rejection: "+werr.Error())
 		return
 	}
-	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "delegation_rejected: "+string(code))
+	o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, "delegation_rejected: "+string(code))
 	o.maybeScheduleTask(o.runContext(context.Background()), taskID)
 }

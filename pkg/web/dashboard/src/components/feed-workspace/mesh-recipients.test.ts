@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshMentionGroups } from './mesh-recipients'
+import { buildMeshMentionGroups, participantMentionItem } from './mesh-recipients'
 import { findExistingDirectThread, participantLabel } from '../../lib/mesh-roster'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
@@ -61,6 +61,14 @@ describe('buildMeshMentionGroups', () => {
     const item = groups.find((g) => g.label === 'This stage')?.items[0]
     expect(item?.unavailable).toBe(true)
     expect(item?.unavailableReason).toBe('stage s1 has reached a terminal status')
+  })
+
+  it('a script stage the server marks unreachable is offered unavailable, also to a people-panel pick', () => {
+    const script: MeshParticipant = { ...stageAgent, reachable: false, unreachable_reason: 'script stage: no agent reads messages' }
+    const item = buildMeshMentionGroups([script], [], 's1').find((g) => g.label === 'This stage')?.items[0]
+    expect(item?.unavailable).toBe(true)
+    expect(item?.unavailableReason).toBe('script stage: no agent reads messages')
+    expect(participantMentionItem([script], 'stage:s1')?.unavailable).toBe(true)
   })
 
   it('resolves a participant mention target to its own scope, not the composer\'s stage', () => {

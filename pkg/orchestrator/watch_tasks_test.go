@@ -393,7 +393,7 @@ func TestWatcherUI_ShowsLastProcessedCheckpoint(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -428,7 +428,7 @@ func TestWatcherUI_AdvisoryErrorIsNotBlockingAttention(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return executor.HelperOutcome{}, errors.New("boom: watcher crashed")
 	}
 

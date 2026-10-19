@@ -24,8 +24,8 @@ import (
 // Publish implements Service.Publish. Any PENDING WaitOnBoardKey wait this publish satisfies is resolved by
 // applyMeshBoardPublished itself (pkg/state/mesh_board.go), in the SAME commit as the publish — not
 // precomputed here from a snapshot, which could race a concurrent Wait registration or break idempotent
-// replay. beforeReady only tells notifyAndResumeNewlyReadyWaits which waits to skip because they were already
-// ready before this call.
+// replay. The commit's result names the waits it made ready (OperationResult.ReadyWaits), and only those are
+// announced and resumed.
 //
 // The notices to req.Notify are messages committed in the SAME operation as the revision, so nothing — a
 // run finishing in between included — can keep the revision and lose its notices: FinalizeIf sees them
@@ -51,9 +51,10 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		notify[i] = string(n)
 	}
 	status := o.RedactSecrets(req.Status)
+	refs := o.redactAll(req.ArtifactRefs)
 	publishEff, err := marshalEffect("mesh_board_published",
 		state.Target{BoardKey: req.Key, ParticipantID: string(req.Author)},
-		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: req.ArtifactRefs, ExpectedVersion: req.ExpectedVersion, Notify: &notify})
+		state.MeshBoardPublishedPayload{Status: status, ArtifactRefs: refs, ExpectedVersion: req.ExpectedVersion, Notify: &notify})
 	if err != nil {
 		return agentcomm.BoardEntry{}, err
 	}
@@ -70,26 +71,19 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 			return agentcomm.BoardEntry{}, err
 		}
 		effects := []state.Effect{publishEff}
-		var recipients []agentcomm.ParticipantID
 		for _, n := range notices {
 			effects = append(effects, n.effects...)
-			recipients = append(recipients, n.send.Recipients...)
 		}
-		beforeReady := readyWaitSet(rs)
 		op := state.Operation{ID: req.OperationID, Kind: opKindMeshPublish, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
-			Check: func(cur *state.RunState) error { return rejectUnreachableRecipients(*cur, recipients) },
+			Check: o.recipientsReachable(notices),
 		}}
-		res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": status}})
-			for _, n := range notices {
-				o.announceMessage(n.send, n.messageID, n.openedThread)
-			}
-			o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
-			o.wakeRecipients(runCtx, recipients)
+			o.deliverCommittedMessages(runCtx, notices, res.ReadyWaits)
 		})
 		if err == nil {
 			return agentcomm.BoardEntry{
-				AuthorID: req.Author, Key: req.Key, Version: req.ExpectedVersion + 1, Status: status, ArtifactRefs: req.ArtifactRefs,
+				AuthorID: req.Author, Key: req.Key, Version: req.ExpectedVersion + 1, Status: status, ArtifactRefs: refs,
 				Seq: res.Seq, Ts: res.Time,
 			}, nil
 		}
@@ -103,7 +97,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 // meanwhile (a concurrent retry — the next attempt answers from that commit), or the notices planned from the
 // current state differ from the rejected ones (a recipient finished, a conversation filled or closed). A
 // rejection the notices did not cause is the publish's own answer.
-func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status string, rejectedNotices []boardNotice, err error) bool {
+func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status string, rejectedNotices []plannedMessage, err error) bool {
 	var rejected *state.OperationRejectedError
 	if !errors.As(err, &rejected) {
 		return false
@@ -131,7 +125,7 @@ func (o *Orchestrator) replayedPublish(req PublishRequest, notify []string) (age
 		return agentcomm.BoardEntry{}, true, err
 	}
 	if !found || target.BoardKey != req.Key || target.ParticipantID != string(req.Author) || !o.sameRedactedText(p.Status, req.Status) ||
-		!slices.Equal(p.ArtifactRefs, req.ArtifactRefs) || p.ExpectedVersion != req.ExpectedVersion || (p.Notify != nil && !slices.Equal(*p.Notify, notify)) {
+		!o.sameRedactedList(p.ArtifactRefs, req.ArtifactRefs) || p.ExpectedVersion != req.ExpectedVersion || (p.Notify != nil && !slices.Equal(*p.Notify, notify)) {
 		return agentcomm.BoardEntry{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return agentcomm.BoardEntry{
@@ -155,27 +149,18 @@ func clipForNotice(s string, limit int) string {
 	return strings.ToValidUTF8(s[:limit], "") + "…"
 }
 
-// boardNotice is one planned notice of a publish: a message from the author to one recipient, in their open
-// conversation or in a new one opened by the same operation.
-type boardNotice struct {
-	send         SendRequest
-	messageID    agentcomm.MessageID
-	openedThread bool
-	effects      []state.Effect
-}
-
 // planBoardNotices plans one message from the author per reachable participant in req.Notify — one per
 // recipient, so no recipient or conversation-size limit can refuse the notices as a whole. A name that cannot
 // receive a message now is skipped with a log line. Each message id is derived from the publish's request id
 // and its recipient.
-func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, status string) ([]boardNotice, error) {
+func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, status string) ([]plannedMessage, error) {
 	if len(req.Notify) == 0 {
 		return nil, nil
 	}
 	key := clipForNotice(req.Key, boardNoticeKeyLimit)
 	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", key, clipForNotice(status, boardNoticeStatusLimit), key)
 	roster := o.liveRoster(rs)
-	var notices []boardNotice
+	var notices []plannedMessage
 	seen := map[agentcomm.ParticipantID]bool{req.Author: true}
 	for _, name := range req.Notify {
 		ids, err := resolveRecipients(roster, []agentcomm.ParticipantID{name})
@@ -191,40 +176,28 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 		if p, ok := resolveParticipant(rs, recipient); !ok || !p.Reachable {
 			continue
 		}
-		if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}); err != nil {
+		if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {
 			log.Printf("WARN: mesh: board key %s: not notifying %s: %v", req.Key, recipient, err)
 			continue
 		}
-		n := boardNotice{
-			send: SendRequest{
-				Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body,
-			},
-			messageID: deriveMeshMessageID(req.OperationID + ":notify:" + string(recipient)),
-		}
-		members := []agentcomm.ParticipantID{req.Author, recipient}
+		send := SendRequest{Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}
+		var open []state.Effect
+		members := conversationMembers(req.Author, []agentcomm.ParticipantID{recipient})
 		if th := openThreadWithMembers(rs, members); th != "" {
 			if rs.Assistants.Mesh.ThreadFull(th) {
 				log.Printf("WARN: mesh: board key %s: not notifying %s: conversation %s is full", req.Key, recipient, th)
 				continue
 			}
-			n.send.ThreadID = th
+			send.ThreadID = th
 		} else {
-			n.send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
-			open, err := threadOpenEffects(rs, n.send.ThreadID, "", agentcomm.ScopeRun, sortedMemberSet(members), 0)
-			if err != nil {
+			send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
+			if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, req.Author)); err != nil {
 				return nil, err
 			}
-			n.effects, n.openedThread = open, true
 		}
-		msg, err := messageSentEffect(n.send, n.messageID, body)
+		n, err := o.planMessage(rs, send, deriveMeshMessageID(req.OperationID+":notify:"+string(recipient)), open)
 		if err != nil {
 			return nil, err
-		}
-		n.effects = append(n.effects, msg)
-		if mirror, ok, err := discussionMirrorOfReply(rs, n.send, n.messageID, body); err != nil {
-			return nil, err
-		} else if ok {
-			n.effects = append(n.effects, mirror)
 		}
 		notices = append(notices, n)
 	}

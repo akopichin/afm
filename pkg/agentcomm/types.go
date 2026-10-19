@@ -80,6 +80,18 @@ type Participant struct {
 	// task on every roster read and never journaled; empty for stage agents (their stage status says it), the
 	// user and the Side agent.
 	Activity Activity `json:"activity,omitempty"`
+	// Command is the agent command (a configured client or docker.agents recipe name) this participant
+	// runs: a stage agent's effective stage command, a helper's or run agent's command frozen into its task's
+	// profile snapshot. Derived on every roster read and never journaled, like Activity; empty for the user,
+	// the Side agent and a script stage.
+	Command string `json:"command,omitempty"`
+	// ReadonlyEnforcement is a task-backed participant's read-only guarantee ("os" — an OS sandbox, "none" —
+	// only the container or the prompt): for a live task, what the current execution environment gives its
+	// command; for a finished one, what it ran under. AdmittedReadonlyEnforcement is the historical value
+	// frozen into its profile snapshot when the task was admitted. Both are derived on every roster read and
+	// never journaled; empty for stage agents (they write the project), the user and the Side agent.
+	ReadonlyEnforcement         string `json:"readonly_enforcement,omitempty"`
+	AdmittedReadonlyEnforcement string `json:"admitted_readonly_enforcement,omitempty"`
 }
 
 // Activity — what a run agent or helper is doing now, for the Team roster.
@@ -137,6 +149,10 @@ type Thread struct {
 	Members []ParticipantID `json:"members"`
 	Status  ThreadStatus    `json:"status"`
 	Budgets ThreadBudgets   `json:"budgets,omitempty"`
+	// OriginStage is the stage the thread was opened from: the sender's stage, or the stage whose feed the
+	// human opened it in. Empty for a thread opened outside any stage, and for threads journaled before the
+	// field existed — those show in a stage's feed by membership alone.
+	OriginStage string `json:"origin_stage,omitempty"`
 }
 
 // Valid reports whether t has the minimum shape a Thread needs: a non-empty ID, at least one
@@ -183,6 +199,10 @@ type Message struct {
 	InReplyTo    *MessageID `json:"in_reply_to,omitempty"`
 	Body         string     `json:"body"`
 	ArtifactRefs []string   `json:"artifact_refs,omitempty"`
+	// AutoResult marks a PASSIVE message: afm posted an agent's turn result as a reply to the message that woke
+	// that turn. It waits in the recipient's inbox for its next turn but never wakes it (state.MeshState's
+	// HasWakingUnreadFor).
+	AutoResult bool `json:"auto_result,omitempty"`
 	// Seq is assigned by the journal writer, sharing the run's single event-log sequence.
 	Seq uint64 `json:"seq"`
 	// CreatedAt is stamped from the control record's own time, never time.Now(), so replay stays

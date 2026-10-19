@@ -207,7 +207,7 @@ func TestCommit_NoLockHeldDuringModelWorkOrPreflight(t *testing.T) {
 	reached := make(chan struct{})
 	orch.commitAddStageBarrier = func() {
 		close(reached)
-		<-release
+		awaitRelease(t, release)
 	}
 
 	done := make(chan error, 1)
