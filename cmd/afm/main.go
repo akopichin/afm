@@ -10,6 +10,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
+	"github.com/akopichin/afm/pkg/executor"
 )
 
 var rootDir string
@@ -62,6 +63,10 @@ func resolveDebug(flag bool, env string) bool {
 }
 
 func main() {
+	// A copy of afm started as an agent's process group anchor does nothing else (see pkg/executor).
+	if executor.ServeProcessGroupAnchor(os.Args) {
+		return
+	}
 	os.Exit(runMain(os.Args[1:]))
 }
 

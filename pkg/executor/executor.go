@@ -1048,10 +1048,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 
 	// The agent and every descendant run in one process group. release, deferred here, kills whatever is still
 	// in it when the turn ends — also descendants that closed their pipes — before the call returns.
-	group, err := newProcessGroup()
-	if err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
-	}
+	group := newProcessGroup(anchorExecutable, stderr)
 	defer group.release()
 	group.join(cmd)
 	// A cancelled context stops the agent's whole process group, not just the agent: a descendant must not
@@ -1079,25 +1076,30 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		return true
 	})
 
+	idleErr := fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
 	select {
 	case waitErr := <-exited:
-		readErr := pipes.drain(group, stderr)
+		// Cancellation and the idle timeout keep working while drain reads the agent's last output.
+		drainErr := pipes.drain(ctx, idleTimer.C(), group, stderr)
 		if waitErr != nil && ctx.Err() != nil {
 			return ctx.Err() // the context's cancellation killed the agent
 		}
-		if readErr != nil {
-			return readErr
+		if errors.Is(drainErr, ErrIdleTimeout) {
+			return idleErr
+		}
+		if drainErr != nil {
+			return drainErr
 		}
 		return waitErr
 	case <-idleTimer.C():
 		killAgent(cmd, group)
 		<-exited
-		_ = pipes.drain(group, stderr)
-		return fmt.Errorf("idle timeout after %v: %w", e.cfg.IdleTimeout, ErrIdleTimeout)
+		_ = pipes.drain(ctx, nil, group, stderr)
+		return idleErr
 	case <-ctx.Done():
 		killAgent(cmd, group)
 		<-exited
-		_ = pipes.drain(group, stderr)
+		_ = pipes.drain(ctx, nil, group, stderr)
 		return ctx.Err()
 	case <-e.cfg.InterruptCh:
 		// Мягкое прерывание: SIGINT, а не Kill — claude сам грамотно завершает текущую атомарную операцию
@@ -1110,7 +1112,7 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 			group.signal(syscall.SIGKILL)
 			<-exited
 		}
-		_ = pipes.drain(group, stderr)
+		_ = pipes.drain(ctx, nil, group, stderr)
 		return ErrUserInterrupted
 	}
 }

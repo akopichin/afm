@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,15 @@ import (
 // Real time, not the injected clock: it bounds an OS-level drain, like exec.Cmd.WaitDelay.
 const pipeGracePeriod = 2 * time.Second
 
+// pipeDrainLimit bounds how long afm reads output after the agent has exited, however busy the pipes are: a
+// descendant that writes without pause would otherwise keep the turn open forever. When it runs out, afm kills
+// the agent's process group.
+const pipeDrainLimit = 10 * time.Second
+
+// pipeFlushPeriod is how long afm still reads after it killed the group: enough to hand the output already in
+// the pipes to the readers. Whatever keeps the pipes open after that is outside the group; afm stops reading.
+const pipeFlushPeriod = time.Second
+
 // pipeSilencePoll is how often drain checks whether the output readers have gone silent.
 const pipeSilencePoll = 50 * time.Millisecond
 
@@ -28,6 +38,7 @@ type agentPipes struct {
 	stdinWritten   chan struct{}
 	outputs        []*outputPipe // stdout first, then stderr when it is a pipe
 	finished       chan struct{} // one value per output reader that returned
+	drainLimit     time.Duration // pipeDrainLimit; tests shorten it
 }
 
 // outputPipe is one output pipe and what its reader is doing.
@@ -42,7 +53,7 @@ type outputPipe struct {
 
 // attachAgentPipes connects cmd's stdin, stdout and, unless stderr is a file, its stderr to fresh pipes.
 func attachAgentPipes(cmd *exec.Cmd, stderr io.Writer) (*agentPipes, error) {
-	p := &agentPipes{stdinWritten: make(chan struct{})}
+	p := &agentPipes{stdinWritten: make(chan struct{}), drainLimit: pipeDrainLimit}
 	var err error
 	if p.stdinR, p.stdinW, err = os.Pipe(); err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
@@ -106,46 +117,64 @@ func (p *agentPipes) read(o *outputPipe, consume func(io.Reader) error) {
 	}()
 }
 
-// drain runs after the agent has exited. It stops the prompt write and reads every output pipe to its end, for
-// as long as data flows. Pipes that all stay silent for pipeGracePeriod are held open by a leftover descendant:
-// drain kills the agent's process group. If they are still open and silent another pipeGracePeriod later, their
-// holder left the group; drain then closes the read ends and reports the truncated output on stderr. It returns
-// the stdout reader's own error.
-func (p *agentPipes) drain(group *processGroup, stderr io.Writer) error {
+// drain runs after the agent has exited. It stops the prompt write and reads every output pipe to its end.
+// It kills the agent's process group when the pipes all stay silent for pipeGracePeriod (a leftover
+// descendant holds them), when drainLimit has passed since the agent exited (a descendant keeps writing), when
+// ctx is cancelled or when idle fires. After the kill it reads for pipeFlushPeriod more; pipes still open then
+// are held by a process outside the group: drain closes the read ends and reports the truncated output on
+// stderr. It returns ctx's error or ErrIdleTimeout when they stopped the drain, otherwise the stdout reader's
+// own error.
+func (p *agentPipes) drain(ctx context.Context, idle <-chan time.Time, group *processGroup, stderr io.Writer) error {
 	_ = p.stdinW.Close()
 	<-p.stdinWritten
 
 	poll := time.NewTicker(pipeSilencePoll)
 	defer poll.Stop()
-	silentFrom := time.Now()
-	groupKilled, truncated := false, false
+	exitedAt := time.Now()
+	var killedAt time.Time
+	kill := func() {
+		if killedAt.IsZero() {
+			group.signal(syscall.SIGKILL)
+			killedAt = time.Now()
+		}
+	}
+	done := ctx.Done()
+	var stopErr error
+	truncated := false
 	for remaining := len(p.outputs); remaining > 0; {
 		select {
 		case <-p.finished:
 			remaining--
+		case <-done:
+			stopErr, done = ctx.Err(), nil
+			kill()
+		case <-idle:
+			stopErr, idle = ErrIdleTimeout, nil
+			kill()
 		case <-poll.C:
-			if truncated || !p.silentFor(pipeGracePeriod, silentFrom) {
-				continue
-			}
-			if !groupKilled {
-				group.signal(syscall.SIGKILL)
-				groupKilled, silentFrom = true, time.Now()
-				continue
-			}
-			truncated = true
-			for _, o := range p.outputs {
-				_ = o.r.Close() // unblocks the reader with os.ErrClosed
+			if killedAt.IsZero() {
+				if p.silentFor(pipeGracePeriod, exitedAt) || time.Since(exitedAt) >= p.drainLimit {
+					kill()
+				}
+			} else if !truncated && time.Since(killedAt) >= pipeFlushPeriod {
+				truncated = true
+				for _, o := range p.outputs {
+					_ = o.r.Close() // unblocks the reader with os.ErrClosed
+				}
 			}
 		}
 	}
 	readErr := p.outputs[0].err
 	if truncated {
 		// Every reader has returned, so nothing else writes to stderr now.
-		_, _ = fmt.Fprintf(stderr, "afm: agent output truncated: a process outside the agent's process group "+
-			"kept its output pipe open %s after the agent exited\n", 2*pipeGracePeriod)
+		_, _ = fmt.Fprintf(stderr, "afm: agent output truncated: its output pipes were still open %s after the "+
+			"agent exited and its process group was killed\n", time.Since(exitedAt).Round(100*time.Millisecond))
 		if errors.Is(readErr, os.ErrClosed) {
 			readErr = nil
 		}
+	}
+	if stopErr != nil {
+		return stopErr
 	}
 	return readErr
 }
