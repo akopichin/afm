@@ -120,7 +120,7 @@ func TestTurnReply_AnswersTheLastNonPassiveMessage(t *testing.T) {
 	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
 		if calls.Add(1) == 1 {
 			close(firstTurn)
-			awaitRelease(o, release)
+			awaitRelease(t, release)
 		}
 		return passResultOutcome(), nil
 	}
@@ -164,7 +164,7 @@ func TestTurnReply_SkippedOnlyWhenTheAgentAnsweredTheWakingMessage(t *testing.T)
 	var first, second agentcomm.MessageID
 	added := make(chan struct{})
 	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
-		awaitRelease(o, added)
+		awaitRelease(t, added)
 		switch calls.Add(1) {
 		case 1:
 			sendAs(t, o, "op-own-answer", res.ThreadID, res.ParticipantID, meshUserParticipantID, "my own answer", &first, false)
@@ -208,7 +208,7 @@ func TestTurnReply_OwnReplyRacingTheFinishWins(t *testing.T) {
 	release := make(chan struct{})
 	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
 		close(started)
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	msg := "question"
@@ -274,7 +274,7 @@ func TestTurnReply_UndeliverableReplyFinishesTheTurnWithoutIt(t *testing.T) {
 			var thread agentcomm.ThreadID
 			ready := make(chan struct{})
 			o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
-				awaitRelease(o, ready)
+				awaitRelease(t, ready)
 				tc.duringTurn(t, o, thread)
 				return passResultOutcome(), nil
 			}
@@ -307,7 +307,7 @@ func TestDelegateMirror_RejectedMirrorStillFinishesTheChild(t *testing.T) {
 		case 1:
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		case 2:
-			awaitRelease(o, releaseChild)
+			awaitRelease(t, releaseChild)
 		default:
 		}
 		return passResultOutcome(), nil
@@ -506,7 +506,7 @@ func TestPassive_WaitingAgentIsResumedOnlyByWhatItWaitsFor(t *testing.T) {
 			var th agentcomm.ThreadID
 			ready := make(chan struct{})
 			o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
-				awaitRelease(o, ready)
+				awaitRelease(t, ready)
 				o.deliverRenderedInbox(a.ParticipantID)() // what the real executor does once the process starts
 				if calls.Add(1) == 1 {
 					th = openThread(t, o, "op-th", 0, a.ParticipantID, meshUserParticipantID)

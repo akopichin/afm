@@ -146,7 +146,7 @@ func TestSpawnKind_StampsKindSynchronously(t *testing.T) {
 	t.Cleanup(func() { close(blocked) })
 	// Pre-seed a STALE kind to model the planning→implementation window.
 	o.setRunnerKind("s1", kindPlanning)
-	o.spawnKind(ctx, o.opts.Stages[0], kindImplementation, func(context.Context, flow.Stage) { <-blocked })
+	o.spawnKind(ctx, o.opts.Stages[0], kindImplementation, func(context.Context, flow.Stage) { awaitRelease(t, blocked) })
 
 	if k := o.runnerKindOf("s1"); k != kindImplementation {
 		t.Fatalf("spawnKind must stamp the kind synchronously (overriding stale), got %q", k)

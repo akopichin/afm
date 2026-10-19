@@ -83,15 +83,15 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 	return o, store
 }
 
-// awaitRelease blocks a fake helper agent until the test closes release or the run ends, then lets it go on as
-// if released. newAssistantsTestOrchestrator's cleanup cancels the run context before it waits for the
-// helpers, so a test that fails before closing release does not leave a helper blocked through that wait. The
-// task's own context is deliberately not watched: a fake must keep running through CancelTask, as the tests
-// that check a late result after a cancel expect.
-func awaitRelease(o *Orchestrator, release <-chan struct{}) {
+// awaitRelease blocks a fake agent, helper or hook until the test closes release or the test ends, then lets
+// it go on as if released. t.Context is cancelled before any cleanup runs, so a test that fails before closing
+// release does not leave the fake blocked through the cleanup that waits for agents (cancelRun → WaitAgents),
+// whatever fixture built the orchestrator. Neither the task's nor the run's context is watched: a fake must
+// keep running through CancelTask and run-context swaps, as the tests of late results expect.
+func awaitRelease(t testing.TB, release <-chan struct{}) {
 	select {
 	case <-release:
-	case <-o.runContext(context.Background()).Done():
+	case <-t.Context().Done():
 	}
 }
 
@@ -105,7 +105,7 @@ func TestAssistantsTestOrchestrator_CleanupReleasesBlockedHelpers(t *testing.T) 
 		release, started := make(chan struct{}), make(chan struct{})
 		o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 			close(started)
-			awaitRelease(o, release)
+			awaitRelease(t, release)
 			return passResultOutcome(), nil
 		}
 		attachTestTask(context.Background(), t, o, "op-1")
@@ -517,7 +517,7 @@ func TestCancel_HasNoResultEvent(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -708,7 +708,7 @@ func TestPauseTask_SurvivesImmediateRequeueRace(t *testing.T) {
 	}
 
 	releaseOld := make(chan struct{})
-	o.taskRequeuePreDeferHook = func(assistants.TaskID) { <-releaseOld }
+	o.taskRequeuePreDeferHook = func(assistants.TaskID) { awaitRelease(t, releaseOld) }
 
 	taskID := attachTestTask(context.Background(), t, o, "op-1")
 	<-oldStarted
@@ -774,7 +774,7 @@ func TestParentDone_ClosesNewTriggers(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -1026,7 +1026,7 @@ func TestFinishTaskFrom_StorageErrorSetsFatal(t *testing.T) {
 
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 

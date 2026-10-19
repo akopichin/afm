@@ -27,7 +27,7 @@ func TestSpawnKind_StoresLeaseDuringRunAndDeletesAfter(t *testing.T) {
 		} else {
 			leaseSeen <- nil
 		}
-		<-release
+		awaitRelease(t, release)
 	})
 
 	select {

@@ -581,7 +581,7 @@ func TestAttachAndSend_FirstMessageResumesASatisfiedWait(t *testing.T) {
 	var waiter AttachAndSendResult
 	ready := make(chan struct{})
 	o.runHelperAgent = func(_ context.Context, taskID, _, _, _, _, _ string) (executor.HelperOutcome, error) {
-		awaitRelease(o, ready)
+		awaitRelease(t, ready)
 		if assistants.TaskID(taskID) == waiter.TaskID && calls.Add(1) == 1 {
 			o.deliverRenderedInbox(waiter.ParticipantID)()
 			if _, err := o.Wait(context.Background(), WaitRequest{OperationID: "op-wait-any", Waiter: waiter.ParticipantID,

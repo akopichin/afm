@@ -163,7 +163,7 @@ func TestRunBarrier_AcceptedWorkHoldsRun_ShutdownBounded(t *testing.T) {
 	release := make(chan struct{})
 	orchestrator.SetRunHelperAgentForTest(orch, func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		started <- taskID
-		<-release
+		orchestrator.AwaitReleaseForTest(t, release)
 		return passResultOutcome(), nil
 	})
 

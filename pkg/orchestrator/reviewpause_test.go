@@ -179,7 +179,7 @@ func markActiveForTest(t *testing.T, o *Orchestrator, stageID string) {
 	testActiveRelease.Store(stageID, releaseFn)
 	o.concurrency.SpawnAgent(context.Background(), flow.Stage{ID: stageID}, func(context.Context, flow.Stage) {
 		close(ready)
-		<-release
+		awaitRelease(t, release)
 	})
 	t.Cleanup(func() {
 		releaseFn()

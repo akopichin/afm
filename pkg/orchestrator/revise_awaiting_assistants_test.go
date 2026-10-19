@@ -136,7 +136,7 @@ func TestRevise_CancelsStaleAssistantTurns(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return executor.HelperOutcome{}, context.Canceled
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")

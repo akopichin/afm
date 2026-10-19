@@ -49,7 +49,7 @@ func TestCrash_QueuedChildNeverSpawnedBeforeCrash_RecoveredOnRestart(t *testing.
 
 	parentRelease := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-parentRelease // the parent's own turn — never completes before the simulated crash
+		awaitRelease(t, parentRelease) // the parent's own turn — never completes before the simulated crash
 		return passResultOutcome(), nil
 	}
 	parentID := attachTestTask(context.Background(), t, o, "op-parent")
@@ -131,7 +131,7 @@ func TestCrash_ChildResultRecordedBeforeParentContinuation_RecoveredOnRestart(t 
 		if calls == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		<-childRelease // the child's own turn — never completes through the normal path before the crash
+		awaitRelease(t, childRelease) // the child's own turn — never completes through the normal path before the crash
 		return passResultOutcome(), nil
 	}
 

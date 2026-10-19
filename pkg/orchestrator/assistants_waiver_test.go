@@ -120,7 +120,7 @@ func TestWaiver_UnblocksStageThroughNormalCascade(t *testing.T) {
 	// release is closed explicitly mid-test (below) once the task should resolve — no t.Cleanup double-close.
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(t, release)
 		return executor.HelperOutcome{ProcessOK: true, RawText: `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"fix it"}`}, nil
 	}
 	taskID := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-1")

@@ -152,7 +152,7 @@ func TestPublish_NoticeIsCommittedWithTheRevision(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true)
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 	t.Cleanup(func() { close(release); o.concurrency.WaitAgents() })

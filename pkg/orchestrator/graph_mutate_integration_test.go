@@ -63,7 +63,7 @@ func TestCommit_NewStageStartsViaExistingPaths(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	keepalive := &blockingOnceAutoRunner{release: make(chan struct{})}
+	keepalive := &blockingOnceAutoRunner{t: t, release: make(chan struct{})}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(),
 		Runner: keepalive,
@@ -99,6 +99,7 @@ func TestCommit_NewStageStartsViaExistingPaths(t *testing.T) {
 // built for: RunAgent blocks until release is closed, then marks the stage complete. Used to deterministically
 // park a stage in StatusRunning so a test can race something against its completion.
 type blockingOnceAutoRunner struct {
+	t       testing.TB
 	release chan struct{}
 }
 
@@ -107,7 +108,7 @@ func (r *blockingOnceAutoRunner) RunPlanning(context.Context, string, string, st
 }
 
 func (r *blockingOnceAutoRunner) RunAgent(_ context.Context, _, _, _, logFile string) error {
-	<-r.release
+	orchestrator.AwaitReleaseForTest(r.t, r.release)
 	stageDir := filepath.Dir(logFile)
 	return os.WriteFile(filepath.Join(stageDir, "execution_summary.md"), []byte("## Summary\ndone\n"), 0644)
 }
@@ -134,7 +135,7 @@ func TestAppend_RaceWithLastStageCompletion(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	runner := &blockingOnceAutoRunner{release: make(chan struct{})}
+	runner := &blockingOnceAutoRunner{t: t, release: make(chan struct{})}
 	orch := orchestrator.New(orchestrator.Options{
 		RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(), Runner: runner,
 	})

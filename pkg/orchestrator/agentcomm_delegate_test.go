@@ -31,7 +31,7 @@ func TestDelegate_ResultDeliveredThroughSharedMeshInbox(t *testing.T) {
 		case 1:
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		case 2:
-			<-releaseChild // the child holds until the parent got an ordinary peer message (part 2 below)
+			awaitRelease(t, releaseChild) // the child holds until the parent got an ordinary peer message (part 2 below)
 			return passResultOutcome(), nil
 		default:
 			resumedPrompt = prompt
@@ -109,7 +109,7 @@ func TestDelegate_StaleChildResultNotMirroredToParentInbox(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 

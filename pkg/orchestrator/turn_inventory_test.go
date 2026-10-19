@@ -225,7 +225,7 @@ func TestTurnInventory_DelegationClearsTheCache(t *testing.T) {
 		case 1:
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		case 2:
-			<-release // the child holds the parent in waiting_children
+			awaitRelease(t, release) // the child holds the parent in waiting_children
 		default:
 		}
 		return passResultOutcome(), nil

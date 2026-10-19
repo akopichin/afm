@@ -65,7 +65,7 @@ func TestWaitingChildren_PersistedWithExpectedSet(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory), childJSON(assistants.ModeAdvisory)), nil
 		}
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -116,10 +116,10 @@ func TestWaitingChildren_NewRequiredChildReopensReadiness(t *testing.T) {
 			}
 			return passResultOutcome(), nil
 		case store.Snapshot().Assistants.Tasks[assistants.TaskID(taskID)].Title == "late child":
-			<-release2
+			awaitRelease(t, release2)
 			return passResultOutcome(), nil
 		default:
-			<-release1
+			awaitRelease(t, release1)
 			return passResultOutcome(), nil
 		}
 	}
@@ -167,7 +167,7 @@ func TestWaitingChildren_NotAncestorInactive(t *testing.T) {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
 		childRan.Store(true)
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -199,7 +199,7 @@ func TestWaitingChildren_RestoredAfterRestart(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -332,7 +332,7 @@ func TestContinuation_WaivedChildUnblocksParentPass(t *testing.T) {
 		case 2: // the required child reports needs_changes, never pass
 			return executor.HelperOutcome{ProcessOK: true, RawText: `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"not done yet"}`}, nil
 		default: // the resumed parent's pass, this time legitimately unblocked by the waiver below
-			awaitRelease(o, resumeBlocked)
+			awaitRelease(t, resumeBlocked)
 			return passResultOutcome(), nil
 		}
 	}
@@ -370,7 +370,7 @@ func TestLease_ReleasedBeforeWaitingChildren(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -424,7 +424,7 @@ func TestWaitingChildren_DoesNotCountInActiveInvocations(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
@@ -451,7 +451,7 @@ func TestChildDeadlines_DoNotExtendParent(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		awaitRelease(o, release)
+		awaitRelease(t, release)
 		return passResultOutcome(), nil
 	}
 
