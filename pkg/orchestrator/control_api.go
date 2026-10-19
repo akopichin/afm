@@ -125,6 +125,10 @@ func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
 // "не создавать второй независимый способ перезапуска основного агента": manual notes and stage buttons keep
 // calling this exact function, unchanged.
 func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) (applied bool, seq uint64, err error) {
+	// The review-pause gate and the revise transition are one decision under flowPauseMu: PauseFlow cannot
+	// snapshot this stage between them and then lose it to the revise.
+	o.flowPauseMu.Lock()
+	defer o.flowPauseMu.Unlock()
 	if err := o.rejectIfReviewPaused(); err != nil {
 		return false, 0, err
 	}
@@ -148,7 +152,9 @@ func (o *Orchestrator) Revise(reqCtx context.Context, stageID, feedback string) 
 // save actually writes the stage's feedback.md.
 func (o *Orchestrator) reviseRunning(stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
-	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, reason)
+	// ExpectFrom: only a stage STILL running is revised — a Pause committed after the caller's status read wins
+	// (EvRevise also accepts paused). The same holds for the two branches below.
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{ExpectFrom: state.StatusRunning}, reason)
 	if !ok {
 		return false, 0, nil
 	}
@@ -176,7 +182,7 @@ func (o *Orchestrator) reviseRunning(stageID, reason string, save func(stageDir 
 // (TestRevise_InvalidatesPriorPass — mirrors TestBarrier_GenerationAwareCas's read-side proof).
 func (o *Orchestrator) reviseAwaitingAssistants(reqCtx context.Context, stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
-	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, reason)
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{ExpectFrom: state.StatusAwaitingAssistants}, reason)
 	if !ok {
 		return false, 0, nil
 	}
@@ -205,7 +211,7 @@ func (o *Orchestrator) reviseAwaitingAssistants(reqCtx context.Context, stageID,
 // reviseRunning above.
 func (o *Orchestrator) reviseAwaitingApproval(reqCtx context.Context, stageID, reason string, save func(stageDir string) error) (applied bool, seq uint64, err error) {
 	stageDir := filepath.Join(o.opts.RunDir, stageID)
-	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{}, reason)
+	_, seq, ok := o.triggerWithSeq(stageID, bus.EvRevise, bus.GuardCtx{ExpectFrom: state.StatusAwaitingApproval}, reason)
 	if !ok {
 		return false, 0, nil
 	}
