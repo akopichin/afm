@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/prompts"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // Agent Mesh Phase 4, T4.4: the <inbox> block and its delivery marking. A turn's prompt and the set of
@@ -113,16 +116,61 @@ func (o *Orchestrator) markInboxDelivered(participant agentcomm.ParticipantID, i
 // agentCommInboxForTask is renderInbox's helper-task-scoped wrapper, used by buildTaskContext (T4.3): the
 // task's unfinished turn input (if any) is rendered again together with its pending messages.
 func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
-	return o.renderInbox(o.taskMeshParticipant(taskID), o.loadTurnInbox(taskID))
+	return o.renderInbox(o.taskMeshParticipant(taskID), o.unfinishedTurnInput(taskID))
 }
 
-// turnInboxFileName holds the ids of the <inbox> messages handed to a task turn that has not finished yet.
-// The executor marks them delivered when the process starts; if the turn is then cut short (run shutdown,
-// Pause), its retry reads them back here, so the input that started the turn is not lost. The file is
-// removed once a turn's process ran to its end.
+// unfinishedTurnInput returns the messages handed to taskID's latest turn while that turn has not finished: the
+// executor marks them delivered when the process starts, so if the turn is cut short (run shutdown, a crash,
+// Pause) only this record hands them to its retry. The journal is the source (state.TaskState.TurnInbox); a
+// journal written before turns were recorded has no turn yet and falls back to the turn-inbox.json it left.
+func (o *Orchestrator) unfinishedTurnInput(taskID assistants.TaskID) []agentcomm.MessageID {
+	if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok && t.Turn > 0 {
+		return t.TurnInbox
+	}
+	return o.loadTurnInbox(taskID)
+}
+
+// startTurn records, before the process starts, the start of taskID's next turn and the messages handed to it
+// (inbox). It is a running→running task_status_changed with Turn/TurnInbox — the record kind that already marks
+// a task's progress, which an older binary still reads — never a new kind it would reject. turn-inbox.json is
+// refreshed as a cache of the same list. ok=false: the task is no longer running (cancelled meanwhile) or the
+// journal failed (handleTaskOperationErr ends the run); the turn must not start.
+func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.MessageID) (turn uint64, ok bool) {
+	t, found := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
+	if !found {
+		return 0, false
+	}
+	turn = t.Turn + 1
+	ids := make([]string, len(inbox))
+	for i, id := range inbox {
+		ids[i] = string(id)
+	}
+	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(assistants.StatusRunning), Turn: turn, TurnInbox: ids})
+	if err != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record the turn: "+err.Error())
+		return 0, false
+	}
+	op := state.Operation{
+		ID:      fmt.Sprintf("task-turn:%s:%d:%s", taskID, turn, randomOpSuffix()),
+		Kind:    "start_turn",
+		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusRunning}},
+		Effects: []state.Effect{eff},
+	}
+	if _, err := o.opts.Store.ApplyRunOperation(op, nil); err != nil {
+		o.handleTaskOperationErr(err)
+		return 0, false
+	}
+	if err := o.saveTurnInbox(taskID, inbox); err != nil {
+		log.Printf("assistants: task %s: write the turn-inbox cache: %v", taskID, err)
+	}
+	return turn, true
+}
+
+// turnInboxFileName is a cache of the latest unfinished turn's input (state.TaskState.TurnInbox) for a human
+// inspecting the task directory; afm reads it only for a journal written before turns were recorded.
 const turnInboxFileName = "turn-inbox.json"
 
-// saveTurnInbox records ids as taskID's unfinished turn input (or removes the record when there are none).
+// saveTurnInbox writes ids as the turn-inbox cache (or removes it when there are none).
 func (o *Orchestrator) saveTurnInbox(taskID assistants.TaskID, ids []agentcomm.MessageID) error {
 	if len(ids) == 0 {
 		return o.clearTurnInbox(taskID)
@@ -134,7 +182,7 @@ func (o *Orchestrator) saveTurnInbox(taskID assistants.TaskID, ids []agentcomm.M
 	return memory.AtomicWrite(filepath.Join(o.taskDir(taskID), turnInboxFileName), raw)
 }
 
-// clearTurnInbox forgets taskID's unfinished turn input: its turn ran to the end.
+// clearTurnInbox removes the turn-inbox cache: its turn ran to the end.
 func (o *Orchestrator) clearTurnInbox(taskID assistants.TaskID) error {
 	err := os.Remove(filepath.Join(o.taskDir(taskID), turnInboxFileName))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -143,7 +191,7 @@ func (o *Orchestrator) clearTurnInbox(taskID assistants.TaskID) error {
 	return err
 }
 
-// loadTurnInbox returns taskID's unfinished turn input; a missing or unreadable record means none.
+// loadTurnInbox reads the turn-inbox file; a missing or unreadable file means none.
 func (o *Orchestrator) loadTurnInbox(taskID assistants.TaskID) []agentcomm.MessageID {
 	raw, err := os.ReadFile(filepath.Join(o.taskDir(taskID), turnInboxFileName))
 	if err != nil {

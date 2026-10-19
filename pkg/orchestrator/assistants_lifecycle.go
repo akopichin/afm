@@ -183,8 +183,8 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
 		return
 	}
-	if werr := o.saveTurnInbox(taskID, tc.inboxIDs); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist turn inbox: "+werr.Error())
+	turn, started := o.startTurn(taskID, tc.inboxIDs)
+	if !started {
 		return
 	}
 
@@ -208,15 +208,15 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
 	// a helperAgentRunner that never calls OnDelivered — otherwise a run agent would see them as unseen forever
 	// and restart itself after every turn. A process that never started leaves them accepted for the next turn.
-	// Only a turn that ran to its end consumed its input: a cut-short one (run shutdown, Pause) keeps the
-	// turn-inbox record, so its retry is handed the same messages again.
+	// Only a turn that ran to its end consumed its input — and only together with the commit of its outcome
+	// (finishTaskTurn with consumed): a cut-short turn (run shutdown, Pause), or a crash before that commit,
+	// keeps the turn's inventory in the journal, so its retry is handed the same messages again.
+	var consumed uint64
 	if err == nil && outcome.ProcessOK {
 		if tc.markInboxDelivered != nil {
 			tc.markInboxDelivered()
 		}
-		if cerr := o.clearTurnInbox(taskID); cerr != nil {
-			log.Printf("assistants: task %s: forget finished turn input: %v", taskID, cerr)
-		}
+		consumed = turn
 	}
 	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
 		// Observation only — never changes the task's verdict (mirrors verify_tree_modified). Not an accusation
@@ -256,7 +256,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		if finalizedByOther {
 			return
 		}
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
 		return
 	}
 	switch {
@@ -265,7 +265,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// subprocess reaching here must not clobber it with a second, contradictory status.
 		return
 	case outcome.TimedOut:
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
 		return
 	case !outcome.ProcessOK:
 		// A PauseTask (or StopAndClarify, T4.7) on an ALREADY-RUNNING task cancels runCtx directly (not via
@@ -285,7 +285,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		_, pausedBeforeClassification := o.taskPausePending.LoadAndDelete(taskID)
 		_, clarifying := o.taskClarifyPending.LoadAndDelete(taskID)
 		if pausedBeforeClassification || clarifying || o.taskHeld(taskID) {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
+			o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
 			if !o.taskHeld(taskID) {
 				o.maybeScheduleTask(ctx, taskID)
 			}
@@ -294,7 +294,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			}
 			return
 		}
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
 		return
 	}
 
@@ -304,11 +304,11 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// classified BEFORE the executor's "no final answer" protocol error is looked at. This task's own
 	// concurrency lease is released simply by this function returning next.
 	if o.turnYielded(waiter, waitsBefore, outcome.RawText) {
-		o.parkYieldedTurn(ctx, taskID, waiter, waitsBefore)
+		o.parkYieldedTurn(ctx, taskID, consumed, waiter, waitsBefore)
 		return
 	}
 	if outcome.ProtocolErr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
 		return
 	}
 
@@ -317,7 +317,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's
 		// §9.3 acceptance criterion), regardless of how plausible the raw text looks. Mechanical repair has
 		// already been tried and failed — decErr is the ORIGINAL strict decode error.
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
 		return
 	}
 	if repaired {
@@ -330,18 +330,18 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// T4a.3: admit the requested children and move this task to waiting_children — never treated as a
 		// completed check (assistants.Envelope.ClosesRequiredGate is false for kind:"delegate" by
 		// construction, T4a.1).
-		o.handleDelegate(ctx, taskID, tc.Version, *env.Delegate)
+		o.handleDelegate(ctx, taskID, consumed, tc.Version, *env.Delegate)
 		return
 	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind")
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind")
 		return
 	}
 	if env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
 		// dev-plan.md's TestResult_ConsistencyWithRequiredChildren: a required child that has not (yet, or
 		// ever will) reached verdict:"pass" keeps this gate closed — the model's own claimed "pass" text does
 		// not override it.
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: verdict:\"pass\" with an unresolved required child")
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: verdict:\"pass\" with an unresolved required child")
 		return
 	}
 
@@ -352,7 +352,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	result.ContextVersion = tc.Version
 	result.Repaired = repaired
 	if werr := o.persistTaskResult(dir, result); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
 		return
 	}
 	// The decoded result is attached as a SECOND effect of the SAME finish operation — never a separate
@@ -360,7 +360,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// result event does not exist yet (see finishTaskFrom's extra doc comment).
 	resultEff, eerr := taskResultEffect(taskID, result)
 	if eerr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
 		return
 	}
 
@@ -373,7 +373,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	if isWatcherTrigger(task.Trigger) {
 		_, final := o.taskFinalPass.LoadAndDelete(taskID)
 		if !final {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWatching, "", resultEff)
+			o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusWatching, "", resultEff)
 			return
 		}
 	}
@@ -381,11 +381,11 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// state.RunBlocker) rather than completed, and the next message addressed to it starts its next turn
 	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away.
 	if task.Scope == assistants.ScopeRun {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, resultEff)
+		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, resultEff)
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}
-	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+	o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
 }
 
 // meshWaitIDsOf returns the ids of every mesh wait waiter has registered so far, whatever their status.
@@ -399,13 +399,13 @@ func (o *Orchestrator) meshWaitIDsOf(waiter agentcomm.ParticipantID) map[agentco
 	return ids
 }
 
-// parkYieldedTurn parks a yielded task in waiting_peer and closes the ready-before-park window: a reply (or a
+// parkYieldedTurn parks a yielded task in waiting_peer — ending turn, which consumed its input — and closes the ready-before-park window: a reply (or a
 // counter-question) may have landed while the process was finishing, when the task was still running and the
 // resume Send attempted was a no-op. Nobody else will resume it now, so it re-checks through the same
 // CAS-protected resumes Send uses — a resume that already won makes them no-ops. A wait the run closed
 // (closeRemainingMeshWaits) never resumes anybody.
-func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool) {
-	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, turn uint64, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool) {
+	o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
 	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
 		if w.Waiter == waiter && !waitsBefore[id] && w.Status == agentcomm.WaitRunClosed {
 			return

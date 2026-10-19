@@ -60,7 +60,13 @@ func taskCreatedEffect(taskID assistants.TaskID, stageID string, p state.TaskCre
 }
 
 func taskStatusEffect(taskID assistants.TaskID, status assistants.TaskStatus, reason string) (state.Effect, error) {
-	raw, err := json.Marshal(state.TaskStatusChangedPayload{Status: string(status), Reason: reason})
+	return taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(status), Reason: reason})
+}
+
+// taskStatusChangeEffect is taskStatusEffect with the whole payload — for a status change that also starts or
+// ends a turn (TaskStatusChangedPayload.Turn/TurnInbox).
+func taskStatusChangeEffect(taskID assistants.TaskID, p state.TaskStatusChangedPayload) (state.Effect, error) {
+	raw, err := json.Marshal(p)
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_status_changed payload: %w", err)
 	}
@@ -433,7 +439,14 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 // "completed" status land in one atomic control record (T2.4's "all effects of one operation commit
 // together" invariant). The failure/cancel/requeue call sites all pass none.
 func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assistants.TaskStatus, reason string, extra ...state.Effect) {
-	eff, err := taskStatusEffect(taskID, to, reason)
+	o.finishTaskTurn(taskID, 0, from, to, reason, extra...)
+}
+
+// finishTaskTurn is finishTaskFrom for a commit that also ends turn — a turn whose process ran to its end, so
+// its input is consumed together with the outcome this commit records (state.TaskState.TurnInbox). turn 0 ends
+// no turn: a cut-short turn keeps its input for the retry.
+func (o *Orchestrator) finishTaskTurn(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, extra ...state.Effect) {
+	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
 	if err != nil {
 		return
 	}
@@ -500,5 +513,10 @@ func (o *Orchestrator) finishTaskFrom(taskID assistants.TaskID, from, to assista
 		// it the same way any other mesh write does.
 		o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
 	})
+	if err == nil && turn > 0 {
+		if cerr := o.clearTurnInbox(taskID); cerr != nil {
+			log.Printf("assistants: task %s: drop the finished turn's inbox cache: %v", taskID, cerr)
+		}
+	}
 	o.handleTaskOperationErr(err)
 }

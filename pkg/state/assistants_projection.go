@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 )
 
@@ -55,6 +56,13 @@ type TaskState struct {
 	// ResultSeq is the seq of the most recently projected task_result record (0 if none) — tells a result
 	// recorded after a task_result wait was registered from an earlier one (MeshWait.ResultBaseline).
 	ResultSeq uint64 `json:"result_seq,omitempty"`
+	// Turn is the number of the task's latest started turn (0 before the first one, and in a journal written
+	// before turns were recorded). TurnInbox is the inventory of that turn: the ids of the mesh messages handed
+	// to it, kept while the turn has not finished so a retry after Pause or a crash is handed them again, and
+	// cleared by the status change that commits the turn's outcome. Both come from task_status_changed
+	// records (TaskStatusChangedPayload.Turn/TurnInbox).
+	Turn      uint64                `json:"turn,omitempty"`
+	TurnInbox []agentcomm.MessageID `json:"turn_inbox,omitempty"`
 	// Waived/WaiverReason/WaivedBy/WaivedAt (Этап 7, T7.6) record a human's explicit decision to accept the
 	// risk of this required task never closing its own gate — a SEPARATE, audited operation (kindTaskWaived),
 	// never a side effect of cancel/retry/any task_result. Once Waived, RequiredBlocker treats this task's
@@ -437,6 +445,13 @@ type TaskCreatedPayload struct {
 type TaskStatusChangedPayload struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+	// Turn and TurnInbox record a helper turn's inventory on the record kind that already marks a task's
+	// progress, so a journal stays readable by an older binary (it ignores both). A "running" record with Turn
+	// starts that turn, handed the messages TurnInbox lists; a record with any other status and the same Turn
+	// ends it — the turn ran to its end and its outcome is committed with this record. A record without Turn
+	// ends no turn.
+	Turn      uint64   `json:"turn,omitempty"`
+	TurnInbox []string `json:"turn_inbox,omitempty"`
 }
 
 // TaskHoldPayload is the task_hold_set/task_hold_cleared control records' shared payload — decoded here by
@@ -672,6 +687,18 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	}
 	if status.Terminal() {
 		t.FinishedAt = c.Time
+	}
+	switch {
+	case p.Turn == 0:
+	case status == assistants.StatusRunning:
+		t.Turn = p.Turn
+		t.TurnInbox = nil
+		for _, m := range p.TurnInbox {
+			t.TurnInbox = append(t.TurnInbox, agentcomm.MessageID(m))
+		}
+	case p.Turn == t.Turn:
+		t.TurnInbox = nil
+	default: // a stale turn number ends nothing
 	}
 	as.resolveTaskResultWaits(id)
 	return nil

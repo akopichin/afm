@@ -238,6 +238,12 @@ stay pending and their deadlines keep running after `afm run` resumes it; only a
 run that finishes closes them. A rejected call reports why
 (for example an unknown recipient) instead of a generic server error.
 
+Each helper or run-agent turn is numbered in the run's journal together with
+the messages it was handed, before its process starts. A turn cut short by
+Pause, Ctrl+C or a crash, before its outcome was recorded, is retried with the
+same messages; a turn whose outcome was recorded does not get them again.
+`turn-inbox.json` in the task directory is only a copy for inspection.
+
 Secret values are replaced before they are stored or shown. This covers message
 bodies and artifact references, board statuses and artifact references,
 discussion posts, a helper's title and instruction, every text field of its

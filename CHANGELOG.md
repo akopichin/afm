@@ -5,6 +5,16 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: a helper turn interrupted after its process ended keeps its messages
+
+A helper's turn input used to live only in `turn-inbox.json`, and the file was
+deleted before the turn's result was recorded. If afm stopped in between, the
+retried turn lost the messages that had started it. Each turn is now numbered
+in the journal with the messages it was handed, before its process starts, and
+that input is consumed together with the turn's recorded outcome.
+`turn-inbox.json` is kept as a copy. Runs written by an older afm still resume
+from that file.
+
 ### Fix: secrets no longer leak through helper results, logs and artifact references
 
 Secret values were replaced in message bodies but not everywhere else. They are
