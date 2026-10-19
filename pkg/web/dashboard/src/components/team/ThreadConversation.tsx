@@ -326,7 +326,7 @@ function MessageRow({ message, participants, answered }: { message: MeshMessage;
               <span className="team-conversation-reply-quote-text">{messageText(answered.body, answered.sender_id !== 'user')}</span>
             </blockquote>
           )}
-          <AgentMessageBody body={message.body} fromAgent={!fromYou} />
+          <AgentMessageBody body={message.body} fromAgent={!fromYou} autoResult={message.auto_result === true} />
         </div>
       </div>
     </li>

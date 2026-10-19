@@ -29,6 +29,7 @@ function toMessage(w: DiscussionMessageWire): DiscussionMessage {
     body: w.body ?? '',
     mentions: w.mentions,
     unanswered: w.unanswered,
+    autoResult: w.auto_result,
     createdAt: w.created_at,
   }
 }

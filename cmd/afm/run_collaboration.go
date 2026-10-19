@@ -354,7 +354,7 @@ func (d collaborationDiscussion) Messages(stageID string, cursor uint64, limit i
 			ID: m.ID, AuthorKind: string(m.Author.Kind), AuthorID: m.Author.ID, Role: m.Role,
 			Executor: m.Executor, Round: m.Round, ParentMessageID: m.ParentMessageID,
 			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, Mentions: m.Mentions,
-			Interrupt: m.Interrupt, Unanswered: unanswered[m.ID], CreatedAt: m.CreatedAt,
+			Interrupt: m.Interrupt, Unanswered: unanswered[m.ID], AutoResult: m.AutoResult, CreatedAt: m.CreatedAt,
 		})
 	}
 	return out, uint64(end), end < len(all), nil

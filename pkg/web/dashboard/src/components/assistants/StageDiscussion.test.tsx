@@ -17,6 +17,11 @@ function makeMessage(overrides: Partial<DiscussionMessage> = {}): DiscussionMess
 }
 
 describe('StageDiscussion', () => {
+  test("an agent's turn result afm posted shows the turn result tag", () => {
+    render(<StageDiscussion messages={[makeMessage({ autoResult: true, body: 'checked it' })]} />)
+    expect(screen.getByText('turn result')).toBeInTheDocument()
+  })
+
   test('empty state', () => {
     render(<StageDiscussion messages={[]} />)
     expect(screen.getByText(/no discussion yet/i)).toBeInTheDocument()

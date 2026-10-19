@@ -87,6 +87,8 @@ export type MeshMessage = {
   in_reply_to?: string
   body: string
   artifact_refs?: string[]
+  // auto_result — afm posted this as an agent's turn result (a passive reply that wakes nobody).
+  auto_result?: boolean
   seq: number
   created_at: string
 }

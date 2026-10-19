@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, test } from 'vitest'
-import { AgentMessageBody } from './AgentMessageBody'
+import { AgentMessageBody, TURN_RESULT_TOOLTIP } from './AgentMessageBody'
 
 const RESULT = '{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"Two tests fail."}'
 
@@ -17,6 +17,17 @@ describe('AgentMessageBody', () => {
     render(<AgentMessageBody body={RESULT} fromAgent={false} />)
     expect(screen.getByText(RESULT)).toBeInTheDocument()
     expect(screen.queryByText('Needs changes')).toBeNull()
+  })
+
+  test('a turn result afm posted carries the "turn result" tag with its explanation', () => {
+    render(<AgentMessageBody body="checked the flow" fromAgent autoResult />)
+    expect(screen.getByText('turn result')).toHaveAttribute('title', TURN_RESULT_TOOLTIP)
+    expect(screen.getByText('checked the flow')).toBeInTheDocument()
+  })
+
+  test('an ordinary message has no "turn result" tag', () => {
+    render(<AgentMessageBody body="working on it" fromAgent />)
+    expect(screen.queryByText('turn result')).toBeNull()
   })
 
   test('plain text is shown as is', () => {

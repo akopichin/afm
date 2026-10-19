@@ -933,6 +933,19 @@
 }
 .agent-result-verdict[data-verdict='pass'] { color: var(--success); border-color: rgba(var(--success-rgb), 0.4); }
 .agent-result-verdict[data-verdict='needs_changes'] { color: var(--attention); border-color: rgba(var(--attention-rgb), 0.4); }
+/* "turn result" tag: afm posted the agent's turn result as its reply (auto_result) — it woke nobody. */
+.agent-turn-result-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--separator-subtle);
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--text-muted);
+  vertical-align: baseline;
+  cursor: help;
+}
 .agent-result-raw { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
 .agent-result-raw > summary { cursor: pointer; }
 .agent-result-raw > pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); }

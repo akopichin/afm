@@ -465,7 +465,7 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
               <li key={m.id} className="mesh-message-thread-item">
                 <span className="mesh-message-thread-sender">{senderLabel(m.sender_id, mesh.roster.participants)}</span>
                 <span className="mesh-message-thread-body">
-                  <AgentMessageBody body={m.body} fromAgent={m.sender_id !== 'user'} />
+                  <AgentMessageBody body={m.body} fromAgent={m.sender_id !== 'user'} autoResult={m.auto_result === true} />
                 </span>
                 {/* Your own message has nobody to address back: Reply is offered on others' messages only. */}
                 {m.sender_id !== 'user' && (
