@@ -79,8 +79,9 @@ func TestRoster_ParticipantCommandAndReadonlyEnforcement(t *testing.T) {
 	}
 }
 
-// A finished task keeps the guarantee it ran under; a live one gets what the current environment gives its
-// command (here the host or a container without the codex read-only adapter: "none").
+// A finished task shows the guarantee its last turn ran under (recorded at the turn's start; an older journal
+// falls back to the admission snapshot); a live one gets what the current environment gives its command (here
+// the host or a container without the codex read-only adapter: "none").
 func TestEffectiveReadonlyEnforcement(t *testing.T) {
 	task := func(status assistants.TaskStatus) *state.TaskState {
 		return &state.TaskState{Task: assistants.Task{
@@ -89,7 +90,12 @@ func TestEffectiveReadonlyEnforcement(t *testing.T) {
 		}}
 	}
 	if got := effectiveReadonlyEnforcement(task(assistants.StatusCompleted), config.Config{}); got != string(assistants.ReadonlyEnforcementOS) {
-		t.Errorf("finished task = %q, want its admission-time os", got)
+		t.Errorf("finished task from an older journal = %q, want its admission-time os", got)
+	}
+	ranWithout := task(assistants.StatusCompleted)
+	ranWithout.TurnReadonlyEnforcement = assistants.ReadonlyEnforcementNone
+	if got := effectiveReadonlyEnforcement(ranWithout, config.Config{}); got != string(assistants.ReadonlyEnforcementNone) {
+		t.Errorf("finished task = %q, want the none its last turn ran under", got)
 	}
 	if got := effectiveReadonlyEnforcement(task(assistants.StatusRunning), config.Config{}); got != string(assistants.ReadonlyEnforcementNone) {
 		t.Errorf("live task = %q, want the current environment's none", got)

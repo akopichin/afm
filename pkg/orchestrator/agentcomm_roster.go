@@ -194,8 +194,9 @@ func (o *Orchestrator) withStageConfig(p agentcomm.Participant, s flow.Stage) ag
 
 // withEffectiveReadonly sets the read-only guarantee a task-backed participant's badge shows. A live task
 // runs its next turn in THIS process's environment, so it gets the guarantee that environment gives its
-// command now (a host run resumed in a container loses the OS sandbox); a finished task keeps the guarantee
-// it ran under. The admission-time value stays in AdmittedReadonlyEnforcement.
+// command now (a host run resumed in a container loses the OS sandbox); a finished task shows the guarantee
+// its last turn ran under, recorded at that turn's start (an older journal has only the admission snapshot).
+// The admission-time value stays in AdmittedReadonlyEnforcement.
 func (o *Orchestrator) withEffectiveReadonly(p agentcomm.Participant, t *state.TaskState) agentcomm.Participant {
 	p.ReadonlyEnforcement = effectiveReadonlyEnforcement(t, o.opts.Config)
 	return p
@@ -203,6 +204,9 @@ func (o *Orchestrator) withEffectiveReadonly(p agentcomm.Participant, t *state.T
 
 func effectiveReadonlyEnforcement(t *state.TaskState, cfg config.Config) string {
 	if t.Status.Terminal() {
+		if t.TurnReadonlyEnforcement != "" {
+			return string(t.TurnReadonlyEnforcement)
+		}
 		return string(t.ProfileSnapshot.ReadonlyEnforcement)
 	}
 	return config.HelperReadonlyEnforcement(t.ProfileSnapshot.Command, cfg)

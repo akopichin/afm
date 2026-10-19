@@ -63,6 +63,11 @@ type TaskState struct {
 	// records (TaskStatusChangedPayload.Turn/TurnInbox).
 	Turn      uint64                `json:"turn,omitempty"`
 	TurnInbox []agentcomm.MessageID `json:"turn_inbox,omitempty"`
+	// TurnReadonlyEnforcement is the read-only guarantee the latest turn actually ran under — the environment's
+	// at its start (TaskStatusChangedPayload.ReadonlyEnforcement), which can differ from the admission-time
+	// ProfileSnapshot.ReadonlyEnforcement after a resume in another environment. "" before the first recorded
+	// turn and in an older journal.
+	TurnReadonlyEnforcement assistants.ReadonlyEnforcement `json:"turn_readonly_enforcement,omitempty"`
 	// Waived/WaiverReason/WaivedBy/WaivedAt (Этап 7, T7.6) record a human's explicit decision to accept the
 	// risk of this required task never closing its own gate — a SEPARATE, audited operation (kindTaskWaived),
 	// never a side effect of cancel/retry/any task_result. Once Waived, RequiredBlocker treats this task's
@@ -452,6 +457,9 @@ type TaskStatusChangedPayload struct {
 	// ends no turn.
 	Turn      uint64   `json:"turn,omitempty"`
 	TurnInbox []string `json:"turn_inbox,omitempty"`
+	// ReadonlyEnforcement — on a turn start only: the read-only guarantee the environment gives the turn
+	// ("os"/"none"), recorded because the admission snapshot no longer says it after a resume elsewhere.
+	ReadonlyEnforcement string `json:"readonly_enforcement,omitempty"`
 }
 
 // TaskHoldPayload is the task_hold_set/task_hold_cleared control records' shared payload — decoded here by
@@ -692,6 +700,7 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	case p.Turn == 0:
 	case status == assistants.StatusRunning:
 		t.Turn = p.Turn
+		t.TurnReadonlyEnforcement = assistants.ReadonlyEnforcement(p.ReadonlyEnforcement)
 		t.TurnInbox = nil
 		for _, m := range p.TurnInbox {
 			t.TurnInbox = append(t.TurnInbox, agentcomm.MessageID(m))

@@ -75,6 +75,15 @@ Before, such a process could keep the turn open until the idle timeout or keep
 changing the project after a failed turn. Cancelling a run stops an agent's
 background processes too.
 
+### Fix: the sandbox a helper is told about is the one it runs in
+
+A helper's prompt now states the read-only sandbox of the environment its turn
+runs in, not the one it was admitted under: a task admitted on the host and
+resumed in a container is no longer told it cannot write. Each turn records
+that guarantee (`readonly_enforcement` on the turn's `task_status_changed`),
+and People and Team show a finished task with the guarantee its last turn ran
+under.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was

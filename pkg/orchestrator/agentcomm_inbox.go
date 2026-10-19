@@ -131,7 +131,7 @@ func (o *Orchestrator) unfinishedTurnInput(taskID assistants.TaskID) []agentcomm
 }
 
 // startTurn records, before the process starts, the start of taskID's next turn and the messages handed to it
-// (inbox). It is a running→running task_status_changed with Turn/TurnInbox — the record kind that already marks
+// (inbox), and the read-only guarantee it runs under. It is a running→running task_status_changed with Turn/TurnInbox — the record kind that already marks
 // a task's progress, which an older binary still reads — never a new kind it would reject. turn-inbox.json is
 // refreshed as a cache of the same list. ok=false: the task is no longer running (cancelled meanwhile) or the
 // journal failed (handleTaskOperationErr ends the run); the turn must not start.
@@ -145,7 +145,10 @@ func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.Mes
 	for i, id := range inbox {
 		ids[i] = string(id)
 	}
-	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(assistants.StatusRunning), Turn: turn, TurnInbox: ids})
+	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{
+		Status: string(assistants.StatusRunning), Turn: turn, TurnInbox: ids,
+		ReadonlyEnforcement: o.currentReadonlyEnforcement(t.Task),
+	})
 	if err != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record the turn: "+err.Error())
 		return 0, false

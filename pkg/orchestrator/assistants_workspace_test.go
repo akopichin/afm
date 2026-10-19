@@ -102,7 +102,7 @@ func TestTaskContext_WorkspaceSection_ReadOnlySandbox(t *testing.T) {
 	o.opts.RootDir = t.TempDir()
 	taskID := assistants.TaskID("t-readonly")
 	task := assistants.Task{ID: taskID, RootStageID: assistantsTestStageID, Instruction: "review",
-		ProfileSnapshot: assistants.Profile{ReadonlyEnforcement: assistants.ReadonlyEnforcementOS}}
+		ProfileSnapshot: assistants.Profile{Command: "codex-as-claude", ReadonlyEnforcement: assistants.ReadonlyEnforcementOS}}
 
 	tc, err := o.buildTaskContext(task, *o.reg().Stage(assistantsTestStageID))
 	if err != nil {
@@ -113,6 +113,47 @@ func TestTaskContext_WorkspaceSection_ReadOnlySandbox(t *testing.T) {
 	}
 	if strings.Contains(tc.Prompt, "keep your notes and temporary files there") {
 		t.Fatalf("a read-only helper must not be offered a scratch it cannot write:\n%s", tc.Prompt)
+	}
+}
+
+// TestTaskContext_WorkspaceSection_SandboxFromCurrentEnvironment: the sandbox claim follows the environment the
+// turn runs in now, not the admission snapshot — a task admitted on the host under the codex read-only sandbox
+// and resumed in a container has no OS sandbox, so it is offered its scratch directory instead.
+func TestTaskContext_WorkspaceSection_SandboxFromCurrentEnvironment(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "1")
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	o.opts.RootDir = t.TempDir()
+	task := assistants.Task{ID: "t-resumed", RootStageID: assistantsTestStageID, Instruction: "review",
+		ProfileSnapshot: assistants.Profile{Command: "codex-as-claude", ReadonlyEnforcement: assistants.ReadonlyEnforcementOS}}
+
+	tc, err := o.buildTaskContext(task, *o.reg().Stage(assistantsTestStageID))
+	if err != nil {
+		t.Fatalf("buildTaskContext: %v", err)
+	}
+	if strings.Contains(tc.Prompt, "read-only sandbox") {
+		t.Fatalf("a helper without an OS sandbox now must not be told it runs in one:\n%s", tc.Prompt)
+	}
+	if !strings.Contains(tc.Prompt, "keep your notes and temporary files there") {
+		t.Fatalf("a helper that can write must be offered its scratch directory:\n%s", tc.Prompt)
+	}
+}
+
+// TestHelperTurn_RecordsTheSandboxItRanUnder: the turn-start record carries the read-only guarantee the turn
+// actually ran under — the current environment's (a container: none), not the admission snapshot's.
+func TestHelperTurn_RecordsTheSandboxItRanUnder(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "1")
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+
+	taskID := attachTestTask(context.Background(), t, o, "op-sandbox")
+	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
+	o.concurrency.WaitAgents()
+
+	if got := store.Snapshot().Assistants.Tasks[taskID].TurnReadonlyEnforcement; got != assistants.ReadonlyEnforcementNone {
+		t.Fatalf("turn read-only enforcement = %q, want the container's none", got)
 	}
 }
 

@@ -59,6 +59,13 @@ value.
   on the agent's behalf. Such a message waits in the recipient's inbox but never
   wakes it. A message from an older journal has no `auto_result` and is an
   ordinary message that wakes its recipient, exactly as before.
+- `readonly_enforcement` on the `task_status_changed` record that starts a
+  helper turn (`os` or `none`, omitted when empty) is the read-only guarantee
+  the environment gave that turn. It can differ from the guarantee recorded
+  when the task was admitted: a task admitted on the host under the Codex
+  sandbox and resumed in a container has none. The roster shows a finished
+  task with the value of its last turn; a task from an older journal shows the
+  admission-time value.
 - `origin_stage` on `mesh_thread_opened` (a stage id, omitted when empty) is the
   stage the conversation was opened from: the sending agent's stage, the stage
   whose feed the human opened it in, or the stage of a Discussion thread. The

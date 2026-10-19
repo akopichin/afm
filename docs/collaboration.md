@@ -57,7 +57,10 @@ commit the branch forked from; otherwise `HEAD`), and its own scratch directory.
 The scratch directory is also in `$AFM_SCRATCH_DIR`; it is meant for the
 helper's notes and temporary files. A helper in the host's read-only sandbox
 (the `codex-as-claude` adapter) cannot write it — nor anything else — so its
-prompt says so and asks for notes in its answer instead.
+prompt says so and asks for notes in its answer instead. This follows the
+environment each turn runs in: a task admitted on the host and resumed in a
+container is told it can write, and a finished task's badge shows the
+guarantee its last turn ran under.
 
 What stops a helper from changing project files depends on where it runs, not
 on its prompt:

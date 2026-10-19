@@ -58,3 +58,44 @@ func TestTaskTurn_InventoryProjectsLiveAndOnReplay(t *testing.T) {
 	}
 	check(replayed, 2, nil)
 }
+
+// TestTaskTurn_ReadonlyEnforcementProjectsLiveAndOnReplay: a turn-start record names the read-only guarantee the
+// turn runs under; the task keeps the latest one, a status change without a turn leaves it, and replay agrees.
+func TestTaskTurn_ReadonlyEnforcementProjectsLiveAndOnReplay(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	created := taskCreatedControl("op-1", "t1", "a", nil)
+	created.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "reviewer"})
+	if err := store.AppendControl(created); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []TaskStatusChangedPayload{
+		{Status: "running"},
+		{Status: "running", Turn: 1, ReadonlyEnforcement: "os"},
+		{Status: "queued", Turn: 1},
+		{Status: "running"},
+		{Status: "running", Turn: 2, ReadonlyEnforcement: "none"},
+		{Status: "completed", Turn: 2},
+	} {
+		c := &Control{Kind: "task_status_changed", SchemaVersion: ControlSchemaVersion, Target: Target{TaskID: "t1"}, Payload: mustMarshal(t, p)}
+		if err := store.AppendControl(c); err != nil {
+			t.Fatalf("AppendControl(%+v): %v", p, err)
+		}
+	}
+	if got := store.Snapshot().Assistants.Tasks["t1"].TurnReadonlyEnforcement; got != "none" {
+		t.Fatalf("live turn enforcement = %q, want the last turn's none", got)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	if got := replayed.Assistants.Tasks["t1"].TurnReadonlyEnforcement; got != "none" {
+		t.Fatalf("replayed turn enforcement = %q, want none", got)
+	}
+}
