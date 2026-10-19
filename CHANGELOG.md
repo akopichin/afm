@@ -96,7 +96,11 @@ unknown profile of a member not added yet stops `afm run` at preflight and fails
 `afm validate` (which checks the flow as a fresh run); with collaboration
 disabled, afm warns and runs the flow without the team. A member that keeps
 losing its `@name` to agents added from the dashboard at the same moment stops
-startup instead of being dropped. The flow schema covers the new key.
+startup instead of being dropped. Request ids starting with `team/` are
+reserved for the team: an attach from the dashboard or the API under such an id
+is refused, and an older operation under it that the team did not create is
+reported instead of being taken for the member's agent. The flow schema covers
+the new key.
 
 ### Fix: a stage continues when its waits are answered before it exits
 
@@ -115,7 +119,20 @@ Pause, Continue or Revise that lands while the process is exiting wins: the
 stale exit neither parks nor completes the stage (also not the park of the
 process that replaced it), a Revise of that turn runs exactly one feedback
 turn, and a continuation queued for an earlier park is dropped instead of
-resuming the next one.
+resuming the next one. A parked stage (`awaiting_peer`) can be paused through
+`POST /api/stages/{id}/pause`; it keeps its waits, and Continue resumes it if
+one was answered meanwhile. A stage whose process stopped right after
+`afm agent wait` answered `yield`, before the park, is parked on those waits at
+the next start instead of rerunning its agent or finishing from a completion
+marker.
+
+### Fix: a stage post that mentions a finished agent is refused
+
+A stage post that mentions someone who can no longer read it — a stage or
+helper that finished, also after you opened the `@` list — is refused with the
+reason, under the same lock that commits the post, instead of being recorded
+as sent with an undeliverable receipt. A post to the feed's own finished stage
+is still recorded, as before.
 
 ### Fix: only a recipient answers a `reply_to` wait
 

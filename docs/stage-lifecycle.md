@@ -55,7 +55,9 @@ On a repeated `afm run`, the tool automatically:
 - Rechecks the required-helper gate for stages in `awaiting_assistants`, without
   rerunning their completed main agent
 - Restores pending Agent Mesh waits for stages in `awaiting_peer` and resumes the
-  stage when its wait resolves
+  stage when its wait resolves; a `running` stage whose turn had already
+  yielded on waits (`afm agent wait` answered `yield`) is parked on them
+  instead of restarted
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
 - Preserves stages in `awaiting_user_input`: question/answer files survive the

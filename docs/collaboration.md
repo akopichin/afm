@@ -193,6 +193,8 @@ every message from you, even with a short status update, but this is not
 guaranteed: if a stage finishes without replying, the post is marked **Not
 answered** and the feed gets a notice. A post to a stage that has already
 finished does not reach its agent, though it still reaches anyone you mention.
+A post that mentions someone who can no longer read it — a stage or helper that
+has finished — is refused with the reason instead, and nothing is sent.
 While the stage is running, you can turn on **Interrupt agent** before you send
 a new message to the stage agent.
 If the agent is working, it stops its current turn, answers your post as a
@@ -405,7 +407,13 @@ continues on the same rule, also when one of them was answered by a turn
 result and another is still open. If you pause, continue or revise the stage
 while that process is exiting, your action wins: the old process neither parks
 nor completes the stage, a revise of its turn starts exactly one feedback turn,
-and a continuation decided for an earlier park never resumes a later one.
+and a continuation decided for an earlier park never resumes a later one. A
+parked stage (`awaiting_peer`) can be paused too: it keeps the waits it parked
+for, an answer that arrives while it is paused waits, and **Continue** resumes
+it if an answer is there (or keeps it parked). If afm stops after `afm agent
+wait` answered `yield` but before the stage was parked, the next `afm run` parks
+it on those waits instead of rerunning the agent or finishing the stage from a
+completion marker the turn left behind.
 
 ## Add a stage during a run
 

@@ -32,7 +32,10 @@ stages:
       When the code builds and `go test ./...` passes, ask the team for a review:
 
       1. Run `afm agent list` and find the aliases of the two reviewers, by
-         default `architecture` and `qa`.
+         default `architecture` and `qa`. If it reports that messaging is
+         unavailable (collaboration is off, so there is no team), skip the
+         review: finish with the code, the tests and the verify gate, and say
+         in your summary that no team review took place and why.
       2. Send each reviewer its own request with the same change summary (what
          changed, which files, how you tested it):
 

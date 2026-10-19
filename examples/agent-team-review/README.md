@@ -36,8 +36,11 @@ does not count as a reviewer's answer to the stage's `reply_to` wait.
   need the Claude Code CLI on `PATH` and logged in (or its credentials in afm's
   Docker container). To use another agent, set `client.command` in
   `.afm/config.yaml` or `command:` on the stage.
-- Collaboration on (the default; `AFM_COLLABORATION=0` runs the flow without the
-  team).
+- Collaboration on (the default). With `AFM_COLLABORATION=0` afm warns that the
+  team will not be added, `afm agent list` reports that messaging is
+  unavailable, and the stage follows the prompt's fallback: it implements and
+  tests the function without a review, notes that in its summary, and the
+  `verify:` gate still runs.
 - The dashboard HTTP server on, which Agent Mesh needs.
 - On the host, a `codex` CLI on `PATH`: the reviewers and the verify step use the
   read-only `codex-as-claude` adapter (see [`../verify/`](../verify/)).
