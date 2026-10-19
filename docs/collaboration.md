@@ -214,6 +214,22 @@ Discussion as the answer, so the post is not shown as **Not answered**. Run
 agents are told this in their prompt; to continue a conversation they write
 explicitly with `afm agent send` or `afm agent reply`.
 
+The human is a member of every conversation (except some opened before this
+rule): one an agent starts with `afm agent send`, the message telling an agent
+about a board task, and the thread where a delegated child's result reaches its
+parent. You read along and can answer in the conversation; you are not addressed
+by its messages and your inbox does not fill with them. The human does not count
+toward the limit of 8 agents per conversation. An agent that writes to the same
+colleagues again continues their conversation, also one opened before you
+joined every conversation, so resuming an older run does not split it. A stage's
+Discussion thread is never picked for this: what agents say among themselves
+stays out of the Discussion tab.
+
+Each stage's **Feed** shows its conversations: those opened from that stage (by
+its agent or one of its helpers, from its feed's composer, or by adding a run
+agent from its People panel), those its agent or one of its helpers takes part
+in, and its Discussion. See [the stage feed](dashboard.md#conversations-in-the-stage-feed).
+
 The **Board** tab (with a count of its tasks) shows keys agents have published
 with their status, author, version, and artifact references. Use **Post task** to
 put a task on the board: choose under **Notify** which working agents get a

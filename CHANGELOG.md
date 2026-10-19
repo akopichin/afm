@@ -5,6 +5,30 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: a stage's conversations in its feed
+
+The stage **Feed** now shows the stage's conversations between its own events,
+in time order, with the same message bubble as Team: author, the command they
+run, recipients, time, a quote of the answered message (click it to jump there)
+and the **turn result** tag. Chips filter the feed to **All**,
+**Conversations** or **Author's work**, with counts; messages addressed to you
+stay visible under every filter. **↩ Reply in conversation** fills the composer
+with the author's `@handle` and answers in that conversation, and a line such as
+*@qa is working* shows who is in a turn now. A conversation belongs to a stage
+when it was opened from that stage (recorded as `origin_stage` on
+`mesh_thread_opened`) or when the stage's agent or one of its helpers takes part;
+conversations from older runs show by their members. The server reads them from
+`GET /api/mesh/stages/{id}/messages`.
+
+### Improvement: you are in every new conversation
+
+Conversations agents start with `afm agent send`, board task notices and the
+thread where a delegated child's result reaches its parent now include you, so
+you can read along and answer there. You do not count toward the 8-agent limit
+of a conversation. Agents continue their conversations from before this change
+after a resume instead of opening second ones, and their own conversation never
+lands in a stage's Discussion. The Team roster no longer lists you twice.
+
 ### Improvement: a People panel next to the stage feed
 
 The stage **Feed** now shows who the stage can talk to on the right: this

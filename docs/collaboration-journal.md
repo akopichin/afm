@@ -59,3 +59,11 @@ value.
   on the agent's behalf. Such a message waits in the recipient's inbox but never
   wakes it. A message from an older journal has no `auto_result` and is an
   ordinary message that wakes its recipient, exactly as before.
+- `origin_stage` on `mesh_thread_opened` (a stage id, omitted when empty) is the
+  stage the conversation was opened from: the sending agent's stage, the stage
+  whose feed the human opened it in, or the stage of a Discussion thread. The
+  first open decides it: a later open of the same thread with another (or no)
+  `origin_stage` is still a no-op, so two agents of different stages starting
+  the same conversation at once, or a post re-opening a Discussion thread from an
+  older journal, do not conflict. A thread from an older journal has no
+  `origin_stage` and shows in a stage's feed by its members alone.
