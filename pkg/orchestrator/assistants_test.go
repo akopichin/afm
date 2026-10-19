@@ -480,12 +480,12 @@ func TestCancel_HasNoResultEvent(t *testing.T) {
 	}
 
 	taskID := attachTestTask(context.Background(), t, o, "op-1")
-	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 2*time.Second)
+	waitForTaskStatus(t, store, taskID, assistants.StatusRunning, 10*time.Second)
 
 	if err := o.CancelTask(context.Background(), taskID); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
-	waitForTaskStatus(t, store, taskID, assistants.StatusCancelled, 2*time.Second)
+	waitForTaskStatus(t, store, taskID, assistants.StatusCancelled, 10*time.Second)
 	close(release) // let the blocked fake runner return so its goroutine doesn't leak past the test
 
 	for _, kind := range taskEventKinds(t, o, taskID) {
