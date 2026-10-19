@@ -365,6 +365,10 @@ type Orchestrator struct {
 	// удаления.
 	testClearReviewArtifacts func() error
 
+	// testAfterAttachSnapshot runs in AttachAndSend right after it reads the snapshot it plans from, so a test
+	// can commit a competing attach in between (the alias race initTeam retries).
+	testAfterAttachSnapshot func()
+
 	// --- Этап 5: watcher helper tasks (checkpoints/on_completion-triggered observation of the main agent) ---
 
 	// watchMu guards watchByStage/watchByTask — rare, admission-time/poll-time mutation, not a hot path, so a
@@ -726,15 +730,27 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 
 	// Restore review-pause before scheduling. On a corrupt resuming marker, hold activation and keep the
 	// dashboard available for inspection.
-	poisoned := false
-	if err := o.recoverReviewPause(ctx); err != nil {
+	// The marker is read first, its owners are respawned only after the team exists: every way a stage starts
+	// — including a review-pause resume — sees the flow's team from its first turn.
+	marker, resuming, err := o.loadReviewPause()
+	if err != nil {
 		log.Printf("review-pause: recovery error, activation held pending manual intervention: %v", err)
-		// A poisoned round must NOT run normal bootstrap at all — activationHeld alone still lets some
-		// scheduling side effects through.
-		poisoned = errors.Is(err, errReviewPausePoisoned)
+	}
+	// A poisoned round must NOT run normal bootstrap at all — activationHeld alone still lets some
+	// scheduling side effects through.
+	poisoned := errors.Is(err, errReviewPausePoisoned)
+	if !poisoned {
+		if err := o.initTeam(ctx); err != nil {
+			o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
+			return fmt.Errorf("team: %w", err)
+		}
+	}
+	if resuming {
+		if err := o.resumeReviewPause(ctx, marker); err != nil {
+			log.Printf("review-pause: recovery error, activation held pending manual intervention: %v", err)
+		}
 	}
 	if !poisoned {
-		o.initTeam(ctx) // before any stage starts: the authors can address the team from their first turn
 		o.startPlanningForPending(ctx)
 		o.recoverAssistants(ctx)
 		o.recoverFeedbackIntents(ctx)

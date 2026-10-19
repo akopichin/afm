@@ -40,10 +40,11 @@ func validateTeamProfiles(team flow.Team) error {
 		warnTeamWithoutCollaboration(team)
 		return nil
 	}
-	return checkTeamProfiles(team, func(id string) bool {
-		_, ok := cfg.Collaboration.Profiles[id]
-		return ok
-	})
+	reg, err := buildProfileRegistry(cfg)
+	if err != nil {
+		return fmt.Errorf("collaboration.profiles: %w (afm run would turn collaboration off)", err)
+	}
+	return checkTeamProfiles(team, reg)
 }
 
 func newValidateCmd() *cobra.Command {

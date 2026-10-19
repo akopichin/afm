@@ -147,3 +147,13 @@ func TestValidateFlowFile_TeamWithDisabledCollaborationWarns(t *testing.T) {
 		t.Fatalf("stderr = %q, want the disabled-collaboration warning", stderr)
 	}
 }
+
+// validate builds the same profile registry as afm run: a malformed profile that would turn collaboration
+// off at run time fails validation even when the team's own profile is fine.
+func TestValidateFlowFile_TeamWithMalformedProfileRegistry(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  profiles:\n    rev-arch:\n      command: codex-as-claude\n    \"bad/id\":\n      command: codex-as-claude\n")
+	_, err := validateFlowFile(writeTestFlow(t, validateTeamFlow))
+	if err == nil || !strings.Contains(err.Error(), "bad/id") {
+		t.Fatalf("validateFlowFile = %v, want the registry error for bad/id", err)
+	}
+}

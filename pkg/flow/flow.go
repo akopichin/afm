@@ -383,6 +383,9 @@ func ParseFile(path string) (*Flow, error) {
 	if err := yaml.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
+	if err := rejectNullTeam(data); err != nil {
+		return nil, err
+	}
 	if err := f.validate(); err != nil {
 		return nil, err
 	}

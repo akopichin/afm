@@ -290,6 +290,9 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"team member without profile", "name: f\nteam:\n  - id: qa\n    title: QA\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"team member empty title", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: \"\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"team member unknown key", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    alias: q\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team null", "name: f\nteam: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team empty value", "name: f\nteam:\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team empty list", "name: f\nteam: []\nstages:\n  - id: s\n    agents: [auto]\n", true},
 		{"team as object", "name: f\nteam:\n  id: qa\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"assistants unknown object key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        triger: on_completion\n", false},
 	}

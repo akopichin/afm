@@ -31,7 +31,7 @@ type Team []TeamMember
 // UnmarshalYAML accepts only a list of objects with the known keys, so a typo'd key fails loudly.
 func (t *Team) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.SequenceNode {
-		return errors.New("team must be a list of objects with id, profile, title and instruction")
+		return errTeamNotList
 	}
 	out := make(Team, 0, len(value.Content))
 	for _, item := range value.Content {
@@ -44,6 +44,23 @@ func (t *Team) UnmarshalYAML(value *yaml.Node) error {
 	*t = out
 	return nil
 }
+
+// rejectNullTeam rejects "team:" with no value (or null), as the schema does: yaml.v3 never calls
+// Team.UnmarshalYAML for a null node, so the parsed Flow cannot tell it from an absent key.
+func rejectNullTeam(data []byte) error {
+	var probe struct {
+		Team yaml.Node `yaml:"team"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return nil // the real decode already accepted data; nothing more to learn here
+	}
+	if probe.Team.Kind == yaml.ScalarNode && probe.Team.ShortTag() == "!!null" {
+		return errTeamNotList
+	}
+	return nil
+}
+
+var errTeamNotList = errors.New("team must be a list of objects with id, profile, title and instruction")
 
 func (m *TeamMember) unmarshalMapping(value *yaml.Node) error {
 	if value.Kind != yaml.MappingNode {

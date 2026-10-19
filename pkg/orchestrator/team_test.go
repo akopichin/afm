@@ -2,13 +2,16 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -37,7 +40,7 @@ func TestInitTeam_CreatesIdleRunAgentsInDeclarationOrder(t *testing.T) {
 		{ID: "qa-second", Profile: "qa", Title: "QA"}, // same title: the later one gets the suffix
 	}
 
-	o.initTeam(context.Background())
+	mustInitTeam(t, o)
 
 	rs := store.Snapshot()
 	if n := len(rs.Assistants.Tasks); n != 3 {
@@ -69,7 +72,7 @@ func TestInitTeam_ResumeKeepsSavedAgents(t *testing.T) {
 		{ID: "arch", Profile: "reviewer", Title: "Architecture", Instruction: "Review for simplicity."},
 		{ID: "qa", Profile: "qa", Title: "QA"},
 	}
-	o.initTeam(context.Background())
+	mustInitTeam(t, o)
 	runDir := o.opts.RunDir
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -80,8 +83,8 @@ func TestInitTeam_ResumeKeepsSavedAgents(t *testing.T) {
 		{ID: "arch", Profile: "qa", Title: "Arch v2", Instruction: "Something else."},
 		{ID: "ops", Profile: "qa", Title: "QA"},
 	}
-	resumed.initTeam(context.Background())
-	resumed.initTeam(context.Background()) // a second pass (replay) changes nothing either
+	mustInitTeam(t, resumed)
+	mustInitTeam(t, resumed) // a second pass (replay) changes nothing either
 
 	rs := store2.Snapshot()
 	if n := len(rs.Assistants.Tasks); n != 3 {
@@ -115,7 +118,7 @@ func TestInitTeam_DisabledCollaborationAddsNothing(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, false)
 	o.opts.Team = flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}}
 
-	o.initTeam(context.Background())
+	mustInitTeam(t, o)
 
 	if n := len(store.Snapshot().Assistants.Tasks); n != 0 {
 		t.Fatalf("Tasks = %d, want 0 with collaboration disabled", n)
@@ -129,7 +132,7 @@ func TestInitTeam_UnknownProfileIsSkipped(t *testing.T) {
 		{ID: "qa", Profile: "qa", Title: "QA"},
 	}
 
-	o.initTeam(context.Background())
+	mustInitTeam(t, o)
 
 	rs := store.Snapshot()
 	if n := len(rs.Assistants.Tasks); n != 1 {
@@ -138,5 +141,148 @@ func TestInitTeam_UnknownProfileIsSkipped(t *testing.T) {
 	teamAgent(t, rs, "qa")
 	if o.loadFatal() != nil {
 		t.Fatalf("an unknown profile must not end the run: %v", o.loadFatal())
+	}
+}
+
+func mustInitTeam(t *testing.T, o *Orchestrator) {
+	t.Helper()
+	if err := o.initTeam(context.Background()); err != nil {
+		t.Fatalf("initTeam: %v", err)
+	}
+}
+
+// A journal that cannot be written while adding a member stops startup instead of being skipped.
+func TestInitTeam_StorageFailureOnAddStopsStartup(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.opts.Team = flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}}
+	store.CloseEventsLogForTest()
+
+	err := o.initTeam(context.Background())
+	var se *state.StorageError
+	if !errors.As(err, &se) {
+		t.Fatalf("initTeam = %v, want a storage error", err)
+	}
+}
+
+// A saved member whose committed operation cannot be read back stops startup too.
+func TestInitTeam_StorageFailureOnReadStopsStartup(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.opts.Team = flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}}
+	mustInitTeam(t, o)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resumed, store2 := reopenAssistantsTestOrchestrator(t, o)
+	store2.CloseEventsLogForTest()
+
+	if err := resumed.initTeam(context.Background()); err == nil {
+		t.Fatal("initTeam with an unreadable journal: want an error, got nil")
+	}
+	if _, err := TeamMembersToCreate(store2, resumed.opts.Team); err == nil {
+		t.Fatal("TeamMembersToCreate with an unreadable journal: want an error, got nil")
+	}
+}
+
+// TestTeamMembersToCreate: preflight checks only the members that still need an agent — a saved one keeps
+// its snapshot even if its profile is gone from config now.
+func TestTeamMembersToCreate(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.opts.Team = flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}}
+	mustInitTeam(t, o)
+
+	got, err := TeamMembersToCreate(store, flow.Team{
+		{ID: "qa", Profile: "removed-profile", Title: "QA"},
+		{ID: "ops", Profile: "qa", Title: "Ops"},
+	})
+	if err != nil {
+		t.Fatalf("TeamMembersToCreate: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "ops" {
+		t.Fatalf("TeamMembersToCreate = %+v, want only ops", got)
+	}
+}
+
+// TestInitTeam_RetriesTakenAlias: a dashboard "Add run agent" that takes the same @name between the team
+// member's read of the roster and its commit does not drop the member — it is added again with a free name.
+func TestInitTeam_RetriesTakenAlias(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	o.opts.Team = flow.Team{{ID: "arch", Profile: "reviewer", Title: "Architecture"}}
+	raced := false // the hook also runs inside the dashboard's own attach: race only once
+	o.testAfterAttachSnapshot = func() {
+		if raced {
+			return
+		}
+		raced = true
+		if _, err := o.AddRunAgent(context.Background(), AddRunAgentRequest{
+			OperationID: "dashboard-op", ProfileID: "qa", Title: "Architecture", Actor: state.Actor{Kind: "user"},
+		}); err != nil {
+			t.Errorf("dashboard AddRunAgent: %v", err)
+		}
+	}
+
+	mustInitTeam(t, o)
+
+	_, p := teamAgent(t, store.Snapshot(), "arch")
+	if p.Alias != "architecture-2" {
+		t.Fatalf("team alias = %q, want architecture-2 (the dashboard agent won @architecture)", p.Alias)
+	}
+}
+
+// teamCountingRunner records how many tasks the run had when the first stage agent was spawned.
+type teamCountingRunner struct {
+	countingBlockingRunner
+	store        *state.Store
+	tasksAtSpawn chan int
+}
+
+func (r *teamCountingRunner) RunAgent(ctx context.Context, cmd, stageName, prompt, logFile string) error {
+	select {
+	case r.tasksAtSpawn <- len(r.store.Snapshot().Assistants.Tasks):
+	default:
+	}
+	return r.countingBlockingRunner.RunAgent(ctx, cmd, stageName, prompt, logFile)
+}
+
+// TestRun_TeamExistsBeforeReviewPauseResume: a review pause saved in "resuming" respawns its owner stage at
+// startup; the team must already exist by then, like for every other way a stage starts.
+func TestRun_TeamExistsBeforeReviewPauseResume(t *testing.T) {
+	base, store := newAssistantsTestOrchestrator(t, true)
+	runner := &teamCountingRunner{store: store, tasksAtSpawn: make(chan int, 1)}
+	o := New(Options{
+		RunDir: base.opts.RunDir, Stages: []flow.Stage{{ID: assistantsTestStageID, Name: "s", Agents: []flow.AgentType{flow.AgentAuto}}},
+		Store: store, Config: config.Default(), Prompts: DefaultPrompts(), Runner: runner, Resumed: true,
+		AssistantsEnabled: true, AssistantsRegistry: base.opts.AssistantsRegistry,
+		Team: flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}},
+	})
+	setPausedFrom(t, store, assistantsTestStageID, state.StatusRunning)
+	stageDir := filepath.Join(o.opts.RunDir, assistantsTestStageID)
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteNotesPauseMarker(o.opts.RunDir, state.PauseMarker{
+		Version: 1, OperationID: "op-review", State: state.PauseStateResuming, Mode: state.PauseModeCancel,
+		Owned: []state.PauseOwner{{ID: assistantsTestStageID, ResumeKind: kindAutonomous}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = o.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	select {
+	case n := <-runner.tasksAtSpawn:
+		if n != 1 {
+			t.Fatalf("tasks when the resumed owner spawned = %d, want the team agent already there", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the review-pause owner was never respawned")
 	}
 }

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -11,10 +12,39 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+// teamAliasAttempts bounds how often a member is added again after a concurrent attach took its @name.
+const teamAliasAttempts = 3
+
 // teamOperationID names the AddRunAgent operation that creates a team member's agent. It depends only on
 // the declaration id, so a resumed run finds the agent it already created instead of adding a second one.
 func teamOperationID(memberID string) string {
 	return "team/" + memberID
+}
+
+// savedTeamAgent reads the committed operation that created a member's agent, if any.
+func savedTeamAgent(store *state.Store, memberID string) (state.CommittedOperation, bool, error) {
+	return store.CommittedOperation(teamOperationID(memberID), opKindAttachAndSend)
+}
+
+// TeamMembersToCreate returns the members whose agent the run has not created yet — the only ones whose
+// profile must exist now; a saved agent keeps the profile snapshot it was created with. A member whose id
+// was taken by another kind of operation is left out (initTeam reports it). A journal read failure is an
+// error.
+func TeamMembersToCreate(store *state.Store, team flow.Team) (flow.Team, error) {
+	var out flow.Team
+	for _, m := range team {
+		_, saved, err := savedTeamAgent(store, m.ID)
+		if errors.Is(err, state.ErrOperationIDConflict) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("team member %q: %w", m.ID, err)
+		}
+		if !saved {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 // initTeam adds the flow's team: agents, in declaration order, before any stage starts. A member whose
@@ -22,35 +52,53 @@ func teamOperationID(memberID string) string {
 // AddRunAgent — the same path as the dashboard's "Add run agent". The agents get no first message: each
 // waits, idle, until somebody writes to it.
 //
-// Best effort, like stage assistants: an agent that cannot be added (an unavailable profile, a finished run)
-// is reported and skipped without stopping the run; only a journal-write failure ends it.
-func (o *Orchestrator) initTeam(ctx context.Context) {
+// An agent that cannot be added (an unavailable profile, a finished run) is reported and skipped, like stage
+// assistants. A journal that cannot be read or written is returned: the run must not start without it.
+func (o *Orchestrator) initTeam(ctx context.Context) error {
 	if len(o.opts.Team) == 0 || !o.opts.AssistantsEnabled {
-		return
+		return nil
 	}
 	for _, m := range o.opts.Team {
-		opID := teamOperationID(m.ID)
-		op, committed, err := o.opts.Store.CommittedOperation(opID, opKindAttachAndSend)
-		if err != nil {
-			o.teamWarning(m.ID, fmt.Sprintf("cannot read the saved agent: %v", err))
-			continue
-		}
-		if committed {
+		op, saved, err := savedTeamAgent(o.opts.Store, m.ID)
+		switch {
+		case errors.Is(err, state.ErrOperationIDConflict):
+			o.teamWarning(m.ID, fmt.Sprintf("not added: %v", err))
+		case err != nil:
+			return fmt.Errorf("team member %q: %w", m.ID, err)
+		case saved:
 			o.warnIfTeamMemberChanged(op, m)
-			continue
+		default:
+			if err := o.addTeamAgent(ctx, m); err != nil {
+				var se *state.StorageError
+				if errors.As(err, &se) {
+					return fmt.Errorf("team member %q: %w", m.ID, err)
+				}
+				o.teamWarning(m.ID, fmt.Sprintf("agent not added: %v", err))
+			}
 		}
+	}
+	return nil
+}
+
+// addTeamAgent creates a member's agent. The dashboard is already up, so an "Add run agent" can take the
+// member's @name between its read of the roster and its commit; that rejection is retried with a fresh
+// roster, which gives the member the next free name.
+func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) error {
+	var err error
+	for range teamAliasAttempts {
 		_, err = o.AddRunAgent(ctx, AddRunAgentRequest{
-			OperationID: opID,
+			OperationID: teamOperationID(m.ID),
 			ProfileID:   assistants.ProfileID(m.Profile),
 			Title:       m.Title,
 			Instruction: m.Instruction,
 			Actor:       state.Actor{Kind: "system", ID: "flow"},
 		})
-		if err != nil {
-			o.handleTaskOperationErr(err)
-			o.teamWarning(m.ID, fmt.Sprintf("agent not added: %v", err))
+		var rejected *state.OperationRejectedError
+		if !errors.As(err, &rejected) || rejected.Code != assistants.CodeStaleRevision {
+			return err
 		}
 	}
+	return err
 }
 
 // warnIfTeamMemberChanged compares a saved team agent with its declaration in the current flow.yaml. A

@@ -249,6 +249,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 
 	rs := o.opts.Store.Snapshot()
+	if o.testAfterAttachSnapshot != nil {
+		o.testAfterAttachSnapshot()
+	}
 	if _, known := rs.Stages[req.OriginStage]; req.OriginStage != "" && !known {
 		return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "unknown origin stage %q", req.OriginStage)
 	}

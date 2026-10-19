@@ -54,6 +54,8 @@ func TestTeam_Rejected(t *testing.T) {
 		{"duplicate id", "  - id: qa\n    profile: qa\n    title: QA\n  - id: qa\n    profile: qa\n    title: QA 2\n", `duplicate team member id "qa"`},
 		{"unknown key", "  - id: qa\n    profile: qa\n    title: QA\n    alias: q\n", `team: unknown field "alias"`},
 		{"not a list", "  id: qa\n", "team must be a list"},
+		{"null", "  null\n", "team must be a list"},
+		{"empty value", "", "team must be a list"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
