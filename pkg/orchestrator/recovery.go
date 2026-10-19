@@ -142,7 +142,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				// RequiredBlocker and diverts to awaiting_assistants exactly like the live completion path
 				// would have; TestResumeByDoneMarkerDoesNotBypassBarrier).
 				if s.Verify.IsEmpty() && stagefiles.CheckCompletion(stageDir, ".", s) == nil {
-					o.completeStage(ctx, s.ID, state.StatusRetrying, "recovered .done")
+					o.completeRecoveredStage(ctx, s, state.StatusRetrying, "recovered .done")
 				} else {
 					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
 				}
@@ -228,6 +228,20 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	}
 }
 
+// completeRecoveredStage completes a stage whose completion marker survived a restart — its agent finished the
+// turn before the process stopped. A colleague's unread message still earns it the extra turn onAgentCompleted
+// would have given (agentcomm_unread.go).
+func (o *Orchestrator) completeRecoveredStage(ctx context.Context, s flow.Stage, from state.StageStatus, reason string) {
+	phase := phaseImplementation
+	if o.executionKind(s) == kindAutonomous {
+		phase = phaseAutonomous
+	}
+	if !s.IsScript() && o.continueForUnreadMessages(ctx, s.ID, phase) {
+		return
+	}
+	o.completeStage(ctx, s.ID, from, reason)
+}
+
 // resumeExecutionStage probes the author's output once. A configured verify gate always requires a fresh
 // execution pass, even when the output exists (guard: completionErr == nil && s.Verify.IsEmpty()).
 // Retrying without output may instead be an interrupted planning attempt.
@@ -243,7 +257,7 @@ func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, s
 		completionErr = stagefiles.CheckCompletion(stageDir, ".", s)
 	}
 	if completionErr == nil && s.Verify.IsEmpty() {
-		o.completeStage(ctx, s.ID, status, reason)
+		o.completeRecoveredStage(ctx, s, status, reason)
 		return
 	}
 

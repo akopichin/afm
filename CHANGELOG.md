@@ -14,7 +14,9 @@ its prompt and a note to answer them before finishing, at most 5 times per
 stage. If a stage still finishes with unread messages (the limit was reached, or
 the stage failed), a notice lists them, they are marked undeliverable, and the
 senders' waits for an answer to them are cancelled and the senders resumed, so
-the run can finish.
+the run can finish. This also holds across a restart and when two recipients of
+the same question finish at once, and a new wait for an answer nobody can send
+any more is refused.
 
 ### Fix: an interrupted run keeps its team's coordination
 

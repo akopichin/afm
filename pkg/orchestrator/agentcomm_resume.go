@@ -425,17 +425,24 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 			}
 			continue
 		}
-		ready := false
+		ready, ended := false, false
 		for _, w := range rs.Assistants.Mesh.Waits {
-			if w.Waiter == waiter && w.Status == agentcomm.WaitReady {
-				ready = true
-				break
+			if w.Waiter != waiter {
+				continue
 			}
+			ready = ready || w.Status == agentcomm.WaitReady
+			ended = ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
 		}
 		switch {
 		case ready:
 			if err := o.onPeerReplied(ctx, bus.Event{StageID: s.ID}); err != nil {
 				log.Printf("WARN: mesh: recover awaiting_peer stage %q: %v", s.ID, err)
+			}
+		case ended:
+			// The wait was cancelled or expired (e.g. its colleague finished without reading the question) and
+			// the process stopped before the waiter was woken.
+			if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: s.ID}); err != nil {
+				log.Printf("WARN: mesh: recover awaiting_peer stage %q after its wait ended: %v", s.ID, err)
 			}
 		case o.hasUndeliveredInbox(waiter):
 			// Parked for unread messages with no wait at all (agentcomm_unread.go), and the process stopped

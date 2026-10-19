@@ -378,3 +378,155 @@ func TestUnreadMessage_RecoverParkedStage(t *testing.T) {
 	}
 	o.concurrency.WaitAgents()
 }
+
+// A restart after a stage's wait was cancelled (its colleague finished without reading the question) but
+// before the stage was woken resumes the stage through the terminal-wait path.
+func TestUnreadMessage_RecoverStageWhoseWaitWasCancelled(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "ended-open", Members: []agentcomm.ParticipantID{meshUserParticipantID, stage}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := o.Wait(ctx, WaitRequest{
+		OperationID: "ended-wait", Waiter: stage, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: thread.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parkStageAwaitingPeer(t, o, assistantsTestStageID)
+	// Committed, but the process stopped before waking the stage.
+	if err := o.resolveMeshWaitDurable("ended-cancel", receipt.WaitID, state.Actor{Kind: "system"}, agentcomm.WaitCancelled, "nobody will answer"); err != nil {
+		t.Fatal(err)
+	}
+
+	o.recoverMeshWaits(ctx)
+
+	if got := store.Get(assistantsTestStageID); got == state.StatusAwaitingPeer {
+		t.Fatal("a stage whose wait was cancelled must be resumed on recovery, not left in awaiting_peer")
+	}
+	o.concurrency.WaitAgents()
+}
+
+// Two recipients finishing at once: a release decided while the other recipient could still answer must not
+// commit after that recipient gave the message up too — it is decided again, and the sender's wait is cancelled.
+func TestUnreadMessage_ReleaseDecidesAgainstCurrentState(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true, flow.Stage{ID: "backend", Command: "claude"}, flow.Stage{ID: "qa", Command: "claude"})
+	ctx := context.Background()
+	for _, id := range []string{assistantsTestStageID, "backend", "qa"} {
+		activateStage(t, o, id)
+	}
+	front, back, qa := meshStageParticipantID(assistantsTestStageID), meshStageParticipantID("backend"), meshStageParticipantID("qa")
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "race-open", Members: []agentcomm.ParticipantID{qa, front, back}, Scope: agentcomm.ScopeRun,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := o.Send(ctx, SendRequest{
+		OperationID: "race-q", ThreadID: thread.ID, Sender: qa,
+		Recipients: []agentcomm.ParticipantID{front, back}, Kind: agentcomm.MessageKindMessage, Body: "is the API stable?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait, err := o.Wait(ctx, WaitRequest{
+		OperationID: "race-wait", Waiter: qa, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: sent.MessageID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := store.Snapshot() // frontend's release looks while backend can still answer
+	if _, err := o.markUnreadUndeliverable(sent.MessageID, back, "backend"); err != nil {
+		t.Fatal(err)
+	}
+	op, ended, err := unreadReleaseOp(stale, sent.MessageID, front, "frontend finished")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ended) != 0 {
+		t.Fatalf("stale decision cancelled %v, want nothing (backend could still answer then)", ended)
+	}
+	if _, err := store.ApplyRunOperation(*op, nil); !errors.Is(err, errUnreadReleaseStale) {
+		t.Fatalf("stale release: err = %v, want errUnreadReleaseStale", err)
+	}
+
+	cancelled, err := o.markUnreadUndeliverable(sent.MessageID, front, assistantsTestStageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cancelled) != 1 || cancelled[0] != wait.WaitID {
+		t.Fatalf("cancelled = %v, want [%s]", cancelled, wait.WaitID)
+	}
+	if got := store.Snapshot().Assistants.Mesh.Waits[wait.WaitID].Status; got != agentcomm.WaitCancelled {
+		t.Fatalf("sender wait = %s, want cancelled", got)
+	}
+}
+
+// A wait for the answer to a message nobody can answer any more (its only recipient gave it up) is refused.
+func TestUnreadMessage_WaitOnMessageWithoutReaderIsRejected(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true, flow.Stage{ID: "qa", Command: "claude"})
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	activateStage(t, o, "qa")
+	front, qa := meshStageParticipantID(assistantsTestStageID), meshStageParticipantID("qa")
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "late-open", Members: []agentcomm.ParticipantID{qa, front}, Scope: agentcomm.ScopeRun,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := o.Send(ctx, SendRequest{
+		OperationID: "late-q", ThreadID: thread.ID, Sender: qa,
+		Recipients: []agentcomm.ParticipantID{front}, Kind: agentcomm.MessageKindMessage, Body: "done yet?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.markUnreadUndeliverable(sent.MessageID, front, assistantsTestStageID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = o.Wait(ctx, WaitRequest{
+		OperationID: "late-wait", Waiter: qa, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: sent.MessageID},
+	})
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != assistants.CodeInvalidStatus {
+		t.Fatalf("wait on a message nobody can answer: err = %v, want an invalid_status rejection", err)
+	}
+}
+
+// A restart after the stage agent wrote its completion marker but before its completion was handled gives the
+// extra turn for a colleague's unread question instead of completing the stage and dropping the question.
+func TestUnreadMessage_RecoveryCompletionGivesExtraTurn(t *testing.T) {
+	runner := &scriptedStageRunner{turn: func(int32) error { return nil }}
+	o, store := newUnreadTestOrchestrator(t, flow.AgentAuto, runner)
+	activateStage(t, o, unreadTestStageID)
+	stageDir := filepath.Join(o.opts.RunDir, unreadTestStageID)
+	for _, name := range []string{".done", "execution_summary.md"} {
+		if err := os.WriteFile(filepath.Join(stageDir, name), []byte("done"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	question := sendFromUser(t, o, "recovered-q", "did you update the README?")
+
+	runToEnd(t, o)
+
+	if got := runner.turns.Load(); got != 1 {
+		t.Fatalf("stage turns = %d, want 1 (the extra turn for the unread question)", got)
+	}
+	if !strings.Contains(runner.prompt(1), "did you update the README?") {
+		t.Fatalf("extra turn prompt must carry the question, got:\n%s", runner.prompt(1))
+	}
+	if got := receiptOf(store, question, unreadTestStage); got != agentcomm.DeliveryDelivered {
+		t.Fatalf("question receipt = %s, want delivered", got)
+	}
+	if got := store.Get(unreadTestStageID); got != state.StatusDone {
+		t.Fatalf("stage status = %s, want done", got)
+	}
+}

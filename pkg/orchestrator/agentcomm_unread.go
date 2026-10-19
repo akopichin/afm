@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -41,7 +43,7 @@ func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, p
 	if cur := o.currentStatus(stageID); cur != state.StatusRunning && cur != state.StatusRetrying {
 		return false
 	}
-	if !o.hasUndeliveredInbox(meshStageParticipantID(stageID)) {
+	if !o.stageHasUnreadMessages(stageID) {
 		return false
 	}
 	used := 0
@@ -128,66 +130,93 @@ func (o *Orchestrator) releaseUnreadMessages(ctx context.Context, stageID string
 	o.concurrency.WakeEventLoop()
 }
 
+// errUnreadReleaseStale rejects a release operation whose decision about the sender's waits no longer matches
+// the state it would commit against (see unreadReleaseOp).
+var errUnreadReleaseStale = errors.New("mesh: unread-message release decided on a stale snapshot")
+
+// maxUnreadReleaseAttempts bounds the retries of a release that keeps losing to concurrent mesh changes.
+const maxUnreadReleaseAttempts = 10
+
 // markUnreadUndeliverable commits, in one operation, message id becoming undeliverable to recipient and the
-// cancellation of every pending wait of its sender that waited for an answer to it — only when no recipient
-// can read the message any more (another one may still answer). It returns the waits it cancelled. The
-// operation id is fixed per (message, recipient), so a repeat after a restart is an idempotent replay.
+// cancellation of every pending wait of its sender that waited for an answer to it — only when nobody else can
+// answer the message any more. It returns the waits it cancelled. The operation id is fixed per (message,
+// recipient), so a repeat after a restart is an idempotent replay.
 func (o *Orchestrator) markUnreadUndeliverable(id agentcomm.MessageID, recipient agentcomm.ParticipantID, stageID string) ([]agentcomm.WaitID, error) {
-	rs := o.opts.Store.Snapshot()
+	reason := fmt.Sprintf("stage %s finished without reading message %s", stageID, id)
+	for range maxUnreadReleaseAttempts {
+		op, ended, err := unreadReleaseOp(o.opts.Store.Snapshot(), id, recipient, reason)
+		if err != nil || op == nil {
+			return nil, err
+		}
+		_, err = o.opts.Store.ApplyRunOperation(*op, func(state.OperationResult) {
+			for _, waitID := range ended {
+				o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
+					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": reason}})
+			}
+		})
+		if errors.Is(err, errUnreadReleaseStale) {
+			continue // another recipient finished or a wait was registered meanwhile: decide again
+		}
+		return ended, err
+	}
+	return nil, fmt.Errorf("release unread message %s: %w", id, errUnreadReleaseStale)
+}
+
+// unreadReleaseOp builds the operation markUnreadUndeliverable commits, deciding from rs which of the sender's
+// waits to cancel. Two recipients finishing at once may both decide from snapshots in which the other can still
+// answer, and neither would cancel; so the operation's Check repeats the decision under the commit's lock and
+// rejects the operation with errUnreadReleaseStale when it differs. It returns a nil operation for an unknown
+// message.
+func unreadReleaseOp(rs state.RunState, id agentcomm.MessageID, recipient agentcomm.ParticipantID, reason string) (*state.Operation, []agentcomm.WaitID, error) {
 	m := rs.Assistants.Mesh.Messages[id]
 	if m == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	reason := fmt.Sprintf("stage %s finished without reading message %s", stageID, id)
 	undeliverable, err := marshalEffect("mesh_message_undeliverable",
 		state.Target{MessageID: string(id), ParticipantID: string(recipient)}, state.MeshMessageReceiptPayload{Reason: reason})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	effects := []state.Effect{undeliverable}
+	ended := waitsLeftWithoutAnswer(rs, m, recipient)
+	for _, waitID := range ended {
+		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(waitID)},
+			state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: reason})
+		if err != nil {
+			return nil, nil, err
+		}
+		effects = append(effects, eff)
+	}
+	op := &state.Operation{
+		ID:   "mesh-unread-" + deriveMeshID("mesh-unread", string(id)+"|"+string(recipient)),
+		Kind: "mesh_release_unread", Actor: state.Actor{Kind: "system"}, Effects: effects,
+		Expect: state.Preconditions{Check: func(cur *state.RunState) error {
+			if !slices.Equal(waitsLeftWithoutAnswer(*cur, m, recipient), ended) {
+				return errUnreadReleaseStale
+			}
+			return nil
+		}},
+	}
+	return op, ended, nil
+}
+
+// waitsLeftWithoutAnswer returns the pending waits of m's sender for an answer to m once finished gives m up —
+// none while another recipient can still answer it.
+func waitsLeftWithoutAnswer(rs state.RunState, m *agentcomm.Message, finished agentcomm.ParticipantID) []agentcomm.WaitID {
+	answer := agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: m.ID}
+	for _, r := range m.Recipients {
+		if r != finished && canStillAnswer(rs, answer, r) {
+			return nil
+		}
+	}
 	var ended []agentcomm.WaitID
-	if noOtherReader(rs, m, recipient) {
-		for _, waitID := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
-			w := rs.Assistants.Mesh.Waits[waitID]
-			if w.Status != agentcomm.WaitPending || w.Waiter != m.Sender || !waitsForAnswerTo(w.Condition, m) {
-				continue
-			}
-			eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(waitID)},
-				state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: reason})
-			if err != nil {
-				return nil, err
-			}
-			effects = append(effects, eff)
+	for _, waitID := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
+		w := rs.Assistants.Mesh.Waits[waitID]
+		if w.Status == agentcomm.WaitPending && w.Waiter == m.Sender && waitsForAnswerTo(w.Condition, m) {
 			ended = append(ended, waitID)
 		}
 	}
-	opID := "mesh-unread-" + deriveMeshID("mesh-unread", string(id)+"|"+string(recipient))
-	op := state.Operation{ID: opID, Kind: "mesh_release_unread", Actor: state.Actor{Kind: "system"}, Effects: effects}
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		for _, waitID := range ended {
-			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
-				"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": reason}})
-		}
-	})
-	return ended, err
-}
-
-// noOtherReader reports whether no recipient of m other than finished can still answer it: every other
-// recipient has it as undeliverable too. A human recipient reads the thread in the dashboard, so a message to
-// the human always has a reader.
-func noOtherReader(rs state.RunState, m *agentcomm.Message, finished agentcomm.ParticipantID) bool {
-	for _, r := range m.Recipients {
-		if r == finished {
-			continue
-		}
-		if p, ok := rs.Assistants.Mesh.Participants[r]; ok && p.Kind == agentcomm.KindUser {
-			return false
-		}
-		if rs.Assistants.Mesh.Receipts[m.ID][r] != agentcomm.DeliveryUndeliverable {
-			return false
-		}
-	}
-	return true
+	return ended
 }
 
 // waitsForAnswerTo reports whether a wait with cond can be satisfied by an answer to m: a reply_to m, or an

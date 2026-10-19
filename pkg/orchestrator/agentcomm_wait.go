@@ -107,7 +107,7 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 // validateWaitAdmission rejects a wait that could never end on its own: one on a message, task or stage that
 // does not exist, on a closed thread, on a stage already finished in another status, a speculative wait (a key
 // nobody has published, a thread not opened yet) without a deadline, a wait only the waiter itself could
-// satisfy, or a wait that would close a cycle — every participant that could satisfy it already
+// satisfy, a wait for an answer nobody left can send (every recipient or thread member finished), or a wait that would close a cycle — every participant that could satisfy it already
 // (transitively) waits on the waiter. A condition that already holds is always admitted: it is ready at once.
 // Run under the commit's lock.
 func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
@@ -127,6 +127,11 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
 	if len(targets) == 0 {
 		return nil
 	}
+	if !slices.ContainsFunc(targets, func(p agentcomm.ParticipantID) bool { return canStillAnswer(rs, req.Condition, p) }) {
+		return &state.OperationRejectedError{
+			Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) has finished — nobody will answer", targets),
+		}
+	}
 	graph := buildMeshWaitGraph(rs)
 	memo := map[agentcomm.ParticipantID]bool{}
 	for _, target := range targets {
@@ -138,6 +143,24 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
 		Code:   agentcomm.CodeWaitCycle,
 		Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", targets, req.Waiter, agentcomm.MaxCausalHops),
 	}
+}
+
+// canStillAnswer reports whether participant p can still send the message a reply_to or addressed_message wait
+// cond is waiting for: p has not finished, and for reply_to its copy of the message was not given up as
+// undeliverable (agentcomm_unread.go). Other conditions are not decided here. An unknown participant is not
+// ruled out.
+func canStillAnswer(rs state.RunState, cond agentcomm.WaitCondition, p agentcomm.ParticipantID) bool {
+	switch cond.Kind {
+	case agentcomm.WaitOnReplyTo:
+		if rs.Assistants.Mesh.Receipts[cond.MessageID][p] == agentcomm.DeliveryUndeliverable {
+			return false
+		}
+	case agentcomm.WaitOnAddressedMessage:
+	default:
+		return true
+	}
+	participant, known := resolveParticipant(rs, p)
+	return !known || participant.Reachable
 }
 
 // validateWaitTarget rejects a wait whose target does not exist or can no longer produce what it waits for.

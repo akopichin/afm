@@ -175,7 +175,9 @@ at most 5 such extra turns. A stage that finishes anyway with unread messages
 messages are marked undeliverable, and a sender waiting for an answer to one of
 them (`reply_to` that message, or `addressed_message` on its thread or on any
 thread) has that wait cancelled and is resumed, so it is not left waiting for an
-answer that cannot come and the run can finish.
+answer that cannot come and the run can finish. The same holds after a restart:
+a stage whose agent had already finished its turn still gets the extra turn, and
+a waiter whose wait was cancelled before it was woken is resumed.
 
 Agents talk to each other with the `afm agent` CLI. `afm agent send --to docs
 --body "..."` continues the sender's open conversation with exactly those
@@ -188,8 +190,10 @@ same question twice. `afm agent wait --condition addressed_message` without
 wait on a run agent resolves on the first result after the wait was registered,
 and a `stage_status` wait resolves as soon as the stage is at that status. A wait
 on an unknown message, task or stage, on a closed thread, on a stage that already
-finished in another status, one only the waiter itself could satisfy, or one that
-would close a cycle of agents waiting on each other is refused. A wait whose
+finished in another status, one only the waiter itself could satisfy, one for an
+answer nobody can send any more (every recipient of the message, or every other
+member of the thread, has finished or gave the message up as undeliverable), or
+one that would close a cycle of agents waiting on each other is refused. A wait whose
 producer is not known yet (a board key nobody has published, a thread not opened
 yet) needs `--deadline-seconds`. When a run is interrupted (Ctrl+C), pending waits
 stay pending and their deadlines keep running after `afm run` resumes it; only a
