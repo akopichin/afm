@@ -22,7 +22,7 @@ describe('typedMentionHandles', () => {
 describe('composerRecipients', () => {
   it('without anyone named, the message goes to the stage agent by default', () => {
     const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: [], draft: 'hello' })
-    expect(r.recipients).toEqual([{ key: 'stage:impl', handle: 'impl', participantId: 'stage:impl', source: 'default', picked: false, typedTokens: [], problem: null }])
+    expect(r.recipients).toEqual([{ key: 'stage:impl', handle: 'impl', participantId: 'stage:impl', source: 'default', picked: false, typedTokens: [], problem: null, note: null }])
     expect(r.defaultProblem).toBeNull()
   })
 
@@ -69,7 +69,7 @@ describe('composerRecipients — chips that must not silently change who gets th
   it('a picked person who left the roster stays as a problem chip; the stage agent does not take over', () => {
     const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: ['run:gone'], draft: 'hi' })
     expect(r.recipients).toEqual([
-      { key: 'run:gone', handle: 'run:gone', participantId: null, source: 'picked', picked: true, typedTokens: [], problem: '@run:gone is no longer available in this run' },
+      { key: 'run:gone', handle: 'run:gone', participantId: null, source: 'picked', picked: true, typedTokens: [], problem: '@run:gone is no longer available in this run', note: null },
     ])
   })
 
@@ -85,6 +85,27 @@ describe('composerRecipients — chips that must not silently change who gets th
       ['stage:docs', 'reply'],
       ['run:t-1', 'typed'],
     ])
+  })
+})
+
+describe("composerRecipients — the feed stage's finished agent", () => {
+  const finishedImpl = { ...impl, reachable: false, unreachable_reason: 'stage impl has reached a terminal status' }
+  const doneStages = [{ id: 'impl', status: 'done' }, { id: 'docs', status: 'running' }]
+
+  it('named explicitly it is a recorded post, not an error; other stages\' finished agents still are', () => {
+    const r = composerRecipients({ participants: [user, finishedImpl, docs, qa], stages: doneStages, stageId: 'impl', picked: [], draft: '@impl @qa recap please' })
+    expect(r.recipients.map((x) => [x.participantId, x.problem, x.note])).toEqual([
+      ['stage:impl', null, 'finished — post recorded, not read'],
+      ['run:t-1', null, null],
+    ])
+    const fromDocs = composerRecipients({ participants: [user, finishedImpl, docs], stages: doneStages, stageId: 'docs', picked: [], draft: '@impl hi' })
+    expect(fromDocs.recipients[0]?.problem).toMatch(/terminal status/)
+  })
+
+  it('is never the default: with nobody named a recipient is still required', () => {
+    const r = composerRecipients({ participants: [user, finishedImpl, qa], stages: doneStages, stageId: 'impl', picked: [], draft: 'hi' })
+    expect(r.recipients).toEqual([])
+    expect(r.defaultProblem).toMatch(/terminal status/)
   })
 })
 

@@ -311,15 +311,23 @@ type LastSend = { messageId: string | null; recipientIds: string[] }
 // exactly its recipients). Free text here NEVER reaches the Revise path.
 function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCancelReply, onReplySent, onUseRevise, shown }: MeshMessageComposerProps): ReactElement {
   const participants = mesh.roster.participants
-  const [draft, setDraft] = useState('')
+  // A reply has its own draft (like its own picks below): what was being written to others neither becomes the
+  // reply's text and @recipients nor is lost — it comes back when the reply ends.
+  const [ordinaryDraft, setOrdinaryDraft] = useState('')
+  const [replyDraft, setReplyDraft] = useState('')
   // picked — people added from the People panel. While a message is answered they go to replyPicked instead:
   // the reply is addressed to that conversation's people only, and its additions end with it.
   const [picked, setPicked] = useState<string[]>([])
   const [replyPicked, setReplyPicked] = useState<string[]>([])
   const replyId = reply?.messageId
-  useEffect(() => setReplyPicked([]), [replyId])
+  useEffect(() => {
+    setReplyPicked([])
+    setReplyDraft('')
+  }, [replyId])
   const activePicked = reply !== null ? replyPicked : picked
   const setActivePicked = reply !== null ? setReplyPicked : setPicked
+  const draft = reply !== null ? replyDraft : ordinaryDraft
+  const setDraft = reply !== null ? setReplyDraft : setOrdinaryDraft
   const [attaching, setAttaching] = useState<Attaching | null>(null)
   // attachPreview — an "Attach to stage" pick is never sent straight away: Send opens this preview, and only
   // the dialog's own "Attach and send" click calls attachAndSendMesh. Cancel keeps the draft.
@@ -456,6 +464,8 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
       {
         onSuccess: (receipt) => {
           setLastSend({ messageId: receipt.messageId, recipientIds })
+          // Interrupting is chosen per send: it does not carry over to the next message (a failure keeps it for the retry).
+          setInterrupt(false)
           setDraft((cur) => removeSubmittedText(cur, submitted))
           if (submittedReply !== null) onReplySent?.(submittedReply.messageId)
         },
@@ -623,6 +633,7 @@ function RecipientChip({ recipient, participants, onRemove }: { recipient: Compo
     >
       {p !== undefined && <MeshAvatar name={name} kind={p.kind} size="small" />}@{recipient.handle}
       {recipient.source === 'default' && <span className="mesh-recipient-note">stage agent</span>}
+      {recipient.note !== null && <span className="mesh-recipient-note">{recipient.note}</span>}
       {onRemove !== undefined && (
         <button type="button" className="mesh-recipient-remove" aria-label={`Remove @${recipient.handle}`} onClick={onRemove}>
           ×

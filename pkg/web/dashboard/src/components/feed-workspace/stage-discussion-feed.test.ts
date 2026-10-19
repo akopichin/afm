@@ -19,8 +19,33 @@ describe('withStageDiscussion — the stage conversation log in the feed', () =>
       'impl',
     )
     expect(messages.map((m) => m.id)).toEqual(['m1', 'dm-2', 'dm-legacy', 'm4'])
-    const legacy = messages[2]
-    expect(legacy).toMatchObject({ sender_id: 'qaEngineer', recipient_ids: [], body: 'the retry loop is unbounded\n\nEvidence: f-1, f-2' })
+    expect(messages[2]).toMatchObject({ sender_id: 'qaEngineer', recipient_ids: [], body: 'the retry loop is unbounded' })
+  })
+
+  it("a legacy helper post keeps its role and evidence as data beside the bubble, not inside its text", () => {
+    const { messages, legacy } = withStageDiscussion([], [post('h', 1, { authorKind: 'assistant', authorId: 'qa', role: 'reviewer', evidence: ['f-1', 'f-2'], body: 'unbounded' })], 'impl')
+    expect(messages[0]?.body).toBe('unbounded')
+    expect(legacy.get('h')).toEqual({ role: 'reviewer', evidence: ['f-1', 'f-2'] })
+  })
+
+  it('the journal seq orders the two readers when both have it — not the clock', () => {
+    // The legacy post was journaled between m1 and m2, although its timestamp says otherwise.
+    const { messages } = withStageDiscussion(
+      [mesh('m1', 1, { seq: 10 }), mesh('m2', 2, { seq: 30 })],
+      [post('dm-x', 9, { seq: 20 })],
+      'impl',
+    )
+    expect(messages.map((m) => m.id)).toEqual(['m1', 'dm-x', 'm2'])
+  })
+
+  it("a legacy agent reply to your post is addressed to you, so Author's work still shows it", () => {
+    const { messages } = withStageDiscussion(
+      [mesh('dm-q', 1, { sender_id: 'user', recipient_ids: ['stage:impl'] })],
+      [post('dm-q', 1), post('a1', 2, { authorKind: 'main_agent', parentMessageId: 'dm-q' }), post('a2', 3, { authorKind: 'assistant', authorId: 'qa', parentMessageId: 'a1' })],
+      'impl',
+    )
+    expect(messages.find((m) => m.id === 'a1')?.recipient_ids).toEqual(['user'])
+    expect(messages.find((m) => m.id === 'a2')?.recipient_ids).toEqual([])
   })
 
   it('a legacy post names its real author and recipients; it is in no thread you can reply to', () => {
@@ -35,7 +60,7 @@ describe('withStageDiscussion — the stage conversation log in the feed', () =>
     )
     expect(messages.map((m) => [m.sender_id, m.recipient_ids, m.in_reply_to, m.auto_result])).toEqual([
       ['user', ['stage:impl', 'run:t-1'], undefined, undefined],
-      ['stage:impl', [], 'q', true],
+      ['stage:impl', ['user'], 'q', true],
       ['afm', [], undefined, undefined],
     ])
     expect(new Set(messages.map((m) => m.thread_id))).toEqual(new Set(['discussion:impl']))

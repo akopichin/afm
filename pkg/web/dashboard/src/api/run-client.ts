@@ -359,6 +359,8 @@ export type DiscussionMessageWire = {
   unanswered?: boolean
   auto_result?: boolean
   created_at: string
+  // seq — the journal seq of the post (the order mesh messages carry too); absent from an older server cache.
+  seq?: number
 }
 
 // listStageDiscussion reads one page of a stage's discussion log — GET /api/stages/{id}/discussion. A 404

@@ -347,6 +347,49 @@ describe('FeedComposer', () => {
       expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
     })
 
+    it('Interrupt is reset after a successful post and kept after a failed one', async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ messageId: 'dm-1' })
+      renderComposer()
+      type('status?')
+      fireEvent.click(screen.getByLabelText('Interrupt agent'))
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+      expect((screen.getByLabelText('Interrupt agent') as HTMLInputElement).checked).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+      expect(post.mock.calls[1]?.[2]).toMatchObject({ interrupt: true })
+      await waitFor(() => expect(input().value).toBe(''))
+      type('next')
+      expect((screen.getByLabelText('Interrupt agent') as HTMLInputElement).checked).toBe(false)
+    })
+
+    it("a reply has its own draft: the ordinary draft's @mentions are not its recipients, and the draft comes back after it", async () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm9', seq: 9, thread_id: 'mt-docs' })
+      const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question' }
+      const { rerender } = renderComposer()
+      type('@qa half-written note')
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={reply} />)
+      expect(input().value).toBe('')
+      expect(within(recipients()).queryByText('@qa')).toBeNull()
+      type('the answer')
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-2'], body: 'the answer', inReplyTo: 'm5' })))
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} meshReply={null} />)
+      expect(input().value).toBe('@qa half-written note')
+      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+    })
+
+    it("the feed stage's finished agent can still get a post in its conversation, delivered to the others named", async () => {
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+      const done = { ...stageAgent, reachable: false, unreachable_reason: 'stage s1 has reached a terminal status' }
+      renderComposer(meshProps({ roster: roster({ participants: [runAgent, done] }), stages: [makeStage({ status: 'done' })] }), { reviseAvailable: false })
+      type('@s1 @qa recap for the record')
+      expect(within(recipients()).getByText('finished — post recorded, not read')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: '@s1 @qa recap for the record', mentions: ['run:t-1'], interrupt: false }))
+    })
+
     it('@ lists the agents of other stages too', () => {
       const other: MeshParticipant = { id: 'stage:docs', kind: 'stage_agent', scope: 'stage', stage_id: 'docs', alias: 'docs-stage', display_name: 'Docs stage', reachable: true }
       renderComposer(meshProps({ roster: roster({ participants: [runAgent, stageAgent, other] }) }))

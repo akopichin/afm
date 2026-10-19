@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { startSerialPoll } from './serial-poll'
+import { readPagesFrom, startSerialPoll } from './serial-poll'
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
@@ -66,5 +66,23 @@ describe('startSerialPoll', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(load).toHaveBeenCalledTimes(2)
     poll.stop()
+  })
+})
+
+describe('readPagesFrom', () => {
+  test('reads every page from the cursor until the last one, and returns where the next read starts', async () => {
+    const pages: Record<number, { items: string[]; next: number; hasMore: boolean }> = {
+      3: { items: ['a', 'b'], next: 5, hasMore: true },
+      5: { items: ['c'], next: 6, hasMore: false },
+    }
+    const fetchPage = vi.fn(async (cursor: number) => pages[cursor] as { items: string[]; next: number; hasMore: boolean })
+    expect(await readPagesFrom(3, fetchPage)).toEqual({ pages: [pages[3], pages[5]], cursor: 6 })
+    expect(fetchPage.mock.calls.map((c) => c[0])).toEqual([3, 5])
+  })
+
+  test('a page that claims more but does not move the cursor ends the read (no endless loop)', async () => {
+    const fetchPage = vi.fn(async () => ({ next: 2, hasMore: true }))
+    expect(await readPagesFrom(2, fetchPage)).toEqual({ pages: [{ next: 2, hasMore: true }], cursor: 2 })
+    expect(fetchPage).toHaveBeenCalledTimes(1)
   })
 })

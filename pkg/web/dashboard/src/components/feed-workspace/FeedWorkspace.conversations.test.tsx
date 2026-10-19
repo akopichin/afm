@@ -191,7 +191,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     })
     stageLog([
       { id: 'm5', author_kind: 'human', round: 1, body: 'Mirrored post', created_at: at(7) },
-      { id: 'd-only', author_kind: 'assistant', author_id: 'reviewer', round: 1, body: 'An old helper verdict', evidence: ['f-1'], created_at: at(8) },
+      { id: 'd-only', author_kind: 'assistant', author_id: 'reviewer', role: 'reviewer', round: 1, body: 'An old helper verdict', evidence: ['f-1'], created_at: at(8) },
     ])
     render(<FeedWorkspace events={[...events, ...posts]} stageId="impl" mesh={meshProps()} noteTarget="impl" onSendNote={vi.fn()} />)
     await waitFor(() => expect(row('d-only')).not.toBeNull())
@@ -201,8 +201,8 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(text.split('Mirrored post')).toHaveLength(2)
     // In journal order after the mirrored one, with its author, its text and the evidence it cited; read-only.
     expect(text.indexOf('Mirrored post')).toBeLessThan(text.indexOf('An old helper verdict'))
-    expect(within(row('d-only')).getByText('reviewer')).toBeInTheDocument()
-    expect(within(row('d-only')).getByText(/Evidence: f-1/)).toBeInTheDocument()
+    expect(within(row('d-only')).getAllByText('reviewer')).toHaveLength(2) // the author and its role
+    expect(within(within(row('d-only')).getByRole('list', { name: 'Evidence' })).getByText('f-1')).toBeInTheDocument()
     expect(within(row('d-only')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
     // All counts what is shown: two events and the two bubbles.
     expect(screen.getByRole('button', { name: /^All/ })).toHaveTextContent('4')

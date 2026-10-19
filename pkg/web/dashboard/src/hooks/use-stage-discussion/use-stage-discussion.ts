@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listStageDiscussion, type DiscussionMessageWire } from '../../api/run-client'
-import { startSerialPoll } from '../../lib/serial-poll'
+import { readPagesFrom, startSerialPoll } from '../../lib/serial-poll'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -22,6 +22,8 @@ export type DiscussionMessage = {
   // autoResult — an agent's turn result afm posted as its reply.
   autoResult?: boolean
   createdAt: string
+  // seq — the journal seq of the post, the order shared with mesh messages; undefined when the server has none.
+  seq?: number
 }
 
 function toMessage(w: DiscussionMessageWire): DiscussionMessage {
@@ -38,6 +40,7 @@ function toMessage(w: DiscussionMessageWire): DiscussionMessage {
     unanswered: w.unanswered,
     autoResult: w.auto_result,
     createdAt: w.created_at,
+    seq: w.seq,
   }
 }
 
@@ -61,26 +64,23 @@ export function useStageDiscussion(stageId: string | null, finished: boolean): D
   useEffect(() => {
     if (stageId === null) return
     let cursor = 0
-    let fresh = true // the first page of this read replaces what an earlier read (another stage, unfinished) left
+    let fresh = true // the first read replaces what an earlier read (another stage, unfinished) left
     const poll = startSerialPoll(async (isStopped) => {
-      try {
-        for (;;) {
-          const page = await listStageDiscussion(stageId, cursor)
-          if (isStopped()) return
-          const replace = fresh
-          fresh = false
-          if (page.messages.length > 0 || replace) {
-            setLoaded((prev) => {
-              const base = replace || prev.stageId !== stageId ? [] : prev.messages
-              return { stageId, messages: withAnswersApplied(base.concat(page.messages.map(toMessage))) }
-            })
-          }
-          cursor = page.nextCursor
-          if (!page.hasMore) return
-        }
-      } catch {
-        /* transient — keep what we have, retry next tick from the same cursor */
-      }
+      // A failed page rejects the read: what we have stays, and the next tick reads from the same cursor.
+      const read = await readPagesFrom(cursor, async (c) => {
+        const page = await listStageDiscussion(stageId, c)
+        return { ...page, next: page.nextCursor }
+      })
+      if (isStopped()) return
+      cursor = read.cursor
+      const added = read.pages.flatMap((p) => p.messages.map(toMessage))
+      const replace = fresh
+      fresh = false
+      if (added.length === 0 && !replace) return
+      setLoaded((prev) => {
+        const base = replace || prev.stageId !== stageId ? [] : prev.messages
+        return { stageId, messages: withAnswersApplied(base.concat(added)) }
+      })
     }, POLL_INTERVAL_MS)
     return poll.stop
   }, [stageId, finished])

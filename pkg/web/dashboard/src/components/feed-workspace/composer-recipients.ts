@@ -22,7 +22,13 @@ export type ComposerRecipient = {
   typedTokens: string[]
   // problem — why the message cannot go to them; Send stays off while any recipient has one.
   problem: string | null
+  // note — what sending to them means when it is not the usual delivery (the feed stage's finished agent).
+  note: string | null
 }
+
+// FINISHED_STAGE_NOTE — the feed stage's finished agent, named explicitly: the post is recorded in the stage's
+// conversation (and reaches the other agents named) but its agent never reads it.
+export const FINISHED_STAGE_NOTE = 'finished — post recorded, not read'
 
 export type ComposerRecipients = {
   recipients: ComposerRecipient[]
@@ -88,7 +94,7 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
   const handleOf = (p: MeshParticipant): string => handles.get(p.id) ?? p.id
   const recipients: ComposerRecipient[] = []
   const byKey = new Map<string, ComposerRecipient>()
-  const add = (key: string, from: RecipientSource, found: () => Pick<ComposerRecipient, 'handle' | 'participantId' | 'problem'>, token?: string): void => {
+  const add = (key: string, from: RecipientSource, found: () => Pick<ComposerRecipient, 'handle' | 'participantId' | 'problem' | 'note'>, token?: string): void => {
     let r = byKey.get(key)
     if (r === undefined) {
       r = { key, ...found(), source: from, picked: false, typedTokens: [] }
@@ -98,9 +104,16 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
     if (from === 'picked') r.picked = true
     if (token !== undefined) r.typedTokens.push(token)
   }
-  const known = (p: MeshParticipant) => () => ({ handle: handleOf(p), participantId: p.id, problem: recipientProblem(p, handleOf(p), stages) })
+  // The feed stage's own agent once the stage has finished can still be named on purpose: the post goes into the
+  // stage's conversation, recorded (as the Discussion always allowed) and delivered to the others named.
+  const finishedHere = (p: MeshParticipant): boolean =>
+    p.id === `stage:${stageId}` && ['done', 'failed'].includes(stages.find((s) => s.id === stageId)?.status ?? '')
+  const known = (p: MeshParticipant) => () =>
+    finishedHere(p)
+      ? { handle: handleOf(p), participantId: p.id, problem: null, note: FINISHED_STAGE_NOTE }
+      : { handle: handleOf(p), participantId: p.id, problem: recipientProblem(p, handleOf(p), stages), note: null }
   // A person named by id who left the roster: still a chip, with the reason, so Send cannot quietly go elsewhere.
-  const departed = (id: string) => () => ({ handle: id, participantId: null, problem: `@${id} is no longer available in this run` })
+  const departed = (id: string) => () => ({ handle: id, participantId: null, problem: `@${id} is no longer available in this run`, note: null })
   const byId = (id: string, from: RecipientSource): void => {
     const p = participants.find((x) => x.id === id)
     add(id, from, p !== undefined ? known(p) : departed(id))
@@ -111,9 +124,9 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
   for (const handle of typedMentionHandles(draft)) {
     const p = resolveTyped(handle, participants, handles)
     if (p === 'ambiguous') {
-      add(`@${handle.toLowerCase()}`, 'typed', () => ({ handle, participantId: null, problem: `@${handle} matches several people — pick one from the list` }), handle)
+      add(`@${handle.toLowerCase()}`, 'typed', () => ({ handle, participantId: null, problem: `@${handle} matches several people — pick one from the list`, note: null }), handle)
     } else if (p === null) {
-      add(`@${handle.toLowerCase()}`, 'typed', () => ({ handle, participantId: null, problem: `No one is called @${handle} in this run` }), handle)
+      add(`@${handle.toLowerCase()}`, 'typed', () => ({ handle, participantId: null, problem: `No one is called @${handle} in this run`, note: null }), handle)
     } else {
       add(p.id, 'typed', known(p), handle)
     }
@@ -125,7 +138,7 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
   const problem = recipientProblem(stageAgent, handleOf(stageAgent), stages)
   if (problem !== null) return { recipients, defaultProblem: problem }
   return {
-    recipients: [{ key: stageAgent.id, handle: handleOf(stageAgent), participantId: stageAgent.id, source: 'default', picked: false, typedTokens: [], problem: null }],
+    recipients: [{ key: stageAgent.id, handle: handleOf(stageAgent), participantId: stageAgent.id, source: 'default', picked: false, typedTokens: [], problem: null, note: null }],
     defaultProblem: null,
   }
 }

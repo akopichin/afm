@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
-import { senderLabel } from '../../lib/mesh-roster'
+import { participantRole, senderLabel } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
 import { AgentMessageBody } from '../agent-message/AgentMessageBody'
 import { MeshAvatar } from './MeshAvatar'
@@ -20,6 +20,21 @@ export type ConversationMessageProps = {
   notAnswered?: boolean
   // markdown — render the text as Markdown (the stage feed, where the stage conversation always did).
   markdown?: boolean
+  // role, evidence — a post from an older run's stage conversation log: its author's role and the ids it cited.
+  role?: string
+  evidence?: string[]
+}
+
+// roleLabel — a log post author's role in words; wire values (main_agent, assistant, a mesh kind) are not for people.
+function roleLabel(role: string): string {
+  switch (role) {
+    case 'main_agent':
+      return 'Stage agent'
+    case 'assistant':
+      return 'Helper'
+    default:
+      return participantRole(role)
+  }
 }
 
 function messageTime(createdAt: string): string {
@@ -30,7 +45,7 @@ function messageTime(createdAt: string): string {
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
@@ -58,6 +73,7 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
               {sender.command}
             </span>
           )}
+          {role !== undefined && <span className="conversation-role-chip">{roleLabel(role)}</span>}
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
           <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
           {notAnswered && (
@@ -79,6 +95,13 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
             </blockquote>
           )}
           <AgentMessageBody body={message.body} fromAgent={!fromYou} markdown={markdown} autoResult={message.auto_result === true} />
+          {evidence !== undefined && evidence.length > 0 && (
+            <ul className="conversation-evidence" aria-label="Evidence">
+              {evidence.map((e) => (
+                <li key={e}>{e}</li>
+              ))}
+            </ul>
+          )}
         </div>
         {onReply !== undefined && (
           <div className="conversation-message-actions">

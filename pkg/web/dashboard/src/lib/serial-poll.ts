@@ -51,3 +51,21 @@ export function startSerialPoll(load: (isStopped: () => boolean) => Promise<void
     },
   }
 }
+
+// PagedRead — one page of a cursor-based reader: next is the cursor after it, hasMore — another page follows.
+export type PagedRead = { next: number; hasMore: boolean }
+
+// readPagesFrom reads the pages of a cursor-based reader from cursor on, until the last one (or one that does
+// not move the cursor), and returns them with the cursor the next read starts from. Meant for a startSerialPoll
+// load: a failed page rejects the whole read, so the caller keeps its cursor and reads the same pages again.
+export async function readPagesFrom<P extends PagedRead>(cursor: number, fetchPage: (cursor: number) => Promise<P>): Promise<{ pages: P[]; cursor: number }> {
+  const pages: P[] = []
+  let next = cursor
+  for (;;) {
+    const page = await fetchPage(next)
+    pages.push(page)
+    const advanced = page.next > next
+    next = Math.max(next, page.next)
+    if (!page.hasMore || !advanced) return { pages, cursor: next }
+  }
+}

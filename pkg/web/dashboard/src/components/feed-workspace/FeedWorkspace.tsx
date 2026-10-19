@@ -95,7 +95,7 @@ export function FeedWorkspace({
   const conversation = useStageConversation(mesh !== undefined ? stageId : null)
   const stageStatus = mesh?.stages.find((s) => s.id === stageId)?.status
   const discussionLog = useStageDiscussion(mesh !== undefined ? stageId : null, stageStatus === 'done' || stageStatus === 'failed')
-  const { messages: conversationMessages, unanswered } = useMemo(
+  const { messages: conversationMessages, unanswered, legacy } = useMemo(
     () => withStageDiscussion(conversation.messages, discussionLog, stageId ?? ''),
     [conversation.messages, discussionLog, stageId],
   )
@@ -185,6 +185,8 @@ export function FeedWorkspace({
                     replyActive={activeMeshReply?.messageId === m.id}
                     notAnswered={unanswered.has(m.id)}
                     markdown
+                    role={legacy.get(m.id)?.role}
+                    evidence={legacy.get(m.id)?.evidence}
                     onReply={
                       canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation, participants)
                         ? () =>
