@@ -109,6 +109,16 @@ The **Discussion** tab shows the stage's discussion and lets you post a human
 message; the stage agent's reply appears there too, and authors are named as in
 the Team roster. Posting does not change the stage's status. A post to a stage
 that has already finished is kept in its history but is not delivered to anyone.
+A post normally waits until the agent next reads its inbox or ends its turn. An
+agent always answers a message from you, even with a short status update. While
+the stage is running, you can turn on **Interrupt agent** before you send. The
+agent then stops its current turn and answers your post as a question with
+`afm agent reply`. It does not treat the post as a revision of its plan, and it
+then continues its work. For any other status the switch is not shown. Type `@`
+to bring other agents into a post, such as run agents, helpers or other stages'
+agents. They receive the post together with the stage agent, the post shows who
+it went to (`→ QA, DevOps`), and their replies appear in this Discussion under
+their own names.
 Pending agent proposals also appear there; **Accept** confirms a supported
 proposal before its change is applied, while **Dismiss** discards it. In the Side agent, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
