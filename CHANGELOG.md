@@ -46,7 +46,10 @@ The composer's drafts and picked recipients are kept per stage for the page
 session, so the Feed following the run to the next stage no longer drops them; a
 composer that appeared before Agent Mesh answered switches to **Message** once
 it does (unless you chose a mode or are writing a Revise note); and a hint shows
-that **Cmd/Ctrl+Enter** sends, highlighted after a plain Enter.
+that **Cmd/Ctrl+Enter** sends, highlighted after a plain Enter. The stage
+menu offers **Pause** for a stage in `awaiting_peer` too. A refused stage
+conversation post (and any other refused dashboard request) shows the server's
+reason instead of a bare status code, and the draft is kept.
 
 ### Improvement: the stage Feed composer writes to several people
 

@@ -401,7 +401,15 @@ line comments and "Send revision" (see [Inline plan comments](#inline-plan-comme
 
 > An earlier version offered "Add a note for the agent" in the stage's kebab (⋮)
 > menu; that item was replaced by this Feed composer. The kebab still hosts stage
-> buttons, **Pause**, and the pre-note item for `pending` stages.
+> buttons, **Pause**, and the pre-note item for `pending` stages. **Pause** is
+> offered while a stage is `planning`, `running` (not for a running script),
+> `revising`, `retrying` or `awaiting_peer` (parked waiting for a colleague's
+> reply); **Continue** returns a paused `awaiting_peer` stage to its wait, and it
+> goes on by itself if the wait was answered meanwhile.
+
+A message whose post the server refuses — for example because someone you named
+can no longer read it — keeps its draft and shows the server's reason under the
+input (*"@qa cannot read this post (…) — remove the mention and send again"*).
 
 ## Images in the feed (agent → you)
 
