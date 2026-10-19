@@ -1,19 +1,27 @@
 # afm
 
-**Orchestrate multi-stage AI tasks.** Describe a task in a YAML file, break it
-into stages — afm runs AI agents sequentially or in parallel, waits for your
-approval of their plans, and carries out the implementation. Works with `claude`
-and any claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
+**A control plane for AI agent teams.** Put several agents on one job — stage
+agents that own a step of the flow, run agents that join for the whole run — let
+them talk to each other directly, and keep a human in the loop. Describe the flow
+in a YAML file; afm runs the agents sequentially or in parallel, waits for your
+approval where you want it, and writes every message, wait and stage transition
+to an event log, so a run survives a restart. Works with `claude` and any
+claude-compatible agent (GLM, DeepSeek, Cursor, Codex, …).
 
 <p align="center">
-  <img src="assets/afm-demo.gif" alt="afm demo — multi-stage AI orchestration with a live dashboard" width="900">
+  <img src="assets/afm-team.gif" alt="afm demo — Frontend, QA and DevOps agents coordinate a checkout in the Team view" width="900">
 </p>
 
 ## Why afm, when Claude Code already exists
 
+- **Agents that coordinate directly.** QA asks Frontend a question, Frontend fixes
+  the bug QA found, DevOps picks up QA's tests the moment they are ready — through
+  conversations, a shared board and durable waits. You follow and steer it all in
+  the **Team** tab; see [Helpers and collaboration](collaboration.md).
 - **Tasks measured in hours, not minutes.** Every run is written to an append-only
   event log; if it's interrupted, `afm run` resumes from the same point — completed
-  stages are skipped, interrupted ones retried.
+  stages are skipped, interrupted ones retried, and agents' conversations and waits
+  come back with it.
 - **Several models in one flow.** Claude plans, a cheaper model (GLM/DeepSeek) does
   the routine work, another reviews — each stage can use a different agent.
 - **A human in the loop at the plan level.** Review and comment on the plan

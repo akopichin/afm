@@ -1,8 +1,10 @@
 # afm
 
-**A control plane for AI workflows that need to finish.** Coordinate multiple agents
-across long-running stages, keep humans in the loop when judgment is needed, and make
-every run observable, resumable, and recoverable from failure.
+**A control plane for AI agent teams.** Put several agents on one job — stage
+agents that own a step of the flow, run agents that join for the whole run — let
+them talk to each other directly, and keep a human in the loop. Every message,
+wait and stage transition is written to an event log, so a run survives a restart
+and you can always see who did what.
 
 Use Claude, Codex, GLM, DeepSeek, Cursor, or other compatible agents — together in the
 same workflow.
@@ -14,14 +16,24 @@ same workflow.
 [![Docs](https://img.shields.io/badge/docs-akopichin.github.io%2Fafm-blue)](https://akopichin.github.io/afm/)
 
 <p align="center">
-  <img src="docs/assets/afm-demo.gif" alt="afm demo — multi-stage AI orchestration with a live dashboard" width="900">
+  <img src="docs/assets/afm-team.gif" alt="afm demo — Frontend, QA and DevOps agents coordinate a checkout in the Team view" width="900">
 </p>
 
 ## Why afm, when Claude Code already exists
 
+- **Agents that coordinate directly.** QA asks Frontend a question, Frontend fixes
+  the bug QA found, DevOps picks up QA's tests the moment they are ready — through
+  conversations, a shared board and durable waits, not by you copying text between
+  sessions. You follow and steer it all in the **Team** tab.
 - **Tasks measured in hours, not minutes.** Every run is written to an append-only
   event log; if it's interrupted, `afm run` resumes from the same point — completed
-  stages are skipped, interrupted ones retried.
+  stages are skipped, interrupted ones retried, and agents' conversations and waits
+  come back with it.
+
+  <p align="center">
+    <img src="docs/assets/afm-restart.gif" alt="afm restarts mid-run and the team's conversations and waits are restored" width="720">
+  </p>
+
 - **Several models in one flow.** Claude plans, a cheaper model (GLM/DeepSeek) does
   the routine work, another reviews — each stage can use a different agent.
 - **A human in the loop at the plan level.** Review and comment on the plan
@@ -133,7 +145,7 @@ Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github
 | Carrying lessons across runs | [Agent memory](https://akopichin.github.io/afm/agent-memory/) |
 | Token/cost tracking, `pricing:` overrides | [Cost accounting](https://akopichin.github.io/afm/accounting/) |
 | The web dashboard | [Dashboard](https://akopichin.github.io/afm/dashboard/) |
-| Helper roles and stage collaboration | [Helpers and collaboration](https://akopichin.github.io/afm/collaboration/) |
+| Agent teams: run agents, conversations, board, helpers | [Helpers and collaboration](https://akopichin.github.io/afm/collaboration/) |
 | Running in Docker, non-Claude agents | [Docker mode](https://akopichin.github.io/afm/docker/) |
 | Event log, directory layout, prompts | [Internals](https://akopichin.github.io/afm/internals/directory-layout/) |
 
