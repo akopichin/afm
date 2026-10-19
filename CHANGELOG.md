@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: a team review example
+
+`examples/agent-team-review/` shows `team:` at work: two reviewer run agents
+from collaboration profiles in the example's `.afm/config.yaml`, and a stage
+agent that sends each of them its change with `afm agent send`, waits for both
+answers with `afm agent wait --condition reply_to`, fixes the valid findings,
+and then passes a `go test` and Codex `verify:` gate. The schema check now also
+validates the examples' `.afm/config.yaml` files.
+
 ### Improvement: a team of run agents in flow.yaml
 
 A flow can declare its run agents with a top-level `team:` list (`id`,

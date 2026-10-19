@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
+# Team review example: the stage agent asks two run agents from team: for a review, waits for both
+# answers, fixes what is valid, then a verify gate checks the result. Profiles live in .afm/config.yaml.
+
+name: agent-team-review
+description: "Demo: a stage agent asks a team of reviewer agents for feedback before it finishes"
+
+# Run agents afm adds before the first stage starts. Each @name comes from the title:
+# @architecture and @qa (or @qa-2 and so on when the name is taken).
+# Replace with your own agents/models: point profile at any role in collaboration.profiles.
+team:
+  - id: arch
+    profile: rev-arch
+    title: Architecture
+    instruction: Review the change you are asked about for simplicity and duplication.
+  - id: qa
+    profile: rev-qa
+    title: QA
+    instruction: Review the change you are asked about for edge cases and test coverage.
+
+stages:
+  - id: implement
+    name: "Implement Slugify with a team review"
+    agents: [auto]
+    description: |
+      Implement a function Slugify(s string) string in ./slug.go: lower-case the
+      text, replace every run of characters that are not letters or digits with a
+      single "-", and trim "-" from both ends ("  Hello, World! " -> "hello-world").
+      Add a table-driven test in ./slug_test.go. If there is no go.mod, create one
+      with `go mod init example.com/slug`.
+
+      When the code builds and `go test ./...` passes, ask the team for a review:
+
+      1. Run `afm agent list` and find the aliases of the two reviewers, by
+         default `architecture` and `qa`.
+      2. Send each reviewer its own request with the same change summary (what
+         changed, which files, how you tested it):
+
+           afm agent send --to architecture --kind request --body "<summary>"
+           afm agent send --to qa --kind request --body "<summary>"
+
+         Each command prints a `message_id`.
+      3. For each `message_id`, register a wait for its answer:
+
+           afm agent wait --condition reply_to --message-id <message_id>
+
+         Then END YOUR TURN. Do not poll. Each answer resumes you with the reply
+         in your inbox. If a wait reports `ready`, the answer is already there:
+         read it with `afm agent inbox`.
+      4. For each answer, fix the findings that are valid and run the tests
+         again. If you changed code because of a reviewer, send that reviewer a
+         new request with what you changed and wait for it again (steps 2-3, at
+         most two rounds per reviewer).
+      5. While a wait is still open, end your turn again after handling a reply.
+         Finish only after both reviewers have answered. In your summary, list the
+         findings you fixed and the ones you declined, with a reason.
+
+    # Runs after the agent finishes: a test gate, then a read-only AI review.
+    verify:
+      - run: "go test ./..."
+        timeout: 5m
+      - command: codex-as-claude
+        timeout: 15m
+        prompt: |
+          Check Slugify against the stage's requirements and its tests. Block only
+          provable bugs or missing required behavior; do not ask for unrelated
+          refactoring.

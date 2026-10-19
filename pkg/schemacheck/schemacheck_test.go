@@ -336,12 +336,17 @@ func TestRepositoryYAMLExamplesMatchSchemas(t *testing.T) {
 	}
 
 	configSchema := compileSchema(t, configSchemaPath)
-	configExample := "../../config.example.yaml"
-	data, err := os.ReadFile(configExample)
+	exampleConfigs, err := filepath.Glob("../../examples/*/.afm/config.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := configSchema.Validate(jsonInstance(t, data)); err != nil {
-		t.Errorf("%s does not match config schema: %v", configExample, err)
+	for _, path := range append([]string{"../../config.example.yaml"}, exampleConfigs...) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := configSchema.Validate(jsonInstance(t, data)); err != nil {
+			t.Errorf("%s does not match config schema: %v", path, err)
+		}
 	}
 }

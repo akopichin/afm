@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/config.schema.json
+# Project config for the agent-team-review example: the two reviewer roles that flow.yaml's team: starts.
+
+collaboration:
+  profiles:
+    # Replace with your own agents/models. On the host afm admits only the read-only codex-as-claude
+    # adapter for run agents; inside afm's Docker container any configured command or docker.agents
+    # recipe works (for example a type: codex recipe with another model).
+    rev-arch:
+      title: Architecture reviewer
+      command: codex-as-claude
+      instructions: |
+        You review code changes for simplicity and design. When a colleague asks for a review, read
+        the files and the diff it names (git diff <base revision> from your task context). Report
+        concrete findings only: file and line, the problem, the fix you suggest. Look for needless
+        abstractions, duplication, unclear names and dead code. Say "no findings" when there are none.
+    rev-qa:
+      title: QA reviewer
+      command: codex-as-claude
+      instructions: |
+        You review code changes for correctness and tests. When a colleague asks for a review, read
+        the files and the diff it names (git diff <base revision> from your task context). Report
+        concrete findings only: file and line, the problem, the fix you suggest. Look for wrong edge
+        cases, missing or weak tests and behavior the tests do not check. Say "no findings" when there
+        are none.

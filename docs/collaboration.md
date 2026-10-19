@@ -145,6 +145,11 @@ run starts is logged, reported as a `team_warning` notice and skipped, and the
 stages run anyway. When collaboration is disabled, afm warns that the team will
 not be added and runs the flow without it, as with `assistants:`.
 
+Full example: [`examples/agent-team-review/`](https://github.com/akopichin/afm/tree/main/examples/agent-team-review)
+— a stage agent sends its change to two reviewer agents from `team:`, waits for
+both answers with `afm agent wait`, fixes the valid findings, and then passes a
+`verify:` gate.
+
 ## Use helpers in the dashboard
 
 Open a stage's **⋯ → Attach helper…** menu, select an available role, and give

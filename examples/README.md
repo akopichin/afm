@@ -13,6 +13,7 @@ them write into these sources (e.g. the `basic` flow implements a JWT backend/fr
 | [`cursor-agent/`](cursor-agent/) | Using a non-Claude agent (`type: cursor`, the Cursor Cloud Agents API) via Docker autoShim. |
 | [`buttons/`](buttons/) | Predefined one-click stage actions in the dashboard kebab menu. |
 | [`verify/`](verify/) | AI-verify: a shell test gate followed by a read-only AI code review before a stage is marked done. |
+| [`agent-team-review/`](agent-team-review/) | A `team:` of two reviewer agents: the stage agent asks them for a review with `afm agent send`, waits for both answers, fixes the findings, then passes a verify gate. |
 
 Copy one into a scratch project and run it there:
 
