@@ -260,3 +260,58 @@ func TestMesh_TaskResultWaitReplaysLegacySemantics(t *testing.T) {
 		t.Fatalf("fresh wait after the next result = %s, want ready", got)
 	}
 }
+
+// TestMesh_ReplyToIsAnsweredOnlyByARecipient: the human is a member of every thread, so a reply_to wait must
+// not be satisfied by just any reply — only by one from a recipient of the original message.
+func TestMesh_ReplyToIsAnsweredOnlyByARecipient(t *testing.T) {
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m1"}
+	tests := []struct {
+		name       string
+		recipients []string // of the original message from "author"
+		replier    string
+		want       agentcomm.WaitStatus
+	}{
+		{"the addressed reviewer replies", []string{"rev"}, "rev", agentcomm.WaitReady},
+		{"one of several recipients replies", []string{"rev", "qa"}, "qa", agentcomm.WaitReady},
+		{"the human replies to a message for the reviewer", []string{"rev"}, "user", agentcomm.WaitPending},
+		{"the human replies to a message for the human", []string{"user"}, "user", agentcomm.WaitReady},
+		{"the author answers itself", []string{"rev"}, "author", agentcomm.WaitPending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			as := setupMeshThread(t, "author", "rev", "qa", "user")
+			mustApply(t, &as, meshMessageSentControl(1, "m1", "th-1", "author", tt.recipients, string(agentcomm.MessageKindMessage), nil, "review please"))
+			mustApply(t, &as, meshWaitRegisteredControl("w1", "author", cond, "", "", 0))
+			to := "author"
+			if tt.replier == "author" {
+				to = "rev"
+			}
+			mustApply(t, &as, meshMessageSentControl(2, "m2", "th-1", tt.replier, []string{to}, string(agentcomm.MessageKindReply), strp("m1"), "done"))
+
+			if got := as.Mesh.Waits["w1"].Status; got != tt.want {
+				t.Fatalf("wait status = %q, want %q", got, tt.want)
+			}
+			if got := as.Mesh.MessageAnswered("m1"); got != (tt.want == agentcomm.WaitReady) {
+				t.Fatalf("MessageAnswered = %v, want %v", got, tt.want == agentcomm.WaitReady)
+			}
+		})
+	}
+}
+
+// A wait registered after a recipient already replied is ready at once; after only a non-recipient replied, it
+// is still pending.
+func TestMesh_ReplyToReadyAtRegistrationNeedsARecipientReply(t *testing.T) {
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m1"}
+	as := setupMeshThread(t, "author", "rev", "user")
+	mustApply(t, &as, meshMessageSentControl(1, "m1", "th-1", "author", []string{"rev"}, string(agentcomm.MessageKindMessage), nil, "review please"))
+	mustApply(t, &as, meshMessageSentControl(2, "m2", "th-1", "user", []string{"author"}, string(agentcomm.MessageKindReply), strp("m1"), "me too"))
+	mustApply(t, &as, meshWaitRegisteredControl("w1", "author", cond, "", "", 0))
+	if got := as.Mesh.Waits["w1"].Status; got != agentcomm.WaitPending {
+		t.Fatalf("after the human's reply: wait = %q, want pending", got)
+	}
+	mustApply(t, &as, meshMessageSentControl(3, "m3", "th-1", "rev", []string{"author"}, string(agentcomm.MessageKindReply), strp("m1"), "lgtm"))
+	mustApply(t, &as, meshWaitRegisteredControl("w2", "author", cond, "", "", 0))
+	if got := as.Mesh.Waits["w2"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("after the reviewer's reply: wait = %q, want ready", got)
+	}
+}

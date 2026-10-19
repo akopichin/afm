@@ -122,13 +122,21 @@ func (ms MeshState) deepClone() MeshState {
 	return out
 }
 
-// MessageAnswered reports whether SOME message in ms has InReplyTo equal to id — "answered" is deliberately
-// never a stored DeliveryStatus value (unlike accepted/delivered/acknowledged/undeliverable, each of which has
-// its own control kind below): it is always computed fresh from the current message set, the same
-// "derived, not stored" discipline ReadyContinuations/ReadyWaits use elsewhere in this package.
+// MessageAnswered reports whether a recipient of message id replied to it (a message with InReplyTo = id
+// sent by one of id's recipients). The human is a member of every thread, so a reply from anyone else — the
+// human chiming in on a message meant for a reviewer, or the author itself — does not answer it; a message
+// addressed to the human is answered by the human's reply. "Answered" is deliberately never a stored
+// DeliveryStatus value (unlike accepted/delivered/acknowledged/undeliverable, each of which has its own control
+// kind below): it is always computed fresh from the current message set, the same "derived, not stored"
+// discipline ReadyContinuations/ReadyWaits use elsewhere in this package, so replaying an older journal
+// evaluates it with the same rule.
 func (ms MeshState) MessageAnswered(id agentcomm.MessageID) bool {
+	orig := ms.Messages[id]
+	if orig == nil {
+		return false
+	}
 	for _, m := range ms.Messages {
-		if m.InReplyTo != nil && *m.InReplyTo == id {
+		if m.InReplyTo != nil && *m.InReplyTo == id && slices.Contains(orig.Recipients, m.Sender) {
 			return true
 		}
 	}

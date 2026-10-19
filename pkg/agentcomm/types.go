@@ -249,7 +249,7 @@ type WaitID string
 type WaitConditionKind string
 
 const (
-	// WaitOnReplyTo is satisfied when some message in the thread has InReplyTo equal to MessageID.
+	// WaitOnReplyTo is satisfied when a recipient of MessageID replies to it (InReplyTo = MessageID).
 	WaitOnReplyTo WaitConditionKind = "reply_to"
 	// WaitOnAddressedMessage is satisfied by any new message addressed to the waiter in ThreadID.
 	WaitOnAddressedMessage WaitConditionKind = "addressed_message"
