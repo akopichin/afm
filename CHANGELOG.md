@@ -61,6 +61,12 @@ running when its result could not be mirrored to its parent. Answering a
 Discussion post that mentioned the agent clears its **Not answered** mark.
 Journals written before this change load unchanged.
 
+### Fix: a paused agent's unread message keeps the run open
+
+A paused agent or helper with work waiting — a message it has not read yet or
+a turn it was in — now keeps the run open until you continue or cancel it.
+Before, the run could finish with the message never read.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was

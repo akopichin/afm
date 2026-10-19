@@ -342,13 +342,11 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 // starts it: a resume (waiting_peer/waiting_children → queued, then queued → running in a separate operation)
 // or a message accepted during a run agent's last turn. Without this check the run loop could finalize the run
 // in between, and the start would then be rejected run_finalizing, losing the turn. Only an idle run agent
-// (idleRunAgent) and a held (paused) task are exempt: neither starts on its own.
+// (idleRunAgent) is exempt. A held (paused) task is not: the hold defers its accepted work, it does not drop
+// it, so the run stays open — like a paused stage — until the human continues or cancels the task.
 func queuedTurnDue(rs state.RunState) bool {
-	for id, t := range rs.Assistants.Tasks {
+	for _, t := range rs.Assistants.Tasks {
 		if t.Status != assistants.StatusQueued {
-			continue
-		}
-		if held, _ := rs.Assistants.EffectivelyHeld(id); held {
 			continue
 		}
 		if t.Scope == assistants.ScopeRun && idleRunAgent(rs, t) {

@@ -126,6 +126,8 @@ Choose when it runs:
 Attached helpers appear as child rows in the stage rail. Select one to see its
 status, verdict, findings, delegation breadcrumb, and, for watchers, pass count.
 The task view offers **Pause**, **Continue**, and **Cancel** while applicable.
+A paused task with work waiting — a message it has not read yet or a turn it was
+in — keeps the run open until you continue or cancel it.
 If a required helper cannot pass, **Waive…** lets a human unblock the stage by
 recording a reason. Required tasks with `needs_changes` or `inconclusive` do not
 pass the gate; a `pass` verdict does.

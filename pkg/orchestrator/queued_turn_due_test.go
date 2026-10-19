@@ -8,8 +8,8 @@ import (
 )
 
 // TestQueuedTurnDue_HoldsTheRunUntilTheStartCommits: a queued task holds the run open while its turn is due —
-// a resumed run agent between its resume and its start, a run agent with a message to read, a stage helper —
-// but an idle run agent and a held task never do.
+// a resumed run agent between its resume and its start, a run agent with a message to read, a stage helper, and
+// a held task whose accepted work the hold only defers — but an idle run agent never does, held or not.
 func TestQueuedTurnDue_HoldsTheRunUntilTheStartCommits(t *testing.T) {
 	queued := func(id string, scope assistants.Scope, reason string) *state.TaskState {
 		return &state.TaskState{Task: assistants.Task{ID: assistants.TaskID(id), Scope: scope, Status: assistants.StatusQueued, StatusReason: reason}}
@@ -24,7 +24,9 @@ func TestQueuedTurnDue_HoldsTheRunUntilTheStartCommits(t *testing.T) {
 		{"run agent attached without a message", queued("fresh", assistants.ScopeRun, ""), false, false},
 		{"resumed run agent", queued("resumed", assistants.ScopeRun, "resumed: mesh wait ready"), false, true},
 		{"queued stage helper", queued("helper", assistants.ScopeStage, ""), false, true},
-		{"held task", queued("held", assistants.ScopeStage, "re-queued: paused while running"), true, false},
+		{"held task", queued("held", assistants.ScopeStage, "re-queued: paused while running"), true, true},
+		{"held resumed run agent", queued("held-resumed", assistants.ScopeRun, "resumed: mesh wait ready"), true, true},
+		{"held idle run agent", queued("held-idle", assistants.ScopeRun, runAgentIdleReason), true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rs := *state.NewRunState(nil)
