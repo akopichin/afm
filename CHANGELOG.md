@@ -5,6 +5,31 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Improvement: the stage Feed composer writes to several people
+
+With Agent Mesh and collaboration on, the stage Feed composer opens in
+**Message** mode and is there for any non-script stage while the run is going;
+**Revise** is a tab only while the stage takes one (`running`,
+`awaiting_approval`, `awaiting_assistants` — the Revise API now accepts
+`awaiting_assistants` too). A **To** row shows the recipients as chips: a click
+in the People panel adds one, `@handles` typed in the text count, **+** opens the
+`@` list, and with nobody named the message goes to the stage's agent if it can
+read it. An unknown, ambiguous or unreachable recipient is an error with its
+reason, never a silent redirect. One message reaches all recipients through the
+new `POST /api/mesh/messages`: the server resolves the names, continues their
+open conversation that the stage's feed shows or opens one in the same
+operation, and replays the original receipt for a retried request id. Each
+recipient gets its own delivery state. **↩ Reply in conversation** is one active
+reply, told apart from a Revise reply to a thought; the conversation preview
+above the input is gone, since conversations show in the feed. The People panel
+has **Add run agent…** and **Attach helper to stage…** side by side.
+
+### Fix: a just-added run agent shows under its name
+
+`POST /api/mesh/attach-and-send` now returns the new participant's roster entry,
+so an agent added from the People panel or Team shows and is addressed as
+`@alias` at once instead of `@run:t-…` until the next roster poll.
+
 ### Improvement: a team review example
 
 `examples/agent-team-review/` shows `team:` at work: two reviewer run agents

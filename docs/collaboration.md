@@ -355,10 +355,10 @@ environment, and the agents' mesh tokens. Values shorter than 4 characters are
 left as they are: they cannot be meaningful credentials, and replacing them would
 garble ordinary text.
 
-A running stage's [Feed composer](dashboard.md#sending-a-note-to-a-running-stage)
-can send a **Message** to an existing participant or attach a configured helper
-through a preview. Its **Revise** mode continues to send stage feedback through
-the existing revision path. In the Side agent, an `@` mention records a role with
+A stage's [Feed composer](dashboard.md#writing-to-a-stage-from-its-feed) sends a
+**Message** — one message to one or several participants, the stage's agent by
+default — or attaches a configured helper through a preview. Its **Revise** mode
+continues to send stage feedback through the existing revision path. In the Side agent, an `@` mention records a role with
 the chat message; it still does not attach a helper by itself.
 
 ## Helper answers and protocol errors

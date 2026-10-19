@@ -190,17 +190,27 @@ commentable elements, Enter opens the form); the `## Assumptions` / `## Acceptan
 Criteria` sections are collapsible. The same per-element commenting works on an agent's
 **question** in the Communication channel.
 
-## Sending a note to a running stage
+## Writing to a stage from its Feed
 
-While a stage is actively `running`, a messenger-style composer is pinned to the
-bottom of its **Feed**. With Agent Mesh and collaboration on it has **Revise** and
-**Message** modes; **Revise** is selected by default and keeps the existing note
-behavior. With collaboration off (`AFM_COLLABORATION=0`) the composer is the plain
-note field, without modes, and sends a Revise:
+A messenger-style composer is pinned to the bottom of a stage's **Feed**.
 
-1. Select the `running` stage and open its **Feed** tab. A note input sits at the
-   bottom: a growing textarea, an **Attach** button, and a send button. It
-   appears only for a `running`, non-script stage.
+With collaboration off (`AFM_COLLABORATION=0`) it is the plain note field, without
+modes, shown only while the stage is `running` (and not a script stage); it sends a
+Revise. With Agent Mesh and collaboration on it has two modes:
+
+- **Message** (selected by default) — write to people in the run without
+  restarting the stage. Available for any non-script stage while the run is going,
+  whatever the stage's status.
+- **Revise** — the note that restarts the stage's agent with your text. The tab is
+  there only while the stage takes a Revise: `running`, `awaiting_approval` or
+  `awaiting_assistants`, and not during a review pause.
+
+Each mode keeps its own draft when you switch between them.
+
+### Revise
+
+1. Select the stage and open its **Feed** tab (with modes, pick **Revise**). The
+   input is a growing textarea, an **Attach** button and a send button.
 2. Type your note and send it — click **Apply Revise** when the composer has
    modes (otherwise the send button), or press **Cmd/Ctrl+Enter**
    (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
@@ -208,16 +218,45 @@ note field, without modes, and sends a Revise:
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
    not a kill); the stage moves through `revising` and restarts the same phase
    (planning/implementation/review/autonomous) with your note folded into its
-   context, then continues toward `done`.
+   context, then continues toward `done`. An agent waiting for its helpers
+   (`awaiting_assistants`) has finished its turn; a Revise starts it again.
 4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
    the agent's own messages (it is not clickable — it's a record of what you sent).
 
-Choose **Message** to contact a Team participant without revising the stage. Type
-`@` and pick someone under **This run** or **This stage**; sending uses an existing
-direct conversation or opens one on the first message. **Attach to stage** lists
-available configured roles and opens an attach preview before sending. The message
-view shows its conversation and delivery status. A failed send leaves the draft
-available to retry. See [Team conversations](collaboration.md#team-conversations).
+Click **↩** on one of the agent's thoughts to answer it: the composer switches to
+**Revise** and shows the quoted thought above the input (**↩ In reply to**).
+
+### Message
+
+The **To** row above the input lists who the message goes to:
+
+- People you click in the [People panel](#people-panel) — each click adds a
+  recipient chip; your text is left as it is.
+- `@handles` you type in the text. Type `@` (or click **+** in the **To** row) to
+  pick someone under **This run** or **This stage**; their `@handle` goes into
+  the text and shows as a chip. A handle typed by hand counts too.
+- Nobody named — the stage's own agent, shown as a dashed **stage agent** chip.
+  If it cannot read a message (the stage has finished, or it waits for its
+  helpers and reads a note only as a Revise), the row says why and you must pick
+  someone; **Use Revise** switches modes when Revise is available.
+
+**×** on a chip removes that recipient (a typed one is removed from the text). A
+name nobody in the run has, an alias several people share, or someone who can no
+longer receive messages is marked on its chip and explained under the input;
+nothing is sent until you fix it. afm never sends to someone else instead.
+
+Sending posts **one** message to all recipients. It goes into your open
+conversation with exactly those people that this stage's feed shows, or opens a
+new one there in the same step. A failed send keeps the draft and shows the
+server's reason; sending it again is the same message, never a duplicate. Under
+the input each recipient gets its own delivery state (*Delivered*, *Waiting for
+an inbox check*, *Paused · waiting for Continue*, *Answered* once that recipient
+replies, …).
+
+**Attach to stage** in the `@` list lists available configured roles: picking one
+adds an *Attach helper* chip, and Send opens the attach preview with your text as
+the helper's assignment (it must be the only recipient). See
+[Team conversations](collaboration.md#team-conversations).
 
 ### People panel
 
@@ -236,18 +275,20 @@ with the selected stage on top; conversations stay in the **Team** tab.
   current environment gives its command; if the agent was added under a
   different one (for example, a host run resumed in Docker), the badge's tooltip
   says so. A finished agent shows the guarantee it ran under.
-- Click a person to put their `@handle` into the composer and address them, the
-  same as picking them from the `@` menu; the composer switches to **Message**.
-  A message has one recipient, so picking someone else replaces the previous
-  `@handle` (or the one your draft starts with) and keeps the rest of your text,
-  with the cursor at its end. A reply under way stays only if the new person is
-  in that conversation. You can do this while the stage is `running` and its
-  composer is shown.
+- Click a person to add them to the composer's recipients: the composer switches
+  to **Message** and the person gets a chip in the **To** row; click more people
+  to write to several at once. You can do this while the stage's composer is
+  shown (any non-script stage while the run is going).
 - A finished stage or task stays listed but is disabled (*Finished — can't
   write*). A script stage is listed but disabled too: no agent reads its
   messages. A stage that has not started yet can be addressed: it reads the
-  message when it starts. An agent you just added can be picked right away.
-- **+ Add agent** opens the same dialog as **Add run agent** in Team.
+  message when it starts. An agent you just added shows under its `@handle` and
+  can be picked right away.
+- Two buttons at the bottom add someone new: **Add run agent…** opens the same
+  dialog as **Add run agent** in Team (an agent of the whole run, which can talk
+  to every stage); **Attach helper to stage…** opens the stage's **Attach
+  helper** dialog (a helper that works for this stage's agent). The second is
+  shown only while the stage can take a helper.
 
 On a narrower window the panel becomes a drawer: open it with the 👥 button at
 the right of the stage header. The open drawer takes the keyboard focus and
@@ -271,10 +312,13 @@ jump to that message) and a **turn result** tag on a turn result.
   **Author's work** (only the stage's own events). Each chip shows how many
   rows that filter shows. Messages addressed to you stay visible under every
   filter.
-- **↩ Reply in conversation** puts the author's `@handle` into the composer
-  (switching it to **Message**) and answers that message in its conversation.
-  It is offered while the composer is shown, on open conversations you are a
-  member of, and while the author can still read it; a conversation closed
+- **↩ Reply in conversation** answers that message in its conversation: the
+  composer switches to **Message**, the author becomes a recipient and a
+  **↩ Reply in conversation** chip quotes the message, which is highlighted in
+  the feed. One message is answered at a time — choosing another replaces it;
+  **✕** cancels. It is told apart from answering a thought with Revise by its
+  colour. It is offered while the composer is shown, on open conversations you
+  are a member of, and while the author can still read it; a conversation closed
   meanwhile loses it on the next poll.
 - A line such as *@qa is working* at the bottom shows who among the people in
   this stage's conversations, and its helpers, is in a turn right now.
