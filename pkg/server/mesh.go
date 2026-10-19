@@ -55,8 +55,8 @@ type MeshOpenThreadRequest struct {
 }
 
 // MeshStageMessagePage is GET /api/mesh/stages/{id}/messages' response: a page of the stage feed's
-// conversation messages in journal order, every thread the feed shows (on every page, so a poll with nothing
-// new still refreshes a thread's status), and the cursor of the next page.
+// conversation messages in journal order, the feed's threads opened or closed after the cursor (a client merges
+// them by id, so a thread's status change arrives without a new message), and the cursor of the next page.
 type MeshStageMessagePage struct {
 	Messages   []agentcomm.Message `json:"messages"`
 	Threads    []agentcomm.Thread  `json:"threads"`

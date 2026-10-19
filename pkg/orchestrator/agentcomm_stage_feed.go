@@ -11,9 +11,10 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// StageMessagePage is one page of a stage feed's conversation messages, in journal order, and every thread the
-// feed shows — on every page, even one with no new message, so a reader sees a thread's status change (a
-// conversation closed after its last message) without waiting for a message in it.
+// StageMessagePage is what changed in a stage feed's conversations in the journal range (cursor, NextCursor]:
+// the messages committed there, in journal order, and the feed's threads opened or closed there. A reader that
+// keeps the threads it has seen and merges each page's threads by id sees a status change (a conversation
+// closed after its last message) without waiting for a message in it, and a quiet poll returns nothing.
 type StageMessagePage struct {
 	Messages   []agentcomm.Message
 	Threads    []agentcomm.Thread
@@ -44,17 +45,20 @@ func threadInStageFeed(rs state.RunState, th *agentcomm.Thread, stageID string) 
 }
 
 // StageMessages returns the conversation messages stage stageID's feed shows (threadInStageFeed) committed
-// after cursor, in journal order, at most limit of them (defaultMeshPageLimit when limit <= 0), with every
-// thread of the feed. A page never splits the messages of one operation (they share a seq), so a cursor-based
-// reader never skips one. It is polled every few seconds, so it reads the live projection (Store.View) instead
-// of a full copy, and finds each thread's new messages by binary search over its seq-ordered message list: an
-// empty poll costs a pass over the threads, not over the run's whole history.
+// after cursor, in journal order, at most limit of them (defaultMeshPageLimit when limit <= 0), and the feed's
+// threads changed in the same range. A page never splits the messages of one operation (they share a seq), so
+// a cursor-based reader never skips one. The last page also covers threads changed after its last message, and
+// its NextCursor moves past them, so the next poll does not return them again. It is polled every few seconds,
+// so it reads the live projection (Store.View) instead of a full copy, and finds each thread's new messages by
+// binary search over its seq-ordered message list: an empty poll costs a pass over the threads' ids, not over
+// the run's whole history, and copies nothing.
 func (o *Orchestrator) StageMessages(stageID string, cursor uint64, limit int) StageMessagePage {
 	if limit <= 0 {
 		limit = defaultMeshPageLimit
 	}
 	page := StageMessagePage{NextCursor: cursor}
 	var msgs []agentcomm.Message
+	var changed []changedThread
 	o.opts.Store.View(func(rs *state.RunState) {
 		mesh := rs.Assistants.Mesh
 		for _, id := range mesh.ThreadOrder {
@@ -62,9 +66,11 @@ func (o *Orchestrator) StageMessages(stageID string, cursor uint64, limit int) S
 			if th == nil || !threadInStageFeed(*rs, th, stageID) {
 				continue
 			}
-			thread := *th
-			thread.Members = slices.Clone(th.Members)
-			page.Threads = append(page.Threads, thread)
+			if seq := mesh.ThreadChangedSeq[id]; seq > cursor {
+				thread := *th
+				thread.Members = slices.Clone(th.Members)
+				changed = append(changed, changedThread{thread, seq})
+			}
 			msgs = append(msgs, messagesAfter(mesh, id, cursor, limit)...)
 		}
 	})
@@ -78,7 +84,21 @@ func (o *Orchestrator) StageMessages(stageID string, cursor uint64, limit int) S
 		page.Messages = append(page.Messages, m)
 		page.NextCursor = m.Seq
 	}
+	lastMessage := page.NextCursor
+	for _, c := range changed {
+		if page.HasMore && c.seq > lastMessage {
+			continue // a later page covers it
+		}
+		page.Threads = append(page.Threads, c.thread)
+		page.NextCursor = max(page.NextCursor, c.seq)
+	}
 	return page
+}
+
+// changedThread is a copy of a thread with the seq of the record that last changed it.
+type changedThread struct {
+	thread agentcomm.Thread
+	seq    uint64
 }
 
 // messagesAfter copies thread's messages committed after cursor — at most limit of them plus the rest of the

@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { MAX_STAGE_MESSAGES, useStageConversation } from './use-stage-conversation'
+import { MAX_STAGE_MESSAGES, MAX_STAGE_THREADS, useStageConversation } from './use-stage-conversation'
 import * as meshClient from '../../api/mesh-client'
 
 function msg(id: string, seq: number, threadId = 'mt-1'): meshClient.MeshMessage {
@@ -57,15 +57,33 @@ describe('useStageConversation', () => {
     await waitFor(() => expect(spy).toHaveBeenCalledWith('docs', 0, 100))
   })
 
-  test('a poll with no new message still refreshes the status of the threads', async () => {
+  test('a thread closed without a new message updates; threads not sent again stay', async () => {
     const spy = vi.spyOn(meshClient, 'getStageMessages')
-    spy.mockResolvedValueOnce({ messages: [msg('m1', 3)], threads: [thread('mt-1')], next_cursor: 3, has_more: false })
-    spy.mockResolvedValue({ messages: [], threads: [{ ...thread('mt-1'), status: 'closed' }], next_cursor: 3, has_more: false })
+    spy.mockResolvedValueOnce({ messages: [msg('m1', 3), msg('m2', 4, 'mt-2')], threads: [thread('mt-1'), thread('mt-2')], next_cursor: 4, has_more: false })
+    spy.mockResolvedValueOnce({ messages: [], threads: [{ ...thread('mt-1'), status: 'closed' }], next_cursor: 6, has_more: false })
+    spy.mockResolvedValue({ messages: [], threads: [], next_cursor: 6, has_more: false })
 
     const { result } = renderHook(() => useStageConversation('impl'))
     await waitFor(() => expect(result.current.threads['mt-1']?.status).toBe('open'))
     await waitFor(() => expect(result.current.threads['mt-1']?.status).toBe('closed'), { timeout: 5000 })
-    expect(result.current.messages.map((m) => m.id)).toEqual(['m1'])
+    expect(spy).toHaveBeenCalledWith('impl', 4, 100)
+    expect(result.current.threads['mt-2']?.status).toBe('open')
+    expect(result.current.messages.map((m) => m.id)).toEqual(['m1', 'm2'])
+  })
+
+  test('keeps only the MAX_STAGE_THREADS most recently changed threads', async () => {
+    const spy = vi.spyOn(meshClient, 'getStageMessages')
+    const many = Array.from({ length: MAX_STAGE_THREADS + 2 }, (_, i) => thread(`mt-${i}`))
+    spy.mockResolvedValueOnce({ messages: [], threads: many, next_cursor: 10, has_more: false })
+    spy.mockResolvedValueOnce({ messages: [], threads: [{ ...thread('mt-0'), status: 'closed' }], next_cursor: 11, has_more: false })
+    spy.mockResolvedValue({ messages: [], threads: [], next_cursor: 11, has_more: false })
+
+    const { result } = renderHook(() => useStageConversation('impl'))
+    await waitFor(() => expect(Object.keys(result.current.threads)).toHaveLength(MAX_STAGE_THREADS))
+    expect(result.current.threads['mt-0']).toBeUndefined()
+    await waitFor(() => expect(result.current.threads['mt-0']?.status).toBe('closed'), { timeout: 5000 })
+    expect(Object.keys(result.current.threads)).toHaveLength(MAX_STAGE_THREADS)
+    expect(result.current.threads['mt-2']).toBeUndefined()
   })
 
   test('keeps only the newest MAX_STAGE_MESSAGES messages', async () => {

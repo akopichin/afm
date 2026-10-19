@@ -7,12 +7,14 @@ const PAGE_LIMIT = 100
 // MAX_STAGE_MESSAGES bounds the conversation history kept for one stage's feed, like the feed's own event cap
 // (use-stage-events): only the newest messages stay; Team still shows every conversation in full.
 export const MAX_STAGE_MESSAGES = 2000
+// MAX_STAGE_THREADS bounds the threads kept for one stage's feed: the most recently changed stay.
+export const MAX_STAGE_THREADS = 500
 
 export type StageConversation = {
   // messages — every conversation message the stage's feed shows, in journal order, each once.
   messages: MeshMessage[]
-  // threads — every thread of the stage's feed, by id, refreshed on every poll (a status change shows even in
-  // a quiet thread).
+  // threads — the stage feed's threads, by id. The server sends a thread again only when it is opened or closed
+  // (a status change shows even in a quiet thread); the newest-changed MAX_STAGE_THREADS are kept.
   threads: Record<string, MeshThread>
 }
 
@@ -54,10 +56,8 @@ export function useStageConversation(stageId: string | null): StageConversation 
         }
         const changedThreads = threads.filter((t) => !sameThread(base.threads[t.id], t))
         if (added.length === 0 && changedThreads.length === 0 && base === prev) return prev
-        const byId = { ...base.threads }
-        for (const t of changedThreads) byId[t.id] = t
         const kept = added.length === 0 ? base.messages : [...base.messages, ...added].slice(-MAX_STAGE_MESSAGES)
-        return { stageId, messages: kept, threads: byId }
+        return { stageId, messages: kept, threads: mergeThreads(base.threads, changedThreads) }
       })
     }, POLL_INTERVAL_MS)
     return poll.stop
@@ -65,6 +65,18 @@ export function useStageConversation(stageId: string | null): StageConversation 
 
   // A response for the previous stage is never shown for this one.
   return loaded.stageId === stageId ? loaded : EMPTY
+}
+
+// mergeThreads moves each changed thread to the end of the record (insertion order is change order) and keeps
+// the last MAX_STAGE_THREADS.
+function mergeThreads(known: Record<string, MeshThread>, changed: MeshThread[]): Record<string, MeshThread> {
+  const merged = { ...known }
+  for (const t of changed) {
+    delete merged[t.id]
+    merged[t.id] = t
+  }
+  const entries = Object.entries(merged)
+  return entries.length <= MAX_STAGE_THREADS ? merged : Object.fromEntries(entries.slice(-MAX_STAGE_THREADS))
 }
 
 function sameThread(a: MeshThread | undefined, b: MeshThread): boolean {

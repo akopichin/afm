@@ -21,6 +21,9 @@ type MeshState struct {
 
 	Threads     map[agentcomm.ThreadID]*agentcomm.Thread `json:"threads,omitempty"`
 	ThreadOrder []agentcomm.ThreadID                     `json:"thread_order,omitempty"`
+	// ThreadChangedSeq is the seq of the record that last changed each thread (opened or closed it), so a
+	// poller can ask for the threads changed after its cursor instead of re-reading every thread.
+	ThreadChangedSeq map[agentcomm.ThreadID]uint64 `json:"thread_changed_seq,omitempty"`
 
 	Messages map[agentcomm.MessageID]*agentcomm.Message `json:"messages,omitempty"`
 	// MessagesByThread preserves each thread's commit order — the same role Discussions.ByStage plays for
@@ -43,6 +46,7 @@ func newMeshState() MeshState {
 	return MeshState{
 		Participants:     map[agentcomm.ParticipantID]*agentcomm.Participant{},
 		Threads:          map[agentcomm.ThreadID]*agentcomm.Thread{},
+		ThreadChangedSeq: map[agentcomm.ThreadID]uint64{},
 		Messages:         map[agentcomm.MessageID]*agentcomm.Message{},
 		MessagesByThread: map[agentcomm.ThreadID][]agentcomm.MessageID{},
 		Inbox:            map[agentcomm.ParticipantID][]agentcomm.MessageID{},
@@ -66,6 +70,9 @@ func (ms MeshState) clone() MeshState {
 		out.Threads[id] = th
 	}
 	out.ThreadOrder = append([]agentcomm.ThreadID(nil), ms.ThreadOrder...)
+	for id, seq := range ms.ThreadChangedSeq {
+		out.ThreadChangedSeq[id] = seq
+	}
 	for id, m := range ms.Messages {
 		out.Messages[id] = m
 	}
@@ -329,6 +336,7 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	}
 	as.Mesh.Threads[id] = &thread
 	as.Mesh.ThreadOrder = append(as.Mesh.ThreadOrder, id)
+	as.Mesh.ThreadChangedSeq[id] = c.Seq
 	return nil
 }
 
@@ -354,6 +362,7 @@ func applyMeshThreadClosed(as *AssistantsState, c *Control, dryRun bool) error {
 		return nil
 	}
 	th.Status = agentcomm.ThreadClosed
+	as.Mesh.ThreadChangedSeq[id] = c.Seq
 
 	threadMessages := make(map[agentcomm.MessageID]bool, len(as.Mesh.MessagesByThread[id]))
 	for _, mid := range as.Mesh.MessagesByThread[id] {

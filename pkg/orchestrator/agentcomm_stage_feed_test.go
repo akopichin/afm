@@ -98,15 +98,20 @@ func TestStageMessages_ConversationsOfTheStage(t *testing.T) {
 		t.Fatalf("docs feed = %q, want %q", got, want)
 	}
 
-	// The cursor walks the same messages one page at a time; each page names the threads of its messages.
+	// The cursor walks the same messages one page at a time; a message's thread arrives no later than the
+	// message itself.
 	var bodies []string
+	seen := map[agentcomm.ThreadID]bool{}
 	cursor := uint64(0)
 	for {
 		page := o.StageMessages(assistantsTestStageID, cursor, 1)
+		for _, th := range page.Threads {
+			seen[th.ID] = true
+		}
 		for _, m := range page.Messages {
 			bodies = append(bodies, m.Body)
-			if !slices.ContainsFunc(page.Threads, func(th agentcomm.Thread) bool { return th.ID == m.ThreadID }) {
-				t.Fatalf("page threads %+v miss the thread of %s", page.Threads, m.ID)
+			if !seen[m.ThreadID] {
+				t.Fatalf("the thread of %s has not arrived by its page", m.ID)
 			}
 		}
 		if !page.HasMore {
@@ -119,9 +124,10 @@ func TestStageMessages_ConversationsOfTheStage(t *testing.T) {
 	}
 }
 
-// TestStageMessages_EveryPollCarriesTheThreadsStatus: a poll with nothing new still returns every thread of the
-// stage's feed, so a conversation closed after its last message shows as closed without a new message.
-func TestStageMessages_EveryPollCarriesTheThreadsStatus(t *testing.T) {
+// TestStageMessages_PollsReturnOnlyChangedThreads: a poll returns the feed's threads opened or closed after its
+// cursor and nothing else — a quiet poll is empty, and a conversation closed after its last message shows as
+// closed once, without a new message and without the feed's other threads.
+func TestStageMessages_PollsReturnOnlyChangedThreads(t *testing.T) {
 	o, _ := newTwoStageMeshOrchestrator(t)
 	ctx := context.Background()
 	impl := meshStageParticipantID(assistantsTestStageID)
@@ -129,17 +135,31 @@ func TestStageMessages_EveryPollCarriesTheThreadsStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendFromAgent: %v", err)
 	}
-	cursor := o.StageMessages(assistantsTestStageID, 0, 0).NextCursor
+	if _, err := o.PostDiscussionMessage(ctx, humanPost("op-post", "impl discussion", nil, false)); err != nil {
+		t.Fatalf("PostDiscussionMessage: %v", err)
+	}
+	first := o.StageMessages(assistantsTestStageID, 0, 0)
+	if len(first.Threads) != 2 {
+		t.Fatalf("first poll threads = %+v, want both conversations", first.Threads)
+	}
+	cursor := first.NextCursor
+
+	if quiet := o.StageMessages(assistantsTestStageID, cursor, 0); len(quiet.Threads) != 0 || len(quiet.Messages) != 0 || quiet.NextCursor != cursor {
+		t.Fatalf("quiet poll = %+v, want nothing at cursor %d", quiet, cursor)
+	}
 
 	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "op-close", ThreadID: r.ThreadID, Actor: state.Actor{Kind: actorKindUser}}); err != nil {
 		t.Fatalf("CloseThread: %v", err)
 	}
 	page := o.StageMessages(assistantsTestStageID, cursor, 0)
-	if len(page.Messages) != 0 || page.NextCursor != cursor {
-		t.Fatalf("page = %+v, want no new messages at cursor %d", page, cursor)
+	if len(page.Messages) != 0 || page.NextCursor <= cursor {
+		t.Fatalf("page = %+v, want no new messages and a cursor past the close", page)
 	}
 	if len(page.Threads) != 1 || page.Threads[0].ID != r.ThreadID || page.Threads[0].Status != agentcomm.ThreadClosed {
-		t.Fatalf("threads = %+v, want %s, closed", page.Threads, r.ThreadID)
+		t.Fatalf("threads = %+v, want only %s, closed", page.Threads, r.ThreadID)
+	}
+	if again := o.StageMessages(assistantsTestStageID, page.NextCursor, 0); len(again.Threads) != 0 {
+		t.Fatalf("next poll threads = %+v, want none: the close was already returned", again.Threads)
 	}
 }
 
