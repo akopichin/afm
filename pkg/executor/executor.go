@@ -126,18 +126,22 @@ type Config struct {
 	// message is not main-agent output"). Synchronous and never selected/dropped — unlike bus.UIBus, there is
 	// no channel here to overflow (TestObservation_UIBusDropDoesNotAffectObservations).
 	OnObservation func(Observation)
-	SessionID     string                       // if non-empty, passed via --session-id (or --resume when Resume=true)
-	Resume        bool                         // if true, --resume <SessionID> is used instead of --session-id
-	StageDir      string                       // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	ScratchDir    string                       // passed to a helper agent as AFM_SCRATCH_DIR: its own directory for notes
-	WrapperDir    string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
-	Dir           string                       // if set, agent runs with this working directory (project root from flow.root_dir)
-	Debug         bool                         // if true, log the exact agent input (prompt) to debug logs
-	RunDir        string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
-	StageID       string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
-	Phase         string                       // phase label for the accounting Observation this invocation produces
-	UsageHint     accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
-	OnUsage       func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
+	SessionID     string // if non-empty, passed via --session-id (or --resume when Resume=true)
+	Resume        bool   // if true, --resume <SessionID> is used instead of --session-id
+	StageDir      string // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
+	ScratchDir    string // passed to a helper agent as AFM_SCRATCH_DIR: its own directory for notes
+	// Redact, if set, masks secrets in everything RunHelperAgent writes or reports: the raw stream (*.jsonl),
+	// the action log and OnAction details, stderr and the raw answer. It is called at write time, so a secret
+	// that appears only after the executor was configured (the agent's own mesh token) is masked too.
+	Redact     func(string) string
+	WrapperDir string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir        string                       // if set, agent runs with this working directory (project root from flow.root_dir)
+	Debug      bool                         // if true, log the exact agent input (prompt) to debug logs
+	RunDir     string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
+	StageID    string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	Phase      string                       // phase label for the accounting Observation this invocation produces
+	UsageHint  accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
+	OnUsage    func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
 	// InterruptCh, if set, is watched during RunAgent: a signal on this channel sends SIGINT to the
 	// subprocess — graceful, user-requested interrupt, distinct from idle timeout / full-run shutdown.
 	InterruptCh <-chan struct{}
@@ -386,6 +390,9 @@ func contentToAction(c streamContent, limit int) (toolName, detail string, ok bo
 		return "", "", false
 	}
 }
+
+// stderrPipeWaitDelay bounds how long Wait keeps copying a piped stderr after the agent has exited.
+const stderrPipeWaitDelay = 2 * time.Second
 
 // openStderrLog opens <logBase>.stderr.log for appending so the agent's stderr is captured instead of
 // lost. Returns nil on error — stderr is diagnostic only, callers fall back to io.Discard.
@@ -1031,6 +1038,11 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = stderr
+	if _, isFile := stderr.(*os.File); !isFile {
+		// A non-file writer is fed through a pipe. A background process the agent left behind may keep that pipe
+		// open; once the agent itself has exited, Wait must not wait for it.
+		cmd.WaitDelay = stderrPipeWaitDelay
+	}
 
 	// Перед запуском процесса повторно проверяем ctx и interrupt, чтобы не спавнить уже отменённый вызов.
 	select {
@@ -1065,6 +1077,9 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		waitErr := cmd.Wait()
 		if readErr != nil {
 			return readErr
+		}
+		if errors.Is(waitErr, exec.ErrWaitDelay) {
+			return nil // the agent exited cleanly; only a leftover child still held its stderr pipe
 		}
 		return waitErr
 	case <-idleTimer.C():

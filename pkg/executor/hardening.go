@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -91,10 +92,19 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 	defer jf.Close()
 
+	redactText := func(s string) string {
+		if e.cfg.Redact == nil {
+			return s
+		}
+		return e.cfg.Redact(s)
+	}
+
 	var stderr = io.Discard
 	if sf := openStderrLog(logFile); sf != nil {
-		stderr = sf
 		defer sf.Close()
+		lines := &lineRedactor{w: sf, redact: redactText}
+		defer func() { _ = lines.Flush() }() // deferred after sf.Close, so it runs first; a lost log tail is not fatal
+		stderr = lines
 	}
 
 	lg.LogStart(profileID, taskID)
@@ -117,13 +127,13 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	collector := accounting.NewCollector(he.cfg.UsageHint)
 	runErr := he.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
-		jf.WriteString(line + "\n") //nolint:errcheck
+		jf.WriteString(redactText(line) + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
 			if isErrorLine(line) {
-				lg.LogAction("error", line)
+				lg.LogAction("error", redactText(line))
 				if firstErr == "" {
-					firstErr = line
+					firstErr = redactText(line)
 				}
 			}
 			return
@@ -136,6 +146,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 				haveFinalText = true
 			}
 			if tool, detail, actionOK := contentToAction(c, he.cfg.TruncateOutput); actionOK {
+				detail = redactText(detail)
 				lg.LogAction(tool, detail)
 				if he.cfg.OnAction != nil {
 					he.cfg.OnAction(tool, detail)
@@ -167,7 +178,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 
 	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
-		outcome.RawText = finalText.String()
+		outcome.RawText = redactText(finalText.String())
 		if werr := os.WriteFile(resultFile, []byte(outcome.RawText), 0644); werr != nil {
 			return outcome, fmt.Errorf("write result file: %w", werr)
 		}
@@ -180,4 +191,44 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		outcome.ProtocolErr = errors.New("helper produced no final answer")
 	}
 	return outcome, nil
+}
+
+// lineRedactor writes whole lines through redact, so a secret is never split across two writes; Flush writes a
+// last line that has no newline. A line longer than maxRedactedLine is written in pieces rather than held.
+type lineRedactor struct {
+	w      io.Writer
+	redact func(string) string
+	buf    []byte
+}
+
+const maxRedactedLine = 64 * 1024
+
+func (l *lineRedactor) Write(p []byte) (int, error) {
+	l.buf = append(l.buf, p...)
+	for {
+		i := bytes.IndexByte(l.buf, '\n')
+		if i < 0 {
+			break
+		}
+		if _, err := io.WriteString(l.w, l.redact(string(l.buf[:i+1]))); err != nil {
+			return 0, err
+		}
+		l.buf = l.buf[i+1:]
+	}
+	if len(l.buf) > maxRedactedLine {
+		if err := l.Flush(); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+// Flush writes whatever is buffered.
+func (l *lineRedactor) Flush() error {
+	if len(l.buf) == 0 {
+		return nil
+	}
+	_, err := io.WriteString(l.w, l.redact(string(l.buf)))
+	l.buf = nil
+	return err
 }

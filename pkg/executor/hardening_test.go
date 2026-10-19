@@ -275,3 +275,82 @@ func TestVerifyEnv_Unchanged(t *testing.T) {
 		t.Errorf("verify env must still set CODEX_VERIFY=1:\n%s", got)
 	}
 }
+
+// TestRunHelperAgent_RedactsEverythingItWrites: a secret the agent prints — in a tool call, an error line, on
+// stderr or in its final answer — never reaches the raw stream, the action log, the stderr log, the raw answer
+// file, OnAction or the returned RawText. Redact is called at write time.
+func TestRunHelperAgent_RedactsEverythingItWrites(t *testing.T) {
+	const secret = "s3cr3t-value"
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "agent.log")
+	resultFile := filepath.Join(dir, "result.json.raw")
+	toolLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo ` + secret + `"}}]}}`
+	script := "#!/bin/bash\n" +
+		"cat <<'EOF'\n" + toolLine + "\nEOF\n" +
+		`echo 'Error: token ` + secret + ` rejected'` + "\n" +
+		`echo 'stderr carries ` + secret + `' >&2` + "\n" +
+		emitAssistantTextScript(t, `{"schema_version":1,"kind":"result","verdict":"pass","summary":"saw `+secret+`"}`) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	ex := executor.New(executor.Config{
+		Command: scriptPath, IdleTimeout: 5 * time.Second,
+		Redact:   func(s string) string { return strings.ReplaceAll(s, secret, "[REDACTED]") },
+		OnAction: func(tool, detail string) { actions = append(actions, tool+" "+detail) },
+	})
+
+	outcome, err := ex.RunHelperAgent(context.Background(), "t1", "reviewer", "review", logFile, resultFile)
+	if err != nil {
+		t.Fatalf("RunHelperAgent: %v", err)
+	}
+	if strings.Contains(outcome.RawText, secret) {
+		t.Errorf("RawText carries the secret: %s", outcome.RawText)
+	}
+	for _, a := range actions {
+		if strings.Contains(a, secret) {
+			t.Errorf("OnAction got the secret: %s", a)
+		}
+	}
+	for _, f := range []string{logFile, filepath.Join(dir, "agent.jsonl"), filepath.Join(dir, "agent.stderr.log"), resultFile} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if strings.Contains(string(raw), secret) {
+			t.Errorf("%s carries the secret:\n%s", filepath.Base(f), raw)
+		}
+		if !strings.Contains(string(raw), "[REDACTED]") {
+			t.Errorf("%s lacks the redaction marker — was the line written at all?\n%s", filepath.Base(f), raw)
+		}
+	}
+}
+
+// TestRunHelperAgent_BackgroundChildHoldingStderrDoesNotHang: with Redact set, stderr goes through a pipe; a
+// background process the agent started that keeps that pipe open must not hold the turn once the agent exited.
+func TestRunHelperAgent_BackgroundChildHoldingStderrDoesNotHang(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/bash\n" +
+		"(sleep 30 >/dev/null &)\n" +
+		emitAssistantTextScript(t, helperValidResultJSON) + "\n" +
+		resultSuccessLine() + "\n"
+	scriptPath := filepath.Join(dir, "agent.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ex := executor.New(executor.Config{Command: scriptPath, IdleTimeout: 60 * time.Second, Redact: func(s string) string { return s }})
+
+	start := time.Now()
+	outcome, err := ex.RunHelperAgent(context.Background(), "t1", "reviewer", "review", filepath.Join(dir, "agent.log"), filepath.Join(dir, "raw"))
+	if err != nil {
+		t.Fatalf("RunHelperAgent: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Fatalf("the turn waited %s for a background child's stderr", elapsed)
+	}
+	if !outcome.ProcessOK {
+		t.Fatalf("outcome = %+v, want a clean finish", outcome)
+	}
+}
