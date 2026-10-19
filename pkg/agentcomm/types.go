@@ -80,6 +80,16 @@ type Participant struct {
 	// task on every roster read and never journaled; empty for stage agents (their stage status says it), the
 	// user and the Side agent.
 	Activity Activity `json:"activity,omitempty"`
+	// Command is the agent command (a configured client or docker.agents recipe name) this participant
+	// runs: a stage agent's effective stage command, a helper's or run agent's command frozen into its task's
+	// profile snapshot. Derived on every roster read and never journaled, like Activity; empty for the user,
+	// the Side agent and a script stage.
+	Command string `json:"command,omitempty"`
+	// ReadonlyEnforcement is the read-only guarantee ("os" — an OS sandbox, "none" — only the container or
+	// the prompt) frozen into a task-backed participant's profile snapshot when its task was admitted. Derived
+	// on every roster read and never journaled; empty for stage agents (they write the project), the user and
+	// the Side agent.
+	ReadonlyEnforcement string `json:"readonly_enforcement,omitempty"`
 }
 
 // Activity — what a run agent or helper is doing now, for the Team roster.

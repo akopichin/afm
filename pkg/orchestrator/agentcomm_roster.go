@@ -8,6 +8,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -128,14 +129,17 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 
 	stages := o.reg().Stages()
 	stageIDs := make([]string, 0, len(stages))
-	stageByID := make(map[string]string, len(stages)) // id -> name
+	stageByID := make(map[string]flow.Stage, len(stages))
 	for _, s := range stages {
 		stageIDs = append(stageIDs, s.ID)
-		stageByID[s.ID] = s.Name
+		stageByID[s.ID] = s
 	}
 	slices.Sort(stageIDs)
 	for _, id := range stageIDs {
-		out = append(out, stageParticipant(rs, id, stageByID[id]))
+		s := stageByID[id]
+		p := stageParticipant(rs, id, s.Name)
+		p.Command = o.stageAgentCommand(s)
+		out = append(out, p)
 	}
 
 	taskIDs := make([]string, 0, len(rs.Assistants.Tasks))
@@ -169,6 +173,16 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 	return out
 }
 
+// stageAgentCommand is the command a stage's main agent runs — empty for a script stage, which has no agent.
+// Only the full roster (liveRoster) fills it: resolveParticipant's single-id checks need reachability, not
+// the command, and have no registry at hand.
+func (o *Orchestrator) stageAgentCommand(s flow.Stage) string {
+	if s.Script != "" {
+		return ""
+	}
+	return o.stageCommand(s)
+}
+
 // stageParticipant synthesizes stageID's live roster entry. A stage finishing removes nothing from history
 // — it stays in the roster with Reachable=false and a reason, exactly like a terminal helper task.
 func stageParticipant(rs state.RunState, stageID, name string) agentcomm.Participant {
@@ -191,6 +205,7 @@ func helperParticipant(id assistants.TaskID, t *state.TaskState) agentcomm.Parti
 		ID: meshHelperParticipantID(id), Kind: agentcomm.KindHelper, Scope: agentcomm.ScopeStage,
 		Alias: string(id), DisplayName: t.Title, StageID: t.RootStageID, Reachable: reachable,
 		Activity: taskActivity(t, false),
+		Command:  t.ProfileSnapshot.Command, ReadonlyEnforcement: string(t.ProfileSnapshot.ReadonlyEnforcement),
 	}
 	if !reachable {
 		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", id)
@@ -260,6 +275,8 @@ func liveRunParticipant(rs state.RunState, p agentcomm.Participant) agentcomm.Pa
 		return p
 	}
 	p.Activity = taskActivity(t, idleRunAgent(rs, t))
+	p.Command = t.ProfileSnapshot.Command
+	p.ReadonlyEnforcement = string(t.ProfileSnapshot.ReadonlyEnforcement)
 	if t.Status.Terminal() {
 		p.Reachable = false
 		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", taskID)
