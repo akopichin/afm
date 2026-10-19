@@ -4,11 +4,15 @@ import { startSerialPoll } from '../../lib/serial-poll'
 
 const POLL_INTERVAL_MS = 3000
 const PAGE_LIMIT = 100
+// MAX_STAGE_MESSAGES bounds the conversation history kept for one stage's feed, like the feed's own event cap
+// (use-stage-events): only the newest messages stay; Team still shows every conversation in full.
+export const MAX_STAGE_MESSAGES = 2000
 
 export type StageConversation = {
   // messages — every conversation message the stage's feed shows, in journal order, each once.
   messages: MeshMessage[]
-  // threads — the threads of those messages, by id.
+  // threads — every thread of the stage's feed, by id, refreshed on every poll (a status change shows even in
+  // a quiet thread).
   threads: Record<string, MeshThread>
 }
 
@@ -39,7 +43,6 @@ export function useStageConversation(stageId: string | null): StageConversation 
       }
       if (isStopped()) return
       cursor = next
-      if (messages.length === 0) return
       setLoaded((prev) => {
         const base = prev.stageId === stageId ? prev : { ...EMPTY, stageId }
         const known = new Set(base.messages.map((m) => m.id))
@@ -49,9 +52,12 @@ export function useStageConversation(stageId: string | null): StageConversation 
           known.add(m.id)
           added.push(m)
         }
+        const changedThreads = threads.filter((t) => !sameThread(base.threads[t.id], t))
+        if (added.length === 0 && changedThreads.length === 0 && base === prev) return prev
         const byId = { ...base.threads }
-        for (const t of threads) byId[t.id] = t
-        return { stageId, messages: added.length === 0 ? base.messages : [...base.messages, ...added], threads: byId }
+        for (const t of changedThreads) byId[t.id] = t
+        const kept = added.length === 0 ? base.messages : [...base.messages, ...added].slice(-MAX_STAGE_MESSAGES)
+        return { stageId, messages: kept, threads: byId }
       })
     }, POLL_INTERVAL_MS)
     return poll.stop
@@ -59,4 +65,8 @@ export function useStageConversation(stageId: string | null): StageConversation 
 
   // A response for the previous stage is never shown for this one.
   return loaded.stageId === stageId ? loaded : EMPTY
+}
+
+function sameThread(a: MeshThread | undefined, b: MeshThread): boolean {
+  return a !== undefined && JSON.stringify(a) === JSON.stringify(b)
 }

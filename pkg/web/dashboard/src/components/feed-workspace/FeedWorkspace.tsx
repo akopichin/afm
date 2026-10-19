@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnima
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
-import { toFeedItems, buildFeedTimeline, isForYou, type FeedActor, type FeedFilter, type FeedGroup } from './feed-view-model'
+import { toFeedItems, buildFeedTimeline, feedFilterCounts, isForYou, type FeedActor, type FeedFilter, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
@@ -93,6 +93,7 @@ export function FeedWorkspace({
   const [filter, setFilter] = useState<FeedFilter>('all')
   useEffect(() => setFilter('all'), [stageId])
   const timeline = useMemo(() => buildFeedTimeline(items, conversation.messages, filter), [items, conversation.messages, filter])
+  const filterCounts = useMemo(() => feedFilterCounts(items, conversation.messages), [items, conversation.messages])
   const messageById = useMemo(() => new Map(conversation.messages.map((m) => [m.id, m])), [conversation.messages])
 
   // Jump to a quoted message: show it (Author's work may hide it), scroll to it and flash it.
@@ -137,7 +138,7 @@ export function FeedWorkspace({
   return (
     <section className="feed-workspace" aria-label="Feed" ref={sectionRef}>
       {conversation.messages.length > 0 && (
-        <FeedFilterChips filter={filter} onChange={setFilter} counts={{ all: items.length + conversation.messages.length, conversations: conversation.messages.length, author: items.length }} />
+        <FeedFilterChips filter={filter} onChange={setFilter} counts={filterCounts} />
       )}
       <div id="feed-content" className="feed-scroll" ref={feed.ref}>
         {timeline.length === 0 ? (
@@ -217,12 +218,13 @@ export function FeedWorkspace({
 
 const EMPTY_PARTICIPANTS: MeshParticipant[] = []
 
-// canReplyInConversation — the human may answer a message in its thread: someone else wrote it, the human is a
-// member of the thread (older threads agents opened among themselves are read-only), and the author can still
-// read it.
+// canReplyInConversation — the human may answer a message in its thread: someone else wrote it, the thread is
+// still open and the human is a member of it (older threads agents opened among themselves are read-only), and
+// the author can still read it.
 function canReplyInConversation(m: MeshMessage, conversation: StageConversation, participants: MeshParticipant[]): boolean {
   if (m.sender_id === 'user') return false
-  if (conversation.threads[m.thread_id]?.members.includes('user') !== true) return false
+  const thread = conversation.threads[m.thread_id]
+  if (thread === undefined || thread.status === 'closed' || !thread.members.includes('user')) return false
   return participants.find((p) => p.id === m.sender_id)?.reachable === true
 }
 

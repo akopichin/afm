@@ -253,22 +253,26 @@ between the stage's own events in time order: conversations the stage opened
 (its agent or helpers wrote first, you started one from this feed, or you added a
 run agent from this stage's People panel), conversations its agent or one of its
 helpers is in, and the stage's Discussion. A message from the Discussion appears
-once. Each message shows its author, the command they run, **→** whom it is
+once, as its message bubble; a post that reached nobody's inbox appears as a line
+such as *"You posted in the Discussion"*. Each message shows its author, the command they run, **→** whom it is
 addressed to, the time, a quote of the message it answers (click the quote to
 jump to that message) and a **turn result** tag on a turn result.
 
 - Filter the feed with **All**, **Conversations** (only the messages) or
-  **Author's work** (only the stage's own events). Each chip shows its count.
-  Messages addressed to you stay visible under every filter.
+  **Author's work** (only the stage's own events). Each chip shows how many
+  rows that filter shows. Messages addressed to you stay visible under every
+  filter.
 - **↩ Reply in conversation** puts the author's `@handle` into the composer
   (switching it to **Message**) and answers that message in its conversation.
-  It is offered while the composer is shown, on conversations you are a member
-  of, and while the author can still read it.
+  It is offered while the composer is shown, on open conversations you are a
+  member of, and while the author can still read it; a conversation closed
+  meanwhile loses it on the next poll.
 - A line such as *@qa is working* at the bottom shows who among the people in
   this stage's conversations, and its helpers, is in a turn right now.
 
 The feed reads conversations by itself every few seconds, so a message appears
-even when the live connection drops.
+even when the live connection drops. It keeps the newest 2,000 conversation
+messages of a stage; Team shows every conversation in full.
 
 ### Hold the agent while you type
 

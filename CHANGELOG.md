@@ -93,6 +93,15 @@ handed first, then the messages that wake the agent, and only then turn
 results. Before, an idle run agent with many large turn results waiting could
 take several turns before your message reached its prompt.
 
+### Fix: the stage feed shows a Discussion post once and counts what it shows
+
+A Discussion post that reached the stage agent no longer appears twice in the
+stage feed — once as its message and once as a raw `discussion_message` line;
+a post without a message shows as *"You posted in the Discussion"*. The
+**Author's work** chip counts the messages addressed to you that it also shows.
+**↩ Reply in conversation** is no longer offered on a closed conversation, and
+the feed keeps at most the newest 2,000 conversation messages of a stage.
+
 ### Fix: a helper turn interrupted after its process ended keeps its messages
 
 A helper's turn input used to live only in `turn-inbox.json`, and the file was

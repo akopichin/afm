@@ -29,6 +29,9 @@ export type FeedItem = {
   // reportVerificationId — id verify-прохода, только у verify_result-строк, для которых событие несло
   // непустой report_path.
   reportVerificationId?: string
+  // meshMessageId — a discussion_message row's message id: the row is dropped where the same post is shown as
+  // its mirrored conversation bubble (buildFeedTimeline), so the post is not shown twice.
+  meshMessageId?: string
 }
 
 // FeedGroup — последовательные items одной стороны и стадии, слитые визуально в
@@ -103,6 +106,7 @@ type Mapped = {
   // dedupeId — переопределяет стандартный ключ дедупликации там, где событие несёт свой собственный
   // стабильный идентификатор надёжнее timestamp.
   dedupeId?: string
+  meshMessageId?: string
 }
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
@@ -326,6 +330,21 @@ function mapEvent(event: AfmEvent): Mapped | null {
       const outcome = status === 'ready' ? 'resolved' : status
       return { actor: 'system', tone, kind: 'status', text: `wait ${str(obj.wait_id)} ${outcome}`, mono: false }
     }
+    case 'discussion_message': {
+      // A Discussion post. Its text lives in the Discussion and, for a post that reached the stage agent, in
+      // its mirrored conversation bubble — then this row is dropped (buildFeedTimeline).
+      const author = str(obj.author_kind) === 'human' ? 'You' : str(obj.author_id)
+      const messageId = str(obj.message_id)
+      return {
+        actor: 'system',
+        tone: 'neutral',
+        kind: 'status',
+        text: `${author} posted in the Discussion`,
+        mono: false,
+        dedupeId: `discussion:${messageId}`,
+        meshMessageId: messageId,
+      }
+    }
     case 'mesh_board':
       // Publish() payload: key, author_id, status — a free-form board status string (e.g. "ready").
       return {
@@ -451,6 +470,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       navigable: m.navigable,
       markdown: m.markdown,
       reportVerificationId: m.reportVerificationId,
+      meshMessageId: m.meshMessageId,
     })
   })
 
@@ -487,9 +507,11 @@ export function isForYou(m: MeshMessage): boolean {
 
 // buildFeedTimeline сливает события стадии и сообщения её бесед по времени (при равенстве событие раньше) и
 // применяет фильтр. Подряд идущие события группируются как обычно, подряд идущие сообщения — в один блок.
+// Строка discussion_message, чей пост показан пузырём беседы, опускается: один пост — одна строка.
 export function buildFeedTimeline(items: FeedItem[], messages: MeshMessage[], filter: FeedFilter): FeedTimelineEntry[] {
-  const shownItems = filter === 'conversations' ? [] : items
   const shownMessages = filter === 'author' ? messages.filter(isForYou) : messages
+  const mirrored = new Set(shownMessages.map((m) => m.id))
+  const shownItems = filter === 'conversations' ? [] : items.filter((it) => it.meshMessageId === undefined || !mirrored.has(it.meshMessageId))
   const entries: FeedTimelineEntry[] = []
   let run: FeedItem[] = []
   const flushItems = () => {
@@ -511,4 +533,12 @@ export function buildFeedTimeline(items: FeedItem[], messages: MeshMessage[], fi
   run.push(...shownItems.slice(i))
   flushItems()
   return entries
+}
+
+// feedFilterCounts — how many rows each filter shows: counted from the timeline that filter builds, so a chip
+// never promises more (or fewer) rows than the feed then shows.
+export function feedFilterCounts(items: FeedItem[], messages: MeshMessage[]): Record<FeedFilter, number> {
+  const count = (filter: FeedFilter) =>
+    buildFeedTimeline(items, messages, filter).reduce((n, e) => n + (e.kind === 'group' ? e.group.items.length : e.messages.length), 0)
+  return { all: count('all'), conversations: count('conversations'), author: count('author') }
 }

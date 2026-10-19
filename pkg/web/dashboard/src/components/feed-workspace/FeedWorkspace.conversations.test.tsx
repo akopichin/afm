@@ -62,7 +62,8 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     await waitFor(() => expect(row('m1')).not.toBeNull())
     expect(screen.getByRole('button', { name: /^All/ })).toHaveTextContent('6')
     expect(screen.getByRole('button', { name: /^Conversations/ })).toHaveTextContent('4')
-    expect(screen.getByRole('button', { name: /^Author's work/ })).toHaveTextContent('2')
+    // Author's work: the two events and the message addressed to you — exactly what the filter shows.
+    expect(screen.getByRole('button', { name: /^Author's work/ })).toHaveTextContent('3')
 
     fireEvent.click(screen.getByRole('button', { name: /^Conversations/ }))
     expect(screen.queryByText('Started the work')).toBeNull()
@@ -82,6 +83,35 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ id: 'm1' }))
     // An older thread the agents opened among themselves is read-only.
     expect(within(row('m4')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
+  })
+
+  it('Reply in conversation is not offered in a closed conversation', async () => {
+    const closed: MeshThread = { id: 'mt-closed', scope: 'run', members: ['user', 'stage:impl', 'run:qa'], status: 'closed' }
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
+      messages: [msg('m9', 2, { thread_id: 'mt-closed', body: 'A closed one' })], threads: [closed], next_cursor: 2, has_more: false,
+    })
+    render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps()} onReplyInConversation={vi.fn()} />)
+    await waitFor(() => expect(row('m9')).not.toBeNull())
+    expect(within(row('m9')).queryByRole('button', { name: '↩ Reply in conversation' })).toBeNull()
+  })
+
+  it('a Discussion post shows once — as its conversation bubble — and a post without one as a readable line', async () => {
+    const posts = [
+      ev('discussion_message', { message_id: 'm5', author_kind: 'human', author_id: 'user', round: 1 }, 7),
+      ev('discussion_message', { message_id: 'd-only', author_kind: 'assistant', author_id: 'reviewer', round: 1 }, 8),
+    ]
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
+      messages: [msg('m5', 7, { sender_id: 'user', recipient_ids: ['stage:impl'], body: 'Mirrored post' })], threads: [withUser], next_cursor: 7, has_more: false,
+    })
+    render(<FeedWorkspace events={[...events, ...posts]} stageId="impl" mesh={meshProps()} />)
+    await waitFor(() => expect(row('m5')).not.toBeNull())
+    const text = feedText()
+    expect(text).not.toContain('discussion_message')
+    expect(text.split('Mirrored post')).toHaveLength(2)
+    expect(text).toContain('reviewer posted in the Discussion')
+    expect(text).not.toContain('You posted in the Discussion')
+    // All counts what is shown: two events, the bubble and the post without one.
+    expect(screen.getByRole('button', { name: /^All/ })).toHaveTextContent('4')
   })
 
   it('a click on the quote jumps to the quoted message, even from a filter that hides it', async () => {
