@@ -93,7 +93,8 @@ func unanswerableWait(rs state.RunState, waitID agentcomm.WaitID) (string, bool)
 	if len(gone) == 0 {
 		return "", false
 	}
-	return "nobody left can answer: " + strings.Join(gone, "; "), true
+	// The reasons come from recorded (already sanitised) task status reasons; the joined text is bounded too.
+	return truncateText("nobody left can answer: "+strings.Join(gone, "; "), maxTaskReasonBytes), true
 }
 
 // whyCannotAnswer names p and why it can no longer answer.

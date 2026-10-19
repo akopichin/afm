@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -246,5 +247,40 @@ func TestTaskEndedReason_SaysWhatHappened(t *testing.T) {
 		if got := helperParticipant("t-1", ts).UnreachableReason; got != tc.want {
 			t.Errorf("helper %s/%q: reason = %q, want %q", tc.status, tc.reason, got, tc.want)
 		}
+	}
+}
+
+// A rejected answer's reason can quote the model's output. It is redacted and bounded before it is recorded —
+// in the task status, the notice, the reply and the roster alike.
+func TestInvalidResultReason_RedactedAndBounded(t *testing.T) {
+	huge := strings.Repeat("x", 64*1024)
+	for _, scope := range []string{"run agent", "stage helper"} {
+		t.Run(scope, func(t *testing.T) {
+			o, store := newRedactingTestOrchestrator(t)
+			o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
+				return executor.HelperOutcome{ProcessOK: true, RawText: `{"schema_version":1,"kind":"result","verdict":"` +
+					redactionTestSecret + huge + `","summary":"fine"}`}, nil
+			}
+			var taskID assistants.TaskID
+			if scope == "run agent" {
+				msg := "please review"
+				res := addTestRunAgent(t, o, "op-add", &msg)
+				taskID = res.TaskID
+				waitUntil(t, "the failed turn reply", func() bool { return len(repliesTo(store, *res.MessageID)) == 1 })
+			} else {
+				taskID = attachTestTask(context.Background(), t, o, "op-helper")
+				waitForTaskStatus(t, store, taskID, assistants.StatusFailed, 2*time.Second)
+			}
+			o.concurrency.WaitAgents()
+
+			tk := store.Snapshot().Assistants.Tasks[taskID]
+			if !strings.Contains(tk.StatusReason, "invalid verdict value") || len(tk.StatusReason) > 2*maxTaskReasonBytes {
+				t.Fatalf("reason (%d bytes) = %.200q, want the bounded protocol error", len(tk.StatusReason), tk.StatusReason)
+			}
+			assertNoSecretIn(t, journalOf(o), filepath.Join(o.opts.RunDir, "notices.jsonl"))
+			if strings.Contains(tk.StatusReason, redactionTestSecret) {
+				t.Fatalf("status reason carries the secret: %.200q", tk.StatusReason)
+			}
+		})
 	}
 }

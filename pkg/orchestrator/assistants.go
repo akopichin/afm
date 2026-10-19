@@ -325,6 +325,16 @@ func (o *Orchestrator) CancelTask(ctx context.Context, taskID assistants.TaskID)
 // A turn whose answer was rejected adds why after it (runAgentIdleAfterFailure); both mean idle.
 const runAgentIdleReason = "idle: waiting for a message"
 
+// maxTaskReasonBytes bounds a task's status reason. A failure reason can quote the model's own output (a
+// decode error names the offending value), so it is also redacted (sanitizeTaskReason).
+const maxTaskReasonBytes = 2048
+
+// sanitizeTaskReason is reason as it may be recorded and shown: secrets masked first, then cut to
+// maxTaskReasonBytes — in this order, so a cut never leaves part of a secret the redaction cannot recognise.
+func (o *Orchestrator) sanitizeTaskReason(reason string) string {
+	return truncateText(o.RedactSecrets(reason), maxTaskReasonBytes)
+}
+
 // runAgentIdleAfterFailure is the status reason of a run agent idle again after a turn that failed for reason.
 func runAgentIdleAfterFailure(reason string) string {
 	return runAgentIdleReason + " (last turn failed: " + describeTaskFailure(reason) + ")"
@@ -471,6 +481,7 @@ func (o *Orchestrator) finishTaskTurn(taskID assistants.TaskID, turn uint64, fro
 // itself), the finish is committed again without them, and a notice says why the result was not delivered. A
 // task never stays running without a process.
 func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, reply *plannedMessage, extra ...state.Effect) {
+	reason = o.sanitizeTaskReason(reason)
 	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
 	if err != nil {
 		return

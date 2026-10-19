@@ -399,6 +399,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 // passive reply saying why there is no result — so a colleague waiting for that reply is answered, not left
 // waiting on an agent that will never write again.
 func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string) {
+	reason = o.sanitizeTaskReason(reason) // the reply and the idle reason below use the same recorded value
 	// turn 0 consumed nothing: going idle would hand the same input straight back to a new turn.
 	if task.Scope != assistants.ScopeRun || turn == 0 {
 		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason)
@@ -408,7 +409,7 @@ func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.T
 	if agent == "" {
 		agent = string(task.ProfileID)
 	}
-	body := o.RedactSecrets(turnFailureBody(taskID, turn, agent, reason))
+	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason)
 	reply := o.planTurnReply(taskID, turn, body)
 	o.finishTaskTurnReplying(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), reply)
 	o.maybeScheduleTask(ctx, taskID)
