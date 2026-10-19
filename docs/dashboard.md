@@ -205,7 +205,13 @@ Revise. With Agent Mesh and collaboration on it has two modes:
   there only while the stage takes a Revise: `running`, `awaiting_approval` or
   `awaiting_assistants`, and not during a review pause.
 
-Each mode keeps its own draft when you switch between them.
+Each mode keeps its own draft when you switch between them. Drafts — both modes'
+text, the chosen mode and the people picked as recipients — are kept per stage:
+switching to another stage, the Feed following the run to the next stage, or
+opening another tab and coming back restores them. They are not kept across a
+page reload. When Agent Mesh becomes available only after the composer appeared,
+it switches to **Message** unless you already chose a mode or are writing a
+Revise note.
 
 ### Revise
 
@@ -265,6 +271,10 @@ Sending posts **one** message to all recipients:
   you can still name it (`@` or the People panel): the chip says *finished — post
   recorded, not read*. The post is kept in your conversation with that stage and
   reaches the other agents you named; the stage's agent does not read it.
+
+**Cmd/Ctrl+Enter** sends; plain **Enter** adds a line. While there is text, a
+hint under the input says so, and it is highlighted when you press plain Enter
+on a message that could be sent.
 
 **Interrupt agent** is reset after each successful send and kept after a failed
 one, so a retry interrupts too.

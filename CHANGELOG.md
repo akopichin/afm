@@ -42,6 +42,11 @@ post is recorded in its conversation and reaches the others named, as the
 Discussion allowed. Old stage-conversation posts are placed by journal order
 (both readers now return the journal `seq`), keep their role and evidence as
 tags, and an agent's old answer to your post stays under **Author's work**.
+The composer's drafts and picked recipients are kept per stage for the page
+session, so the Feed following the run to the next stage no longer drops them; a
+composer that appeared before Agent Mesh answered switches to **Message** once
+it does (unless you chose a mode or are writing a Revise note); and a hint shows
+that **Cmd/Ctrl+Enter** sends, highlighted after a plain Enter.
 
 ### Improvement: the stage Feed composer writes to several people
 
