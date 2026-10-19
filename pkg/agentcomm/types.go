@@ -85,11 +85,13 @@ type Participant struct {
 	// profile snapshot. Derived on every roster read and never journaled, like Activity; empty for the user,
 	// the Side agent and a script stage.
 	Command string `json:"command,omitempty"`
-	// ReadonlyEnforcement is the read-only guarantee ("os" — an OS sandbox, "none" — only the container or
-	// the prompt) frozen into a task-backed participant's profile snapshot when its task was admitted. Derived
-	// on every roster read and never journaled; empty for stage agents (they write the project), the user and
-	// the Side agent.
-	ReadonlyEnforcement string `json:"readonly_enforcement,omitempty"`
+	// ReadonlyEnforcement is a task-backed participant's read-only guarantee ("os" — an OS sandbox, "none" —
+	// only the container or the prompt): for a live task, what the current execution environment gives its
+	// command; for a finished one, what it ran under. AdmittedReadonlyEnforcement is the historical value
+	// frozen into its profile snapshot when the task was admitted. Both are derived on every roster read and
+	// never journaled; empty for stage agents (they write the project), the user and the Side agent.
+	ReadonlyEnforcement         string `json:"readonly_enforcement,omitempty"`
+	AdmittedReadonlyEnforcement string `json:"admitted_readonly_enforcement,omitempty"`
 }
 
 // Activity — what a run agent or helper is doing now, for the Team roster.
