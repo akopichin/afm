@@ -10,15 +10,24 @@ older ones further down. Dates follow the commits that shipped each change.
 A run agent whose answer failed the result contract (for example `limitations`
 written as a list) used to become failed for good, shown as finished, and a
 stage waiting for its reply stayed in `awaiting_peer` forever. Now the free-text
-fields `summary`, `evidence`, `suggested_change` and `limitations` accept either
-a string or a list of strings; a run agent whose answer is still invalid goes
-back to idle and replies to the message that woke it with why it could not
-produce a result, so the waiting stage continues and the agent can be asked
-again. A wait whose every possible answerer has finished — failed, cancelled, or
-a stage done without answering — is cancelled and its waiter continues, also
-after a restart. The People list and conversations say how a finished agent
-ended (*"failed: invalid result — …"*, *"was cancelled by user"*) instead of
-only that it finished.
+fields `summary`, `evidence`, `suggested_change` and `limitations` (and a
+delegation's `summary`) accept either a string or a list of strings, in the
+decoder and in `schema/assistant-result.schema.json` alike. A run agent whose
+answer is still invalid goes back to idle and replies with why it could not
+produce a result — to the message that woke the turn and to any request an
+earlier turn ended waiting on whose sender still waits for the reply (a turn
+woken only by a colleague's passive result still answers the request it was
+working on), so the waiting stage
+continues and the agent can be asked again. When such an answer cannot be
+delivered (the conversation or an inbox is full), the requester's wait for it
+is cancelled in the same commit with the reason instead of staying pending. A
+wait whose every possible answerer has finished — failed, cancelled, or a stage
+done without answering — is cancelled and its waiter continues, also after a
+restart; of two resolutions of one wait, only the one that ended it announces
+it and wakes the waiter. The failure reason is redacted and bounded before it
+is recorded. The People list and conversations say how a finished agent ended
+(*"failed: invalid result — …"*, *"was cancelled by user"*) instead of only
+that it finished.
 
 ### Fix: a stage continued after a colleague's reply no longer starts over
 

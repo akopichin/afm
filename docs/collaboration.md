@@ -267,7 +267,8 @@ fit waits for the next turn or `afm agent inbox`. A stage
 that finishes without reading one marks it undeliverable without listing it as
 unanswered. afm skips the reply when the agent already answered the waking
 message itself during the turn; a question to someone else or a reply to a
-different message does not count. A turn with no waking message posts nothing.
+different message does not count. A turn with no waking message and no awaited
+request left open by an earlier turn posts nothing.
 If the reply cannot be delivered — the conversation is closed or full, the
 recipient's inbox is full, or the recipient has finished — the result is still
 recorded, the agent goes idle as usual, and the feed shows *"turn result of task
@@ -405,10 +406,17 @@ helper view to inspect its final text, when available. The free-text fields
 string or an array of strings; anything else in them is still a protocol error.
 
 A run agent is a standing role, so a turn with an invalid answer does not end
-it: the agent goes back to idle (its status says the last turn failed and why),
-and the message that woke the turn gets a reply such as *"QA could not produce
-a valid result: invalid result — …"*, which also answers a colleague waiting for
-that reply. Write to the agent again to retry. A stage helper fails as before
+it: the agent goes back to idle (its status says the last turn failed and why,
+with secrets masked and the text cut to 2 KiB), and the message that woke the
+turn gets a reply such as *"QA could not produce a valid result: invalid result
+— …"*, which also answers a colleague waiting for that reply. Write to the
+agent again to retry. A turn's reply, whether a result or such a failure, also
+answers each request an earlier turn ended waiting on (`afm agent wait`, or a
+delegation) while its sender still waits for that reply (`reply_to`): a turn
+woken only by a colleague's passive result still answers the request it was
+working on. If a reply cannot be delivered (the
+conversation or an inbox is full), the requester's `reply_to` wait for it is
+cancelled with the reason, unless another recipient can still answer. A stage helper fails as before
 and can be retried from its view. In the People list and in a conversation with
 it, a finished agent shows how it ended, for example *"task … failed: invalid
 result — …"* or *"task … was cancelled by user"*.

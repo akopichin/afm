@@ -385,8 +385,8 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away. Its result also
 	// answers the message that woke the turn: a passive reply in the same commit (agentcomm_turn_reply.go).
 	if task.Scope == assistants.ScopeRun {
-		reply := o.planTurnReply(taskID, consumed, turnReplyBody(taskID, consumed, result))
-		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, reply, resultEff)
+		replies := o.planTurnReplies(taskID, consumed, turnReplyBody(taskID, consumed, result))
+		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, replies, resultEff)
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}
@@ -410,8 +410,8 @@ func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.T
 		agent = string(task.ProfileID)
 	}
 	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason)
-	reply := o.planTurnReply(taskID, turn, body)
-	o.finishTaskTurnReplying(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), reply)
+	replies := o.planTurnReplies(taskID, turn, body)
+	o.finishTaskTurnReplying(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies)
 	o.maybeScheduleTask(ctx, taskID)
 }
 

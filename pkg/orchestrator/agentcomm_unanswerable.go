@@ -26,8 +26,11 @@ var errWaitStillAnswerable = errors.New("mesh: the wait can still be answered")
 // releaseUnanswerableWaitsAfterFinish runs releaseUnanswerableWaits off the caller's goroutine: a finish may be
 // committed on the event loop, which a stage resume publishes to. A bare test harness without a store or a
 // concurrency manager has no mesh to release.
+//
+// It spawns only when some wait is unanswerable right now — the common finish has none, and a stage finishing
+// while the run is already draining its agents must not start new work then.
 func (o *Orchestrator) releaseUnanswerableWaitsAfterFinish() {
-	if o.opts.Store == nil || o.concurrency == nil {
+	if o.opts.Store == nil || o.concurrency == nil || !anyUnanswerableWait(o.opts.Store.Snapshot()) {
 		return
 	}
 	o.concurrency.SpawnDetached(o.runContext(context.Background()), func(ctx context.Context) {
@@ -67,6 +70,16 @@ func (o *Orchestrator) releaseUnanswerableWaits(ctx context.Context, wake func(c
 			wake(ctx, waiter)
 		}
 	}
+}
+
+// anyUnanswerableWait reports whether some pending wait of rs is unanswerable.
+func anyUnanswerableWait(rs state.RunState) bool {
+	for id := range rs.Assistants.Mesh.Waits {
+		if _, ok := unanswerableWait(rs, id); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // unanswerableWait reports whether waitID is a pending wait for an answer that nobody left can send — every

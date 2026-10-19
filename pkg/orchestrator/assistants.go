@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -473,14 +474,17 @@ func (o *Orchestrator) finishTaskTurn(taskID assistants.TaskID, turn uint64, fro
 	o.finishTaskTurnReplying(taskID, turn, from, to, reason, nil, extra...)
 }
 
-// finishTaskTurnReplying is finishTaskTurn that also posts reply (planTurnReply; nil: none) in the same commit.
+// finishTaskTurnReplying is finishTaskTurn that also posts replies (planTurnReplies; none: nil) in the same
+// commit.
 //
-// The messages a finish carries — reply and a child's result mirrored to its delegating parent — never keep the
-// task from finishing: when the operation is rejected because of them (the recipient's inbox or the thread is
-// full, the thread is closed, the recipient has finished, or the agent already answered the waking message
-// itself), the finish is committed again without them, and a notice says why the result was not delivered. A
-// task never stays running without a process.
-func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, reply *plannedMessage, extra ...state.Effect) {
+// The messages a finish carries — replies and a child's result mirrored to its delegating parent — never keep
+// the task from finishing. A reply whose message the agent answered itself meanwhile is dropped and the finish
+// tried again. When the operation is rejected because of the others (the recipient's inbox or the thread is
+// full, the thread is closed, the recipient has finished), the finish is committed again without them, together
+// with the cancellation of the waits for those answers that nobody else can give (undeliveredReplyWaitEffects),
+// and a notice says why the result was not delivered. A task never stays running without a process, and a
+// requester never waits for an answer that was dropped.
+func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, replies []plannedMessage, extra ...state.Effect) {
 	reason = o.sanitizeTaskReason(reason)
 	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
 	if err != nil {
@@ -504,11 +508,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			messages = append(messages, mirror...)
 		}
 	}
-	var check func(*state.RunState) error
-	if reply != nil {
-		messages = append(messages, reply.effects...)
-		check = o.turnReplyCheck(*reply)
-	}
+	mirror := messages
 
 	finishOp := func(effects []state.Effect, check func(*state.RunState) error) state.Operation {
 		return state.Operation{
@@ -518,15 +518,23 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			Effects: effects,
 		}
 	}
-	afterFinish := func(delivered *plannedMessage) func(state.OperationResult) {
+	afterFinish := func(delivered []plannedMessage, endedReason string) func(state.OperationResult) {
 		return func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 				"task_id": string(taskID), "status": string(to), "reason": reason,
 			}})
-			// The turn reply is passive: announcing it is all its delivery needs — it wakes nobody, and the waits it
+			// A turn reply is passive: announcing it is all its delivery needs — it wakes nobody, and the waits it
 			// resolves (a reply_to the message it answers) are resumed below with the rest of this commit's.
-			if delivered != nil {
-				o.announceMessage(delivered.send, delivered.messageID, false)
+			for _, d := range delivered {
+				o.announceMessage(d.send, d.messageID, false)
+			}
+			// The waits this commit cancelled because their answer was dropped: their waiters continue.
+			for _, waitID := range res.EndedWaits {
+				o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
+					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": endedReason}})
+				if w := o.opts.Store.Snapshot().Assistants.Mesh.Waits[waitID]; w != nil {
+					o.resumeWaiterAfterTerminalWait(o.runContext(context.Background()), w.Waiter)
+				}
 			}
 			// T4a.5: a terminal child (pass, needs_changes, failure, or cancel — ANY terminal outcome, see
 			// TestWaitingChildren_FailedChildDelivered) is the ONLY trigger that re-checks whether its parent's
@@ -566,13 +574,41 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		}
 	}
 
-	_, err = o.opts.Store.ApplyRunOperation(finishOp(append(slices.Clone(effects), messages...), check), afterFinish(reply))
+	withReplies := func(replies []plannedMessage) ([]state.Effect, func(*state.RunState) error) {
+		all := append(slices.Clone(effects), mirror...)
+		if len(replies) == 0 {
+			return all, nil
+		}
+		for _, r := range replies {
+			all = append(all, r.effects...)
+		}
+		return all, o.turnRepliesCheck(replies)
+	}
 	var storageErr *state.StorageError
-	if err != nil && len(messages) > 0 && !errors.As(err, &storageErr) {
+	for {
+		all, check := withReplies(replies)
+		_, err = o.opts.Store.ApplyRunOperation(finishOp(all, check), afterFinish(replies, ""))
+		if !errors.Is(err, errTurnAlreadyAnswered) {
+			break
+		}
+		// The agent answered one of the messages itself meanwhile: post the rest.
+		rest := unansweredReplies(o.opts.Store.Snapshot(), replies)
+		if len(rest) == len(replies) {
+			break
+		}
+		replies = rest
+	}
+	if err != nil && (len(mirror) > 0 || len(replies) > 0) && !errors.As(err, &storageErr) {
 		dropped := err
-		_, err = o.opts.Store.ApplyRunOperation(finishOp(effects, nil), afterFinish(nil))
-		if err == nil && !errors.Is(dropped, errTurnAlreadyAnswered) {
-			o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, reply), dropped)
+		notDelivered := "the answer to it could not be delivered: " + o.RedactSecrets(rejectionReason(dropped))
+		fallback := append(slices.Clone(effects), undeliveredReplyWaitEffects(o.opts.Store.Snapshot(), replies, notDelivered)...)
+		_, err = o.opts.Store.ApplyRunOperation(finishOp(fallback, nil), afterFinish(nil, notDelivered))
+		if err == nil {
+			var first *plannedMessage
+			if len(replies) > 0 {
+				first = &replies[0]
+			}
+			o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, first), dropped)
 		}
 	}
 	if err == nil && turn > 0 {

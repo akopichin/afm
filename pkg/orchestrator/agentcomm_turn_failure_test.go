@@ -284,3 +284,106 @@ func TestInvalidResultReason_RedactedAndBounded(t *testing.T) {
 		})
 	}
 }
+
+// The stage asks a reviewer; the reviewer yields on a question of its own, and its next turn is woken only by a
+// passive answer to that question. Whatever that turn produces still answers the stage's request — it is the
+// request the turns were working on — so the stage's reply_to wait never stays pending while the reviewer idles.
+func TestTurnReply_AnswersTheRequestAcrossAYield(t *testing.T) {
+	for _, second := range []string{"invalid", "pass"} {
+		t.Run(second, func(t *testing.T) {
+			o, store := newAssistantsTestOrchestrator(t, true)
+			ctx := context.Background()
+			activateStage(t, o, assistantsTestStageID)
+			stage := meshStageParticipantID(assistantsTestStageID)
+			rev, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-rev", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "user"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviewThread := openThread(t, o, "op-review-thread", 0, stage, rev.ParticipantID)
+			userThread := openThread(t, o, "op-user-thread", 0, rev.ParticipantID, meshUserParticipantID)
+
+			var calls atomic.Int32
+			var question atomic.Value
+			o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
+				if calls.Add(1) == 1 {
+					q := sendAs(t, o, "op-rev-question", userThread, rev.ParticipantID, meshUserParticipantID, "which base revision?", nil, false)
+					question.Store(q)
+					if _, err := o.Wait(context.Background(), WaitRequest{
+						OperationID: "op-rev-wait", Waiter: rev.ParticipantID,
+						Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: q},
+					}); err != nil {
+						t.Errorf("reviewer Wait: %v", err)
+					}
+					return executor.HelperOutcome{ProcessOK: true}, nil // a yield
+				}
+				if second == "invalid" {
+					return invalidResultOutcome(), nil
+				}
+				return passResultOutcome(), nil
+			}
+
+			request := sendAs(t, o, "op-request", reviewThread, stage, rev.ParticipantID, "please review", nil, false)
+			stageWait, err := o.Wait(ctx, WaitRequest{
+				OperationID: "op-stage-wait", Waiter: stage, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: request},
+			})
+			if err != nil {
+				t.Fatalf("stage Wait: %v", err)
+			}
+			waitForTaskStatus(t, store, rev.TaskID, assistants.StatusWaitingPeer, 2*time.Second)
+			q := question.Load().(agentcomm.MessageID)
+			sendAs(t, o, "op-user-answer", userThread, meshUserParticipantID, rev.ParticipantID, "HEAD~1", &q, true)
+
+			waitUntil(t, "the reply to the stage's request", func() bool { return len(repliesTo(store, request)) == 1 })
+			o.concurrency.WaitAgents()
+			reply := repliesTo(store, request)[0]
+			want := "could not produce a valid result"
+			if second == "pass" {
+				want = "looks fine"
+			}
+			if reply.Sender != rev.ParticipantID || !reply.AutoResult || !strings.Contains(reply.Body, want) {
+				t.Fatalf("reply = %+v, want the reviewer's passive reply containing %q", reply, want)
+			}
+			if got := store.Snapshot().Assistants.Mesh.Waits[stageWait.WaitID].Status; got != agentcomm.WaitReady {
+				t.Fatalf("stage wait = %s, want ready", got)
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("reviewer turns = %d, want 2", got)
+			}
+		})
+	}
+}
+
+// A turn's answer that cannot be delivered (here: the conversation is full) is not silently dropped while the
+// requester keeps waiting: the requester's wait for it is cancelled in the same commit, with the reason.
+func TestTurnReply_UndeliveredAnswerEndsTheRequestersWait(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+	rev, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-rev", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := openThread(t, o, "op-full-thread", 1, stage, rev.ParticipantID)
+	request := sendAs(t, o, "op-request", full, stage, rev.ParticipantID, "please review", nil, false)
+	w, err := o.Wait(ctx, WaitRequest{OperationID: "op-stage-wait", Waiter: stage, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: request}})
+	if err != nil {
+		t.Fatalf("stage Wait: %v", err)
+	}
+	waitForRunAgentTurn(t, store, rev.TaskID, 2*time.Second)
+	o.concurrency.WaitAgents()
+
+	if got := repliesTo(store, request); len(got) != 0 {
+		t.Fatalf("replies = %+v, want none: the conversation is full", got)
+	}
+	got := store.Snapshot().Assistants.Mesh.Waits[w.WaitID]
+	if got.Status != agentcomm.WaitCancelled || !strings.Contains(got.Reason, "could not be delivered") {
+		t.Fatalf("stage wait = %s %q, want cancelled because the answer could not be delivered", got.Status, got.Reason)
+	}
+	if !strings.Contains(noticesText(t, o), "not delivered") {
+		t.Fatal("no notice that the turn result was not delivered")
+	}
+}

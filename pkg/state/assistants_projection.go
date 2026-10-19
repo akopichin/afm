@@ -63,6 +63,11 @@ type TaskState struct {
 	// records (TaskStatusChangedPayload.Turn/TurnInbox).
 	Turn      uint64                `json:"turn,omitempty"`
 	TurnInbox []agentcomm.MessageID `json:"turn_inbox,omitempty"`
+	// OpenRequests are the requests (not replies, not passive results) handed to earlier turns which ended
+	// waiting (a yield, or a delegation) instead of answering: the request those turns were working on, still owed an answer once a later turn —
+	// possibly woken only by a passive result — produces one. A turn that ends any other way clears them; its
+	// finish answers them. Derived from the same task_status_changed records as TurnInbox, live and on replay.
+	OpenRequests []agentcomm.MessageID `json:"open_requests,omitempty"`
 	// TurnReadonlyEnforcement is the read-only guarantee the latest turn actually ran under — the environment's
 	// at its start (TaskStatusChangedPayload.ReadonlyEnforcement), which can differ from the admission-time
 	// ProfileSnapshot.ReadonlyEnforcement after a resume in another environment. "" before the first recorded
@@ -706,11 +711,29 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 			t.TurnInbox = append(t.TurnInbox, agentcomm.MessageID(m))
 		}
 	case p.Turn == t.Turn:
+		t.OpenRequests = carriedRequests(as.Mesh, t, status)
 		t.TurnInbox = nil
 	default: // a stale turn number ends nothing
 	}
 	as.resolveTaskResultWaits(id)
 	return nil
+}
+
+// carriedRequests is t's OpenRequests once its current turn ends in status: a turn that ends waiting for a
+// colleague or for its children keeps them and adds the requests among the turn's own messages — neither
+// passive results nor replies, which answer something rather than ask; any other end clears them. Always a new
+// slice — a snapshot may share the task's current one.
+func carriedRequests(ms MeshState, t *TaskState, status assistants.TaskStatus) []agentcomm.MessageID {
+	if status != assistants.StatusWaitingPeer && status != assistants.StatusWaitingChildren {
+		return nil
+	}
+	out := slices.Clone(t.OpenRequests)
+	for _, id := range t.TurnInbox {
+		if m := ms.Messages[id]; m != nil && !m.AutoResult && m.Kind != agentcomm.MessageKindReply && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func applyTaskHoldSet(as *AssistantsState, c *Control, dryRun bool) error {
