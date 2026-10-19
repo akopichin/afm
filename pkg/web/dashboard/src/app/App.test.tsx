@@ -1980,6 +1980,55 @@ describe('App', () => {
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()
   })
 
+  // Stage 5: the stage Feed's people panel. A click on a person puts their @handle into the Feed composer
+  // (Message mode) and addresses them; the Team tab keeps its own roster.
+  test('people panel: a click on a person addresses them in the current Feed composer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            stages: [stageView('s1', 'Propose', 'running'), stageView('s2', 'Review', 'pending')],
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true, command: 'claude' },
+              { id: 'stage:s2', kind: 'stage_agent', scope: 'stage', stage_id: 's2', alias: 's2', display_name: 'Review', reachable: true, command: 'claude' },
+              { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true, command: 'codex', readonly_enforcement: 'os' },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    await waitFor(() => expect(within(people).getByText('QA reviewer')).toBeInTheDocument())
+    expect(within(people).getByText('Not started — reads it when it starts')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show people' })).toHaveAttribute('aria-controls', 'stage-people')
+
+    fireEvent.click(within(people).getByText('QA reviewer'))
+
+    const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
+    expect(composer.value).toBe('@qa ')
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
+  })
+
   test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',

@@ -859,7 +859,7 @@
   display: none;
 }
 @media (max-width: 760px) {
-  .team-roster {
+  .team-roster:not(.team-roster-embedded) {
     position: absolute;
     top: 0;
     bottom: 0;
@@ -933,6 +933,158 @@
 }
 .agent-result-verdict[data-verdict='pass'] { color: var(--success); border-color: rgba(var(--success-rgb), 0.4); }
 .agent-result-verdict[data-verdict='needs_changes'] { color: var(--attention); border-color: rgba(var(--attention-rgb), 0.4); }
+/* "turn result" tag: afm posted the agent's turn result as its reply (auto_result) — it woke nobody. */
+.agent-turn-result-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--separator-subtle);
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--text-muted);
+  vertical-align: baseline;
+  cursor: help;
+}
 .agent-result-raw { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
 .agent-result-raw > summary { cursor: pointer; }
 .agent-result-raw > pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); }
+
+/* === Stage people panel (StagePeoplePanel → RunTeamList with focusStageId): the stage Feed's right side
+   panel, "who this stage can talk to". The roster rows are the Team tab's own; this adds the embedded
+   roster, the command/sandbox chips, disabled (finished) rows and the narrow-screen drawer. === */
+.stage-feed-layout {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+.stage-feed-layout > .feed-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stage-people {
+  flex: 0 0 280px;
+  width: 280px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  margin: -12px -12px -12px 12px;
+  border-left: 1px solid var(--separator-subtle);
+}
+.team-roster.team-roster-embedded {
+  flex: 1 1 auto;
+  width: auto;
+  border-right: 0;
+}
+
+.team-roster-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* Name with the command chip (and the read-only guarantee) after it; the name is the part that is clipped. */
+.team-person-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.team-person-title .team-person-name {
+  /* The name keeps its room; the command chip after it is the part that is clipped. */
+  flex: 0 0 auto;
+  max-width: 70%;
+}
+.team-person-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+/* The read-only guarantee ends the detail line; the status before it is clipped first. */
+.team-person-sandbox {
+  flex: 0 0 auto;
+}
+.team-person-sandbox::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--text-muted);
+}
+.team-person-sandbox[data-enforcement="os"] {
+  color: var(--success);
+}
+
+/* A finished participant stays listed but cannot be written to. */
+.team-person-row:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.team-person-row:disabled:hover {
+  background: transparent;
+}
+
+.team-add-agent-bottom {
+  margin: 14px 8px 0;
+  width: auto;
+  min-height: 34px;
+  justify-content: center;
+}
+
+.stage-people-toggle,
+.stage-people-scrim {
+  display: none;
+}
+
+/* Narrower than the feed plus the panel: the panel becomes a drawer from the right, opened by 👥. */
+@media (max-width: 1180px) {
+  .stage-people {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(300px, 88%);
+    margin: 0 -12px -12px 0;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-overlay);
+    transform: translateX(105%);
+    visibility: hidden;
+    transition: transform var(--motion-fast, 120ms) ease, visibility var(--motion-fast, 120ms);
+  }
+  .stage-people.open {
+    transform: none;
+    visibility: visible;
+  }
+  .stage-people-toggle {
+    display: grid;
+    font-size: 15px;
+  }
+  .stage-people-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    border: 0;
+    padding: 0;
+    background: color-mix(in srgb, var(--surface-canvas) 60%, transparent);
+    cursor: pointer;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-people {
+    transition: none;
+  }
+}

@@ -217,6 +217,31 @@ available configured roles and opens an attach preview before sending. The messa
 view shows its conversation and delivery status. A failed send leaves the draft
 available to retry. See [Team conversations](collaboration.md#team-conversations).
 
+### People panel
+
+With Agent Mesh available, the stage **Feed** has a **People** panel on the right:
+everyone this stage can talk to, in three groups — **This stage** (the stage's
+agent and its helpers), **Run agents** (run agents and the Side agent) and
+**Other stages** (in flow order, each with its helpers). It is the Team roster
+with the selected stage on top; conversations stay in the **Team** tab.
+
+- Each row shows the person's `@handle`, what they are doing now and a presence
+  dot. A chip next to the name shows the command they run: the stage's command
+  for a stage agent, the profile's command for a run agent or helper. A run agent
+  or helper also shows its read-only guarantee: **read-only** (an OS sandbox
+  enforces it) or **no sandbox** (only the container or the prompt limits it).
+  Both come from the server, as recorded when the agent was added.
+- Click a person to put their `@handle` into the composer and address them, the
+  same as picking them from the `@` menu; the composer switches to **Message**.
+  You can do this while the stage is `running` and its composer is shown.
+- A finished stage or task stays listed but is disabled (*Finished — can't
+  write*). A stage that has not started yet can be addressed: it reads the
+  message when it starts.
+- **+ Add agent** opens the same dialog as **Add run agent** in Team.
+
+On a narrower window the panel becomes a drawer: open it with the 👥 button at
+the right of the stage header.
+
 ### Hold the agent while you type
 
 A running agent can finish (or move on) before you're done typing a note. The

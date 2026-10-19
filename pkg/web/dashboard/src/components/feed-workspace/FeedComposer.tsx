@@ -39,7 +39,13 @@ export type FeedComposerMeshProps = {
   profiles: AssistantProfile[]
   // stages — for looking up a mentioned participant's OWN stage status (Paused · waiting for Continue).
   stages: Stage[]
+  // pick — the stage's people panel picked someone (seq tells two clicks on the same person apart): the
+  // composer switches to Message and addresses them, the same as picking them from the @ menu. A pick made
+  // before this composer mounted (another stage, no composer yet) is ignored.
+  pick?: MeshPick | null
 }
+
+export type MeshPick = { participantId: string; seq: number }
 
 type ComposerMode = 'message' | 'revise'
 
@@ -103,6 +109,16 @@ export function FeedComposer({
   const [sending, setSending] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const tabsId = useId()
+  // pendingPick — a people-panel pick Message mode has not applied yet (it may have to mount first).
+  const [pendingPick, setPendingPick] = useState<string | null>(null)
+  const seenPickSeq = useRef(mesh?.pick?.seq ?? 0)
+  const pick = mesh?.pick ?? null
+  useEffect(() => {
+    if (pick === null || pick.seq === seenPickSeq.current) return
+    seenPickSeq.current = pick.seq
+    setMode('message')
+    setPendingPick(pick.participantId)
+  }, [pick])
 
   const empty = value.trim() === ''
 
@@ -230,6 +246,8 @@ export function FeedComposer({
               mesh={mesh}
               knownThreads={[...mesh.roster.threads, ...localThreads.filter((l) => !mesh.roster.threads.some((t) => t.id === l.id))]}
               onThreadCreated={(thread) => setLocalThreads((prev) => (prev.some((t) => t.id === thread.id) ? prev : [...prev, thread]))}
+              pickParticipantId={pendingPick}
+              onPickHandled={() => setPendingPick(null)}
             />
           ) : (
             reviseComposer
@@ -250,6 +268,9 @@ type MeshMessageComposerProps = {
   // knownThreads — the roster's threads plus ones opened here that the poll has not reported yet.
   knownThreads: MeshThread[]
   onThreadCreated: (thread: MeshThread) => void
+  // pickParticipantId — someone picked in the people panel, to address; onPickHandled consumes it.
+  pickParticipantId: string | null
+  onPickHandled: () => void
 }
 
 // targetKey — a stable string identity for a MeshMentionTarget, used as a dependency/reset key: switching
@@ -266,7 +287,7 @@ function targetKey(target: MeshMentionTarget | null): string {
 // per findExistingDirectThread's own "never widen a private thread" rule) or, for an "Attach to stage" pick,
 // the T6.2 attachAndSendMesh composite. Free text here NEVER reaches the Revise/onSend path above — the two
 // modes share a stageId and nothing else.
-function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: MeshMessageComposerProps): ReactElement {
+function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated, pickParticipantId, onPickHandled }: MeshMessageComposerProps): ReactElement {
   const [draft, setDraft] = useState('')
   const [target, setTarget] = useState<MeshMentionTarget | null>(null)
   // targetHandle — the `@handle` that picked target; deleting it from the draft un-addresses the target.
@@ -330,19 +351,38 @@ function MeshMessageComposer({ stageId, mesh, knownThreads, onThreadCreated }: M
     openRequestIdRef.current = genMeshRequestId('mesh-feed-open')
   }
 
-  // replyToMessage — Reply on a message of the shown conversation: answer it there, addressed back to its
-  // sender, whose @handle goes into the draft (so the user never re-types the mention).
-  function replyToMessage(m: MeshMessage): void {
-    setReplyTo({ messageId: m.id, preview: messageText(m.body, m.sender_id !== 'user').slice(0, 120) })
-    const sender = participantMentionItem(mesh.roster.participants, m.sender_id)
-    if (sender === null) return
-    const handle = mentionText(sender)
-    addressedRef.current = targetKey(sender.target)
-    setTarget(sender.target)
+  // addressMention — make item the recipient and put its @handle in front of the draft unless the draft
+  // already mentions it (so the user never re-types the mention).
+  function addressMention(item: MeshMentionItem): void {
+    const handle = mentionText(item)
+    addressedRef.current = targetKey(item.target)
+    setTarget(item.target)
     setTargetHandle(handle)
     setDraft((cur) => (draftMentions(cur, handle) ? cur : `@${handle} ${cur}`))
     textareaRef.current?.focus()
   }
+
+  // replyToMessage — Reply on a message of the shown conversation: answer it there, addressed back to its
+  // sender.
+  function replyToMessage(m: MeshMessage): void {
+    setReplyTo({ messageId: m.id, preview: messageText(m.body, m.sender_id !== 'user').slice(0, 120) })
+    const sender = participantMentionItem(mesh.roster.participants, m.sender_id)
+    if (sender !== null) addressMention(sender)
+  }
+
+  // A people-panel pick addresses that person like an @ menu pick: someone new drops the previous
+  // conversation. A finished participant cannot be written to (the panel disables it, the roster may have
+  // caught up since).
+  useEffect(() => {
+    if (pickParticipantId === null) return
+    onPickHandled()
+    const item = participantMentionItem(mesh.roster.participants, pickParticipantId)
+    if (item === null || item.unavailable === true) return
+    if (targetKey(item.target) !== addressedRef.current) addressNewTarget(item.target)
+    addressMention(item)
+    // Runs once per pick; the roster and handlers are read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickParticipantId])
 
   function closeConversation(): void {
     setOpenedThreadId(null)

@@ -61,6 +61,11 @@ export type MeshParticipant = {
   unreachable_reason?: string
   // activity — what a run agent or helper is doing now (working, waiting, idle, paused, done).
   activity?: string
+  // command — the agent command this participant runs (a stage's effective command, a task's frozen profile
+  // command); readonly_enforcement — a run agent's or helper's read-only guarantee ("os" | "none"). Both are
+  // server-derived on every roster read; absent for the user, the Side agent and script stages.
+  command?: string
+  readonly_enforcement?: string
 }
 
 export type MeshThreadBudgets = {

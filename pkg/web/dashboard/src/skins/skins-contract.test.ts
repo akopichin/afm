@@ -200,9 +200,20 @@ describe('skins CSS contract — shared chat composer (feed, discussion, Team, s
 describe('skins CSS contract — Team on narrow screens', () => {
   it('turns the roster into a drawer below 760px instead of squeezing the conversation', () => {
     const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 760px)'))
-    expect(narrow).toMatch(/\.team-roster \{[^}]*position:\s*absolute/)
+    // The stage people panel embeds the same roster and has a drawer of its own, so it is exempt.
+    expect(narrow).toMatch(/\.team-roster:not\(\.team-roster-embedded\) \{[^}]*position:\s*absolute/)
     expect(narrow).toMatch(/\.team-roster\.open \{[^}]*visibility:\s*visible/)
     expect(narrow).toMatch(/\.team-roster-toggle \{[^}]*display:\s*grid/)
+  })
+})
+
+describe('skins CSS contract — stage people panel', () => {
+  it('is a right drawer opened by the people toggle when the feed and the panel do not fit side by side', () => {
+    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 1180px)'))
+    expect(narrow).toMatch(/\.stage-people \{[^}]*position:\s*absolute[^}]*right:\s*0/)
+    expect(narrow).toMatch(/\.stage-people\.open \{[^}]*visibility:\s*visible/)
+    expect(narrow).toMatch(/\.stage-people-toggle \{[^}]*display:\s*grid/)
+    expect(rule(meshCss, '.stage-people-toggle,\n.stage-people-scrim')).toMatch(/display:\s*none/)
   })
 })
 

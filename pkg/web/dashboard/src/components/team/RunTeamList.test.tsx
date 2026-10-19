@@ -165,3 +165,139 @@ describe('RunTeamList', () => {
     expect(onSelectThread).toHaveBeenCalledWith(threads[0])
   })
 })
+
+// The stage Feed's people panel: the same roster, focused on one stage.
+describe('RunTeamList with focusStageId', () => {
+  const focusParticipants: MeshParticipant[] = [
+    ...participants,
+    {
+      id: 'run:sec', kind: 'run_agent', scope: 'run', alias: 'security', display_name: 'Security', reachable: true,
+      command: 'codex-as-claude', readonly_enforcement: 'os',
+    },
+    { id: 'helper:h2', kind: 'helper', scope: 'stage', stage_id: 'implement', display_name: 'Docs helper', reachable: true, command: 'claude', readonly_enforcement: 'none' },
+    { id: 'helper:h3', kind: 'helper', scope: 'stage', stage_id: 'commit', display_name: 'Commit helper', reachable: true },
+  ]
+
+  function renderFocused(overrides: Partial<Parameters<typeof RunTeamList>[0]> = {}) {
+    const onPick = vi.fn()
+    const onSelectParticipant = vi.fn()
+    const onAddRunAgent = vi.fn()
+    render(
+      <RunTeamList
+        id="stage-people-roster"
+        drawer={false}
+        focusStageId="implement"
+        participants={focusParticipants}
+        stages={stages}
+        onPick={onPick}
+        onSelectParticipant={onSelectParticipant}
+        onAddRunAgent={onAddRunAgent}
+        {...overrides}
+      />,
+    )
+    return { onPick, onSelectParticipant, onAddRunAgent }
+  }
+
+  function groupNames(): string[] {
+    return screen.getAllByRole('region').map((r) => r.querySelector('h3')?.firstChild?.textContent ?? '')
+  }
+
+  function rowNames(group: string): string[] {
+    return within(screen.getByRole('region', { name: new RegExp(`^${group}`) }))
+      .getAllByRole('button')
+      .map((b) => b.querySelector('.team-person-name')?.textContent ?? '')
+  }
+
+  test('groups: this stage first, then run agents, then the other stages in flow order — no conversations', () => {
+    renderFocused()
+    expect(groupNames()).toEqual(['This stage', 'Run agents', 'Other stages'])
+    expect(rowNames('This stage')).toEqual(['Implement feature', 'Correctness helper', 'Docs helper'])
+    expect(rowNames('Run agents')).toEqual(['QA reviewer', 'claude', 'Security'])
+    // Flow order (plan → commit), each stage's helpers right under it; the focused stage is not repeated.
+    expect(rowNames('Other stages')).toEqual(['Plan', 'Commit & cleanup', 'Commit helper'])
+    expect(screen.queryByRole('region', { name: 'Conversations' })).toBeNull()
+  })
+
+  test('the root and its group headings use the given id, not the Team tab ids', () => {
+    renderFocused()
+    expect(document.getElementById('stage-people-roster')).not.toBeNull()
+    expect(document.getElementById('team-roster')).toBeNull()
+    expect(document.getElementById('stage-people-roster-stage')).not.toBeNull()
+    expect(screen.getByRole('navigation', { name: 'People' })).not.toHaveClass('open')
+  })
+
+  test('a click picks the person through onPick, not onSelectParticipant', () => {
+    const { onPick, onSelectParticipant } = renderFocused()
+    fireEvent.click(screen.getByText('Security'))
+    expect(onPick).toHaveBeenCalledWith(focusParticipants.find((p) => p.id === 'run:sec'))
+    expect(onSelectParticipant).not.toHaveBeenCalled()
+  })
+
+  test("a finished participant is listed but disabled: it can't be written to", () => {
+    const { onPick } = renderFocused()
+    const helper = screen.getByText('Correctness helper').closest('button') as HTMLElement
+    expect(helper).toBeDisabled()
+    expect(within(helper).getByText("Finished — can't write")).toBeInTheDocument()
+    fireEvent.click(helper)
+    expect(onPick).not.toHaveBeenCalled()
+  })
+
+  test('a stage not started yet is addressable: it reads the message when it starts', () => {
+    renderFocused()
+    const commit = screen.getByText('Commit & cleanup').closest('button') as HTMLElement
+    expect(commit).toBeEnabled()
+    expect(within(commit).getByText('Not started — reads it when it starts')).toBeInTheDocument()
+  })
+
+  test('the command chip and the sandbox come from the roster fields', () => {
+    renderFocused()
+    const sec = screen.getByText('Security').closest('button') as HTMLElement
+    expect(within(sec).getByText('codex-as-claude')).toHaveClass('team-person-chip')
+    expect(within(sec).getByText('read-only')).toHaveAttribute('data-enforcement', 'os')
+    const docs = screen.getByText('Docs helper').closest('button') as HTMLElement
+    expect(within(docs).getByText('claude')).toHaveClass('team-person-chip')
+    expect(within(docs).getByText('no sandbox')).toHaveAttribute('data-enforcement', 'none')
+    // Nothing guessed: a row without the fields has no chips.
+    const qa = screen.getByText('QA reviewer').closest('button') as HTMLElement
+    expect(qa.querySelector('.team-person-chip')).toBeNull()
+  })
+
+  test('without onPick the rows are disabled and the hint says when writing is possible', () => {
+    renderFocused({ onPick: undefined, pickHint: 'You can write to them here while this stage is running.' })
+    expect(screen.getByText('You can write to them here while this stage is running.')).toBeInTheDocument()
+    expect(screen.getByText('Security').closest('button')).toBeDisabled()
+  })
+
+  test('"+ Add agent" calls onAddRunAgent', () => {
+    const { onAddRunAgent } = renderFocused()
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    expect(onAddRunAgent).toHaveBeenCalled()
+  })
+})
+
+describe('RunTeamList without focusStageId (the Team tab)', () => {
+  test('keeps its groups, ids and rows: no chips, nothing disabled, finished rows keep their reason', () => {
+    render(
+      <RunTeamList
+        participants={[...participants, { id: 'run:sec', kind: 'run_agent', scope: 'run', display_name: 'Security', reachable: true, command: 'codex', readonly_enforcement: 'os' }]}
+        threads={threads}
+        stages={stages}
+        onSelectParticipant={vi.fn()}
+        onSelectThread={vi.fn()}
+        onAddRunAgent={vi.fn()}
+        open
+      />,
+    )
+    expect(screen.getAllByRole('region').map((r) => r.querySelector('h3')?.firstChild?.textContent)).toEqual(['This run', 'Stages', 'Conversations'])
+    const nav = screen.getByRole('navigation', { name: 'Team roster' })
+    expect(nav).toHaveAttribute('id', 'team-roster')
+    expect(nav).toHaveClass('team-roster', 'open')
+    expect(nav).not.toHaveClass('team-roster-embedded')
+    expect(document.getElementById('team-roster-run')).not.toBeNull()
+    expect(nav.querySelector('.team-person-chip, .team-person-title, .team-person-sandbox')).toBeNull()
+    expect(within(nav).getAllByRole('button').every((b) => !(b as HTMLButtonElement).disabled)).toBe(true)
+    expect(screen.getByText('task h1 has reached a terminal status')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add run agent' })).toBeInTheDocument()
+  })
+})
+

@@ -5,3 +5,4 @@ export { ThreadConversation, type ThreadConversationTarget } from './ThreadConve
 export { BoardPanel } from './BoardPanel'
 export { ActivityPanel } from './ActivityPanel'
 export { AddRunAgentDialog } from './AddRunAgentDialog'
+export { StagePeoplePanel, STAGE_PEOPLE_ID } from './StagePeoplePanel'
