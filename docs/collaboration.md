@@ -140,10 +140,11 @@ flow.yaml; using the saved version, the new one applies to a new run"*. A member
 removed from `flow.yaml` keeps its agent until the run ends.
 
 With collaboration enabled, every member the run has not added yet needs a
-profile in `collaboration.profiles`: an unknown one stops `afm run` at preflight
-and fails `afm validate`. An agent the run already added keeps the profile it
-was created with, so a resume still works after that profile is removed from
-config. A profile that is unavailable when the run starts is logged, reported as
+profile in `collaboration.profiles`: an unknown one stops `afm run` at preflight.
+An agent the run already added keeps the profile it was created with, so a
+resume still works after that profile is removed from config. `afm validate`
+checks the flow as a fresh run: it reads no run journal, so it requires a
+configured profile for every member. A profile that is unavailable when the run starts is logged, reported as
 a `team_warning` notice and skipped, and the stages run anyway. If the run's
 journal cannot be read or written while the team is being added, the run stops
 before any stage starts. When collaboration is disabled, `afm run` and
@@ -323,7 +324,10 @@ recipients or opens a new one, and prints its `thread_id`; recipients can be
 `@name`s or participant ids. `afm agent reply --in-reply-to <message-id>` answers
 in that message's thread. `afm agent inbox` lists only messages the agent has not
 been handed yet (`--all` shows the whole history), so an agent never answers the
-same question twice. `afm agent wait --condition addressed_message` without
+same question twice. A `reply_to` wait resolves on a reply from a recipient of
+that message: you take part in every conversation, but your reply to a message
+addressed to a reviewer does not count as the reviewer's answer (your reply to a
+message addressed to you does). `afm agent wait --condition addressed_message` without
 `--thread-id` waits for the next message anyone sends the agent. A `task_result`
 wait on a run agent resolves on the first result after the wait was registered,
 and a `stage_status` wait resolves as soon as the stage is at that status. A wait
@@ -384,7 +388,9 @@ helper view to inspect its final text, when available.
 A turn that ends by waiting for a colleague (`afm agent wait` answered
 `yield`) needs no answer: the task waits in `waiting_peer` and continues in a
 new turn when the reply arrives, even if it arrives while the agent process is
-still exiting.
+still exiting. A stage agent works the same way: when a wait its turn yielded
+on is answered before its process exits, the stage continues in a new turn
+instead of finishing or being retried as incomplete.
 
 ## Add a stage during a run
 

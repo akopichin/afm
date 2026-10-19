@@ -50,9 +50,27 @@ already added (Ctrl+C and resume never add one twice) and adds only new ids; a
 member changed in `flow.yaml` keeps its saved version with a `team_warning`
 notice, and a removed one stays until the run ends. With collaboration on, an
 unknown profile of a member not added yet stops `afm run` at preflight and fails
-`afm validate`; with collaboration disabled, afm warns and runs the flow without
-the team. The flow schema covers the new
-key.
+`afm validate` (which checks the flow as a fresh run); with collaboration
+disabled, afm warns and runs the flow without the team. A member that keeps
+losing its `@name` to agents added from the dashboard at the same moment stops
+startup instead of being dropped. The flow schema covers the new key.
+
+### Fix: a stage continues when its waits are answered before it exits
+
+A stage agent that registered waits (`afm agent wait` answered `yield`) and got
+the answers while its process was still exiting — for example two reviewers'
+turn results arriving right after the yield — went to the completion check or
+an incomplete-work retry. It now continues in a new turn, exactly once, as if
+the answers had arrived after it parked. A wait that was already answered when
+it was registered (`ready`) still lets the turn finish normally.
+
+### Fix: only a recipient answers a `reply_to` wait
+
+A `reply_to` wait now resolves on a reply from a recipient of the awaited
+message. The human takes part in every conversation, and their reply to a
+message for a reviewer no longer counts as the reviewer's answer; a reply to a
+message addressed to the human still does. Journals replay with the same rule,
+so waits answered by an addressed agent evaluate as before.
 
 ### Fix: the stage Feed with collaboration off
 

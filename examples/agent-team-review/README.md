@@ -26,10 +26,16 @@ afm run flow.yaml
 ```
 
 The requests and answers appear in the stage **Feed** and in the **Team** tab.
-You are a member of every conversation and can answer there too.
+You are a member of every conversation and can answer there too; your reply
+does not count as a reviewer's answer to the stage's `reply_to` wait.
 
 ## Requirements
 
+- The `implement` stage runs your default agent command: `client.command` from
+  your global or project config, `claude` when none is set. With the default you
+  need the Claude Code CLI on `PATH` and logged in (or its credentials in afm's
+  Docker container). To use another agent, set `client.command` in
+  `.afm/config.yaml` or `command:` on the stage.
 - Collaboration on (the default; `AFM_COLLABORATION=0` runs the flow without the
   team).
 - The dashboard HTTP server on, which Agent Mesh needs.
