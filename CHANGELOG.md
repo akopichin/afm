@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: a helper that waits for a colleague no longer fails with protocol_error
+
+A helper or run agent that ends its turn with `afm agent wait` prints no final
+answer. afm used to check for the missing answer first and failed the task with
+`protocol_error: helper produced no final answer`. Now the wait is recognized
+first and the task parks in `waiting_peer` until the reply arrives. A reply that
+lands while the agent process is still exiting no longer leaves the task stuck:
+it resumes right after it parks.
+
 ### Improvement: ask a running stage agent a question from the Discussion tab
 
 The Discussion composer has an **Interrupt agent** switch, shown while the stage

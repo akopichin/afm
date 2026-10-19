@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -196,6 +197,8 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
+	waiter := o.taskMeshParticipant(taskID)
+	waitsBefore := o.meshWaitIDsOf(waiter)
 	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
 	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
@@ -285,20 +288,19 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		}
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
 		return
-	case outcome.ProtocolErr != nil:
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
-		return
 	}
 
 	// Agent Mesh Phase 5, T5.4: the subprocess registered a mesh Wait on a colleague (another helper, a
-	// stage, or the human) and exited cooperatively — mirrors retry.go's stage-level T5.2 branch exactly, and
-	// for the same reason: this is NOT a false completion, NOT a protocol error, and must not run through
-	// DecodeResultWithRepair at all — a yielding agent is not expected to have produced a kind:"result"/
-	// kind:"delegate" envelope, and treating its (expected) empty/absent RawText as malformed would be wrong.
-	// This task's own concurrency lease is released simply by this function returning next, exactly like
-	// runWithRetry's awaiting_peer branch releases a stage's.
-	if o.hasOpenMeshWaitFor(meshParticipantForTask(o.opts.Store.Snapshot(), task)) {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+	// stage, or the human) and exited cooperatively — mirrors retry.go's stage-level T5.2 branch. This is NOT a
+	// false completion and NOT a protocol error: a yielding agent prints no final answer, so the yield is
+	// classified BEFORE the executor's "no final answer" protocol error is looked at. This task's own
+	// concurrency lease is released simply by this function returning next.
+	if o.turnYielded(waiter, waitsBefore, outcome.RawText) {
+		o.parkYieldedTurn(ctx, taskID, waiter, waitsBefore)
+		return
+	}
+	if outcome.ProtocolErr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
 		return
 	}
 
@@ -376,6 +378,51 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+}
+
+// meshWaitIDsOf returns the ids of every mesh wait waiter has registered so far, whatever their status.
+func (o *Orchestrator) meshWaitIDsOf(waiter agentcomm.ParticipantID) map[agentcomm.WaitID]bool {
+	ids := map[agentcomm.WaitID]bool{}
+	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter == waiter {
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
+// parkYieldedTurn parks a yielded task in waiting_peer and closes the ready-before-park window: a reply (or a
+// counter-question) may have landed while the process was finishing, when the task was still running and the
+// resume Send attempted was a no-op. Nobody else will resume it now, so it re-checks through the same
+// CAS-protected resumes Send uses — a resume that already won makes them no-ops. A wait the run closed
+// (closeRemainingMeshWaits) never resumes anybody.
+func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool) {
+	o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter == waiter && !waitsBefore[id] && w.Status == agentcomm.WaitRunClosed {
+			return
+		}
+	}
+	o.tryResumePeer(ctx, taskID)
+	o.maybeResumeAwaitingPeerQuestion(ctx, waiter)
+}
+
+// turnYielded reports whether a helper turn that ran to its end yielded into a mesh wait instead of answering:
+// a wait of waiter is still pending, or the turn registered a new wait (one not in waitsBefore) and left no
+// usable answer — the awaited reply arrived before the turn could park, so that wait is already ready.
+func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool, rawText string) bool {
+	if o.hasOpenMeshWaitFor(waiter) {
+		return true
+	}
+	registered := false
+	for id := range o.meshWaitIDsOf(waiter) {
+		registered = registered || !waitsBefore[id]
+	}
+	if !registered {
+		return false
+	}
+	_, _, err := assistants.DecodeResultWithRepair([]byte(rawText))
+	return err != nil
 }
 
 // maxFailureReasonLen (in characters, ellipsis included) keeps a failure reason short enough for the task list
