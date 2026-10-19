@@ -64,24 +64,25 @@ func (e Envelope) ClosesRequiredGate() bool {
 	return e.Kind == KindResult && e.Result != nil && e.Result.Verdict.ClosesGate()
 }
 
-// resultEnvelope — JSON-форма kind:"result" (зеркало definitions.result схемы).
+// resultEnvelope — JSON-форма kind:"result" (зеркало definitions.result схемы). Свободный текст (summary,
+// evidence, suggested_change, limitations) принимается и строкой, и списком строк (freetext.go).
 type resultEnvelope struct {
-	SchemaVersion   int       `json:"schema_version"`
-	Kind            Kind      `json:"kind"`
-	Verdict         Verdict   `json:"verdict"`
-	Summary         string    `json:"summary"`
-	Findings        []Finding `json:"findings,omitempty"`
-	Evidence        []string  `json:"evidence,omitempty"`
-	ContextVersion  string    `json:"context_version,omitempty"`
-	SuggestedChange string    `json:"suggested_change,omitempty"`
-	Limitations     string    `json:"limitations,omitempty"`
+	SchemaVersion   int           `json:"schema_version"`
+	Kind            Kind          `json:"kind"`
+	Verdict         Verdict       `json:"verdict"`
+	Summary         textField     `json:"summary"`
+	Findings        []Finding     `json:"findings,omitempty"`
+	Evidence        textListField `json:"evidence,omitempty"`
+	ContextVersion  string        `json:"context_version,omitempty"`
+	SuggestedChange textField     `json:"suggested_change,omitempty"`
+	Limitations     textField     `json:"limitations,omitempty"`
 }
 
 // delegateEnvelope — JSON-форма kind:"delegate" (зеркало definitions.delegate схемы).
 type delegateEnvelope struct {
 	SchemaVersion int               `json:"schema_version"`
 	Kind          Kind              `json:"kind"`
-	Summary       string            `json:"summary,omitempty"`
+	Summary       textField         `json:"summary,omitempty"`
 	Children      []DelegateRequest `json:"children"`
 	Continuation  *Continuation     `json:"continuation,omitempty"`
 }
@@ -171,12 +172,12 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 
 	result := &Result{
 		Verdict:         e.Verdict,
-		Summary:         e.Summary,
+		Summary:         string(e.Summary),
 		Findings:        e.Findings,
 		Evidence:        e.Evidence,
 		ContextVersion:  ContextVersion(e.ContextVersion),
-		SuggestedChange: e.SuggestedChange,
-		Limitations:     e.Limitations,
+		SuggestedChange: string(e.SuggestedChange),
+		Limitations:     string(e.Limitations),
 	}
 	return Envelope{SchemaVersion: e.SchemaVersion, Kind: KindResult, Result: result}, nil
 }
@@ -196,7 +197,7 @@ func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
 		return Envelope{}, fmt.Errorf("assistant result with kind:\"delegate\" requests %d children, exceeding the cap of %d", len(e.Children), MaxDelegateChildren)
 	}
 
-	delegate := &Delegate{Summary: e.Summary, Children: e.Children, Continuation: e.Continuation}
+	delegate := &Delegate{Summary: string(e.Summary), Children: e.Children, Continuation: e.Continuation}
 	return Envelope{SchemaVersion: e.SchemaVersion, Kind: KindDelegate, Delegate: delegate}, nil
 }
 
