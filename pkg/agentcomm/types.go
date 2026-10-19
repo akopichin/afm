@@ -149,6 +149,10 @@ type Thread struct {
 	Members []ParticipantID `json:"members"`
 	Status  ThreadStatus    `json:"status"`
 	Budgets ThreadBudgets   `json:"budgets,omitempty"`
+	// OriginStage is the stage the thread was opened from: the sender's stage, or the stage whose feed the
+	// human opened it in. Empty for a thread opened outside any stage, and for threads journaled before the
+	// field existed — those show in a stage's feed by membership alone.
+	OriginStage string `json:"origin_stage,omitempty"`
 }
 
 // Valid reports whether t has the minimum shape a Thread needs: a non-empty ID, at least one

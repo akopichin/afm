@@ -36,7 +36,10 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 		return th, err
 	}
 	rs := o.opts.Store.Snapshot()
-	effects, err := threadOpenEffects(rs, threadID, req.Title, req.Scope, req.Members, req.MaxMessages)
+	if _, known := rs.Stages[req.OriginStage]; req.OriginStage != "" && !known {
+		return agentcomm.Thread{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("unknown origin stage %q", req.OriginStage)}
+	}
+	effects, err := threadOpenEffects(rs, threadID, req.Title, req.Scope, req.Members, req.MaxMessages, req.OriginStage)
 	if err != nil {
 		return agentcomm.Thread{}, err
 	}
@@ -56,7 +59,7 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 func openedThread(threadID agentcomm.ThreadID, req OpenThreadRequest) agentcomm.Thread {
 	return agentcomm.Thread{
 		ID: threadID, Title: req.Title, Scope: req.Scope, Members: req.Members, Status: agentcomm.ThreadOpen,
-		Budgets: agentcomm.ThreadBudgets{MaxMessages: req.MaxMessages},
+		Budgets: agentcomm.ThreadBudgets{MaxMessages: req.MaxMessages}, OriginStage: req.OriginStage,
 	}
 }
 
@@ -78,7 +81,7 @@ func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenT
 		members[i] = string(m)
 	}
 	if !found || agentcomm.ThreadID(target.ThreadID) != threadID || p.Title != req.Title || p.Scope != string(req.Scope) ||
-		p.MaxMessages != req.MaxMessages || !slices.Equal(p.Members, members) {
+		p.MaxMessages != req.MaxMessages || p.OriginStage != req.OriginStage || !slices.Equal(p.Members, members) {
 		return agentcomm.Thread{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return openedThread(threadID, req), true, nil
@@ -86,8 +89,9 @@ func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenT
 
 // threadOpenEffects builds the effects that open threadID with members: registering every member the mesh
 // roster does not hold yet, then the thread itself — shared by OpenThread and SendFromAgent, which opens a
-// conversation in the same operation as its first message.
-func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title string, scope agentcomm.Scope, members []agentcomm.ParticipantID, maxMessages int) ([]state.Effect, error) {
+// conversation in the same operation as its first message. originStage is the stage the thread is opened
+// from (agentcomm.Thread.OriginStage).
+func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title string, scope agentcomm.Scope, members []agentcomm.ParticipantID, maxMessages int, originStage string) ([]state.Effect, error) {
 	effects, err := ensureParticipantEffects(rs, members)
 	if err != nil {
 		return nil, err
@@ -97,7 +101,7 @@ func threadOpenEffects(rs state.RunState, threadID agentcomm.ThreadID, title str
 		memberIDs[i] = string(m)
 	}
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: title, Scope: string(scope), Members: memberIDs, MaxMessages: maxMessages})
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(scope), Members: memberIDs, MaxMessages: maxMessages, OriginStage: originStage})
 	if err != nil {
 		return nil, err
 	}

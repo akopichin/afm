@@ -290,7 +290,7 @@ func (o *Orchestrator) childResultMeshEffects(rs state.RunState, parentID, child
 	var effects []state.Effect
 	if _, exists := rs.Assistants.Mesh.Threads[threadID]; !exists {
 		var err error
-		effects, err = threadOpenEffects(rs, threadID, "", agentcomm.ScopeStage, append([]agentcomm.ParticipantID{meshUserParticipantID}, members...), 0)
+		effects, err = threadOpenEffects(rs, threadID, "", agentcomm.ScopeStage, append([]agentcomm.ParticipantID{meshUserParticipantID}, members...), 0, participantStage(rs, members[0]))
 		if err != nil {
 			return nil, fmt.Errorf("child result mesh mirror: %w", err)
 		}

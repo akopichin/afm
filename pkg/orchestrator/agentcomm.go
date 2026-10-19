@@ -83,6 +83,8 @@ type OpenThreadRequest struct {
 	Scope       agentcomm.Scope
 	Members     []agentcomm.ParticipantID
 	MaxMessages int
+	// OriginStage — the stage whose feed the thread is opened from (agentcomm.Thread.OriginStage); "" for none.
+	OriginStage string
 	Actor       state.Actor
 }
 

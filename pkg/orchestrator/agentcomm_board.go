@@ -191,7 +191,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			send.ThreadID = th
 		} else {
 			send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
-			if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, members, 0); err != nil {
+			if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, req.Author)); err != nil {
 				return nil, err
 			}
 		}

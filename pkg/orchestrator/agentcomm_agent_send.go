@@ -59,7 +59,7 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 		return o.Send(ctx, req)
 	}
 	req.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
-	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, members, 0)
+	open, err := threadOpenEffects(rs, req.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, req.Sender))
 	if err != nil {
 		return SendReceipt{}, err
 	}

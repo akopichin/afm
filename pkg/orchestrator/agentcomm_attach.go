@@ -47,7 +47,18 @@ type AttachAndSendRequest struct {
 	Instruction  string
 	FirstMessage *string // nil = no first message; the task is still created and addressable
 	Recipients   []agentcomm.ParticipantID
-	Actor        state.Actor
+	// OriginStage — for a run agent, the stage whose feed it was added from: its first thread shows there
+	// (agentcomm.Thread.OriginStage). A stage helper's thread always belongs to its StageID.
+	OriginStage string
+	Actor       state.Actor
+}
+
+// attachOriginStage is the origin stage of an attach's first thread.
+func attachOriginStage(req AttachAndSendRequest) string {
+	if normalizeScope(req.Scope) == assistants.ScopeRun {
+		return req.OriginStage
+	}
+	return req.StageID
 }
 
 // AttachAndSendResult names everything AttachAndSend's one operation created. MessageID is nil when the
@@ -154,7 +165,8 @@ func (o *Orchestrator) replayedAttachAndSend(op state.CommittedOperation, treq t
 	for i, m := range thread.Members {
 		got[i] = agentcomm.ParticipantID(m)
 	}
-	if !found || agentcomm.ThreadID(threadTarget.ThreadID) != res.ThreadID || !slices.Equal(sortedMemberSet(got), sortedMemberSet(want)) {
+	if !found || agentcomm.ThreadID(threadTarget.ThreadID) != res.ThreadID || !slices.Equal(sortedMemberSet(got), sortedMemberSet(want)) ||
+		thread.OriginStage != attachOriginStage(req) {
 		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
 	}
 
@@ -237,6 +249,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 
 	rs := o.opts.Store.Snapshot()
+	if _, known := rs.Stages[req.OriginStage]; req.OriginStage != "" && !known {
+		return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "unknown origin stage %q", req.OriginStage)
+	}
 	task, err := o.admitTopLevelTask(rs, treq)
 	if err != nil {
 		return AttachAndSendResult{}, err
@@ -282,7 +297,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 
 	threadID := deriveMeshThreadID(req.OperationID)
 	threadEff, err := marshalEffect("mesh_thread_opened", state.Target{ThreadID: string(threadID)},
-		state.MeshThreadOpenedPayload{Title: title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs})
+		state.MeshThreadOpenedPayload{Title: title, Scope: string(meshThreadScopeFor(scope)), Members: memberStrs, OriginStage: attachOriginStage(req)})
 	if err != nil {
 		return AttachAndSendResult{}, err
 	}

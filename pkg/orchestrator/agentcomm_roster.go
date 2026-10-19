@@ -285,6 +285,13 @@ func resolveParticipant(rs state.RunState, id agentcomm.ParticipantID) (agentcom
 	}
 }
 
+// participantStage is the stage a participant belongs to: a stage agent's stage, a stage helper's root stage;
+// "" for the human, run agents and the Side agent.
+func participantStage(rs state.RunState, id agentcomm.ParticipantID) string {
+	p, _ := resolveParticipant(rs, id)
+	return p.StageID
+}
+
 // liveRunParticipant derives a run agent's reachability from its task, like helperParticipant does: the
 // journal's descriptor says Reachable for good, but once the agent's task is terminal nobody will read new
 // messages, so it must not look (or be addressable) as if somebody would.
