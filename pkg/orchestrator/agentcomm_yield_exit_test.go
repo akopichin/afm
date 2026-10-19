@@ -123,6 +123,7 @@ type exitFixture struct {
 
 type exitOutcome struct {
 	completionChecked bool
+	completions       int // EventAgentCompleted published
 	interrupted       int
 	continuations     map[bus.EventType]int
 }
@@ -161,6 +162,9 @@ func (f *exitFixture) runTurn(t *testing.T, turn func()) exitOutcome {
 	for {
 		select {
 		case ev := <-events:
+			if ev.Type == bus.EventAgentCompleted {
+				out.completions++
+			}
 			fsmEv, ok := transition[ev.Type]
 			if !ok || ev.StageID != assistantsTestStageID {
 				continue

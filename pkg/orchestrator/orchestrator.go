@@ -871,12 +871,20 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 // and unblocks dependents.
 func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error {
 	agentType, _ := ev.Data.(string)
-	current := o.currentStatus(ev.StageID)
+	st := o.opts.Store.Snapshot().Stages[ev.StageID]
+	current := st.Status
+	// A completion carries the epoch of the turn that completed (completeAgent): it acts only while that turn
+	// still owns the stage — or for the Revise of that very turn (the feedback branch below). Every transition
+	// it makes is fenced with the epoch too, so a takeover after this check still wins.
+	fence := ev.Epoch
+	if fence != nil && st.Epoch != *fence && !reviseOfTurn(st, *fence) {
+		return nil
+	}
 
 	// Check all phases for fresh questions.
 	if current != state.StatusAwaitingUserInput && o.hasOpenQuestion(ev.StageID, agentType) {
 		o.preAskPhase.Store(ev.StageID, agentType)
-		o.Trigger(ev.StageID, bus.EvAskUser, bus.GuardCtx{Phase: agentType}, "")
+		o.Trigger(ev.StageID, bus.EvAskUser, bus.GuardCtx{Phase: agentType, ExpectEpoch: fence}, "")
 		return nil
 	}
 
@@ -887,7 +895,9 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		if current != state.StatusPlanning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput {
 			return nil
 		}
-		o.Trigger(ev.StageID, bus.EvPlanReady, bus.GuardCtx{}, "")
+		if _, ok := o.Trigger(ev.StageID, bus.EvPlanReady, bus.GuardCtx{ExpectEpoch: fence}, ""); !ok && fence != nil && !o.turnOwnsStage(ev.StageID, *fence) {
+			return nil // the stage was taken over after the check above
+		}
 		// auto_approve: true on the stage config wins regardless of
 		// dashboard/--require-approval — checked before the headless branch.
 		if stage := o.reg().Stage(ev.StageID); stage != nil && o.autoApproveIfConfigured(ctx, *stage) {
@@ -921,24 +931,24 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 			return nil
 		}
 		// A teammate wrote while the agent was working: one more turn to answer instead of done.
-		if o.continueForUnreadMessages(ctx, ev.StageID, agentType) {
+		if o.continueForUnreadMessages(ctx, ev.StageID, agentType, fence) {
 			return nil
 		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
-		o.completeStage(ctx, ev.StageID, current, "")
+		o.completeStageFenced(ctx, ev.StageID, current, "", fence)
 	case phaseScript:
 		// Script-стадия завершилась (runScriptStage): нет revising-гонки (interruptChans не регистрируется вне
 		// runWithRetry, Revise() на script-стадию не осмыслен) — просто done, как остальные фазы.
-		o.completeStage(ctx, ev.StageID, current, "")
+		o.completeStageFenced(ctx, ev.StageID, current, "", fence)
 	case phaseReview:
 		// Standalone review публикует собственный completion; встроенный review завершается через implementation
 		// и сюда не попадает.
 		if current == state.StatusRunning || current == state.StatusRevising {
-			if o.continueForUnreadMessages(ctx, ev.StageID, agentType) {
+			if o.continueForUnreadMessages(ctx, ev.StageID, agentType, fence) {
 				return nil
 			}
-			o.completeStage(ctx, ev.StageID, current, "review complete")
+			o.completeStageFenced(ctx, ev.StageID, current, "review complete", fence)
 		}
 	default:
 		// unknown agent type: no status change needed
@@ -960,6 +970,12 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 // honored (TestCollaborationDisabledBeforeResumeDoesNotSkipRequirement), and RequiredBlocker is a cheap,
 // file-I/O-free read that is a correct no-op when no task was ever attached.
 func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus, reason string) {
+	o.completeStageFenced(ctx, stageID, current, reason, nil)
+}
+
+// completeStageFenced is completeStage for a completion bound to a turn's execution epoch: its transitions
+// commit only while that turn still owns the stage (nil = not bound).
+func (o *Orchestrator) completeStageFenced(ctx context.Context, stageID string, current state.StageStatus, reason string, fence *uint64) {
 	if current != state.StatusRunning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput && current != state.StatusAwaitingAssistants {
 		return
 	}
@@ -970,7 +986,7 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 			// pass right after this commits — see finalizeWatchersForStage's EvAwaitAssistants case — so a
 			// required watcher can never be left "watching" forever once there is no more main-agent output to
 			// wait for.
-			o.Trigger(stageID, bus.EvAwaitAssistants, bus.GuardCtx{}, "awaiting required assistant: "+string(blocker.ID))
+			o.Trigger(stageID, bus.EvAwaitAssistants, bus.GuardCtx{ExpectEpoch: fence}, "awaiting required assistant: "+string(blocker.ID))
 		}
 		// Already in awaiting_assistants and still open: nothing to do until the blocking task resolves — see
 		// maybeCompleteAfterAssistants, called from finishTaskFrom's terminal-transition hook.
@@ -978,7 +994,7 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	}
 	// current — снимок статуса, прочитанный вызывающим ДО этого момента: между чтением и CAS сюда мог влезть
 	// Pause/Revise на другой горутине и увести стадию из running/retrying.
-	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason); !ok {
+	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{ExpectEpoch: fence}, reason); !ok {
 		return
 	}
 	// script_after runs first, and reflection only starts once it returns — so a stage's reflect capture
@@ -1029,7 +1045,7 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 
 	// Agent exited before the user answered. Restart it so it can read
 	// answer.json (bash loop exits immediately since the file now exists).
-	return o.resumeStageForPhase(ctx, *stage, phase, bus.EvUserAnswered)
+	return o.resumeStageForPhase(ctx, *stage, phase, bus.EvUserAnswered, 0)
 }
 
 // resumeStageForPhase triggers ev (dispatching, via phaseDispatch, to the FSM status that phase implies)
@@ -1037,25 +1053,32 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 // onUserAnswered (human answered) and onPeerReplied (Agent Mesh Phase 5, T5.3: a colleague replied). Each
 // caller is responsible for its own precondition checks (current status, that a phase was actually
 // stashed) before calling this.
-func (o *Orchestrator) resumeStageForPhase(ctx context.Context, stage flow.Stage, phase string, ev bus.FSMEvent) error {
+//
+// parkSeq, when non-zero, binds the resume to one park (state.StageState.Seq of the awaiting_peer transition):
+// the transition commits only while the stage is still in that park.
+func (o *Orchestrator) resumeStageForPhase(ctx context.Context, stage flow.Stage, phase string, ev bus.FSMEvent, parkSeq uint64) error {
+	var expectSeq *uint64
+	if parkSeq != 0 {
+		expectSeq = &parkSeq
+	}
 	switch phase {
 	case phasePlanning:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phasePlanning}, ""); !ok {
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phasePlanning, ExpectStageSeq: expectSeq}, ""); !ok {
 			return nil // another resume won the transition — or the stage left the status: nothing to spawn
 		}
 		o.spawnKind(ctx, stage, kindPlanning, o.runPlanningAgent)
 	case phaseImplementation:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseImplementation}, ""); !ok {
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseImplementation, ExpectStageSeq: expectSeq}, ""); !ok {
 			return nil // another resume won the transition — or the stage left the status: nothing to spawn
 		}
 		o.spawnKind(ctx, stage, kindImplementation, o.runImplementationAgent)
 	case phaseReview:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseReview}, ""); !ok {
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseReview, ExpectStageSeq: expectSeq}, ""); !ok {
 			return nil // another resume won the transition — or the stage left the status: nothing to spawn
 		}
 		o.spawnKind(ctx, stage, kindReview, o.runReviewAgent)
 	case phaseAutonomous:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseAutonomous}, ""); !ok {
+		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseAutonomous, ExpectStageSeq: expectSeq}, ""); !ok {
 			return nil // another resume won the transition — or the stage left the status: nothing to spawn
 		}
 		o.spawnKind(ctx, stage, kindAutonomous, o.runAutonomousAgent)

@@ -166,12 +166,17 @@ func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (ass
 // Whether — and with which event — the stage continues is peerContinuation's decision, the same one the exit
 // path (retry.go) and recovery (recoverMeshWaits) make; evType is only the caller's reason, used for a park
 // that recorded no waits.
+//
+// The event is bound to the park it was decided for (ParkSeq): handled after that park is over — e.g. queued
+// behind another continuation that already resumed the stage, which then parked again — it is a no-op.
 func (o *Orchestrator) resumeAwaitingPeerStage(ctx context.Context, stageID string, evType bus.EventType) {
-	if o.currentStatus(stageID) != state.StatusAwaitingPeer {
+	rs := o.opts.Store.Snapshot()
+	park := rs.Stages[stageID]
+	if park.Status != state.StatusAwaitingPeer {
 		return
 	}
-	if ev, ok := peerContinuation(o.opts.Store.Snapshot(), stageID, evType); ok {
-		o.publishCritical(ctx, bus.Event{Type: ev, StageID: stageID})
+	if ev, ok := peerContinuation(rs, stageID, evType); ok {
+		o.publishCritical(ctx, bus.Event{Type: ev, StageID: stageID, ParkSeq: park.Seq})
 	}
 }
 
@@ -253,8 +258,8 @@ func (o *Orchestrator) continueParkedStage(ctx context.Context, stageID string) 
 
 // dispatchPeerContinuation runs the handler of a continuation event directly — recovery's path, before the
 // event loop drains the critical bus.
-func (o *Orchestrator) dispatchPeerContinuation(ctx context.Context, stageID string, ev bus.EventType) error {
-	e := bus.Event{StageID: stageID}
+func (o *Orchestrator) dispatchPeerContinuation(ctx context.Context, stageID string, ev bus.EventType, parkSeq uint64) error {
+	e := bus.Event{StageID: stageID, ParkSeq: parkSeq}
 	switch ev {
 	case bus.EventPeerReplied:
 		return o.onPeerReplied(ctx, e)
@@ -287,8 +292,12 @@ func (o *Orchestrator) resumeAfterPeerQuestion(ctx context.Context, stageID stri
 // durable marker file when prePeerPhase was never populated in THIS process — the restart case recoverMeshWaits
 // below drives. Which fsmEv is passed in does not change any of this: a bounded T5.5 counter-question turn
 // needs no different spawn behavior, only a differently-labeled resume (see this file's own header comment).
+//
+// An event bound to a park (ParkSeq) resumes only that park: the check here skips a stale one before it takes
+// the phase marker, and the resume transition itself is fenced to the park under the store lock.
 func (o *Orchestrator) resumeAwaitingPeerPhase(ctx context.Context, ev bus.Event, fsmEv bus.FSMEvent) error {
-	if o.currentStatus(ev.StageID) != state.StatusAwaitingPeer {
+	park := o.opts.Store.Snapshot().Stages[ev.StageID]
+	if park.Status != state.StatusAwaitingPeer || (ev.ParkSeq != 0 && park.Seq != ev.ParkSeq) {
 		return nil
 	}
 	phase, ok := o.popPeerWaitPhase(ev.StageID)
@@ -299,7 +308,7 @@ func (o *Orchestrator) resumeAwaitingPeerPhase(ctx context.Context, ev bus.Event
 	if stage == nil {
 		return nil
 	}
-	return o.resumeStageForPhase(ctx, *stage, phase, fsmEv)
+	return o.resumeStageForPhase(ctx, *stage, phase, fsmEv, ev.ParkSeq)
 }
 
 // onPeerReplied is resumeAwaitingPeerPhase's T5.3 handler, dispatched from EventPeerReplied.
@@ -530,7 +539,7 @@ func (o *Orchestrator) recoverMeshWaits(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if err := o.dispatchPeerContinuation(ctx, s.ID, ev); err != nil {
+		if err := o.dispatchPeerContinuation(ctx, s.ID, ev, rs.Stages[s.ID].Seq); err != nil {
 			log.Printf("WARN: mesh: recover awaiting_peer stage %q (%s): %v", s.ID, ev, err)
 		}
 	}

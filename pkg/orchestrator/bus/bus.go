@@ -138,6 +138,12 @@ type Event struct {
 	// Seq — реальный seq FSM-transition. Позволяет фронту дедуплицировать историю из /api/events с
 	// live-потоком WS по стабильному ключу вместо содержимого.
 	Seq uint64 `json:"seq,omitempty"`
+	// Epoch — on EventAgentCompleted: the execution epoch (state.StageState.Epoch) of the turn that completed.
+	// The event loop ignores a completion whose turn no longer owns the stage. nil = not fenced.
+	Epoch *uint64 `json:"-"`
+	// ParkSeq — on a peer continuation (EventPeerReplied/Question/WaitEnded): the park it was decided for
+	// (state.StageState.Seq of the awaiting_peer transition). 0 = not bound to a park.
+	ParkSeq uint64 `json:"-"`
 }
 
 type CriticalBus struct {

@@ -91,6 +91,9 @@ type StageState struct {
 	Epoch uint64 `json:"epoch,omitempty"`
 	// PeerWaits — while parked in awaiting_peer: the waits its continuation depends on (Transition.PeerWaits).
 	PeerWaits []agentcomm.WaitID `json:"peer_waits,omitempty"`
+	// Seq is the seq of the stage's latest transition. While parked, it identifies the park: a resume is fenced
+	// to it (Transition.ExpectStageSeq), so a resume decided for an earlier park cannot move a later one.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // stageTakeoverEvents are the FSM events (pkg/orchestrator/bus) by which someone other than the stage's running
@@ -282,6 +285,7 @@ func (rs *RunState) applyTransition(t *Transition) {
 		st.Epoch++
 	}
 	st.PeerWaits = slices.Clone(t.PeerWaits)
+	st.Seq = t.Seq
 	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()
 }

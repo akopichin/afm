@@ -106,3 +106,37 @@ func TestStagePeerWaits_RecordedOnParkAndReplayed(t *testing.T) {
 		t.Fatalf("PeerWaits after the resume = %v, want none", got)
 	}
 }
+
+// Each stage remembers the seq of its latest transition — a park's identity while it stays parked — and a
+// transition fenced with that seq commits only if nothing has moved the stage since.
+func TestStageSeq_IdentifiesTheLatestTransition(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, []string{"s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTr(t, s, StatusPending, StatusRunning, "start_run")
+	applyTr(t, s, StatusRunning, StatusAwaitingPeer, "await_peer")
+	park1 := s.Snapshot().Stages["s"].Seq
+	if park1 == 0 {
+		t.Fatal("the park has no seq")
+	}
+	applyTr(t, s, StatusAwaitingPeer, StatusRunning, "peer_replied")
+	applyTr(t, s, StatusRunning, StatusAwaitingPeer, "await_peer")
+	park2 := s.Snapshot().Stages["s"].Seq
+
+	err = s.Apply(&Transition{StageID: "s", From: StatusAwaitingPeer, To: StatusRunning, Event: "peer_question", ExpectStageSeq: &park1})
+	if !errors.Is(err, ErrConcurrentChange) {
+		t.Fatalf("resume fenced to an earlier park: err = %v, want ErrConcurrentChange", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rs.Stages["s"].Seq; got != park2 {
+		t.Fatalf("replayed seq = %d, want %d", got, park2)
+	}
+}

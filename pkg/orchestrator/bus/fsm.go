@@ -82,6 +82,9 @@ type GuardCtx struct {
 	ExpectEpoch *uint64
 	// PeerWaits is recorded on an EvAwaitPeer park: the waits its continuation depends on.
 	PeerWaits []agentcomm.WaitID
+	// ExpectStageSeq, when set, fences the transition to the stage's latest transition (state.Transition.
+	// ExpectStageSeq): a resume decided for one park cannot move a later park.
+	ExpectStageSeq *uint64
 }
 
 type Rule struct {
@@ -195,8 +198,9 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		Event:   string(ev),
 		Reason:  reason,
 
-		PeerWaits:   ctx.PeerWaits,
-		ExpectEpoch: ctx.ExpectEpoch,
+		PeerWaits:      ctx.PeerWaits,
+		ExpectEpoch:    ctx.ExpectEpoch,
+		ExpectStageSeq: ctx.ExpectStageSeq,
 	}
 	if err := f.store.Apply(tr); err != nil {
 		if errors.Is(err, state.ErrConcurrentChange) {

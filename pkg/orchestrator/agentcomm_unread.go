@@ -39,7 +39,9 @@ const unreadTurnNoteText = "\nTeammates wrote to you while you were working; ans
 // Only a stage still running its turn (running/retrying) gets one. awaiting_user_input — a stale question let
 // the stage complete — finishes as before: a new turn would ask that question again and hang the stage. Part 2
 // of the rule above releases the senders.
-func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, phase string) bool {
+//
+// fence binds the park to the completed turn's execution epoch (nil = not bound).
+func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, phase string, fence *uint64) bool {
 	if cur := o.currentStatus(stageID); cur != state.StatusRunning && cur != state.StatusRetrying {
 		return false
 	}
@@ -58,13 +60,13 @@ func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, p
 	// recovers the stage through recoverMeshWaits.
 	o.prePeerPhase.Store(stageID, phase)
 	saveMeshPeerWaitPhase(o.stageDir(stageID), phase)
-	if _, ok := o.Trigger(stageID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase}, "unread messages from teammates"); !ok {
+	if _, ok := o.Trigger(stageID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase, ExpectEpoch: fence}, "unread messages from teammates"); !ok {
 		o.prePeerPhase.Delete(stageID)
 		return false
 	}
 	o.unreadTurns.Store(stageID, used+1)
 	o.unreadNotePending.Store(stageID, true)
-	if err := o.onPeerQuestion(ctx, bus.Event{StageID: stageID}); err != nil {
+	if err := o.onPeerQuestion(ctx, bus.Event{StageID: stageID, ParkSeq: o.opts.Store.Snapshot().Stages[stageID].Seq}); err != nil {
 		log.Printf("WARN: mesh: resume stage %q for unread messages: %v", stageID, err)
 	}
 	return true

@@ -252,7 +252,7 @@ func (o *Orchestrator) completeRecoveredStage(ctx context.Context, s flow.Stage,
 	if o.executionKind(s) == kindAutonomous {
 		phase = phaseAutonomous
 	}
-	if !s.IsScript() && o.continueForUnreadMessages(ctx, s.ID, phase) {
+	if !s.IsScript() && o.continueForUnreadMessages(ctx, s.ID, phase, nil) {
 		return
 	}
 	o.completeStage(ctx, s.ID, from, reason)

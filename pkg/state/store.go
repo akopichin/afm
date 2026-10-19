@@ -32,6 +32,9 @@ type Transition struct {
 	// ExpectEpoch, when set, fences the transition: it commits only while the stage's StageState.Epoch still
 	// has this value — the process that decided it still owns the stage. Never journaled.
 	ExpectEpoch *uint64 `json:"-"`
+	// ExpectStageSeq, when set, fences the transition to the stage's latest transition (StageState.Seq): e.g. a
+	// resume decided for one park commits only while the stage is still in that park. Never journaled.
+	ExpectStageSeq *uint64 `json:"-"`
 }
 
 // ErrRunLocked означает, что run-директория уже открыта другим процессом afm. flock освобождается ОС при
@@ -505,6 +508,10 @@ func (s *Store) Apply(t *Transition) error {
 	if t.ExpectEpoch != nil && current.Epoch != *t.ExpectEpoch {
 		return fmt.Errorf("%w: stage %q was taken over (execution epoch %d, expected %d)",
 			ErrConcurrentChange, t.StageID, current.Epoch, *t.ExpectEpoch)
+	}
+	if t.ExpectStageSeq != nil && current.Seq != *t.ExpectStageSeq {
+		return fmt.Errorf("%w: stage %q moved on (latest transition %d, expected %d)",
+			ErrConcurrentChange, t.StageID, current.Seq, *t.ExpectStageSeq)
 	}
 
 	s.lastSeq++
