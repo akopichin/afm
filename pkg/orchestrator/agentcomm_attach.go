@@ -318,7 +318,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 
 	expect := task.Expect
-	reachable := recipientsReachable(msgs)
+	reachable := o.recipientsReachable(msgs)
 	expect.Check = func(cur *state.RunState) error {
 		if scope == assistants.ScopeRun {
 			if err := aliasTaken(*cur, newParticipant.Alias); err != nil {

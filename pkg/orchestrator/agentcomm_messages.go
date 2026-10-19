@@ -132,19 +132,36 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 	return err
 }
 
-// rejectUnreachableRecipients refuses a message to a participant whose stage or task has finished — nobody would
-// ever read it. Senders run it as their operation's Preconditions.Check, against the state under the commit's
-// own lock (a recipient can finish between any earlier snapshot and the commit); an idempotent replay of an
-// already-committed send skips it, like every precondition, and returns its original outcome.
-func rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.ParticipantID) error {
+// rejectUnreachableRecipients refuses a message to a participant nobody will read for: its stage or task has
+// finished, or it is a script stage, which runs no agent. Reachability is the full roster's (o.liveParticipant),
+// so a send by exact id is refused for exactly what the roster shows as unreachable. Senders run it as their
+// operation's Preconditions.Check, against the state under the commit's own lock (a recipient can finish between
+// any earlier snapshot and the commit); an idempotent replay of an already-committed send skips it, like every
+// precondition, and returns its original outcome.
+func (o *Orchestrator) rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.ParticipantID) error {
 	for _, r := range recipients {
-		if p, ok := resolveParticipant(rs, r); ok && !p.Reachable {
+		if p, ok := o.liveParticipant(rs, r); ok && !p.Reachable {
 			return &state.OperationRejectedError{
-				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s has finished and cannot receive messages (%s)", r, p.UnreachableReason),
+				Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s cannot receive messages (%s)", r, p.UnreachableReason),
 			}
 		}
 	}
 	return nil
+}
+
+// liveParticipant is resolveParticipant with what only the stage config knows (withStageConfig) — the same
+// derivation the full roster (liveRoster) uses, for one id.
+func (o *Orchestrator) liveParticipant(rs state.RunState, id agentcomm.ParticipantID) (agentcomm.Participant, bool) {
+	p, ok := resolveParticipant(rs, id)
+	if !ok {
+		return p, false
+	}
+	if stageID, isStage := stageIDFromMeshParticipant(id); isStage && o.reg() != nil {
+		if s := o.reg().Stage(stageID); s != nil {
+			p = o.withStageConfig(p, *s)
+		}
+	}
+	return p, true
 }
 
 // Send implements Service.Send. One ApplyRunOperation commits the message plus one accepted receipt/inbox
@@ -182,7 +199,7 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: msg.effects, Expect: state.Preconditions{
-		Check: recipientsReachable(msgs),
+		Check: o.recipientsReachable(msgs),
 	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		o.deliverCommittedMessages(runCtx, msgs, res.ReadyWaits)
@@ -234,9 +251,9 @@ func recipientsOf(msgs []plannedMessage) []agentcomm.ParticipantID {
 
 // recipientsReachable is the commit-time check of an operation carrying msgs: rejectUnreachableRecipients over
 // all their recipients, against the state under the commit's lock.
-func recipientsReachable(msgs []plannedMessage) func(*state.RunState) error {
+func (o *Orchestrator) recipientsReachable(msgs []plannedMessage) func(*state.RunState) error {
 	recipients := recipientsOf(msgs)
-	return func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, recipients) }
+	return func(rs *state.RunState) error { return o.rejectUnreachableRecipients(*rs, recipients) }
 }
 
 // deliverCommittedMessages is the post-commit tail of every operation that commits messages: publish each

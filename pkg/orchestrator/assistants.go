@@ -491,7 +491,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 	var check func(*state.RunState) error
 	if reply != nil {
 		messages = append(messages, reply.effects...)
-		check = turnReplyCheck(*reply)
+		check = o.turnReplyCheck(*reply)
 	}
 
 	finishOp := func(effects []state.Effect, check func(*state.RunState) error) state.Operation {

@@ -81,8 +81,8 @@ func (o *Orchestrator) planTurnReply(taskID assistants.TaskID, turn uint64, resu
 // turnReplyCheck is the commit-time check of a finish operation carrying reply: the agent has not answered the
 // waking message itself meanwhile (errTurnAlreadyAnswered — the same turn's explicit reply may commit after
 // planTurnReply looked), and the recipient can still receive a message.
-func turnReplyCheck(reply plannedMessage) func(*state.RunState) error {
-	reachable := recipientsReachable([]plannedMessage{reply})
+func (o *Orchestrator) turnReplyCheck(reply plannedMessage) func(*state.RunState) error {
+	reachable := o.recipientsReachable([]plannedMessage{reply})
 	return func(rs *state.RunState) error {
 		if answeredBy(rs.Assistants.Mesh, reply.send.Sender, *reply.send.InReplyTo) {
 			return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: errTurnAlreadyAnswered.Error(), Cause: errTurnAlreadyAnswered}

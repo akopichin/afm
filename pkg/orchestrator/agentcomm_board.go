@@ -75,7 +75,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 			effects = append(effects, n.effects...)
 		}
 		op := state.Operation{ID: req.OperationID, Kind: opKindMeshPublish, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
-			Check: recipientsReachable(notices),
+			Check: o.recipientsReachable(notices),
 		}}
 		res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": status}})

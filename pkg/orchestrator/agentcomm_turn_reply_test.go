@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -539,5 +540,21 @@ func TestPassive_WaitingAgentIsResumedOnlyByWhatItWaitsFor(t *testing.T) {
 				t.Fatalf("turns = %d, want the waiter resumed by its reply", calls.Load())
 			}
 		})
+	}
+}
+
+// A script stage runs no agent: a message to it by its exact participant id is refused at commit time with the
+// same reason the roster shows, never accepted for nobody to read.
+func TestSend_ToScriptStageIsRejected(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true, flow.Stage{ID: "lint", Script: "true"})
+	script := meshStageParticipantID("lint")
+	th := openThread(t, o, "op-script-thread", 0, meshUserParticipantID, script)
+	_, err := o.Send(context.Background(), SendRequest{
+		OperationID: "op-to-script", ThreadID: th, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{script},
+		Kind: agentcomm.MessageKindMessage, Body: "anyone there?",
+	})
+	var rejected *state.OperationRejectedError
+	if !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, scriptStageUnreachableReason) {
+		t.Fatalf("Send to a script stage = %v, want a rejection saying %q", err, scriptStageUnreachableReason)
 	}
 }
