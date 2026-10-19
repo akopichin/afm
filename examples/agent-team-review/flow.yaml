@@ -37,6 +37,11 @@ stages:
         to fix: finish now (step 5).
       - A request is still waiting for its answer: handle the answers you have
         (step 4), then end your turn without sending anything new.
+      - A request ended without an answer (<your_requests> says its wait was
+        cancelled or expired, e.g. the reviewer failed or left the run): that
+        reviewer is unavailable. Do not ask it again; once no other request is
+        waiting, finish and say in your summary which review did not happen
+        and why.
       - You have not asked yet: implement and test, then go on with step 1.
 
       When the code builds and `go test ./...` passes, ask the team for a review.
@@ -66,9 +71,10 @@ stages:
          new request with what you changed and wait for it again (steps 2-3, at
          most two rounds per reviewer).
       5. While a wait is still open, end your turn again after handling a reply.
-         Finish only after both reviewers have answered. Never send a new
-         request to a reviewer whose latest answer had no findings. In your summary, list the
-         findings you fixed and the ones you declined, with a reason.
+         Finish once every request is answered or ended without an answer.
+         Never send a new request to a reviewer whose latest answer had no
+         findings. In your summary, list the findings you fixed and the ones
+         you declined, with a reason.
 
     # Runs after the agent finishes: a test gate, then a read-only AI review.
     verify:
