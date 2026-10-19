@@ -405,6 +405,34 @@ describe('FeedComposer', () => {
       expect(send).not.toHaveBeenCalled()
     })
 
+    it('the mesh arriving after mount opens Message — unless a Revise note is being written', () => {
+      const { rerender } = render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
+      expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    })
+
+    it('a late mesh keeps a Revise note being written in Revise', () => {
+      const { rerender } = render(<FeedComposer stageId="s1" onSend={vi.fn()} />)
+      fireEvent.change(screen.getByPlaceholderText('Note to agent…'), { target: { value: 'tighten tests' } })
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
+      expect(screen.getByRole('tab', { name: 'Revise' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByPlaceholderText('Note to agent…')).toHaveValue('tighten tests')
+    })
+
+    it('Cmd/Ctrl+Enter sends to two picked people; a plain Enter does not, and the hint says how', async () => {
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm1', seq: 1, thread_id: 'mt-1' })
+      const { rerender } = renderComposer()
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 2 } })} />)
+      type('please both review')
+      expect(screen.getByText('Cmd/Ctrl+Enter to send · Enter adds a line')).not.toHaveClass('is-nudged')
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(send).not.toHaveBeenCalled()
+      expect(screen.getByText('Cmd/Ctrl+Enter to send · Enter adds a line')).toHaveClass('is-nudged')
+      fireEvent.keyDown(input(), { key: 'Enter', ctrlKey: true })
+      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-1', 'run:t-2'], body: 'please both review' })))
+    })
+
     it('@ lists the agents of other stages too', () => {
       const other: MeshParticipant = { id: 'stage:docs', kind: 'stage_agent', scope: 'stage', stage_id: 'docs', alias: 'docs-stage', display_name: 'Docs stage', reachable: true }
       renderComposer(meshProps({ roster: roster({ participants: [runAgent, stageAgent, other] }) }))

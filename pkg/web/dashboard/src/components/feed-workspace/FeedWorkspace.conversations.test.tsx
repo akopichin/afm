@@ -262,6 +262,30 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(document.querySelectorAll('[data-message-id]')).toHaveLength(3)
   })
 
+  it("drafts are per stage: following the run to another stage and back keeps the text, the picks and the Revise note", async () => {
+    const stages = [{ id: 'impl', name: 'Implement', status: 'running' }, { id: 'verify', name: 'Verify', status: 'running' }] as unknown as FeedComposerMeshProps['stages']
+    const mesh = (pick: FeedComposerMeshProps['pick']) => ({ ...meshProps(stages), pick })
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages, threads: [withUser, legacy], next_cursor: 6, has_more: false })
+    const props = { events, mesh: mesh(null), onSendNote: vi.fn().mockResolvedValue(undefined) }
+    const { rerender } = render(<FeedWorkspace {...props} stageId="impl" noteTarget="impl" />)
+    await waitFor(() => expect(row('m1')).not.toBeNull())
+    rerender(<FeedWorkspace {...props} mesh={mesh({ participantId: 'run:qa', seq: 1 })} stageId="impl" noteTarget="impl" />)
+    fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: 'half-written' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
+    fireEvent.change(screen.getByPlaceholderText('Note to agent…'), { target: { value: 'a note' } })
+
+    rerender(<FeedWorkspace {...props} mesh={mesh({ participantId: 'run:qa', seq: 1 })} stageId="verify" noteTarget="verify" />)
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('combobox', { name: /message the mesh/i })).toHaveValue('')
+
+    rerender(<FeedWorkspace {...props} mesh={mesh({ participantId: 'run:qa', seq: 1 })} stageId="impl" noteTarget="impl" />)
+    expect(screen.getByRole('tab', { name: 'Revise' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByPlaceholderText('Note to agent…')).toHaveValue('a note')
+    fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
+    expect(screen.getByRole('combobox', { name: /message the mesh/i })).toHaveValue('half-written')
+    expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
+  })
+
   it('a click on the quote jumps to the quoted message, even from a filter that hides it', async () => {
     renderFeed()
     await waitFor(() => expect(row('m1')).not.toBeNull())

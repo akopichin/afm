@@ -48,6 +48,12 @@ export type MeshReplyTarget = { messageId: string; threadId: string; senderId: s
 
 type ComposerMode = 'message' | 'revise'
 
+// ComposerDraft — what one stage's composer holds that must outlive the composer itself (switching stages, the
+// Feed following the run to the next stage, leaving the Feed tab): the mode and whether the human chose it, the
+// Revise note, and the Message text and picked recipients. Kept in memory per stage (FeedWorkspace), never across
+// a page reload. Replies are not kept: their target is reset on a stage change anyway.
+export type ComposerDraft = { mode: ComposerMode; modeChosen: boolean; revise: string; message: string; picked: string[] }
+
 type FeedComposerProps = {
   // Стадия, живому агенту которой уйдёт заметка.
   stageId: string
@@ -90,6 +96,9 @@ type FeedComposerProps = {
   meshReply?: MeshReplyTarget | null
   onCancelMeshReply?: () => void
   onMeshReplySent?: (messageId: string) => void
+  // draft — this stage's saved draft to start from; onDraftChange — every change of it, to save (see ComposerDraft).
+  draft?: ComposerDraft
+  onDraftChange?: (draft: ComposerDraft) => void
 }
 
 // FeedComposer — messenger-поле ввода внизу ленты. Без mesh — ровно прежнее поведение: заметка живому агенту
@@ -114,12 +123,40 @@ export function FeedComposer({
   meshReply = null,
   onCancelMeshReply,
   onMeshReplySent,
+  draft,
+  onDraftChange,
 }: FeedComposerProps): ReactElement {
-  const [mode, setMode] = useState<ComposerMode>(mesh !== undefined ? 'message' : 'revise')
+  const [mode, setModeState] = useState<ComposerMode>(draft?.mode ?? (mesh !== undefined ? 'message' : 'revise'))
+  // modeChosen — the human (or an action of theirs: a pick, a reply) chose the mode; a late mesh never overrides it.
+  const modeChosen = useRef(draft?.modeChosen ?? false)
+  const setMode = useCallback((m: ComposerMode): void => {
+    modeChosen.current = true
+    setModeState(m)
+  }, [])
   // Without Revise the composer is Message only (with mesh; without it, it is never mounted then).
   const shownMode: ComposerMode = mesh !== undefined && !reviseAvailable ? 'message' : mode
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(draft?.revise ?? '')
   const [sending, setSending] = useState(false)
+
+  // The mesh can arrive after the composer mounted (the roster probe answers after the first render): its first
+  // activation opens Message, the default with the mesh — unless the human already chose a mode or is writing a
+  // Revise note.
+  const meshActive = mesh !== undefined
+  const wasMeshActive = useRef(meshActive)
+  useEffect(() => {
+    if (meshActive && !wasMeshActive.current && !modeChosen.current && value.trim() === '') setModeState('message')
+    wasMeshActive.current = meshActive
+  }, [meshActive, value])
+
+  // The saved draft: every change is reported, merged with the Message part MeshMessageComposer reports.
+  const savedDraft = useRef<ComposerDraft>(draft ?? { mode, modeChosen: false, revise: value, message: '', picked: [] })
+  const reportDraft = useRef(onDraftChange)
+  reportDraft.current = onDraftChange
+  const updateDraft = useCallback((patch: Partial<ComposerDraft>): void => {
+    savedDraft.current = { ...savedDraft.current, ...patch }
+    reportDraft.current?.(savedDraft.current)
+  }, [])
+  useEffect(() => updateDraft({ mode, modeChosen: modeChosen.current, revise: value }), [mode, value, updateDraft])
   const revisePanelRef = useRef<HTMLDivElement | null>(null)
   const tabsId = useId()
 
@@ -264,6 +301,9 @@ export function FeedComposer({
         <MeshMessageComposer
           stageId={stageId}
           mesh={mesh}
+          initialMessage={draft?.message ?? ''}
+          initialPicked={draft?.picked ?? NO_PICKS}
+          onDraftChange={updateDraft}
           conversationMessages={conversationMessages}
           reply={meshReply}
           onCancelReply={onCancelMeshReply}
@@ -282,6 +322,7 @@ export function FeedComposer({
 }
 
 const NO_MESSAGES: MeshMessage[] = []
+const NO_PICKS: string[] = []
 const MAX_MESSAGE_TEXTAREA_HEIGHT = 200
 
 type MeshMessageComposerProps = {
@@ -296,6 +337,10 @@ type MeshMessageComposerProps = {
   onUseRevise?: () => void
   // shown — the Message panel is visible (a hidden one cannot take the focus yet).
   shown: boolean
+  // initialMessage/initialPicked — the stage's saved Message draft; onDraftChange — report its changes.
+  initialMessage: string
+  initialPicked: string[]
+  onDraftChange: (patch: { message: string; picked: string[] }) => void
 }
 
 // Attaching — an "Attach to stage" profile picked with @: Send opens the attach preview instead of sending.
@@ -310,15 +355,28 @@ type LastSend = { messageId: string | null; recipientIds: string[] }
 // request sends ONE message to all recipients, shown in this stage's feed (messageRoute picks the request: a new
 // message to the stage agent is a post in its stage conversation, with "Interrupt agent"; anything else goes to
 // exactly its recipients). Free text here NEVER reaches the Revise path.
-function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCancelReply, onReplySent, onUseRevise, shown }: MeshMessageComposerProps): ReactElement {
+function MeshMessageComposer({
+  stageId,
+  mesh,
+  conversationMessages,
+  reply,
+  onCancelReply,
+  onReplySent,
+  onUseRevise,
+  shown,
+  initialMessage,
+  initialPicked,
+  onDraftChange,
+}: MeshMessageComposerProps): ReactElement {
   const participants = mesh.roster.participants
   // A reply has its own draft (like its own picks below): what was being written to others neither becomes the
   // reply's text and @recipients nor is lost — it comes back when the reply ends.
-  const [ordinaryDraft, setOrdinaryDraft] = useState('')
+  const [ordinaryDraft, setOrdinaryDraft] = useState(initialMessage)
   const [replyDraft, setReplyDraft] = useState('')
   // picked — people added from the People panel. While a message is answered they go to replyPicked instead:
   // the reply is addressed to that conversation's people only, and its additions end with it.
-  const [picked, setPicked] = useState<string[]>([])
+  const [picked, setPicked] = useState<string[]>(initialPicked)
+  useEffect(() => onDraftChange({ message: ordinaryDraft, picked }), [ordinaryDraft, picked, onDraftChange])
   const [replyPicked, setReplyPicked] = useState<string[]>([])
   const replyId = reply?.messageId
   useEffect(() => {
@@ -425,15 +483,23 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
     const v = e.target.value
     setDraft(v)
+    if (!v.endsWith('\n')) setNudged(false)
     setLocalError(null)
     mention.onInput(v, e.target.selectionStart ?? v.length)
   }
 
+  // nudged — a plain Enter was pressed in a draft that could be sent: Enter only adds a line here (as in every
+  // composer), so the send hint is emphasised instead of the message silently not going.
+  const [nudged, setNudged] = useState(false)
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
     if (mention.onKeyDown(e)) return
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+    if (e.metaKey || e.ctrlKey) {
       e.preventDefault()
+      setNudged(false)
       submit()
+    } else if (!e.shiftKey && canSend) {
+      setNudged(true)
     }
   }
 
@@ -590,6 +656,11 @@ function MeshMessageComposer({ stageId, mesh, conversationMessages, reply, onCan
         )}
         <ChatSendButton label="Send message" disabled={!canSend} sending={submitter.pending} onClick={submit} />
       </div>
+      {draft.trim() !== '' && (
+        <div className={`composer-send-hint${nudged ? ' is-nudged' : ''}`} role={nudged ? 'status' : undefined}>
+          Cmd/Ctrl+Enter to send · Enter adds a line
+        </div>
+      )}
 
       {problems.length > 0 && (
         <ul className="mesh-message-error mesh-recipient-problems" role="alert">

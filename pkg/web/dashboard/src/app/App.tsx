@@ -8,7 +8,7 @@ import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { FeedWorkspace, meshDeliveries, type MeshPick } from '../components/feed-workspace'
+import { FeedWorkspace, meshDeliveries, type ComposerDraft, type MeshPick } from '../components/feed-workspace'
 import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
@@ -315,6 +315,8 @@ export function App(): ReactElement {
   // Team tab keeps its own gate, the mesh probe alone.)
   const stageMesh = meshRoster.enabled && capabilities.collaboration
   // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
+  // composerDrafts — every stage's Feed composer draft for this page session (FeedWorkspace's composerDrafts).
+  const composerDrafts = useRef(new Map<string, ComposerDraft>())
   const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
   // statuses the Revise API accepts (or a Pause-on-focus operation still in flight), outside a review pause.
@@ -615,6 +617,7 @@ export function App(): ReactElement {
                       emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                       onOpenDialog={handleOpenDialogFromFeed}
                       noteTarget={noteTarget}
+                      composerDrafts={composerDrafts.current}
                       onSendNote={pauseOnFocus.handleSend}
                       pauseOnFocusEnabled={pauseOnFocus.enabled}
                       onTogglePauseOnFocus={pauseOnFocus.setEnabled}

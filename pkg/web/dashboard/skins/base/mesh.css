@@ -590,6 +590,15 @@
 
 /* The agent command a message's author runs (claude, codex, a recipe), next to its name. A long command (an
    absolute path) is clipped with an ellipsis; its title keeps the whole value. */
+.composer-send-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.composer-send-hint.is-nudged {
+  color: var(--attention);
+  font-weight: 600;
+}
 .conversation-role-chip {
   flex: 0 0 auto;
   font-size: 10px;

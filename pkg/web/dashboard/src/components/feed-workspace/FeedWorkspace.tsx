@@ -4,7 +4,7 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
 import { toFeedItems, buildFeedTimeline, feedFilterCounts, isForYou, type FeedActor, type FeedFilter, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
-import { FeedComposer, type FeedComposerMeshProps, type MeshReplyTarget } from './FeedComposer'
+import { FeedComposer, type ComposerDraft, type FeedComposerMeshProps, type MeshReplyTarget } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
@@ -53,6 +53,9 @@ type FeedWorkspaceProps = {
   // reviseAvailable — with mesh: the composer's stage takes a Revise now (its tab and replies to thoughts).
   // Without mesh the composer is the Revise note itself and is shown only when it is available.
   reviseAvailable?: boolean
+  // composerDrafts — each stage's composer draft (ComposerDraft), owned by the caller so it outlives this view too
+  // (the Team tab and back). Without it the drafts live as long as this FeedWorkspace.
+  composerDrafts?: Map<string, ComposerDraft>
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -85,8 +88,13 @@ export function FeedWorkspace({
   imagePolicy = 'stage',
   mesh,
   reviseAvailable = true,
+  composerDrafts,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
+  // Drafts are per stage: switching stages (or the Feed following the run) remounts the composer for the new
+  // stage, and coming back restores what was written and picked there.
+  const ownDrafts = useRef(new Map<string, ComposerDraft>())
+  const drafts = composerDrafts ?? ownDrafts.current
   const sectionRef = useRef<HTMLElement | null>(null)
 
   const items = useMemo(() => toFeedItems(events), [events])
@@ -259,6 +267,8 @@ export function FeedWorkspace({
           onCancelMeshReply={() => setMeshReplyTo(null)}
           // Reset only if the same message is still being answered (another may have been picked meanwhile).
           onMeshReplySent={(id) => setMeshReplyTo((cur) => (cur?.target.messageId === id ? null : cur))}
+          draft={drafts.get(noteTarget)}
+          onDraftChange={(d) => drafts.set(noteTarget, d)}
         />
       )}
     </section>
