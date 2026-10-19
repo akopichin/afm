@@ -152,8 +152,8 @@ func rejectUnreachableRecipients(rs state.RunState, recipients []agentcomm.Parti
 // rejects (not a member, or the thread is closed) fails the WHOLE call, nothing is written. Any PENDING wait
 // this message satisfies (reply_to the message it answers, or addressed_message in its thread for one of its
 // recipients — Agent Mesh Phase 5, T5.3: "a reply arriving makes exactly one continuation") is resolved by
-// applyMeshMessageSent itself, in the SAME commit; beforeReady below only tells notifyAndResumeNewlyReadyWaits
-// which waits to skip because they were already ready before this call.
+// applyMeshMessageSent itself, in the SAME commit, and the commit's result names them
+// (OperationResult.ReadyWaits) for deliverCommittedMessages to announce and resume.
 func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, error) {
 	return o.sendWithOpen(ctx, req, nil)
 }
@@ -179,14 +179,13 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		return SendReceipt{}, err
 	}
 	msgs := []plannedMessage{msg}
-	beforeReady := readyWaitSet(rs)
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: msg.effects, Expect: state.Preconditions{
 		Check: recipientsReachable(msgs),
 	}}
-	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.deliverCommittedMessages(runCtx, msgs, beforeReady)
+	res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		o.deliverCommittedMessages(runCtx, msgs, res.ReadyWaits)
 	})
 	if err != nil {
 		return SendReceipt{}, err
@@ -241,13 +240,13 @@ func recipientsReachable(msgs []plannedMessage) func(*state.RunState) error {
 }
 
 // deliverCommittedMessages is the post-commit tail of every operation that commits messages: publish each
-// message's live notices, resume the waits the commit made ready (beforeReady lists those already ready), and
+// message's live notices, resume the waits the commit made ready (readyWaits, OperationResult.ReadyWaits), and
 // give the recipients the turn they may need.
-func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []plannedMessage, beforeReady map[agentcomm.WaitID]bool) {
+func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []plannedMessage, readyWaits []agentcomm.WaitID) {
 	for _, m := range msgs {
 		o.announceMessage(m.send, m.messageID, m.openedThread)
 	}
-	o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
+	o.notifyAndResumeWaits(runCtx, readyWaits)
 	o.wakeRecipients(runCtx, recipientsOf(msgs))
 }
 

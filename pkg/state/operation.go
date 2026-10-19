@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 )
 
@@ -124,6 +125,10 @@ type OperationResult struct {
 	Seq         uint64
 	// Time is the commit's own timestamp (the record's Time) — also the ORIGINAL one on a replay.
 	Time time.Time
+	// ReadyWaits are the mesh waits THIS commit made ready, in id order — decided under the store lock, so
+	// two concurrent commits never both claim the same wait (each publishes and resumes only its own). Empty
+	// on an idempotent replay: the original commit already resolved them.
+	ReadyWaits []agentcomm.WaitID
 }
 
 // ApplyRunOperation is the single mutation path for new (assistants/task) state (§6.3, dev-plan T2.4). The
@@ -200,13 +205,20 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 	// Steps 4-5: write+fsync, then update projections — appendControlLocked validates (dry-run) before ever
 	// touching the journal, exactly like AppendControl, so a batch that would fail projection never gets
 	// durably written at all.
+	readyBefore := readyWaitIDs(s.snapshot.Assistants)
 	if err := s.appendControlLocked(c); err != nil {
 		return OperationResult{}, err
+	}
+	var newlyReady []agentcomm.WaitID
+	for _, w := range s.snapshot.Assistants.ReadyWaits() {
+		if !readyBefore[w.ID] {
+			newlyReady = append(newlyReady, w.ID)
+		}
 	}
 
 	// Round(0) drops the monotonic clock reading: a replay (decoded from the journal) carries none, and the
 	// result must be identical either way.
-	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: commitTime(c.Time)}
+	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: commitTime(c.Time), ReadyWaits: newlyReady}
 	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, time: res.Time, payloadJSON: payload})
 
 	// Step 6: publish a notice. pkg/state has no notice bus (that lives in pkg/orchestrator) — left as the
@@ -433,4 +445,15 @@ func (c *opResultCache) put(id string, e opCacheEntry) {
 		}
 	}
 	c.entries[id] = e
+}
+
+// readyWaitIDs is the set of mesh waits that are ready in as.
+func readyWaitIDs(as AssistantsState) map[agentcomm.WaitID]bool {
+	out := map[agentcomm.WaitID]bool{}
+	for id, w := range as.Mesh.Waits {
+		if w.Status == agentcomm.WaitReady {
+			out[id] = true
+		}
+	}
+	return out
 }

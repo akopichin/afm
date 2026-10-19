@@ -24,8 +24,8 @@ import (
 // Publish implements Service.Publish. Any PENDING WaitOnBoardKey wait this publish satisfies is resolved by
 // applyMeshBoardPublished itself (pkg/state/mesh_board.go), in the SAME commit as the publish — not
 // precomputed here from a snapshot, which could race a concurrent Wait registration or break idempotent
-// replay. beforeReady only tells notifyAndResumeNewlyReadyWaits which waits to skip because they were already
-// ready before this call.
+// replay. The commit's result names the waits it made ready (OperationResult.ReadyWaits), and only those are
+// announced and resumed.
 //
 // The notices to req.Notify are messages committed in the SAME operation as the revision, so nothing — a
 // run finishing in between included — can keep the revision and lose its notices: FinalizeIf sees them
@@ -74,13 +74,12 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 		for _, n := range notices {
 			effects = append(effects, n.effects...)
 		}
-		beforeReady := readyWaitSet(rs)
 		op := state.Operation{ID: req.OperationID, Kind: opKindMeshPublish, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
 			Check: recipientsReachable(notices),
 		}}
-		res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": status}})
-			o.deliverCommittedMessages(runCtx, notices, beforeReady)
+			o.deliverCommittedMessages(runCtx, notices, res.ReadyWaits)
 		})
 		if err == nil {
 			return agentcomm.BoardEntry{

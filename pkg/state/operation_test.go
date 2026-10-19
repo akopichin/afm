@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -241,7 +242,7 @@ func TestIdempotency_SameIdSameContentReturnsPriorResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second (repeat) ApplyRunOperation: %v", err)
 	}
-	if res1 != res2 {
+	if !reflect.DeepEqual(res1, res2) {
 		t.Fatalf("res1=%+v res2=%+v, want identical (idempotent repeat)", res1, res2)
 	}
 	tasks := 0
@@ -297,7 +298,7 @@ func TestIdempotency_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyRunOperation after restart: %v", err)
 	}
-	if res1 != res2 {
+	if !reflect.DeepEqual(res1, res2) {
 		t.Fatalf("res1=%+v res2=%+v, want identical across restart", res1, res2)
 	}
 	// The result's time is in one canonical form (UTC), so it compares equal whatever the machine's local
@@ -332,7 +333,7 @@ func TestIdempotency_DoubleClickFromTwoTabs(t *testing.T) {
 			t.Fatalf("attempt %d: %v", i, err)
 		}
 	}
-	if results[0] != results[1] {
+	if !reflect.DeepEqual(results[0], results[1]) {
 		t.Fatalf("results differ across the two concurrent attempts: %+v vs %+v", results[0], results[1])
 	}
 	if n := len(store.Snapshot().Assistants.Tasks); n != 1 {
@@ -375,7 +376,7 @@ func TestIdempotency_ReplayAfterResultEvicted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repeat ApplyRunOperation(opA) after eviction: %v", err)
 	}
-	if resA != resA2 {
+	if !reflect.DeepEqual(resA, resA2) {
 		t.Fatalf("resA=%+v resA2=%+v, want identical (prior result read from the journal by seq)", resA, resA2)
 	}
 	if atomic.LoadInt32(&reads) != 1 {
@@ -423,7 +424,7 @@ func TestIdempotency_ReplayAfterEvictionAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repeat ApplyRunOperation(opA) after restart: %v", err)
 	}
-	if resA != resA2 {
+	if !reflect.DeepEqual(resA, resA2) {
 		t.Fatalf("resA=%+v resA2=%+v, want identical across eviction+restart", resA, resA2)
 	}
 }

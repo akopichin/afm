@@ -480,7 +480,6 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 	// transition from landing, so it is logged and the finish proceeds without the mirror rather than failing
 	// the whole operation.
 	rs := o.opts.Store.Snapshot()
-	beforeReady := readyWaitSet(rs)
 	var messages []state.Effect
 	if to.Terminal() && hasParent {
 		if mirror, merr := o.childResultMeshEffects(rs, parentID, taskID, reason, extra); merr != nil {
@@ -504,7 +503,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		}
 	}
 	afterFinish := func(delivered *plannedMessage) func(state.OperationResult) {
-		return func(state.OperationResult) {
+		return func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 				"task_id": string(taskID), "status": string(to), "reason": reason,
 			}})
@@ -545,7 +544,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			// needed — a task_result wait on this task (its terminal status, or a run agent's recorded turn
 			// result), a reply_to wait answered by the turn reply, or an addressed_message wait on the delegate
 			// thread the result was mirrored into — resume it the same way any other mesh write does.
-			o.notifyAndResumeNewlyReadyWaits(o.runContext(context.Background()), beforeReady)
+			o.notifyAndResumeWaits(o.runContext(context.Background()), res.ReadyWaits)
 		}
 	}
 

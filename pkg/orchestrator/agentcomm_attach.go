@@ -330,9 +330,8 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 
 	op := state.Operation{ID: req.OperationID, Kind: opKindAttachAndSend, Actor: req.Actor, Expect: expect, Effects: effects}
-	beforeReady := readyWaitSet(rs)
 	runCtx := o.runContext(ctx) // Инвариант №6: спавн не должен зависеть от HTTP request ctx.
-	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskCreated, StageID: targetStageID, Data: map[string]any{
 			"task_id": string(taskID), "profile_id": string(req.ProfileID),
 		}})
@@ -342,7 +341,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": title}})
 		// A role attached with no first message stays queued and addressable, never starting its process: only
 		// a message gives it (and every other recipient) work — deliverCommittedMessages schedules it.
-		o.deliverCommittedMessages(runCtx, msgs, beforeReady)
+		o.deliverCommittedMessages(runCtx, msgs, res.ReadyWaits)
 	})
 	if err != nil {
 		return AttachAndSendResult{}, err
