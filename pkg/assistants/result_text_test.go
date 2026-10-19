@@ -1,6 +1,7 @@
 package assistants_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -89,6 +90,43 @@ func TestDecodeResult_FreeTextFieldsStayStrictOtherwise(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := assistants.DecodeResult([]byte(raw)); err == nil {
 				t.Fatal("DecodeResult accepted it, want a protocol error")
+			}
+		})
+	}
+}
+
+// The published schema and the decoder accept and reject the same free-text shapes: a model checked against
+// the schema is never told an answer is wrong that afm would take, and the other way round.
+func TestFreeTextShapes_SchemaMatchesDecoder(t *testing.T) {
+	sch := compileAssistantResultSchema(t)
+	const result = `{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok",%s}`
+	const delegate = `{"schema_version":1,"kind":"delegate",%s,` +
+		`"children":[{"profile_id":"p","title":"x","instruction":"look at x","mode":"advisory","trigger":"one_shot"}]}`
+	cases := []struct {
+		name   string
+		raw    string
+		accept bool
+	}{
+		{"summary as an array", `{"schema_version":1,"kind":"result","verdict":"pass","summary":["a","b"]}`, true},
+		{"evidence as a string", fmt.Sprintf(result, `"evidence":"ran the tests"`), true},
+		{"evidence as an array", fmt.Sprintf(result, `"evidence":["a"]`), true},
+		{"suggested_change as an array", fmt.Sprintf(result, `"suggested_change":["a","b"]`), true},
+		{"limitations as an array", fmt.Sprintf(result, `"limitations":["a","b"]`), true},
+		{"limitations as a string", fmt.Sprintf(result, `"limitations":"a"`), true},
+		{"delegate summary as an array", fmt.Sprintf(delegate, `"summary":["a","b"]`), true},
+		{"delegate summary as a string", fmt.Sprintf(delegate, `"summary":"a"`), true},
+		{"number in a list", fmt.Sprintf(result, `"limitations":["a",1]`), false},
+		{"object", fmt.Sprintf(result, `"limitations":{"a":"b"}`), false},
+		{"nested list", fmt.Sprintf(result, `"evidence":[["a"]]`), false},
+		{"number as summary", `{"schema_version":1,"kind":"result","verdict":"pass","summary":42}`, false},
+		{"delegate summary as a number", fmt.Sprintf(delegate, `"summary":1`), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, decErr := assistants.DecodeResult([]byte(tc.raw))
+			schemaErr := sch.Validate(mustUnmarshalJSON(t, tc.raw))
+			if (decErr == nil) != tc.accept || (schemaErr == nil) != tc.accept {
+				t.Fatalf("decoder err = %v, schema err = %v; want both to accept = %v", decErr, schemaErr, tc.accept)
 			}
 		})
 	}
