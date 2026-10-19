@@ -70,22 +70,16 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 			return agentcomm.BoardEntry{}, err
 		}
 		effects := []state.Effect{publishEff}
-		var recipients []agentcomm.ParticipantID
 		for _, n := range notices {
 			effects = append(effects, n.effects...)
-			recipients = append(recipients, n.send.Recipients...)
 		}
 		beforeReady := readyWaitSet(rs)
 		op := state.Operation{ID: req.OperationID, Kind: opKindMeshPublish, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
-			Check: func(cur *state.RunState) error { return rejectUnreachableRecipients(*cur, recipients) },
+			Check: recipientsReachable(notices),
 		}}
 		res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventMeshBoard, Data: map[string]any{"key": req.Key, "author_id": string(req.Author), "status": status}})
-			for _, n := range notices {
-				o.announceMessage(n.send, n.messageID, n.openedThread)
-			}
-			o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
-			o.wakeRecipients(runCtx, recipients)
+			o.deliverCommittedMessages(runCtx, notices, beforeReady)
 		})
 		if err == nil {
 			return agentcomm.BoardEntry{
@@ -103,7 +97,7 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 // meanwhile (a concurrent retry — the next attempt answers from that commit), or the notices planned from the
 // current state differ from the rejected ones (a recipient finished, a conversation filled or closed). A
 // rejection the notices did not cause is the publish's own answer.
-func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status string, rejectedNotices []boardNotice, err error) bool {
+func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status string, rejectedNotices []plannedMessage, err error) bool {
 	var rejected *state.OperationRejectedError
 	if !errors.As(err, &rejected) {
 		return false
@@ -155,27 +149,18 @@ func clipForNotice(s string, limit int) string {
 	return strings.ToValidUTF8(s[:limit], "") + "…"
 }
 
-// boardNotice is one planned notice of a publish: a message from the author to one recipient, in their open
-// conversation or in a new one opened by the same operation.
-type boardNotice struct {
-	send         SendRequest
-	messageID    agentcomm.MessageID
-	openedThread bool
-	effects      []state.Effect
-}
-
 // planBoardNotices plans one message from the author per reachable participant in req.Notify — one per
 // recipient, so no recipient or conversation-size limit can refuse the notices as a whole. A name that cannot
 // receive a message now is skipped with a log line. Each message id is derived from the publish's request id
 // and its recipient.
-func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, status string) ([]boardNotice, error) {
+func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, status string) ([]plannedMessage, error) {
 	if len(req.Notify) == 0 {
 		return nil, nil
 	}
 	key := clipForNotice(req.Key, boardNoticeKeyLimit)
 	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", key, clipForNotice(status, boardNoticeStatusLimit), key)
 	roster := o.liveRoster(rs)
-	var notices []boardNotice
+	var notices []plannedMessage
 	seen := map[agentcomm.ParticipantID]bool{req.Author: true}
 	for _, name := range req.Notify {
 		ids, err := resolveRecipients(roster, []agentcomm.ParticipantID{name})
@@ -195,36 +180,24 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			log.Printf("WARN: mesh: board key %s: not notifying %s: %v", req.Key, recipient, err)
 			continue
 		}
-		n := boardNotice{
-			send: SendRequest{
-				Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body,
-			},
-			messageID: deriveMeshMessageID(req.OperationID + ":notify:" + string(recipient)),
-		}
+		send := SendRequest{Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}
+		var open []state.Effect
 		members := []agentcomm.ParticipantID{req.Author, recipient}
 		if th := openThreadWithMembers(rs, members); th != "" {
 			if rs.Assistants.Mesh.ThreadFull(th) {
 				log.Printf("WARN: mesh: board key %s: not notifying %s: conversation %s is full", req.Key, recipient, th)
 				continue
 			}
-			n.send.ThreadID = th
+			send.ThreadID = th
 		} else {
-			n.send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
-			open, err := threadOpenEffects(rs, n.send.ThreadID, "", agentcomm.ScopeRun, sortedMemberSet(members), 0)
-			if err != nil {
+			send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members))
+			if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, sortedMemberSet(members), 0); err != nil {
 				return nil, err
 			}
-			n.effects, n.openedThread = open, true
 		}
-		msg, err := messageSentEffect(n.send, n.messageID, body)
+		n, err := o.planMessage(rs, send, deriveMeshMessageID(req.OperationID+":notify:"+string(recipient)), open)
 		if err != nil {
 			return nil, err
-		}
-		n.effects = append(n.effects, msg)
-		if mirror, ok, err := discussionMirrorOfReply(rs, n.send, n.messageID, body); err != nil {
-			return nil, err
-		} else if ok {
-			n.effects = append(n.effects, mirror)
 		}
 		notices = append(notices, n)
 	}

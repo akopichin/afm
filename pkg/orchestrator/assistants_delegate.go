@@ -290,12 +290,10 @@ func (o *Orchestrator) childResultMeshEffects(rs state.RunState, parentID, child
 	}
 	body = truncateMeshBody(o.RedactSecrets(body))
 
-	messageID := deriveMeshMessageID("delegate-result:" + string(childID))
-	msgEff, err := marshalEffect("mesh_message_sent", state.Target{ThreadID: string(threadID), MessageID: string(messageID)},
-		state.MeshMessageSentPayload{
-			Sender: string(members[1]), Recipients: []string{string(members[0])},
-			Kind: string(agentcomm.MessageKindMessage), Body: body,
-		})
+	msgEff, err := messageSentEffect(SendRequest{
+		ThreadID: threadID, Sender: members[1], Recipients: []agentcomm.ParticipantID{members[0]},
+		Kind: agentcomm.MessageKindMessage, Body: body,
+	}, deriveMeshMessageID("delegate-result:"+string(childID)))
 	if err != nil {
 		return nil, err
 	}

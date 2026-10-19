@@ -174,39 +174,84 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		return receipt, err
 	}
 
-	messageID := deriveMeshMessageID(req.OperationID)
-	body := o.RedactSecrets(req.Body)
-	eff, err := messageSentEffect(req, messageID, body)
+	msg, err := o.planMessage(rs, req, deriveMeshMessageID(req.OperationID), openThread)
 	if err != nil {
 		return SendReceipt{}, err
 	}
-
-	effects := append(slices.Clone(openThread), eff)
-	if mirror, ok, merr := discussionMirrorOfReply(rs, req, messageID, body); merr != nil {
-		return SendReceipt{}, merr
-	} else if ok {
-		effects = append(effects, mirror)
-	}
-
+	msgs := []plannedMessage{msg}
 	beforeReady := readyWaitSet(rs)
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
-	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
-		Check: func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, req.Recipients) },
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: msg.effects, Expect: state.Preconditions{
+		Check: recipientsReachable(msgs),
 	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.announceMessage(req, messageID, len(openThread) > 0)
-		o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
-		o.wakeRecipients(runCtx, req.Recipients)
+		o.deliverCommittedMessages(runCtx, msgs, beforeReady)
 	})
 	if err != nil {
 		return SendReceipt{}, err
 	}
-	return SendReceipt{MessageID: messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
+	return SendReceipt{MessageID: msg.messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
 }
 
-// messageSentEffect builds the mesh_message_sent effect of req, with body already redacted.
-func messageSentEffect(req SendRequest, messageID agentcomm.MessageID, body string) (state.Effect, error) {
+// plannedMessage is one message an operation commits: the request it was built from (body already redacted),
+// its id, and the effects that record it.
+type plannedMessage struct {
+	send         SendRequest
+	messageID    agentcomm.MessageID
+	openedThread bool
+	effects      []state.Effect
+}
+
+// planMessage is the one place a message's effects are assembled — for Send, for board notices, and for any
+// other operation that carries a message: openThread (the effects opening req.ThreadID in the same operation,
+// if any), the mesh_message_sent itself with its body redacted, and its Discussion mirror when it answers a
+// discussion message. The operation commits them with recipientsReachable as its Preconditions.Check, and its
+// post-commit work calls deliverCommittedMessages.
+func (o *Orchestrator) planMessage(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, openThread []state.Effect) (plannedMessage, error) {
+	req.Body = o.RedactSecrets(req.Body)
+	eff, err := messageSentEffect(req, messageID)
+	if err != nil {
+		return plannedMessage{}, err
+	}
+	effects := append(slices.Clone(openThread), eff)
+	if mirror, ok, err := discussionMirrorOfReply(rs, req, messageID, req.Body); err != nil {
+		return plannedMessage{}, err
+	} else if ok {
+		effects = append(effects, mirror)
+	}
+	return plannedMessage{send: req, messageID: messageID, openedThread: len(openThread) > 0, effects: effects}, nil
+}
+
+// recipientsOf lists every recipient of msgs, in order.
+func recipientsOf(msgs []plannedMessage) []agentcomm.ParticipantID {
+	var out []agentcomm.ParticipantID
+	for _, m := range msgs {
+		out = append(out, m.send.Recipients...)
+	}
+	return out
+}
+
+// recipientsReachable is the commit-time check of an operation carrying msgs: rejectUnreachableRecipients over
+// all their recipients, against the state under the commit's lock.
+func recipientsReachable(msgs []plannedMessage) func(*state.RunState) error {
+	recipients := recipientsOf(msgs)
+	return func(rs *state.RunState) error { return rejectUnreachableRecipients(*rs, recipients) }
+}
+
+// deliverCommittedMessages is the post-commit tail of every operation that commits messages: publish each
+// message's live notices, resume the waits the commit made ready (beforeReady lists those already ready), and
+// give the recipients the turn they may need.
+func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []plannedMessage, beforeReady map[agentcomm.WaitID]bool) {
+	for _, m := range msgs {
+		o.announceMessage(m.send, m.messageID, m.openedThread)
+	}
+	o.notifyAndResumeNewlyReadyWaits(runCtx, beforeReady)
+	o.wakeRecipients(runCtx, recipientsOf(msgs))
+}
+
+// messageSentEffect builds the mesh_message_sent effect of req; req.Body must already be redacted.
+func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Effect, error) {
 	recipients := make([]string, len(req.Recipients))
 	for i, r := range req.Recipients {
 		recipients[i] = string(r)
@@ -219,7 +264,7 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID, body stri
 	return marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		state.MeshMessageSentPayload{
 			Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
-			InReplyTo: inReplyTo, Body: body, ArtifactRefs: req.ArtifactRefs,
+			InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs,
 		})
 }
 
