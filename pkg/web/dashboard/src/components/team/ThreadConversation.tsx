@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
-import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
+import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
@@ -9,10 +9,8 @@ import { MentionMenu } from '../assistants/AssistantMentionMenu'
 import { draftMentions, filterMentionProfiles } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { directPeer, findExistingDirectThread, mentionHandles, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
-import { MeshAvatar } from './MeshAvatar'
+import { ConversationMessage } from './ConversationMessage'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
-import { AgentMessageBody } from '../agent-message/AgentMessageBody'
-import { messageText } from '../../lib/agent-result'
 
 // ThreadConversationTarget — what the Messages pane is currently pointed at: an ALREADY open thread (picked
 // from the roster's "Conversations" group), or a person row with no thread yet ("direct" — opening one is
@@ -239,7 +237,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         ) : (
           <ul className="team-conversation-message-list">
             {messages.map((m) => (
-              <MessageRow key={m.id} message={m} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} />
+              <ConversationMessage key={m.id} message={m} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} />
             ))}
           </ul>
         )}
@@ -296,39 +294,5 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         </>
       )}
     </div>
-  )
-}
-
-function messageTime(createdAt: string): string {
-  const d = new Date(createdAt)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-// MessageRow — one message: avatar, author, "→ recipients", time, then the text bubble; a reply quotes the start of the message it answers ("Replying to …").
-function MessageRow({ message, participants, answered }: { message: MeshMessage; participants: MeshParticipant[]; answered?: MeshMessage }): ReactElement {
-  const author = senderLabel(message.sender_id, participants)
-  const kind = participants.find((p) => p.id === message.sender_id)?.kind ?? (message.sender_id === 'user' ? 'user' : '')
-  const recipients = message.recipient_ids.map((id) => senderLabel(id, participants)).join(', ')
-  const fromYou = message.sender_id === 'user'
-  return (
-    <li className={`team-conversation-message${fromYou ? ' from-you' : ''}`} data-sender={message.sender_id}>
-      <MeshAvatar name={author} kind={kind} />
-      <div className="team-conversation-message-content">
-        <div className="team-conversation-message-header">
-          <span className="team-conversation-message-sender">{author}</span>
-          {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
-          <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
-        </div>
-        <div className="team-conversation-message-body">
-          {answered !== undefined && (
-            <blockquote className="team-conversation-reply-quote">
-              <span className="team-conversation-reply-quote-author">Replying to {senderLabel(answered.sender_id, participants)}</span>
-              <span className="team-conversation-reply-quote-text">{messageText(answered.body, answered.sender_id !== 'user')}</span>
-            </blockquote>
-          )}
-          <AgentMessageBody body={message.body} fromAgent={!fromYou} autoResult={message.auto_result === true} />
-        </div>
-      </div>
-    </li>
   )
 }
