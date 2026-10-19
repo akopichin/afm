@@ -69,7 +69,7 @@ func TestRedaction_HelperTreeModifiedTitle(t *testing.T) {
 	started := make(chan struct{})
 	o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
 		close(started)
-		<-release
+		awaitRelease(o, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachTestTask(context.Background(), t, o, "op-old-title") // titled "Reviewer", unredacted

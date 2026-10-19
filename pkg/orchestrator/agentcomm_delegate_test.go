@@ -109,7 +109,7 @@ func TestDelegate_StaleChildResultNotMirroredToParentInbox(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		<-release
+		awaitRelease(o, release)
 		return passResultOutcome(), nil
 	}
 

@@ -24,7 +24,7 @@ func newRunningHelperForMesh(t *testing.T, o *Orchestrator, store *state.Store, 
 	t.Helper()
 	release := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-		<-release
+		awaitRelease(o, release)
 		return passResultOutcome(), nil
 	}
 	taskID := attachTestTask(context.Background(), t, o, opID)

@@ -179,7 +179,7 @@ func TestCancel_CascadesAndKeepsHistory(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
 		}
-		<-releaseChild
+		awaitRelease(o, releaseChild)
 		return passResultOutcome(), nil
 	}
 
@@ -224,7 +224,7 @@ func TestReviseRoot_InvalidatesRootGenerationAcrossTree(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeRequired)), nil
 		}
-		<-release
+		awaitRelease(o, release)
 		return passResultOutcome(), nil
 	}
 
@@ -273,7 +273,7 @@ func TestLateResult_AfterGenerationBump_DoesNotResurrectCancelledTask(t *testing
 		if calls.Add(1) == 1 {
 			return delegateOutcome(childJSON(assistants.ModeRequired)), nil
 		}
-		<-release
+		awaitRelease(o, release)
 		// The stale subprocess "wins the race" and reports a clean PASS — exactly as if it had been about to
 		// succeed right as the generation bump cancelled it.
 		return passResultOutcome(), nil
@@ -320,7 +320,7 @@ func TestRetryTask_InvalidatesOwnSubtreeNotSiblings(t *testing.T) {
 		case 3: // the parent's resumed turn sends garbage -> protocol_error -> failed
 			return executor.HelperOutcome{ProcessOK: true, RawText: "not json"}, nil
 		default: // the sibling branch, and later the parent's RETRIED turn
-			<-releaseRest
+			awaitRelease(o, releaseRest)
 			return passResultOutcome(), nil
 		}
 	}
