@@ -459,6 +459,26 @@ describe('FeedComposer', () => {
         expect(combobox().value).toBe('@stage:s1 ')
       })
 
+      it('a Reply in conversation from the feed answers that message in its thread', async () => {
+        const openSpy = vi.spyOn(meshClient, 'openMeshThread')
+        const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm2', seq: 2 })
+        vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+        const { rerender } = render(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
+        const reply = { messageId: 'm1', threadId: 'mt-group', preview: 'Found a bug' }
+        rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:qa', seq: 1, reply } })} />)
+
+        expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+        expect(combobox().value).toBe('@run:qa ')
+        expect(screen.getByText('Found a bug')).toBeInTheDocument()
+
+        fireEvent.change(combobox(), { target: { value: '@run:qa fixed' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+        await waitFor(() =>
+          expect(sendSpy).toHaveBeenCalledWith('mt-group', expect.objectContaining({ recipientIds: ['run:qa'], inReplyTo: 'm1' })),
+        )
+        expect(openSpy).not.toHaveBeenCalled()
+      })
+
       it('ignores a pick made before the composer mounted, and a finished participant', () => {
         const finished: MeshParticipant = { ...runAgent, reachable: false, unreachable_reason: 'done' }
         const mesh = (pick: FeedComposerMeshProps['pick']) => meshProps({ roster: roster({ participants: [finished, stageAgent] }), pick })

@@ -22,6 +22,7 @@ import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assista
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
+import { messageText } from '../lib/agent-result'
 import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -618,6 +619,18 @@ export function App(): ReactElement {
                       // (meshRoster.enabled mirrors TeamView's own capability gate: no tab/toggle until the
                       // first roster probe confirms the capability is actually on).
                       mesh={meshRoster.enabled ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
+                      // "↩ Reply in conversation" on a conversation message: the Feed composer (which exists only
+                      // while noteTarget is set) answers it in its thread, addressed back to its author.
+                      onReplyInConversation={
+                        noteTarget !== null
+                          ? (m) =>
+                              setPeoplePick((prev) => ({
+                                participantId: m.sender_id,
+                                seq: (prev?.seq ?? 0) + 1,
+                                reply: { messageId: m.id, threadId: m.thread_id, preview: messageText(m.body, true).slice(0, 120) },
+                              }))
+                          : undefined
+                      }
                     />
                     {showPeople && workspaceStage !== null && (
                       <StagePeoplePanel

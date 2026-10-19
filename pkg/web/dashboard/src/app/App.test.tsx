@@ -2029,6 +2029,56 @@ describe('App', () => {
     expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
   })
 
+  // Stage 3a: the stage's conversations are in its Feed; "↩ Reply in conversation" answers a message in the
+  // current Feed composer, addressed back to its author, in its thread.
+  test('stage feed: a conversation message is shown and Reply in conversation fills the composer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+              { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/stages/s1/messages')) {
+        return {
+          ok: true,
+          json: async () => ({
+            messages: [{ id: 'm1', thread_id: 'mt-1', sender_id: 'run:t-1', recipient_ids: ['stage:s1'], kind: 'message', body: 'Found a bug in parse()', seq: 4, created_at: '2026-10-19T10:00:00Z' }],
+            threads: [{ id: 'mt-1', scope: 'run', members: ['user', 'stage:s1', 'run:t-1'], status: 'open' }],
+            next_cursor: 4,
+            has_more: false,
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '↩ Reply in conversation' }))
+
+    const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
+    expect(composer.value).toBe('@qa ')
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByText('Found a bug in parse()').length).toBeGreaterThan(1) // the bubble and the reply chip
+  })
+
   test('people panel: an agent just added can be picked before the next roster poll', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url

@@ -2,12 +2,16 @@ import { useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnima
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
-import { toFeedItems, groupFeedItems, type FeedActor, type FeedGroup } from './feed-view-model'
+import { toFeedItems, buildFeedTimeline, isForYou, type FeedActor, type FeedFilter, type FeedGroup } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
+import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
+import { useStageConversation, type StageConversation } from '../../hooks/use-mesh'
+import { ConversationMessage } from '../team/ConversationMessage'
+import { mentionHandles } from '../../lib/mesh-roster'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -43,6 +47,9 @@ type FeedWorkspaceProps = {
   // imagePolicy — как трактовать маркеры [AFM image: …] в прозе агента. 'stage' (дефолт) — разбирать в
   // <FeedImage> с per-stage URL (лента стадий).
   imagePolicy?: 'stage' | 'none'
+  // onReplyInConversation — «↩ Reply in conversation» on a conversation message: the composer answers it in
+  // its thread. undefined → no reply link (no composer to answer with).
+  onReplyInConversation?: (message: MeshMessage) => void
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -74,17 +81,40 @@ export function FeedWorkspace({
   systemAuthorLabel = 'Flow',
   imagePolicy = 'stage',
   mesh,
+  onReplyInConversation,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
+  const sectionRef = useRef<HTMLElement | null>(null)
 
-  const groups = useMemo(() => groupFeedItems(toFeedItems(events)), [events])
+  const items = useMemo(() => toFeedItems(events), [events])
+  // The stage's conversations, interleaved with its events — only in a stage feed with the mesh on.
+  const conversation = useStageConversation(mesh !== undefined ? stageId : null)
+  const participants = mesh?.roster.participants ?? EMPTY_PARTICIPANTS
+  const [filter, setFilter] = useState<FeedFilter>('all')
+  useEffect(() => setFilter('all'), [stageId])
+  const timeline = useMemo(() => buildFeedTimeline(items, conversation.messages, filter), [items, conversation.messages, filter])
+  const messageById = useMemo(() => new Map(conversation.messages.map((m) => [m.id, m])), [conversation.messages])
+
+  // Jump to a quoted message: show it (Author's work may hide it), scroll to it and flash it.
+  const [jump, setJump] = useState<{ id: string; n: number } | null>(null)
+  function jumpTo(id: string): void {
+    const target = messageById.get(id)
+    if (filter === 'author' && target !== undefined && !isForYou(target)) setFilter('all')
+    setJump((prev) => ({ id, n: (prev?.n ?? 0) + 1 }))
+  }
+  useEffect(() => {
+    if (jump === null) return
+    const el = [...(sectionRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])].find((x) => x.dataset.messageId === jump.id)
+    if (el === undefined) return
+    el.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    el.classList.add('is-jump-target')
+    const t = setTimeout(() => el.classList.remove('is-jump-target'), 1600)
+    return () => clearTimeout(t)
+  }, [jump])
 
   // Анимация появления: только самая свежая строка ленты и только когда её КОНТЕНТ отличается от прошлой
   // свежей строки.
-  const lastItem = useMemo(() => {
-    const g = groups[groups.length - 1]
-    return g ? g.items[g.items.length - 1] : undefined
-  }, [groups])
+  const lastItem = items[items.length - 1]
   const lastKey = lastItem?.key ?? null
   const lastSig = lastItem ? feedItemSignature(lastItem) : null
   // Namespaced reset token so a stage legitimately named "full" can never collide
@@ -105,32 +135,55 @@ export function FeedWorkspace({
   useEffect(() => setReplyTo(null), [noteTarget])
 
   return (
-    <section className="feed-workspace" aria-label="Feed">
+    <section className="feed-workspace" aria-label="Feed" ref={sectionRef}>
+      {conversation.messages.length > 0 && (
+        <FeedFilterChips filter={filter} onChange={setFilter} counts={{ all: items.length + conversation.messages.length, conversations: conversation.messages.length, author: items.length }} />
+      )}
       <div id="feed-content" className="feed-scroll" ref={feed.ref}>
-        {groups.length === 0 ? (
-          <div className="empty-hint feed-empty">{emptyHint ?? 'No events yet'}</div>
+        {timeline.length === 0 ? (
+          <div className="empty-hint feed-empty">{items.length + conversation.messages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>
         ) : (
-          groups.map((g) => (
-            <FeedGroupView
-              key={g.key}
-              group={g}
-              showStageBadges={showStageBadges}
-              systemAuthorLabel={systemAuthorLabel}
-              imagePolicy={imagePolicy}
-              enteringKey={enteringKey}
-              onEntered={onEntered}
-              onOpenDialog={onOpenDialog}
-              // Репляибл только per-stage Feed с живым композером: мысль выбирается
-              // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
-              onReplyToThought={
-                noteTarget !== null && onSendNote !== undefined
-                  ? (key, text) => setReplyTo({ stageId: noteTarget, key, text })
-                  : undefined
-              }
-              activeReplyKey={activeReplyKey}
-            />
-          ))
+          timeline.map((entry) =>
+            entry.kind === 'conversation' ? (
+              <ul key={entry.key} className="team-conversation-message-list feed-conversation" aria-label="Conversation messages">
+                {entry.messages.map((m) => (
+                  <ConversationMessage
+                    key={m.id}
+                    message={m}
+                    participants={participants}
+                    answered={m.in_reply_to !== undefined ? messageById.get(m.in_reply_to) : undefined}
+                    onJumpToQuote={jumpTo}
+                    onReply={
+                      onReplyInConversation !== undefined && canReplyInConversation(m, conversation, participants)
+                        ? () => onReplyInConversation(m)
+                        : undefined
+                    }
+                  />
+                ))}
+              </ul>
+            ) : (
+              <FeedGroupView
+                key={entry.key}
+                group={entry.group}
+                showStageBadges={showStageBadges}
+                systemAuthorLabel={systemAuthorLabel}
+                imagePolicy={imagePolicy}
+                enteringKey={enteringKey}
+                onEntered={onEntered}
+                onOpenDialog={onOpenDialog}
+                // Репляибл только per-stage Feed с живым композером: мысль выбирается
+                // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
+                onReplyToThought={
+                  noteTarget !== null && onSendNote !== undefined
+                    ? (key, text) => setReplyTo({ stageId: noteTarget, key, text })
+                    : undefined
+                }
+                activeReplyKey={activeReplyKey}
+              />
+            ),
+          )
         )}
+        {stageId !== null && <WorkingLine stageId={stageId} participants={participants} conversation={conversation} />}
         {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
       </div>
 
@@ -159,6 +212,56 @@ export function FeedWorkspace({
         />
       )}
     </section>
+  )
+}
+
+const EMPTY_PARTICIPANTS: MeshParticipant[] = []
+
+// canReplyInConversation — the human may answer a message in its thread: someone else wrote it, the human is a
+// member of the thread (older threads agents opened among themselves are read-only), and the author can still
+// read it.
+function canReplyInConversation(m: MeshMessage, conversation: StageConversation, participants: MeshParticipant[]): boolean {
+  if (m.sender_id === 'user') return false
+  if (conversation.threads[m.thread_id]?.members.includes('user') !== true) return false
+  return participants.find((p) => p.id === m.sender_id)?.reachable === true
+}
+
+const FILTER_LABEL: Record<FeedFilter, string> = { all: 'All', conversations: 'Conversations', author: "Author's work" }
+
+// FeedFilterChips — «All / Conversations / Author's work» with counts. Messages addressed to you stay visible
+// under every filter.
+function FeedFilterChips({ filter, onChange, counts }: { filter: FeedFilter; onChange: (f: FeedFilter) => void; counts: Record<FeedFilter, number> }): ReactElement {
+  return (
+    <div className="feed-filter-chips" role="group" aria-label="Show in the feed">
+      {(['all', 'conversations', 'author'] as const).map((f) => (
+        <button key={f} type="button" className="feed-filter-chip" aria-pressed={filter === f} onClick={() => onChange(f)}>
+          {FILTER_LABEL[f]}
+          <span className="feed-filter-count">{counts[f]}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// WorkingLine — "@qa is working": the agents this stage talks to (members of its conversations, its helpers)
+// whose turn is running now, from the roster's activity. The stage agent's own work is the feed itself.
+function WorkingLine({ stageId, participants, conversation }: { stageId: string; participants: MeshParticipant[]; conversation: StageConversation }): ReactElement | null {
+  const members = new Set(Object.values(conversation.threads).flatMap((t) => t.members))
+  const working = participants.filter(
+    (p) => p.activity === 'working' && p.id !== `stage:${stageId}` && (p.stage_id === stageId || members.has(p.id)),
+  )
+  if (working.length === 0) return null
+  const handles = mentionHandles(participants)
+  const names = working.map((p) => `@${handles.get(p.id) ?? p.id}`).join(', ')
+  return (
+    <div className="feed-working" role="status">
+      <span className="feed-working-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      {names} {working.length === 1 ? 'is' : 'are'} working
+    </div>
   )
 }
 

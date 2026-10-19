@@ -55,6 +55,7 @@ export function toSideAgentFeedItems(events: SideAgentEvent[]): FeedItem[] {
       kind: m.kind,
       text: m.text,
       gap: formatEventGap(ts, prevTs),
+      ts,
       mono: m.mono,
       markdown: m.markdown,
     })

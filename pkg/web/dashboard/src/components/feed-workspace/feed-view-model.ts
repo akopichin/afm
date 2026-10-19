@@ -1,4 +1,5 @@
 import type { AfmEvent, StageStatus } from '../../types'
+import type { MeshMessage } from '../../api/mesh-client'
 
 // Семантическая презентация ленты: каждое РЕАЛЬНОЕ событие из events.jsonl превращается в FeedItem с
 // ролью, тоном и текстом.
@@ -16,6 +17,7 @@ export type FeedItem = {
   kind: FeedItemKind
   text: string
   gap: string // статичная длительность: разница с предыдущим событием ленты
+  ts: number // время события (ms; NaN — нет валидного timestamp), для слияния с беседами стадии
   mono: boolean // tool/script/auto-answer — компактная mono-строка dialog_question/dialog_answer: координаты вопроса
   // диалога для последующего перехода к нему.
   phase?: string
@@ -442,6 +444,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       kind: m.kind,
       text: m.text,
       gap: formatEventGap(ts, prevTs),
+      ts,
       mono: m.mono,
       phase: m.phase,
       id: m.id,
@@ -467,4 +470,45 @@ export function groupFeedItems(items: FeedItem[]): FeedGroup[] {
     }
   }
   return groups
+}
+
+// FeedFilter — фильтр ленты стадии: всё, только беседы, только работа автора (события стадии).
+export type FeedFilter = 'all' | 'conversations' | 'author'
+
+// FeedTimelineEntry — строка ленты стадии: пузырь событий автора или подряд идущие сообщения бесед.
+export type FeedTimelineEntry =
+  | { kind: 'group'; key: string; group: FeedGroup }
+  | { kind: 'conversation'; key: string; messages: MeshMessage[] }
+
+// isForYou — сообщение адресовано человеку: оно видно при любом фильтре.
+export function isForYou(m: MeshMessage): boolean {
+  return m.recipient_ids.includes('user')
+}
+
+// buildFeedTimeline сливает события стадии и сообщения её бесед по времени (при равенстве событие раньше) и
+// применяет фильтр. Подряд идущие события группируются как обычно, подряд идущие сообщения — в один блок.
+export function buildFeedTimeline(items: FeedItem[], messages: MeshMessage[], filter: FeedFilter): FeedTimelineEntry[] {
+  const shownItems = filter === 'conversations' ? [] : items
+  const shownMessages = filter === 'author' ? messages.filter(isForYou) : messages
+  const entries: FeedTimelineEntry[] = []
+  let run: FeedItem[] = []
+  const flushItems = () => {
+    for (const group of groupFeedItems(run)) entries.push({ kind: 'group', key: group.key, group })
+    run = []
+  }
+  const pushMessage = (m: MeshMessage) => {
+    flushItems()
+    const last = entries[entries.length - 1]
+    if (last?.kind === 'conversation') last.messages.push(m)
+    else entries.push({ kind: 'conversation', key: `conversation:${m.id}`, messages: [m] })
+  }
+  let i = 0
+  for (const m of shownMessages) {
+    const ts = Date.parse(m.created_at)
+    while (i < shownItems.length && !(ts < (shownItems[i] as FeedItem).ts)) run.push(shownItems[i++] as FeedItem)
+    pushMessage(m)
+  }
+  run.push(...shownItems.slice(i))
+  flushItems()
+  return entries
 }
