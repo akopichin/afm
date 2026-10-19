@@ -92,11 +92,13 @@ func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinish
 // of each request and of each answer, and requestsBlockBudget bytes of them in all (requestEntryOverhead
 // approximates one entry's header line).
 const (
-	maxListedRequests    = 20
-	requestExcerptBytes  = 300
-	answerExcerptBytes   = 2 << 10
-	requestsBlockBudget  = 24 << 10
-	requestEntryOverhead = 256
+	maxListedRequests   = 20
+	requestExcerptBytes = 300
+	// waitReasonExcerptBytes cuts an ended wait's reason the same way: it can name every recipient and why.
+	waitReasonExcerptBytes = 300
+	answerExcerptBytes     = 2 << 10
+	requestsBlockBudget    = 24 << 10
+	requestEntryOverhead   = 256
 )
 
 // sentRequest is one request participant sent, with what became of the waits for its answer.
@@ -131,7 +133,7 @@ func agentCommRequestsBlock(mesh state.MeshState, participant agentcomm.Particip
 	omittedRequests, omittedAnswers := 0, 0
 	for _, r := range order {
 		entry := requestView(mesh, r)
-		cost := len(entry.Body) + requestEntryOverhead
+		cost := requestViewCost(entry)
 		if len(picked) >= maxListedRequests || (len(picked) > 0 && cost > budget) {
 			omittedRequests++
 			continue
@@ -213,10 +215,16 @@ func requestView(mesh state.MeshState, r *sentRequest) prompts.AgentCommRequest 
 	if r.ended != nil && !r.waiting && len(r.answers) == 0 {
 		v.WaitEnded = string(r.ended.Status)
 		if r.ended.Reason != "" {
-			v.WaitEnded += ": " + r.ended.Reason
+			v.WaitEnded += ": " + truncateText(r.ended.Reason, waitReasonExcerptBytes)
 		}
 	}
 	return v
+}
+
+// requestViewCost is what an entry takes of the block's budget without its answers: every text it shows and
+// the fixed overhead of its lines.
+func requestViewCost(v prompts.AgentCommRequest) int {
+	return len(v.Body) + len(v.WaitEnded) + requestEntryOverhead
 }
 
 // participantLabel names id the way `afm agent send --to` takes it: its alias, or the id when it has none.

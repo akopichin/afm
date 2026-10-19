@@ -221,3 +221,28 @@ func TestRequestsBlock_ShowsAWaitThatEnded(t *testing.T) {
 		t.Fatalf("an ended wait must show its status and reason:\n%s", block)
 	}
 }
+
+// An ended wait's reason is shown cut to its start, and what is shown counts against the block's budget: a
+// long cancellation reason on every request cannot push the block past it.
+func TestRequestsBlock_EndedWaitReasonIsBoundedAndCharged(t *testing.T) {
+	const requests = maxListedRequests
+	mesh := requestsMesh(requests)
+	long := strings.Repeat("r", 4<<10)
+	for i := 1; i <= requests; i++ {
+		addWait(mesh, fmt.Sprintf("mw-%d", i), agentcomm.MessageID(fmt.Sprintf("mm-%d", i)), agentcomm.WaitCancelled, long)
+	}
+	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	if strings.Contains(block, strings.Repeat("r", waitReasonExcerptBytes+1)) {
+		t.Fatalf("an ended wait's reason must be cut to %d bytes:\n%.1000s", waitReasonExcerptBytes, block)
+	}
+	if !strings.Contains(block, "cancelled: rrr") {
+		t.Fatalf("the ended wait must still show its status and the start of its reason:\n%.1000s", block)
+	}
+	if len(block) > requestsBlockBudget+2048 {
+		t.Fatalf("block is %d bytes, budget %d", len(block), requestsBlockBudget)
+	}
+	view := requestView(mesh, sentRequests(mesh, unreadTestStage)[0])
+	if got, want := requestViewCost(view), len(view.Body)+len(view.WaitEnded)+requestEntryOverhead; got != want {
+		t.Fatalf("an entry's cost = %d, want its body, its ended-wait text and the overhead (%d)", got, want)
+	}
+}
