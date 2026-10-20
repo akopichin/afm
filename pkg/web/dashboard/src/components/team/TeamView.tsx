@@ -1,4 +1,4 @@
-import { useId, useState, type ReactElement, type SetStateAction } from 'react'
+import { useId, useState, type CSSProperties, type ReactElement, type SetStateAction } from 'react'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
@@ -12,6 +12,7 @@ import { BoardPanel, boardTaskCount } from './BoardPanel'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 import { TabList, tabPanelProps } from '../tab-list'
+import { usePanelResize } from '../layout/use-panel-resize'
 
 export type TeamViewProps = {
   // roster — owned by App.tsx (ONE useMeshRoster poll for the whole dashboard, same "capability hook lives at
@@ -36,6 +37,10 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
   // rosterOpen — the roster drawer on a narrow screen (CSS shows the toggle only there).
   const [rosterOpen, setRosterOpen] = useState(false)
+  const resize = usePanelResize({
+    storageKey: 'afm.teamRosterWidth', defaultWidth: 260, container: 'self', direction: 1,
+    drawerQuery: '(max-width: 760px)', drawerBelow: 560, toggleSelector: '.team-roster-toggle',
+  })
   // localThreads / localParticipants — threads and run agents this dashboard just created that the next
   // roster poll (every 3s, see useMeshRoster) has not reported yet. Every lookup and the roster UI use the
   // merged lists, so a person clicked before that poll lands in the thread that already exists (no second
@@ -149,7 +154,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const teamStages = teamStagesOf(stages)
 
   return (
-    <div className="team-view">
+    <div className={`team-view${resize.isDrawer ? ' drawer' : ''}`} ref={resize.targetRef} style={{ '--team-roster-width': `${resize.effectiveWidth}px` } as CSSProperties}>
       <RunTeamList
         participants={participants}
         threads={threads}
@@ -164,6 +169,21 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
         }}
         open={rosterOpen}
       />
+      <div
+        ref={resize.handleRef}
+        className="panel-resizer team-roster-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize run team panel"
+        aria-valuemin={200}
+        aria-valuemax={resize.maxWidth}
+        aria-valuenow={resize.effectiveWidth}
+        aria-hidden={resize.isDrawer ? true : undefined}
+        tabIndex={resize.isDrawer ? -1 : 0}
+        onMouseDown={resize.onMouseDown}
+        onKeyDown={resize.onKeyDown}
+        onDoubleClick={resize.onDoubleClick}
+      ><span className="panel-resizer-grip" aria-hidden="true" /></div>
       {rosterOpen && <button type="button" className="team-roster-scrim" aria-label="Close team roster" onClick={() => setRosterOpen(false)} />}
       <div className="team-main">
         <header className="team-conversation-header">

@@ -21,6 +21,14 @@ exposes run identity, richer stage views, dialog and discussion, Agent Mesh,
 profiles, plan reading, pause/continue, typed dashboard HTTP errors and bounded
 responses. See the [SDK README](sdk/README.md).
 
+### Improvement: resize the People and Team panels
+
+Drag the divider beside the stage Feed's People panel or the Team roster to set
+their widths independently. Focus a divider and use the arrow keys for 16 px
+steps, or double-click it to restore its default width. Browser storage keeps
+both widths across reloads and tab changes. Each panel stays within the space
+available for its content; on narrow layouts it uses its existing drawer.
+
 ## 2026-10-19
 
 ### Fix: a reviewer's invalid answer no longer leaves the stage waiting forever

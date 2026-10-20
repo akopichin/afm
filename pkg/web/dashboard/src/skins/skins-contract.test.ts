@@ -6,6 +6,7 @@ import planPanelCss from '../../skins/base/plan-panel.css?raw'
 import sideAgentCss from '../../public/side-agent.css?raw'
 import assistantsCss from '../../skins/base/assistants.css?raw'
 import meshCss from '../../skins/base/mesh.css?raw'
+import layoutCss from '../../skins/base/layout.css?raw'
 import chatComposerCss from '../../public/chat-composer.css?raw'
 import headerCss from '../../skins/base/header.css?raw'
 import graphiteIndexCss from '../../skins/graphite/index.css?raw'
@@ -205,6 +206,18 @@ describe('skins CSS contract — Team on narrow screens', () => {
     expect(narrow).toMatch(/\.team-roster\.open \{[^}]*visibility:\s*visible/)
     expect(narrow).toMatch(/\.team-roster-toggle \{[^}]*display:\s*grid/)
   })
+
+  it('hides the Run team separator at the 760px viewport breakpoint', () => {
+    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 760px)'))
+    expect(narrow).toMatch(/\.team-roster-resizer\s*\{[^}]*display:\s*none/)
+  })
+
+  it('also uses the same fixed-width drawer when the measured Team container is narrow', () => {
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster:not\(\.team-roster-embedded\)\s*\{[^}]*position:\s*absolute[^}]*width:\s*min\(300px, 85%\)/)
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster-toggle\s*\{[^}]*display:\s*grid/)
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster-scrim\s*\{[^}]*display:\s*block/)
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster-resizer\s*\{[^}]*display:\s*none/)
+  })
 })
 
 describe('skins CSS contract — stage people panel', () => {
@@ -214,6 +227,33 @@ describe('skins CSS contract — stage people panel', () => {
     expect(narrow).toMatch(/\.stage-people\.open \{[^}]*visibility:\s*visible/)
     expect(narrow).toMatch(/\.stage-people-toggle \{[^}]*display:\s*grid/)
     expect(rule(meshCss, '.stage-people-toggle,\n.stage-people-scrim')).toMatch(/display:\s*none/)
+  })
+
+  it('uses a preferred desktop width but keeps the existing 1180px drawer fixed and hides its separator', () => {
+    expect(rule(meshCss, '.stage-people')).toMatch(/(?:width|flex-basis|flex):[^;]*var\(--people-width\)/)
+    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 1180px)'))
+    expect(narrow).toMatch(/\.stage-people \{[^}]*width:\s*min\(300px, 88%\)/)
+    expect(narrow).toMatch(/\.stage-people-resizer\s*\{[^}]*display:\s*none/)
+  })
+})
+
+describe('skins CSS contract — People and Run team separators', () => {
+  it('uses the measured desktop roster width and keeps the conversation shrinkable', () => {
+    expect(rule(meshCss, '.team-roster')).toMatch(/(?:width|flex-basis|flex):[^;]*var\(--team-roster-width\)/)
+    expect(rule(meshCss, '.team-main')).toMatch(/min-width:\s*0/)
+  })
+
+  it('gives both separators the Stages hit area and centered grip with keyboard focus feedback', () => {
+    // The shared rules may live in layout.css alongside the Stages divider or in mesh.css.
+    const css = `${layoutCss}\n${meshCss}`
+    expect(rule(css, '.panel-resizer')).toMatch(/position:\s*absolute/)
+    expect(rule(css, '.panel-resizer')).toMatch(/width:\s*11px/)
+    expect(rule(css, '.panel-resizer')).toMatch(/cursor:\s*col-resize/)
+    expect(rule(css, '.panel-resizer-grip')).toMatch(/width:\s*4px/)
+    expect(rule(css, '.panel-resizer-grip')).toMatch(/height:\s*40px/)
+    expect(css).toMatch(/\.panel-resizer:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus-ring\)/)
+    expect(css).toMatch(/\.panel-resizer:hover \.panel-resizer-grip,[\s\S]*?\.panel-resizer:focus-visible \.panel-resizer-grip\s*\{[^}]*height:\s*60px/)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.panel-resizer-grip\s*\{[^}]*transition:\s*none/)
   })
 })
 
