@@ -65,6 +65,7 @@ nav:
       - Managed browser: browser.md
       - Docker mode: docker.md
       - Go SDK: sdk.md
+      - Releases and prereleases: releases.md
   - Internals:
       - Directory layout: internals/directory-layout.md
       - Event log: internals/event-log.md

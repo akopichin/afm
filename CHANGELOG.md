@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-20
 
+### Improvement: numbered alpha and beta releases with separate Homebrew commands
+
+`make release-{major,minor,patch}-{alpha,beta}` publishes prerelease tags such as
+`v2.0.0-alpha.1`, increasing the counter for each version and channel. Version
+bumps use stable tags. Pushes to `main` now run CI checks only; releases require
+an explicit version tag, so alpha code is not automatically published as a
+stable patch. Prereleases are marked in GitHub and keep Docker `latest` and the
+stable Homebrew cask on stable versions. The `afm-alpha` and `afm-beta` Homebrew
+casks install commands
+with those names alongside `afm`. See [Releases and prereleases](docs/releases.md).
+
 ### Improvement: control local AFM runs from a private Telegram chat
 
 A standalone `telegram-bot/` Go module can connect to an already running AFM

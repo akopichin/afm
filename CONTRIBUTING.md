@@ -24,6 +24,10 @@ Building the dashboard still requires npm dependencies from its lockfile.
 
 Before committing, run `make lint build test`.
 
+For stable and numbered alpha/beta releases, see
+[Releases and prereleases](docs/releases.md). Release script and publication
+configuration regression tests are included in `make test` (`go test ./scripts`).
+
 ## Documentation
 
 User docs live under [`docs/`](docs/) and are published to

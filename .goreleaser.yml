@@ -2,6 +2,10 @@ version: 2
 
 project_name: afm
 
+release:
+  prerelease: auto
+  make_latest: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
+
 before:
   hooks:
     - go mod tidy
@@ -30,14 +34,16 @@ checksum:
   name_template: "checksums.txt"
 
 homebrew_casks:
-  - name: afm
+  - &afm_cask
+    name: afm
+    skip_upload: auto
     binaries:
-      - afm
+      - 'afm{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}'
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
     caveats: |
       Claude-скиллы (/afm, /afm-check и др.) не устанавливаются автоматически.
-      Установить: afm install-skills
+      Установить: afm{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }} install-skills
     directory: Casks
     repository:
       owner: akopichin
@@ -48,9 +54,20 @@ homebrew_casks:
       name: afm-release-bot
       email: afm-release-bot@users.noreply.github.com
     hooks:
+      pre:
+        install: |
+          {{ if .Prerelease -}}
+          File.rename(staged_path.join("afm"), staged_path.join("afm-{{ index (split .Prerelease ".") 0 }}"))
+          {{- end }}
       post:
         install: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/afm"]
-            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/afm{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}"]
+            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}"]
           end
+  - <<: *afm_cask
+    name: afm-alpha
+    skip_upload: '{{ if eq (index (split .Prerelease ".") 0) "alpha" }}false{{ else }}true{{ end }}'
+  - <<: *afm_cask
+    name: afm-beta
+    skip_upload: '{{ if eq (index (split .Prerelease ".") 0) "beta" }}false{{ else }}true{{ end }}'

@@ -40,6 +40,12 @@ The binary is updated via `brew upgrade --cask afm`; skills don't need to be
 reinstalled on update, but you can re-run `afm install-skills` if new ones have
 appeared.
 
+Alpha and beta channels are available as separate casks after their first
+release: `brew install --cask akopichin/afm/afm-alpha` or
+`brew install --cask akopichin/afm/afm-beta`. Run them with `afm-alpha` or
+`afm-beta`; both can coexist with stable `afm`. See
+[Releases and prereleases](releases.md) for updates and publishing commands.
+
 **On Linux without Homebrew (prebuilt binary from GitHub Releases):**
 
 ```bash

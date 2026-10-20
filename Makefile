@@ -133,13 +133,12 @@ docker-run:
 	  -e ANTHROPIC_API_KEY \
 	  $(DOCKER_IMAGE):$(DOCKER_TAG) $(ARGS)
 
-.PHONY: release-patch release-minor release-major
-release-patch:
-	./scripts/release.sh patch
-release-minor:
-	./scripts/release.sh minor
-release-major:
-	./scripts/release.sh major
+RELEASE_TARGETS := $(addprefix release-,patch minor major \
+	patch-alpha minor-alpha major-alpha patch-beta minor-beta major-beta)
+
+.PHONY: $(RELEASE_TARGETS)
+$(RELEASE_TARGETS):
+	./scripts/release.sh $(subst -, ,$(patsubst release-%,%,$@))
 
 .PHONY: sdk-test sdk-test-integration sdk-lint
 

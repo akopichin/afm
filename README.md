@@ -163,9 +163,16 @@ make docker-build # build the Docker image
 
 Versioned release: `make release-patch` / `release-minor` / `release-major` bumps the
 SemVer tag and pushes it; the actual build (Docker image + binaries + GitHub Release +
-Homebrew cask) happens in GitHub Actions once the tag is pushed. A push to `main`
-releases a patch version automatically. See the [CHANGELOG](CHANGELOG.md) for release
-history and [CONTRIBUTING](CONTRIBUTING.md) to get started.
+Homebrew cask) happens in GitHub Actions once the tag is pushed. Add `-alpha` or
+`-beta` to any release target for numbered prereleases, for example
+`make release-major-alpha` creates `v2.0.0-alpha.1` from stable `v1.x.y` and
+increments the alpha counter on subsequent calls. Install the separate Homebrew
+casks with `brew install --cask akopichin/afm/afm-alpha` or `afm-beta`; they provide
+commands `afm-alpha` and `afm-beta` alongside stable `afm`. Pushes to `main` run
+CI checks; releases require an explicit version tag, created with `make release-*`.
+See [Releases and prereleases](docs/releases.md) for details, the
+[CHANGELOG](CHANGELOG.md) for release history, and
+[CONTRIBUTING](CONTRIBUTING.md) to get started.
 
 ## License
 
