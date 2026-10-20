@@ -2,10 +2,7 @@ package afmsdk
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
+	"time"
 )
 
 // StageStatus mirrors afm's internal stage FSM status, duplicated here as a plain string type so this
@@ -29,57 +26,81 @@ const (
 	// Failed — an SDK consumer polling Status in a loop must be able to tell this apart from "still running"
 	// or "actually stuck", rather than seeing an unrecognized raw string.
 	StageAwaitingAssistants StageStatus = "awaiting_assistants"
+	StageAwaitingPeer       StageStatus = "awaiting_peer"
+	StagePaused             StageStatus = "paused"
 )
+
+// StageView is the dashboard's joined runtime and configuration view. It has
+// updated_at but no per-stage sequence or conditional action token.
+type StageView struct {
+	ID                        string      `json:"id"`
+	Name                      string      `json:"name,omitempty"`
+	Status                    StageStatus `json:"status"`
+	UpdatedAt                 time.Time   `json:"updated_at"`
+	Interactive               bool        `json:"interactive"`
+	Autonomous                bool        `json:"autonomous"`
+	AutoApprove               bool        `json:"auto_approve"`
+	HasDialog                 bool        `json:"has_dialog"`
+	IsScript                  bool        `json:"is_script"`
+	PausedFrom                StageStatus `json:"paused_from,omitempty"`
+	ShowPlan                  bool        `json:"show_plan"`
+	ShowDialog                bool        `json:"show_dialog"`
+	Buttons                   []string    `json:"buttons,omitempty"`
+	AwaitingAssistantsBlocked bool        `json:"awaiting_assistants_blocked,omitempty"`
+}
+
+type Capabilities struct {
+	FileBrowser   bool `json:"file_browser"`
+	SideAgent     bool `json:"side_agent"`
+	Collaboration bool `json:"collaboration"`
+	AddStage      bool `json:"add_stage"`
+}
 
 // RunStatus is a snapshot of a run's flow name and per-stage statuses.
 type RunStatus struct {
-	FlowName string
-	Stages   map[string]StageStatus
+	FlowName     string
+	RunID        string
+	StartedAt    time.Time
+	RunState     string
+	EndedAt      *time.Time
+	LastSeq      uint64
+	Capabilities Capabilities
+	StageViews   []StageView
+	Stages       map[string]StageStatus
 	// Done is true when the run has at least one stage and every stage is StageDone.
 	Done bool
 	// Failed is true when any stage is StageFailed or StageHookFailed.
 	Failed bool
 }
 
-type statusWireStage struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
-
 type statusWire struct {
-	FlowName string            `json:"flow_name"`
-	Stages   []statusWireStage `json:"stages"`
+	FlowName     string       `json:"flow_name"`
+	RunID        string       `json:"run_id,omitempty"`
+	StartedAt    time.Time    `json:"started_at"`
+	RunState     string       `json:"run_status,omitempty"`
+	EndedAt      *time.Time   `json:"ended_at,omitempty"`
+	LastSeq      uint64       `json:"last_seq"`
+	Capabilities Capabilities `json:"capabilities"`
+	Stages       []StageView  `json:"stages"`
 }
 
 // Status fetches the current run status from afm's own dashboard API
 // (GET /api/status on the run's isolated --port).
 func (r *Run) Status(ctx context.Context) (RunStatus, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/api/status", nil)
-	if err != nil {
-		return RunStatus{}, fmt.Errorf("afmsdk: status: %w", err)
-	}
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return RunStatus{}, fmt.Errorf("afmsdk: status: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return RunStatus{}, fmt.Errorf("afmsdk: status: unexpected response %s: %s", resp.Status, body)
-	}
-
 	var wire statusWire
-	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
-		return RunStatus{}, fmt.Errorf("afmsdk: status: decode response: %w", err)
+	if err := r.getJSON(ctx, "/api/status", &wire); err != nil {
+		return RunStatus{}, err
 	}
 
 	out := RunStatus{
-		FlowName: wire.FlowName,
-		Stages:   make(map[string]StageStatus, len(wire.Stages)),
+		FlowName: wire.FlowName, RunID: wire.RunID, StartedAt: wire.StartedAt,
+		RunState: wire.RunState, EndedAt: wire.EndedAt, LastSeq: wire.LastSeq,
+		Capabilities: wire.Capabilities, StageViews: wire.Stages,
+		Stages: make(map[string]StageStatus, len(wire.Stages)),
 	}
 	allDone := len(wire.Stages) > 0
 	for _, s := range wire.Stages {
-		st := StageStatus(s.Status)
+		st := s.Status
 		out.Stages[s.ID] = st
 		if st == StageFailed || st == StageHookFailed {
 			out.Failed = true

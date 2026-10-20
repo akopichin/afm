@@ -2,7 +2,17 @@
 
 Newest first. See the module's [README](./README.md) for usage; see the main project's [release-notes.md](../CHANGELOG.md) for afm itself.
 
+## 2026-10-20
+
+### Improvement: Current SDK contract and live dashboard coverage
+
+- `Client.Start(ctx, flowPath, workDir)` creates `workDir` if needed and uses it for both the subprocess CWD and `afm run --dir`. `Config` has no `BaseDir`, and `Start` does not create a separate isolated state directory. A failed start leaves `workDir` in place. After the subprocess exits, `Run.Cleanup()` removes the **entire `workDir`**, so use it only for a disposable directory dedicated to that run.
+- `Connect(ctx, dashboardPort)` opens an existing dashboard on `127.0.0.1` after checking that its status includes a flow name and start time. It does not check a PID or own the process; `Wait` and `Cleanup` are unavailable on the returned handle. `Client.Attach(ctx, dir, port, pid)` remains available when the PID and directory are known; it checks the PID and dashboard port but likewise does not own the process.
+- Dashboard operations now include `Status` and `Plan`; stage `Dialog`/`Answer` and `Discussion`/`PostDiscussion`; Agent Mesh `Participants`, `Threads`, `Inbox`, `Thread`, `StageMessages`, `Send`, `AssistantProfiles`, and `AttachAndSend`; and `Approve`, `Retry`, `Revise`, `Pause`, and `Continue`. Availability of an action depends on the run's capabilities and stage state. See the [README](./README.md) for current usage and error handling.
+
 ## 2026-08-13
+
+> Historical design record: the isolation and cleanup claims below describe the earlier design. Follow the 2026-10-20 entry and the [README](./README.md) for the current API.
 
 ### New: `afmsdk` — a Go SDK for driving afm flows from another Go program
 

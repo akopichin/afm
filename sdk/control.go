@@ -1,11 +1,9 @@
 package afmsdk
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 )
@@ -31,25 +29,22 @@ func (r *Run) Revise(ctx context.Context, stageID, feedback string) error {
 }
 
 func (r *Run) post(ctx context.Context, path string, body []byte) error {
-	var reader io.Reader
+	// Existing controls keep their historical raw JSON request body. The shared
+	// request path provides bounded reads and inspectable HTTP failures.
+	var payload any
 	if body != nil {
-		reader = bytes.NewReader(body)
+		payload = json.RawMessage(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.baseURL+path, reader)
-	if err != nil {
-		return fmt.Errorf("afmsdk: %s: %w", path, err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("afmsdk: %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("afmsdk: %s: unexpected response %s: %s", path, resp.Status, bytes.TrimSpace(respBody))
-	}
-	return nil
+	_, err := r.request(ctx, http.MethodPost, path, payload, maxJSONBytes)
+	return err
+}
+
+// Pause and Continue control an eligible stage. The dashboard does not accept
+// an expected stage sequence, so callers must perform their own fresh read.
+func (r *Run) Pause(ctx context.Context, stageID string) error {
+	return r.post(ctx, stagePath(stageID, "/pause"), nil)
+}
+
+func (r *Run) Continue(ctx context.Context, stageID string) error {
+	return r.post(ctx, stagePath(stageID, "/continue"), nil)
 }

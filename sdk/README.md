@@ -1,110 +1,116 @@
 # afmsdk
 
-A dependency-free Go module that lets a Go service launch an [afm](../README.md) flow as a subprocess, poll its progress, and drive approve/retry/revise while it's running — so services can build their own web endpoints ("watch progress in the browser") on top of afm without shelling out by hand.
+`afmsdk` is a dependency-free Go module for controlling AFM through its local
+dashboard API. Use `Connect` for an existing run, or `Client.Start` when your Go
+program must launch and own an `afm run` subprocess. The module does not import
+AFM's internal Go packages.
 
-See the project's [release notes](../CHANGELOG.md) for the announcement, and this package's own [release-notes.md](./release-notes.md) for the SDK's own history.
-
-## Why a subprocess, not an embedded orchestrator
-
-`afmsdk.Client.Start` spawns `afm run --dir <isolated> --port <picked> <flowPath>` as a real subprocess — it does not import or embed afm's orchestrator. Two afm internals make this the right shape (both documented in more depth in [release-notes.md](./release-notes.md)):
-
-- **Control while a run is live has to go through afm's own HTTP dashboard, not the `afm approve/retry/revise` CLI subcommands.** Those subcommands take an exclusive `flock` on the run directory, which the live `afm run` process already holds for as long as any stage sits in `awaiting_approval` — so they fail with a locked-run error while the run you'd want to control is exactly the one that's alive. The SDK always starts its own subprocess with `--port` and talks to that run's dashboard API instead.
-- **Ctx cancellation sends `SIGINT`, never `SIGTERM`** — afm's own graceful shutdown only traps `SIGINT`.
-
-Because of this, `afmsdk` imports **zero** `github.com/akopichin/afm/...` packages — it only needs the `afm` binary to exist (on `PATH`, or via `Config.Binary`) and talks to it as a black box over CLI flags plus its existing dashboard HTTP API (`GET /api/status`, `POST /api/stages/<id>/{approve,retry,revise}`).
+See the [site guide](../docs/sdk.md), the project's [changelog](../CHANGELOG.md),
+and the [SDK release notes](release-notes.md).
 
 ## Install
 
-This module isn't tagged yet (no `sdk/vX.Y.Z` release cut — see [release-notes.md](./release-notes.md) for the tagging convention this module will use once it is). Until then, consume it from a local checkout via a `replace` directive in your own `go.mod`:
+The nested module is `github.com/akopichin/afm/sdk`. It has not been tagged as
+`sdk/vX.Y.Z` yet. From a local checkout, use a `replace` directive:
 
-```
+```go
 require github.com/akopichin/afm/sdk v0.0.0-00010101000000-000000000000
 
 replace github.com/akopichin/afm/sdk => /path/to/afm/sdk
 ```
 
-You also need the `afm` binary itself installed and reachable — see the main [README's Installation section](../README.md#installation).
+An existing dashboard is enough for `Connect`. `Client.Start` additionally
+requires an `afm` executable on `PATH`, or `Config.Binary` pointing to it.
 
-## Quick example
+## Connect to a running dashboard
+
+Start AFM with its dashboard on a known port, for example `afm run --port 9876`.
+Then:
 
 ```go
-client, err := afmsdk.New(afmsdk.Config{MaxConcurrent: 4})
-if err != nil {
-	log.Fatal(err)
-}
+package main
 
-runCtx, cancel := context.WithCancel(ctx)
-defer cancel()
+import (
+	"context"
+	"fmt"
+	"log"
 
-run, err := client.Start(runCtx, "flow.yaml", "/path/to/target/project")
-if err != nil {
-	log.Fatal(err)
-}
+	afmsdk "github.com/akopichin/afm/sdk"
+)
 
-for {
-	status, err := run.Status(runCtx)
+func main() {
+	ctx := context.Background()
+	run, err := afmsdk.Connect(ctx, 9876)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if status.Done {
-		break
+	status, err := run.Status(ctx)
+	if err != nil {
+		log.Fatal(err)
 	}
-	if status.Failed {
-		// afm keeps the subprocess alive on failure so a stage can be
-		// retried; here we just give up and shut it down instead, since
-		// Wait only returns once the process exits or ctx is cancelled.
-		cancel()
-		break
-	}
-	time.Sleep(2 * time.Second)
-}
-
-if err := run.Wait(runCtx); err != nil {
-	log.Fatal(err)
-}
-if err := run.Cleanup(); err != nil {
-	log.Fatal(err)
+	fmt.Printf("%s: %s (%d stages)\n", status.FlowName, status.RunState, len(status.StageViews))
 }
 ```
 
-A more complete, runnable example — a small HTTP service wrapping `afmsdk` with `POST /runs`, `GET /runs/{id}/status`, `POST /runs/{id}/{approve,retry,revise}`, `DELETE /runs/{id}` — is exactly the shape this package exists to make easy; build one the same way if you want a manual sanity check against a real flow.
+`Connect` uses `127.0.0.1`, checks that the dashboard responds with a flow name
+and start time, and does not start or own an AFM process. It does not check a
+PID. `Wait` and `Cleanup` are only for a run launched by `Client.Start`.
 
-## API
+## Launch a run
 
-- `Config{Binary string; MaxConcurrent int}` / `New(cfg Config) (*Client, error)` — `Binary` defaults to resolving `"afm"` from `PATH`; `MaxConcurrent` caps how many `afm run` subprocesses this `Client` will have active at once (0 = unlimited).
-- `Client.Start(ctx, flowPath, workDir string) (*Run, error)` — `workDir` is used as both the subprocess's `--dir` (afm's own state directory) and its CWD (the target project agents actually operate on), creating `workDir` first if it doesn't exist. Blocks until the run's dashboard API is reachable.
-- `Client.Attach(ctx, dir string, port int, pid int) (*Run, error)` — reconnect to a live afm subprocess that was started by an earlier process instance. `dir`, `port`, and `pid` are usually persisted when `Start` returns (e.g. in a database row), so a service can survive a restart: cancel the old process, restart the service, and call `Attach` to get a new `*Run` handle on the same subprocess. `Status`, `Approve`, `Retry`, and `Revise` work exactly as on a started run; `Wait` and `Cleanup` return an error (since this package never held the `*exec.Cmd` to manage across the restart).
-- `Run.Status(ctx) (RunStatus, error)` — polls `GET /api/status`. `RunStatus{FlowName string; Stages map[string]StageStatus; Done, Failed bool}`. `StageStatus` mirrors afm's internal stage FSM values (`pending`, `planning`, `awaiting_approval`, `revising`, `ready`, `running`, `retrying`, `awaiting_user_input`, `done`, `failed`, `hook_failed`) as plain string constants — duplicated here on purpose so this module stays free of any afm-package dependency.
-- `Run.Approve(ctx, stageID string) error`, `Run.Retry(ctx, stageID string) error`, `Run.Revise(ctx, stageID, feedback string) error` — POST to the live run's dashboard API. Errors carry the dashboard's response text; there are no typed/sentinel errors in v1.
-- `Run.Wait(ctx) error` — blocks until the subprocess exits. Cancelling `ctx` sends `SIGINT` (afm's graceful-shutdown signal) and waits up to 15s before killing the process.
-- `Run.Cleanup() error` — removes the run's isolated state directory. Must be called after `Wait` returns; calling it while the subprocess might still be alive returns an error instead of deleting files out from under a live afm process. Never called automatically.
-- `Run.Dir() string` — the isolated `--dir` this run's afm state lives in (useful for debugging).
-- `Run.Port() int` — the dashboard API port for this run (needed to reconnect via `Client.Attach` after a restart).
-- `Run.PID() int` — the operating system process ID of the afm subprocess (needed to reconnect via `Client.Attach` after a restart).
+`Client.Start(ctx, flowPath, workDir)` starts `afm run --dir workDir --port
+<picked> flowPath`, with `workDir` also as the subprocess's working directory.
+It waits for the dashboard to respond. The flow path should be absolute when it
+is outside `workDir`. The returned `Run` exposes `Dir()`, `Port()`, and `PID()`.
 
-## Scope (v1)
+`Run.Wait(ctx)` waits for the subprocess to exit. If `ctx` is cancelled, it
+sends `SIGINT`, waits up to 15 seconds, then kills the process if needed. A
+failed AFM stage can keep the process alive for a retry, so cancel the context
+before waiting if your service is giving up. `Run.Cleanup()` removes **the
+entire `workDir`** after the process has exited. Use it only for a directory
+your program created solely for this run; it is never called automatically.
 
-Deliberately out of scope for now — see [release-notes.md](./release-notes.md) for the reasoning behind each:
+`Client.Attach(ctx, dir, port, pid)` reconnects to a previously launched
+process when you have retained all three values. It checks the PID and dashboard
+port, but it does not own that subprocess, so `Wait` and `Cleanup` are
+unavailable on the attached handle. `Config.MaxConcurrent` limits subprocesses
+started by one `Client` (zero means unlimited).
 
-- No push/webhook notifications — `Status` is poll-only.
-- No `Answer()` API for interactive (question/answer) stages — only autonomous (`agents: [auto]`) or script/planning-gated stages are supported end to end.
-- No built-in `net/http.Handler` — wire `Status`/`Approve`/`Retry`/`Revise` into your own routes.
-- No dynamic/in-memory flow definitions — `Start` takes a file path only.
+## Read and control a run
 
-## Testing
+All methods below take a `context.Context` and use the local dashboard API:
 
-From this directory:
+| Method | Purpose |
+|---|---|
+| `Status` | Read flow name, run ID, start/end time, run state, last sequence, capabilities, stage views, and the stage-status map. `Done` means every stage is done and there is at least one; `Failed` means a stage is failed or hook-failed. |
+| `Plan(stageID)` | Read the complete plan bytes. |
+| `Dialog(stageID)`, `Answer(stageID, DialogAnswer)` | Read stage dialog and answer a question by ID and phase. |
+| `Discussion(stageID, cursor, limit)`, `PostDiscussion(stageID, DiscussionPost)` | Read and post in a stage discussion. |
+| `Participants`, `Threads`, `Inbox`, `Thread`, `StageMessages` | Read Agent Mesh people, conversations, and paged messages. |
+| `Send(MeshSendRequest)` | Send an Agent Mesh message with a caller-supplied stable request ID for safe retries after an ambiguous response. |
+| `AssistantProfiles`, `AttachAndSend(AttachAndSendRequest)` | Find available profiles and attach an agent with an optional first message. |
+| `Approve`, `Retry`, `Revise`, `Pause`, `Continue` | Send the corresponding stage control request. |
 
-```bash
-go test ./...                          # unit tests only (no real subprocess)
-```
+`StageView` contains each stage's runtime status and UI flags such as
+`ShowPlan`, `ShowDialog`, and `Buttons`. `RunStatus.Capabilities` tells a client
+which optional APIs are available. Stage statuses include `awaiting_approval`,
+`awaiting_user_input`, `awaiting_assistants`, `awaiting_peer`, and `paused`, as
+well as the normal pending/running/done/failure states. Check the status and
+capabilities before showing an action. The dashboard has no atomic stage
+sequence precondition for controls, so a fresh read cannot guarantee that the
+stage stays unchanged until a write.
 
-From the repo root:
+Rejected dashboard requests return `*afmsdk.HTTPError` with `StatusCode` and a
+bounded `Body`; use `errors.As` to inspect it. Oversized successful responses
+wrap `afmsdk.ErrResponseTooLarge` for `errors.Is`. JSON responses are limited
+to 8 MiB, plan responses to 16 MiB, and error bodies to 4 KiB.
 
-```bash
-make sdk-test              # same as above
-make sdk-test-integration  # builds afm first, then also runs the 7 real-subprocess integration tests
-make sdk-lint              # golangci-lint against this module
-```
+## Scope and checks
 
-The integration tests (`TestIntegration_HappyPath`, `_StartUsesWorkDirAsAfmDir`, `_Approve`, `_Retry`, `_Revise`, `_MaxConcurrentBlocksExtraStarts`, `_AttachReconnectsToLiveRun`) spawn a real `afm run` subprocess end to end — they need a pre-built `afm` binary, resolved via `AFM_SDK_TEST_BINARY` or `../bin/afm` (what `make build` produces at the repo root), and `t.Skip` with a clear message if neither exists.
+There are no push/webhook notifications, built-in `net/http.Handler`, or
+dynamic in-memory flow definitions. Poll `Status` or the relevant message API
+as needed; `Start` takes a flow file path.
+
+From the repository root, use `make sdk-test sdk-lint`. Integration tests that
+launch a real subprocess use `make sdk-test-integration`; they require an AFM
+binary from `AFM_SDK_TEST_BINARY` or `bin/afm` after `make build`.

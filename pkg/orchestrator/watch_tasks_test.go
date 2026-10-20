@@ -366,6 +366,10 @@ func TestWatcherUI_ShowsTriggerAndPassCount(t *testing.T) {
 			t.Fatalf("pass %d never fired", i+1)
 		}
 		waitForTaskStatus(t, store, taskID, assistants.StatusWatching, 2*time.Second)
+		// StatusWatching is committed before the helper's deferred collector cleanup.
+		// Finish that turn before advancing the fake clock for the next checkpoint;
+		// otherwise cooldown can start at the newly advanced time.
+		o.concurrency.WaitAgents()
 	}
 
 	passes, _, _, ok := o.WatcherStatus(taskID)

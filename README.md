@@ -145,8 +145,10 @@ Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github
 | Carrying lessons across runs | [Agent memory](https://akopichin.github.io/afm/agent-memory/) |
 | Token/cost tracking, `pricing:` overrides | [Cost accounting](https://akopichin.github.io/afm/accounting/) |
 | The web dashboard | [Dashboard](https://akopichin.github.io/afm/dashboard/) |
+| AFM from a private Telegram chat | [Telegram bot](https://akopichin.github.io/afm/telegram-bot/) |
 | Agent teams: run agents, conversations, board, helpers | [Helpers and collaboration](https://akopichin.github.io/afm/collaboration/) |
 | Running in Docker, non-Claude agents | [Docker mode](https://akopichin.github.io/afm/docker/) |
+| Driving afm from Go | [Go SDK](https://akopichin.github.io/afm/sdk/) |
 | Event log, directory layout, prompts | [Internals](https://akopichin.github.io/afm/internals/directory-layout/) |
 
 ## Development

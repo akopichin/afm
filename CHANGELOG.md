@@ -3,6 +3,24 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-20
+
+### Improvement: control local AFM runs from a private Telegram chat
+
+A standalone `telegram-bot/` Go module can connect to an already running AFM
+dashboard on the same host. An operator explicitly registers a dashboard port
+with `/connect PORT` or the bot's loopback registration endpoint. The bot offers
+run selection, agent and conversation views, interactive answers, plan review,
+stage pause/continue, profile-backed agent creation, and Agent Mesh messages.
+It persists outbound receipts so queued, accepted, replied, failed and
+uncertain sends remain distinguishable across restarts. See the
+[Telegram bot guide](docs/telegram-bot.md) for setup and limits.
+
+The Go SDK now also connects to an existing local dashboard with `Connect` and
+exposes run identity, richer stage views, dialog and discussion, Agent Mesh,
+profiles, plan reading, pause/continue, typed dashboard HTTP errors and bounded
+responses. See the [SDK README](sdk/README.md).
+
 ## 2026-10-19
 
 ### Fix: a reviewer's invalid answer no longer leaves the stage waiting forever

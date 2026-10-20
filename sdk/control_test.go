@@ -109,3 +109,25 @@ func TestStageIDIsPathEscaped(t *testing.T) {
 		t.Errorf("escaped path: got %q, want escaped slash", gotEscapedPath)
 	}
 }
+
+func TestPauseContinueUseProtectedWriteContract(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Origin") != "http://"+r.Host {
+			t.Errorf("method/origin: %s %q", r.Method, r.Header.Get("Origin"))
+		}
+		paths = append(paths, r.URL.EscapedPath())
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	run := &Run{baseURL: srv.URL, httpClient: srv.Client()}
+	if err := run.Pause(context.Background(), "stage/id"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Continue(context.Background(), "stage/id"); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/api/stages/stage%2Fid/pause" || paths[1] != "/api/stages/stage%2Fid/continue" {
+		t.Fatalf("paths: %v", paths)
+	}
+}

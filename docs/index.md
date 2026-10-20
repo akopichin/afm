@@ -59,6 +59,7 @@ or the **[flow.yaml reference](flow-reference.md)** for every field.
 | Passing data between stages | [Artifacts & inputs](artifacts.md) |
 | Carrying lessons across runs | [Agent memory](agent-memory.md) |
 | The web dashboard | [Dashboard](dashboard.md) |
+| AFM from a private Telegram chat | [Telegram bot](telegram-bot.md) |
 | Helper roles, required tasks, discussion | [Helpers and collaboration](collaboration.md) |
 | Driving a real Chrome from a stage | [Managed browser](browser.md) |
 | Running in Docker, non-Claude agents | [Docker mode](docker.md) |

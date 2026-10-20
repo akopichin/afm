@@ -60,6 +60,7 @@ nav:
       - Agent memory: agent-memory.md
       - Cost accounting: accounting.md
       - Dashboard: dashboard.md
+      - Telegram bot: telegram-bot.md
       - Helpers and collaboration: collaboration.md
       - Managed browser: browser.md
       - Docker mode: docker.md

@@ -1,12 +1,35 @@
 # Go SDK
 
-Need to drive afm from a Go service instead of the CLI — start a flow as a
-subprocess, poll its progress, and call approve/retry/revise while it's running (for
-example to expose your own HTTP endpoints for watching progress in a browser)?
+Use the `afmsdk` Go module to connect a service to a running AFM dashboard, or
+to launch and manage an `afm run` subprocess. For an existing dashboard on port
+`9876`, the minimum read is:
 
-`afmsdk.Client.Start` spawns `afm run --dir <isolated> --port <picked> <flowPath>` as
-a real subprocess — it does not import or embed afm's orchestrator.
+```go
+run, err := afmsdk.Connect(ctx, 9876)
+if err != nil {
+	return err
+}
+status, err := run.Status(ctx)
+if err != nil {
+	return err
+}
+fmt.Println(status.FlowName, status.RunState)
+```
 
-See [`sdk/README.md`](https://github.com/akopichin/afm/blob/main/sdk/README.md) for
-the `afmsdk` Go module, its API, and the tagging convention it will use once
-released.
+`Connect` uses the local loopback address and does not own the AFM process.
+`Run.Status` includes stage views, capabilities, run identity and state. The
+SDK also reads plans, dialog, discussion and Agent Mesh conversations; answers
+questions, sends messages, attaches profile-backed agents, and controls stages
+with approve, retry, revise, pause and continue.
+
+For a run your service creates, `Client.Start(ctx, flowPath, workDir)` starts an
+`afm` subprocess and waits for its dashboard. The SDK uses `workDir` both as
+the subprocess working directory and its `--dir`. `Run.Cleanup()` deletes that
+whole directory after the process exits, so supply a dedicated temporary
+directory if you intend to call it. Dashboard HTTP errors expose a status code
+through `*afmsdk.HTTPError`.
+
+See the [SDK README](https://github.com/akopichin/afm/blob/main/sdk/README.md)
+for module setup, a complete `Connect` example, API details and checks. To
+operate the same dashboard from a private Telegram chat, see the
+[Telegram bot guide](telegram-bot.md).
