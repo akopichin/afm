@@ -225,6 +225,16 @@ that participant and what it is doing: a stage's status, or for a run agent or
 helper whether it is **Working**, **Waiting** (for a colleague), **Idle** (between
 turns), **Paused**, or **Done**; the presence dot follows the same state.
 
+Drag the divider at the roster's right edge to make more room for the roster or
+conversation. You can also focus the divider and use **Left** or **Right** to
+resize in 16 px steps; double-click it to restore the 260 px default. The roster
+can be 200–560 px wide while leaving at least 320 px for the conversation. Its
+width is saved in the browser separately from the stage Feed's People panel, and
+survives reloads and tab changes. If the Team area shrinks, the displayed width
+is limited to the space available; your saved width returns when it grows again.
+If browser storage is unavailable, resizing still works, but the width is not
+retained.
+
 Select a person to read or send a direct message; the first send opens a
 conversation, and selecting that person again returns to it. The **+** button in
 the conversation header creates a group conversation after you enter a topic and
@@ -235,8 +245,10 @@ have already finished are named above the composer and left out; when nobody can
 answer any more, sending is turned off. When two agents share a name, the `@`
 menu inserts a handle that addresses only the one you picked. The **Messages**,
 **Board** and **Activity** tabs work with the arrow keys. A conversation opens at its latest
-message, and a reply quotes the message it answers. On narrow screens the roster
-opens from the **☰** button.
+message, and a reply quotes the message it answers. At viewport widths of 760 px
+or less, or when the Team area is narrower than 560 px, the roster becomes a
+left-side drawer opened with **☰**. Its resize divider is hidden; if the divider
+had keyboard focus when the layout changed, focus moves to **☰**.
 
 **Add run agent** starts a standing agent from an available configured profile.
 Choose a role, enter an instruction, and optionally give it a title and a first

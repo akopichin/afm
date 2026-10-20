@@ -39,9 +39,53 @@ function renderTeamView(stages: Stage[] = [makeStage()], events: AfmEvent[] = []
   return render(<TeamView roster={roster} stages={stages} events={events} profiles={profiles} />)
 }
 
+function mockTeamWidth(initialWidth: number) {
+  let width = initialWidth
+  const observers = new Set<{ callback: ResizeObserverCallback; targets: Set<Element> }>()
+  vi.stubGlobal('ResizeObserver', class {
+    private targets = new Set<Element>()
+    private record: { callback: ResizeObserverCallback; targets: Set<Element> }
+    constructor(callback: ResizeObserverCallback) {
+      this.record = { callback, targets: this.targets }
+      observers.add(this.record)
+    }
+    observe(target: Element) { this.targets.add(target) }
+    unobserve(target: Element) { this.targets.delete(target) }
+    disconnect() { observers.delete(this.record); this.targets.clear() }
+  })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const measured = this.matches('.team-view') ? width : 0
+    return { x: 0, y: 0, left: 0, top: 0, right: measured, bottom: 0, width: measured, height: 0, toJSON: () => ({}) } as DOMRect
+  })
+  vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(function (this: Element) {
+    return this.matches('.team-view') ? width : 0
+  })
+  return {
+    resize(nextWidth: number) {
+      width = nextWidth
+      act(() => {
+        for (const observer of observers) {
+          const entries = [...observer.targets]
+            .filter((target) => target.isConnected)
+            .map((target) => ({ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry))
+          if (entries.length > 0) observer.callback(entries, {} as ResizeObserver)
+        }
+      })
+    },
+  }
+}
+
+function teamSeparator() {
+  return screen.getByRole('separator', { name: 'Resize run team panel' })
+}
+
 describe('TeamView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
   })
 
   test('roster groups participants under "This run", "Stages" and "Conversations"', () => {
@@ -292,6 +336,187 @@ describe('TeamView', () => {
     fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
     expect(roster).not.toHaveClass('open')
     expect(await screen.findByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
+  })
+
+  test('the labeled vertical separator grows Run team to the right and survives remount independently of People', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(1200)
+    localStorage.setItem('afm.peopleWidth', '400')
+    const view = renderTeamView()
+    const handle = teamSeparator()
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    expect(handle).toHaveAttribute('aria-orientation', 'vertical')
+    expect(handle).toHaveAttribute('aria-valuemin', '200')
+    expect(handle).toHaveAttribute('aria-valuemax', '560')
+    expect(handle).toHaveAttribute('aria-valuenow', '260')
+
+    fireEvent.mouseDown(handle, { clientX: 260 })
+    fireEvent.mouseMove(document, { clientX: 340 })
+    fireEvent.mouseUp(document)
+    expect(layout.style.getPropertyValue('--team-roster-width')).toBe('340px')
+    expect(handle).toHaveAttribute('aria-valuenow', '340')
+    expect(localStorage.getItem('afm.teamRosterWidth')).toBe('340')
+    expect(localStorage.getItem('afm.peopleWidth')).toBe('400')
+
+    view.unmount()
+    const remount = renderTeamView()
+    expect((remount.container.querySelector('.team-view') as HTMLElement).style.getPropertyValue('--team-roster-width')).toBe('340px')
+    expect(teamSeparator()).toHaveAttribute('aria-valuenow', '340')
+  })
+
+  test('ArrowRight widens Run team, ArrowLeft narrows it, both clamp, and double-click resets', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(1200)
+    const view = renderTeamView()
+    const handle = teamSeparator()
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(handle).toHaveAttribute('aria-valuenow', '276')
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    expect(handle).toHaveAttribute('aria-valuenow', '260')
+    fireEvent.mouseDown(handle, { clientX: 260 })
+    fireEvent.mouseMove(document, { clientX: 9999 })
+    fireEvent.mouseUp(document)
+    expect(handle).toHaveAttribute('aria-valuenow', '560')
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    expect(handle).toHaveAttribute('aria-valuenow', '560')
+    fireEvent.doubleClick(handle)
+    expect(layout.style.getPropertyValue('--team-roster-width')).toBe('260px')
+    expect(localStorage.getItem('afm.teamRosterWidth')).toBe('260')
+    fireEvent.mouseDown(handle, { clientX: 260 })
+    fireEvent.mouseMove(document, { clientX: -9999 })
+    fireEvent.mouseUp(document)
+    expect(handle).toHaveAttribute('aria-valuenow', '200')
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    expect(handle).toHaveAttribute('aria-valuenow', '200')
+  })
+
+  test('a narrow desktop Team container clamps the visible width without changing the stored preference', () => {
+    mockThreadAndBoardFetches()
+    localStorage.setItem('afm.teamRosterWidth', '500')
+    const measured = mockTeamWidth(600)
+    const view = renderTeamView()
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const handle = teamSeparator()
+    expect(layout.style.getPropertyValue('--team-roster-width')).toBe('280px')
+    expect(handle).toHaveAttribute('aria-valuenow', '280')
+    expect(handle).toHaveAttribute('aria-valuemax', '280')
+    expect(localStorage.getItem('afm.teamRosterWidth')).toBe('500')
+
+    measured.resize(580)
+    expect(handle).toHaveAttribute('aria-valuenow', '260')
+    expect(handle).toHaveAttribute('aria-valuemax', '260')
+    expect(localStorage.getItem('afm.teamRosterWidth')).toBe('500')
+
+    measured.resize(1000)
+    expect(layout.style.getPropertyValue('--team-roster-width')).toBe('500px')
+    expect(handle).toHaveAttribute('aria-valuenow', '500')
+    expect(handle).toHaveAttribute('aria-valuemax', '560')
+  })
+
+  test('outward resize at a temporary clamp keeps the saved Run team preference', () => {
+    mockThreadAndBoardFetches()
+    localStorage.setItem('afm.teamRosterWidth', '500')
+    const measured = mockTeamWidth(600)
+    const view = renderTeamView()
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const handle = teamSeparator()
+    expect(handle).toHaveAttribute('aria-valuenow', '280')
+
+    fireEvent.keyDown(handle, { key: 'ArrowRight' })
+    fireEvent.mouseDown(handle, { clientX: 260 })
+    fireEvent.mouseMove(document, { clientX: 360 })
+    fireEvent.mouseUp(document)
+    expect(handle).toHaveAttribute('aria-valuenow', '280')
+    expect(localStorage.getItem('afm.teamRosterWidth')).toBe('500')
+
+    measured.resize(1000)
+    expect(layout.style.getPropertyValue('--team-roster-width')).toBe('500px')
+  })
+
+  test('a measured Team container that narrows into drawer mode transfers separator focus', () => {
+    mockThreadAndBoardFetches()
+    const measured = mockTeamWidth(600)
+    const view = renderTeamView()
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const handle = teamSeparator()
+    const toggle = screen.getByRole('button', { name: 'Show team roster' })
+    handle.focus()
+
+    measured.resize(341)
+    expect(layout).toHaveClass('drawer')
+    expect(handle).toHaveAttribute('aria-hidden', 'true')
+    expect(handle).toHaveAttribute('tabindex', '-1')
+    expect(toggle).toHaveFocus()
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
+    fireEvent.click(screen.getByRole('button', { name: 'Close team roster' }))
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).not.toHaveClass('open')
+  })
+
+  test('an initially narrow Team container starts in drawer mode', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(341)
+    const view = renderTeamView()
+    expect(view.container.querySelector('.team-view')).toHaveClass('drawer')
+    const handle = view.container.querySelector('.team-roster-resizer')
+    expect(handle).toHaveAttribute('aria-hidden', 'true')
+    expect(handle).toHaveAttribute('tabindex', '-1')
+    expect(screen.getByRole('button', { name: 'Show team roster' })).toBeInTheDocument()
+  })
+
+  test('keeps measuring Team after a temporary disabled state', () => {
+    mockThreadAndBoardFetches()
+    const measured = mockTeamWidth(600)
+    const initialRoster = enabledRoster({ probed: false })
+    const view = render(
+      <TeamView roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
+    )
+    const firstLayout = view.container.querySelector('.team-view')
+    expect(teamSeparator()).toHaveAttribute('aria-valuemax', '280')
+
+    view.rerender(<TeamView roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
+    view.rerender(<TeamView roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const nextLayout = view.container.querySelector('.team-view')
+    expect(nextLayout).toBe(firstLayout)
+
+    measured.resize(500)
+    expect(nextLayout).toHaveClass('drawer')
+    expect(nextLayout?.querySelector('.team-roster-resizer')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  test('invalid stored width falls back to the Run team default', () => {
+    mockThreadAndBoardFetches()
+    localStorage.setItem('afm.teamRosterWidth', 'NaN')
+    mockTeamWidth(1200)
+    renderTeamView()
+    expect(teamSeparator()).toHaveAttribute('aria-valuenow', '260')
+  })
+
+  test('mouseup outside the handle and unmount clean up drag listeners and body styles', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(1200)
+    const view = renderTeamView()
+    const handle = teamSeparator()
+    fireEvent.mouseDown(handle, { clientX: 260 })
+    fireEvent.mouseMove(document, { clientX: 310 })
+    fireEvent.mouseUp(document.body)
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    fireEvent.mouseMove(document, { clientX: 500 })
+    expect(handle).toHaveAttribute('aria-valuenow', '310')
+
+    fireEvent.mouseDown(handle, { clientX: 260 })
+    expect(document.body.style.cursor).toBe('col-resize')
+    view.unmount()
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    const savedWidth = localStorage.getItem('afm.teamRosterWidth')
+    fireEvent.mouseMove(document, { clientX: 500 })
+    fireEvent.mouseUp(document)
+    expect(localStorage.getItem('afm.teamRosterWidth')).toBe(savedWidth)
   })
 
   test('renders the disabled empty state when the mesh capability is off', () => {

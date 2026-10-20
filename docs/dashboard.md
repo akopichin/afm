@@ -303,6 +303,16 @@ agent and its helpers), **Run agents** (run agents and the Side agent) and
 **Other stages** (in flow order, each with its helpers). It is the Team roster
 with the selected stage on top; conversations stay in the **Team** tab.
 
+To give the Feed more room, drag the divider at the left edge of the right-hand
+People panel to the right; drag it left to widen People. Focus the divider and
+press **Left** or **Right** to resize in 16 px steps. Double-click it to restore
+the 280 px default. The panel can be 200–560 px wide, provided at least 320 px
+remains for the Feed. Its width is saved in the browser separately from the Team
+roster's width, so it survives reloads and tab changes. If the available space
+shrinks, the panel becomes narrower without losing your saved preference; it
+returns to that width when space grows again. If browser storage is unavailable,
+resizing still works, but the width is not retained.
+
 - Each row shows the person's `@handle`, what they are doing now and a presence
   dot. A chip next to the name shows the command they run: the stage's command
   for a stage agent, the profile's command for a run agent or helper. A run agent
@@ -327,11 +337,12 @@ with the selected stage on top; conversations stay in the **Team** tab.
   helper** dialog (a helper that works for this stage's agent). The second is
   shown only while the stage can take a helper.
 
-On a narrower window the panel becomes a drawer: open it with the 👥 button at
-the right of the stage header. The open drawer takes the keyboard focus and
-keeps **Tab** inside it; **Escape**, a click beside it or a pick closes it and
-returns the focus. A long command is shortened with an ellipsis; hover it for
-the full value.
+At viewport widths of 1180 px or less, the panel becomes a right-side drawer:
+open it with the 👥 button at the right of the stage header. The resize divider
+is hidden; if it had keyboard focus when the layout changed, focus moves to the
+👥 button. The open drawer takes the keyboard focus and keeps **Tab** inside it;
+**Escape**, a click beside it or a pick closes it and returns the focus. A long
+command is shortened with an ellipsis; hover it for the full value.
 
 ### Conversations in the stage feed
 

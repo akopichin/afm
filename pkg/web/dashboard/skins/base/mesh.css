@@ -13,6 +13,7 @@
    registry. */
 
 .team-view {
+  --team-roster-width: 260px;
   position: relative;
   display: flex;
   height: 100%;
@@ -27,8 +28,8 @@
 /* === Roster (RunTeamList) — "Run team" rail: title + full-width "Add run agent", then This run / Stages /
    Conversations groups. Rows: avatar, name over "@handle · status/role", presence dot. === */
 .team-roster {
-  width: 260px;
-  flex: 0 0 260px;
+  width: var(--team-roster-width);
+  flex: 0 0 var(--team-roster-width);
   min-width: 0;
   overflow-y: auto;
   /* Long names are clipped with an ellipsis, never scrolled sideways (a horizontally scrolled roster
@@ -963,7 +964,42 @@
 .team-roster-scrim {
   display: none;
 }
+.team-view.drawer .team-roster:not(.team-roster-embedded) {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  width: min(300px, 85%);
+  flex-basis: auto;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-overlay);
+  transform: translateX(-105%);
+  visibility: hidden;
+  transition: transform var(--motion-fast, 120ms) ease, visibility var(--motion-fast, 120ms);
+}
+.team-view.drawer .team-roster.open {
+  transform: none;
+  visibility: visible;
+}
+.team-view.drawer .team-roster-toggle {
+  display: grid;
+}
+.team-view.drawer .team-roster-scrim {
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  border: 0;
+  padding: 0;
+  background: color-mix(in srgb, var(--surface-canvas) 60%, transparent);
+  cursor: pointer;
+}
+.team-view.drawer .team-roster-resizer {
+  display: none;
+}
 @media (max-width: 760px) {
+  .team-roster-resizer { display: none; }
   .team-roster:not(.team-roster-embedded) {
     position: absolute;
     top: 0;
@@ -1059,6 +1095,7 @@
    panel, "who this stage can talk to". The roster rows are the Team tab's own; this adds the embedded
    roster, the command/sandbox chips, disabled (finished) rows and the narrow-screen drawer. === */
 .stage-feed-layout {
+  --people-width: 280px;
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
@@ -1071,13 +1108,55 @@
 }
 
 .stage-people {
-  flex: 0 0 280px;
-  width: 280px;
+  position: relative;
+  flex: 0 0 var(--people-width);
+  width: var(--people-width);
   min-width: 0;
   min-height: 0;
   display: flex;
   margin: -12px -12px -12px 12px;
   border-left: 1px solid var(--separator-subtle);
+}
+
+/* The hit area straddles each existing panel border. Its grip matches the Stages divider. */
+.panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 11px;
+  transform: translateX(-50%);
+  z-index: 6;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.stage-people-resizer { left: 0; }
+.team-roster-resizer { left: var(--team-roster-width); }
+.panel-resizer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+.panel-resizer-grip {
+  width: 4px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  opacity: 0.35;
+  transition: opacity 0.15s ease, background 0.15s ease, height 0.15s ease;
+}
+.panel-resizer:hover .panel-resizer-grip,
+.panel-resizer:focus-visible .panel-resizer-grip {
+  opacity: 1;
+  background: var(--accent-primary);
+  height: 60px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-resizer-grip { transition: none; }
 }
 .team-roster.team-roster-embedded {
   flex: 1 1 auto;
@@ -1162,6 +1241,7 @@
 
 /* Narrower than the feed plus the panel: the panel becomes a drawer from the right, opened by 👥. */
 @media (max-width: 1180px) {
+  .stage-people-resizer { display: none; }
   .stage-people {
     position: absolute;
     top: 0;

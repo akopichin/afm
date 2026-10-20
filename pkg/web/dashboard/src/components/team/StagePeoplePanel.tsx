@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
 import type { Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { MeshParticipant } from '../../api/mesh-client'
 import { RunTeamList, teamStagesOf } from './RunTeamList'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 import { visibleFocusables } from '../../lib/focus-trap'
+import { usePanelResize } from '../layout/use-panel-resize'
 
 export const STAGE_PEOPLE_ID = 'stage-people'
 
@@ -37,6 +38,16 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
   const [addOpen, setAddOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement | null>(null)
   const openerRef = useRef<HTMLElement | null>(null)
+  const resize = usePanelResize({
+    storageKey: 'afm.peopleWidth', defaultWidth: 280, container: 'parent', direction: -1,
+    drawerQuery: '(max-width: 1180px)', toggleSelector: '.stage-people-toggle',
+  })
+
+  useLayoutEffect(() => {
+    const layout = resize.targetRef.current?.parentElement
+    layout?.style.setProperty('--people-width', `${resize.effectiveWidth}px`)
+    return () => { layout?.style.removeProperty('--people-width') }
+  }, [resize.effectiveWidth, resize.targetRef])
 
   // The open drawer covers the feed: it takes the focus (its first control), and on close hands it back to
   // whatever opened it (the 👥 button) — unless the focus has already moved on, e.g. to the composer a pick
@@ -55,7 +66,7 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
 
   // Tab stays inside the open drawer: from its last control to its first, and back with Shift+Tab.
   function trapTab(e: ReactKeyboardEvent<HTMLDivElement>): void {
-    if (!open || e.key !== 'Tab' || drawerRef.current === null) return
+    if (!open || !resize.isDrawer || e.key !== 'Tab' || drawerRef.current === null) return
     const items = visibleFocusables(drawerRef.current)
     const first = items[0]
     const last = items[items.length - 1]
@@ -82,7 +93,22 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
   return (
     <>
       {/* Not a landmark of its own: the roster inside is the "People" navigation. */}
-      <div id={STAGE_PEOPLE_ID} ref={drawerRef} className={`stage-people${open ? ' open' : ''}`} onKeyDown={trapTab}>
+      <div id={STAGE_PEOPLE_ID} ref={(node) => { drawerRef.current = node; resize.targetRef.current = node }} className={`stage-people${open ? ' open' : ''}`} onKeyDown={trapTab}>
+        <div
+          ref={resize.handleRef}
+          className="panel-resizer stage-people-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize people panel"
+          aria-valuemin={200}
+          aria-valuemax={resize.maxWidth}
+          aria-valuenow={resize.effectiveWidth}
+          aria-hidden={resize.isDrawer ? true : undefined}
+          tabIndex={resize.isDrawer ? -1 : 0}
+          onMouseDown={resize.onMouseDown}
+          onKeyDown={resize.onKeyDown}
+          onDoubleClick={resize.onDoubleClick}
+        ><span className="panel-resizer-grip" aria-hidden="true" /></div>
         <RunTeamList
           id={`${STAGE_PEOPLE_ID}-roster`}
           drawer={false}

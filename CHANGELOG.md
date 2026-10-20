@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-20
+
+### Improvement: resize the People and Team panels
+
+Drag the divider beside the stage Feed's People panel or the Team roster to set
+their widths independently. Focus a divider and use the arrow keys for 16 px
+steps, or double-click it to restore its default width. Browser storage keeps
+both widths across reloads and tab changes. Each panel stays within the space
+available for its content; on narrow layouts it uses its existing drawer.
+
 ## 2026-10-19
 
 ### Fix: a reviewer's invalid answer no longer leaves the stage waiting forever
