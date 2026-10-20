@@ -28,20 +28,34 @@ It does not start a run or register one automatically.
    afm run --port 9876
    ```
 
-3. From an AFM source checkout, start the bot in another terminal on the same
-   host. Replace `123456789` with your own numeric user ID; separate multiple
-   allowed IDs with commas.
+3. From the root of an AFM source checkout, start the bot in another terminal on
+   the same host (Go must be installed):
 
    ```bash
-   cd telegram-bot
+   ./runbot.sh
+   ```
+
+   The launcher reads `~/.afm/secrets/telegram-bot-token` and uses the positive
+   private-chat ID in `~/.afm/secrets/telegram-chat-id` as the allowed user ID,
+   sharing the notifier's existing files. Trailing line endings are stripped.
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS`, and `TELEGRAM_CHAT_ID` can
+   override the file values. A group chat ID cannot be used as a user ID; set
+   `TELEGRAM_ALLOWED_USER_IDS` explicitly if your notifier sends to a group.
+   To read another secrets directory, set `AFM_TELEGRAM_SECRETS_DIR`.
+
+   To supply the credentials through the environment instead, replace
+   `123456789` with your own numeric user ID; separate multiple allowed IDs with
+   commas:
+
+   ```bash
    export TELEGRAM_ALLOWED_USER_IDS=123456789
    read -r -s -p 'Bot token: ' TELEGRAM_BOT_TOKEN; echo
    export TELEGRAM_BOT_TOKEN
-   go run .
+   ./runbot.sh
    ```
 
-   The bot requires both environment variables. It ignores group chats and
-   messages from IDs outside the allowlist. It listens on `127.0.0.1:8080` for
+   The launcher supplies both required environment variables. The bot ignores
+   group chats and messages from IDs outside the allowlist. It listens on `127.0.0.1:8080` for
    local registration and health checks. `GET http://127.0.0.1:8080/healthz`
    returns `ok` while the listener is up.
 
@@ -62,9 +76,10 @@ The endpoint accepts requests from loopback only, requires JSON, and returns a
 `run_key`, `label`, and `dashboard_port`. Registration does not select a run in a
 Telegram user's chat; use `/runs` to select it. The bot's `--port` flag changes
 its local listener (default `8080`); `--store` changes its durable state file
-(default `~/.afm/telegram-bot/state.json`). For example, run `go run . --port
-8081 --store /path/to/bot-state.json` from `telegram-bot/` and change the local
-registration URL accordingly. Use one bot process per state file.
+(default `~/.afm/telegram-bot/state.json`). For example, run
+`./runbot.sh --port 8081 --store /path/to/bot-state.json` from the repository
+root and change the local registration URL accordingly. Use one bot process
+per state file.
 
 ## Work from Telegram
 

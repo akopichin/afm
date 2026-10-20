@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-20
 
+### Improvement: start the Telegram bot with the notifier's existing secrets
+
+Run `./runbot.sh` from a source checkout to start the Telegram control bot using
+the existing `~/.afm/secrets/telegram-bot-token` and private `telegram-chat-id`
+files. Environment variables can override these settings, and command-line
+arguments such as `--port` and `--store` are forwarded to the bot. The launcher
+works from any working directory. See the [Telegram bot guide](docs/telegram-bot.md).
+
 ### Improvement: numbered alpha and beta releases with separate Homebrew commands
 
 `make release-{major,minor,patch}-{alpha,beta}` publishes prerelease tags such as
