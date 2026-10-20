@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
@@ -321,7 +323,23 @@ func (o *Orchestrator) CancelTask(ctx context.Context, taskID assistants.TaskID)
 }
 
 // runAgentIdleReason is the status reason of a run agent that finished a turn and waits for its next message.
+// A turn whose answer was rejected adds why after it (runAgentIdleAfterFailure); both mean idle.
 const runAgentIdleReason = "idle: waiting for a message"
+
+// maxTaskReasonBytes bounds a task's status reason. A failure reason can quote the model's own output (a
+// decode error names the offending value), so it is also redacted (sanitizeTaskReason).
+const maxTaskReasonBytes = 2048
+
+// sanitizeTaskReason is reason as it may be recorded and shown: secrets masked first, then cut to
+// maxTaskReasonBytes — in this order, so a cut never leaves part of a secret the redaction cannot recognise.
+func (o *Orchestrator) sanitizeTaskReason(reason string) string {
+	return truncateText(o.RedactSecrets(reason), maxTaskReasonBytes)
+}
+
+// runAgentIdleAfterFailure is the status reason of a run agent idle again after a turn that failed for reason.
+func runAgentIdleAfterFailure(reason string) string {
+	return runAgentIdleReason + " (last turn failed: " + describeTaskFailure(reason) + ")"
+}
 
 // idleRunAgent reports whether t is a standing run agent with nothing to do: queued because it was attached
 // without a first message or finished its last turn (not because a wait resumed it), and nobody has written
@@ -330,7 +348,7 @@ func idleRunAgent(rs state.RunState, t *state.TaskState) bool {
 	if t.Scope != assistants.ScopeRun || t.Status != assistants.StatusQueued {
 		return false
 	}
-	if t.StatusReason != "" && t.StatusReason != runAgentIdleReason {
+	if t.StatusReason != "" && !strings.HasPrefix(t.StatusReason, runAgentIdleReason) {
 		return false
 	}
 	return !rs.Assistants.Mesh.HasWakingUnreadFor(meshParticipantForTask(rs, t.Task))
@@ -456,14 +474,18 @@ func (o *Orchestrator) finishTaskTurn(taskID assistants.TaskID, turn uint64, fro
 	o.finishTaskTurnReplying(taskID, turn, from, to, reason, nil, extra...)
 }
 
-// finishTaskTurnReplying is finishTaskTurn that also posts reply (planTurnReply; nil: none) in the same commit.
+// finishTaskTurnReplying is finishTaskTurn that also posts replies (planTurnReplies; none: nil) in the same
+// commit.
 //
-// The messages a finish carries — reply and a child's result mirrored to its delegating parent — never keep the
-// task from finishing: when the operation is rejected because of them (the recipient's inbox or the thread is
-// full, the thread is closed, the recipient has finished, or the agent already answered the waking message
-// itself), the finish is committed again without them, and a notice says why the result was not delivered. A
-// task never stays running without a process.
-func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, reply *plannedMessage, extra ...state.Effect) {
+// The messages a finish carries — replies and a child's result mirrored to its delegating parent — never keep
+// the task from finishing. A reply whose message the agent answered itself meanwhile is dropped and the finish
+// tried again. When the operation is rejected because of the others (the recipient's inbox or the thread is
+// full, the thread is closed, the recipient has finished), the finish is committed again without them, together
+// with the cancellation of the waits for those answers that nobody else can give (undeliveredReplyWaitEffects),
+// and a notice says why the result was not delivered. A task never stays running without a process, and a
+// requester never waits for an answer that was dropped.
+func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, replies []plannedMessage, extra ...state.Effect) {
+	reason = o.sanitizeTaskReason(reason)
 	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
 	if err != nil {
 		return
@@ -486,11 +508,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			messages = append(messages, mirror...)
 		}
 	}
-	var check func(*state.RunState) error
-	if reply != nil {
-		messages = append(messages, reply.effects...)
-		check = o.turnReplyCheck(*reply)
-	}
+	mirror := messages
 
 	finishOp := func(effects []state.Effect, check func(*state.RunState) error) state.Operation {
 		return state.Operation{
@@ -500,16 +518,18 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			Effects: effects,
 		}
 	}
-	afterFinish := func(delivered *plannedMessage) func(state.OperationResult) {
+	afterFinish := func(delivered []plannedMessage, endedReasons map[agentcomm.WaitID]string) func(state.OperationResult) {
 		return func(res state.OperationResult) {
 			o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 				"task_id": string(taskID), "status": string(to), "reason": reason,
 			}})
-			// The turn reply is passive: announcing it is all its delivery needs — it wakes nobody, and the waits it
+			// A turn reply is passive: announcing it is all its delivery needs — it wakes nobody, and the waits it
 			// resolves (a reply_to the message it answers) are resumed below with the rest of this commit's.
-			if delivered != nil {
-				o.announceMessage(delivered.send, delivered.messageID, false)
+			for _, d := range delivered {
+				o.announceMessage(d.send, d.messageID, false)
 			}
+			// The waits this commit cancelled because their answer was dropped: their waiters continue.
+			o.announceAndWakeEnded(res.EndedWaits, func(id agentcomm.WaitID) string { return endedReasons[id] })
 			// T4a.5: a terminal child (pass, needs_changes, failure, or cancel — ANY terminal outcome, see
 			// TestWaitingChildren_FailedChildDelivered) is the ONLY trigger that re-checks whether its parent's
 			// whole waiting_children group just became ready. tryResumeParent's own CAS (not this check) is what
@@ -522,6 +542,8 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
 			// no-op for a stage that isn't currently awaiting_assistants.
 			if to.Terminal() {
+				// A finished task answers nobody any more: waits only it could answer end now.
+				o.releaseUnanswerableWaitsAfterFinish()
 				o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
 				// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
 				// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a
@@ -546,14 +568,67 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		}
 	}
 
-	_, err = o.opts.Store.ApplyRunOperation(finishOp(append(slices.Clone(effects), messages...), check), afterFinish(reply))
-	var storageErr *state.StorageError
-	if err != nil && len(messages) > 0 && !errors.As(err, &storageErr) {
-		dropped := err
-		_, err = o.opts.Store.ApplyRunOperation(finishOp(effects, nil), afterFinish(nil))
-		if err == nil && !errors.Is(dropped, errTurnAlreadyAnswered) {
-			o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, reply), dropped)
+	// Each rejected attempt drops what made it fail — a reply the agent answered itself meanwhile, the replies
+	// that cannot be delivered (their requesters' waits are cancelled in the same commit), then the mirror, then
+	// any remaining reply — so the loop ends after a few attempts with the task finished.
+	var (
+		storageErr  *state.StorageError
+		undelivered []undeliveredReply
+		dropped     error
+		withMirror  = len(mirror) > 0
+	)
+	for range len(replies) + 3 {
+		rs := o.opts.Store.Snapshot()
+		all := slices.Clone(effects)
+		if withMirror {
+			all = append(all, mirror...)
 		}
+		var check func(*state.RunState) error
+		for _, r := range replies {
+			all = append(all, r.effects...)
+		}
+		if len(replies) > 0 {
+			check = o.turnRepliesCheck(replies)
+		}
+		cancels, endedReasons := undeliveredReplyWaitEffects(rs, undelivered)
+		all = append(all, cancels...)
+		_, err = o.opts.Store.ApplyRunOperation(finishOp(all, check), afterFinish(replies, endedReasons))
+		if err == nil || errors.As(err, &storageErr) {
+			break
+		}
+		rs = o.opts.Store.Snapshot()
+		if errors.Is(err, errTurnAlreadyAnswered) {
+			if rest := unansweredReplies(rs, replies); len(rest) < len(replies) {
+				replies = rest
+				continue
+			}
+		}
+		if dropped == nil {
+			dropped = err
+		}
+		if good, bad := o.splitDeliverable(rs, replies); len(bad) > 0 {
+			replies, undelivered = good, append(undelivered, bad...)
+			continue
+		}
+		if withMirror {
+			withMirror = false
+			continue
+		}
+		if len(replies) == 0 {
+			break // nothing left to drop: the rejection is the finish's own (e.g. the task moved on)
+		}
+		reason := "the answer to it could not be delivered: " + o.RedactSecrets(rejectionReason(err))
+		for _, r := range replies {
+			undelivered = append(undelivered, undeliveredReply{reply: r, reason: reason})
+		}
+		replies = nil
+	}
+	if err == nil && dropped != nil {
+		var first *plannedMessage
+		if len(undelivered) > 0 {
+			first = &undelivered[0].reply
+		}
+		o.noticeResultNotDelivered(taskID, resultNoticeStage(o.opts.Store.Snapshot(), rootStage, first), dropped)
 	}
 	if err == nil && turn > 0 {
 		if cerr := o.clearTurnInbox(taskID); cerr != nil {

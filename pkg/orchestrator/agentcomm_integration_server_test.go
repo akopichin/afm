@@ -65,7 +65,7 @@ func (a meshServerActionsForTest) CloseThread(ctx context.Context, requestID, th
 	return a.orch.CloseThread(ctx, orchestrator.CloseThreadRequest{OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Actor: state.Actor{Kind: "user"}})
 }
 
-func (a meshServerActionsForTest) Send(ctx context.Context, requestID, threadID string, req server.MeshSendRequest) (server.MeshSendReceipt, error) {
+func (a meshServerActionsForTest) Send(ctx context.Context, requestID string, req server.MeshUserSendRequest) (server.MeshSendReceipt, error) {
 	recipients := make([]agentcomm.ParticipantID, len(req.Recipients))
 	for i, r := range req.Recipients {
 		recipients[i] = agentcomm.ParticipantID(r)
@@ -79,15 +79,15 @@ func (a meshServerActionsForTest) Send(ctx context.Context, requestID, threadID 
 	if kind == "" {
 		kind = agentcomm.MessageKindMessage
 	}
-	receipt, err := a.orch.Send(ctx, orchestrator.SendRequest{
-		OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Sender: "user",
+	receipt, err := a.orch.SendFromAgent(ctx, orchestrator.SendRequest{
+		OperationID: requestID, ThreadID: agentcomm.ThreadID(req.ThreadID), Sender: "user",
 		Recipients: recipients, Kind: kind, InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs,
-		Actor: state.Actor{Kind: "user"},
+		OriginStage: req.OriginStage, Actor: state.Actor{Kind: "user"},
 	})
 	if err != nil {
 		return server.MeshSendReceipt{}, err
 	}
-	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq}, nil
+	return server.MeshSendReceipt{MessageID: string(receipt.MessageID), Seq: receipt.Seq, ThreadID: string(receipt.ThreadID)}, nil
 }
 
 func (a meshServerActionsForTest) Thread(ctx context.Context, threadID string, cursor uint64, limit int) (server.MeshMessagePage, error) {

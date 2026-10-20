@@ -221,7 +221,9 @@ func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage
 	o.setRunnerKind(s.ID, kindPlanning)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 
-	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}, "")
+	if !o.claimRevise(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}) {
+		return
+	}
 
 	o.runPlanningAttempt(ctx, s, stageDir, "planning-revision.log", "revise",
 		func(_ string, in *prompts.Inputs) error {
@@ -440,6 +442,15 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 	}), func() { o.spawnKind(ctx, s, kindAutonomous, o.runAutonomousWithFeedback) })
 }
 
+// claimRevise makes a feedback run's first transition out of revising its claim on the Revise: it commits only
+// from revising, so of several hand-offs for one Revise (an exiting turn, the interrupted turn, the completion
+// event) exactly one runs its agent; the others return without one.
+func (o *Orchestrator) claimRevise(stageID string, ev bus.FSMEvent, guard bus.GuardCtx) bool {
+	guard.ExpectFrom = state.StatusRevising
+	_, ok := o.Trigger(stageID, ev, guard, "")
+	return ok
+}
+
 // runImplementationWithFeedback перезапускает implementation-фазу с фидбеком пользователя — как
 // runImplementationAgent, но с добавленной в контекст фразой из feedback.md.
 func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow.Stage) {
@@ -447,7 +458,9 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// Возвращаемся в Running. Без этого onAgentCompleted и EvComplete не увидели бы подходящий статус, и
 	// стадия зависла бы в Revising даже после успешного завершения агента.
-	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
+		return
+	}
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runImplementationAttempt(ctx, s, stageDir, feedbackNote, "implementation-feedback.log", "impl (feedback restart)")
@@ -458,7 +471,9 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	o.setRunnerKind(s.ID, kindReview)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
+		return
+	}
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	depPlans := o.collectDependencyPlansNoticing(s)
@@ -472,7 +487,9 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
+		return
+	}
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runAutonomousAttempt(ctx, s, stageDir, feedbackNote, "autonomous-feedback.log", "autonomous (feedback restart)")

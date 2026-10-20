@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
@@ -82,6 +83,10 @@ func TestRunImplementationWithFeedback_InjectsVerifyFeedbackAlongsideHumanNote(t
 	fake := &fakeAgentRunner{onAgent: func(prompt string) { capturedPrompt = prompt }}
 	o.opts.Runner = fake
 	o.runner = fake
+	// A feedback run answers a Revise: it starts from revising and claims it with its first transition.
+	if _, ok := o.Trigger("s1", bus.EvRevise, bus.GuardCtx{}, "please also update docs"); !ok {
+		t.Fatal("EvRevise failed")
+	}
 
 	o.runImplementationWithFeedback(context.Background(), flow.Stage{ID: "s1"})
 

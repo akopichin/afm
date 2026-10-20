@@ -91,9 +91,12 @@ function splitByReachability(ids: string[], participants: MeshParticipant[]): Re
 // (and keep Send off) instead of letting messages silently go unanswered.
 function unreachableNotice({ reachable, finished }: Reachability): string | null {
   if (reachable.length > 0 || finished.length === 0) return null
-  return finished.length === 1
-    ? `${participantLabel(finished[0] as MeshParticipant)} has finished and can't reply any more.`
-    : 'Everyone in this conversation has finished and can\'t reply any more.'
+  if (finished.length > 1) return 'Everyone in this conversation has finished and can\'t reply any more.'
+  const only = finished[0] as MeshParticipant
+  const why = only.unreachable_reason ?? ''
+  return why === ''
+    ? `${participantLabel(only)} has finished and can't reply any more.`
+    : `${participantLabel(only)} can't reply any more: ${why}.`
 }
 
 // skippedNote — who the default route leaves out because they have finished, e.g. "QA has finished and won't

@@ -205,9 +205,11 @@ func (s *Server) handleRevise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "stage not found", http.StatusNotFound)
 		return
 	}
-	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning
+	// The statuses Orchestrator.Revise acts on; awaiting_assistants — the author finished and waits for its
+	// helpers, a note reaches it only this way.
+	allowed := st.Status == state.StatusAwaitingApproval || st.Status == state.StatusRunning || st.Status == state.StatusAwaitingAssistants
 	if !allowed {
-		http.Error(w, fmt.Sprintf("stage is %s, not awaiting_approval or running", st.Status), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("stage is %s, not running, awaiting_approval or awaiting_assistants", st.Status), http.StatusBadRequest)
 		return
 	}
 	// A script stage has no live agent to revise; Revise would move it to `revising`, after which script
@@ -379,8 +381,8 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch st.Status {
-	// awaiting_assistants: see Orchestrator.Pause's matching comment (control_api.go) — T7.1's checklist.
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants:
+	// awaiting_assistants/awaiting_peer: see Orchestrator.Pause's matching comments (control_api.go).
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer:
 	default:
 		http.Error(w, fmt.Sprintf("stage is %s, cannot be paused", st.Status), http.StatusBadRequest)
 		return

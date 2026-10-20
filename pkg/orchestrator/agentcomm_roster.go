@@ -238,9 +238,27 @@ func helperParticipant(id assistants.TaskID, t *state.TaskState) agentcomm.Parti
 		AdmittedReadonlyEnforcement: string(t.ProfileSnapshot.ReadonlyEnforcement),
 	}
 	if !reachable {
-		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", id)
+		p.UnreachableReason = taskEndedReason(id, t)
 	}
 	return p
+}
+
+// taskEndedReason says how a finished task ended, for the roster: failed and why, cancelled, or finished.
+func taskEndedReason(id assistants.TaskID, t *state.TaskState) string {
+	switch t.Status {
+	case assistants.StatusFailed:
+		return fmt.Sprintf("task %s failed: %s", id, describeTaskFailure(t.StatusReason))
+	case assistants.StatusCancelled:
+		if detail, ok := strings.CutPrefix(t.StatusReason, "cancelled "); ok {
+			return fmt.Sprintf("task %s was cancelled %s", id, detail)
+		}
+		if t.StatusReason != "" {
+			return fmt.Sprintf("task %s was cancelled: %s", id, t.StatusReason)
+		}
+		return fmt.Sprintf("task %s was cancelled", id)
+	default:
+		return fmt.Sprintf("task %s has finished", id)
+	}
 }
 
 // taskActivity says what a task's participant is doing now. idle — a queued run agent with nothing to read
@@ -317,7 +335,7 @@ func liveRunParticipant(rs state.RunState, p agentcomm.Participant) agentcomm.Pa
 	p.AdmittedReadonlyEnforcement = string(t.ProfileSnapshot.ReadonlyEnforcement)
 	if t.Status.Terminal() {
 		p.Reachable = false
-		p.UnreachableReason = fmt.Sprintf("task %s has reached a terminal status", taskID)
+		p.UnreachableReason = taskEndedReason(taskID, t)
 	}
 	return p
 }

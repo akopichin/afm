@@ -38,6 +38,16 @@ describe('AddRunAgentDialog', () => {
     expect(attachSpy).not.toHaveBeenCalled()
   })
 
+  test("hands over the server's roster entry of the new agent, alias included", async () => {
+    const participant = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true }
+    const result = { task_id: 't-1', participant_id: 'run:t-1', thread_id: 'mt-1', participant }
+    vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue(result)
+    const { onAttached } = renderDialog()
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(onAttached).toHaveBeenCalledWith(result, participant))
+  })
+
   test('submits scope "run" with no stage id, sharing one request_id across retries', async () => {
     const attachSpy = vi
       .spyOn(meshClient, 'attachAndSendMesh')
@@ -52,7 +62,13 @@ describe('AddRunAgentDialog', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('transient'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
-    await waitFor(() => expect(onAttached).toHaveBeenCalledWith({ task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' }, 'QA reviewer'))
+    // Without the server's roster entry the new agent is shown under its title until the roster poll has it.
+    await waitFor(() =>
+      expect(onAttached).toHaveBeenCalledWith(
+        { task_id: 't1', participant_id: 'run:qa', thread_id: 'mt-1' },
+        { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true },
+      ),
+    )
 
     expect(attachSpy).toHaveBeenCalledTimes(2)
     const [firstCall, secondCall] = attachSpy.mock.calls

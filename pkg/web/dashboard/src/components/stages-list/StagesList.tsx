@@ -100,8 +100,10 @@ function railCost(stage: Stage, accounting: AccountingState): { text: string; a1
 }
 
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
-// Статусы, из которых можно поставить стадию на паузу вручную.
-const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying'])
+// Статусы, из которых можно поставить стадию на паузу вручную (POST /api/stages/{id}/pause). awaiting_peer —
+// стадия припаркована в ожидании коллеги: пауза держит её, Continue возвращает в ожидание (и продолжает сама,
+// если ожидание тем временем ответили).
+const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer'])
 
 // Статусы, при которых у стадии есть ЖИВОЙ агент, которому Revise доставит промпт:
 // running/awaiting_approval и никогда скрипт. Гейтит кастомные кнопки стадии (см. hasLiveAgent).
@@ -127,7 +129,7 @@ function canPause(stage: Stage): boolean {
 
 // Прикрепить помощника можно к любой не-скрипт стадии, которая ещё не достигла терминального статуса
 // (сервер отвергает done/failed и script — см. orchestrator.Attach). Совпадает с гейтом пункта в JSX.
-function canAttachHelper(stage: Stage, collaborationEnabled: boolean): boolean {
+export function canAttachHelper(stage: Stage, collaborationEnabled: boolean): boolean {
   return collaborationEnabled && !stage.isScript && stage.status !== 'done' && stage.status !== 'failed'
 }
 

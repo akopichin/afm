@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/akopichin/afm/pkg/agentcomm"
 )
 
 // StageStatus represents the lifecycle state of a single stage.
@@ -83,6 +85,37 @@ type StageState struct {
 	// PausedFrom хранит исходный статус паузы и навсегда остаётся маркером пройденного pause-цикла для
 	// auto_run:false.
 	PausedFrom StageStatus `json:"paused_from,omitempty"`
+	// Epoch counts the takeovers of the stage from outside its running process — pause, continue, revise
+	// (stageTakeoverEvents). A process remembers the epoch it started in; a transition it fences with that value
+	// (Transition.ExpectEpoch) is refused once someone else took the stage over. Derived on replay.
+	Epoch uint64 `json:"epoch,omitempty"`
+	// PeerWaits — while parked in awaiting_peer: the waits its continuation depends on (Transition.PeerWaits).
+	PeerWaits []agentcomm.WaitID `json:"peer_waits,omitempty"`
+	// PeerContinued — the stage's current turn continues earlier turns after it waited for colleagues: set by the
+	// resume out of awaiting_peer (peerContinuationEvents), kept while that turn is retried, cleared by any other
+	// transition. A turn that starts as a fresh agent session reads it to get the earlier turns' actions — also
+	// after a restart between the resume and the agent's start. Derived on replay.
+	PeerContinued bool `json:"peer_continued,omitempty"`
+	// Seq is the seq of the stage's latest transition. While parked, it identifies the park: a resume is fenced
+	// to it (Transition.ExpectStageSeq), so a resume decided for an earlier park cannot move a later one.
+	Seq uint64 `json:"seq,omitempty"`
+}
+
+// stageTakeoverEvents are the FSM events (pkg/orchestrator/bus) by which someone other than the stage's running
+// process takes the stage over or hands it to a new process; each one starts a new StageState.Epoch.
+var stageTakeoverEvents = map[string]bool{"pause": true, "continue": true, "revise": true}
+
+// peerContinuationEvents are the FSM events (pkg/orchestrator/bus) that resume a stage parked in awaiting_peer.
+var peerContinuationEvents = map[string]bool{"peer_replied": true, "peer_question": true, "peer_wait_ended": true}
+
+// continuesPeerTurn reports whether transition t keeps the stage in a turn that continues after a peer wait:
+// the resume itself, or a retry of that turn.
+func continuesPeerTurn(prev StageState, t *Transition) bool {
+	if t.From == StatusAwaitingPeer && peerContinuationEvents[t.Event] {
+		return true
+	}
+	retry := t.To == StatusRetrying || (t.From == StatusRetrying && t.To == StatusRunning)
+	return prev.PeerContinued && retry
 }
 
 // RunState is the snapshot cache; events.jsonl is authoritative.
@@ -147,11 +180,12 @@ func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
 
 // SetStageStatusAt updates a stage status, stamping it with the given time t instead of time.Now.
 func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
-	pausedFrom := rs.Stages[stageID].PausedFrom
+	st := rs.Stages[stageID]
 	if status == StatusPaused {
-		pausedFrom = rs.Stages[stageID].Status // статус ДО этого перехода
+		st.PausedFrom = st.Status // статус ДО этого перехода
 	}
-	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t, PausedFrom: pausedFrom}
+	st.Status, st.UpdatedAt, st.PeerWaits = status, t, nil
+	rs.Stages[stageID] = st
 }
 
 // isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое состояние на весь флоу.
@@ -263,7 +297,20 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 // timers before the change, the new status, then the stage_status waits the new status resolves.
 func (rs *RunState) applyTransition(t *Transition) {
 	accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
+	prev := rs.Stages[t.StageID]
 	rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+	st := rs.Stages[t.StageID]
+	if stageTakeoverEvents[t.Event] {
+		st.Epoch++
+	}
+	st.PeerWaits = slices.Clone(t.PeerWaits)
+	// Pausing a park and continuing it keep its episode: Continue decides the continuation on the same waits.
+	if (t.To == StatusPaused && t.From == StatusAwaitingPeer) || (t.From == StatusPaused && t.To == StatusAwaitingPeer) {
+		st.PeerWaits = slices.Clone(prev.PeerWaits)
+	}
+	st.PeerContinued = continuesPeerTurn(prev, t)
+	st.Seq = t.Seq
+	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()
 }
 

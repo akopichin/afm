@@ -237,6 +237,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	if req.OperationID == "" {
 		return AttachAndSendResult{}, errors.New("agentcomm: operation id is required")
 	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return AttachAndSendResult{}, err
+	}
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
 		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Actor: req.Actor,
@@ -249,6 +252,9 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 
 	rs := o.opts.Store.Snapshot()
+	if o.testAfterAttachSnapshot != nil {
+		o.testAfterAttachSnapshot()
+	}
 	if _, known := rs.Stages[req.OriginStage]; req.OriginStage != "" && !known {
 		return AttachAndSendResult{}, attachRejected(assistants.CodeInvalidRequest, "unknown origin stage %q", req.OriginStage)
 	}

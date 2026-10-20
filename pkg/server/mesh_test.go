@@ -39,7 +39,7 @@ type fakeMeshActions struct {
 
 	sentByReq  map[string]MeshSendReceipt
 	sendCalls  int
-	lastSend   MeshSendRequest
+	lastSend   MeshUserSendRequest
 	lastThread string
 
 	threadPage     MeshMessagePage
@@ -111,16 +111,20 @@ func (f *fakeMeshActions) CloseThread(ctx context.Context, requestID, threadID s
 	return nil
 }
 
-func (f *fakeMeshActions) Send(ctx context.Context, requestID, threadID string, req MeshSendRequest) (MeshSendReceipt, error) {
+func (f *fakeMeshActions) Send(ctx context.Context, requestID string, req MeshUserSendRequest) (MeshSendReceipt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sendCalls++
 	f.lastSend = req
-	f.lastThread = threadID
+	f.lastThread = req.ThreadID
 	if existing, ok := f.sentByReq[requestID]; ok {
 		return existing, nil
 	}
-	receipt := MeshSendReceipt{MessageID: "msg-" + requestID, Seq: uint64(len(f.sentByReq) + 1)}
+	threadID := req.ThreadID
+	if threadID == "" {
+		threadID = "mt-picked"
+	}
+	receipt := MeshSendReceipt{MessageID: "msg-" + requestID, Seq: uint64(len(f.sentByReq) + 1), ThreadID: threadID}
 	f.sentByReq[requestID] = receipt
 	return receipt, nil
 }
@@ -220,6 +224,7 @@ func TestMesh_404WhenCapabilityOff(t *testing.T) {
 		{http.MethodGet, "/api/mesh/threads/mt-1"},
 		{http.MethodPost, "/api/mesh/threads"},
 		{http.MethodPost, "/api/mesh/threads/mt-1/messages"},
+		{http.MethodPost, "/api/mesh/messages"},
 		{http.MethodPost, "/api/mesh/threads/mt-1/close"},
 		{http.MethodPost, "/api/mesh/attach-and-send"},
 	}
@@ -360,6 +365,39 @@ func TestMesh_Send_PathThreadIDWinsOverBody(t *testing.T) {
 	}
 	if resp["message_id"] == "" || resp["message_id"] == nil {
 		t.Fatalf("resp = %v, want a message_id", resp)
+	}
+}
+
+// POST /api/mesh/messages — the human writes to a set of people without naming a thread: recipients (aliases or
+// ids), an optional reply target, and the stage feed it is written from all reach the Service, and the receipt
+// names the thread the message went into.
+func TestMesh_SendToSet(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/messages", map[string]any{
+		"request_id": "req-set", "recipient_ids": []string{"qa", "@docs"}, "in_reply_to": "mm-1",
+		"body": "both of you, please", "origin_stage": "impl",
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	got := fake.lastSend
+	if got.ThreadID != "" || got.OriginStage != "impl" || got.InReplyTo != "mm-1" || len(got.Recipients) != 2 || got.Recipients[1] != "@docs" {
+		t.Fatalf("Send got %+v, want the recipients, reply target and origin stage as sent, no thread", got)
+	}
+	if resp["thread_id"] != "mt-picked" || resp["message_id"] == nil {
+		t.Fatalf("resp = %v, want the message id and the thread it went into", resp)
+	}
+
+	if w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/messages", map[string]any{
+		"request_id": "req-bad", "body": "hi", "origin_stage": "bad id",
+	}, true); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid origin_stage: HTTP %d, want 400", w.Code)
+	}
+	if w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/messages", map[string]any{
+		"request_id": "req-bad-2", "body": "hi", "thread_id": "../x",
+	}, true); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid thread_id: HTTP %d, want 400", w.Code)
 	}
 }
 

@@ -200,7 +200,7 @@ func (o *Orchestrator) acceptStalemate(ctx context.Context, s flow.Stage, phase 
 		command = s.Verify.Steps[vre.Step-1].Command
 	}
 	o.emitStalemateAccepted(s.ID, vre.ReportID, vre.Step, command, rounds)
-	o.completeAgent(ctx, s.ID, phase)
+	o.completeAgent(ctx, s.ID, phase, nil)
 }
 
 // emitStalemateAccepted публикует afm-вердикт live и durable через verify_result; декодер ответов модели

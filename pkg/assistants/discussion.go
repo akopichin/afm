@@ -69,6 +69,9 @@ type DiscussionMessage struct {
 	// AutoResult — an agent's turn result afm posted as a reply on its behalf.
 	AutoResult bool      `json:"auto_result,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
+	// Seq — the journal seq of the record that wrote this message: the run's one durable order, shared with
+	// mesh messages (agentcomm.Message.Seq). 0 in a state cache written before it was kept.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // ErrRoundLimitExceeded is returned by RoundUsage.Allow when a round has already been used, or the requested

@@ -135,9 +135,18 @@ describe('ThreadConversation', () => {
 
   test('says so when the only other member has finished and cannot reply', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
-    const done = { ...qa, reachable: false, unreachable_reason: 'stage qa has reached a terminal status' }
+    const done = { ...qa, reachable: false }
     render(<ThreadConversation target={{ kind: 'direct', participant: done }} participants={[done]} />)
     expect(screen.getByRole('status')).toHaveTextContent("QA reviewer has finished and can't reply any more.")
+  })
+
+  test('says how the only other member ended when the server gives the reason', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const failed = { ...qa, reachable: false, unreachable_reason: 'task t-1 failed: invalid result — invalid verdict value "approved"' }
+    render(<ThreadConversation target={{ kind: 'direct', participant: failed }} participants={[failed]} />)
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `QA reviewer can't reply any more: task t-1 failed: invalid result — invalid verdict value "approved".`,
+    )
   })
 
   test('a reachable member gets no finished notice', () => {

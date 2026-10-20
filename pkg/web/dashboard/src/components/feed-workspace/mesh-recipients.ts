@@ -30,19 +30,11 @@ function toParticipantItem(p: MeshParticipant, handle: string): MeshMentionItem 
   }
 }
 
-// participantMentionItem — the mention of one roster participant (by id) under its roster-wide unique
-// @handle, e.g. to re-address the sender of a message the user answers with Reply. null for an id the roster
-// does not know or for the operator itself.
-export function participantMentionItem(participants: MeshParticipant[], id: string): MeshMentionItem | null {
-  const p = participants.find((x) => x.id === id)
-  if (p === undefined || p.kind === 'user') return null
-  return toParticipantItem(p, mentionHandles(participants).get(p.id) ?? p.id)
-}
-
 // buildMeshMentionGroups — the feed composer's `@`-mention source, grouped per dev-plan.md T7.4: "This run"
 // (standing run-scoped roles and the Side agent), "This stage" (THIS composer's own stage agent and any
-// helper already attached to it) and "Attach to stage" (configured profiles — picking one and sending goes
-// through attachAndSendMesh, never a plain Send into an existing thread). Query filtering is mention-match's
+// helper already attached to it), "Other stages" (the agents and helpers of every other stage) and "Attach to
+// stage" (configured profiles — picking one and sending goes through attachAndSendMesh, never a plain Send
+// into an existing thread). Query filtering is mention-match's
 // own filterMentionGroups, not reimplemented here.
 export function buildMeshMentionGroups(
   participants: MeshParticipant[],
@@ -54,6 +46,7 @@ export function buildMeshMentionGroups(
   const item = (p: MeshParticipant): MeshMentionItem => toParticipantItem(p, handles.get(p.id) ?? p.id)
   const thisRun = participants.filter((p) => p.scope === 'run' && p.kind !== 'user').map(item)
   const thisStage = participants.filter((p) => p.scope === 'stage' && p.stage_id === stageId).map(item)
+  const otherStages = participants.filter((p) => p.scope === 'stage' && p.stage_id !== stageId).map(item)
   const attach: MeshMentionItem[] = profiles
     .filter((p) => p.available)
     .map((p) => ({ id: p.id, title: p.title, target: { kind: 'profile', profileId: p.id } }))
@@ -61,6 +54,7 @@ export function buildMeshMentionGroups(
   return [
     { label: 'This run', items: thisRun },
     { label: 'This stage', items: thisStage },
+    { label: 'Other stages', items: otherStages },
     { label: 'Attach to stage', items: attach },
   ]
 }

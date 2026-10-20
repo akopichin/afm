@@ -548,6 +548,16 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A stage-feed bubble renders Markdown: its blocks lay out normally, without the plain text's pre-wrap gaps. */
+.team-conversation-message-body .md {
+  white-space: normal;
+}
+.team-conversation-message-body .md > :first-child {
+  margin-top: 0;
+}
+.team-conversation-message-body .md > :last-child {
+  margin-bottom: 0;
+}
 .team-conversation-message.from-you .team-conversation-message-body {
   background: color-mix(in srgb, var(--accent-primary) 9%, var(--surface-canvas));
   border-color: rgba(var(--accent-primary-rgb), 0.16);
@@ -580,6 +590,49 @@
 
 /* The agent command a message's author runs (claude, codex, a recipe), next to its name. A long command (an
    absolute path) is clipped with an ellipsis; its title keeps the whole value. */
+.composer-send-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.composer-send-hint.is-nudged {
+  color: var(--attention);
+  font-weight: 600;
+}
+.conversation-role-chip {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--separator-subtle);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+/* The ids a post from an older run's stage conversation cited (findings, messages). */
+.conversation-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  white-space: normal;
+}
+.conversation-evidence li {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.conversation-not-answered {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--attention);
+  border: 1px solid rgba(var(--attention-rgb), 0.4);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
 .conversation-command-chip {
   flex: 0 1 auto;
   min-width: 0;
@@ -1089,9 +1142,15 @@
   background: transparent;
 }
 
+/* People panel: "Add run agent…" (the whole run) and "Attach helper to stage…" (this stage), side by side. */
 .team-add-agent-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin: 14px 8px 0;
-  width: auto;
+}
+.team-add-agent-bottom .btn {
+  flex: 1 1 auto;
   min-height: 34px;
   justify-content: center;
 }

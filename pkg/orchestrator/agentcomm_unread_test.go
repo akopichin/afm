@@ -69,7 +69,13 @@ func (r *scriptedStageRunner) prompt(n int) string {
 // "qa" run-agent profile.
 func newUnreadTestOrchestrator(t *testing.T, agent flow.AgentType, runner executor.Runner) (*Orchestrator, *state.Store) {
 	t.Helper()
-	runDir := t.TempDir()
+	return newUnreadTestOrchestratorAt(t, t.TempDir(), agent, runner)
+}
+
+// newUnreadTestOrchestratorAt is newUnreadTestOrchestrator over runDir — a second call on the same directory is
+// a restarted process replaying the first one's journal (close the first store before).
+func newUnreadTestOrchestratorAt(t *testing.T, runDir string, agent flow.AgentType, runner executor.Runner) (*Orchestrator, *state.Store) {
+	t.Helper()
 	store, err := state.Open(runDir, []string{unreadTestStageID})
 	if err != nil {
 		t.Fatal(err)
@@ -400,7 +406,7 @@ func TestUnreadMessage_RecoverStageWhoseWaitWasCancelled(t *testing.T) {
 	}
 	parkStageAwaitingPeer(t, o, assistantsTestStageID)
 	// Committed, but the process stopped before waking the stage.
-	if err := o.resolveMeshWaitDurable("ended-cancel", receipt.WaitID, state.Actor{Kind: "system"}, agentcomm.WaitCancelled, "nobody will answer"); err != nil {
+	if _, _, err := o.resolveMeshWaitDurable("ended-cancel", receipt.WaitID, state.Actor{Kind: "system"}, agentcomm.WaitCancelled, "nobody will answer"); err != nil {
 		t.Fatal(err)
 	}
 

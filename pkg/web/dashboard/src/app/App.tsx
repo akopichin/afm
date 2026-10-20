@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
-import { StagesList } from '../components/stages-list'
-import { AssistantTaskView, AttachHelperDialog, StageDiscussionPanel, StageProposals, AddStageDialog } from '../components/assistants'
+import { StagesList, canAttachHelper } from '../components/stages-list'
+import { AssistantTaskView, AttachHelperDialog, AddStageDialog } from '../components/assistants'
 import { StagePeoplePanel, STAGE_PEOPLE_ID, TeamView } from '../components/team'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { FeedWorkspace, type MeshPick } from '../components/feed-workspace'
+import { FeedWorkspace, meshDeliveries, type ComposerDraft, type MeshPick } from '../components/feed-workspace'
 import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
@@ -22,7 +22,6 @@ import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assista
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
-import { messageText } from '../lib/agent-result'
 import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -59,13 +58,18 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
   assistants: 'Assistant decision needed',
 }
 
+// REVISE_STATUSES — the statuses POST /api/stages/{id}/revise accepts (pkg/server handleRevise).
+const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants'])
+// NO_DELIVERIES — no delivery receipts (the stage Feed's mesh UI is off).
+const NO_DELIVERIES: ReadonlySet<string> = new Set()
+
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, runCost,
-    runOverheadCost, coverageIssues, accounting, statusAvailable, refresh,
+    runOverheadCost, coverageIssues, accounting, statusAvailable, refresh, runStatus,
   } = useStatus()
 
   // Модалка ревью-раунда — открывается по клику ReviewBanner's "Send notes".
@@ -139,7 +143,7 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openDiscussion, openTeam } = useWorkspaceView(stages, editing, ownedHandledSigs)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam } = useWorkspaceView(stages, editing, ownedHandledSigs)
 
   // meshRoster (Agent Mesh, T7.3) — the ONE useMeshRoster poll for the whole dashboard; there is no
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
@@ -190,7 +194,7 @@ export function App(): ReactElement {
   // Защита: если collaboration выключена на бэкенде, а вид застрял на 'assistant' — уводим в Feed (тот же
   // паттерн, что и у accounting/'cost' ниже).
   useEffect(() => {
-    if (!capabilities.collaboration && (wsState.view === 'assistant' || wsState.view === 'discussion')) openFeed()
+    if (!capabilities.collaboration && wsState.view === 'assistant') openFeed()
   }, [capabilities.collaboration, wsState.view])
 
   // Защита: мэш-капабилити определяется пробным запросом (meshRoster.enabled), а не статическим полем
@@ -298,7 +302,7 @@ export function App(): ReactElement {
   // не скрипт, ЛИБО есть незавершённая Pause-on-focus операция (hasActiveOp) — композер остаётся
   // смонтированным на всём цикле pause→набор→send→resume, иначе поле и черновик исчезли бы, когда стадия
   // мигнула в paused/resuming. Прочие статусы/скрипты и flowPauseState!=='none' → null (поле не показываем).
-  const noteTarget =
+  const legacyNoteTarget =
     workspaceStage !== null &&
     flowPauseState === 'none' &&
     !workspaceStage.isScript &&
@@ -310,6 +314,22 @@ export function App(): ReactElement {
   // both the mesh and collaboration: with collaboration off the stage Feed is the plain pre-mesh Feed. (The
   // Team tab keeps its own gate, the mesh probe alone.)
   const stageMesh = meshRoster.enabled && capabilities.collaboration
+  // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
+  // composerDrafts — every stage's Feed composer draft for this page session (FeedWorkspace's composerDrafts).
+  const composerDrafts = useRef(new Map<string, ComposerDraft>())
+  const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
+  // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
+  // statuses the Revise API accepts (or a Pause-on-focus operation still in flight), outside a review pause.
+  const runAlive = runStatus !== 'finished' && runStatus !== 'failed' && runStatus !== 'interrupted'
+  const reviseAvailable =
+    workspaceStage !== null &&
+    flowPauseState === 'none' &&
+    (REVISE_STATUSES.has(workspaceStage.status) || pauseOnFocus.hasActiveOp(workspaceStage.id))
+  const noteTarget = stageMesh
+    ? workspaceStage !== null && !workspaceStage.isScript && runAlive
+      ? workspaceStage.id
+      : null
+    : legacyNoteTarget
   // showPeople — the stage Feed shows who this stage can talk to.
   const showPeople = stageMesh && workspaceStage !== null && wsState.view === 'feed'
 
@@ -388,7 +408,7 @@ export function App(): ReactElement {
         count: countByKind(attnItems, contextKind),
         glow: true,
       })
-    } else if ((!isGlobalView && wsState.view !== 'discussion') || (wsState.view === 'feed' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
+    } else if (!isGlobalView || (wsState.view === 'feed' && workspaceStage.status !== 'pending' && !duplicatesBeacon && (workspaceStage.showPlan || workspaceStage.showDialog))) {
       // Тело показывает историю/детали выбранной стадии — вкладка это и отражает. В history-виде
       // (!isGlobalView) таб нужен всегда — он и есть активная вкладка истории.
       tabs.push({
@@ -409,10 +429,6 @@ export function App(): ReactElement {
       glow: true,
     })
   }
-  // Discussion — вкладка обсуждения выбранной стадии (Этап 6), когда collaboration включена. Перед Cost.
-  if (workspaceStage !== null && capabilities.collaboration) {
-    tabs.push({ id: 'discussion', label: 'Discussion' })
-  }
   // Team — ГЛОБАЛЬНАЯ вкладка ростера/бесед Agent Mesh (T7.3), не привязана к выбранной стадии (как Cost
   // ниже), видна когда meshRoster.enabled (пробный запрос — см. его комментарий, у мэша нет своего поля в
   // status.capabilities).
@@ -426,12 +442,11 @@ export function App(): ReactElement {
   // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка, читает весь событийный поток флоу. Всегда ПОСЛЕДНЯЯ в
   // списке — правее Cost, а не второй сразу после Feed (тот же порядок, что и у Cost выше).
   tabs.push({ id: 'full-feed', label: 'Full feed' })
-  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'discussion' ? 'discussion' : wsState.view === 'team' ? 'team' : 'detail'
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'team' ? 'team' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
     if (id === 'cost') { openCost(); return }
     if (id === 'full-feed') { openFullFeed(); return }
-    if (id === 'discussion') { openDiscussion(); return }
     if (id === 'team') { openTeam(); return }
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
@@ -602,6 +617,7 @@ export function App(): ReactElement {
                       emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                       onOpenDialog={handleOpenDialogFromFeed}
                       noteTarget={noteTarget}
+                      composerDrafts={composerDrafts.current}
                       onSendNote={pauseOnFocus.handleSend}
                       pauseOnFocusEnabled={pauseOnFocus.enabled}
                       onTogglePauseOnFocus={pauseOnFocus.setEnabled}
@@ -622,19 +638,8 @@ export function App(): ReactElement {
                       // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
                       // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
                       // and the plain note-to-agent composer (no Message/Revise tabs).
-                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick } : undefined}
-                      // "↩ Reply in conversation" on a conversation message: the Feed composer (which exists only
-                      // while noteTarget is set) answers it in its thread, addressed back to its author.
-                      onReplyInConversation={
-                        stageMesh && noteTarget !== null
-                          ? (m) =>
-                              setPeoplePick((prev) => ({
-                                participantId: m.sender_id,
-                                seq: (prev?.seq ?? 0) + 1,
-                                reply: { messageId: m.id, threadId: m.thread_id, preview: messageText(m.body, true).slice(0, 120) },
-                              }))
-                          : undefined
-                      }
+                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts } : undefined}
+                      reviseAvailable={reviseAvailable}
                     />
                     {showPeople && workspaceStage !== null && (
                       <StagePeoplePanel
@@ -643,9 +648,10 @@ export function App(): ReactElement {
                         stages={stages}
                         profiles={assistantProfiles}
                         onAgentAdded={addParticipant}
+                        onAttachHelper={canAttachHelper(workspaceStage, capabilities.collaboration) ? setAttachHelperStageId : undefined}
                         open={peopleOpen}
                         onClose={closePeople}
-                        // The click goes to the Feed composer, which exists only while noteTarget is set.
+                        // The click adds a recipient in the Feed composer, which exists only while noteTarget is set.
                         onPick={
                           noteTarget !== null
                             ? (p) => setPeoplePick((prev) => ({ participantId: p.id, seq: (prev?.seq ?? 0) + 1 }))
@@ -656,15 +662,6 @@ export function App(): ReactElement {
                   </div>
                 ) : wsState.view === 'assistant' ? (
                   <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
-                ) : wsState.view === 'discussion' ? (
-                  workspaceStage !== null ? (
-                    <div className="stage-collab-view">
-                      <StageProposals stageId={workspaceStage.id} />
-                      <StageDiscussionPanel key={workspaceStage.id} stageId={workspaceStage.id} participants={meshRoster.participants} stageStatus={workspaceStage.status} />
-                    </div>
-                  ) : (
-                    <div className="detail-empty empty-hint">Select a stage to see its discussion</div>
-                  )
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

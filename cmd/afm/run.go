@@ -228,6 +228,9 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	if err := checkDeclaredAssistants(f, collab); err != nil {
 		return err
 	}
+	if err := checkFlowTeam(store, f.Team, collab); err != nil {
+		return err
+	}
 
 	var orch *orchestrator.Orchestrator
 	hooksDisp, err := prepareLifecycleDispatcher(rootDir, lifecyclehooks.DispatcherConfig{
@@ -267,6 +270,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		BrowserDescriptor:  browserDesc,
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
+		Team:               f.Team,
 		SecretValues:       loadRedactionSecrets(rootDir, cfg, hooks),
 	}
 	if ws != nil {

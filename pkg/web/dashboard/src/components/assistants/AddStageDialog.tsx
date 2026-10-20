@@ -40,7 +40,7 @@ function newRequestId(): string {
 
 // AddStageDialog — dev-plan.md T9.6's modal for inserting a dynamic "agents: [auto]" stage into the live run.
 // Mirrors AttachAssistantDialog's modal mechanics (focus-trap via visibleFocusables, Escape-to-cancel,
-// modal-overlay/modal-content classes, immediate-disable double-submit guard) and ProposalCard's
+// modal-overlay/modal-content classes, immediate-disable double-submit guard) and its
 // non-committal-until-explicit-confirm posture: nothing here mutates the run until "Add stage" is clicked, and
 // everything up to that point is a read-only preview rendered through GraphOperationPreview.
 export function AddStageDialog({ capabilityEnabled, graphRevision, stages, onCommitted, onCancel }: AddStageDialogProps): ReactElement {

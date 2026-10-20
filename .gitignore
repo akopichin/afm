@@ -1,6 +1,10 @@
 # ralphex progress logs
 .ralphex/progress/
 .afm/
+# пример с проектным конфигом коммитится, его раны — нет
+!examples/*/.afm/
+examples/*/.afm/*
+!examples/*/.afm/config.yaml
 
 # brainstorm visual companion
 .superpowers/

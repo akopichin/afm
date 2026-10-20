@@ -20,20 +20,27 @@ export class FlowApiError extends Error {
   code: string | undefined
   status: number
 
-  constructor(url: string, status: number, code: string | undefined) {
-    super(`${url} -> ${status}${code ? ` (${code})` : ''}`)
+  // reason — the server's explanation of a rejected request (the error body's message, e.g. why a mention cannot
+  // read a post); it becomes the error's message, so a form shows it as it is. Without one the message names the
+  // request, its status and code.
+  constructor(url: string, status: number, code: string | undefined, reason?: string) {
+    super(reason !== undefined && reason !== '' ? reason : `${url} -> ${status}${code ? ` (${code})` : ''}`)
     this.status = status
     this.code = code
   }
 }
 
-async function readErrorCode(response: Response): Promise<string | undefined> {
+// flowApiError — the FlowApiError of a failed response: its error code and, when the server gave one, its reason.
+async function flowApiError(url: string, response: Response): Promise<FlowApiError> {
   try {
     const body: unknown = await response.json()
-    return isRecord(body) && typeof body.error === 'string' ? body.error : undefined
+    if (isRecord(body)) {
+      return new FlowApiError(url, response.status, typeof body.error === 'string' ? body.error : undefined, typeof body.message === 'string' ? body.message : undefined)
+    }
   } catch {
-    return undefined
+    /* no JSON body */
   }
+  return new FlowApiError(url, response.status, undefined)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,7 +57,7 @@ async function jsonRequest<T>(url: string, method: 'POST' | 'PUT', body: unknown
   })
 
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
 
   return response.json() as Promise<T>
@@ -116,7 +123,7 @@ export async function answerDialog(
     body: JSON.stringify({ id, phase, answer, from_options: fromOptions }),
   })
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
 }
 
@@ -157,7 +164,7 @@ export async function listNotes(): Promise<{ rev: number; notes: ReviewNote[] }>
   const url = '/api/flow/notes'
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { rev?: number; notes?: ReviewNote[] | null }
   // Defensive normalization: a freshly created store serializes an empty note list as `"notes": null`.
@@ -191,7 +198,7 @@ export async function deleteNote(id: string, expectedRev: number): Promise<void>
   const url = `/api/flow/notes/${encodeURIComponent(id)}?expected_rev=${expectedRev}`
   const response = await fetch(url, { method: 'DELETE' })
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
 }
 
@@ -280,7 +287,7 @@ export async function listStageAssistants(stageId: string): Promise<{ tasks: Ass
   const url = stageUrl(stageId, 'assistants')
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { tasks?: AssistantTaskWire[] | null }
   return { tasks: body.tasks ?? [] }
@@ -293,7 +300,7 @@ export async function listAssistantProfiles(): Promise<{ profiles: AssistantProf
   const url = '/api/assistant-profiles'
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { profiles?: AssistantProfileWire[] | null; max_depth?: number; max_depth_source?: string }
   return {
@@ -323,7 +330,7 @@ export async function getAssistantTaskEvents(
   const url = `/api/assistants/${encodeURIComponent(taskId)}/events?cursor=${cursor}`
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { events?: AssistantEventWire[] | null; next_cursor?: number; has_more?: boolean }
   return { events: body.events ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
@@ -336,7 +343,7 @@ export async function getAssistantTaskRaw(taskId: string): Promise<string> {
   const url = `/api/assistants/${encodeURIComponent(taskId)}/raw`
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { content?: string }
   return body.content ?? ''
@@ -359,6 +366,8 @@ export type DiscussionMessageWire = {
   unanswered?: boolean
   auto_result?: boolean
   created_at: string
+  // seq — the journal seq of the post (the order mesh messages carry too); absent from an older server cache.
+  seq?: number
 }
 
 // listStageDiscussion reads one page of a stage's discussion log — GET /api/stages/{id}/discussion. A 404
@@ -371,7 +380,7 @@ export async function listStageDiscussion(
   const url = `${stageUrl(stageId, 'discussion')}?cursor=${cursor}&limit=${limit}`
   const response = await fetch(url)
   if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
+    throw await flowApiError(url, response)
   }
   const body = (await response.json()) as { messages?: DiscussionMessageWire[] | null; next_cursor?: number; has_more?: boolean }
   return { messages: body.messages ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
@@ -396,48 +405,6 @@ export async function postStageDiscussionMessage(stageId: string, requestId: str
     interrupt: post.interrupt,
   })
   return { messageId: resp.message_id }
-}
-
-// ProposalWire mirrors pkg/server/proposals.go's ProposalView.
-export type ProposalWire = {
-  id: string
-  stage_id: string
-  task_id?: string
-  type: string
-  title: string
-  rationale?: string
-  authors?: string[]
-  source_message_ids?: string[]
-  source_finding_ids?: string[]
-  expected_stage_generation: number
-  status: string
-  created_at: string
-}
-
-// listStageProposals reads a stage's proposals — GET /api/stages/{id}/proposals.
-export async function listStageProposals(stageId: string): Promise<{ proposals: ProposalWire[] }> {
-  const url = stageUrl(stageId, 'proposals')
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new FlowApiError(url, response.status, await readErrorCode(response))
-  }
-  const body = (await response.json()) as { proposals?: ProposalWire[] | null }
-  return { proposals: body.proposals ?? [] }
-}
-
-// acceptProposal durably accepts a proposal and starts its delivery — POST /api/proposals/{id}/accept.
-// requestId is the idempotency key: resending the SAME id after a timeout/double-click is always safe.
-export async function acceptProposal(proposalId: string, requestId: string): Promise<void> {
-  await jsonRequest<{ status: string }>(`/api/proposals/${encodeURIComponent(proposalId)}/accept`, 'POST', { request_id: requestId })
-}
-
-// dismissProposal durably dismisses a pending proposal — POST /api/proposals/{id}/dismiss. Never touches the
-// main agent in any way.
-export async function dismissProposal(proposalId: string, requestId: string, reason = ''): Promise<void> {
-  await jsonRequest<{ status: string }>(`/api/proposals/${encodeURIComponent(proposalId)}/dismiss`, 'POST', {
-    request_id: requestId,
-    reason,
-  })
 }
 
 // --- Этап 9 (T9.6): dynamic "add a regular stage" dialog — POST /api/run/graph/{preview|commit}. Same wire

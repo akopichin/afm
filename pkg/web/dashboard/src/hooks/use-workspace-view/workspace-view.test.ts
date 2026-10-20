@@ -503,16 +503,7 @@ describe('workspaceReducer — cost view + returnView contract', () => {
 // dialog-history: never part of the attention auto-open queue (a helper task completing/appearing must
 // never steal focus — see use-selected-stage's own tests for the companion selection-side guarantee), but
 // still correctly superseded by (and returned to from) a genuine attention arrival.
-describe("workspaceReducer — 'discussion' view (Этап 6)", () => {
-  it('is reachable via openDiscussion and does not alter returnView', () => {
-    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
-    const discussion = workspaceReducer(cost, { type: 'openDiscussion' })
-    expect(discussion.view).toBe('discussion')
-    expect(discussion.returnView).toBe('cost')
-  })
-})
-
-// 'team' (Agent Mesh, T7.3) — the Team view: same manual, non-attention posture as 'discussion' above, but
+// 'team' (Agent Mesh, T7.3) — the Team view: same manual, non-attention posture as 'assistant' above, but
 // run-wide rather than tied to a selected stage.
 describe("workspaceReducer — 'team' view (Agent Mesh, T7.3)", () => {
   it('is reachable via openTeam and does not alter returnView', () => {

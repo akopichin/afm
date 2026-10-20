@@ -5,10 +5,12 @@ import {
   cancelNotes,
   continueStage,
   deleteNote,
+  FlowApiError,
   injectNotes,
   listNotes,
   pauseFlow,
   pauseStage,
+  postStageDiscussionMessage,
   retryStage,
   triggerStageButton,
   updateNote,
@@ -226,5 +228,25 @@ describe('run-client flow-wide review-pause + notes calls', () => {
 
     await expect(addNote({ root: 'project', path: 'a.go', line: null, text: 't', content_sha: 'x', expected_rev: 0 }))
       .rejects.toMatchObject({ code: 'stale_content' })
+  })
+})
+
+describe('FlowApiError carries the server reason', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  test("a refused stage-conversation post shows the server's reason, with its code", async () => {
+    const reason = '@qa cannot read this post (task t-1 has reached a terminal status) — remove the mention and send again'
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 409, json: async () => ({ error: 'invalid_status', message: reason }) } as Response)
+    const err = await postStageDiscussionMessage('s1', 'req-1', { body: 'hi', mentions: ['run:t-1'], interrupt: false }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FlowApiError)
+    expect((err as FlowApiError).message).toBe(reason)
+    expect((err as FlowApiError).code).toBe('invalid_status')
+    expect((err as FlowApiError).status).toBe(409)
+  })
+
+  test('without a reason the message names the request, status and code as before', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) } as Response)
+    const err = await postStageDiscussionMessage('s1', 'req-1', { body: 'hi', mentions: [], interrupt: false }).catch((e: unknown) => e)
+    expect((err as FlowApiError).message).toBe('/api/stages/s1/discussion -> 404 (not_found)')
   })
 })

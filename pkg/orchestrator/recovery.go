@@ -28,16 +28,27 @@ func (o *Orchestrator) enterReviewPausePoison() {
 // recoverReviewPause restores the hold before scheduling or resumes an interrupted transaction. Corrupt
 // paused fails open; corrupt resuming stays held.
 func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
+	m, resuming, err := o.loadReviewPause()
+	if err != nil || !resuming {
+		return err
+	}
+	return o.resumeReviewPause(ctx, m)
+}
+
+// loadReviewPause is the half of recoverReviewPause that spawns nothing: it reads the marker and restores the
+// review state (poison, hold). resuming reports a round whose owners
+// resumeReviewPause must still respawn.
+func (o *Orchestrator) loadReviewPause() (m state.PauseMarker, resuming bool, err error) {
 	// A durable poison breadcrumb from a PRIOR startup that found a corrupt resuming marker: re-establish the
 	// fail-closed poison state on EVERY restart until an operator clears the breadcrumb.
 	if state.HasPoisonMarker(o.opts.RunDir) {
 		o.enterReviewPausePoison()
-		return fmt.Errorf("review-pause: %w (poison breadcrumb present in %q; clear it after manual recovery)", errReviewPausePoisoned, o.opts.RunDir)
+		return m, false, fmt.Errorf("review-pause: %w (poison breadcrumb present in %q; clear it after manual recovery)", errReviewPausePoisoned, o.opts.RunDir)
 	}
 
 	m, found, err := state.ReadNotesPauseMarker(o.opts.RunDir)
 	if !found {
-		return nil // no review pause was in flight
+		return m, false, nil // no review pause was in flight
 	}
 	switch {
 	case errors.Is(err, state.ErrCorruptPauseMarker):
@@ -45,31 +56,36 @@ func (o *Orchestrator) recoverReviewPause(ctx context.Context) error {
 			// Fail CLOSED with a DURABLE poison breadcrumb plus a real in-memory poison marker.
 			_ = state.WritePoisonMarker(o.opts.RunDir, "corrupt resuming review-pause marker; owners may be partially resumed")
 			o.enterReviewPausePoison()
-			return fmt.Errorf("review-pause: %w (corrupt resuming marker quarantined in %q; owners may be partially resumed)", errReviewPausePoisoned, o.opts.RunDir)
+			return m, false, fmt.Errorf("review-pause: %w (corrupt resuming marker quarantined in %q; owners may be partially resumed)", errReviewPausePoisoned, o.opts.RunDir)
 		}
 		log.Printf("review-pause: corrupt paused marker quarantined in %q, continuing without review mode", o.opts.RunDir)
-		return nil
+		return m, false, nil
 	case err != nil:
-		return fmt.Errorf("review-pause: %w", err)
+		return m, false, fmt.Errorf("review-pause: %w", err)
 	}
 
 	switch m.State {
 	case state.PauseStatePaused:
 		o.activationHeld.Store(true)
 		o.reviewMarker.Store(&m)
-		return nil
+		return m, false, nil
 	case state.PauseStateResuming:
 		o.reviewMarker.Store(&m)
 		o.activationHeld.Store(false)
-		// Idempotent: SaveFeedbackOnce sentinel + per-owner status dispatch + delete-if-exists.
-		if err := o.runResumeTransaction(ctx, m); err != nil {
-			o.activationHeld.Store(true)
-			return fmt.Errorf("review-pause: resume transaction incomplete (hold retained): %w", err)
-		}
-		return nil
+		return m, true, nil
 	default:
-		return fmt.Errorf("review-pause: unknown marker state %q", m.State)
+		return m, false, fmt.Errorf("review-pause: unknown marker state %q", m.State)
 	}
+}
+
+// resumeReviewPause finishes a round loadReviewPause found in "resuming": it respawns the owners. Idempotent:
+// SaveFeedbackOnce sentinel + per-owner status dispatch + delete-if-exists.
+func (o *Orchestrator) resumeReviewPause(ctx context.Context, m state.PauseMarker) error {
+	if err := o.runResumeTransaction(ctx, m); err != nil {
+		o.activationHeld.Store(true)
+		return fmt.Errorf("review-pause: resume transaction incomplete (hold retained): %w", err)
+	}
+	return nil
 }
 
 // autoRecoverFailedStages resets all failed stages to pending when enabled; normal activation reapplies
@@ -207,6 +223,35 @@ func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
 	o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
 }
 
+// executionPhases maps an execution kind to the phase its turn runs (the phase a park resumes into).
+var executionPhases = map[string]string{kindAutonomous: phaseAutonomous, kindImplementation: phaseImplementation, kindReview: phaseReview}
+
+// parkInterruptedTurn parks a running stage whose turn ended for waits but whose process stopped before its exit
+// parked it — Ctrl+C right after `afm agent wait` answered "yield", or a Pause that interrupted it then. Rerunning
+// the author would ask again; a completion marker it left must not finish the stage past the wait. The park is
+// what the exit would have committed (interruptedTurnEpisode), and its continuation is decided at once.
+func (o *Orchestrator) parkInterruptedTurn(ctx context.Context, s flow.Stage) bool {
+	rs := o.opts.Store.Snapshot()
+	episode := interruptedTurnEpisode(rs, s.ID)
+	if len(episode) == 0 {
+		return false
+	}
+	phase, ok := executionPhases[o.executionKind(s)]
+	if !ok {
+		return false
+	}
+	epoch := rs.Stages[s.ID].Epoch
+	o.prePeerPhase.Store(s.ID, phase)
+	saveMeshPeerWaitPhase(o.stageDir(s.ID), phase)
+	guard := bus.GuardCtx{Phase: phase, ExpectFrom: state.StatusRunning, ExpectEpoch: &epoch, PeerWaits: episode}
+	if _, ok := o.Trigger(s.ID, bus.EvAwaitPeer, guard, "recovered: the turn had yielded on waits"); !ok {
+		o.prePeerPhase.CompareAndDelete(s.ID, phase)
+		return true // the stage moved on meanwhile; whoever moved it owns it
+	}
+	o.continueParkedStage(ctx, s.ID)
+	return true
+}
+
 // resumeStageAtStatus is shared by startup and Continue: the recorded status
 // describes work whose process is no longer running.
 func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, status state.StageStatus) {
@@ -214,7 +259,13 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusPlanning:
 		o.resumePlanningStage(ctx, s)
 	case state.StatusRunning, state.StatusRetrying:
+		if status == state.StatusRunning && o.parkInterruptedTurn(ctx, s) {
+			return
+		}
 		o.resumeExecutionStage(ctx, s, status)
+	case state.StatusAwaitingPeer:
+		// Continue of a paused park: the continuation is decided on the park's waits again.
+		o.continueParkedStage(ctx, s.ID)
 	case state.StatusRevising:
 		kind := o.revisingKind(s)
 		o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind))
@@ -236,7 +287,7 @@ func (o *Orchestrator) completeRecoveredStage(ctx context.Context, s flow.Stage,
 	if o.executionKind(s) == kindAutonomous {
 		phase = phaseAutonomous
 	}
-	if !s.IsScript() && o.continueForUnreadMessages(ctx, s.ID, phase) {
+	if !s.IsScript() && o.continueForUnreadMessages(ctx, s.ID, phase, nil) {
 		return
 	}
 	o.completeStage(ctx, s.ID, from, reason)

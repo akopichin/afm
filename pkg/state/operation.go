@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -129,6 +130,10 @@ type OperationResult struct {
 	// two concurrent commits never both claim the same wait (each publishes and resumes only its own). Empty
 	// on an idempotent replay: the original commit already resolved them.
 	ReadyWaits []agentcomm.WaitID
+	// EndedWaits are the mesh waits THIS commit moved from pending to an end without an answer (cancelled,
+	// expired, run_closed), in id order — the same under-the-lock decision as ReadyWaits, so of two concurrent
+	// resolutions only the one that changed the wait announces it and wakes its waiter. Empty on a replay.
+	EndedWaits []agentcomm.WaitID
 }
 
 // ApplyRunOperation is the single mutation path for new (assistants/task) state (§6.3, dev-plan T2.4). The
@@ -206,6 +211,7 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 	// touching the journal, exactly like AppendControl, so a batch that would fail projection never gets
 	// durably written at all.
 	readyBefore := readyWaitIDs(s.snapshot.Assistants)
+	pendingBefore := pendingWaitIDs(s.snapshot.Assistants)
 	if err := s.appendControlLocked(c); err != nil {
 		return OperationResult{}, err
 	}
@@ -215,10 +221,11 @@ func (s *Store) applyRunOperationLocked(op Operation) (OperationResult, error) {
 			newlyReady = append(newlyReady, w.ID)
 		}
 	}
+	newlyEnded := endedWaitIDs(s.snapshot.Assistants, pendingBefore)
 
 	// Round(0) drops the monotonic clock reading: a replay (decoded from the journal) carries none, and the
 	// result must be identical either way.
-	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: commitTime(c.Time), ReadyWaits: newlyReady}
+	res := OperationResult{OperationID: op.ID, Seq: c.Seq, Time: commitTime(c.Time), ReadyWaits: newlyReady, EndedWaits: newlyEnded}
 	s.opCache.put(op.ID, opCacheEntry{seq: c.Seq, time: res.Time, payloadJSON: payload})
 
 	// Step 6: publish a notice. pkg/state has no notice bus (that lives in pkg/orchestrator) — left as the
@@ -448,6 +455,42 @@ func (c *opResultCache) put(id string, e opCacheEntry) {
 }
 
 // readyWaitIDs is the set of mesh waits that are ready in as.
+// CheckEffects reports whether effects, committed together as one operation, would project onto rs — the
+// same projection-level admission an ApplyRunOperation commit runs (thread and inbox limits, membership,
+// ...), without writing or changing anything. Preconditions are not part of it. A caller holding several
+// optional parts of one operation uses it to tell which part a rejection came from.
+func (rs RunState) CheckEffects(effects []Effect) error {
+	payload, err := json.Marshal(operationCommittedPayload{OpKind: "check", Effects: effects})
+	if err != nil {
+		return fmt.Errorf("marshal operation effects: %w", err)
+	}
+	scratch := rs
+	return validateControlForRunState(&scratch, &Control{Kind: kindOperationCommitted, SchemaVersion: ControlSchemaVersion, Payload: payload})
+}
+
+// pendingWaitIDs is the set of waits still pending in as.
+func pendingWaitIDs(as AssistantsState) map[agentcomm.WaitID]bool {
+	out := map[agentcomm.WaitID]bool{}
+	for id, w := range as.Mesh.Waits {
+		if w.Status == agentcomm.WaitPending {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// endedWaitIDs lists, in id order, the waits of pendingBefore that as now shows ended without an answer.
+func endedWaitIDs(as AssistantsState, pendingBefore map[agentcomm.WaitID]bool) []agentcomm.WaitID {
+	var out []agentcomm.WaitID
+	for id := range pendingBefore {
+		if w := as.Mesh.Waits[id]; w != nil && w.Status != agentcomm.WaitPending && w.Status != agentcomm.WaitReady {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 func readyWaitIDs(as AssistantsState) map[agentcomm.WaitID]bool {
 	out := map[agentcomm.WaitID]bool{}
 	for id, w := range as.Mesh.Waits {

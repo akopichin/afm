@@ -74,3 +74,20 @@ value.
   the same conversation at once, or a post re-opening a Discussion thread from an
   older journal, do not conflict. A thread from an older journal has no
   `origin_stage` and shows in a stage's feed by its members alone.
+- `origin_stage` on `mesh_message_sent` (a stage id, omitted when empty) is the
+  stage feed the human wrote a message from without naming a thread. It records
+  the request's intent so that a retry under the same request id from another
+  feed is rejected as a conflict instead of replaying the first send. Projection
+  ignores it; a message from an older journal has none.
+- `recipient_reply_only` on `mesh_wait_registered` (a boolean, omitted when
+  false) is set on every new `reply_to` wait: only a reply from a recipient of
+  the awaited message answers it. A `reply_to` wait from an older journal has no
+  `recipient_reply_only` and keeps its old rule, so any reply answers it, the
+  human's included. Replay resolves its waits exactly as they were resolved
+  when the journal was written.
+- `peer_waits` on a stage transition into `awaiting_peer` (a list of wait ids,
+  omitted when empty) names the waits the parked stage's continuation depends
+  on: the waits its last turn ended for. The stage continues when one of them is
+  answered or ends, or when a message that should wake it arrives. A park from
+  an older journal, or one for unread messages, has no `peer_waits`; recovery
+  then uses the earlier rule.

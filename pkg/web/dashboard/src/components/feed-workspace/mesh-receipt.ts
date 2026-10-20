@@ -1,15 +1,12 @@
-// mesh-receipt — presentation mapping for a sent mesh message's delivery state (Agent Mesh Phase 7, T7.4).
+// mesh-receipt — presentation of a sent mesh message's delivery state, per recipient (Agent Mesh Phase 7, T7.4).
 //
-// The backend's REAL per-recipient agentcomm.DeliveryStatus (accepted/delivered/acknowledged/answered/
-// undeliverable, pkg/agentcomm/types.go) is only readable from the agent-facing /api/agent-mesh/* surface
-// (agentcomm_messages.go's rs.Assistants.Mesh.Receipts) — the dashboard-facing /api/mesh/* adapter
-// (pkg/server/mesh.go's MeshActions) exposes no equivalent read today, and adding one is a backend change out
-// of this (frontend-only) task's scope. computeReceiptPhase below is therefore a CLIENT-SIDE APPROXIMATION
-// built from data the dashboard already has: the roster's Participant.reachable/unreachable_reason, whether
-// the recipient's own stage currently shows 'paused', and whether a reply addressed to our sent message has
-// shown up in the thread. A follow-up that adds a receipts read to /api/mesh/* could replace this outright.
+// Real signals only: the recipient's delivery receipt (the mesh_receipt notices afm publishes when a message is
+// handed to an agent's turn or inbox read, and when it is acknowledged — meshDeliveries), an answer in the thread,
+// the roster's reachability and the recipient stage's pause. Accepted by the API is not delivered: until the
+// receipt arrives the recipient shows as waiting for an inbox check, whatever kind of agent it is.
 
 import type { MeshParticipant } from '../../api/mesh-client'
+import type { AfmEvent } from '../../types'
 
 export type ReceiptPhase =
   | 'awaiting'
@@ -24,7 +21,7 @@ export type ReceiptPhase =
 export const RECEIPT_LABEL: Record<ReceiptPhase, string> = {
   awaiting: 'Awaiting delivery',
   delivered: 'Delivered',
-  waiting_inbox: 'Waiting for an inbox check',
+  waiting_inbox: 'Accepted · waiting for an inbox check',
   answered: 'Answered',
   paused: 'Paused · waiting for Continue',
   unavailable: 'Unavailable',
@@ -44,12 +41,13 @@ export type ReceiptInput = {
   // inFlight — the Send request that produced this receipt has not resolved yet (optimistic "just clicked
   // Send" state, shown before we even know the new message's id).
   inFlight: boolean
+  // delivered — the recipient's own delivery (or acknowledgement) receipt for this message has arrived.
+  delivered: boolean
 }
 
-// computeReceiptPhase picks ONE presentation phase, most-specific first: an actual answer trumps everything,
-// an in-flight send is reported before any participant lookup (we simply don't know anything yet), a KNOWN
-// unreachable participant is reported before a delivery guess, and only once none of those apply do we fall
-// back to "is this the kind of participant that only reads mail between turns".
+// computeReceiptPhase picks ONE presentation phase, most-specific first: an actual answer trumps everything, an
+// in-flight send is reported before any participant lookup, a KNOWN unreachable participant before anything about
+// delivery, a paused stage next, then the real delivery receipt; without it the message is only accepted.
 export function computeReceiptPhase(input: ReceiptInput): ReceiptPhase {
   if (input.answered) return 'answered'
   if (input.inFlight) return 'awaiting'
@@ -59,6 +57,22 @@ export function computeReceiptPhase(input: ReceiptInput): ReceiptPhase {
     return p.unreachable_reason?.toLowerCase().includes('mesh') === true ? 'messaging_unavailable' : 'unavailable'
   }
   if (input.stagePaused) return 'paused'
-  if (p === undefined || p.kind === 'helper' || p.kind === 'run_agent') return 'waiting_inbox'
-  return 'delivered'
+  return input.delivered ? 'delivered' : 'waiting_inbox'
+}
+
+// deliveryKey — meshDeliveries' key for one message and recipient.
+export function deliveryKey(messageId: string, participantId: string): string {
+  return `${messageId}|${participantId}`
+}
+
+// meshDeliveries — the (message, recipient) pairs the run's mesh_receipt events say were delivered or
+// acknowledged (either means the recipient got it).
+export function meshDeliveries(events: readonly AfmEvent[]): ReadonlySet<string> {
+  const out = new Set<string>()
+  for (const e of events) {
+    if (e.type !== 'mesh_receipt' || e.payload === null || typeof e.payload !== 'object') continue
+    const p = e.payload as { message_id?: unknown; participant_id?: unknown }
+    if (typeof p.message_id === 'string' && typeof p.participant_id === 'string') out.add(deliveryKey(p.message_id, p.participant_id))
+  }
+  return out
 }

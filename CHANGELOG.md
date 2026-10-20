@@ -5,6 +5,184 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-19
 
+### Fix: a reviewer's invalid answer no longer leaves the stage waiting forever
+
+A run agent whose answer failed the result contract (for example `limitations`
+written as a list) used to become failed for good, shown as finished, and a
+stage waiting for its reply stayed in `awaiting_peer` forever. Now the free-text
+fields `summary`, `evidence`, `suggested_change` and `limitations` (and a
+delegation's `summary`) accept either a string or a list of strings, in the
+decoder and in `schema/assistant-result.schema.json` alike. A run agent whose
+answer is still invalid goes back to idle and replies with why it could not
+produce a result — to the message that woke the turn and to any request an
+earlier turn ended waiting on whose sender still waits for the reply (a turn
+woken only by a colleague's passive result still answers the request it was
+working on), so the waiting stage
+continues and the agent can be asked again. When such an answer cannot be
+delivered (the conversation or an inbox is full), the requester's wait for it
+is cancelled in the same commit with the reason instead of staying pending. A
+wait whose every possible answerer has finished — failed, cancelled, or a stage
+done without answering — is cancelled and its waiter continues, also after a
+restart; of two resolutions of one wait, only the one that ended it announces
+it and wakes the waiter. The failure reason is redacted and bounded before it
+is recorded. The People list and conversations say how a finished agent ended
+(*"failed: invalid result — …"*, *"was cancelled by user"*) instead of only
+that it finished.
+
+### Fix: a stage continued after a colleague's reply no longer starts over
+
+A stage agent resumed by a reviewer's answer used to begin its task again in a
+fresh session and ask the same colleagues once more, round after round. Every
+turn's prompt now lists the requests the stage sent earlier with their answers,
+the waits still open and the ones that ended without an answer (with status and
+reason) — open requests first, at most 20 requests and about 24 KiB, with a
+count of what was left out. A continuation without a resumed session also gets
+the earlier turns' actions, even after a restart before its agent started, and
+an answer the agent already read during its turn no longer earns the stage
+another turn. The `agent-team-review` example checks where the review stands
+at the start of each turn and finishes when a reviewer is unavailable.
+
+### Improvement: the stage conversation lives in the Feed
+
+With collaboration on, the **Discussion** tab is gone: your conversation with a
+stage's agent is in its Feed. A new **Message** whose recipients include the
+stage's agent is posted in that conversation (the others you named join it), so
+it keeps everything the Discussion had — **Interrupt agent** (a switch in the
+**To** row while the stage is running, chosen per send), the **Not answered**
+mark on a post the stage finished without answering, the question in the
+agent's next prompt, and safe retries. Replies and messages without the stage
+agent go to exactly their recipients as before. `@` also lists **Other stages**.
+Conversation bubbles in the stage feed render Markdown. Runs recorded earlier
+show their old stage conversation posts, helper results with their evidence
+included, as read-only bubbles in journal order, each once. The proposal cards
+are removed with the tab; proposals are still recorded. Agents are told their
+reply appears in the stage feed. A `team_warning` notice shows in the Full feed
+as a warning line.
+
+### Fix: the Feed composer never changes who gets a message
+
+A picked recipient who left the run stays as a chip with the reason and blocks
+Send instead of the stage agent taking over. **↩ Reply in conversation** is
+addressed to that conversation only: earlier picks wait and picks made during
+the reply end with it, and the reply has its own draft, so the text and
+`@mentions` you were writing to others come back after it. **×** on a chip removes every mention of that person,
+also a full id shown by its alias. A reply ends when its conversation closes. A
+recipient shows *Delivered* only after afm actually hands it the message; until
+then *Accepted · waiting for an inbox check*. On the server, a conversation you
+start from a stage's feed is that feed's own (two feeds writing to the same agent
+at once no longer share one), an older conversation of agents you are not a
+member of is not reused for your message, and retrying a request id from another
+feed is a conflict instead of the first send's receipt (a send recorded before
+the feed was kept is retried as before). **Interrupt agent** is reset after a
+successful send. The finished stage's agent can be named on purpose again: the
+post is recorded in its conversation and reaches the others named, as the
+Discussion allowed. Old stage-conversation posts are placed by journal order
+(both readers now return the journal `seq`), keep their role and evidence as
+tags, and an agent's old answer to your post stays under **Author's work**.
+The composer's drafts and picked recipients are kept per stage for the page
+session, so the Feed following the run to the next stage no longer drops them; a
+composer that appeared before Agent Mesh answered switches to **Message** once
+it does (unless you chose a mode or are writing a Revise note); and a hint shows
+that **Cmd/Ctrl+Enter** sends, highlighted after a plain Enter. The stage
+menu offers **Pause** for a stage in `awaiting_peer` too. A refused stage
+conversation post (and any other refused dashboard request) shows the server's
+reason instead of a bare status code, and the draft is kept.
+
+### Improvement: the stage Feed composer writes to several people
+
+With Agent Mesh and collaboration on, the stage Feed composer opens in
+**Message** mode and is there for any non-script stage while the run is going;
+**Revise** is a tab only while the stage takes one (`running`,
+`awaiting_approval`, `awaiting_assistants` — the Revise API now accepts
+`awaiting_assistants` too). A **To** row shows the recipients as chips: a click
+in the People panel adds one, `@handles` typed in the text count, **+** opens the
+`@` list, and with nobody named the message goes to the stage's agent if it can
+read it. An unknown, ambiguous or unreachable recipient is an error with its
+reason, never a silent redirect. One message reaches all recipients through the
+new `POST /api/mesh/messages`: the server resolves the names, continues their
+open conversation that the stage's feed shows or opens one in the same
+operation, and replays the original receipt for a retried request id. Each
+recipient gets its own delivery state. **↩ Reply in conversation** is one active
+reply, told apart from a Revise reply to a thought; the conversation preview
+above the input is gone, since conversations show in the feed. The People panel
+has **Add run agent…** and **Attach helper to stage…** side by side.
+
+### Fix: a just-added run agent shows under its name
+
+`POST /api/mesh/attach-and-send` now returns the new participant's roster entry,
+so an agent added from the People panel or Team shows and is addressed as
+`@alias` at once instead of `@run:t-…` until the next roster poll.
+
+### Improvement: a team review example
+
+`examples/agent-team-review/` shows `team:` at work: two reviewer run agents
+from collaboration profiles in the example's `.afm/config.yaml`, and a stage
+agent that sends each of them its change with `afm agent send`, waits for both
+answers with `afm agent wait --condition reply_to`, fixes the valid findings,
+and then passes a `go test` and Codex `verify:` gate. The schema check now also
+validates the examples' `.afm/config.yaml` files.
+
+### Improvement: a team of run agents in flow.yaml
+
+A flow can declare its run agents with a top-level `team:` list (`id`,
+`profile`, `title`, optional `instruction`). afm adds them in the listed order
+before the first stage starts, through the same path as **Add run agent**, so
+stage agents can write to them from their first turn; each `@name` is made from
+the title, with `-2`, `-3` on a collision. A resumed run reuses the agents it
+already added (Ctrl+C and resume never add one twice) and adds only new ids; a
+member changed in `flow.yaml` keeps its saved version with a `team_warning`
+notice, and a removed one stays until the run ends. With collaboration on, an
+unknown profile of a member not added yet stops `afm run` at preflight and fails
+`afm validate` (which checks the flow as a fresh run); with collaboration
+disabled, afm warns and runs the flow without the team. A member that keeps
+losing its `@name` to agents added from the dashboard at the same moment stops
+startup instead of being dropped. Request ids starting with `team/` are
+reserved for the team: an attach from the dashboard or the API under such an id
+is refused, and an older operation under it that the team did not create is
+reported instead of being taken for the member's agent. The flow schema covers
+the new key.
+
+### Fix: a stage continues when its waits are answered before it exits
+
+A stage agent that registered waits (`afm agent wait` answered `yield`) and got
+the answers while its process was still exiting — for example two reviewers'
+turn results arriving right after the yield — went to the completion check or
+an incomplete-work retry. It now continues in a new turn, exactly once, as if
+the answers had arrived after it parked; a yielded wait that was cancelled or
+expired meanwhile continues it as a wait that ended without an answer. A wait
+that was already answered when it was registered (`ready`) still lets the turn
+finish normally. The park records the waits it depends on (`peer_waits`), and
+the exit, the live reply paths and recovery after a restart decide the
+continuation by the same rule, so a crash right after the park no longer loses
+it when one wait was answered by a turn result and another is still open. A
+Pause, Continue or Revise that lands while the process is exiting wins: the
+stale exit neither parks nor completes the stage (also not the park of the
+process that replaced it), a Revise of that turn runs exactly one feedback
+turn, and a continuation queued for an earlier park is dropped instead of
+resuming the next one. A parked stage (`awaiting_peer`) can be paused through
+`POST /api/stages/{id}/pause`; it keeps its waits, and Continue resumes it if
+one was answered meanwhile. A stage whose process stopped right after
+`afm agent wait` answered `yield`, before the park, is parked on those waits at
+the next start instead of rerunning its agent or finishing from a completion
+marker.
+
+### Fix: a stage post that mentions a finished agent is refused
+
+A stage post that mentions someone who can no longer read it — a stage or
+helper that finished, also after you opened the `@` list — is refused with the
+reason, under the same lock that commits the post, instead of being recorded
+as sent with an undeliverable receipt. A post to the feed's own finished stage
+is still recorded, as before.
+
+### Fix: only a recipient answers a `reply_to` wait
+
+A `reply_to` wait now resolves on a reply from a recipient of the awaited
+message. The human takes part in every conversation, and their reply to a
+message for a reviewer no longer counts as the reviewer's answer; a reply to a
+message addressed to the human still does. New `reply_to` waits carry the rule
+(`recipient_reply_only`); a wait from an older journal keeps the old one, so
+replaying it resolves its waits exactly as before.
+
 ### Fix: the stage Feed with collaboration off
 
 With collaboration off (`AFM_COLLABORATION=0`) the stage **Feed** is the plain

@@ -103,6 +103,10 @@ const (
 	EventMeshReceipt     EventType = "mesh_receipt"
 	EventMeshWait        EventType = "mesh_wait"
 	EventMeshBoard       EventType = "mesh_board"
+	// EventTeamWarning fires when a flow's team: declaration could not be applied as written — on resume,
+	// a member changed in flow.yaml keeps its saved version; or its agent could not be added. Run-level,
+	// non-FSM, live + durable (notices.jsonl). Data: {"member_id", "message"}.
+	EventTeamWarning EventType = "team_warning"
 	// EventPeerReplied (Agent Mesh Phase 5, T5.3) fires once a mesh wait a stage registered becomes ready —
 	// the peer twin of EventUserAnswered. Routed through the critical bus exactly like EventUserAnswered when
 	// the stage's own process has already exited, so onPeerReplied can respawn it.
@@ -134,6 +138,12 @@ type Event struct {
 	// Seq — реальный seq FSM-transition. Позволяет фронту дедуплицировать историю из /api/events с
 	// live-потоком WS по стабильному ключу вместо содержимого.
 	Seq uint64 `json:"seq,omitempty"`
+	// Epoch — on EventAgentCompleted: the execution epoch (state.StageState.Epoch) of the turn that completed.
+	// The event loop ignores a completion whose turn no longer owns the stage. nil = not fenced.
+	Epoch *uint64 `json:"-"`
+	// ParkSeq — on a peer continuation (EventPeerReplied/Question/WaitEnded): the park it was decided for
+	// (state.StageState.Seq of the awaiting_peer transition). 0 = not bound to a park.
+	ParkSeq uint64 `json:"-"`
 }
 
 type CriticalBus struct {

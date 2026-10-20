@@ -146,12 +146,19 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 	}
 	effects = append(effects, msgEff)
 
-	// A post to a stage that has already finished keeps its place in the thread's history, but nobody will
-	// ever read it: its receipt is undeliverable from the start, so it never counts as an unread message.
+	// A post to the feed's own stage after it finished keeps its place in the thread's history, but nobody will
+	// ever read it: its receipt is undeliverable from the start, so it never counts as an unread message. Anyone
+	// else the post names explicitly must still be able to read it: such a post is refused with the reason — it
+	// is decided again under the commit's lock (PostDiscussionMessage), so a mention that finished after the
+	// sender looked at the roster is refused too, never reported as sent.
 	for _, r := range recipients {
 		p, ok := resolveParticipant(rs, agentcomm.ParticipantID(r))
 		if !ok || p.Reachable {
 			continue
+		}
+		if agentcomm.ParticipantID(r) != meshStageParticipantID(stageID) {
+			return nil, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf(
+				"@%s cannot read this post (%s) — remove the mention and send again", p.Alias, p.UnreachableReason)}
 		}
 		undeliverable, err := marshalEffect("mesh_message_undeliverable", state.Target{MessageID: messageID, ParticipantID: r},
 			state.MeshMessageReceiptPayload{Reason: p.UnreachableReason})
@@ -166,7 +173,7 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 // discussionMirrorOfReply is the way back of the discussion mirror: when any member but the human REPLIES to a
 // discussion message of a stage (typically the human's post) in one of that stage's discussion threads, the
 // same message — same id, in the same operation — is also recorded as that stage's discussion message, under
-// that parent, so the Discussion tab shows the answer and not only the question. The stage agent appears as
+// that parent, so the stage feed's conversation log shows the answer and not only the question. The stage agent appears as
 // the main agent; anybody the human mentioned appears under their own participant id, with their mesh kind as
 // the role. Anything else said in the thread — a new topic, or an answer to a message written straight into
 // the thread from the Team view, which exists only in the mesh — stays in the Team conversation (ok=false).

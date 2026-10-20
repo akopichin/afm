@@ -29,6 +29,15 @@ type MeshWait struct {
 	// answers it. A wait journaled before that rule keeps the old meaning — any recorded result answers it.
 	FreshResultOnly bool   `json:"fresh_result_only,omitempty"`
 	ResultBaseline  uint64 `json:"result_baseline,omitempty"`
+	// RecipientReplyOnly marks a reply_to wait registered with MeshWaitRegisteredPayload.RecipientReplyOnly:
+	// only a reply from a recipient of the awaited message answers it. A wait journaled before that rule keeps
+	// the old one — any reply answers it — so replaying an old journal resolves its waits as it did then.
+	RecipientReplyOnly bool `json:"recipient_reply_only,omitempty"`
+	// RegisteredSeq is the seq of the record that registered the wait, and Yielded whether it was still pending
+	// then — `afm agent wait` answered "yield", so the waiter ended its turn for it. Both are derived from the
+	// registration on replay; recovery uses them to find the waits a turn interrupted before its park yielded on.
+	RegisteredSeq uint64 `json:"registered_seq,omitempty"`
+	Yielded       bool   `json:"yielded,omitempty"`
 }
 
 // MeshWaitRegisteredPayload is the mesh_wait_registered control record's payload — decoded here by
@@ -46,6 +55,9 @@ type MeshWaitRegisteredPayload struct {
 	// and on replay, and a retried request rebuilds the same payload. Absent in older journals: there any
 	// recorded run-agent result answered the wait, and replay keeps that.
 	FreshResultOnly bool `json:"fresh_result_only,omitempty"`
+	// RecipientReplyOnly (set on every new reply_to wait) accepts only a reply from a recipient of the awaited
+	// message. Absent in older journals: there any reply answered the wait, and replay keeps that.
+	RecipientReplyOnly bool `json:"recipient_reply_only,omitempty"`
 }
 
 // applyMeshWaitRegistered projects one mesh_wait_registered control record. If the condition is ALREADY
@@ -75,15 +87,20 @@ func applyMeshWaitRegistered(as *AssistantsState, c *Control, dryRun bool) error
 		return nil
 	}
 
-	mw := &MeshWait{Wait: w, TargetTaskID: c.Target.TaskID, TargetStageID: c.Target.StageID, Generation: p.Generation, FreshResultOnly: p.FreshResultOnly}
+	mw := &MeshWait{
+		Wait: w, TargetTaskID: c.Target.TaskID, TargetStageID: c.Target.StageID, Generation: p.Generation,
+		FreshResultOnly: p.FreshResultOnly, RecipientReplyOnly: p.RecipientReplyOnly,
+	}
 	if p.FreshResultOnly && w.Condition.Kind == agentcomm.WaitOnTaskResult {
 		if t, ok := as.Tasks[assistants.TaskID(w.Condition.TaskID)]; ok {
 			mw.ResultBaseline = t.ResultSeq
 		}
 	}
+	mw.RegisteredSeq = c.Seq
 	if as.meshWaitSatisfied(mw) {
 		mw.Status = agentcomm.WaitReady
 	}
+	mw.Yielded = mw.Status == agentcomm.WaitPending
 	as.Mesh.Waits[id] = mw
 	as.Mesh.WaitOrder = append(as.Mesh.WaitOrder, id)
 	return nil
@@ -96,6 +113,9 @@ func (as *AssistantsState) meshWaitSatisfied(w *MeshWait) bool {
 	cond := w.Condition
 	switch cond.Kind {
 	case agentcomm.WaitOnReplyTo:
+		if w.RecipientReplyOnly {
+			return as.Mesh.MessageAnsweredByRecipient(cond.MessageID)
+		}
 		return as.Mesh.MessageAnswered(cond.MessageID)
 	case agentcomm.WaitOnAddressedMessage:
 		if cond.ThreadID == "" {

@@ -330,7 +330,9 @@ type Flow struct {
 	// AFM_COLLABORATION), not something an individual flow can turn on for itself — see
 	// FlowCollaboration.UnmarshalYAML.
 	Collaboration *FlowCollaboration `yaml:"collaboration,omitempty"`
-	Stages        []Stage            `yaml:"stages"`
+	// Team declares run agents created before the stages start (see TeamMember). Needs collaboration.
+	Team   Team    `yaml:"team,omitempty"`
+	Stages []Stage `yaml:"stages"`
 }
 
 // FlowCollaboration is the per-flow override of collaboration.max_depth only.
@@ -377,9 +379,18 @@ func ParseFile(path string) (*Flow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read flow file: %w", err)
 	}
-	var f Flow
-	if err := yaml.Unmarshal(data, &f); err != nil {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
+	}
+	var f Flow
+	if len(root.Content) > 0 {
+		if err := root.Decode(&f); err != nil {
+			return nil, fmt.Errorf("parse yaml: %w", err)
+		}
+		if err := rejectNullTeam(root.Content[0]); err != nil {
+			return nil, err
+		}
 	}
 	if err := f.validate(); err != nil {
 		return nil, err
@@ -532,6 +543,10 @@ func (f *Flow) validate() error {
 			return fmt.Errorf("stage ids %q and %q collide case-insensitively (they map to the same session/profile on a case-insensitive filesystem)", prev, s.ID)
 		}
 		folded[fold] = s.ID
+	}
+
+	if err := f.Team.validate(); err != nil {
+		return err
 	}
 
 	// stage.ID входит в пути и URL; допускаем только [A-Za-z0-9._-], исключая пустую строку, "." и "..".

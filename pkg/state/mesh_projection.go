@@ -122,13 +122,30 @@ func (ms MeshState) deepClone() MeshState {
 	return out
 }
 
-// MessageAnswered reports whether SOME message in ms has InReplyTo equal to id — "answered" is deliberately
-// never a stored DeliveryStatus value (unlike accepted/delivered/acknowledged/undeliverable, each of which has
-// its own control kind below): it is always computed fresh from the current message set, the same
-// "derived, not stored" discipline ReadyContinuations/ReadyWaits use elsewhere in this package.
+// MessageAnswered reports whether SOME message in ms has InReplyTo equal to id — the rule of a reply_to wait
+// journaled before MeshWait.RecipientReplyOnly existed. "Answered" is deliberately never a stored
+// DeliveryStatus value (unlike accepted/delivered/acknowledged/undeliverable, each of which has its own control
+// kind below): it is always computed fresh from the current message set, the same "derived, not stored"
+// discipline ReadyContinuations/ReadyWaits use elsewhere in this package.
 func (ms MeshState) MessageAnswered(id agentcomm.MessageID) bool {
+	return ms.hasReplyTo(id, func(*agentcomm.Message) bool { return true })
+}
+
+// MessageAnsweredByRecipient reports whether a recipient of message id replied to it — the rule of every new
+// reply_to wait. The human is a member of every thread, so a reply from anyone else (the human chiming in on a
+// message meant for a reviewer, or the author itself) does not answer it; a message addressed to the human is
+// answered by the human's reply.
+func (ms MeshState) MessageAnsweredByRecipient(id agentcomm.MessageID) bool {
+	orig := ms.Messages[id]
+	if orig == nil {
+		return false
+	}
+	return ms.hasReplyTo(id, func(reply *agentcomm.Message) bool { return slices.Contains(orig.Recipients, reply.Sender) })
+}
+
+func (ms MeshState) hasReplyTo(id agentcomm.MessageID, counts func(reply *agentcomm.Message) bool) bool {
 	for _, m := range ms.Messages {
-		if m.InReplyTo != nil && *m.InReplyTo == id {
+		if m.InReplyTo != nil && *m.InReplyTo == id && counts(m) {
 			return true
 		}
 	}

@@ -106,6 +106,20 @@ describe('RunTeamList', () => {
     expect(helper.querySelector('.team-presence')).toHaveAttribute('data-presence', 'idle')
   })
 
+  test('a finished task row says how it ended when the server gives the reason', () => {
+    renderList({
+      participants: [
+        ...participants.filter((p) => p.id !== 'helper:h1'),
+        {
+          id: 'helper:h1', kind: 'helper', scope: 'stage', stage_id: 'implement', display_name: 'Correctness helper', reachable: false,
+          activity: 'done', unreachable_reason: 'task h1 failed: invalid result — invalid verdict value "approved"',
+        },
+      ],
+    })
+    const helper = screen.getByText('Correctness helper').closest('button') as HTMLElement
+    expect(within(helper).getByText('task h1 failed: invalid result — invalid verdict value "approved"')).toBeInTheDocument()
+  })
+
   test("a stage's helpers are listed right under that stage", () => {
     renderList()
     const names = within(screen.getByRole('region', { name: 'Stages' }))
@@ -290,15 +304,16 @@ describe('RunTeamList with focusStageId', () => {
   })
 
   test('without onPick the rows are disabled and the hint says when writing is possible', () => {
-    renderFocused({ onPick: undefined, pickHint: 'You can write to them here while this stage is running.' })
-    expect(screen.getByText('You can write to them here while this stage is running.')).toBeInTheDocument()
+    renderFocused({ onPick: undefined, pickHint: 'You can write to them here while the run is going.' })
+    expect(screen.getByText('You can write to them here while the run is going.')).toBeInTheDocument()
     expect(screen.getByText('Security').closest('button')).toBeDisabled()
   })
 
-  test('"+ Add agent" calls onAddRunAgent', () => {
+  test('"Add run agent…" calls onAddRunAgent; "Attach helper to stage…" shows only with onAttachHelper', () => {
     const { onAddRunAgent } = renderFocused()
-    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent…' }))
     expect(onAddRunAgent).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Attach helper to stage…' })).toBeNull()
   })
 })
 

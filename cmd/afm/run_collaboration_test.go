@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -320,5 +322,72 @@ func TestCheckDeclaredAssistants_NoStageDeclaresAssistants(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty (no stage declares assistants)", stderr)
 			}
 		})
+	}
+}
+
+// ---- Этап 6: team: preflight ----
+
+func TestCheckFlowTeam_UnknownProfileErrors(t *testing.T) {
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{"reviewer": {Command: "frontend-reviewer"}},
+	}}
+	f := &flow.Flow{
+		Team:   flow.Team{{ID: "arch", Profile: "reviewer", Title: "Architecture"}, {ID: "qa", Profile: "ghost", Title: "QA"}},
+		Stages: []flow.Stage{{ID: "s1"}},
+	}
+	store := newCollabTestStore(t)
+	collab := startCollaboration(store, cfg, f)
+
+	err := checkFlowTeam(store, f.Team, collab)
+	if err == nil || !strings.Contains(err.Error(), `team member "qa"`) || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("checkFlowTeam = %v, want an error naming team member qa and profile ghost", err)
+	}
+}
+
+// A member whose agent the run already created keeps its saved profile snapshot: removing that profile from
+// config must not stop the resume.
+func TestCheckFlowTeam_SavedMemberSkipsProfileCheck(t *testing.T) {
+	cfg := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{"qa": {Command: "codex-as-claude"}},
+	}}
+	f := &flow.Flow{Team: flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}}, Stages: []flow.Stage{{ID: "s1"}}}
+	store := newCollabTestStore(t)
+	collab := startCollaboration(store, cfg, f)
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: t.TempDir(), Stages: f.Stages, Store: store, Config: config.Default(), Prompts: orchestrator.DefaultPrompts(),
+		AssistantsEnabled: true, AssistantsRegistry: collab.registry,
+	})
+	if _, err := orch.AddRunAgent(context.Background(), orchestrator.AddRunAgentRequest{
+		OperationID: "team/qa", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "system", ID: "flow"},
+	}); err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+
+	removed := config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{"other": {Command: "codex-as-claude"}},
+	}}
+	if err := checkFlowTeam(store, f.Team, startCollaboration(store, removed, f)); err != nil {
+		t.Fatalf("checkFlowTeam on resume: %v, want nil (the saved agent keeps its snapshot)", err)
+	}
+	f.Team = append(f.Team, flow.TeamMember{ID: "ops", Profile: "qa", Title: "Ops"})
+	if err := checkFlowTeam(store, f.Team, startCollaboration(store, removed, f)); err == nil {
+		t.Fatal("checkFlowTeam: a new member with a missing profile must still fail")
+	}
+}
+
+func TestCheckFlowTeam_DisabledCollaborationWarns(t *testing.T) {
+	off := false
+	cfg := config.Config{Collaboration: config.CollaborationConfig{Enabled: &off}}
+	f := &flow.Flow{Team: flow.Team{{ID: "qa", Profile: "ghost", Title: "QA"}}, Stages: []flow.Stage{{ID: "s1"}}}
+	store := newCollabTestStore(t)
+	collab := startCollaboration(store, cfg, f)
+
+	var err error
+	stderr := captureStderr(t, func() { err = checkFlowTeam(store, f.Team, collab) })
+	if err != nil {
+		t.Fatalf("checkFlowTeam: %v, want nil (disabled collaboration must not block the run)", err)
+	}
+	if !strings.Contains(stderr, `"team"`) || !strings.Contains(stderr, "collaboration is disabled") {
+		t.Fatalf("stderr = %q, want a warning about the team", stderr)
 	}
 }

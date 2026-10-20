@@ -39,7 +39,9 @@ const unreadTurnNoteText = "\nTeammates wrote to you while you were working; ans
 // Only a stage still running its turn (running/retrying) gets one. awaiting_user_input — a stale question let
 // the stage complete — finishes as before: a new turn would ask that question again and hang the stage. Part 2
 // of the rule above releases the senders.
-func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, phase string) bool {
+//
+// fence binds the park to the completed turn's execution epoch (nil = not bound).
+func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, phase string, fence *uint64) bool {
 	if cur := o.currentStatus(stageID); cur != state.StatusRunning && cur != state.StatusRetrying {
 		return false
 	}
@@ -58,13 +60,13 @@ func (o *Orchestrator) continueForUnreadMessages(ctx context.Context, stageID, p
 	// recovers the stage through recoverMeshWaits.
 	o.prePeerPhase.Store(stageID, phase)
 	saveMeshPeerWaitPhase(o.stageDir(stageID), phase)
-	if _, ok := o.Trigger(stageID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase}, "unread messages from teammates"); !ok {
+	if _, ok := o.Trigger(stageID, bus.EvAwaitPeer, bus.GuardCtx{Phase: phase, ExpectEpoch: fence}, "unread messages from teammates"); !ok {
 		o.prePeerPhase.Delete(stageID)
 		return false
 	}
 	o.unreadTurns.Store(stageID, used+1)
 	o.unreadNotePending.Store(stageID, true)
-	if err := o.onPeerQuestion(ctx, bus.Event{StageID: stageID}); err != nil {
+	if err := o.onPeerQuestion(ctx, bus.Event{StageID: stageID, ParkSeq: o.opts.Store.Snapshot().Stages[stageID].Seq}); err != nil {
 		log.Printf("WARN: mesh: resume stage %q for unread messages: %v", stageID, err)
 	}
 	return true
@@ -124,9 +126,10 @@ func (o *Orchestrator) releaseUnreadMessages(ctx context.Context, stageID string
 			log.Printf("WARN: mesh: release unread message %s of stage %q: %v", id, stageID, err)
 			continue
 		}
+		rs := o.opts.Store.Snapshot()
 		for _, waitID := range ended {
-			if waiter, won := o.meshWaitResolvedTo(waitID, agentcomm.WaitCancelled); won {
-				wake(ctx, waiter)
+			if w := rs.Assistants.Mesh.Waits[waitID]; w != nil {
+				wake(ctx, w.Waiter)
 			}
 		}
 	}
@@ -144,17 +147,20 @@ const maxUnreadReleaseAttempts = 10
 
 // markUnreadUndeliverable commits, in one operation, message id becoming undeliverable to recipient and the
 // cancellation of every pending wait of its sender that waited for an answer to it — only when nobody else can
-// answer the message any more. It returns the waits it cancelled. The operation id is fixed per (message,
+// answer the message any more. It returns the waits its own commit cancelled (state.OperationResult.EndedWaits):
+// a wait another resolution ended first is neither announced nor returned for waking. The operation id is fixed per (message,
 // recipient), so a repeat after a restart is an idempotent replay.
 func (o *Orchestrator) markUnreadUndeliverable(id agentcomm.MessageID, recipient agentcomm.ParticipantID, stageID string) ([]agentcomm.WaitID, error) {
 	reason := fmt.Sprintf("stage %s finished without reading message %s", stageID, id)
 	for range maxUnreadReleaseAttempts {
-		op, ended, err := unreadReleaseOp(o.opts.Store.Snapshot(), id, recipient, reason)
+		op, _, err := unreadReleaseOp(o.opts.Store.Snapshot(), id, recipient, reason)
 		if err != nil || op == nil {
 			return nil, err
 		}
-		_, err = o.opts.Store.ApplyRunOperation(*op, func(state.OperationResult) {
-			for _, waitID := range ended {
+		var won []agentcomm.WaitID
+		_, err = o.opts.Store.ApplyRunOperation(*op, func(res state.OperationResult) {
+			won = res.EndedWaits
+			for _, waitID := range won {
 				o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{
 					"wait_id": string(waitID), "status": string(agentcomm.WaitCancelled), "reason": reason}})
 			}
@@ -162,7 +168,7 @@ func (o *Orchestrator) markUnreadUndeliverable(id agentcomm.MessageID, recipient
 		if errors.Is(err, errUnreadReleaseStale) {
 			continue // another recipient finished or a wait was registered meanwhile: decide again
 		}
-		return ended, err
+		return won, err
 	}
 	return nil, fmt.Errorf("release unread message %s: %w", id, errUnreadReleaseStale)
 }

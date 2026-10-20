@@ -83,12 +83,7 @@ func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *co
 		return &collaborationRuntime{policy: collaborationPolicy{Enabled: false, Depth: policy.Depth}}
 	}
 
-	available := func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-		reason := config.HelperCommandRejection(cmd, cfg)
-		return reason == "", reason, assistants.ReadonlyEnforcement(config.HelperReadonlyEnforcement(cmd, cfg))
-	}
-	global := profilesFromConfig(cfg.Collaboration.Profiles)
-	reg, err := assistants.BuildRegistry(nil, global, nil, cfg.Client.Command, available)
+	reg, err := buildProfileRegistry(cfg)
 	if err != nil {
 		// A malformed profile (duplicate/unsafe id) disables the capability instead of failing the whole
 		// run — the same posture as startSideAgent's "open failed → disable, don't crash the flow".
@@ -96,6 +91,16 @@ func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *co
 		return &collaborationRuntime{policy: collaborationPolicy{Enabled: false, Depth: policy.Depth}}
 	}
 	return &collaborationRuntime{policy: policy, registry: reg}
+}
+
+// buildProfileRegistry builds the collaboration profile registry from config — the one validation of
+// collaboration.profiles, shared by afm run and afm validate.
+func buildProfileRegistry(cfg config.Config) (*assistants.Registry, error) {
+	available := func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
+		reason := config.HelperCommandRejection(cmd, cfg)
+		return reason == "", reason, assistants.ReadonlyEnforcement(config.HelperReadonlyEnforcement(cmd, cfg))
+	}
+	return assistants.BuildRegistry(nil, profilesFromConfig(cfg.Collaboration.Profiles), nil, cfg.Client.Command, available)
 }
 
 // checkDeclaredAssistants preflights every stage's assistants: field against the resolved collaboration
@@ -128,6 +133,40 @@ func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
 		}
 	}
 	return nil
+}
+
+// checkFlowTeam preflights the flow's team: like checkDeclaredAssistants does a stage's assistants:, before
+// any stage starts. With collaboration disabled it only warns. Otherwise only the members this run has not
+// created an agent for yet need an existing profile: a saved agent keeps the profile snapshot it was created
+// with, so a resume still works after its profile left config.
+func checkFlowTeam(store *state.Store, team flow.Team, collab *collaborationRuntime) error {
+	if !collab.policy.Enabled || collab.registry == nil {
+		warnTeamWithoutCollaboration(team)
+		return nil
+	}
+	toCreate, err := orchestrator.TeamMembersToCreate(store, team)
+	if err != nil {
+		return err
+	}
+	return checkTeamProfiles(toCreate, collab.registry)
+}
+
+// checkTeamProfiles reports the first team member whose profile is not in the registry.
+func checkTeamProfiles(team flow.Team, reg *assistants.Registry) error {
+	for _, m := range team {
+		if _, ok := reg.Get(assistants.ProfileID(m.Profile)); !ok {
+			return fmt.Errorf("team member %q: unknown assistant profile %q (not in collaboration.profiles)", m.ID, m.Profile)
+		}
+	}
+	return nil
+}
+
+// warnTeamWithoutCollaboration warns that a declared team will not be created: like stage assistants, a
+// team never blocks a run with collaboration off, so AFM_COLLABORATION=0 still runs the flow.
+func warnTeamWithoutCollaboration(team flow.Team) {
+	if len(team) > 0 {
+		fmt.Fprintln(os.Stderr, "warning: the flow declares \"team\" but collaboration is disabled — its agents will not be added")
+	}
 }
 
 // assistantProfileCommands returns the distinct, non-empty commands named by this process's configured
@@ -354,7 +393,7 @@ func (d collaborationDiscussion) Messages(stageID string, cursor uint64, limit i
 			ID: m.ID, AuthorKind: string(m.Author.Kind), AuthorID: m.Author.ID, Role: m.Role,
 			Executor: m.Executor, Round: m.Round, ParentMessageID: m.ParentMessageID,
 			ContextVersion: string(m.ContextVersion), Evidence: m.Evidence, Body: m.Body, Mentions: m.Mentions,
-			Interrupt: m.Interrupt, Unanswered: unanswered[m.ID], AutoResult: m.AutoResult, CreatedAt: m.CreatedAt,
+			Interrupt: m.Interrupt, Unanswered: unanswered[m.ID], AutoResult: m.AutoResult, CreatedAt: m.CreatedAt, Seq: m.Seq,
 		})
 	}
 	return out, uint64(end), end < len(all), nil

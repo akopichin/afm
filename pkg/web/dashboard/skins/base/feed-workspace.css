@@ -486,62 +486,72 @@
   gap: 8px;
 }
 
-.mesh-message-thread {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 160px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.mesh-message-thread-item {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-}
-.mesh-message-thread-sender { flex-shrink: 0; color: var(--text-muted); }
-.mesh-message-thread-body { flex: 1; min-width: 0; color: var(--text-secondary); word-break: break-word; }
-.mesh-message-thread-reply {
-  flex-shrink: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-primary);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0 4px;
-}
-
 .mesh-message-error { color: var(--danger); font-size: 12px; }
+.mesh-recipient-problems { margin: 0; padding-left: 16px; }
 .mesh-message-receipt { color: var(--text-muted); font-size: 11px; }
+.mesh-message-receipts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.mesh-receipt-name { color: var(--text-secondary); }
 
-/* The conversation shown above the Message input stays after its @mention is erased; × closes it. The close
-   button sits in its own header row, so it never covers a message's Reply. */
-.mesh-message-thread-header {
+/* Both composer panels stay mounted (each keeps its draft); the hidden one must not take space. */
+.feed-composer-panel[hidden] { display: none; }
+
+/* "To" row: who the message goes to — chips, then "+" (opens the @ list). */
+.mesh-recipients {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 6px;
-  font-size: 11px;
-  color: var(--text-muted);
+  gap: 4px 6px;
+  font-size: 12px;
 }
-.mesh-message-thread-close {
+.mesh-recipients-label { color: var(--text-muted); font-weight: 600; margin-right: 2px; }
+.mesh-recipients-empty { color: var(--text-muted); }
+.mesh-recipient-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 1px 2px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.mesh-recipient-chip.is-attach { padding-left: 8px; }
+/* The stage agent chosen because nobody is named: present, but quieter than a chosen recipient. */
+.mesh-recipient-chip.is-default { background: transparent; border-style: dashed; color: var(--text-secondary); padding-right: 8px; }
+.mesh-recipient-chip.has-problem {
+  border-color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.08);
+  color: var(--danger);
+}
+.mesh-recipient-note { color: var(--text-muted); font-size: 11px; }
+.mesh-recipient-remove,
+.mesh-recipients-add,
+.mesh-recipients-use-revise {
   border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font: inherit;
   cursor: pointer;
+  border-radius: 999px;
 }
-.mesh-message-thread-close:hover { color: var(--text-primary); }
-.mesh-message-thread-close:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-.mesh-message-route {
-  font-size: 11px;
-  color: var(--text-muted);
+.mesh-recipient-remove { width: 16px; height: 16px; padding: 0; line-height: 1; }
+.mesh-recipients-add { width: 22px; height: 22px; padding: 0; border: 1px dashed var(--separator-subtle); }
+.mesh-recipients-use-revise { padding: 1px 8px; border: 1px solid var(--separator-subtle); color: var(--text-secondary); }
+.mesh-recipient-remove:hover,
+.mesh-recipients-add:hover,
+.mesh-recipients-use-revise:hover { color: var(--text-primary); background: var(--surface-hover); }
+.mesh-recipient-remove:focus-visible,
+.mesh-recipients-add:focus-visible,
+.mesh-recipients-use-revise:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* Answering a conversation message (Message mode) is told apart from answering a thought (Revise, accent):
+   its chip and the message it answers use the success hue. */
+.feed-reply-chip--conversation { border-left-color: var(--success); }
+.feed-reply-chip--conversation .feed-reply-chip-label { color: var(--success); }
+.feed-conversation .team-conversation-message.is-reply-target .team-conversation-message-body {
+  box-shadow: inset 2px 0 0 var(--success);
+  background: rgba(var(--success-rgb), 0.08);
 }
 
 /* --- Беседы стадии в ленте: фильтр, сообщения, «@x is working» --- */

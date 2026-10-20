@@ -27,8 +27,7 @@ type TeamTab = 'messages' | 'board' | 'activity'
 
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
-// use-workspace-view/workspace-view.ts's openTeam — the same "manual read-only-ish view owns its own detail
-// state" posture 'discussion' already established for StageDiscussionPanel/StageProposals).
+// use-workspace-view/workspace-view.ts's openTeam — a manual view that owns its own detail state).
 export function TeamView({ roster, stages, events, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
   const tabsId = useId()
@@ -304,14 +303,11 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
       {addRunAgentOpen && (
         <AddRunAgentDialog
           profiles={profiles}
-          onAttached={(result, name) => {
+          onAttached={(result, participant) => {
             setAddRunAgentOpen(false)
-            // Show the new agent by name and open its conversation right away (the next poll confirms both).
-            setLocalParticipants((prev) => [
-              ...prev,
-              { id: result.participant_id, kind: 'run_agent', scope: 'run', display_name: name, reachable: true },
-            ])
-            openThread({ id: result.thread_id, title: name, scope: 'run', members: ['user', result.participant_id], status: 'open' })
+            // Show the new agent and open its conversation right away (the next poll confirms both).
+            setLocalParticipants((prev) => [...prev, participant])
+            openThread({ id: result.thread_id, title: participantLabel(participant), scope: 'run', members: ['user', result.participant_id], status: 'open' })
             setTab('messages')
           }}
           onCancel={() => setAddRunAgentOpen(false)}

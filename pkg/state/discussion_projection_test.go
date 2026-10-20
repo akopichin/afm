@@ -132,3 +132,30 @@ func TestDiscussionProjection_OldJournalWithoutMeshEffectsStillReplays(t *testin
 		t.Fatalf("replay must not synthesize any mesh message for an old discussion-only journal, got %d", n)
 	}
 }
+
+// A discussion message carries the journal seq of its record — the run's one durable order, shared with mesh
+// messages — live and after a replay, so a reader can interleave the two without trusting timestamps.
+func TestDiscussionProjection_MessageCarriesItsJournalSeq(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, id := range []string{"m-1", "m-2"} {
+		if err := store.AppendControl(discussionMessageControl("op-"+id, id, "a", assistants.RoundFreeform, "")); err != nil {
+			t.Fatalf("AppendControl: %v", err)
+		}
+	}
+	live := store.Snapshot().Assistants.Discussions.Messages
+	store.Close()
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	for _, msgs := range []map[string]*assistants.DiscussionMessage{live, rs.Assistants.Discussions.Messages} {
+		first, second := msgs["m-1"], msgs["m-2"]
+		if first == nil || second == nil || first.Seq == 0 || second.Seq <= first.Seq {
+			t.Fatalf("seqs = %+v / %+v, want increasing journal seqs", first, second)
+		}
+	}
+}

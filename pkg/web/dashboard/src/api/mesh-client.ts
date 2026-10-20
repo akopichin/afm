@@ -1,6 +1,6 @@
 // Типизированный клиент к /api/mesh/* (Agent Mesh Phase 7, T7.1/T7.3) — Team view, и далее Feed composer's
 // @-mention/attach-preview (T7.4/T7.5) reuse the same functions. Same per-module convention as
-// side-agent-client.ts/files-client.ts: a local Error class + local readErrorCode/isRecord, not a shared
+// side-agent-client.ts/files-client.ts: a local Error class + local apiError/isRecord, not a shared
 // mega-helper (run-client.ts's own jsonRequest/postJson are private to that module, not exported for reuse).
 //
 // Every wire type below mirrors pkg/agentcomm/types.go and pkg/server/mesh.go's JSON tags field-for-field —
@@ -10,8 +10,10 @@ export class MeshApiError extends Error {
   status: number
   code: string | undefined
 
-  constructor(url: string, status: number, code: string | undefined) {
-    super(`${url} -> ${status}${code ? ` (${code})` : ''}`)
+  // reason — the server's explanation of a rejected request (e.g. why a recipient cannot be written to); it
+  // becomes the error's message, so a form shows it as it is.
+  constructor(url: string, status: number, code: string | undefined, reason?: string) {
+    super(reason !== undefined && reason !== '' ? reason : `${url} -> ${status}${code ? ` (${code})` : ''}`)
     this.name = 'MeshApiError'
     this.status = status
     this.code = code
@@ -22,18 +24,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
 
-async function readErrorCode(response: Response): Promise<string | undefined> {
+// apiError — the MeshApiError of a failed response: its error code and, when the server gave one, its reason.
+async function apiError(url: string, response: Response): Promise<MeshApiError> {
   try {
     const body: unknown = await response.json()
-    return isRecord(body) && typeof body.error === 'string' ? body.error : undefined
+    if (isRecord(body)) {
+      const code = typeof body.error === 'string' ? body.error : undefined
+      const reason = typeof body.message === 'string' ? body.message : undefined
+      return new MeshApiError(url, response.status, code, reason)
+    }
   } catch {
-    return undefined
+    // not JSON — the status alone
   }
+  return new MeshApiError(url, response.status, undefined)
 }
 
 async function meshGet<T>(url: string): Promise<T> {
   const response = await fetch(url)
-  if (!response.ok) throw new MeshApiError(url, response.status, await readErrorCode(response))
+  if (!response.ok) throw await apiError(url, response)
   return response.json() as Promise<T>
 }
 
@@ -43,7 +51,7 @@ async function meshPost<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw new MeshApiError(url, response.status, await readErrorCode(response))
+  if (!response.ok) throw await apiError(url, response)
   return response.json() as Promise<T>
 }
 
@@ -133,6 +141,8 @@ export type MeshBoardEntry = {
 export type MeshSendReceipt = {
   message_id: string
   seq: number
+  // thread_id — the conversation the message went into (the server picks or opens it for a send without one).
+  thread_id?: string
 }
 
 // MeshAttachAndSendResult mirrors server.MeshAttachAndSendResult.
@@ -141,6 +151,8 @@ export type MeshAttachAndSendResult = {
   participant_id: string
   thread_id: string
   message_id?: string
+  // participant — the new participant's roster entry (alias included), before the roster poll has it.
+  participant?: MeshParticipant
 }
 
 // genMeshRequestId is this module's one idempotency-key generator, same shape as run-client.ts's inline
@@ -245,6 +257,32 @@ export async function sendMeshMessage(threadId: string, req: SendMeshMessageRequ
     ...(req.inReplyTo !== undefined ? { in_reply_to: req.inReplyTo } : {}),
     body: req.body,
     ...(req.artifactRefs !== undefined ? { artifact_refs: req.artifactRefs } : {}),
+  })
+}
+
+export type SendMeshMessageToRequest = {
+  requestId: string
+  // recipientIds — participant ids or aliases (with or without "@"); the server resolves them and rejects an
+  // unknown, ambiguous or unreachable one with a reason.
+  recipientIds: string[]
+  inReplyTo?: string
+  body: string
+  // originStage — the stage feed the message is written from: the conversation it goes into shows there.
+  originStage?: string
+}
+
+// sendMeshMessageTo sends the human's message to a set of people without naming a thread — POST
+// /api/mesh/messages. The server continues their open conversation that the origin stage's feed shows (a
+// reply goes into the thread of the message it answers), or opens one in the same operation; the receipt
+// names it. A retry under the same requestId returns the original receipt.
+export async function sendMeshMessageTo(req: SendMeshMessageToRequest): Promise<MeshSendReceipt> {
+  return meshPost<MeshSendReceipt>('/api/mesh/messages', {
+    request_id: req.requestId,
+    recipient_ids: req.recipientIds,
+    kind: 'message',
+    ...(req.inReplyTo !== undefined ? { in_reply_to: req.inReplyTo } : {}),
+    body: req.body,
+    ...(req.originStage !== undefined ? { origin_stage: req.originStage } : {}),
   })
 }
 

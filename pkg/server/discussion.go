@@ -30,6 +30,8 @@ type DiscussionMessageView struct {
 	// AutoResult — an agent's turn result afm posted as its reply; it woke nobody.
 	AutoResult bool      `json:"auto_result,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
+	// Seq — the message's journal seq, the same order mesh messages carry; 0 when unknown (an older cache).
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // DiscussionPost is one human post to a stage's discussion — the body of POST /api/stages/{id}/discussion.

@@ -311,7 +311,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 	if outcome.ProtocolErr != nil {
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+outcome.ProtocolErr.Error())
+		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error())
 		return
 	}
 
@@ -320,7 +320,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's
 		// §9.3 acceptance criterion), regardless of how plausible the raw text looks. Mechanical repair has
 		// already been tried and failed — decErr is the ORIGINAL strict decode error.
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: "+decErr.Error())
+		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+decErr.Error())
 		return
 	}
 	if repaired {
@@ -337,14 +337,14 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: unsupported kind")
+		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+"unsupported kind")
 		return
 	}
 	if env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
 		// dev-plan.md's TestResult_ConsistencyWithRequiredChildren: a required child that has not (yet, or
 		// ever will) reached verdict:"pass" keeps this gate closed — the model's own claimed "pass" text does
 		// not override it.
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "protocol_error: verdict:\"pass\" with an unresolved required child")
+		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+"verdict:\"pass\" with an unresolved required child")
 		return
 	}
 
@@ -385,12 +385,34 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// (Send → maybeScheduleTask). A message that arrived during this turn starts it right away. Its result also
 	// answers the message that woke the turn: a passive reply in the same commit (agentcomm_turn_reply.go).
 	if task.Scope == assistants.ScopeRun {
-		reply := o.planTurnReply(taskID, consumed, result)
-		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, reply, resultEff)
+		replies := o.planTurnReplies(taskID, consumed, turnReplyBody(taskID, consumed, result))
+		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, replies, resultEff)
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}
 	o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+}
+
+// failAnsweredTurn ends a turn that ran to its end but whose answer cannot be accepted (reason says why). A
+// helper task fails; retrying it is the human's call. A run agent is a standing role, and one bad answer must
+// not end it: it goes back to idle, reachable for the next message, and the message that woke the turn gets a
+// passive reply saying why there is no result — so a colleague waiting for that reply is answered, not left
+// waiting on an agent that will never write again.
+func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string) {
+	reason = o.sanitizeTaskReason(reason) // the reply and the idle reason below use the same recorded value
+	// turn 0 consumed nothing: going idle would hand the same input straight back to a new turn.
+	if task.Scope != assistants.ScopeRun || turn == 0 {
+		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason)
+		return
+	}
+	agent := task.Title
+	if agent == "" {
+		agent = string(task.ProfileID)
+	}
+	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason)
+	replies := o.planTurnReplies(taskID, turn, body)
+	o.finishTaskTurnReplying(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies)
+	o.maybeScheduleTask(ctx, taskID)
 }
 
 // meshWaitIDsOf returns the ids of every mesh wait waiter has registered so far, whatever their status.

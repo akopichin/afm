@@ -60,7 +60,7 @@ func TestSendFromAgent_ContinuesALegacyConversationWithoutTheHuman(t *testing.T)
 
 // A stage discussion thread {human, stage agent, mentioned agent} has the same agents as a conversation the
 // stage agent starts with that agent — but it is the human's Discussion: the agents' own conversation must not
-// land there (and so must not leak into the Discussion tab).
+// land there (and so must not leak into the human's stage conversation).
 func TestSendFromAgent_DoesNotReuseADiscussionThread(t *testing.T) {
 	o, store := newTwoStageMeshOrchestrator(t)
 	ctx := context.Background()

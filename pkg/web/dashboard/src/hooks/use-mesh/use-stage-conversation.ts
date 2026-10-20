@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getStageMessages, type MeshMessage, type MeshThread } from '../../api/mesh-client'
-import { startSerialPoll } from '../../lib/serial-poll'
+import { readPagesFrom, startSerialPoll } from '../../lib/serial-poll'
 
 const POLL_INTERVAL_MS = 3000
 const PAGE_LIMIT = 100
@@ -32,19 +32,14 @@ export function useStageConversation(stageId: string | null): StageConversation 
     if (stageId === null) return
     let cursor = 0
     const poll = startSerialPoll(async (isStopped) => {
-      const messages: MeshMessage[] = []
-      const threads: MeshThread[] = []
-      let next = cursor
-      for (;;) {
-        const page = await getStageMessages(stageId, next, PAGE_LIMIT)
-        messages.push(...page.messages)
-        threads.push(...page.threads)
-        const advanced = page.next_cursor > next
-        next = Math.max(next, page.next_cursor)
-        if (!page.has_more || !advanced) break
-      }
+      const read = await readPagesFrom(cursor, async (c) => {
+        const page = await getStageMessages(stageId, c, PAGE_LIMIT)
+        return { ...page, next: page.next_cursor, hasMore: page.has_more }
+      })
       if (isStopped()) return
-      cursor = next
+      cursor = read.cursor
+      const messages: MeshMessage[] = read.pages.flatMap((p) => p.messages)
+      const threads: MeshThread[] = read.pages.flatMap((p) => p.threads)
       setLoaded((prev) => {
         const base = prev.stageId === stageId ? prev : { ...EMPTY, stageId }
         const known = new Set(base.messages.map((m) => m.id))

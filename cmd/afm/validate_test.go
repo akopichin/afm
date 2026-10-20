@@ -72,3 +72,88 @@ stages:
 		t.Errorf("expected unknown-stage error, got: %v", err)
 	}
 }
+
+// writeValidateConfig points afm validate at an empty HOME and a project .afm/config.yaml with body.
+func writeValidateConfig(t *testing.T, body string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AFM_COLLABORATION", "")
+	root := t.TempDir()
+	prev := rootDir
+	rootDir = root
+	t.Cleanup(func() { rootDir = prev })
+	if err := os.MkdirAll(filepath.Join(root, ".afm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".afm", "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const validateTeamFlow = `name: team-flow
+team:
+  - id: arch
+    profile: rev-arch
+    title: Architecture
+    instruction: Review when asked.
+stages:
+  - id: s
+    agents: [auto]
+`
+
+func TestValidateFlowFile_TeamWithKnownProfile(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  profiles:\n    rev-arch:\n      command: codex-as-claude\n")
+	if _, err := validateFlowFile(writeTestFlow(t, validateTeamFlow)); err != nil {
+		t.Fatalf("validateFlowFile: %v", err)
+	}
+}
+
+func TestValidateFlowFile_TeamUnknownProfile(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  profiles:\n    qa:\n      command: codex-as-claude\n")
+	_, err := validateFlowFile(writeTestFlow(t, validateTeamFlow))
+	if err == nil || !strings.Contains(err.Error(), `team member "arch"`) || !strings.Contains(err.Error(), "rev-arch") {
+		t.Fatalf("validateFlowFile = %v, want an unknown-profile error for arch", err)
+	}
+}
+
+func TestValidateFlowFile_TeamDuplicateID(t *testing.T) {
+	writeValidateConfig(t, "")
+	path := writeTestFlow(t, `name: team-flow
+team:
+  - id: qa
+    profile: qa
+    title: QA
+  - id: qa
+    profile: qa
+    title: QA two
+stages:
+  - id: s
+    agents: [auto]
+`)
+	_, err := validateFlowFile(path)
+	if err == nil || !strings.Contains(err.Error(), `duplicate team member id "qa"`) {
+		t.Fatalf("validateFlowFile = %v, want a duplicate id error", err)
+	}
+}
+
+func TestValidateFlowFile_TeamWithDisabledCollaborationWarns(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  enabled: false\n")
+	var err error
+	stderr := captureStderr(t, func() { _, err = validateFlowFile(writeTestFlow(t, validateTeamFlow)) })
+	if err != nil {
+		t.Fatalf("validateFlowFile: %v, want OK with a warning", err)
+	}
+	if !strings.Contains(stderr, "collaboration is disabled") {
+		t.Fatalf("stderr = %q, want the disabled-collaboration warning", stderr)
+	}
+}
+
+// validate builds the same profile registry as afm run: a malformed profile that would turn collaboration
+// off at run time fails validation even when the team's own profile is fine.
+func TestValidateFlowFile_TeamWithMalformedProfileRegistry(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  profiles:\n    rev-arch:\n      command: codex-as-claude\n    \"bad/id\":\n      command: codex-as-claude\n")
+	_, err := validateFlowFile(writeTestFlow(t, validateTeamFlow))
+	if err == nil || !strings.Contains(err.Error(), "bad/id") {
+		t.Fatalf("validateFlowFile = %v, want the registry error for bad/id", err)
+	}
+}

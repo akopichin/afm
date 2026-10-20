@@ -31,7 +31,7 @@ running → awaiting_peer → running
   a user answer; once answered, it returns to the phase where the question was asked
 - `revising` — feedback was sent and the AI is reworking: either the plan (from
   `awaiting_approval`), or a `running` stage that just got a note and a graceful
-  interrupt (see [Dashboard → Sending a note](dashboard.md#sending-a-note-to-a-running-stage))
+  interrupt (see [Dashboard → Revise](dashboard.md#revise))
 - `retrying` — an agent process failed and an automatic retry is scheduled. Known
   rate-limit, server, and network errors get up to 15 retries; an unrecognized
   process failure or idle timeout gets up to 3. A process that could not start
@@ -55,7 +55,9 @@ On a repeated `afm run`, the tool automatically:
 - Rechecks the required-helper gate for stages in `awaiting_assistants`, without
   rerunning their completed main agent
 - Restores pending Agent Mesh waits for stages in `awaiting_peer` and resumes the
-  stage when its wait resolves
+  stage when its wait resolves; a `running` stage whose turn had already
+  yielded on waits (`afm agent wait` answered `yield`) is parked on them
+  instead of restarted
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
 - Preserves stages in `awaiting_user_input`: question/answer files survive the

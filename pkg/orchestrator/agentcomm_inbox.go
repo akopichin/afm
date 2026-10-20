@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -85,6 +86,153 @@ func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinish
 
 	o.renderedInbox.Store(participant, rendered)
 	return prompts.AgentCommInboxBlock(msgs, more), rendered, func() { o.markInboxDelivered(participant, rendered) }
+}
+
+// Bounds of the <your_requests> block, which repeats on every turn: at most maxListedRequests requests, the start
+// of each request and of each answer, and requestsBlockBudget bytes of them in all (requestEntryOverhead
+// approximates one entry's header line).
+const (
+	maxListedRequests   = 20
+	requestExcerptBytes = 300
+	// waitReasonExcerptBytes cuts an ended wait's reason the same way: it can name every recipient and why.
+	waitReasonExcerptBytes = 300
+	answerExcerptBytes     = 2 << 10
+	requestsBlockBudget    = 24 << 10
+	requestEntryOverhead   = 256
+)
+
+// sentRequest is one request participant sent, with what became of the waits for its answer.
+type sentRequest struct {
+	msg     *agentcomm.Message
+	answers []*agentcomm.Message // oldest first
+	waiting bool                 // a wait for its answer is still open
+	ended   *state.MeshWait      // the latest wait for it that ended without an answer
+}
+
+// agentCommRequestsBlock renders participant's <your_requests> block (prompts.AgentCommRequestsBlock): the
+// requests it sent — messages of kind request, or ones it registered a reply_to wait on — each with its answers,
+// its open wait or the wait that ended without an answer. Requests still waiting come first, then the newest
+// others, within maxListedRequests and requestsBlockBudget; an entry keeps its newest answers that fit. The block
+// says how many requests and answers it left out.
+func agentCommRequestsBlock(mesh state.MeshState, participant agentcomm.ParticipantID) string {
+	requests := sentRequests(mesh, participant)
+	// Priority: open requests newest first, then the others newest first.
+	order := slices.Clone(requests)
+	slices.SortStableFunc(order, func(a, b *sentRequest) int {
+		if a.waiting != b.waiting {
+			if a.waiting {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(b.msg.Seq, a.msg.Seq)
+	})
+	budget := requestsBlockBudget
+	var picked []prompts.AgentCommRequest
+	pickedSeq := map[string]uint64{}
+	omittedRequests, omittedAnswers := 0, 0
+	for _, r := range order {
+		entry := requestView(mesh, r)
+		cost := requestViewCost(entry)
+		if len(picked) >= maxListedRequests || (len(picked) > 0 && cost > budget) {
+			omittedRequests++
+			continue
+		}
+		budget -= cost
+		var kept []prompts.AgentCommInboxMessage
+		for i := len(r.answers) - 1; i >= 0; i-- {
+			view := inboxMessageView(r.answers[i])
+			view.Body = truncateText(view.Body, answerExcerptBytes)
+			if c := len(view.Body) + requestEntryOverhead; c <= budget {
+				budget -= c
+				kept = append(kept, view)
+				continue
+			}
+			omittedAnswers += i + 1
+			break
+		}
+		slices.Reverse(kept)
+		entry.Answers = kept
+		picked = append(picked, entry)
+		pickedSeq[entry.MessageID] = r.msg.Seq
+	}
+	slices.SortFunc(picked, func(a, b prompts.AgentCommRequest) int {
+		return cmp.Compare(pickedSeq[a.MessageID], pickedSeq[b.MessageID])
+	})
+	return prompts.AgentCommRequestsBlock(picked, omittedRequests, omittedAnswers)
+}
+
+// sentRequests collects participant's requests (see agentCommRequestsBlock), oldest first.
+func sentRequests(mesh state.MeshState, participant agentcomm.ParticipantID) []*sentRequest {
+	byID := map[agentcomm.MessageID]*sentRequest{}
+	waitsOn := map[agentcomm.MessageID][]*state.MeshWait{}
+	for _, w := range mesh.Waits {
+		if w.Waiter == participant && w.Condition.Kind == agentcomm.WaitOnReplyTo {
+			waitsOn[w.Condition.MessageID] = append(waitsOn[w.Condition.MessageID], w)
+		}
+	}
+	var out []*sentRequest
+	for _, m := range mesh.Messages {
+		if _, waited := waitsOn[m.ID]; m.Sender == participant && (m.Kind == agentcomm.MessageKindRequest || waited) {
+			r := &sentRequest{msg: m}
+			for _, w := range waitsOn[m.ID] {
+				switch w.Status {
+				case agentcomm.WaitPending:
+					r.waiting = true
+				case agentcomm.WaitCancelled, agentcomm.WaitExpired, agentcomm.WaitRunClosed:
+					if r.ended == nil || w.RegisteredSeq > r.ended.RegisteredSeq {
+						r.ended = w
+					}
+				default:
+				}
+			}
+			byID[m.ID] = r
+			out = append(out, r)
+		}
+	}
+	for _, m := range mesh.Messages {
+		if m.InReplyTo == nil || m.Sender == participant {
+			continue
+		}
+		if r := byID[*m.InReplyTo]; r != nil {
+			r.answers = append(r.answers, m)
+		}
+	}
+	bySeq := func(a, b *agentcomm.Message) int { return cmp.Compare(a.Seq, b.Seq) }
+	for _, r := range out {
+		slices.SortFunc(r.answers, bySeq)
+	}
+	slices.SortFunc(out, func(a, b *sentRequest) int { return bySeq(a.msg, b.msg) })
+	return out
+}
+
+// requestView is r without its answers, as the block shows it.
+func requestView(mesh state.MeshState, r *sentRequest) prompts.AgentCommRequest {
+	v := prompts.AgentCommRequest{MessageID: string(r.msg.ID), Body: truncateText(r.msg.Body, requestExcerptBytes), Waiting: r.waiting}
+	for _, to := range r.msg.Recipients {
+		v.To = append(v.To, participantLabel(mesh, to))
+	}
+	if r.ended != nil && !r.waiting && len(r.answers) == 0 {
+		v.WaitEnded = string(r.ended.Status)
+		if r.ended.Reason != "" {
+			v.WaitEnded += ": " + truncateText(r.ended.Reason, waitReasonExcerptBytes)
+		}
+	}
+	return v
+}
+
+// requestViewCost is what an entry takes of the block's budget without its answers: every text it shows and
+// the fixed overhead of its lines.
+func requestViewCost(v prompts.AgentCommRequest) int {
+	return len(v.Body) + len(v.WaitEnded) + requestEntryOverhead
+}
+
+// participantLabel names id the way `afm agent send --to` takes it: its alias, or the id when it has none.
+func participantLabel(mesh state.MeshState, id agentcomm.ParticipantID) string {
+	if p := mesh.Participants[id]; p != nil && p.Alias != "" {
+		return p.Alias
+	}
+	return string(id)
 }
 
 func inboxMessageView(m *agentcomm.Message) prompts.AgentCommInboxMessage {

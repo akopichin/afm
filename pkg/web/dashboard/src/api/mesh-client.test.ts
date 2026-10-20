@@ -10,6 +10,7 @@ import {
   listMeshThreads,
   openMeshThread,
   sendMeshMessage,
+  sendMeshMessageTo,
 } from './mesh-client'
 
 describe('mesh-client', () => {
@@ -113,6 +114,37 @@ describe('mesh-client', () => {
         body: JSON.stringify({ request_id: 'req-2', recipient_ids: ['run:qa'], kind: 'message', body: 'hello' }),
       }),
     )
+  })
+
+  test('sendMeshMessageTo posts recipients without a thread, with the reply target and the feed it is written from', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ message_id: 'm2', seq: 4, thread_id: 'mt-9' }),
+    } as Response)
+
+    const receipt = await sendMeshMessageTo({ requestId: 'req-4', recipientIds: ['qa', 'docs'], inReplyTo: 'm1', body: 'both', originStage: 'impl' })
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/mesh/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ request_id: 'req-4', recipient_ids: ['qa', 'docs'], kind: 'message', in_reply_to: 'm1', body: 'both', origin_stage: 'impl' }),
+      }),
+    )
+    expect(receipt).toEqual({ message_id: 'm2', seq: 4, thread_id: 'mt-9' })
+  })
+
+  test("a rejected request's error reads as the server's reason", async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'invalid_status', message: 'stage:docs cannot receive messages (stage docs has reached a terminal status)' }),
+    } as Response)
+    const err = await sendMeshMessageTo({ requestId: 'r', recipientIds: ['docs'], body: 'hi' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(MeshApiError)
+    expect(err).toMatchObject({ status: 409, code: 'invalid_status' })
+    expect((err as Error).message).toBe('stage:docs cannot receive messages (stage docs has reached a terminal status)')
   })
 
   test('attachAndSendMesh posts scope "run" with no stage_id for a run-scoped agent', async () => {

@@ -1980,8 +1980,8 @@ describe('App', () => {
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()
   })
 
-  // Stage 5: the stage Feed's people panel. A click on a person puts their @handle into the Feed composer
-  // (Message mode) and addresses them; the Team tab keeps its own roster.
+  // The stage Feed's people panel. A click on a person adds them to the Feed composer's recipients (Message
+  // mode); the Team tab keeps its own roster.
   test('people panel: a click on a person addresses them in the current Feed composer', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url
@@ -2025,9 +2025,9 @@ describe('App', () => {
     fireEvent.click(within(people).getByText('QA reviewer'))
 
     const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
-    expect(composer.value).toBe('@qa ')
+    expect(composer.value).toBe('')
+    expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
   })
 
   // Stage 3a: the stage's conversations are in its Feed; "↩ Reply in conversation" answers a message in the
@@ -2074,8 +2074,8 @@ describe('App', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '↩ Reply in conversation' }))
 
-    const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
-    expect(composer.value).toBe('@qa ')
+    await screen.findByRole('combobox', { name: /message the mesh/i })
+    expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getAllByText('Found a bug in parse()').length).toBeGreaterThan(1) // the bubble and the reply chip
   })
@@ -2098,7 +2098,13 @@ describe('App', () => {
         return { ok: true, json: async () => ({ profiles: [{ id: 'qa', title: 'QA role', command: 'claude', available: true }] }) } as Response
       }
       if (url.includes('/api/mesh/attach-and-send')) {
-        return { ok: true, json: async () => ({ task_id: 't-new', participant_id: 'run:t-new', thread_id: 'mt-new' }) } as Response
+        return {
+          ok: true,
+          json: async () => ({
+            task_id: 't-new', participant_id: 'run:t-new', thread_id: 'mt-new',
+            participant: { id: 'run:t-new', kind: 'run_agent', scope: 'run', alias: 'qa-role', display_name: 'QA role', reachable: true },
+          }),
+        } as Response
       }
       // The roster poll never learns about the new agent during this test.
       if (url.includes('/api/mesh/participants')) {
@@ -2121,15 +2127,72 @@ describe('App', () => {
     render(<App />)
 
     const people = await screen.findByRole('navigation', { name: 'People' })
-    fireEvent.click(within(people).getByRole('button', { name: 'Add agent' }))
+    fireEvent.click(within(people).getByRole('button', { name: 'Add run agent…' }))
     fireEvent.change(await screen.findByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
 
     const added = await within(people).findByText('QA role')
+    // Shown by its alias right away, never as its internal id.
+    expect(within(people).getByText('@qa-role')).toBeInTheDocument()
     fireEvent.click(added)
 
-    const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
-    expect(composer.value).toBe('@run:t-new ')
+    await screen.findByRole('combobox', { name: /message the mesh/i })
+    expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa-role')).toBeInTheDocument()
+    expect(screen.queryByText(/run:t-new/)).toBeNull()
+  })
+
+  // The split gate: Message for any non-script stage while the run is alive, Revise only where the Revise API
+  // takes it; no composer once the run has ended.
+  async function renderGate(stageStatus: string, runStatus: string): Promise<void> {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo', run_status: runStatus, stages: [stageView('s1', 'Propose', stageStatus)],
+            capabilities: { collaboration: true }, accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    render(<App />)
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-row')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+    await screen.findByRole('navigation', { name: 'People' })
+  }
+
+  test('composer gate: a pending stage gets Message only', async () => {
+    await renderGate('pending', 'running')
+    await screen.findByRole('combobox', { name: /message the mesh/i })
+    expect(screen.getAllByRole('tab', { name: /^(Message|Revise)$/ }).map((t) => t.textContent)).toEqual(['Message'])
+  })
+
+  test('composer gate: awaiting_assistants also gets Revise', async () => {
+    await renderGate('awaiting_assistants', 'running')
+    expect(await screen.findByRole('tab', { name: 'Revise' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  test('composer gate: no composer once the run has ended', async () => {
+    await renderGate('done', 'finished')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByRole('combobox', { name: /message the mesh/i })).toBeNull()
   })
 
   // Collaboration off (AFM_COLLABORATION=0) with the mesh still answering: the stage Feed looks as before the
@@ -2201,6 +2264,8 @@ describe('App', () => {
     expect(screen.queryByRole('combobox', { name: /message the mesh/i })).toBeNull()
     expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
     expect(requests.some((r) => r.includes('/api/mesh/stages/'))).toBe(false)
+    expect(requests.some((r) => r.includes('/discussion'))).toBe(false)
+    expect(screen.queryByRole('tab', { name: 'Discussion' })).toBeNull()
 
     fireEvent.change(note, { target: { value: 'tighten the tests' } })
     fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
@@ -2219,6 +2284,9 @@ describe('App', () => {
     expect(screen.getByRole('group', { name: 'Show in the feed' })).toBeInTheDocument()
     expect(screen.getByRole('tablist', { name: 'Composer mode' })).toBeInTheDocument()
     expect(requests.some((r) => r.includes('/api/mesh/stages/s1/messages'))).toBe(true)
+    // The stage conversation lives in the Feed: its log is read there, and there is no Discussion tab.
+    await waitFor(() => expect(requests.some((r) => r.startsWith('GET') && r.includes('/api/stages/s1/discussion'))).toBe(true))
+    expect(screen.queryByRole('tab', { name: 'Discussion' })).toBeNull()
   })
 
   test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {

@@ -441,6 +441,26 @@ func TestHandleRevise(t *testing.T) {
 	}
 }
 
+// An author waiting for its helpers (awaiting_assistants) has finished its turn: a note reaches it only as a
+// Revise, which the orchestrator accepts in that status — so the HTTP layer must not refuse it first.
+func TestHandleRevise_AwaitingAssistants(t *testing.T) {
+	srv, _ := setupPendingServer(t, false)
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusPending, To: state.StatusAwaitingAssistants, Event: "main_done"}); err != nil {
+		t.Fatal(err)
+	}
+	revised := ""
+	srv.actions = fakeStageActions{revise: func(ctx context.Context, id, fb string) (bool, uint64, error) {
+		revised = id
+		return true, 1, nil
+	}}
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/revise", strings.NewReader(`{"feedback":"also cover the edge case"}`))
+	w := httptest.NewRecorder()
+	srv.handleRevise(w, req)
+	if w.Code != http.StatusOK || revised != testStageID {
+		t.Fatalf("status %d (body %q), revised %q: want the Revise delivered", w.Code, w.Body.String(), revised)
+	}
+}
+
 // setupPendingServer builds a server whose single stage stays pending (no
 // transition applied), for pre-note handler tests. isScript configures the stage type.
 func setupPendingServer(t *testing.T, isScript bool) (*Server, string) {
@@ -677,6 +697,29 @@ func TestHandlePause(t *testing.T) {
 	}
 	if pausedID != testStageID {
 		t.Errorf("pause not called with %s, got %q", testStageID, pausedID)
+	}
+}
+
+// A stage parked waiting for a colleague (awaiting_peer) can be paused: team reviews park there routinely.
+func TestHandlePause_AwaitingPeer(t *testing.T) {
+	var pausedID string
+	srv, _ := setupTestServer(t)
+	for _, tr := range []state.Transition{
+		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
+		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingPeer, Event: "await_peer"},
+	} {
+		if err := srv.store.Apply(&tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
+	w := httptest.NewRecorder()
+	srv.handlePause(w, req)
+
+	if w.Code != http.StatusOK || pausedID != testStageID {
+		t.Fatalf("pause of awaiting_peer: status %d, paused %q; want 200 and the stage paused", w.Code, pausedID)
 	}
 }
 

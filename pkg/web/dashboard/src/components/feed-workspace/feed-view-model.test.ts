@@ -35,6 +35,12 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
     expect(items[0]?.text).toContain('exit status 1')
   })
 
+  it("renders team_warning (a team: member could not be applied as written) as a run-level warning with the member and reason", () => {
+    const items = toFeedItems([ev('team_warning', { member_id: 'arch', message: 'profile rev-arch changed since the run started' }, '', '2026-07-10T10:00:00Z')])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', tone: 'warning', kind: 'status', text: 'team member arch: profile rev-arch changed since the run started' })
+  })
+
   it('renders an agent text action as clean prose (no "text:" prefix, not mono)', () => {
     const items = toFeedItems([ev('agent_action', { tool: 'text', detail: 'I initialized the build.' }, 's1', '2026-07-10T10:00:00Z')])
     expect(items[0]).toMatchObject({ text: 'I initialized the build.', kind: 'message', mono: false, actor: 'agent' })

@@ -283,6 +283,17 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"assistants invalid mode", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        mode: advisry\n", false},
 		{"assistants invalid trigger", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        trigger: on_complete\n", false},
 		{"assistants explicit empty mode and trigger", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        mode: \"\"\n        trigger: \"\"\n", true},
+		{"team member", "name: f\nteam:\n  - id: arch\n    profile: rev-arch\n    title: Architecture\n    instruction: Review when asked.\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"team member without instruction", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"team member without id", "name: f\nteam:\n  - profile: qa\n    title: QA\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team member unsafe id", "name: f\nteam:\n  - id: a/b\n    profile: qa\n    title: QA\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team member without profile", "name: f\nteam:\n  - id: qa\n    title: QA\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team member empty title", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: \"\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team member unknown key", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    alias: q\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team null", "name: f\nteam: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team empty value", "name: f\nteam:\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team empty list", "name: f\nteam: []\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"team as object", "name: f\nteam:\n  id: qa\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"assistants unknown object key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        triger: on_completion\n", false},
 	}
 
@@ -328,12 +339,17 @@ func TestRepositoryYAMLExamplesMatchSchemas(t *testing.T) {
 	}
 
 	configSchema := compileSchema(t, configSchemaPath)
-	configExample := "../../config.example.yaml"
-	data, err := os.ReadFile(configExample)
+	exampleConfigs, err := filepath.Glob("../../examples/*/.afm/config.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := configSchema.Validate(jsonInstance(t, data)); err != nil {
-		t.Errorf("%s does not match config schema: %v", configExample, err)
+	for _, path := range append([]string{"../../config.example.yaml"}, exampleConfigs...) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := configSchema.Validate(jsonInstance(t, data)); err != nil {
+			t.Errorf("%s does not match config schema: %v", path, err)
+		}
 	}
 }

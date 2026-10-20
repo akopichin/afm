@@ -94,7 +94,7 @@ func TestTurnReply_AnswersTheWakingMessage(t *testing.T) {
 		t.Fatalf("replies to the waking message = %d, want 1", len(replies))
 	}
 	r := replies[0]
-	if r.ID != turnReplyMessageID(res.TaskID, 1) || r.Sender != res.ParticipantID || r.ThreadID != res.ThreadID ||
+	if r.ID != turnReplyMessageID(res.TaskID, 1, *res.MessageID) || r.Sender != res.ParticipantID || r.ThreadID != res.ThreadID ||
 		len(r.Recipients) != 1 || r.Recipients[0] != meshUserParticipantID || !r.AutoResult || r.Kind != agentcomm.MessageKindReply {
 		t.Fatalf("turn reply = %+v, want a passive reply from the agent to the human in the same thread", r)
 	}
@@ -136,7 +136,7 @@ func TestTurnReply_AnswersTheLastNonPassiveMessage(t *testing.T) {
 	})
 	o.concurrency.WaitAgents()
 
-	if got := repliesTo(store, waking); len(got) != 1 || got[0].ID != turnReplyMessageID(res.TaskID, 2) {
+	if got := repliesTo(store, waking); len(got) != 1 || got[0].ID != turnReplyMessageID(res.TaskID, 2, waking) {
 		t.Fatalf("replies to the waking message = %+v, want the second turn's reply", got)
 	}
 	if len(repliesTo(store, older)) != 0 || len(repliesTo(store, passive)) != 0 {
@@ -216,16 +216,16 @@ func TestTurnReply_OwnReplyRacingTheFinishWins(t *testing.T) {
 	<-started
 
 	result := assistants.Result{Verdict: assistants.VerdictPass, Summary: "done"}
-	reply := o.planTurnReply(res.TaskID, 1, result)
-	if reply == nil {
-		t.Fatal("no turn reply planned")
+	replies := o.planTurnReplies(res.TaskID, 1, turnReplyBody(res.TaskID, 1, result))
+	if len(replies) != 1 {
+		t.Fatalf("turn replies planned = %d, want 1", len(replies))
 	}
 	sendAs(t, o, "op-own", res.ThreadID, res.ParticipantID, meshUserParticipantID, "my own answer", res.MessageID, false)
 	resultEff, err := taskResultEffect(res.TaskID, result)
 	if err != nil {
 		t.Fatal(err)
 	}
-	o.finishTaskTurnReplying(res.TaskID, 1, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, reply, resultEff)
+	o.finishTaskTurnReplying(res.TaskID, 1, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, replies, resultEff)
 	close(release)
 	o.concurrency.WaitAgents()
 
