@@ -129,18 +129,36 @@ func TestReleaseUnmergedTags(t *testing.T) {
 func TestReleaseMakeTargets(t *testing.T) {
 	t.Parallel()
 	dir := releaseRepo(t)
-	for _, level := range []string{"major", "minor", "patch"} {
-		for _, channel := range []string{"", "alpha", "beta"} {
-			target := "release-" + level
-			want := "./scripts/release.sh " + level
-			if channel != "" {
-				target += "-" + channel
-				want += " " + channel
+	for _, tt := range []struct {
+		name string
+		env  []string
+	}{
+		{"direct", []string{"MAKELEVEL=0", "MAKEFLAGS=", "MFLAGS="}},
+		{"recursive", []string{"MAKELEVEL=1", "MAKEFLAGS=w", "MFLAGS=-w"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, level := range []string{"major", "minor", "patch"} {
+				for _, channel := range []string{"", "alpha", "beta"} {
+					target := "release-" + level
+					want := "./scripts/release.sh " + level
+					if channel != "" {
+						target += "-" + channel
+						want += " " + channel
+					}
+					// Assert the recipe only, even when make test enables recursive
+					// directory messages through MAKELEVEL or inherited MAKEFLAGS.
+					cmd := releaseCommand(dir, "make", "--no-print-directory", "-n", target)
+					cmd.Env = append(cmd.Env, tt.env...)
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Fatalf("%s: %v\n%s", target, err, out)
+					}
+					if got := strings.TrimSpace(string(out)); got != want {
+						t.Fatalf("%s = %q, want %q", target, got, want)
+					}
+				}
 			}
-			if got := run(t, dir, "make", "-n", target); got != want {
-				t.Fatalf("%s = %q, want %q", target, got, want)
-			}
-		}
+		})
 	}
 }
 
