@@ -16,15 +16,15 @@ same workflow.
 [![Docs](https://img.shields.io/badge/docs-akopichin.github.io%2Fafm-blue)](https://akopichin.github.io/afm/)
 
 <p align="center">
-  <img src="docs/assets/afm-team.gif" alt="afm demo — Frontend, QA and DevOps agents coordinate a checkout in the Team view" width="900">
+  <img src="docs/assets/afm-team.gif" alt="afm demo — QA, Architect, Frontend and DevOps coordinate a checkout in the stage feed" width="900">
 </p>
 
 ## Why afm, when Claude Code already exists
 
-- **Agents that coordinate directly.** QA asks Frontend a question, Frontend fixes
-  the bug QA found, DevOps picks up QA's tests the moment they are ready — through
+- **Agents that coordinate directly.** QA reports a bug, Architect checks
+  the finding, Frontend fixes it, and DevOps picks up QA's passing tests — through
   conversations, a shared board and durable waits, not by you copying text between
-  sessions. You follow and steer it all in the **Team** tab.
+  sessions. You follow and steer it in the stage **Feed** and the **Team** tab.
 - **Tasks measured in hours, not minutes.** Every run is written to an append-only
   event log; if it's interrupted, `afm run` resumes from the same point — completed
   stages are skipped, interrupted ones retried, and agents' conversations and waits
