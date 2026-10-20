@@ -23,6 +23,7 @@ docs/plans/
 # локальный dev-pipeline флоу (не коммитим)
 /dev-pipeline.yaml
 /dev-pipeline-codex.yaml
+/dev-pipeline-codex-legacy.yaml
 
 # рабочие артефакты dev-pipeline в корне (план/спека) — как и docs/plans/, не коммитим
 /dev-plan.md
