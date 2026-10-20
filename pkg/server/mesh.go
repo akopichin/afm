@@ -69,10 +69,11 @@ type MeshUserSendRequest struct {
 // conversation messages in journal order, the feed's threads opened or closed after the cursor (a client merges
 // them by id, so a thread's status change arrives without a new message), and the cursor of the next page.
 type MeshStageMessagePage struct {
-	Messages   []agentcomm.Message `json:"messages"`
-	Threads    []agentcomm.Thread  `json:"threads"`
-	NextCursor uint64              `json:"next_cursor"`
-	HasMore    bool                `json:"has_more"`
+	Messages           []agentcomm.Message          `json:"messages"`
+	Threads            []agentcomm.Thread           `json:"threads"`
+	NextCursor         uint64                       `json:"next_cursor"`
+	HasMore            bool                         `json:"has_more"`
+	SideAgentFailedIDs map[agentcomm.MessageID]bool `json:"-"`
 }
 
 // MeshBoardPublishRequest is POST /api/mesh/board's body: the entry the human publishes (a key is only ever
@@ -220,7 +221,7 @@ func (s *Server) handleMeshReadThread(w http.ResponseWriter, r *http.Request, th
 		s.writeAssistantError(w, err)
 		return
 	}
-	writeJSON(w, page)
+	writeJSON(w, map[string]any{"messages": meshMessagesForClient(page.Messages, page.SideAgentFailedIDs), "next_cursor": page.NextCursor})
 }
 
 // handleMeshStageMessages is GET /api/mesh/stages/{id}/messages?cursor=&limit= — the conversations a stage's
@@ -236,7 +237,24 @@ func (s *Server) handleMeshStageMessages(w http.ResponseWriter, r *http.Request,
 		s.writeAssistantError(w, err)
 		return
 	}
-	writeJSON(w, page)
+	writeJSON(w, map[string]any{"messages": meshMessagesForClient(page.Messages, page.SideAgentFailedIDs), "threads": page.Threads, "next_cursor": page.NextCursor, "has_more": page.HasMore})
+}
+
+// meshMessagesForClient adds the durable side failure bit only to human read
+// responses. The underlying Message and event journal keep their schema.
+func meshMessagesForClient(messages []agentcomm.Message, failed map[agentcomm.MessageID]bool) []any {
+	views := make([]any, 0, len(messages))
+	for _, msg := range messages {
+		if failed[msg.ID] {
+			views = append(views, struct {
+				agentcomm.Message
+				SideAgentFailed bool `json:"side_agent_failed"`
+			}{Message: msg, SideAgentFailed: true})
+		} else {
+			views = append(views, msg)
+		}
+	}
+	return views
 }
 
 // handleMeshOpenThread decodes ONLY the fields a dashboard operator is trusted to supply — there is no actor

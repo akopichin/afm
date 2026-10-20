@@ -5,14 +5,17 @@ import { errorCodeToMessage, type SideAgentEvent } from '../../types/side-agent'
 import { formatEventGap, groupFeedItems, type FeedGroup, type FeedItem } from '../feed-workspace/feed-view-model'
 
 // mapSideAgentEvent — единственная точка соответствия «тип события беседы → презентация».
-type Mapped = Pick<FeedItem, 'actor' | 'side' | 'tone' | 'kind' | 'text' | 'mono'> & { markdown?: boolean }
+type Mapped = Pick<FeedItem, 'actor' | 'side' | 'tone' | 'kind' | 'text' | 'mono'> & { markdown?: boolean; authorLabel?: string }
 
 function mapSideAgentEvent(event: SideAgentEvent): Mapped | null {
   switch (event.type) {
     case 'turn_accepted':
       // Реплика пользователя — справа, обычным текстом (как agent_note в ленте
       // стадий): введённые `*`/`#`/URL не должны менять вид сообщения.
-      return { actor: 'user', side: 'right', tone: 'neutral', kind: 'message', text: event.data.message, mono: false }
+      return event.data.sourceMessageId !== undefined
+        ? { actor: 'user', side: 'left', tone: 'neutral', kind: 'message', text: event.data.message, mono: false,
+            authorLabel: `From ${event.data.sourceSenderName || event.data.sourceSenderId || 'Unknown sender'}` }
+        : { actor: 'user', side: 'right', tone: 'neutral', kind: 'message', text: event.data.message, mono: false }
     case 'assistant_text':
       // Ответ агента — слева, как markdown (заголовки/код/таблицы), тем же
       // санитайзером, что и проза стадий.
@@ -50,6 +53,7 @@ export function toSideAgentFeedItems(events: SideAgentEvent[]): FeedItem[] {
       key: `seq:${event.seq}`,
       stageId: '',
       actor: m.actor,
+      authorLabel: m.authorLabel,
       side: m.side,
       tone: m.tone,
       kind: m.kind,

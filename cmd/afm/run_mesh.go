@@ -104,7 +104,9 @@ func (a meshActions) Thread(ctx context.Context, threadID string, cursor uint64,
 	if err != nil {
 		return server.MeshMessagePage{}, err
 	}
-	return toMeshMessagePage(page), nil
+	view := toMeshMessagePage(page)
+	view.SideAgentFailedIDs = a.sideAgentFailures(page.Messages)
+	return view, nil
 }
 
 func (a meshActions) Inbox(ctx context.Context, cursor uint64, limit int) (server.MeshMessagePage, error) {
@@ -119,7 +121,22 @@ func (a meshActions) Inbox(ctx context.Context, cursor uint64, limit int) (serve
 
 // StageMessages is the stage feed's conversation page; empty lists, never null, for the dashboard.
 func (a meshActions) StageMessages(ctx context.Context, stageID string, cursor uint64, limit int) (server.MeshStageMessagePage, error) {
-	return toMeshStagePage(a.orch.StageMessages(stageID, cursor, limit)), nil
+	view := toMeshStagePage(a.orch.StageMessages(stageID, cursor, limit))
+	view.SideAgentFailedIDs = a.sideAgentFailures(view.Messages)
+	return view, nil
+}
+
+func (a meshActions) sideAgentFailures(messages []agentcomm.Message) map[agentcomm.MessageID]bool {
+	var failed map[agentcomm.MessageID]bool
+	for _, msg := range messages {
+		if !msg.AutoResult && a.orch.SideAgentMeshResponseFailedAlready(msg.ID) {
+			if failed == nil {
+				failed = make(map[agentcomm.MessageID]bool)
+			}
+			failed[msg.ID] = true
+		}
+	}
+	return failed
 }
 
 func toMeshStagePage(p orchestrator.StageMessagePage) server.MeshStageMessagePage {

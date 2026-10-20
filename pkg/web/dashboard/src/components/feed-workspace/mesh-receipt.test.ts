@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeReceiptPhase, meshDeliveries, RECEIPT_LABEL } from './mesh-receipt'
+import { computeReceiptPhase, meshDeliveries, sideAgentFailures, sideAgentOutcome, RECEIPT_LABEL } from './mesh-receipt'
 import type { MeshParticipant } from '../../api/mesh-client'
 
 const reachable: MeshParticipant = { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', reachable: true }
@@ -69,10 +69,51 @@ describe('meshDeliveries', () => {
     const d = meshDeliveries([
       ev({ message_id: 'm1', participant_id: 'stage:s1', status: 'delivered' }),
       ev({ message_id: 'm1', participant_id: 'run:qa', status: 'acknowledged' }),
+      ev({ message_id: 'm1', participant_id: 'side:r1', status: 'undeliverable' }),
       { type: 'mesh_message', payload: { message_id: 'm2' }, stageId: '', timestamp: '' },
     ])
     expect(d.has('m1|stage:s1')).toBe(true)
     expect(d.has('m1|run:qa')).toBe(true)
+    expect(d.has('m1|side:r1')).toBe(false)
     expect(d.has('m2|stage:s1')).toBe(false)
+  })
+})
+
+describe('sideAgentOutcome', () => {
+  const original = { id: 'm1', thread_id: 'mt1', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'help', seq: 1, created_at: '' }
+  it('distinguishes linked success, linked passive failure and a durable failure notice', () => {
+    const reply = { ...original, id: 'm2', sender_id: 'side:r1', recipient_ids: ['user'], in_reply_to: 'm1', kind: 'reply', auto_result: true }
+    expect(sideAgentOutcome(original, [original, reply], new Set())).toBe('answered')
+    expect(sideAgentOutcome(original, [original, { ...reply, kind: 'result' }], new Set())).toBe('could_not_answer')
+    const failures = sideAgentFailures([{ type: 'side_agent_mesh_failure', payload: { source_message_id: 'm1' }, stageId: '', timestamp: '' }])
+    expect(sideAgentOutcome(original, [original], failures)).toBe('could_not_answer')
+    expect(sideAgentOutcome({ ...original, recipient_ids: ['run:qa'] }, [original, reply], failures)).toBeNull()
+  })
+
+  it('treats an undeliverable side receipt as failure before the linked reply refreshes', () => {
+    const receipts = [
+      { type: 'mesh_receipt', payload: { message_id: 'm1', participant_id: 'side:r1', status: 'undeliverable' }, stageId: '', timestamp: '' },
+      { type: 'mesh_receipt', payload: { message_id: 'm1', participant_id: 'run:qa', status: 'delivered' }, stageId: '', timestamp: '' },
+    ]
+    const failures = sideAgentFailures(receipts)
+    expect(failures.has('m1')).toBe(true)
+    expect(sideAgentOutcome(original, [original], failures)).toBe('could_not_answer')
+    expect(meshDeliveries(receipts).has('m1|side:r1')).toBe(false)
+    expect(meshDeliveries(receipts).has('m1|run:qa')).toBe(true)
+  })
+
+  it('recovers an old side failure from the message when the capped event replay has no notice', () => {
+    const failed = { ...original, side_agent_failed: true }
+    expect(sideAgentOutcome(failed, [failed], new Set())).toBe('could_not_answer')
+    // The composer only knows the sent id; the stage message poll carries the durable flag.
+    expect(sideAgentOutcome({ id: 'm1', recipient_ids: ['side:r1'] }, [failed], new Set(), 'side:r1')).toBe('could_not_answer')
+    expect(sideAgentOutcome({ id: 'm1', recipient_ids: ['run:qa'] }, [failed], new Set())).toBeNull()
+  })
+
+  it('does not call a passive auto result a failed side request after orphan cleanup', () => {
+    const passive = { ...original, kind: 'result', auto_result: true, side_agent_failed: true }
+    const failures = new Set(['m1'])
+    expect(sideAgentOutcome(passive, [passive], failures)).toBeNull()
+    expect(sideAgentOutcome({ id: 'm1', recipient_ids: ['side:r1'] }, [passive], failures)).toBeNull()
   })
 })

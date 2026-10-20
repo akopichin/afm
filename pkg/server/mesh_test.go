@@ -515,6 +515,47 @@ func TestMesh_StageMessages(t *testing.T) {
 	}
 }
 
+func TestMesh_SideFailureReadableAfterEventHistoryCap(t *testing.T) {
+	// The reconnect event response can omit an older failure notice; a fresh
+	// thread or stage read still carries the durable outcome for that source.
+	srv := newTestServerWithStages(t, map[string]int{"noise": 11000})
+	fake := newFakeMeshActions()
+	messages := []agentcomm.Message{
+		{ID: "source", ThreadID: "mt-1", Sender: "stage:noise", Recipients: []agentcomm.ParticipantID{"side:run"}, Kind: agentcomm.MessageKindMessage, Body: "question"},
+		{ID: "ordinary", ThreadID: "mt-1", Sender: "stage:noise", Recipients: []agentcomm.ParticipantID{"user"}, Kind: agentcomm.MessageKindMessage, Body: "note"},
+	}
+	failures := map[agentcomm.MessageID]bool{"source": true}
+	fake.threadPage = MeshMessagePage{Messages: messages, SideAgentFailedIDs: failures}
+	fake.stagePage = MeshStageMessagePage{Messages: messages, SideAgentFailedIDs: failures}
+	// New registers capability routes when the server is constructed.
+	srv = New(Config{RunDir: srv.runDir, Store: srv.store, UIBus: srv.uiBus, Actions: fakeStageActions{}, Mesh: fake})
+	eventsReq := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	events := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(events, eventsReq)
+	var history []feedEvent
+	if err := json.Unmarshal(events.Body.Bytes(), &history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 10000 {
+		t.Fatalf("event history = %d, want capped 10000", len(history))
+	}
+	for _, path := range []string{"/api/mesh/threads/mt-1", "/api/mesh/stages/noise/messages"} {
+		w, body := doMeshJSON(t, srv, http.MethodGet, path, nil, false)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: HTTP %d", path, w.Code)
+		}
+		rows := body["messages"].([]any)
+		source := rows[0].(map[string]any)
+		ordinary := rows[1].(map[string]any)
+		if failed, ok := source["side_agent_failed"].(bool); !ok || !failed {
+			t.Fatalf("%s: source failure missing: %v", path, source)
+		}
+		if _, ok := ordinary["side_agent_failed"]; ok {
+			t.Fatalf("%s: ordinary message gained failure field: %v", path, ordinary)
+		}
+	}
+}
+
 // TestMesh_ReadThread_MembershipRejectionSurfacesAsError documents that a non-member/unknown thread read
 // (the Service's own ReadThread enforces this — pkg/orchestrator/agentcomm_messages.go) is surfaced as an
 // HTTP error, never as a 200 with someone else's data: a thread id from a different run simply does not

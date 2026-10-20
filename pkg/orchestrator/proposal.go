@@ -100,6 +100,9 @@ func (o *Orchestrator) CreateProposal(ctx context.Context, req CreateProposalReq
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return "", err
+	}
 	if o.reg().Stage(req.StageID) == nil {
 		return "", fmt.Errorf("assistants: unknown stage %q", req.StageID)
 	}
@@ -172,6 +175,9 @@ var ErrProposalNotFound = errors.New("assistants: proposal not found")
 func (o *Orchestrator) DismissProposal(ctx context.Context, proposalID, requestID, reason string, actor state.Actor) error {
 	if !o.opts.AssistantsEnabled {
 		return &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
+	}
+	if err := rejectReservedRequestID(requestID, actor); err != nil {
+		return err
 	}
 	p, ok := o.Proposal(proposalID)
 	if !ok {

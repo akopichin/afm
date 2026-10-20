@@ -84,6 +84,13 @@ type Config struct {
 	// MentionResolve above. nil fails CLOSED: no action draft is ever recorded (extractActionDrafts's own
 	// nil-predicate convention).
 	KnownActionType func(typ string) bool
+	// MeshClient is resolved for each invocation, after the dashboard has bound its URL.
+	MeshClient func() *executor.MeshClient
+	// OnSourceDelivered runs only after the executor starts a sourced turn.
+	OnSourceDelivered func(sourceMessageID string)
+	// SourceReply returns a durable explicit Mesh reply to the sourced message.
+	// It is consulted only when a successful turn emitted no assistant text.
+	SourceReply func(sourceMessageID string) (string, bool)
 	// OnUsage — приёмник учёта стоимости одного хода. nil → учёт выключен.
 	OnUsage func(accounting.Observation)
 	// NewExecutor — фабрика AgentRunner из executor.Config (тест-шов). nil →
@@ -97,30 +104,37 @@ type activeTurn struct {
 	interrupt chan struct{} // сигнал Stop именно этому ходу (→ SIGINT)
 	answered  atomic.Bool   // был ли хоть один ВИДИМЫЙ И ПЕРСИСТНУТЫЙ ответ
 	storeFail atomic.Bool   // durable-запись действия провалилась — ход остановлен
+	meshToken atomic.Value  // token minted by this invocation, retained for redacting terminal errors after revoke
 }
 
 // turnRecord — минимум для идемпотентности: совпадение client_message_id.
 type turnRecord struct {
-	message string
-	turnID  string
+	message         string
+	turnID          string
+	sourceMessageID string
+	sourceThreadID  string
+	sourceSenderID  string
 }
 
 // Manager владеет единственным активным ходом бокового разговора: durable-first приём, запуск агента под
 // ПРОЦЕССНЫМ ctx, доставку событий подписчикам и ограниченный Drain для shutdown.
 type Manager struct {
-	store           *Store
-	command         string
-	args            []string
-	dir             string
-	wrapperDir      string
-	idleTimeout     time.Duration
-	reasoning       string
-	ctxBuilder      ContextBuilder
-	secrets         func() []string
-	onUsage         func(accounting.Observation)
-	mentionResolve  func(string) (string, bool)
-	knownActionType func(string) bool
-	newExecutor     func(executor.Config) AgentRunner
+	store             *Store
+	command           string
+	args              []string
+	dir               string
+	wrapperDir        string
+	idleTimeout       time.Duration
+	reasoning         string
+	ctxBuilder        ContextBuilder
+	secrets           func() []string
+	onUsage           func(accounting.Observation)
+	mentionResolve    func(string) (string, bool)
+	knownActionType   func(string) bool
+	meshClient        func() *executor.MeshClient
+	onSourceDelivered func(string)
+	sourceReply       func(string) (string, bool)
+	newExecutor       func(executor.Config) AgentRunner
 
 	// ctx — процессный контекст агентских горутин. Отмена запроса (POST/SSE) на
 	// него НЕ влияет: ход прерывается только через Stop/Shutdown (InterruptCh).
@@ -155,22 +169,25 @@ func New(cfg Config) *Manager {
 		nx = NewExecutorRunner
 	}
 	return &Manager{
-		store:           cfg.Store,
-		command:         cfg.Command,
-		args:            cfg.ExtraArgs,
-		dir:             cfg.Dir,
-		wrapperDir:      cfg.WrapperDir,
-		idleTimeout:     cfg.IdleTimeout,
-		reasoning:       cfg.Reasoning,
-		ctxBuilder:      cfg.Context,
-		secrets:         cfg.Secrets,
-		onUsage:         cfg.OnUsage,
-		mentionResolve:  cfg.MentionResolve,
-		knownActionType: cfg.KnownActionType,
-		newExecutor:     nx,
-		ctx:             context.Background(),
-		idem:            rebuildIdempotency(cfg.Store.History()),
-		subs:            make(map[int]chan Event),
+		store:             cfg.Store,
+		command:           cfg.Command,
+		args:              cfg.ExtraArgs,
+		dir:               cfg.Dir,
+		wrapperDir:        cfg.WrapperDir,
+		idleTimeout:       cfg.IdleTimeout,
+		reasoning:         cfg.Reasoning,
+		ctxBuilder:        cfg.Context,
+		secrets:           cfg.Secrets,
+		onUsage:           cfg.OnUsage,
+		mentionResolve:    cfg.MentionResolve,
+		knownActionType:   cfg.KnownActionType,
+		meshClient:        cfg.MeshClient,
+		onSourceDelivered: cfg.OnSourceDelivered,
+		sourceReply:       cfg.SourceReply,
+		newExecutor:       nx,
+		ctx:               context.Background(),
+		idem:              rebuildIdempotency(cfg.Store.History()),
+		subs:              make(map[int]chan Event),
 	}
 }
 
@@ -185,7 +202,7 @@ func rebuildIdempotency(history []Event) map[string]turnRecord {
 		if err := e.DecodeData(&d); err != nil || d.ClientMessageID == "" {
 			continue
 		}
-		idem[d.ClientMessageID] = turnRecord{message: d.Message, turnID: e.TurnID}
+		idem[d.ClientMessageID] = turnRecord{message: d.Message, turnID: e.TurnID, sourceMessageID: d.SourceMessageID, sourceThreadID: d.SourceThreadID, sourceSenderID: d.SourceSenderID}
 	}
 	return idem
 }
@@ -237,8 +254,11 @@ func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string,
 	}
 	// Идемпотентность по client_message_id (вся беседа, durable — см. idem).
 	if rec, ok := m.idem[clientMessageID]; ok {
-		if rec.message == text {
+		if rec.message == text && rec.sourceMessageID == target.SourceMessageID && rec.sourceThreadID == target.SourceThreadID && rec.sourceSenderID == target.SourceSenderID {
 			return rec.turnID, nil // тот же ход, без повторного запуска
+		}
+		if rec.sourceMessageID != target.SourceMessageID || rec.sourceThreadID != target.SourceThreadID || rec.sourceSenderID != target.SourceSenderID {
+			return "", newErr(ErrCodeInvalidMessage, "client_message_id reused for a different source")
 		}
 		return "", newErr(ErrCodeBusy, "client_message_id reused with different text")
 	}
@@ -248,7 +268,14 @@ func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string,
 
 	// Шаг 3: сборка контекста и бюджет ДО приёма — при превышении ничего не
 	// пишем, прежняя история и черновик сохраняются.
-	prompt, err := m.ctxBuilder.Build(m.store.History(), text)
+	accepted := TurnAcceptedData{
+		Message: text, ClientMessageID: clientMessageID,
+		StageID: target.StageID, AssistantTaskID: target.AssistantTaskID,
+		Mentions:        extractMentions(text, m.mentionResolve),
+		SourceMessageID: target.SourceMessageID, SourceThreadID: target.SourceThreadID,
+		SourceSenderID: target.SourceSenderID, SourceSenderName: target.SourceSenderName,
+	}
+	prompt, err := m.ctxBuilder.Build(m.store.History(), accepted)
 	if err != nil {
 		if errors.Is(err, ErrContextLimit) {
 			return "", newErr(ErrCodeContextLimit, err.Error())
@@ -258,30 +285,23 @@ func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string,
 
 	// Шаг 4: turn_accepted (fsync) → резерв активного хода → учёт горутины.
 	turnID := newTurnID()
-	accepted := TurnAcceptedData{
-		Message:         text,
-		ClientMessageID: clientMessageID,
-		StageID:         target.StageID,
-		AssistantTaskID: target.AssistantTaskID,
-		Mentions:        extractMentions(text, m.mentionResolve),
-	}
 	if _, err := m.record(EventTurnAccepted, turnID, accepted); err != nil {
 		return "", newErr(ErrCodeStorageUnavailable, err.Error())
 	}
 	at := &activeTurn{turnID: turnID, interrupt: make(chan struct{}, 1)}
 	m.active = at
-	m.idem[clientMessageID] = turnRecord{message: text, turnID: turnID}
+	m.idem[clientMessageID] = turnRecord{message: text, turnID: turnID, sourceMessageID: target.SourceMessageID, sourceThreadID: target.SourceThreadID, sourceSenderID: target.SourceSenderID}
 
 	// wg.Add ДО выхода из admission-mutex: shutdown/Drain не сможет обогнать
 	// регистрацию горутины.
 	m.wg.Add(1)
-	go m.runTurn(at, prompt)
+	go m.runTurn(at, prompt, accepted.SourceMessageID)
 
 	return turnID, nil
 }
 
 // runTurn выполняет ход под процессным ctx менеджера.
-func (m *Manager) runTurn(at *activeTurn, prompt string) {
+func (m *Manager) runTurn(at *activeTurn, prompt, sourceMessageID string) {
 	defer m.wg.Done()
 	defer m.releaseActive(at)
 
@@ -295,7 +315,7 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 
 	logFile, logRef, err := m.turnPaths(at.turnID)
 	if err != nil {
-		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeAgentError, Message: m.redactErr(err)}) //nolint:errcheck
+		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeAgentError, Message: m.redactErr(at, err)}) //nolint:errcheck
 		return
 	}
 
@@ -317,12 +337,15 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 		InterruptCh: at.interrupt,
 		OnUsage:     m.onUsage,
 		Reasoning:   m.reasoning,
+		// Read at write time: MeshClient.Mint runs later in executor.run, so
+		// this includes the invocation token once stdout/stderr can contain it.
+		Secrets: func() []string { return m.secretValues(at) },
 		OnAction: func(tool, detail string) {
 			// Уже провалилась durable-запись — не плодим новые (ход останавливается).
 			if at.storeFail.Load() {
 				return
 			}
-			typ, data := mapAction(tool, detail, logRef, m.secretValues())
+			typ, data := mapAction(tool, detail, logRef, m.secretValues(at))
 			if _, err := m.record(typ, at.turnID, data); err != nil {
 				// Сбой журнала во время хода: помечаем, мягко прерываем агента
 				// (InterruptCh) — ход останавливается, flow FSM не затрагивается.
@@ -341,6 +364,24 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 			}
 		},
 	}
+	if m.meshClient != nil {
+		cfg.MeshClient = m.meshClient()
+		if cfg.MeshClient != nil {
+			client := *cfg.MeshClient
+			mint := client.Mint
+			client.Mint = func() (string, string, func()) {
+				url, token, revoke := mint()
+				if token != "" {
+					at.meshToken.Store(token)
+				}
+				return url, token, revoke
+			}
+			cfg.MeshClient = &client
+		}
+	}
+	if sourceMessageID != "" && m.onSourceDelivered != nil {
+		cfg.OnDelivered = func() { m.onSourceDelivered(sourceMessageID) }
+	}
 	runner := m.newExecutor(cfg)
 	runErr := runner.RunAgent(m.ctx, sideAgentType, sideStageName, prompt, logFile)
 
@@ -353,9 +394,22 @@ func (m *Manager) runTurn(at *activeTurn, prompt string) {
 	case errors.Is(runErr, executor.ErrUserInterrupted):
 		m.record(EventTurnInterrupted, at.turnID, TurnInterruptedData{Reason: "stopped by user"}) //nolint:errcheck
 	case runErr != nil:
-		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeAgentError, Message: m.redactErr(runErr)}) //nolint:errcheck
+		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeAgentError, Message: m.redactErr(at, runErr)}) //nolint:errcheck
 	case !at.answered.Load():
-		// Штатный выход без видимого ответа — протокольная ошибка, не «успех».
+		// An explicit afm agent reply is already visible in the source Mesh thread.
+		// Mirror its durable, redacted body into the modal conversation so this
+		// turn does not falsely claim the agent gave no answer.
+		if sourceMessageID != "" && m.sourceReply != nil {
+			if body, ok := m.sourceReply(sourceMessageID); ok && strings.TrimSpace(body) != "" {
+				_, data := mapAction(toolText, body, logRef, m.secretValues(at))
+				if _, err := m.record(EventAssistantText, at.turnID, data); err == nil {
+					m.record(EventTurnCompleted, at.turnID, TurnCompletedData{}) //nolint:errcheck
+					return
+				}
+				return // storage failure is fatal to this conversation
+			}
+		}
+		// A successful process without a visible answer is a protocol failure.
 		m.record(EventTurnFailed, at.turnID, TurnFailedData{Code: ErrCodeNoAnswer, Message: "agent produced no visible answer"}) //nolint:errcheck
 	default:
 		drafts := extractActionDrafts(lastText, m.knownActionType)
@@ -476,15 +530,19 @@ func (m *Manager) record(typ EventType, turnID string, data any) (Event, error) 
 
 // --- вспомогательное ---
 
-func (m *Manager) secretValues() []string {
-	if m.secrets == nil {
-		return nil
+func (m *Manager) secretValues(at *activeTurn) []string {
+	var values []string
+	if m.secrets != nil {
+		values = append(values, m.secrets()...)
 	}
-	return m.secrets()
+	if token := at.meshToken.Load(); token != nil {
+		values = append(values, token.(string))
+	}
+	return values
 }
 
-func (m *Manager) redactErr(err error) string {
-	return redact.String(err.Error(), m.secretValues())
+func (m *Manager) redactErr(at *activeTurn, err error) string {
+	return redact.String(err.Error(), m.secretValues(at))
 }
 
 // turnPaths возвращает путь лога агента хода и относительную ссылку для log_ref.

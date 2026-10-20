@@ -60,6 +60,7 @@ const DEFAULT_DEPS: SideAgentDeps = {
 export type SideAgentApi = {
   events: SideAgentEvent[]
   requestState: 'idle' | 'running'
+  activeSource: ActiveTurnSource
   unavailable: boolean
   command: string
   draft: string
@@ -80,6 +81,24 @@ export type SideAgentApi = {
   // forgotten once the window closes, so reopening defaults back to the current selection.
   contextStageId: string
   setContextStageId: (stageId: string) => void
+}
+
+export type ActiveTurnSource = { kind: 'modal' } | { kind: 'mesh'; sender: string } | null
+
+// The authoritative running flag can arrive before its accepted event. Until that event is known,
+// keep the origin unknown so the modal cannot stop a peer's turn.
+export function activeTurnSource(events: readonly SideAgentEvent[], state: SideAgentApi['requestState']): ActiveTurnSource {
+  if (state !== 'running') return null
+  const accepted = [...events].reverse().find((e) => e.type === 'turn_accepted')
+  if (accepted?.type !== 'turn_accepted') return null
+  // A newer turn may have started while its acceptance frame is still being replayed.
+  if (events.some((e) => e.seq > accepted.seq && e.type === 'turn_started' && e.turnId !== accepted.turnId)) return null
+  if (events.some((e) => e.turnId === accepted.turnId && e.seq > accepted.seq &&
+    (e.type === 'turn_completed' || e.type === 'turn_failed' || e.type === 'turn_interrupted'))) return null
+  if (accepted.data.sourceMessageId !== undefined) {
+    return { kind: 'mesh', sender: accepted.data.sourceSenderName || accepted.data.sourceSenderId || 'Unknown sender' }
+  }
+  return { kind: 'modal' }
 }
 
 function newClientMessageId(): string {
@@ -176,6 +195,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     for (const e of fresh) if (e.seq > cursorRef.current) cursorRef.current = e.seq
     setEvents((prev) => [...prev, ...fresh])
     for (const e of fresh) {
+      if (e.type === 'turn_accepted') setError(null)
       if (e.type === 'turn_accepted' || e.type === 'turn_started') {
         lastTurnIdRef.current = e.turnId
         setRequestState('running')
@@ -337,6 +357,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   return {
     events,
     requestState,
+    activeSource: activeTurnSource(events, requestState),
     unavailable,
     command,
     draft,

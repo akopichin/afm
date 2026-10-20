@@ -79,17 +79,32 @@ project, or run a quick command-style exchange *without* touching the run.
   small indicator — it lights while a reply is in flight and
   flags an unseen result once one arrives while the window is closed.
 - **One conversation per run, one request at a time.** The chat keeps a single
-  conversation tied to the run; you can't fire a second message while one is still
-  working — send it after the current reply lands (or **Stop** the current one).
+  conversation tied to the run. Messages sent to `@side` through Agent Mesh join
+  this history too. Only one turn runs at a time, so you can send a new modal
+  message after the current turn ends. Mesh messages wait for their turn.
 - **Independent execution.** The side chat has its own journal and its own
-  cost accounting; it is *not* part of any stage. It never appears in a stage's Feed,
-  never changes a stage's status, and never triggers stage timers or lifecycle hooks.
-  An error in the chat cannot fail a stage. When Agent Mesh is available, the Side
-  agent also appears in Team.
+  cost accounting; it is *not* part of any stage. Its turns do not change stage
+  status or trigger stage timers or lifecycle hooks, and an error in a turn cannot
+  fail a stage. Mesh messages to and from the Side agent appear in their original
+  Team or stage Feed conversations. When Agent Mesh is available, the Side agent
+  appears in Team as `@side`.
+- **Messages from colleagues appear here too.** A message addressed to `@side`
+  from Team, a stage Feed, or an agent starts a turn in this conversation. The
+  incoming message is labelled **From <sender>**; while it runs, the header says
+  **Replying to <sender>…**. The agent receives the sender and original Mesh
+  conversation in its prompt, so it can answer there with `afm agent reply`.
+  If it does, and writes no separate final answer, its linked reply is also shown
+  in this modal. Otherwise, a successful final answer is posted back to the
+  original conversation unless the agent already replied explicitly. A failed
+  turn or unavailable conversation settles with **Could not answer** or an
+  undeliverable receipt in the source conversation. Automatic turn results do
+  not trigger an automatic answer back to their sender.
 - **The agent outlives the HTTP request.** Once a message is accepted the agent runs
   under afm's own lifetime, not the browser request — closing the window or reloading
-  the page does **not** interrupt it. Only **Stop**, `Ctrl+C`, or afm shutting down
-  does. Reopening the window catches you back up on whatever ran while it was closed.
+  the page does **not** interrupt it. **Stop** is available only for a turn started
+  from this modal; it cannot stop a colleague's turn. `Ctrl+C` or afm shutting
+  down also ends the work. Reopening the window catches you back up on whatever
+  ran while it was closed.
 - **afm assembles the context, with an explicit budget.** Each message is a fresh
   agent call; afm rebuilds the conversation itself rather than relying on the agent's
   native resume. The assembled prompt has a hard byte budget — exceeding it is a

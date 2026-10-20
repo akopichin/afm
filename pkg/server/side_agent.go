@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/sideagent"
 )
@@ -135,6 +136,10 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeSideAgentErrCode(w, http.StatusBadRequest, "invalid_body")
+		return
+	}
+	if strings.HasPrefix(req.ClientMessageID, "mesh:") {
+		writeSideAgentErrCode(w, http.StatusBadRequest, string(sideagent.ErrCodeInvalidMessage))
 		return
 	}
 	turnID, err := s.sideAgent.Send(req.ClientMessageID, req.Text, sideagent.TurnTarget{StageID: req.StageID})

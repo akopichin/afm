@@ -130,6 +130,11 @@ func (o *Orchestrator) CommitAddStage(ctx context.Context, req AddStageDraft) (A
 	if req.RequestID == "" {
 		return AddStageResult{}, ErrRequestIDRequired
 	}
+	// CommitAddStage is reached from dashboard requests (including confirmed drafts).
+	// Its operation ID shares the store's index with side Mesh terminal writes.
+	if err := rejectReservedRequestID(req.RequestID, state.Actor{Kind: "user"}); err != nil {
+		return AddStageResult{}, err
+	}
 
 	// Idempotent replay (TestCommit_DuplicateOperationIgnored): resolve directly from the durable record
 	// instead of re-planning against a registry the ORIGINAL commit may have already mutated — re-planning

@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSideAgent, type SideAgentDeps, type StreamHandlers } from './use-side-agent'
+import { activeTurnSource, useSideAgent, type SideAgentDeps, type StreamHandlers } from './use-side-agent'
 import type { ConversationResponse } from '../../api/side-agent-client'
 import { SideAgentApiError } from '../../api/side-agent-client'
 import type { SideAgentEvent } from '../../types/side-agent'
@@ -45,6 +45,19 @@ function makeDeps(convo: () => ConversationResponse = emptyConversation) {
   const deps: SideAgentDeps = { getConversation, sendMessage, interrupt, openStream }
   return { deps, openStream, close, getConversation, sendMessage, interrupt, emit: (raw: unknown) => handlers?.onEvent(raw) }
 }
+
+describe('activeTurnSource', () => {
+  it('recognizes modal and Mesh turns and clears the source on terminal events', () => {
+    const modal = parsed(1, 'turn_accepted', { message: 'hi', clientMessageId: 'c1' })
+    const mesh = parsed(3, 'turn_accepted', { message: 'help', clientMessageId: 'mesh:m1', sourceMessageId: 'm1', sourceSenderId: 'run:qa', sourceSenderName: 'QA' }, 't2')
+    expect(activeTurnSource([], 'running')).toBeNull()
+    expect(activeTurnSource([modal], 'running')).toEqual({ kind: 'modal' })
+    expect(activeTurnSource([modal, parsed(2, 'turn_started', { command: 'codex', contextFormatVersion: 'v1' }, 't2')], 'running')).toBeNull()
+    expect(activeTurnSource([modal, parsed(2, 'turn_completed', {}, 't1'), mesh], 'running')).toEqual({ kind: 'mesh', sender: 'QA' })
+    expect(activeTurnSource([mesh, parsed(4, 'turn_failed', { code: 'agent_error', message: '' }, 't2')], 'running')).toBeNull()
+    expect(activeTurnSource([mesh], 'idle')).toBeNull()
+  })
+})
 
 describe('useSideAgent', () => {
   beforeEach(() => vi.spyOn(console, 'error').mockImplementation(() => {}))
@@ -127,6 +140,47 @@ describe('useSideAgent', () => {
     expect(result.current.events.filter((e) => e.type === 'assistant_text')).toHaveLength(1)
     act(() => { emit(wire(3, 'turn_completed', {})) })
     expect(result.current.requestState).toBe('idle')
+  })
+
+  it('clears a failed turn banner when a later Mesh turn is accepted and completed while open', async () => {
+    const { deps, emit } = makeDeps()
+    const { result } = renderHook(() => useSideAgent('r1', true, deps))
+    await act(async () => { result.current.open() })
+    await waitFor(() => expect(deps.openStream).toHaveBeenCalled())
+
+    act(() => { emit(wire(1, 'turn_failed', { code: 'agent_error', message: 'failed' }, 't1')) })
+    expect(result.current.error).toBe('The agent failed to answer')
+    act(() => {
+      emit(wire(2, 'turn_accepted', {
+        message: 'help', client_message_id: 'mesh:m2', source_message_id: 'm2',
+        source_sender_id: 'run:qa', source_sender_name: 'QA',
+      }, 't2'))
+      emit(wire(3, 'assistant_text', { text: 'done' }, 't2'))
+      emit(wire(4, 'turn_completed', {}, 't2'))
+    })
+    expect(result.current.isOpen).toBe(true)
+    expect(result.current.error).toBeNull()
+    expect(result.current.events.map((e) => e.type)).toEqual(['turn_failed', 'turn_accepted', 'assistant_text', 'turn_completed'])
+  })
+
+  it('clears a failed turn banner when history sync contains a later Mesh acceptance', async () => {
+    const { deps, getConversation } = makeDeps()
+    getConversation.mockResolvedValueOnce(emptyConversation({
+      state: 'idle', lastSeq: 4, events: [
+        parsed(1, 'turn_failed', { code: 'agent_error', message: 'failed' }, 't1'),
+        parsed(2, 'turn_accepted', {
+          message: 'help', clientMessageId: 'mesh:m2', sourceMessageId: 'm2',
+          sourceSenderId: 'run:qa', sourceSenderName: 'QA',
+        }, 't2'),
+        parsed(3, 'assistant_text', { text: 'done' }, 't2'),
+        parsed(4, 'turn_completed', {}, 't2'),
+      ],
+    }))
+    const { result } = renderHook(() => useSideAgent('r1', true, deps))
+    await act(async () => { result.current.open() })
+    await waitFor(() => expect(result.current.events).toHaveLength(4))
+    expect(result.current.error).toBeNull()
+    expect(result.current.events[0]?.type).toBe('turn_failed')
   })
 
   it('a terminal event while the window is closed raises unseenResult', async () => {

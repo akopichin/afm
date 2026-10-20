@@ -28,6 +28,11 @@ describe('participantLabel', () => {
 })
 
 describe('buildMeshMentionGroups', () => {
+  it('keeps the reachable side agent selectable in the run mention group', () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const item = buildMeshMentionGroups([side], [], 's1')[0]?.items[0]
+    expect(item).toMatchObject({ id: 'side:r1', handle: 'side', unavailable: false, target: { kind: 'participant', id: 'side:r1' } })
+  })
   it('groups run-scoped participants under "This run", excluding the human', () => {
     const groups = buildMeshMentionGroups([user, runAgent, stageAgent], [], 's1')
     const thisRun = groups.find((g) => g.label === 'This run')

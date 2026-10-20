@@ -21,6 +21,9 @@ import (
 //     the message, so a send that is rejected leaves no empty conversation behind. The new thread's id is derived from the member set, so two agents starting
 //     the same conversation at once open the same thread.
 func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (SendReceipt, error) {
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return SendReceipt{}, err
+	}
 	rs := o.opts.Store.Snapshot()
 	roster := o.liveRoster(rs)
 	// A retry of an already-committed request replays its outcome, whatever changed since (a new agent with

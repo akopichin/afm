@@ -36,8 +36,17 @@ import (
 // The returned entry is the revision THIS operation committed — rebuilt from the committed operation, never
 // read back from the board, which may already hold a newer revision.
 func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentcomm.BoardEntry, error) {
+	if len(req.Notify) != 0 {
+		// A board revision and its side notice commit together. CloseInput
+		// must wait until that commit has either completed or been rejected.
+		o.sideAgentGate.RLock()
+		defer o.sideAgentGate.RUnlock()
+	}
 	if req.OperationID == "" {
 		return agentcomm.BoardEntry{}, errors.New("agentcomm: operation id is required")
+	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return agentcomm.BoardEntry{}, err
 	}
 	if req.Key == "" || req.Author == "" {
 		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board entry needs a key"}
@@ -173,7 +182,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			continue
 		}
 		seen[recipient] = true
-		if p, ok := resolveParticipant(rs, recipient); !ok || !p.Reachable {
+		if p, ok := o.liveParticipant(rs, recipient); !ok || !p.Reachable {
 			continue
 		}
 		if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {

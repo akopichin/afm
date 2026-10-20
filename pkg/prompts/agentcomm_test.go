@@ -19,6 +19,18 @@ func TestAgentComm_IncludesOwnIdAndOperations(t *testing.T) {
 	}
 }
 
+func TestAgentComm_SideAgentHasNoWaitResumePromise(t *testing.T) {
+	block := SideAgentCommunicationBlock("side:run-1")
+	for _, want := range []string{"side:run-1", "afm agent list", "afm agent send", "afm agent reply", "afm agent inbox"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(block, "afm agent wait") || strings.Contains(block, "resumed") {
+		t.Fatal("side turn must not promise wait/resume")
+	}
+}
+
 func TestAgentComm_UnavailableStatesSoAndOmitsCommands(t *testing.T) {
 	block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: false})
 	if !strings.Contains(block, "unavailable") {

@@ -12,6 +12,7 @@ export type FeedItem = {
   key: string
   stageId: string
   actor: FeedActor
+  authorLabel?: string
   side: 'left' | 'right' // user → right, agent/system → left
   tone: FeedTone
   kind: FeedItemKind
@@ -41,6 +42,7 @@ export type FeedGroup = {
   side: 'left' | 'right'
   stageId: string
   actor: FeedActor
+  authorLabel?: string
   items: FeedItem[]
 }
 
@@ -306,17 +308,18 @@ function mapEvent(event: AfmEvent): Mapped | null {
       }
     }
     case 'mesh_receipt': {
-      // status is agentcomm.DeliveryAcknowledged ("acknowledged") or DeliveryDelivered ("delivered") —
-      // MarkMessageDelivered can legitimately re-fire for the same (message, recipient) pair on retry, hence
-      // the composite dedupeId below instead of relying on timestamp.
+      // Delivery and terminal undeliverable notices share this event type. A receipt can re-fire for the
+      // same (message, recipient) pair on retry, hence the composite dedupeId instead of timestamp.
       const status = str(obj.status)
       const text =
         status === 'acknowledged'
           ? `${str(obj.participant_id)} acknowledged message ${str(obj.message_id)}`
-          : `message ${str(obj.message_id)} delivered to ${str(obj.participant_id)}`
+          : status === 'delivered'
+            ? `message ${str(obj.message_id)} delivered to ${str(obj.participant_id)}`
+            : `message ${str(obj.message_id)} ${status} for ${str(obj.participant_id)}`
       return {
         actor: 'system',
-        tone: 'neutral',
+        tone: status === 'undeliverable' ? 'warning' : 'neutral',
         kind: 'status',
         text,
         mono: false,
@@ -488,10 +491,10 @@ export function groupFeedItems(items: FeedItem[]): FeedGroup[] {
   const groups: FeedGroup[] = []
   for (const item of items) {
     const last = groups[groups.length - 1]
-    if (last && last.side === item.side && last.stageId === item.stageId && last.actor === item.actor) {
+    if (last && last.side === item.side && last.stageId === item.stageId && last.actor === item.actor && last.authorLabel === item.authorLabel) {
       last.items.push(item)
     } else {
-      groups.push({ key: item.key, side: item.side, stageId: item.stageId, actor: item.actor, items: [item] })
+      groups.push({ key: item.key, side: item.side, stageId: item.stageId, actor: item.actor, authorLabel: item.authorLabel, items: [item] })
     }
   }
   return groups

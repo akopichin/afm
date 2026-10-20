@@ -14,6 +14,7 @@ import (
 	"errors"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -27,6 +28,57 @@ const sideAgentParticipantAlias = "side"
 // "side:<runID>" — computed from the orchestrator's own run id so no caller hardcodes the prefix.
 func (o *Orchestrator) SideAgentParticipantID() agentcomm.ParticipantID {
 	return agentcomm.ParticipantID("side:" + o.opts.RunID)
+}
+
+// SetSideAgentAvailable gates new Mesh sends to the side runtime. A closing gate
+// waits for sends already committing, so the inbox bridge can drain their messages.
+func (o *Orchestrator) SetSideAgentAvailable(available bool) {
+	o.sideAgentGate.Lock()
+	o.sideAgentReachable.Store(available)
+	o.sideAgentGate.Unlock()
+	o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(o.SideAgentParticipantID())}})
+}
+
+// SetSideAgentDrain installs the run-scoped side bridge's normal shutdown path.
+// Run starts it asynchronously once all ordinary run work is finished, then
+// finalizes the Store only after it has committed all side terminal responses.
+func (o *Orchestrator) SetSideAgentDrain(drain func(context.Context) bool) {
+	o.sideMeshDrain = drain
+}
+
+func (o *Orchestrator) sideParticipantAvailable(p agentcomm.Participant) agentcomm.Participant {
+	if p.Kind == agentcomm.KindSideAgent && !o.sideAgentReachable.Load() {
+		p.Reachable = false
+		p.UnreachableReason = "side agent is unavailable"
+	}
+	return p
+}
+
+// SideAgentMeshClient resolves the side identity against the current Mesh URL.
+// Token minting remains deferred until the executor starts an invocation.
+func (o *Orchestrator) SideAgentMeshClient() *executor.MeshClient {
+	return o.meshClientFor(o.SideAgentParticipantID())
+}
+
+// SideAgentExplicitReply returns the latest durable, non-automatic reply this
+// side participant sent to a source message. The side conversation mirrors it
+// when the process produced no separate final assistant text.
+func (o *Orchestrator) SideAgentExplicitReply(sourceMessageID string) (string, bool) {
+	mesh := o.opts.Store.Snapshot().Assistants.Mesh
+	var latest *agentcomm.Message
+	for _, msg := range mesh.Messages {
+		if msg == nil || msg.Sender != o.SideAgentParticipantID() || msg.AutoResult ||
+			msg.InReplyTo == nil || *msg.InReplyTo != agentcomm.MessageID(sourceMessageID) {
+			continue
+		}
+		if latest == nil || msg.Seq > latest.Seq {
+			latest = msg
+		}
+	}
+	if latest == nil {
+		return "", false
+	}
+	return latest.Body, true
 }
 
 // sideAgentRegisterOperationID is deterministic per run: calling RegisterSideAgent more than once (every

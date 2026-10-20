@@ -82,6 +82,9 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if req.OperationID == "" {
 		return WaitReceipt{}, errors.New("agentcomm: operation id is required")
 	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return WaitReceipt{}, err
+	}
 	if req.Waiter == "" {
 		return WaitReceipt{}, errors.New("agentcomm: waiter is required")
 	}
@@ -276,6 +279,9 @@ func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
 func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) error {
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
+	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return err
 	}
 	if req.Actor.Kind != actorKindUser {
 		rs := o.opts.Store.Snapshot()

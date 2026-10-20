@@ -5,6 +5,25 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-20
 
+### Improvement: address the Side agent through Agent Mesh
+
+The Side agent now appears as `@side` in Team and can receive messages from
+Team, a stage Feed, or another agent. These messages run one at a time in its
+existing side conversation. Its modal shows who sent each message and names the
+sender while it is replying; **Stop** remains available only for turns started
+in the modal. A successful final answer returns to the source conversation
+unless the agent already answered there with `afm agent reply`. Failed turns and
+unavailable reply destinations settle as **Could not answer** or undeliverable
+instead of leaving the sender waiting. Automatic turn results do not cause a
+reflex reply. See [Dashboard](docs/dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+and [Team conversations](docs/collaboration.md#team-conversations).
+
+### Fix: show explicit Side agent replies in its modal
+
+When the Side agent answers a Team message with `afm agent reply` and produces no
+separate final text, the modal now shows that reply instead of reporting that the
+agent gave no answer.
+
 ### Improvement: start the Telegram bot with the notifier's existing secrets
 
 Run `./runbot.sh` from a source checkout to start the Telegram control bot using

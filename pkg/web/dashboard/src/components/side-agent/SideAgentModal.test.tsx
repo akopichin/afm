@@ -7,6 +7,7 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
   return {
     events: [],
     requestState: 'idle',
+    activeSource: null,
     unavailable: false,
     command: 'claude',
     draft: '',
@@ -147,9 +148,18 @@ describe('SideAgentModal', () => {
 
   it('Stop button interrupts the active turn', () => {
     const interrupt = vi.fn()
-    renderModal({ isOpen: true, requestState: 'running', interrupt })
+    renderModal({ isOpen: true, requestState: 'running', activeSource: { kind: 'modal' }, interrupt })
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(interrupt).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the Mesh sender and hides Stop, also while the accepted event is still unknown', () => {
+    const { rerender } = renderModal({ requestState: 'running', activeSource: { kind: 'mesh', sender: 'QA' } })
+    expect(screen.getByText('Replying to QA…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
+    rerender(<SideAgentModal api={fakeApi({ requestState: 'running', activeSource: null })} />)
+    expect(screen.getByText('Working…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 
   it('renders the attention shortcut and hides the modal before activating it', () => {

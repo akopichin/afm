@@ -18,8 +18,12 @@ import (
 // text itself via Config.MentionResolve, never accepted from the caller (same "server derives it" posture as
 // depth/root_stage_id in assistants.Attach — see dev-plan.md T4.3's TestTurn_DepthAndRootDerivedServerSide).
 type TurnTarget struct {
-	StageID         string
-	AssistantTaskID string
+	StageID          string
+	AssistantTaskID  string
+	SourceMessageID  string
+	SourceThreadID   string
+	SourceSenderID   string
+	SourceSenderName string
 }
 
 // mentionWordPattern matches a raw "@word" token in free text: '@' followed by one or more characters legal
@@ -163,11 +167,15 @@ func DecodeEvent(line []byte) (Event, error) {
 // упомянутых в тексте; вычисляются СЕРВЕРОМ из Message при приёме (Manager.Send), а не доверяются клиенту —
 // тот же принцип, что у depth/root_stage_id в assistants.Attach (нигде в протоколе клиент их не передаёт).
 type TurnAcceptedData struct {
-	Message         string   `json:"message"`
-	ClientMessageID string   `json:"client_message_id"`
-	StageID         string   `json:"stage_id,omitempty"`
-	AssistantTaskID string   `json:"assistant_task_id,omitempty"`
-	Mentions        []string `json:"mentions,omitempty"`
+	Message          string   `json:"message"`
+	ClientMessageID  string   `json:"client_message_id"`
+	StageID          string   `json:"stage_id,omitempty"`
+	AssistantTaskID  string   `json:"assistant_task_id,omitempty"`
+	Mentions         []string `json:"mentions,omitempty"`
+	SourceMessageID  string   `json:"source_message_id,omitempty"`
+	SourceThreadID   string   `json:"source_thread_id,omitempty"`
+	SourceSenderID   string   `json:"source_sender_id,omitempty"`
+	SourceSenderName string   `json:"source_sender_name,omitempty"`
 }
 
 // TurnStartedData — запись запроса: фактически использованная команда агента и

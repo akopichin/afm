@@ -611,6 +611,11 @@ func WrittenFiles(jsonlPath string) []string {
 // RunAgent runs the AI client with prompt via stdin, writing human-readable
 // actions to logFile and raw stream-json to logFile with .jsonl extension.
 func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	// Author runs normally keep their established raw transcript. Callers that
+	// supply secrets (the side Mesh runtime) opt into the helper's proven
+	// JSON/stream redaction before any output reaches a file or action callback.
+	red := helperRedactor{redact: e.cfg.Redact, secrets: e.cfg.Secrets}
+	redactOutput := e.cfg.Redact != nil || e.cfg.Secrets != nil
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
 		return err
@@ -629,10 +634,20 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	// stale content left over from a previous retry attempt sharing the same append-only log.
 	var stderr = io.Discard
 	var stderrFrom int64
+	var stderrStream io.WriteCloser
 	if sf, from := openStderrLogAt(logFile); sf != nil {
-		stderr = sf
 		stderrFrom = from
 		defer sf.Close()
+		stderr = sf
+		if redactOutput {
+			stderrStream = red.stream(sf)
+			stderr = stderrStream
+			defer func() {
+				if stderrStream != nil {
+					_ = stderrStream.Close()
+				}
+			}()
+		}
 	}
 
 	lg.LogStart(agentType, stageName)
@@ -647,6 +662,9 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	collector := accounting.NewCollector(e.cfg.UsageHint)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
+		if redactOutput {
+			line = red.jsonText(line)
+		}
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -680,7 +698,15 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 		}
 	})
 
-	lg.LogEnd(runErr)
+	if stderrStream != nil {
+		_ = stderrStream.Close()
+		stderrStream = nil
+	}
+	logErr := runErr
+	if logErr != nil && redactOutput {
+		logErr = errors.New(red.text(logErr.Error()))
+	}
+	lg.LogEnd(logErr)
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
 	}

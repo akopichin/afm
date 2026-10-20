@@ -609,6 +609,14 @@ describe('mesh_* — Agent Mesh notice events (T7.2): real presentation rows, no
     expect(items[1]?.text.toLowerCase()).toContain('delivered')
   })
 
+  it('shows an undeliverable mesh receipt as undeliverable', () => {
+    const item = toFeedItems([
+      ev('mesh_receipt', { message_id: 'm1', participant_id: 'side:r1', status: 'undeliverable' }, '', '2026-10-18T10:00:00Z'),
+    ])[0]
+    expect(item?.text).toContain('undeliverable')
+    expect(item?.text).not.toContain('delivered to')
+  })
+
   it('keys a mesh_receipt row by message_id+participant_id+status so a redelivered receipt never duplicates it', () => {
     const receipt = ev('mesh_receipt', { message_id: 'm1', participant_id: 'qa', status: 'delivered' }, '', '2026-10-18T10:00:00Z')
     const first = toFeedItems([receipt])

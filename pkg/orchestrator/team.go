@@ -35,8 +35,16 @@ func teamOperationID(memberID string) string {
 	return teamOperationPrefix + memberID
 }
 
-// rejectReservedRequestID refuses a team/ request id from anyone but the flow's team.
+// rejectReservedRequestID keeps caller-supplied IDs out of the flow-team and
+// side Mesh terminal operation namespaces shared by the run's operation index.
 func rejectReservedRequestID(opID string, actor state.Actor) error {
+	if actor.Kind != "system" {
+		for _, prefix := range []string{"side-mesh-reply:", "side-mesh-unprocessed:"} {
+			if strings.HasPrefix(opID, prefix) {
+				return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved", prefix)
+			}
+		}
+	}
 	if strings.HasPrefix(opID, teamOperationPrefix) && actor != teamActor {
 		return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved for the flow's team", teamOperationPrefix)
 	}

@@ -12,6 +12,19 @@ describe('ThreadConversation', () => {
     vi.restoreAllMocks()
   })
 
+  test('shows a linked side failure beside the original message and keeps its failure body visible', async () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', display_name: 'Side agent', reachable: true }
+    const sideThread: MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'open' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
+      { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'help', seq: 1, created_at: '' },
+      { id: 'm2', thread_id: 'mt-side', sender_id: 'side:r1', recipient_ids: ['user'], kind: 'result', auto_result: true, in_reply_to: 'm1', body: 'The agent failed to answer', seq: 2, created_at: '' },
+    ], next_cursor: 2 })
+    render(<ThreadConversation target={{ kind: 'thread', thread: sideThread }} participants={[side]} />)
+    await waitFor(() => expect(screen.getByText('Could not answer')).toBeInTheDocument())
+    expect(document.querySelector('[data-message-id="m1"]')).toHaveTextContent('Could not answer')
+    expect(screen.getByText('The agent failed to answer')).toBeInTheDocument()
+  })
+
   test('null target shows a neutral empty state', () => {
     render(<ThreadConversation target={null} />)
     expect(screen.getByText(/select a person or a conversation/i)).toBeInTheDocument()

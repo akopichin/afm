@@ -15,6 +15,7 @@ import { withStageDiscussion } from './stage-discussion-feed'
 import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
+import { sideAgentOutcome } from './mesh-receipt'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -192,6 +193,7 @@ export function FeedWorkspace({
                     onJumpToQuote={jumpTo}
                     replyActive={activeMeshReply?.messageId === m.id}
                     notAnswered={unanswered.has(m.id)}
+                    sideOutcome={sideAgentOutcome(m, conversationMessages, mesh?.sideFailures ?? new Set())}
                     markdown
                     role={legacy.get(m.id)?.role}
                     evidence={legacy.get(m.id)?.evidence}
@@ -349,7 +351,7 @@ type FeedGroupViewProps = {
 export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered }: FeedGroupViewProps): ReactElement {
   // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
   // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
-  const authorLabel = group.actor === 'system' ? systemAuthorLabel : ACTOR_LABEL[group.actor]
+  const authorLabel = group.authorLabel ?? (group.actor === 'system' ? systemAuthorLabel : ACTOR_LABEL[group.actor])
   return (
     <div className={`feed-group feed-${group.side}`} data-actor={group.actor}>
       <div className="feed-group-head">

@@ -7,6 +7,7 @@ import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshRoster } from '../../hooks/use-mesh'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
+import { meshDeliveries, sideAgentFailures } from './mesh-receipt'
 
 describe('FeedComposer', () => {
   it('sends the trimmed text and clears on success', async () => {
@@ -645,6 +646,37 @@ describe('FeedComposer', () => {
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={delivered} conversationMessages={[answer]} />)
       expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('QA reviewer · Answered')
       expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Backend agent · Delivered')
+    })
+
+    it('shows a terminal side failure from the run notice even before the thread reply is in the stage poll', async () => {
+      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+      vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm-side' } as Awaited<ReturnType<typeof meshClient.sendMeshMessageTo>>)
+      const mesh = meshProps({ roster: roster({ participants: [...roster().participants, side] }), sideFailures: new Set(['m-side']) })
+      renderComposer(mesh)
+      type('@side help')
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Side agent · Could not answer'))
+    })
+
+    it('shows an undeliverable side receipt before thread refresh without changing another recipient', async () => {
+      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+      vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm-side' } as Awaited<ReturnType<typeof meshClient.sendMeshMessageTo>>)
+      const mesh = meshProps({ roster: roster({ participants: [...roster().participants, side] }) })
+      const { rerender } = renderComposer(mesh)
+      type('@side @qa help')
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Side agent · Accepted · waiting for an inbox check'))
+
+      const events = [
+        { type: 'mesh_receipt', payload: { message_id: 'm-side', participant_id: 'side:r1', status: 'undeliverable' }, stageId: '', timestamp: '' },
+        { type: 'mesh_receipt', payload: { message_id: 'm-side', participant_id: 'run:t-1', status: 'delivered' }, stageId: '', timestamp: '' },
+      ]
+      rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={{
+        ...mesh, deliveries: meshDeliveries(events), sideFailures: sideAgentFailures(events),
+      }} conversationMessages={[]} />)
+      const delivery = screen.getByRole('status', { name: 'Delivery' })
+      expect(delivery).toHaveTextContent('Side agent · Could not answer')
+      expect(delivery).toHaveTextContent('QA reviewer · Delivered')
     })
 
     it('receipts: "Paused · waiting for Continue" when the recipient\'s own stage is paused', async () => {

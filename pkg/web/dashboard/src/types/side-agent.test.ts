@@ -28,6 +28,17 @@ describe('parseSideAgentEvent', () => {
     })
   })
 
+  test('normalizes Mesh source fields while old modal turns omit them', () => {
+    const mesh = parseSideAgentEvent({ seq: 2, type: 'turn_accepted', data: {
+      message: '<b>hi</b>', client_message_id: 'mesh:m1', source_message_id: 'm1',
+      source_thread_id: 'mt1', source_sender_id: 'run:qa', source_sender_name: 'QA',
+    } })
+    expect(mesh?.data).toEqual({ message: '<b>hi</b>', clientMessageId: 'mesh:m1',
+      sourceMessageId: 'm1', sourceThreadId: 'mt1', sourceSenderId: 'run:qa', sourceSenderName: 'QA' })
+    expect(parseSideAgentEvent({ seq: 3, type: 'turn_accepted', data: { message: 'modal', client_message_id: 'c1' } })?.data)
+      .toEqual({ message: 'modal', clientMessageId: 'c1' })
+  })
+
   test('maps tool_action/turn_started/turn_failed data fields', () => {
     const tool = parseSideAgentEvent({ seq: 2, type: 'tool_action', data: { tool: 'bash', detail: 'ls', log_ref: 'log/1' } })
     expect(tool?.type).toBe('tool_action')

@@ -2,10 +2,11 @@
 //
 // Real signals only: the recipient's delivery receipt (the mesh_receipt notices afm publishes when a message is
 // handed to an agent's turn or inbox read, and when it is acknowledged — meshDeliveries), an answer in the thread,
-// the roster's reachability and the recipient stage's pause. Accepted by the API is not delivered: until the
-// receipt arrives the recipient shows as waiting for an inbox check, whatever kind of agent it is.
+// the original message's durable side failure, the roster's reachability and the recipient stage's pause.
+// Accepted by the API is not delivered: until the receipt arrives the recipient shows as waiting for an inbox
+// check, whatever kind of agent it is.
 
-import type { MeshParticipant } from '../../api/mesh-client'
+import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
 import type { AfmEvent } from '../../types'
 
 export type ReceiptPhase =
@@ -13,6 +14,7 @@ export type ReceiptPhase =
   | 'delivered'
   | 'waiting_inbox'
   | 'answered'
+  | 'could_not_answer'
   | 'paused'
   | 'unavailable'
   | 'messaging_unavailable'
@@ -23,6 +25,7 @@ export const RECEIPT_LABEL: Record<ReceiptPhase, string> = {
   delivered: 'Delivered',
   waiting_inbox: 'Accepted · waiting for an inbox check',
   answered: 'Answered',
+  could_not_answer: 'Could not answer',
   paused: 'Paused · waiting for Continue',
   unavailable: 'Unavailable',
   messaging_unavailable: 'Messaging unavailable',
@@ -71,8 +74,48 @@ export function meshDeliveries(events: readonly AfmEvent[]): ReadonlySet<string>
   const out = new Set<string>()
   for (const e of events) {
     if (e.type !== 'mesh_receipt' || e.payload === null || typeof e.payload !== 'object') continue
-    const p = e.payload as { message_id?: unknown; participant_id?: unknown }
-    if (typeof p.message_id === 'string' && typeof p.participant_id === 'string') out.add(deliveryKey(p.message_id, p.participant_id))
+    const p = e.payload as { message_id?: unknown; participant_id?: unknown; status?: unknown }
+    if ((p.status === 'delivered' || p.status === 'acknowledged') &&
+      typeof p.message_id === 'string' && typeof p.participant_id === 'string') out.add(deliveryKey(p.message_id, p.participant_id))
   }
   return out
+}
+
+// Recent side failures are keyed to the original message in event replay. The undeliverable receipt also covers
+// a queued message that could not start; older failures are recovered from MeshMessage.side_agent_failed.
+export function sideAgentFailures(events: readonly AfmEvent[]): ReadonlySet<string> {
+  const ids = new Set<string>()
+  for (const event of events) {
+    if (event.type === 'mesh_receipt' && event.payload !== null && typeof event.payload === 'object') {
+      const receipt = event.payload as { message_id?: unknown; participant_id?: unknown; status?: unknown }
+      if (receipt.status === 'undeliverable' && typeof receipt.message_id === 'string' &&
+        typeof receipt.participant_id === 'string' && receipt.participant_id.startsWith('side:')) ids.add(receipt.message_id)
+    }
+    if (event.type !== 'side_agent_mesh_failure' || event.payload === null || typeof event.payload !== 'object') continue
+    const id = (event.payload as { source_message_id?: unknown }).source_message_id
+    if (typeof id === 'string' && id !== '') ids.add(id)
+  }
+  return ids
+}
+
+// Only a response from the addressed side participant settles its receipt. Other agents' replies in a
+// group conversation do not claim that side answered.
+export function sideAgentOutcome(
+  message: Pick<MeshMessage, 'id' | 'recipient_ids'> & Pick<MeshMessage, 'auto_result' | 'side_agent_failed'>,
+  messages: readonly MeshMessage[],
+  failures: ReadonlySet<string>,
+  recipientId?: string,
+): 'answered' | 'could_not_answer' | null {
+  // A passive result gives side context but never asks it for an answer. Its
+  // orphan receipt can be undeliverable after restart without being a failure.
+  if (message.auto_result === true || messages.some((m) => m.id === message.id && m.auto_result === true)) return null
+  const sideIds = message.recipient_ids.filter((id) => id.startsWith('side:') && (recipientId === undefined || id === recipientId))
+  if (sideIds.length === 0) return null
+  const linked = messages.find((reply) => reply.in_reply_to === message.id && sideIds.includes(reply.sender_id))
+  if (linked?.kind === 'result' && linked.auto_result === true) return 'could_not_answer'
+  if (linked !== undefined) return 'answered'
+  // GET thread/stage messages carry the durable failure even after the event replay cap drops its notice.
+  // The composer passes a send receipt with only the id, so look up the polled original message too.
+  const originalFailed = message.side_agent_failed === true || messages.some((m) => m.id === message.id && m.side_agent_failed === true)
+  return originalFailed || failures.has(message.id) ? 'could_not_answer' : null
 }

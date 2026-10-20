@@ -19,6 +19,10 @@ import (
 
 const defaultMeshPageLimit = 50
 
+// ErrSideAgentExplicitReply means the side process already answered its source
+// directly. Its automatic terminal response must be suppressed.
+var ErrSideAgentExplicitReply = errors.New("side agent explicitly replied to source")
+
 // OpenThread implements Service.OpenThread. Members not yet known to the mesh (a stage agent or helper
 // addressed for the first time) are lazily registered in the SAME operation via ensureParticipantEffects —
 // see that function's doc comment for why Phase 1 never pre-populates them. A retry of an already-committed
@@ -26,6 +30,9 @@ const defaultMeshPageLimit = 50
 func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (agentcomm.Thread, error) {
 	if req.OperationID == "" {
 		return agentcomm.Thread{}, errors.New("agentcomm: operation id is required")
+	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return agentcomm.Thread{}, err
 	}
 	if !req.Scope.Valid() {
 		return agentcomm.Thread{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("invalid scope %q (want stage or run)", req.Scope)}
@@ -125,6 +132,9 @@ func (o *Orchestrator) CloseThread(ctx context.Context, req CloseThreadRequest) 
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
 	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return err
+	}
 
 	closeEff, err := marshalEffect("mesh_thread_closed", state.Target{ThreadID: string(req.ThreadID)}, struct{}{})
 	if err != nil {
@@ -169,6 +179,7 @@ func (o *Orchestrator) liveParticipant(rs state.RunState, id agentcomm.Participa
 			p = o.withStageConfig(p, *s)
 		}
 	}
+	p = o.sideParticipantAvailable(p)
 	return p, true
 }
 
@@ -187,8 +198,15 @@ func (o *Orchestrator) Send(ctx context.Context, req SendRequest) (SendReceipt, 
 // conversation — committed in the SAME operation as the message: a send that is rejected leaves no empty
 // conversation behind.
 func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openThread []state.Effect) (SendReceipt, error) {
+	if slices.Contains(req.Recipients, o.SideAgentParticipantID()) {
+		o.sideAgentGate.RLock()
+		defer o.sideAgentGate.RUnlock()
+	}
 	if req.OperationID == "" {
 		return SendReceipt{}, errors.New("agentcomm: operation id is required")
+	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return SendReceipt{}, err
 	}
 	if req.Sender == "" {
 		return SendReceipt{}, errors.New("agentcomm: sender is required")
@@ -207,7 +225,17 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 	runCtx := o.runContext(ctx) // work this message starts or resumes must not die with the HTTP request.
 
 	op := state.Operation{ID: req.OperationID, Kind: opKindMeshSend, Actor: req.Actor, Effects: msg.effects, Expect: state.Preconditions{
-		Check: o.recipientsReachable(msgs),
+		Check: func(cur *state.RunState) error {
+			if err := o.rejectUnreachableRecipients(*cur, recipientsOf(msgs)); err != nil {
+				return err
+			}
+			if req.AutoResult && req.Sender == o.SideAgentParticipantID() && req.InReplyTo != nil {
+				if explicitSideReply(cur.Assistants.Mesh, req.Sender, *req.InReplyTo) {
+					return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: ErrSideAgentExplicitReply.Error(), Cause: ErrSideAgentExplicitReply}
+				}
+			}
+			return nil
+		},
 	}}
 	res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		o.deliverCommittedMessages(runCtx, msgs, res.ReadyWaits)
@@ -216,6 +244,15 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 		return SendReceipt{}, err
 	}
 	return SendReceipt{MessageID: msg.messageID, Seq: res.Seq, ThreadID: req.ThreadID}, nil
+}
+
+func explicitSideReply(mesh state.MeshState, sender agentcomm.ParticipantID, source agentcomm.MessageID) bool {
+	for _, m := range mesh.Messages {
+		if m != nil && m.Sender == sender && !m.AutoResult && m.InReplyTo != nil && *m.InReplyTo == source {
+			return true
+		}
+	}
+	return false
 }
 
 // plannedMessage is one message an operation commits: the request it was built from (body already redacted),
@@ -422,6 +459,9 @@ func (o *Orchestrator) Acknowledge(ctx context.Context, req AcknowledgeRequest) 
 	if req.OperationID == "" {
 		return errors.New("agentcomm: operation id is required")
 	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return err
+	}
 	eff, err := marshalEffect("mesh_message_acked",
 		state.Target{MessageID: string(req.MessageID), ParticipantID: string(req.Participant)}, state.MeshMessageReceiptPayload{})
 	if err != nil {
@@ -456,6 +496,112 @@ func (o *Orchestrator) MarkMessageDelivered(ctx context.Context, messageID agent
 		}})
 	})
 	return err
+}
+
+// SideAgentMeshResponseFailed durably releases a source whose terminal response
+// cannot be added to its thread. The receipt and pending reply waits change in
+// one operation; a keyed notice gives reconnecting clients the visible outcome.
+func (o *Orchestrator) SideAgentMeshResponseFailed(id agentcomm.MessageID, reason string) error {
+	reason = o.RedactSecrets(reason)
+	if len(reason) > 256 {
+		reason = reason[:256]
+	}
+	recipient := o.SideAgentParticipantID()
+	for range maxUnreadReleaseAttempts {
+		op, _, err := unreadReleaseOp(o.opts.Store.Snapshot(), id, recipient, reason)
+		if err != nil || op == nil {
+			return err
+		}
+		op.ID = "side-mesh-reply:" + string(id)
+		op.Kind = "side_mesh_response_failed"
+		check := op.Expect.Check
+		op.Expect.Check = func(cur *state.RunState) error {
+			if answeredBy(cur.Assistants.Mesh, recipient, id) {
+				return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: ErrSideAgentExplicitReply.Error(), Cause: ErrSideAgentExplicitReply}
+			}
+			return check(cur)
+		}
+		_, err = o.opts.Store.ApplyRunOperation(*op, func(res state.OperationResult) {
+			o.publishNotice(bus.Event{Type: bus.EventMeshReceipt, Data: map[string]any{
+				"message_id": string(id), "participant_id": string(recipient), "status": string(agentcomm.DeliveryUndeliverable),
+			}})
+			o.publishNotice(bus.Event{Type: bus.EventSideAgentMeshFailure, Data: map[string]any{
+				"source_message_id": string(id), "reason": reason,
+			}})
+			o.announceAndWakeEnded(res.EndedWaits, func(agentcomm.WaitID) string { return reason })
+		})
+		if errors.Is(err, errUnreadReleaseStale) {
+			continue
+		}
+		return err
+	}
+	return errUnreadReleaseStale
+}
+
+// SideAgentMeshResponseFailedAlready reports the durable terminal marker used
+// when a thread cannot contain a linked result.
+func (o *Orchestrator) SideAgentMeshResponseFailedAlready(id agentcomm.MessageID) bool {
+	rs := o.opts.Store.Snapshot()
+	return rs.Assistants.Mesh.Receipts[id][o.SideAgentParticipantID()] == agentcomm.DeliveryUndeliverable
+}
+
+// RepublishSideAgentMeshFailure restores the reconnect notice from the durable
+// undeliverable receipt after a crash between operation commit and notice write.
+// The source id is the stable UI key, so replays collapse to one visible outcome.
+func (o *Orchestrator) RepublishSideAgentMeshFailure(id agentcomm.MessageID) {
+	o.publishNotice(bus.Event{Type: bus.EventSideAgentMeshFailure, Data: map[string]any{
+		"source_message_id": string(id), "reason": "Could not answer: conversation unavailable",
+	}})
+}
+
+// SideAgentMeshSourceAccepted remains true until OnDelivered records a real
+// subprocess start. A turn_started journal event occurs earlier than cmd.Start.
+func (o *Orchestrator) SideAgentMeshSourceAccepted(id agentcomm.MessageID) bool {
+	rs := o.opts.Store.Snapshot()
+	return rs.Assistants.Mesh.Receipts[id][o.SideAgentParticipantID()] == agentcomm.DeliveryAccepted
+}
+
+// SideAgentMeshMarkUnprocessed closes an accepted receipt when no subprocess
+// started for this source. A linked failure result, when possible, is committed
+// first so reply waits resolve as answered rather than cancelled.
+func (o *Orchestrator) SideAgentMeshMarkUnprocessed(id agentcomm.MessageID) error {
+	if o.SideAgentMeshResponseFailedAlready(id) {
+		return nil
+	}
+	recipient := o.SideAgentParticipantID()
+	for range maxUnreadReleaseAttempts {
+		snap := o.opts.Store.Snapshot()
+		if explicitSideReply(snap.Assistants.Mesh, recipient, id) {
+			return o.Acknowledge(context.Background(), AcknowledgeRequest{OperationID: "side-mesh-unprocessed:" + string(id), MessageID: id, Participant: recipient, Actor: state.Actor{Kind: "system"}})
+		}
+		op, _, err := unreadReleaseOp(snap, id, recipient, "side agent did not start")
+		if err != nil || op == nil {
+			return err
+		}
+		op.ID = "side-mesh-unprocessed:" + string(id)
+		op.Kind = "side_mesh_unprocessed"
+		check := op.Expect.Check
+		op.Expect.Check = func(cur *state.RunState) error {
+			if explicitSideReply(cur.Assistants.Mesh, recipient, id) {
+				return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: ErrSideAgentExplicitReply.Error(), Cause: ErrSideAgentExplicitReply}
+			}
+			return check(cur)
+		}
+		_, err = o.opts.Store.ApplyRunOperation(*op, func(res state.OperationResult) {
+			o.publishNotice(bus.Event{Type: bus.EventMeshReceipt, Data: map[string]any{
+				"message_id": string(id), "participant_id": string(recipient), "status": string(agentcomm.DeliveryUndeliverable),
+			}})
+			o.announceAndWakeEnded(res.EndedWaits, func(agentcomm.WaitID) string { return "side agent did not start" })
+		})
+		if errors.Is(err, errUnreadReleaseStale) {
+			continue
+		}
+		if errors.Is(err, ErrSideAgentExplicitReply) {
+			return nil
+		}
+		return err
+	}
+	return errUnreadReleaseStale
 }
 
 func sortedWaitIDs(waits map[agentcomm.WaitID]*state.MeshWait) []agentcomm.WaitID {

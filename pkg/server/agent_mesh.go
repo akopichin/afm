@@ -57,6 +57,8 @@ type MeshSendReceipt struct {
 type MeshMessagePage struct {
 	Messages   []agentcomm.Message `json:"messages"`
 	NextCursor uint64              `json:"next_cursor"`
+	// SideAgentFailedIDs is a read-only UI projection, never a Mesh journal field.
+	SideAgentFailedIDs map[agentcomm.MessageID]bool `json:"-"`
 }
 
 type MeshWaitRequest struct {

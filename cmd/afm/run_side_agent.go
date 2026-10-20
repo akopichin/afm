@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/secrets"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/sideagent"
@@ -49,6 +50,7 @@ type sideAgentRuntime struct {
 	manager *sideagent.Manager
 	store   *sideagent.Store
 	acct    *accounting.Store
+	mesh    *sideAgentMeshBridge
 }
 
 // startSideAgent хранит беседу под afm-root независимо от root_dir; сбой открытия отключает боковой агент,
@@ -59,7 +61,10 @@ type sideAgentRuntime struct {
 // вместо собственного ad-hoc matching, который раньше жил здесь через registry.Resolve.
 func startSideAgent(runID string, cfg config.Config, env runEnvironment, registry *assistants.Registry, orch *orchestrator.Orchestrator) (*sideAgentRuntime, error) {
 	store, err := sideagent.Open(fmDir(), runID)
-	if err != nil && store == nil {
+	if err != nil {
+		if store != nil {
+			_ = store.Close()
+		}
 		return nil, err
 	}
 
@@ -69,6 +74,7 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 	if _, err := orch.RegisterSideAgent(context.Background(), orchestrator.RegisterSideAgentRequest{
 		DisplayName: cfg.Client.Command, Actor: state.Actor{Kind: "system"},
 	}); err != nil {
+		_ = store.Close()
 		return nil, fmt.Errorf("register side agent mesh identity: %w", err)
 	}
 
@@ -98,9 +104,16 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		WrapperDir:  executor.WrapperDirFor(cfg.Client.Command, env.WrapperDir, env.GeneratedAgents),
 		IdleTimeout: cfg.Executor.IdleTimeout,
 		Reasoning:   cfg.Client.Reasoning,
-		Context:     sideagent.ContextBuilder{ByteLimit: sideAgentContextByteLimit},
-		Secrets:     func() []string { return protected },
-		OnUsage:     onUsage,
+		Context:     sideagent.ContextBuilder{ByteLimit: sideAgentContextByteLimit, Instruction: sideagent.DefaultInstruction + prompts.SideAgentCommunicationBlock(string(orch.SideAgentParticipantID()))},
+		MeshClient:  orch.SideAgentMeshClient,
+		SourceReply: orch.SideAgentExplicitReply,
+		OnSourceDelivered: func(sourceMessageID string) {
+			if err := orch.MarkMessageDelivered(context.Background(), agentcomm.MessageID(sourceMessageID), orch.SideAgentParticipantID()); err != nil {
+				log.Printf("WARN: mark side source delivered: %v", err)
+			}
+		},
+		Secrets: func() []string { return protected },
+		OnUsage: onUsage,
 		// T6.7: the shared agentcomm.ResolveAlias against the run's LIVE roster — the same resolver every
 		// other mesh addressing path uses — instead of a second, ad-hoc match (assistants.Registry.Resolve)
 		// against the static profile registry alone, which could not see stage agents/helpers/run agents at
@@ -150,11 +163,26 @@ func (r *sideAgentRuntime) service() server.SideAgentService {
 	return r.manager
 }
 
+// drainMesh closes only Mesh input for flow finalization. The manager still
+// accepts direct modal turns until the dashboard grace period ends.
+func (r *sideAgentRuntime) drainMesh(ctx context.Context) bool {
+	if r == nil || r.mesh == nil {
+		return true
+	}
+	r.mesh.CloseInput()
+	return r.mesh.Drain(ctx)
+}
+
 // shutdownNormal закрывает admission до Drain, исключая новые ходы; ждёт завершения без лимита, пока ctx
 // не отменён.
 func (r *sideAgentRuntime) shutdownNormal(ctx context.Context) bool {
 	if r == nil {
 		return false
+	}
+	if r.mesh != nil {
+		if !r.drainMesh(ctx) {
+			return false
+		}
 	}
 	r.manager.CloseAdmission()
 	return r.manager.Drain(ctx)
@@ -175,10 +203,23 @@ func (r *sideAgentRuntime) shutdownEmergency(bound time.Duration) bool {
 	if r == nil {
 		return false
 	}
+	if r.mesh != nil {
+		r.mesh.CloseInput()
+	}
 	r.manager.Shutdown()
 	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
-	return r.manager.Drain(ctx)
+	if !r.manager.Drain(ctx) {
+		if r.mesh != nil {
+			r.mesh.Abort()
+		}
+		return false
+	}
+	if r.mesh != nil && !r.mesh.Drain(ctx) {
+		r.mesh.Abort()
+		return false
+	}
+	return true
 }
 
 // closeStores закрывает журнал разговора и учёт — ТОЛЬКО если агент действительно дренирован. Иначе

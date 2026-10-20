@@ -12,6 +12,7 @@ import { BoardPanel, boardTaskCount } from './BoardPanel'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 import { TabList, tabPanelProps } from '../tab-list'
+import { sideAgentFailures } from '../feed-workspace/mesh-receipt'
 import { usePanelResize } from '../layout/use-panel-resize'
 
 export type TeamViewProps = {
@@ -304,6 +305,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
               onDraftChange={setActiveDraft}
               participants={participants}
               threads={threads}
+              sideFailures={sideAgentFailures(events)}
               onThreadOpened={handleThreadOpened}
               onThreadCreated={rememberThread}
             />

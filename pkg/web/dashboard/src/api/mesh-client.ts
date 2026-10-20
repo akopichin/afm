@@ -107,6 +107,8 @@ export type MeshMessage = {
   artifact_refs?: string[]
   // auto_result — afm posted this as an agent's turn result (a passive reply that wakes nobody).
   auto_result?: boolean
+  // side_agent_failed — durable undeliverable receipt for this original message, included in thread/stage reads.
+  side_agent_failed?: boolean
   seq: number
   created_at: string
 }

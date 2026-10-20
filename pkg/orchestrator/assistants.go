@@ -216,6 +216,9 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	if req.OperationID == "" {
 		return "", errors.New("assistants: operation id is required")
 	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return "", err
+	}
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: assistants.ScopeStage, StageID: req.StageID,
 		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Trigger: req.Trigger, Actor: req.Actor,

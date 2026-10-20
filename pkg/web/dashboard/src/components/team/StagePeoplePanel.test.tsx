@@ -124,6 +124,13 @@ describe('StagePeoplePanel', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  test('the reachable side agent stays selectable in People', () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const { onPick } = renderPanel({ participants: [...participants, side] })
+    fireEvent.click(screen.getByText('Side agent', { selector: '.team-person-name' }))
+    expect(onPick).toHaveBeenCalledWith(side)
+  })
+
   test('without a composer the rows are disabled and a hint says when writing is possible', () => {
     renderPanel({ onPick: undefined })
     expect(screen.getByText('QA reviewer').closest('button')).toBeDisabled()

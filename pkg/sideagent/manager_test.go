@@ -2,6 +2,7 @@ package sideagent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -195,6 +196,189 @@ func TestManager_ConstructionDoesNotLaunch(t *testing.T) {
 	_ = m.Unavailable()
 	if ff.count() != 0 {
 		t.Fatalf("агент запущен без Send: calls = %d", ff.count())
+	}
+}
+
+func TestSideAgent_MeshSourceAndInvocation(t *testing.T) {
+	store := newTestStore(t)
+	runner := &fakeRunner{actions: []fakeAction{{"text", "answer"}}, started: make(chan struct{})}
+	var made, delivered bool
+	m := New(Config{Store: store, Command: "codex", MeshClient: func() *executor.MeshClient {
+		made = true
+		return &executor.MeshClient{ParticipantID: "side:run-test"}
+	}, OnSourceDelivered: func(id string) {
+		if id != "mm-1" {
+			t.Errorf("delivered source = %q", id)
+		}
+		delivered = true
+	}, NewExecutor: func(cfg executor.Config) AgentRunner { runner.cfg = cfg; return runner }})
+	target := TurnTarget{SourceMessageID: "mm-1", SourceThreadID: "mt-1", SourceSenderID: "run:peer", SourceSenderName: "Peer"}
+	if _, err := m.Send("mesh:mm-1", "hi", target); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	if !m.Drain(ctxWithTimeout(t, time.Second)) {
+		t.Fatal("drain")
+	}
+	var d TurnAcceptedData
+	if err := store.History()[0].DecodeData(&d); err != nil {
+		t.Fatal(err)
+	}
+	if d.SourceMessageID != target.SourceMessageID || d.SourceThreadID != target.SourceThreadID || d.SourceSenderID != target.SourceSenderID || d.SourceSenderName != target.SourceSenderName {
+		t.Fatalf("source lost: %+v", d)
+	}
+	if !made || runner.cfg.MeshClient == nil || runner.cfg.MeshClient.ParticipantID != "side:run-test" {
+		t.Fatal("mesh client not attached to invocation")
+	}
+	if runner.cfg.OnDelivered == nil {
+		t.Fatal("delivery callback not attached")
+	}
+	if delivered {
+		t.Fatal("delivery marked before executor start")
+	}
+	runner.cfg.OnDelivered()
+	if !delivered {
+		t.Fatal("delivery not marked on start")
+	}
+	if runner.cfg.StageDir != "" {
+		t.Fatalf("stage dir = %q", runner.cfg.StageDir)
+	}
+}
+
+func TestSideAgent_ModalSourceOmitted(t *testing.T) {
+	store := newTestStore(t)
+	runner := &fakeRunner{actions: []fakeAction{{"text", "answer"}}}
+	m := New(Config{Store: store, Command: "codex", NewExecutor: func(cfg executor.Config) AgentRunner { runner.cfg = cfg; return runner }})
+	if _, err := m.Send("modal-1", "hi", TurnTarget{}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Drain(ctxWithTimeout(t, time.Second)) {
+		t.Fatal("drain")
+	}
+	if strings.Contains(string(store.History()[0].Data), "source_") {
+		t.Fatal("modal event contains source fields")
+	}
+	if runner.cfg.OnDelivered != nil {
+		t.Fatal("modal turn has delivery callback")
+	}
+}
+
+func TestSideAgent_OldJournalWithoutSourceLoads(t *testing.T) {
+	base := t.TempDir()
+	store, err := Open(base, "old-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(EventTurnAccepted, "old-turn", TurnAcceptedData{Message: "old", ClientMessageID: "old-id"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(base, "old-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	m := New(Config{Store: reopened})
+	var d TurnAcceptedData
+	if err := m.History()[0].DecodeData(&d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Message != "old" || d.SourceMessageID != "" || d.SourceSenderID != "" {
+		t.Fatalf("legacy record changed: %+v", d)
+	}
+	if id, err := m.Send("old-id", "old", TurnTarget{}); err != nil || id != "old-turn" {
+		t.Fatalf("legacy idempotency = (%q, %v)", id, err)
+	}
+}
+
+func TestSideAgent_IdempotencyBindsMeshSource(t *testing.T) {
+	store := newTestStore(t)
+	runner := &fakeRunner{block: make(chan struct{}), started: make(chan struct{})}
+	m := New(Config{Store: store, Command: "codex", NewExecutor: func(cfg executor.Config) AgentRunner {
+		runner.cfg = cfg
+		return runner
+	}})
+	// Even a historical modal row with a mesh-shaped id must not stand in for
+	// an accepted Mesh source with the same text.
+	if _, err := m.Send("mesh:claimed", "same body", TurnTarget{}); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	close(runner.block)
+	if !m.Drain(ctxWithTimeout(t, time.Second)) {
+		t.Fatal("drain")
+	}
+	if _, err := m.Send("mesh:claimed", "same body", TurnTarget{SourceMessageID: "claimed", SourceThreadID: "thread", SourceSenderID: "peer"}); codeOf(t, err) != ErrCodeInvalidMessage {
+		t.Fatalf("Mesh source reused modal id: %v", err)
+	}
+}
+
+func TestSideAgent_ContextRejectionDoesNotPersistSource(t *testing.T) {
+	store := newTestStore(t)
+	m := New(Config{Store: store, Context: ContextBuilder{ByteLimit: 20}})
+	_, err := m.Send("mesh:mm-1", "hello", TurnTarget{SourceMessageID: "mm-1", SourceSenderID: "run:peer"})
+	if code := codeOf(t, err); code != ErrCodeContextLimit {
+		t.Fatalf("code = %s", code)
+	}
+	if len(store.History()) != 0 {
+		t.Fatal("rejected source was journaled")
+	}
+}
+
+func TestSideAgent_MeshTokenNeverEntersJournal(t *testing.T) {
+	const token = "mesh-secret-token-123"
+	store := newTestStore(t)
+	runner := &fakeRunner{actions: []fakeAction{{"text", "saw " + token}}, retErr: errors.New("failed with " + token)}
+	runner.beforeActions = func() {
+		_, got, revoke := runner.cfg.MeshClient.Mint()
+		if got != token {
+			t.Errorf("mint returned %q", got)
+		}
+		revoke()
+	}
+	m := New(Config{Store: store, Command: "codex", MeshClient: func() *executor.MeshClient {
+		return &executor.MeshClient{ParticipantID: "side:run-test", Mint: func() (string, string, func()) {
+			return "http://localhost", token, func() {}
+		}}
+	}, NewExecutor: func(cfg executor.Config) AgentRunner { runner.cfg = cfg; return runner }})
+	if _, err := m.Send("mesh:mm-1", "hello", TurnTarget{SourceMessageID: "mm-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Drain(ctxWithTimeout(t, time.Second)) {
+		t.Fatal("drain")
+	}
+	if strings.Contains(runner.gotPrompt, token) {
+		t.Fatal("prompt contains bearer token")
+	}
+	for _, e := range store.History() {
+		if strings.Contains(string(e.Data), token) {
+			t.Fatalf("event %s contains bearer token", e.Type)
+		}
+	}
+}
+
+func TestSideAgent_FailedExecutorStartDoesNotDeliverAndRevokes(t *testing.T) {
+	store := newTestStore(t)
+	var minted, revoked, delivered atomic.Bool
+	m := New(Config{Store: store, Command: "afm-side-agent-command-that-does-not-exist", MeshClient: func() *executor.MeshClient {
+		return &executor.MeshClient{ParticipantID: "side:run-test", Mint: func() (string, string, func()) {
+			minted.Store(true)
+			return "http://127.0.0.1:9876/api/agent-mesh", "secret-token", func() { revoked.Store(true) }
+		}}
+	}, OnSourceDelivered: func(string) { delivered.Store(true) }})
+	if _, err := m.Send("mesh:mm-1", "hello", TurnTarget{SourceMessageID: "mm-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Drain(ctxWithTimeout(t, time.Second)) {
+		t.Fatal("drain")
+	}
+	if !minted.Load() || !revoked.Load() {
+		t.Fatal("executor did not mint and revoke descriptor token")
+	}
+	if delivered.Load() {
+		t.Fatal("failed start marked source delivered")
 	}
 }
 

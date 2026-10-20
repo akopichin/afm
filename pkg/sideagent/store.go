@@ -219,6 +219,10 @@ func (s *Store) appendLocked(typ EventType, turnID string, data any) (Event, err
 	if s.unavailable {
 		return Event{}, s.lastErr
 	}
+	if s.chatLog == nil {
+		s.markUnavailable(os.ErrClosed)
+		return Event{}, s.lastErr
+	}
 	if err := s.validateTransition(typ, turnID); err != nil {
 		return Event{}, err
 	}

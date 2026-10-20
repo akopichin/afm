@@ -64,6 +64,35 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
+  it('shows a linked side reply outcome beside the original post in the stage feed', async () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const original = msg('side-question', 1, { sender_id: 'user', recipient_ids: ['side:r1'], body: 'help' })
+    const answer = msg('side-answer', 2, { sender_id: 'side:r1', recipient_ids: ['user'], kind: 'reply', auto_result: true, in_reply_to: 'side-question', body: 'done' })
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [original, answer], threads: [], next_cursor: 2, has_more: false })
+    render(<FeedWorkspace events={[]} stageId="impl" mesh={{ ...meshProps(), roster: { ...meshProps().roster, participants: [...participants, side] } }} />)
+    await waitFor(() => expect(row('side-question')).toHaveTextContent('Answered'))
+    expect(row('side-answer')).toHaveTextContent('done')
+  })
+
+  it('recovers an old side failure on initial stage replay without a failure event or linked reply', async () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const original = msg('side-question', 1, { sender_id: 'user', recipient_ids: ['side:r1'], body: 'help', side_agent_failed: true })
+    const read = vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [original], threads: [], next_cursor: 1, has_more: false })
+    render(<FeedWorkspace events={[]} stageId="impl" mesh={{ ...meshProps(), roster: { ...meshProps().roster, participants: [...participants, side] } }} />)
+    await waitFor(() => expect(row('side-question')).toHaveTextContent('Could not answer'))
+    expect(read).toHaveBeenCalledWith('impl', 0, 100)
+  })
+
+  it('does not show a failed answer for a passive side result after orphan cleanup', async () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const original = msg('passive', 1, { sender_id: 'stage:impl', recipient_ids: ['side:r1'], kind: 'result', auto_result: true, body: 'passive result', side_agent_failed: true })
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [original], threads: [], next_cursor: 1, has_more: false })
+    const receipt = ev('mesh_receipt', { message_id: 'passive', participant_id: 'side:r1', status: 'undeliverable' }, 2)
+    render(<FeedWorkspace events={[receipt]} stageId="impl" mesh={{ ...meshProps(), roster: { ...meshProps().roster, participants: [...participants, side] }, sideFailures: new Set(['passive']) }} />)
+    await waitFor(() => expect(row('passive')).toHaveTextContent('passive result'))
+    expect(row('passive')).not.toHaveTextContent('Could not answer')
+  })
+
   it('interleaves conversation messages with the stage events in time order', async () => {
     renderFeed()
     await waitFor(() => expect(row('m1')).not.toBeNull())

@@ -166,7 +166,7 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 	}
 	slices.Sort(runIDs)
 	for _, idStr := range runIDs {
-		p := liveRunParticipant(rs, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)])
+		p := o.sideParticipantAvailable(liveRunParticipant(rs, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)]))
 		if taskID, ok := runTaskForParticipant(rs, p.ID); ok && rs.Assistants.Tasks[taskID] != nil {
 			p = o.withEffectiveReadonly(p, rs.Assistants.Tasks[taskID])
 		}

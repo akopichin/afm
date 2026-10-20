@@ -86,9 +86,11 @@ func (a agentMeshActions) Inbox(ctx context.Context, actor string, cursor uint64
 	}
 	// Handing messages to the agent is what "delivered" means: a later thread-less addressed_message wait must
 	// not wake it again for a message it has already read. Idempotent per (message, recipient).
-	for _, m := range page.Messages {
-		if err := a.orch.MarkMessageDelivered(ctx, m.ID, reader); err != nil {
-			return server.MeshMessagePage{}, err
+	if reader != a.orch.SideAgentParticipantID() {
+		for _, m := range page.Messages {
+			if err := a.orch.MarkMessageDelivered(ctx, m.ID, reader); err != nil {
+				return server.MeshMessagePage{}, err
+			}
 		}
 	}
 	return toMeshMessagePage(page), nil

@@ -15,8 +15,8 @@ export type SideAgentComposerProps = {
   // Отправить текущий черновик. Вызывается только при непустом (trim) тексте и
   // когда агент не занят (running → поле редактируемо, но Send недоступен).
   onSend: () => void
-  // Прервать активный turn (кнопка Stop показывается только во время running).
-  onStop: () => void
+  // Stop доступен только для хода из модального окна; Mesh-ход нельзя прервать отсюда.
+  onStop?: () => void
   running: boolean
   // quote — приложенные file-comments (file-browser "Without pause" → "Send to side agent"). Чип
   // рендерится только когда не null; сама цитата не делает сообщение отправляемым — draft всё равно
@@ -121,7 +121,7 @@ export function SideAgentComposer({
             onSelect={mention.pick}
           />
         )}
-        {running && (
+        {running && onStop !== undefined && (
           <button type="button" className="chat-stop" aria-label="Stop" title="Stop" onClick={onStop}>
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
               <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />

@@ -145,6 +145,63 @@ func TestPublish_NotifyNeverFailsThePublish(t *testing.T) {
 	}
 }
 
+func TestPublish_UnavailableSideSkipsNoticeAndCommitsBoard(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	side := registerTestSideAgent(t, o).ID
+	o.SetSideAgentAvailable(false)
+
+	entry, err := publishAsUser(o, "op-side-unavailable", "task/side", "needs review", 0, side)
+	if err != nil {
+		t.Fatalf("Publish with unavailable side: %v", err)
+	}
+	if entry.Version != 1 || store.Snapshot().Assistants.Mesh.Board["task/side"] == nil {
+		t.Fatalf("board entry was not committed: %+v", entry)
+	}
+	if got := store.Snapshot().Assistants.Mesh.Inbox[side]; len(got) != 0 {
+		t.Fatalf("unavailable side got %d notices, want none", len(got))
+	}
+	replay, err := publishAsUser(o, "op-side-unavailable", "task/side", "needs review", 0, side)
+	if err != nil || replay.Seq != entry.Seq {
+		t.Fatalf("replay = %+v, %v; want committed entry seq %d", replay, err, entry.Seq)
+	}
+}
+
+func TestPublish_SideNoticeCommitPrecedesAvailabilityClose(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	side := registerTestSideAgent(t, o).ID
+	insideCommit := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCommit) }) }
+	state.SetAppendControlHook(func(state.Control) {
+		close(insideCommit)
+		<-releaseCommit
+	})
+	t.Cleanup(func() { state.SetAppendControlHook(nil) })
+	t.Cleanup(release)
+	published := make(chan error, 1)
+	go func() {
+		_, err := publishAsUser(o, "op-side-close-publish", "task/side-close", "ready", 0, side)
+		published <- err
+	}()
+	<-insideCommit
+	closed := make(chan struct{})
+	go func() { o.SetSideAgentAvailable(false); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("side gate closed before board notice commit finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	if err := <-published; err != nil {
+		t.Fatal(err)
+	}
+	<-closed
+	if len(store.Snapshot().Assistants.Mesh.Inbox[side]) != 1 {
+		t.Fatal("board notice was lost across side close")
+	}
+}
+
 // TestPublish_NoticeIsCommittedWithTheRevision: the notice is part of the publish's own operation, so a run
 // that finishes right after it sees the notice unread and keeps going — the revision and its notices are
 // never separated.

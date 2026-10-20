@@ -310,6 +310,24 @@ func TestSideAgent_ForeignOriginRejected(t *testing.T) {
 	}
 }
 
+func TestSideAgent_RejectsReservedMeshClientMessageID(t *testing.T) {
+	fake := &fakeSideAgent{}
+	srv := newTestServer(t, Config{SideAgent: fake})
+	body, _ := json.Marshal(map[string]string{"client_message_id": "mesh:preclaim", "text": "same body"})
+	req := httptest.NewRequest(http.MethodPost, "/api/side-agent/messages", bytes.NewReader(body))
+	req.Header.Set("Origin", "http://"+req.Host)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("reserved id: HTTP %d, want 400", w.Code)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sentCMID != "" {
+		t.Fatalf("reserved id reached Manager: %q", fake.sentCMID)
+	}
+}
+
 func TestSideAgent_IgnoresCommandArgsCwd(t *testing.T) {
 	fake := &fakeSideAgent{}
 	srv := newTestServer(t, Config{SideAgent: fake})

@@ -84,6 +84,16 @@ describe('toSideAgentFeedItems', () => {
 })
 
 describe('sideAgentFeedGroups', () => {
+  it('keeps adjacent Mesh senders in separate left bubbles with their names or IDs', () => {
+    const groups = sideAgentFeedGroups([
+      ev({ type: 'turn_accepted', seq: 1, data: { message: '*hello*', clientMessageId: 'mesh:m1', sourceMessageId: 'm1', sourceSenderId: 'run:qa', sourceSenderName: 'QA' } }),
+      ev({ type: 'turn_accepted', seq: 2, data: { message: '<b>hi</b>', clientMessageId: 'mesh:m2', sourceMessageId: 'm2', sourceSenderId: 'run:dev' } }),
+    ])
+    expect(groups).toHaveLength(2)
+    expect(groups.map((g) => [g.side, g.authorLabel, g.items[0]?.markdown])).toEqual([
+      ['left', 'From QA', undefined], ['left', 'From run:dev', undefined],
+    ])
+  })
   it('merges consecutive same-actor rows into one group and splits on actor change', () => {
     const groups = sideAgentFeedGroups([
       ev({ type: 'turn_accepted', seq: 1, data: { message: 'q', clientMessageId: 'm1' } }),

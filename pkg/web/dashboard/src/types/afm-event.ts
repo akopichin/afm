@@ -30,6 +30,7 @@ export const AFM_EVENT_TYPES = [
   'mesh_receipt',
   'mesh_wait',
   'mesh_board',
+  'side_agent_mesh_failure',
 ] as const
 
 export type AfmEventType = (typeof AFM_EVENT_TYPES)[number]

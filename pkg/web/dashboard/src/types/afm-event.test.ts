@@ -105,7 +105,7 @@ describe('SIGNIFICANT_EVENT_TYPES', () => {
   })
 
   test('none of the mesh_* notice types are significant — they are informational, never an FSM transition', () => {
-    for (const t of ['mesh_participant', 'mesh_thread', 'mesh_message', 'mesh_receipt', 'mesh_wait', 'mesh_board']) {
+    for (const t of ['mesh_participant', 'mesh_thread', 'mesh_message', 'mesh_receipt', 'mesh_wait', 'mesh_board', 'side_agent_mesh_failure']) {
       expect(SIGNIFICANT_EVENT_TYPES.has(t)).toBe(false)
     }
   })
@@ -138,6 +138,7 @@ describe('AFM_EVENT_TYPES', () => {
       'mesh_receipt',
       'mesh_wait',
       'mesh_board',
+      'side_agent_mesh_failure',
     ])
   })
 })

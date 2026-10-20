@@ -11,6 +11,7 @@ import { useMentionMenu } from '../assistants/use-mention-menu'
 import { directPeer, findExistingDirectThread, mentionHandles, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { ConversationMessage } from './ConversationMessage'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { sideAgentOutcome } from '../feed-workspace/mesh-receipt'
 
 // ThreadConversationTarget — what the Messages pane is currently pointed at: an ALREADY open thread (picked
 // from the roster's "Conversations" group), or a person row with no thread yet ("direct" — opening one is
@@ -38,6 +39,7 @@ export type ThreadConversationProps = {
   // Without them the component keeps its own draft.
   draft?: string
   onDraftChange?: Dispatch<SetStateAction<string>>
+  sideFailures?: ReadonlySet<string>
 }
 
 // targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
@@ -122,7 +124,7 @@ function routeAll(target: ThreadConversationTarget, label: string): string {
 }
 
 export function ThreadConversation(props: ThreadConversationProps): ReactElement {
-  const { target, onThreadOpened, onThreadCreated, participants = [], threads = [] } = props
+  const { target, onThreadOpened, onThreadCreated, participants = [], threads = [], sideFailures = new Set<string>() } = props
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [ownDraft, setOwnDraft] = useState('')
   const draft = props.draft ?? ownDraft
@@ -240,7 +242,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         ) : (
           <ul className="team-conversation-message-list">
             {messages.map((m) => (
-              <ConversationMessage key={m.id} message={m} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} />
+              <ConversationMessage key={m.id} message={m} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} sideOutcome={sideAgentOutcome(m, messages, sideFailures)} />
             ))}
           </ul>
         )}

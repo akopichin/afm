@@ -231,6 +231,12 @@ func attachRejected(code assistants.ErrorCode, format string, args ...any) error
 //     stage/profile/depth rules, defaults, the initial status and the MaxTasks quota reservation
 //     (CollaborationLimits.MaxTasks: "top-level attaches plus every delegated descendant").
 func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendRequest) (AttachAndSendResult, error) {
+	if req.FirstMessage != nil {
+		// The first message may address the side participant through an
+		// extra thread member. Serialize its commit with CloseInput.
+		o.sideAgentGate.RLock()
+		defer o.sideAgentGate.RUnlock()
+	}
 	if !o.opts.AssistantsEnabled {
 		return AttachAndSendResult{}, &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
 	}

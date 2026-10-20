@@ -28,7 +28,7 @@ export type SideAgentModalProps = {
 // продолжается под ctx менеджера на бэкенде).
 export function SideAgentModal({ api, attentionShortcut = null, stages = [], assistantProfiles = [] }: SideAgentModalProps): ReactElement {
   const {
-    isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, error, unavailable,
+    isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, activeSource, error, unavailable,
     quote, clearQuote, contextStageId, setContextStageId,
   } = api
 
@@ -110,6 +110,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
   }
 
   const running = requestState === 'running'
+  const statusText = running ? activeSource?.kind === 'mesh' ? `Replying to ${activeSource.sender}…` : 'Working…' : ''
 
   return createPortal(
     <div
@@ -134,8 +135,8 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
             {command !== '' && <span className="side-agent-command" title="The configured agent command">{command}</span>}
           </div>
           <div className="side-agent-header-actions">
-            <span className="side-agent-status" aria-live="polite">
-              {running ? 'Working…' : ''}
+            <span className="side-agent-status" aria-live="polite" title={statusText}>
+              {statusText}
             </span>
             {attentionShortcut !== null && (
               <button
@@ -199,7 +200,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
           draft={draft}
           onDraftChange={setDraft}
           onSend={() => void send(draft)}
-          onStop={interrupt}
+          onStop={activeSource?.kind === 'modal' ? interrupt : undefined}
           running={running}
           quote={quote}
           onCancelQuote={clearQuote}

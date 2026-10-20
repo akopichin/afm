@@ -319,8 +319,39 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		ProposalActions:   collab.proposalActions(orch),
 	}, orch)
 	if err != nil {
+		sideDrained = side.shutdownEmergency(sideAgentEmergencyDrain)
 		return err
 	}
+	var unavailableSideMesh *sideAgentMeshBridge
+	if side != nil {
+		side.mesh = startSideAgentMesh(orch, side.manager)
+		// Flow finalization drains Mesh input. Direct modal admission remains open
+		// while the dashboard stays up after the flow has finalized.
+		orch.SetSideAgentDrain(side.drainMesh)
+	} else {
+		// A resumed run can retain a durable side identity even when the
+		// capability is disabled or its journal failed to open. Reconcile its
+		// historical inbox without creating a Manager or making it reachable.
+		var listErr error
+		unavailableSideMesh, listErr = startHistoricalSideAgentMesh(ctx, orch)
+		if listErr != nil {
+			return listErr
+		}
+		if unavailableSideMesh != nil {
+			orch.SetSideAgentDrain(func(ctx context.Context) bool {
+				unavailableSideMesh.CloseInput()
+				return unavailableSideMesh.Drain(ctx)
+			})
+		}
+	}
+	defer func() {
+		if unavailableSideMesh != nil {
+			unavailableSideMesh.Abort()
+			ctx, cancel := context.WithTimeout(context.Background(), sideAgentEmergencyDrain)
+			defer cancel()
+			_ = unavailableSideMesh.Drain(ctx)
+		}
+	}()
 	if srv != nil {
 		defer func() { _ = srv.Shutdown(context.Background()) }()
 	}

@@ -2,6 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +24,105 @@ func registerTestSideAgent(t *testing.T, o *Orchestrator) agentcomm.Participant 
 	if err != nil {
 		t.Fatalf("RegisterSideAgent: %v", err)
 	}
+	o.SetSideAgentAvailable(true)
 	return p
+}
+
+func TestSideAgentMesh_AvailabilityGatesRosterAndSends(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	if _, err := o.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{DisplayName: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
+		t.Fatal(err)
+	}
+	checkReachable := func(want bool) {
+		t.Helper()
+		page, err := o.ListParticipants(context.Background(), ListParticipantsRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range page.Participants {
+			if p.ID == o.SideAgentParticipantID() {
+				if p.Reachable != want {
+					t.Fatalf("side reachable = %v, want %v", p.Reachable, want)
+				}
+				return
+			}
+		}
+		t.Fatal("historical side participant disappeared")
+	}
+	send := func(op string) error {
+		_, err := o.SendFromAgent(context.Background(), SendRequest{OperationID: op, Sender: "user", Recipients: []agentcomm.ParticipantID{o.SideAgentParticipantID()}, Kind: agentcomm.MessageKindMessage, Body: "hello", Actor: state.Actor{Kind: "user"}})
+		return err
+	}
+	checkReachable(false)
+	if err := send("side-off-1"); err == nil {
+		t.Fatal("side accepted send before bridge startup")
+	}
+	o.SetSideAgentAvailable(true)
+	checkReachable(true)
+	if err := send("side-on"); err != nil {
+		t.Fatal(err)
+	}
+	o.SetSideAgentAvailable(false)
+	checkReachable(false)
+	if err := send("side-off-2"); err == nil {
+		t.Fatal("side accepted send after shutdown")
+	}
+	resumed := New(o.opts) // same durable participant, capability not restarted
+	page, err := resumed.ListParticipants(context.Background(), ListParticipantsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range page.Participants {
+		if p.ID == resumed.SideAgentParticipantID() {
+			if p.Reachable {
+				t.Fatal("resumed side without bridge is reachable")
+			}
+			return
+		}
+	}
+	t.Fatal("resumed run lost historical side participant")
+}
+
+func TestSideAgentMesh_FailureMarkerReplaysNoticeAndExplicitReplyWins(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	side := registerTestSideAgent(t, o).ID
+	ctx := context.Background()
+	first, err := o.SendFromAgent(ctx, SendRequest{OperationID: "side-failure-one", Sender: "user", Recipients: []agentcomm.ParticipantID{side}, Kind: agentcomm.MessageKindMessage, Body: "one", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SideAgentMeshResponseFailed(first.MessageID, "conversation unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Snapshot().Assistants.Mesh.Receipts[first.MessageID][side]; got != agentcomm.DeliveryUndeliverable {
+		t.Fatalf("receipt = %s", got)
+	}
+	path := filepath.Join(o.opts.RunDir, "notices.jsonl")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	} // crash after marker, before notice append
+	o.RepublishSideAgentMeshFailure(first.MessageID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"type":"side_agent_mesh_failure"`) || !strings.Contains(string(data), string(first.MessageID)) {
+		t.Fatalf("missing keyed replay notice: %s", data)
+	}
+
+	second, err := o.SendFromAgent(ctx, SendRequest{OperationID: "side-failure-two", Sender: "user", Recipients: []agentcomm.ParticipantID{side}, Kind: agentcomm.MessageKindMessage, Body: "two", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.SendFromAgent(ctx, SendRequest{OperationID: "side-explicit-before-failure", Sender: side, Kind: agentcomm.MessageKindReply, InReplyTo: &second.MessageID, Body: "answered", Actor: state.Actor{Kind: "agent", ID: string(side)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.SideAgentMeshResponseFailed(second.MessageID, "could not answer"); !errors.Is(err, ErrSideAgentExplicitReply) {
+		t.Fatalf("failure after explicit reply = %v", err)
+	}
+	if got := store.Snapshot().Assistants.Mesh.Receipts[second.MessageID][side]; got == agentcomm.DeliveryUndeliverable {
+		t.Fatal("explicit answer was marked undeliverable")
+	}
 }
 
 // TestSideAgent_HasParticipantIdentity — the bound side agent appears in ListParticipants as
@@ -199,5 +301,25 @@ func TestSideAgent_DisabledCapabilityLeavesNoParticipant(t *testing.T) {
 	wantID := o.SideAgentParticipantID()
 	if _, ok := rs.Assistants.Mesh.Participants[wantID]; ok {
 		t.Fatalf("mesh durably references %q although RegisterSideAgent was never called", wantID)
+	}
+}
+
+func TestSideAgent_MeshClientLazyAndScoped(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	if o.SideAgentMeshClient() != nil {
+		t.Fatal("client minted before dashboard URL")
+	}
+	o.opts.DashboardURL = "http://127.0.0.1:9876"
+	client := o.SideAgentMeshClient()
+	if client == nil || client.ParticipantID != string(o.SideAgentParticipantID()) {
+		t.Fatalf("wrong side client: %+v", client)
+	}
+	_, token, revoke := client.Mint()
+	if got, ok := o.ResolveMeshToken(token); !ok || got != o.SideAgentParticipantID() {
+		t.Fatal("side token not scoped to side participant")
+	}
+	revoke()
+	if _, ok := o.ResolveMeshToken(token); ok {
+		t.Fatal("side token was not revoked")
 	}
 }

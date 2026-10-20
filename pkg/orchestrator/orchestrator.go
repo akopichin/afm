@@ -133,6 +133,14 @@ type ResolvedFile struct {
 // Orchestrator manages the full lifecycle of a flow run via event loop.
 type Orchestrator struct {
 	opts Options
+	// sideAgentReachable is true only while this process has a usable side store and inbox bridge.
+	sideAgentReachable atomic.Bool
+	sideAgentGate      sync.RWMutex
+	// sideMeshDrain is installed before Run. Finalization waits for its Mesh
+	// inbox and active turn without blocking the event loop that handles replies.
+	sideMeshDrain     func(context.Context) bool
+	sideMeshDrainOnce sync.Once
+	sideMeshDrained   atomic.Bool
 	// absRunDir — опредёлённый ОДИН РАЗ в New абсолютный вариант opts.RunDir (filepath.Abs; при ошибке —
 	// исходное значение as-is). Используется ТОЛЬКО через stageDir() — на границе с агентом (AFM_STAGE_DIR),
 	// где CWD агента (root_dir/worktree) может не совпадать с CWD afm, и относительный путь резолвился бы не

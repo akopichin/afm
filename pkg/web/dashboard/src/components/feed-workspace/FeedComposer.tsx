@@ -17,7 +17,7 @@ import { buildMeshMentionGroups, type MeshMentionItem } from './mesh-recipients'
 import { composerRecipients, messageRoute, recipientFence, withoutRecipient, type ComposerRecipient, type MessageRoute } from './composer-recipients'
 import { postStageDiscussionMessage } from '../../api/run-client'
 import { participantLabel } from '../../lib/mesh-roster'
-import { computeReceiptPhase, deliveryKey, RECEIPT_LABEL } from './mesh-receipt'
+import { computeReceiptPhase, deliveryKey, sideAgentOutcome, RECEIPT_LABEL } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
 
@@ -38,6 +38,7 @@ export type FeedComposerMeshProps = {
   pick?: MeshPick | null
   // deliveries — the run's real delivery receipts (meshDeliveries over the run events), for "Delivered".
   deliveries?: ReadonlySet<string>
+  sideFailures?: ReadonlySet<string>
 }
 
 // MeshPick — someone to add to the recipients.
@@ -556,7 +557,10 @@ function MeshMessageComposer({
       ? []
       : lastSend.recipientIds.map((id) => {
           const participant = participants.find((p) => p.id === id)
-          const phase = computeReceiptPhase({
+          const sideOutcome = lastSend.messageId === null ? null : sideAgentOutcome(
+            { id: lastSend.messageId, recipient_ids: lastSend.recipientIds }, conversationMessages, mesh.sideFailures ?? new Set(), id,
+          )
+          const phase = sideOutcome ?? computeReceiptPhase({
             participant,
             stagePaused: participant?.stage_id !== undefined && stageStatus(participant.stage_id) === 'paused',
             answered: lastSend.messageId !== null && conversationMessages.some((m) => m.in_reply_to === lastSend.messageId && m.sender_id === id),

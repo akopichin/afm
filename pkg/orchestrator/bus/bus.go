@@ -97,12 +97,13 @@ const (
 	// exactly like the discussion/proposal events above — never from a second, mesh-only journal. The
 	// client's existing content-key dedupe path for seq-less collaboration events already handles them
 	// (use-event-feed.ts), so no UI-side change is required to add a new one here.
-	EventMeshParticipant EventType = "mesh_participant"
-	EventMeshThread      EventType = "mesh_thread"
-	EventMeshMessage     EventType = "mesh_message"
-	EventMeshReceipt     EventType = "mesh_receipt"
-	EventMeshWait        EventType = "mesh_wait"
-	EventMeshBoard       EventType = "mesh_board"
+	EventMeshParticipant      EventType = "mesh_participant"
+	EventMeshThread           EventType = "mesh_thread"
+	EventMeshMessage          EventType = "mesh_message"
+	EventMeshReceipt          EventType = "mesh_receipt"
+	EventMeshWait             EventType = "mesh_wait"
+	EventMeshBoard            EventType = "mesh_board"
+	EventSideAgentMeshFailure EventType = "side_agent_mesh_failure"
 	// EventTeamWarning fires when a flow's team: declaration could not be applied as written — on resume,
 	// a member changed in flow.yaml keeps its saved version; or its agent could not be added. Run-level,
 	// non-FSM, live + durable (notices.jsonl). Data: {"member_id", "message"}.

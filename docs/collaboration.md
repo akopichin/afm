@@ -225,6 +225,20 @@ that participant and what it is doing: a stage's status, or for a run agent or
 helper whether it is **Working**, **Waiting** (for a colleague), **Idle** (between
 turns), **Paused**, or **Done**; the presence dot follows the same state.
 
+To ask the Side agent about the run, select it under **This run** and send a
+message such as `Summarize the latest test failure`. Its handle is `@side`; a
+stage agent or helper can address the same participant with
+`afm agent send --to side --kind request --body "Summarize the latest test failure"`.
+You can also include the Side agent in a stage Feed message by selecting it in
+the **People** panel. Each message it receives joins its single conversation,
+one turn at a time. The answer appears as a linked reply in the original Team
+or Feed conversation. While it works, the Side agent modal names the sender;
+**Stop** there applies only to messages started from that modal. A failed turn
+shows **Could not answer** in the source conversation; if that conversation
+cannot accept a reply, its delivery is marked undeliverable. See
+[Side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) for
+its conversation and availability settings.
+
 Drag the divider at the roster's right edge to make more room for the roster or
 conversation. You can also focus the divider and use **Left** or **Right** to
 resize in 16 px steps; double-click it to restore the 260 px default. The roster

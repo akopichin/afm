@@ -88,6 +88,46 @@ describe('TeamView', () => {
     document.body.style.userSelect = ''
   })
 
+  test('keeps side in the run roster and shows its durable terminal failure beside the original message', async () => {
+    mockThreadAndBoardFetches()
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const thread: meshClient.MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'open' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
+      { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'help', seq: 1, created_at: '' },
+    ], next_cursor: 1 })
+    renderTeamView([makeStage()], [{ type: 'side_agent_mesh_failure', payload: { source_message_id: 'm1' }, stageId: '', timestamp: '' }],
+      enabledRoster({ participants: [...participants, side], threads: [thread] }))
+    expect(within(screen.getByRole('region', { name: 'This run' })).getAllByText('Side agent').length).toBeGreaterThan(0)
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
+    await waitFor(() => expect(screen.getByText('Could not answer')).toBeInTheDocument())
+  })
+
+  test('recovers an old side failure from the thread on reconnect after event replay drops its notice', async () => {
+    mockThreadAndBoardFetches()
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const thread: meshClient.MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'closed' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
+      { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'help', side_agent_failed: true, seq: 1, created_at: '' },
+    ], next_cursor: 1 })
+    renderTeamView([makeStage()], [], enabledRoster({ participants: [...participants, side], threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
+    await waitFor(() => expect(document.querySelector('[data-message-id="m1"]')).toHaveTextContent('Could not answer'))
+  })
+
+  test('does not show a failure on a passive side result whose orphan receipt was released', async () => {
+    mockThreadAndBoardFetches()
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const thread: meshClient.MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'open' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
+      { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'result', auto_result: true, body: 'passive', side_agent_failed: true, seq: 1, created_at: '' },
+    ], next_cursor: 1 })
+    const receipt = { type: 'mesh_receipt', payload: { message_id: 'm1', participant_id: 'side:r1', status: 'undeliverable' }, stageId: '', timestamp: '' }
+    renderTeamView([makeStage()], [receipt], enabledRoster({ participants: [...participants, side], threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
+    await waitFor(() => expect(document.querySelector('[data-message-id="m1"]')).toHaveTextContent('passive'))
+    expect(document.querySelector('[data-message-id="m1"]')).not.toHaveTextContent('Could not answer')
+  })
+
   test('roster groups participants under "This run", "Stages" and "Conversations"', () => {
     mockThreadAndBoardFetches()
     renderTeamView()

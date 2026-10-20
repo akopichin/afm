@@ -326,7 +326,21 @@ func (o *Orchestrator) shouldExit() bool {
 		return false
 	}
 	snap := o.opts.Store.Snapshot()
-	return o.runStateAllowsExit(&snap)
+	if !o.runStateAllowsExitCore(&snap) {
+		return false
+	}
+	if o.sideMeshDrain != nil && !o.sideMeshDrained.Load() {
+		o.sideMeshDrainOnce.Do(func() {
+			go func() {
+				if o.sideMeshDrain(o.runContext(context.Background())) {
+					o.sideMeshDrained.Store(true)
+					o.critical.WakeEventLoop()
+				}
+			}()
+		})
+		return false
+	}
+	return true
 }
 
 // runStateAllowsExit is the run-state half of shouldExit: every stage is terminal and nothing accepted still
@@ -338,6 +352,10 @@ func (o *Orchestrator) shouldExit() bool {
 // state.AssistantsState.RunBlocker's doc comment for why this is a separate, wider check than the per-stage
 // RequiredBlocker gate.
 func (o *Orchestrator) runStateAllowsExit(rs *state.RunState) bool {
+	return o.runStateAllowsExitCore(rs) && (o.sideMeshDrain == nil || o.sideMeshDrained.Load())
+}
+
+func (o *Orchestrator) runStateAllowsExitCore(rs *state.RunState) bool {
 	for _, s := range rs.Stages {
 		if !bus.IsTerminal(s.Status) {
 			return false

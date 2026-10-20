@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,44 @@ import (
 func stubPassingHelper(o *Orchestrator) {
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		return passResultOutcome(), nil
+	}
+}
+
+func TestAttachAndSend_SideFirstMessageCommitPrecedesAvailabilityClose(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	side := registerTestSideAgent(t, o).ID
+	stubPassingHelper(o)
+	planned := make(chan struct{})
+	releasePlan := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releasePlan) }) }
+	t.Cleanup(release)
+	o.testAfterAttachSnapshot = func() { close(planned); <-releasePlan }
+	message := "review this"
+	attached := make(chan error, 1)
+	go func() {
+		_, err := o.AttachAndSend(context.Background(), AttachAndSendRequest{
+			OperationID: "op-side-close-attach", ProfileID: "reviewer", Scope: assistants.ScopeRun,
+			Title: "Reviewer", Instruction: "review", FirstMessage: &message,
+			Recipients: []agentcomm.ParticipantID{side}, Actor: state.Actor{Kind: "user"},
+		})
+		attached <- err
+	}()
+	<-planned
+	closed := make(chan struct{})
+	go func() { o.SetSideAgentAvailable(false); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("side gate closed before attach first-message commit")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	if err := <-attached; err != nil {
+		t.Fatal(err)
+	}
+	<-closed
+	if len(store.Snapshot().Assistants.Mesh.Inbox[side]) != 1 {
+		t.Fatal("side did not receive attach first message")
 	}
 }
 

@@ -215,6 +215,10 @@ func TestCrash_HelperWaitResolvedBeforeRequeue_RecoveredOnRestart(t *testing.T) 
 
 	attachTestTask(ctx, t, o, "op-peer-crash")
 	waitForTaskStatus(t, store, taskID, assistants.StatusWaitingPeer, 2*time.Second)
+	// The status commit precedes parkYieldedTurn's final live-resume check. Finish
+	// that goroutine before injecting the reply, or it can observe the reply and
+	// requeue the task before this test simulates the crash.
+	o.concurrency.WaitAgents()
 
 	thread, err := o.OpenThread(ctx, OpenThreadRequest{
 		OperationID: "op-peer-crash-open", Members: []agentcomm.ParticipantID{helperID, colleague}, Scope: agentcomm.ScopeStage,

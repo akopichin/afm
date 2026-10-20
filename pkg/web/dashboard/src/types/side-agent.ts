@@ -59,7 +59,14 @@ export function errorCodeToMessage(code: string): string {
 
 // --- Типизированные нагрузки по типу события (camelCase, нормализованы из wire) ---
 
-export type TurnAcceptedData = { message: string; clientMessageId: string }
+export type TurnAcceptedData = {
+  message: string
+  clientMessageId: string
+  sourceMessageId?: string
+  sourceThreadId?: string
+  sourceSenderId?: string
+  sourceSenderName?: string
+}
 export type TurnStartedData = { command: string; contextFormatVersion: string }
 export type AssistantTextData = { text: string }
 export type ToolActionData = { tool: string; detail: string; logRef: string }
@@ -105,8 +112,14 @@ function isEventType(value: unknown): value is SideAgentEventType {
 function parseEventData(type: SideAgentEventType, raw: unknown): SideAgentEvent['data'] {
   const d = isRecord(raw) ? raw : {}
   switch (type) {
-    case 'turn_accepted':
-      return { message: str(d.message), clientMessageId: str(d.client_message_id) }
+    case 'turn_accepted': {
+      const accepted: TurnAcceptedData = { message: str(d.message), clientMessageId: str(d.client_message_id) }
+      if (typeof d.source_message_id === 'string' && d.source_message_id !== '') accepted.sourceMessageId = d.source_message_id
+      if (typeof d.source_thread_id === 'string' && d.source_thread_id !== '') accepted.sourceThreadId = d.source_thread_id
+      if (typeof d.source_sender_id === 'string' && d.source_sender_id !== '') accepted.sourceSenderId = d.source_sender_id
+      if (typeof d.source_sender_name === 'string' && d.source_sender_name !== '') accepted.sourceSenderName = d.source_sender_name
+      return accepted
+    }
     case 'turn_started':
       return { command: str(d.command), contextFormatVersion: str(d.context_format_version) }
     case 'assistant_text':

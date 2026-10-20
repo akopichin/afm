@@ -79,6 +79,9 @@ func (o *Orchestrator) AcceptProposal(ctx context.Context, proposalID, requestID
 	if requestID == "" {
 		return errors.New("assistants: request id is required")
 	}
+	if err := rejectReservedRequestID(requestID, actor); err != nil {
+		return err
+	}
 	p, ok := o.Proposal(proposalID)
 	if !ok {
 		return ErrProposalNotFound

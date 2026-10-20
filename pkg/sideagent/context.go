@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/akopichin/afm/pkg/prompts"
 )
 
 // ContextFormatVersion — версия формата сборки промпта. Фиксируется в событии
 // turn_started, чтобы восстановление и downstream знали, как был собран контекст.
-const ContextFormatVersion = "v1"
+const ContextFormatVersion = "v2"
 
 // Заголовки секций промпта (экспортированы для тестов и downstream-навигации).
 const (
@@ -38,7 +40,7 @@ type ContextBuilder struct {
 
 // Build собирает промпт: инструкция + история прошлых сообщений в порядке отправки + текущее сообщение.
 // Метод чистый: он не мутирует history и не усекает её.
-func (b ContextBuilder) Build(history []Event, currentMessage string) (string, error) {
+func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string, error) {
 	instruction := b.Instruction
 	if instruction == "" {
 		instruction = DefaultInstruction
@@ -60,8 +62,17 @@ func (b ContextBuilder) Build(history []Event, currentMessage string) (string, e
 
 	sb.WriteString(CurrentHeading)
 	sb.WriteString("\n")
-	sb.WriteString(currentMessage)
-	sb.WriteString("\n")
+	if current.SourceMessageID != "" {
+		sb.WriteString(prompts.AgentCommInboxBlock([]prompts.AgentCommInboxMessage{{
+			MessageID: current.SourceMessageID,
+			ThreadID:  current.SourceThreadID,
+			From:      peerLabel(current),
+			Body:      current.Message,
+		}}, 0))
+	} else {
+		sb.WriteString(current.Message)
+		sb.WriteString("\n")
+	}
 
 	prompt := sb.String()
 	if b.ByteLimit > 0 && len(prompt) > b.ByteLimit {
@@ -78,7 +89,11 @@ func renderHistory(history []Event) []string {
 		case EventTurnAccepted:
 			var d TurnAcceptedData
 			if e.DecodeData(&d) == nil && d.Message != "" {
-				lines = append(lines, "Пользователь: "+d.Message)
+				if d.SourceMessageID != "" {
+					lines = append(lines, quoteHistoryEntry("From "+peerLabel(d)+" ["+prompts.EscapeTagsForReprompt(d.SourceMessageID)+"] in thread "+prompts.EscapeTagsForReprompt(d.SourceThreadID)+": "+prompts.EscapeTagsForReprompt(d.Message)))
+				} else {
+					lines = append(lines, "Пользователь: "+d.Message)
+				}
 			}
 		case EventAssistantText:
 			var d AssistantTextData
@@ -95,6 +110,23 @@ func renderHistory(history []Event) []string {
 		}
 	}
 	return lines
+}
+
+// Each line of a historical peer message stays inside a Markdown quotation,
+// including blank lines and lines that resemble prompt headings or role labels.
+func quoteHistoryEntry(entry string) string {
+	entry = strings.ReplaceAll(entry, "\r\n", "\n")
+	entry = strings.ReplaceAll(entry, "\r", "\n")
+	return "> " + strings.ReplaceAll(entry, "\n", "\n> ")
+}
+
+func peerLabel(d TurnAcceptedData) string {
+	name := d.SourceSenderName
+	if name == "" {
+		name = d.SourceSenderID
+	}
+	cleanLine := strings.NewReplacer("\r", " ", "\n", " ").Replace
+	return prompts.EscapeTagsForReprompt(cleanLine(name)) + " (" + prompts.EscapeTagsForReprompt(cleanLine(d.SourceSenderID)) + ")"
 }
 
 // formatToolAction — компактная строка действия со ссылкой на подробный лог.
