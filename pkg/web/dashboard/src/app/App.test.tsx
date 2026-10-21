@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
+import { isTeamUnread } from '../lib/team-unread'
 
 // Минимальный stub WebSocket — App открывает соединение при монтировании.
 class StubWebSocket {
@@ -2006,6 +2007,41 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
     expect(screen.getByRole('button', { name: /QA.*New messages/ })).toBeInTheDocument()
   })
+
+  test('leaving Team for the Feed keeps its draft and does not read messages that arrive meanwhile', async () => {
+    let lastOther = 3
+    const message = (seq: number) => ({ id: `m${seq}`, thread_id: 'mt-keep', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: `note ${seq}`, seq, created_at: '' })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', run_id: 'app-keep-team', stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }, { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA', reachable: true }] }) } as Response
+      if (url.includes('/api/mesh/threads/mt-keep')) {
+        const seqs = lastOther === 3 ? [3] : [3, lastOther]
+        return { ok: true, json: async () => ({ messages: seqs.map(message), next_cursor: lastOther }) } as Response
+      }
+      if (url.includes('/api/mesh/threads')) {
+        return { ok: true, json: async () => ({ threads: [{ id: 'mt-keep', title: 'QA', scope: 'run', members: ['user', 'run:qa'], status: 'open' }], summaries: { 'mt-keep': { last_other_message_seq: lastOther, title_seq: 0 } } }) } as Response
+      }
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    render(<App />)
+    const workspaceTabs = () => within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(await screen.findByRole('button', { name: /QA/ }))
+    const composer = await screen.findByPlaceholderText('Message QA…')
+    fireEvent.change(composer, { target: { value: 'unsent thought' } })
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Feed' }))
+    lastOther = 4
+    // The next roster and thread polls bring message 4 while the Feed is shown.
+    await new Promise((resolve) => setTimeout(resolve, 3200))
+    expect(isTeamUnread('app-keep-team', 'mt-keep', 4)).toBe(true)
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    expect(screen.getByPlaceholderText('Message QA…')).toHaveValue('unsent thought')
+  }, 10000)
 
   // The stage Feed's people panel. A click on a person adds them to the Feed composer's recipients (Message
   // mode); the Team tab keeps its own roster.

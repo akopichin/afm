@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useStickToBottom } from './use-stick-to-bottom'
 
@@ -79,5 +79,75 @@ describe('useStickToBottom', () => {
       result.current.ref(second)
     })
     expect(second.scrollTop).toBe(900)
+  })
+
+  describe('a hidden container that is shown again', () => {
+    afterEach(() => vi.unstubAllGlobals())
+
+    // stubResize installs a ResizeObserver whose callback the test fires by hand.
+    function stubResize(): { fire: () => void } {
+      let callback: (() => void) | null = null
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(cb: () => void) { callback = cb }
+        observe() {}
+        disconnect() {}
+      })
+      return { fire: () => callback?.() }
+    }
+
+    // box — a scroll container whose layout the test controls (jsdom has no layout).
+    function box(): { el: HTMLDivElement; layout: (scrollHeight: number, clientHeight: number) => void } {
+      const el = document.createElement('div')
+      const size = { scrollHeight: 0, clientHeight: 0 }
+      Object.defineProperty(el, 'scrollHeight', { get: () => size.scrollHeight, configurable: true })
+      Object.defineProperty(el, 'clientHeight', { get: () => size.clientHeight, configurable: true })
+      return { el, layout: (scrollHeight, clientHeight) => Object.assign(size, { scrollHeight, clientHeight }) }
+    }
+
+    it('returns a reader who scrolled up to where they left, clamped to the new maximum', () => {
+      const resize = stubResize()
+      const { result } = renderHook(() => useStickToBottom<HTMLDivElement>())
+      const { el, layout } = box()
+      layout(2000, 400)
+      act(() => result.current.ref(el))
+      act(() => {
+        el.scrollTop = 900
+        el.dispatchEvent(new Event('scroll'))
+      })
+      expect(result.current.stick).toBe(false)
+
+      // Hidden: no layout, and the browser reports scrollTop 0.
+      layout(0, 0)
+      act(() => {
+        el.scrollTop = 0
+        el.dispatchEvent(new Event('scroll'))
+        resize.fire()
+      })
+      expect(result.current.stick).toBe(false)
+
+      layout(2000, 400)
+      act(() => resize.fire())
+      expect(el.scrollTop).toBe(900)
+
+      // A wider window wraps less text: the old offset no longer fits.
+      layout(0, 0)
+      act(() => resize.fire())
+      layout(1000, 400)
+      act(() => resize.fire())
+      expect(el.scrollTop).toBe(600)
+    })
+
+    it('keeps a reader at the bottom on the bottom when shown again', () => {
+      const resize = stubResize()
+      const { result } = renderHook(() => useStickToBottom<HTMLDivElement>())
+      const { el, layout } = box()
+      layout(2000, 400)
+      act(() => result.current.ref(el))
+      layout(0, 0)
+      act(() => resize.fire())
+      layout(2600, 400)
+      act(() => resize.fire())
+      expect(el.scrollTop).toBe(2600)
+    })
   })
 })

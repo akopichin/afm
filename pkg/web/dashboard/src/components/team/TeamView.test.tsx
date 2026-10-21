@@ -6,7 +6,6 @@ import type { MeshRoster } from '../../hooks/use-mesh'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { isTeamUnread } from '../../lib/team-unread'
-import { clearTeamPageMemory } from '../../lib/team-page-memory'
 
 function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
@@ -110,7 +109,6 @@ function openAddRunAgent(): void {
 
 describe('TeamView', () => {
   afterEach(() => {
-    clearTeamPageMemory()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     localStorage.clear()
@@ -160,39 +158,6 @@ describe('TeamView', () => {
     await waitFor(() => expect(screen.getByText('ping 6')).toBeInTheDocument(), { timeout: 5000 })
     expect(screen.getByRole('button', { name: /New to you.*1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Pinger.*New messages/ })).toBeInTheDocument()
-  })
-
-  test('leaving Team for the Feed keeps the selected conversation, its draft and its log position', async () => {
-    const older: meshClient.MeshThread = { id: 'mt-keep-older', title: 'Older topic', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
-    const newer: meshClient.MeshThread = { id: 'mt-keep-newer', title: 'Newer topic', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
-    const message: meshClient.MeshMessage = { id: 'mk1', thread_id: older.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'long history', seq: 3, created_at: '' }
-    vi.spyOn(meshClient, 'getMeshThread').mockImplementation(async (id) => ({ messages: id === older.id ? [message] : [], next_cursor: 3 }))
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
-    const roster = enabledRoster({
-      threads: [older, newer],
-      summaries: { [older.id]: { last_other_message_seq: 3, title_seq: 0 }, [newer.id]: { last_other_message_seq: 7, title_seq: 0 } },
-    })
-    const first = render(<TeamView runId="keep-on-leave" roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
-    fireEvent.click(screen.getByRole('button', { name: /Older topic/ }))
-    await waitFor(() => expect(screen.getByText('long history')).toBeInTheDocument())
-    fireEvent.change(screen.getByPlaceholderText('Message Older topic…'), { target: { value: 'unsent thought' } })
-    const log = screen.getByRole('log', { name: 'Messages' })
-    Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 2000 })
-    Object.defineProperty(log, 'clientHeight', { configurable: true, value: 400 })
-    log.scrollTop = 120
-    fireEvent.scroll(log)
-
-    // App renders Team only while it is the active view: switching to the Feed unmounts it.
-    first.unmount()
-    render(<TeamView runId="keep-on-leave" roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
-
-    const composer = screen.getByPlaceholderText('Message Older topic…')
-    expect(composer).toHaveValue('unsent thought')
-    const restoredLog = screen.getByRole('log', { name: 'Messages' })
-    Object.defineProperty(restoredLog, 'scrollHeight', { configurable: true, value: 2000 })
-    Object.defineProperty(restoredLog, 'clientHeight', { configurable: true, value: 400 })
-    await waitFor(() => expect(screen.getByText('long history')).toBeInTheDocument(), { timeout: 5000 })
-    await waitFor(() => expect(restoredLog.scrollTop).toBe(120))
   })
 
   test.each([false, true])('visible Messages marks incoming read while People is selected (narrow=%s)', async (narrow) => {

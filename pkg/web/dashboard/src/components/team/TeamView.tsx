@@ -7,7 +7,6 @@ import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryab
 import { directPeer, findExistingDirectThread, mergeById, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { orderInboxThreads } from '../../lib/team-inbox'
 import { advanceTeamSeen, baselineTeamUnread, isTeamUnread } from '../../lib/team-unread'
-import { teamScrollMemory, useTeamPageState } from '../../lib/team-page-memory'
 import { RunTeamList, teamStagesOf } from './RunTeamList'
 import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
 import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
@@ -20,6 +19,9 @@ import { usePanelResize } from '../layout/use-panel-resize'
 
 export type TeamViewProps = {
   runId: string
+  // active — Team is the visible workspace view. App keeps Team mounted while another view is shown, and a
+  // hidden Team must not mark anything read. Defaults to true for standalone use.
+  active?: boolean
   // roster — owned by App.tsx (ONE useMeshRoster poll for the whole dashboard, same "capability hook lives at
   // the top, passed down" convention useStageAssistants/useAssistantProfiles already follow), not fetched a
   // second time here. App.tsx also uses roster.enabled to decide whether the Team tab is even shown.
@@ -40,7 +42,7 @@ function savedPreview(body: string): string {
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
 // use-workspace-view/workspace-view.ts's openTeam — a manual view that owns its own detail state).
-export function TeamView({ runId, roster, stages, events, profiles }: TeamViewProps): ReactElement {
+export function TeamView({ runId, active = true, roster, stages, events, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
   const visitedTabs = useRef<Set<TeamTab>>(new Set(['messages']))
   const [listView, setListView] = useState<TeamListView>('conversations')
@@ -59,7 +61,7 @@ export function TeamView({ runId, roster, stages, events, profiles }: TeamViewPr
   const lastListFocusRef = useRef<HTMLElement | null>(null)
   const tabsId = useId()
   const board = useMeshBoard()
-  const [activeConversation, setActiveConversation] = useTeamPageState<ThreadConversationTarget | null>(runId, 'activeConversation', null)
+  const [activeConversation, setActiveConversation] = useState<ThreadConversationTarget | null>(null)
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
   const editTopicButtonRef = useRef<HTMLButtonElement>(null)
   const returnToEditTopicRef = useRef(false)
@@ -67,7 +69,7 @@ export function TeamView({ runId, roster, stages, events, profiles }: TeamViewPr
   const userInteractedRef = useRef(false)
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
   // Narrow Team starts on the list. The conversation stays mounted while the list is shown.
-  const [mobileDetail, setMobileDetail] = useTeamPageState(runId, 'mobileDetail', false)
+  const [mobileDetail, setMobileDetail] = useState(false)
   const resize = usePanelResize({
     storageKey: 'afm.teamRosterWidth', defaultWidth: 260, container: 'self', direction: 1,
     drawerQuery: '(max-width: 760px)', drawerBelow: 560, toggleSelector: '.team-header .team-tab.active',
@@ -112,7 +114,7 @@ export function TeamView({ runId, roster, stages, events, profiles }: TeamViewPr
   // drafts — each conversation's unsent text by targetKey. Kept here, above the keyed <ThreadConversation>,
   // because a direct conversation's first send remounts it under its new thread's key (handleThreadOpened
   // moves the draft along), and text typed while that send was in flight must not be lost.
-  const [drafts, setDrafts] = useTeamPageState<Record<string, string>>(runId, 'drafts', {})
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   const activeKey = targetKey(activeConversation)
 
   useEffect(() => {
@@ -607,8 +609,7 @@ export function TeamView({ runId, roster, stages, events, profiles }: TeamViewPr
                 getSendRequestId={getSendRequestId}
                 onSendSucceeded={handleSendSucceeded}
                 onMessageSent={handleMessageSent}
-                scrollMemory={teamScrollMemory(runId, activeKey)}
-                readEnabled={readyRunId === runId && tab === 'messages' && !createOpen && !addRunAgentOpen &&
+                readEnabled={active && readyRunId === runId && tab === 'messages' && !createOpen && !addRunAgentOpen &&
                   (!resize.isDrawer || mobileDetail)}
                 onMessagesRead={(threadId, lastRenderedOtherSeq) => {
                   if (advanceTeamSeen(runId, threadId, lastRenderedOtherSeq)) setCursorVersion((version) => version + 1)
