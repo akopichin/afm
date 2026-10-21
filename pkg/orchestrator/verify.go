@@ -367,9 +367,14 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return executor.ErrUserInterrupted
 		}
 
-		// Shell-шаг: отменяемый процесс — CWD legacy ".".
+		// Shell-шаг: отменяемый процесс в корне проекта агентов (worktree, если ран в нём), а без root_dir —
+		// в CWD afm. Иначе `go test ./...` проверял бы не тот код, который меняли агенты.
+		shellDir := o.opts.RootDir
+		if shellDir == "" {
+			shellDir = "."
+		}
 		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
-		out, runErr := o.runVerifyShell(shellCtx, ".", st.Run)
+		out, runErr := o.runVerifyShell(shellCtx, shellDir, st.Run)
 		interruptedByPause := stop()
 
 		stepDir := stagefiles.StepDir(stageDir, verID, idx)
