@@ -364,7 +364,8 @@ When Agent Mesh is available, **Board** appears beside **Team** as a run-wide ta
 It shows only task keys (`task/<slug>`), grouped into **Todo** (gray), **In
 progress** (blue), and **Done** (green) columns. Use **New task** to post from this
 tab, or **Post task** in Team's **Board** subtab. Both use the same form: choose
-under **Notify** which working agents get a message (all by default, at most 16).
+under **Notify** which agents get a message (all by default, at most 16): run agents
+and stage agents that are working or waiting for a colleague.
 Each recipient gets its own message, recorded with the task, so the run does not
 finish before agents read it. A finished recipient, or one whose inbox or
 conversation is full, is skipped; the task is posted either way.
