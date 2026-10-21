@@ -170,7 +170,7 @@ describe('BoardView', () => {
     expect(opener).toHaveFocus()
   })
 
-  test('a posted task is revealed in Todo even when the filters hid it: filters clear, card focused, announced', async () => {
+  test('a posted task is revealed in Todo even when the filters hid it: filters clear, announced, focus back on New task', async () => {
     vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
     const posted = entry('user', 'task/new-thing', 'New thing', 10)
     const reload = vi.fn(() => Promise.resolve())
@@ -179,7 +179,9 @@ describe('BoardView', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'docs' } })
     fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
 
-    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    const opener = screen.getByRole('button', { name: 'New task' })
+    opener.focus()
+    fireEvent.click(opener)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
 
@@ -188,30 +190,53 @@ describe('BoardView', () => {
     expect(screen.getByRole('searchbox', { name: 'Search tasks' })).toHaveValue('')
     expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('all')
     expect(screen.getByRole('status', { name: 'Board updates' })).toHaveTextContent('Task added to Todo')
+    expect(opener).toHaveFocus()
 
-    // The poll delivers the new task.
+    // The poll delivers the new task: it shows in Todo, focus stays where it was.
     rerender(<BoardView board={boardOf([...entries, posted], { reload })} participants={participants} stages={stages} />)
-    const card = within(lane('Todo')).getByRole('button', { name: 'New thing, Todo' })
-    await waitFor(() => expect(card).toHaveFocus())
+    expect(within(lane('Todo')).getByRole('button', { name: 'New thing, Todo' })).toBeInTheDocument()
+    expect(opener).toHaveFocus()
   })
 
-  test('a task that is already on the board when the post resolves is focused too', async () => {
+  test('a posted task that arrives while the operator types in search does not take focus', async () => {
     vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
-    const posted = entry('user', 'task/new-thing', 'New thing', 10)
-    let rerenderView: (b: MeshBoard) => void = () => {}
-    const reload = vi.fn(() => {
-      rerenderView(boardOf([...entries, posted]))
-      return Promise.resolve()
-    })
+    const reload = vi.fn(() => Promise.resolve())
     const { rerender } = renderView(boardOf(entries, { reload }))
-    rerenderView = (b) => rerender(<BoardView board={{ ...b, reload }} participants={participants} stages={stages} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'New task' }))
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
-    const card = await screen.findByRole('button', { name: 'New thing, Todo' })
-    await waitFor(() => expect(card).toHaveFocus())
+    const search = screen.getByRole('searchbox', { name: 'Search tasks' })
+    search.focus()
+    fireEvent.change(search, { target: { value: 'new' } })
+    rerender(<BoardView board={boardOf([...entries, entry('user', 'task/new-thing', 'New thing', 10)], { reload })} participants={participants} stages={stages} />)
+    expect(within(lane('Todo')).getByRole('button', { name: 'New thing, Todo' })).toBeInTheDocument()
+    expect(search).toHaveFocus()
+  })
+
+  test('a posted task that arrives while a dialog the Board does not own is open leaves focus in that dialog', async () => {
+    vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
+    const reload = vi.fn(() => Promise.resolve())
+    const view = (list: MeshBoardEntry[]) => (
+      <>
+        <BoardView board={boardOf(list, { reload })} participants={participants} stages={stages} />
+        <div role="dialog" aria-modal="true" aria-label="Other">
+          <button type="button">Inside other dialog</button>
+        </div>
+      </>
+    )
+    const { rerender } = render(view(entries))
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New task' })).toBeNull())
+
+    const inside = screen.getByRole('button', { name: 'Inside other dialog' })
+    inside.focus()
+    rerender(view([...entries, entry('user', 'task/new-thing', 'New thing', 10)]))
+    expect(inside).toHaveFocus()
   })
 
   test('the board shows no status control: agents own the status', () => {

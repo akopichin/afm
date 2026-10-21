@@ -11,9 +11,9 @@ export type BoardTaskFormProps = {
   // participants / stages — who can be notified: reachable run agents and agents of working stages.
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
-  // onPosted — the task was published under `key`; the caller refreshes its board (and may close the dialog
-  // the form sits in). draftRemains — text typed while the post was in flight is still in the form.
-  onPosted: (key: string, draftRemains: boolean) => void
+  // onPosted — the task was published; the caller refreshes its board (and may close the dialog the form sits
+  // in). draftRemains — text typed while the post was in flight is still in the form.
+  onPosted: (draftRemains: boolean) => void
 }
 
 // taskKey — "task/<slug>" for a task title ("CSV export" → "task/csv-export").
@@ -64,7 +64,7 @@ export function BoardTaskForm({ participants, stages, onPosted }: BoardTaskFormP
           const restDetails = removeSubmittedText(draftRef.current.details, submittedDetails)
           setTitle(restTitle)
           setDetails(restDetails)
-          onPosted(key, restTitle.trim() !== '' || restDetails.trim() !== '')
+          onPosted(restTitle.trim() !== '' || restDetails.trim() !== '')
         },
       },
     )

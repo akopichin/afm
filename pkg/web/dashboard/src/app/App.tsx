@@ -144,9 +144,15 @@ export function App(): ReactElement {
   // авто-открывался за открытой беседой (только сигналил).
   const [sideAgentOpen, setSideAgentOpen] = useState(false)
   // openDialogs — диалоги внутри видов (New task, Task details, Add run agent), открытые через useModalDialog:
-  // они сообщают о себе через DialogOpenContext и тоже входят в anyModalOpen.
+  // они сообщают о себе через DialogOpenContext и тоже входят в anyModalOpen. openDialogsRef — то же число
+  // сразу, без ожидания render: синк attention того же commit читает его через overlayOpenNow.
   const [openDialogs, setOpenDialogs] = useState(0)
-  const reportDialogOpen = useCallback((open: boolean) => setOpenDialogs((n) => n + (open ? 1 : -1)), [])
+  const openDialogsRef = useRef(0)
+  const reportDialogOpen = useCallback((open: boolean) => {
+    openDialogsRef.current += open ? 1 : -1
+    setOpenDialogs(openDialogsRef.current)
+  }, [])
+  const dialogOpenNow = useCallback(() => openDialogsRef.current > 0, [])
   const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen || openDialogs > 0
   const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
@@ -157,7 +163,7 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs, dialogOpenNow)
 
   // meshRoster (Agent Mesh, T7.3) — the ONE useMeshRoster poll for the whole dashboard; there is no
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own

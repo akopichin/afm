@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
 import { boardTasks, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { participantLabel } from '../../lib/mesh-roster'
-import { BOARD_STATUS_LABEL, BoardTaskCard, findTaskCard } from './BoardTaskCard'
+import { BOARD_STATUS_LABEL, BoardTaskCard } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { BoardTaskForm } from './BoardTaskForm'
 import type { RunTeamListStage } from './RunTeamList'
@@ -41,11 +41,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const [newTaskOpen, setNewTaskOpen] = useState(false)
   // Only the key is kept: the dialog reads the task from the latest poll, and closes if the task is gone.
   const [openKey, setOpenKey] = useState<string | null>(null)
-  // focusKey — a task just posted: it takes focus as soon as its card is on the board, unless a dialog is open
-  // by then (opening one drops it, so focus never jumps behind a dialog).
-  const [focusKey, setFocusKey] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
-  const lanesRef = useRef<HTMLDivElement | null>(null)
 
   const tasks = boardTasks(board.entries, participants)
   const taskByKey = new Map(tasks.map((t) => [t.key, t]))
@@ -56,37 +52,20 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const shown = tasks.filter((t) => matchesSearch(t, query) && matchesAssignee(t, assignee))
   const doneCount = tasks.filter((t) => t.status === 'done').length
 
-  const dialogOpen = newTaskOpen || openKey !== null
-
-  useEffect(() => {
-    if (focusKey === null || dialogOpen || lanesRef.current === null) return
-    const card = findTaskCard(focusKey, lanesRef.current)
-    if (card === undefined) return
-    card.focus()
-    setFocusKey(null)
-  }, [focusKey, dialogOpen, board.entries])
-
   function openNewTask(): void {
     setAnnouncement('')
-    setFocusKey(null)
     setNewTaskOpen(true)
   }
 
-  function openDetails(key: string): void {
-    setFocusKey(null)
-    setOpenKey(key)
-  }
-
-  // A new task is always Todo, so the filters that could hide it are cleared. The dialog closes and the card is
-  // focused once it arrives — unless text typed while posting is still in the form: then the dialog stays open.
-  function handlePosted(key: string, draftRemains: boolean): void {
+  // A new task is always Todo, so the filters that could hide it are cleared and the post is announced. The
+  // dialog closes (focus goes back to New task) unless text typed while posting is still in the form. The new
+  // card never takes focus when it arrives: by then the operator may be typing or in another dialog.
+  function handlePosted(draftRemains: boolean): void {
     setSearch('')
     setAssignee(ALL_ASSIGNEES)
     setAnnouncement('Task added to Todo')
     void board.reload()
-    if (draftRemains) return
-    setNewTaskOpen(false)
-    setFocusKey(key)
+    if (!draftRemains) setNewTaskOpen(false)
   }
 
   return (
@@ -135,7 +114,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
         {announcement}
       </p>
 
-      <div className="board-lanes" ref={lanesRef}>
+      <div className="board-lanes">
         {LANES.map((status) => {
           const laneTasks = shown.filter((t) => t.status === status)
           return (
@@ -150,7 +129,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
                 <ul className="board-lane-cards">
                   {laneTasks.map((task) => (
                     <li key={task.key}>
-                      <BoardTaskCard task={task} participants={participants} onOpen={(t) => openDetails(t.key)} />
+                      <BoardTaskCard task={task} participants={participants} onOpen={(t) => setOpenKey(t.key)} />
                     </li>
                   ))}
                 </ul>
@@ -171,7 +150,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
 type NewTaskDialogProps = {
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
-  onPosted: (key: string, draftRemains: boolean) => void
+  onPosted: (draftRemains: boolean) => void
   onClose: () => void
 }
 

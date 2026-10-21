@@ -1,6 +1,6 @@
 // Общий поиск фокусируемых элементов для focus-trap модалок и общий жизненный цикл фокуса диалога.
 
-import { createContext, useContext, useEffect, useRef, type RefObject } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 
 export const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -14,6 +14,8 @@ export function visibleFocusables(root: HTMLElement): HTMLElement[] {
 
 // DialogOpenContext — куда диалог сообщает «открыт/закрыт». App считает открытые диалоги и добавляет их к
 // anyModalOpen: attention не уводит воркспейс из-под открытой формы, даже когда фокус на checkbox или кнопке.
+// Сообщение идёт из layout-эффекта диалога: он выполняется раньше layout-синка attention в App того же
+// commit, поэтому вопрос, пришедший одним batch с открытием диалога, уже видит диалог открытым.
 export const DialogOpenContext = createContext<(open: boolean) => void>(() => {})
 
 // useModalDialog — жизненный цикл фокуса модального диалога: фокус входит в первый элемент, Tab не выходит
@@ -33,7 +35,7 @@ export function useModalDialog(
     returnFocusRef.current = returnFocus
   })
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const opener = document.activeElement
     const modal = modalRef.current
     if (modal !== null) visibleFocusables(modal)[0]?.focus()

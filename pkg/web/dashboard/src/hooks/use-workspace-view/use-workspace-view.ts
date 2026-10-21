@@ -24,10 +24,13 @@ export interface UseWorkspaceView {
   openBoard: () => void
 }
 
+// overlayOpenNow — читается в момент синка: overlay, открытый в этом же commit, ещё не попал в suppressed
+// (его состояние обновится только следующим render), но attention уже не должен уводить из-под него вид.
 export function useWorkspaceView(
   stages: Stage[],
   suppressed: boolean,
   ownedHandledSigs: string[] = [],
+  overlayOpenNow: () => boolean = () => false,
 ): UseWorkspaceView {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState)
 
@@ -37,7 +40,7 @@ export function useWorkspaceView(
   const itemsKey = items.map(sig).join('|')
   const ownedKey = ownedHandledSigs.join('|')
   useLayoutEffect(() => {
-    dispatch({ type: 'sync', items, suppressed, ownedHandledSigs })
+    dispatch({ type: 'sync', items, suppressed: suppressed || overlayOpenNow(), ownedHandledSigs })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemsKey, suppressed, ownedKey])
 

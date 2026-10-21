@@ -2526,11 +2526,13 @@ describe('App', () => {
 
   // Board dialogs are overlays like any other modal: an attention item that arrives while one is open only
   // glows, even when focus sits on a checkbox or a button (not an editable field).
-  type BoardAttentionRun = { asking: boolean; runId: string; boardFails: boolean }
+  // gate — when set, /api/status answers only after it resolves (to land a status in the same batch as a click).
+  type BoardAttentionRun = { asking: boolean; runId: string; boardFails: boolean; gate?: Promise<void> }
   function mockBoardAttentionRun(run: BoardAttentionRun) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       if (url.includes('/api/status')) {
+        if (run.gate !== undefined) await run.gate
         return {
           ok: true,
           json: async () => ({
@@ -2649,6 +2651,59 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByRole('button', { name: 'Task of run-b, Todo' })
     expect(within(screen.getByRole('combobox', { name: 'Assignee' })).queryByRole('option', { name: 'QA role' })).toBeNull()
+  })
+
+  // The dialog opens and the status with a new question lands in ONE render: the attention sync of that very
+  // commit must already see the dialog.
+  async function openWithQuestionInSameBatch(run: BoardAttentionRun, open: () => void): Promise<void> {
+    let release!: () => void
+    run.gate = new Promise<void>((resolve) => (release = resolve))
+    run.asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await act(async () => {
+      open()
+      release()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    run.gate = undefined
+    await waitFor(() => expect(questionBeacon()).toBe(true))
+  }
+
+  test('same batch: New task opening together with a question keeps the Board and the dialog', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    await screen.findByRole('button', { name: 'Task of r1, Todo' })
+
+    await openWithQuestionInSameBatch(run, () => fireEvent.click(screen.getByRole('button', { name: 'New task' })))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument()
+  })
+
+  test('same batch: Task details opening together with a question keep the Board and the dialog', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    const card = await screen.findByRole('button', { name: 'Task of r1, Todo' })
+
+    await openWithQuestionInSameBatch(run, () => fireEvent.click(card))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'Task details' })).toBeInTheDocument()
+  })
+
+  test('same batch: Team Add run agent opening together with a question keeps Team and the dialog', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'People' }))
+    const add = await screen.findByRole('button', { name: 'Add run agent' })
+
+    await openWithQuestionInSameBatch(run, () => fireEvent.click(add))
+    expect(screen.getByRole('tab', { name: 'Team' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'Add run agent' })).toBeInTheDocument()
   })
 })
 

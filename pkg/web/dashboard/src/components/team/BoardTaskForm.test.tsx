@@ -19,14 +19,14 @@ describe('BoardTaskForm', () => {
     vi.restoreAllMocks()
   })
 
-  test('posting publishes task/<slug> with title and details, and reports the key', async () => {
+  test('posting publishes task/<slug> with title and details, and reports that nothing is left', async () => {
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/csv-export', 'x'))
     const onPosted = vi.fn()
     render(<BoardTaskForm participants={participants} stages={stages} onPosted={onPosted} />)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
-    await waitFor(() => expect(onPosted).toHaveBeenCalledWith('task/csv-export', false))
+    await waitFor(() => expect(onPosted).toHaveBeenCalledWith(false))
     expect(publish.mock.calls[0]?.[0]).toMatchObject({ key: 'task/csv-export', status: 'CSV export — Add GET /todos.csv' })
     expect(screen.getByLabelText('Task')).toHaveValue('')
     expect(screen.getByLabelText('Details')).toHaveValue('')
