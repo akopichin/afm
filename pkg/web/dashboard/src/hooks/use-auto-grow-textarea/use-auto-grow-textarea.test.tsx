@@ -86,6 +86,23 @@ describe('useAutoGrowTextarea', () => {
     expect(textarea.style.height).toBe('40px')
   })
 
+  it('re-measures an unchanged draft shown again after its width changed while hidden', () => {
+    const { rerender } = render(<TestComponent value="draft" maxHeight={400} />)
+    const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
+    const layout = { scrollHeight: 90, clientHeight: 90 }
+    Object.defineProperty(textarea, 'scrollHeight', { get: () => layout.scrollHeight, configurable: true })
+    Object.defineProperty(textarea, 'clientHeight', { get: () => layout.clientHeight, configurable: true })
+    rerender(<TestComponent value="draft text" maxHeight={400} />)
+    expect(textarea.style.height).toBe('90px')
+
+    Object.assign(layout, { scrollHeight: 0, clientHeight: 0 })
+    lastObserver?.trigger()
+    // A narrower window wraps the same text onto more lines.
+    Object.assign(layout, { scrollHeight: 210, clientHeight: 90 })
+    lastObserver?.trigger()
+    expect(textarea.style.height).toBe('210px')
+  })
+
   it('grows height to scrollHeight as the value changes', () => {
     const { rerender } = render(<TestComponent value="" maxHeight={400} />)
     const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement

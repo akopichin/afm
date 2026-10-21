@@ -24,6 +24,21 @@ export function useAutoGrowTextarea(
     setNode(el)
   }, [])
 
+  // measure — подгоняет высоту под текст (до maxHeightPx). false — поле скрыто (display: none): мерить нечего,
+  // перемерим при показе (ResizeObserver ниже).
+  const measure = useCallback((el: HTMLTextAreaElement): boolean => {
+    if (el.scrollHeight === 0 && el.clientHeight === 0) {
+      needsMeasure.current = true
+      return false
+    }
+    needsMeasure.current = false
+    el.style.height = 'auto'
+    const next = Math.min(el.scrollHeight, maxHeightPx)
+    el.style.height = `${next}px`
+    lastAutoHeight.current = next
+    return true
+  }, [maxHeightPx])
+
   useLayoutEffect(() => {
     if (node === null) return
 
@@ -31,23 +46,14 @@ export function useAutoGrowTextarea(
       locked.current = false
     }
     if (locked.current) return
-    if (node.scrollHeight === 0 && node.clientHeight === 0) {
-      needsMeasure.current = true
-      prevValue.current = value
-      return
-    }
 
-    needsMeasure.current = false
-    node.style.height = 'auto'
-    const next = Math.min(node.scrollHeight, maxHeightPx)
-    node.style.height = `${next}px`
-    lastAutoHeight.current = next
+    const measured = measure(node)
 
     // Скроллим только при РЕАЛЬНОЙ смене value для этого узла (ввод). На монтировании (prevValue === null)
     // и на StrictMode-реплее (prevValue === value) — только меряем высоту, без scrollIntoView.
     const changed = prevValue.current !== null && prevValue.current !== value
     prevValue.current = value
-    if (!changed) {
+    if (!changed || !measured) {
       return
     }
 
@@ -55,18 +61,19 @@ export function useAutoGrowTextarea(
     // явного признака, что там есть скролл.
     const scrollTarget = node.nextElementSibling ?? node
     scrollTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [value, maxHeightPx, node])
+  }, [value, node, measure])
 
   useEffect(() => {
     if (node === null) return
 
     const obs = new ResizeObserver(() => {
-      if (needsMeasure.current && node.scrollHeight > 0) {
-        needsMeasure.current = false
-        node.style.height = 'auto'
-        const next = Math.min(node.scrollHeight, maxHeightPx)
-        node.style.height = `${next}px`
-        lastAutoHeight.current = next
+      // Скрытое поле помечаем к перемеру; показанное снова (или изменившее ширину, пока было скрыто) меряем.
+      if (node.scrollHeight === 0 && node.clientHeight === 0) {
+        needsMeasure.current = true
+        return
+      }
+      if (needsMeasure.current) {
+        if (!locked.current) measure(node)
         return
       }
       const current = parseFloat(node.style.height || '0')
@@ -76,7 +83,7 @@ export function useAutoGrowTextarea(
     })
     obs.observe(node)
     return () => obs.disconnect()
-  }, [node, maxHeightPx])
+  }, [node, measure])
 
   return ref
 }

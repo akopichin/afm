@@ -30,6 +30,17 @@ describe('AddRunAgentDialog', () => {
     expect(screen.queryByLabelText(/model/i)).toBeNull()
   })
 
+  test('a hidden dialog ignores Escape meant for the view that is shown, and listens again once visible', () => {
+    const onAttached = vi.fn()
+    const onCancel = vi.fn()
+    const view = render(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={onCancel} active={false} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+    view.rerender(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={onCancel} active />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
   test('Cancel creates nothing', () => {
     const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
     const { onCancel } = renderDialog()

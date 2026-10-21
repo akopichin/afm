@@ -154,11 +154,12 @@ export function App(): ReactElement {
   // probe-the-first-fetch result IS the capability signal the Team tab gates on (see use-mesh-roster.ts's own
   // comment). TeamView receives the SAME roster as a prop rather than polling it a second time.
   const meshRoster = useMeshRoster(runId)
-  // teamOpened — Team was opened at least once in this page; from then on it stays mounted (hidden elsewhere).
-  const [teamOpened, setTeamOpened] = useState(false)
+  // teamOpenedRun — the run whose Team was opened in this page; from then on that Team stays mounted (hidden on
+  // other views). A new run mounts its Team only once Team is opened in it.
+  const [teamOpenedRun, setTeamOpenedRun] = useState<string | null>(null)
   useEffect(() => {
-    if (wsState.view === 'team') setTeamOpened(true)
-  }, [wsState.view])
+    if (wsState.view === 'team') setTeamOpenedRun(runId)
+  }, [wsState.view, runId])
   useEffect(() => {
     if (runId !== '' && meshRoster.runId === runId && meshRoster.enabled) {
       baselineTeamUnread(runId, meshRoster.summaries ?? {})
@@ -626,7 +627,7 @@ export function App(): ReactElement {
                   // Team (T7.3) — global, like Cost/Full feed above: must be checked BEFORE the
                   // `workspaceStage === null` Feed fallback below, since Team has no selected-stage
                   // dependency at all (a never-selected stage must still show Team, not Feed).
-                  // Rendered below, outside this chain: Team stays mounted once opened (see teamOpened).
+                  // Rendered below, outside this chain: Team stays mounted once opened (see teamOpenedRun).
                   null
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
                   <div className="stage-feed-layout">
@@ -722,7 +723,7 @@ export function App(): ReactElement {
                 )}
                 {/* Team stays mounted after it is first opened and is only hidden on other views: its drafts,
                     in-flight sends (with their idempotency keys), selection and reading position live in it. */}
-                {teamOpened && (
+                {teamOpenedRun === runId && (
                   <div style={{ display: wsState.view === 'team' ? 'contents' : 'none' }}>
                     <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
                   </div>

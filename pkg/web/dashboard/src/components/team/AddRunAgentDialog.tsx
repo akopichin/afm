@@ -12,6 +12,9 @@ export type AddRunAgentDialogProps = {
   onCancel: () => void
   // originStage — the stage whose feed the agent is added from: its first conversation shows in that feed.
   originStage?: string
+  // active — the dialog's view is visible. A hidden Team keeps the dialog (and its typed text) but must not
+  // take keys, such as Escape, meant for the view that is shown.
+  active?: boolean
 }
 
 // AddRunAgentDialog — the Team view's entry point for a STANDING run-scoped agent (as opposed to
@@ -20,7 +23,7 @@ export type AddRunAgentDialogProps = {
 // client-side, it only picks WHICH configured role to run; scope is always "run" with no stage id, the same
 // convention orchestrator.AddRunAgent's own thin wrapper uses. Mirrors AttachHelperDialog's focus-trap
 // (Escape/Tab via visibleFocusables) and modal-overlay/modal-content classes rather than reinventing them.
-export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage }: AddRunAgentDialogProps): ReactElement {
+export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage, active = true }: AddRunAgentDialogProps): ReactElement {
   const available = profiles.filter((p) => p.available)
   const [profileId, setProfileId] = useState(available[0]?.id ?? '')
   const [title, setTitle] = useState('')
@@ -40,6 +43,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage 
   }, [])
 
   useEffect(() => {
+    if (!active) return
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -62,7 +66,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage 
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
+  }, [onCancel, active])
 
   const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitter.pending
 

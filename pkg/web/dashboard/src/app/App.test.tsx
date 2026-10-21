@@ -2008,6 +2008,30 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /QA.*New messages/ })).toBeInTheDocument()
   })
 
+  test('a new run does not mount its Team until Team is opened in that run', async () => {
+    let runId = 'app-run-a'
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', run_id: runId, stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }] }) } as Response
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [], summaries: {} }) } as Response
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    const { container } = render(<App />)
+    const workspaceTabs = () => within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    await waitFor(() => expect(container.querySelector('.team-view')).not.toBeNull())
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Feed' }))
+
+    runId = 'app-run-b'
+    // The next status poll reports run B.
+    await new Promise((resolve) => setTimeout(resolve, 2600))
+    await waitFor(() => expect(container.querySelector('.team-view')).toBeNull(), { timeout: 3000 })
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    await waitFor(() => expect(container.querySelector('.team-view')).not.toBeNull())
+  }, 15000)
+
   test('Team waits for the run id, so the first status never recreates an open Team', async () => {
     let releaseStatus: () => void = () => {}
     const statusReady = new Promise<void>((resolve) => { releaseStatus = resolve })

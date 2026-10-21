@@ -631,6 +631,7 @@ export function TeamView({ runId, active = true, roster, stages, events, profile
       </div>
       {addRunAgentOpen && (
         <AddRunAgentDialog
+          active={active}
           profiles={profiles}
           onAttached={(result, participant) => {
             focusConversationRef.current = true

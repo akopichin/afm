@@ -50,11 +50,14 @@ export function useStickToBottom<T extends HTMLElement>(): {
     const obs = new MutationObserver(() => {
       if (stickRef.current) node.scrollTop = node.scrollHeight
     })
+    // Видимый прижатый контейнер держим у низа при любом изменении размера (например, выросло поле ввода);
+    // отпущенный возвращаем на lastTop только при переходе «скрыт → виден».
     const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
       const wasHidden = hidden
       hidden = node.clientHeight === 0
-      if (!wasHidden || hidden) return
-      node.scrollTop = stickRef.current ? node.scrollHeight : Math.min(lastTop, node.scrollHeight - node.clientHeight)
+      if (hidden) return
+      if (stickRef.current) node.scrollTop = node.scrollHeight
+      else if (wasHidden) node.scrollTop = Math.min(lastTop, node.scrollHeight - node.clientHeight)
     })
 
     node.addEventListener('scroll', onScroll, { passive: true })

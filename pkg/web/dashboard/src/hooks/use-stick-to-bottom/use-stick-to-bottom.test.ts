@@ -137,6 +137,18 @@ describe('useStickToBottom', () => {
       expect(el.scrollTop).toBe(600)
     })
 
+    it('keeps a visible reader at the bottom when the container is resized (the composer grew)', () => {
+      const resize = stubResize()
+      const { result } = renderHook(() => useStickToBottom<HTMLDivElement>())
+      const { el, layout } = box()
+      layout(2000, 400)
+      act(() => result.current.ref(el))
+      expect(el.scrollTop).toBe(2000)
+      layout(2180, 220)
+      act(() => resize.fire())
+      expect(el.scrollTop).toBe(2180)
+    })
+
     it('keeps a reader at the bottom on the bottom when shown again', () => {
       const resize = stubResize()
       const { result } = renderHook(() => useStickToBottom<HTMLDivElement>())
