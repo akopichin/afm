@@ -60,11 +60,8 @@ func TestRecovery_ProjectArtifactIsCheckedInProjectRoot(t *testing.T) {
 		Prompts: orchestrator.DefaultPrompts(),
 	})
 
+	// Registered after the store cleanup, so Run has returned before the store closes.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	runDone := make(chan error, 1)
-	go func() { runDone <- orch.Run(ctx) }()
+	runOrchestratorAsync(ctx, t, orch, cancel)
 	waitForStatus(t, filepath.Join(runDir, "state.json"), "build", state.StatusDone, 20*time.Second)
-	cancel()
-	<-runDone
 }

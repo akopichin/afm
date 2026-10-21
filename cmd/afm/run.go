@@ -155,10 +155,6 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		return err
 	}
 	defer store.Close()
-	// Absolute: run paths reach agents (prompts, AFM_SCRATCH_DIR, report links) whose CWD may be a worktree.
-	if abs, absErr := filepath.Abs(runDir); absErr == nil {
-		runDir = abs
-	}
 
 	// Collection remains enabled even when cost display is disabled.
 	acct, acctErr := accounting.Open(runDir, accounting.NewResolver(cfg.Pricing))
@@ -180,7 +176,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	fmt.Printf("afm: running %q\n", f.Name)
 	fmt.Printf("  run dir: %s\n", runDir)
 
-	env, err := prepareRunEnvironment(absRootDir(), f, cfg, opts.worktreeDir)
+	env, err := prepareRunEnvironment(rootDir, f, cfg, opts.worktreeDir)
 	if err != nil {
 		return err
 	}
@@ -404,7 +400,11 @@ func resolveFlowPath(args []string) (string, error) {
 // --worktree override — see runNameFor), unless forceNew is set — the clear flags imply a fresh worktree,
 // which has no business resuming a run that may reference the previous checkout's state.
 func resolveRun(f *flow.Flow, runName string, forceNew bool) (runDir string, store *state.Store, err error) {
-	base := runsDir()
+	// Absolute: run paths reach agents (prompts, AFM_SCRATCH_DIR, report links) whose CWD may be a worktree.
+	base, err := filepath.Abs(runsDir())
+	if err != nil {
+		return "", nil, err
+	}
 
 	stageIDs := make([]string, len(f.Stages))
 	for i, s := range f.Stages {
