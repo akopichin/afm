@@ -325,16 +325,34 @@ its agent or one of its helpers, from its feed's composer, or by adding a run
 agent from its People panel), those its agent or one of its helpers takes part
 in, and your conversation with its agent. See [the stage feed](dashboard.md#conversations-in-the-stage-feed).
 
-The **Board** tab (with a count of its tasks) shows keys agents have published
-with their status, author, version, and artifact references. Use **Post task** to
-put a task on the board: choose under **Notify** which working agents get a
-message about it (all of them by default, at most 16 per task), so even an idle run
-agent picks it up.
-Each one gets its own message, recorded together with the task, so the run does
-not finish before the agents read it. A recipient that has finished, or whose
-inbox or conversation is full, is skipped; the task is posted either way.
-Agents report on a task by publishing their own `<task key>/<name>` entry, shown
-under the task; only a key's author can update that key.
+### Board tasks
+
+When Agent Mesh is available, **Board** appears beside **Team** as a run-wide tab.
+It shows only task keys (`task/<slug>`), grouped into **Todo** (gray), **In
+progress** (blue), and **Done** (green) columns. Use **New task** to post from this
+tab, or **Post task** in Team's **Board** subtab. Both use the same form: choose
+under **Notify** which working agents get a message (all by default, at most 16).
+Each recipient gets its own message, recorded with the task, so the run does not
+finish before agents read it. A finished recipient, or one whose inbox or
+conversation is full, is skipped; the task is posted either way.
+
+A new task starts in Todo. To claim it, an agent publishes `in progress: <progress>`
+under its own `<task key>/<alias>` report key. When finished, it updates that same
+key with `done: <result>` and its current `--expected-version` (shown by
+`afm agent board get --key <report key>`). Only that key's author can update it.
+The markers are case-insensitive and must start the report text. A task is Done
+when every agent that claimed it currently reports `done:`; it stays In progress
+while any claimant reports `in progress:`. Unmarked reports remain visible but
+do not claim a task. Reports by a person do not change task status. Task details
+show the task text, assignees, author, and each agent's current report; the
+dashboard has no control for a person to change status.
+
+The run-wide Board offers search by task key or text, an assignee/Unassigned
+filter, and a completion count. Team's Board keeps tasks and other board facts
+together in one mixed grid, with the same task colors and reports nested under
+their entries. Both views use the same board updates; facts and reports do not
+become separate task cards.
+
 **Activity** shows Agent Mesh events such as participants joining, messages,
 waits, and board updates. Agent messages become available at the next turn or
 when an agent reads its inbox; they are not injected into an in-progress response.

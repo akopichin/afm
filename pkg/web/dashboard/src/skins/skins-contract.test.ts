@@ -252,6 +252,38 @@ describe('skins CSS contract — Team on narrow screens', () => {
   })
 })
 
+describe('skins CSS contract — standalone Board lanes', () => {
+  it('lays the three status lanes side by side and lets a squeezed viewport scroll them', () => {
+    const lanes = rule(meshCss, '.board-lanes')
+    expect(lanes).toMatch(/display:\s*grid/)
+    expect(lanes).toMatch(/grid-template-columns:\s*repeat\(3, minmax\(\d+px, 1fr\)\)/)
+    expect(lanes).toMatch(/overflow-x:\s*auto/)
+  })
+
+  it('stacks the lanes into one column on a narrow viewport', () => {
+    expect(meshCss).toMatch(/@media \(max-width: 760px\)\s*\{[^@]*\.board-lanes\s*\{[^}]*grid-template-columns:\s*1fr/)
+  })
+
+  it('lets lane cards shrink instead of widening the lane', () => {
+    expect(rule(meshCss, '.board-lane')).toMatch(/min-width:\s*0/)
+  })
+
+  it.each(['todo', 'in_progress', 'done'])('colors the %s lane from the shared status tokens', (status) => {
+    expect(meshCss).toMatch(new RegExp(`\\.board-lane\\[data-status="${status}"\\]`))
+  })
+
+  it('shows keyboard focus on the search and assignee controls', () => {
+    expect(meshCss).toMatch(/\.board-view-search:focus-visible/)
+    expect(meshCss).toMatch(/\.board-view-assignee:focus-visible/)
+  })
+
+  it('keeps the announcement region out of sight but readable by assistive tech', () => {
+    const announce = rule(meshCss, '.board-view-announce')
+    expect(announce).toMatch(/position:\s*absolute/)
+    expect(announce).toMatch(/clip:\s*rect\(0, 0, 0, 0\)/)
+  })
+})
+
 describe('skins CSS contract — stage people panel', () => {
   it('is a right drawer opened by the people toggle when the feed and the panel do not fit side by side', () => {
     const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 1180px)'))

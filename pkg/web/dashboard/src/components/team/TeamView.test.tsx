@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { TeamView } from './TeamView'
+import { TeamView, type TeamViewProps } from './TeamView'
 import * as meshClient from '../../api/mesh-client'
-import type { MeshRoster } from '../../hooks/use-mesh'
+import { mergeById } from '../../lib/mesh-roster'
+import { useMeshBoard, type MeshBoard, type MeshRoster } from '../../hooks/use-mesh'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
@@ -35,8 +37,17 @@ function mockThreadAndBoardFetches(): void {
   vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
 }
 
+// TeamViewWithBoard — TeamView with the real board poll its parent (App) owns.
+// It also plays App's part for added run agents: it merges them into the roster it passes down.
+function TeamViewWithBoard({ roster, ...props }: Omit<TeamViewProps, 'board' | 'onParticipantAdded'>) {
+  const board = useMeshBoard()
+  const [added, setAdded] = useState<meshClient.MeshParticipant[]>([])
+  const merged = { ...roster, participants: mergeById(roster.participants, added) }
+  return <TeamView board={board} roster={merged} onParticipantAdded={(p) => setAdded((prev) => [...prev, p])} {...props} />
+}
+
 function renderTeamView(stages: Stage[] = [makeStage()], events: AfmEvent[] = [], roster: MeshRoster = enabledRoster()) {
-  return render(<TeamView roster={roster} stages={stages} events={events} profiles={profiles} />)
+  return render(<TeamViewWithBoard roster={roster} stages={stages} events={events} profiles={profiles} />)
 }
 
 function mockTeamWidth(initialWidth: number) {
@@ -185,6 +196,79 @@ describe('TeamView', () => {
     const tab = screen.getByRole('tab', { name: 'Board' })
     await waitFor(() => expect(tab).toHaveTextContent('Board2'))
     expect(tab).not.toHaveTextContent('Board3')
+  })
+
+  test('the Board tab shows the tasks as coloured cards in one grid, next to the facts', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [
+        { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' },
+        { key: 'task/export', status: 'CSV export', author_id: 'user', version: 1, seq: 2, ts: '' },
+        { key: 'task/export/implement', status: 'in progress: wiring', author_id: 'stage:implement', version: 1, seq: 3, ts: '' },
+        { key: 'api/ready', status: 'yes', author_id: 'stage:implement', version: 1, seq: 4, ts: '' },
+      ],
+    })
+    renderTeamView()
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(await screen.findByRole('button', { name: 'Health endpoint, Todo' })).toHaveAttribute('data-status', 'todo')
+    expect(screen.getByRole('button', { name: 'CSV export, In progress' })).toHaveAttribute('data-status', 'in_progress')
+    expect(screen.getByRole('article', { name: 'api/ready' })).toBeInTheDocument()
+    expect(document.querySelectorAll('.team-board-list')).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'Messages' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument()
+  })
+
+  // The board poll is owned by App and passed in: TeamView only shows what it is given.
+  test('the Board tab shows what the owner passes in, without a second board poll', async () => {
+    mockThreadAndBoardFetches()
+    const poll = vi.spyOn(meshClient, 'getMeshBoard')
+    const board: MeshBoard = {
+      entries: [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }],
+      status: 'ready',
+      reload: async () => {},
+    }
+    render(<TeamView roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('tab', { name: /^Board/ })).toHaveTextContent('Board1')
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(await screen.findByRole('button', { name: 'Health endpoint, Todo' })).toBeInTheDocument()
+    expect(poll).not.toHaveBeenCalled()
+  })
+
+  test('the Board tab says it is loading, not that the board is empty, before the first fetch lands', () => {
+    mockThreadAndBoardFetches()
+    const board: MeshBoard = { entries: [], status: 'loading', reload: async () => {} }
+    render(<TeamView roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('status')).toHaveTextContent('Loading board')
+    expect(screen.queryByText(/Nothing on the board yet/)).toBeNull()
+  })
+
+  test('a first-load failure shows an error with Retry instead of an empty board', () => {
+    mockThreadAndBoardFetches()
+    const reload = vi.fn(async () => {})
+    const board: MeshBoard = { entries: [], status: 'error', reload }
+    render(<TeamView roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Board unavailable')
+    expect(screen.queryByText(/Nothing on the board yet/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  test('a failed refresh keeps the last cards under a stale-data warning with Retry', () => {
+    mockThreadAndBoardFetches()
+    const reload = vi.fn(async () => {})
+    const board: MeshBoard = {
+      entries: [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }],
+      status: 'stale',
+      reload,
+    }
+    render(<TeamView roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('out of date')
+    expect(screen.getByRole('button', { name: 'Health endpoint, Todo' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(reload).toHaveBeenCalledTimes(1)
   })
 
   test('a direct conversation opens from a person row', async () => {
@@ -511,14 +595,14 @@ describe('TeamView', () => {
     const measured = mockTeamWidth(600)
     const initialRoster = enabledRoster({ probed: false })
     const view = render(
-      <TeamView roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
+      <TeamViewWithBoard roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
     )
     const firstLayout = view.container.querySelector('.team-view')
     expect(teamSeparator()).toHaveAttribute('aria-valuemax', '280')
 
-    view.rerender(<TeamView roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
-    view.rerender(<TeamView roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
     const nextLayout = view.container.querySelector('.team-view')
     expect(nextLayout).toBe(firstLayout)
 
@@ -564,7 +648,7 @@ describe('TeamView', () => {
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
   })
 
-  test('the tabs follow the tab pattern: arrows switch tabs and each tab controls its panel', () => {
+  test('the tabs follow the tab pattern: arrows switch tabs and each tab controls its panel', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
     const messages = screen.getByRole('tab', { name: 'Messages' })
@@ -575,7 +659,7 @@ describe('TeamView', () => {
     expect(board).toHaveFocus()
     expect(board).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', board.id)
-    expect(screen.getByRole('button', { name: 'Post task' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Post task' })).toBeInTheDocument()
   })
 
   test('a direct send that finishes after the user picked another conversation does not switch back to it', async () => {

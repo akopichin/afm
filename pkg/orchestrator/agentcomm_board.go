@@ -158,6 +158,25 @@ func clipForNotice(s string, limit int) string {
 	return strings.ToValidUTF8(s[:limit], "") + "…"
 }
 
+// boardTaskNoticeBody is the text of a new-task notice: the task, then how to claim it (`in progress:`) and
+// finish it (`done:`) under the agent's own report key. A key longer than boardNoticeKeyLimit is quoted only
+// in part, and a clipped key must never be offered as a report path: the notice sends the agent to the board
+// for the full key instead.
+func boardTaskNoticeBody(taskKey, status string) string {
+	task := fmt.Sprintf("New task on the board: %s — %s.", clipForNotice(taskKey, boardNoticeKeyLimit), clipForNotice(status, boardNoticeStatusLimit))
+	reportKey := taskKey + "/<your alias>"
+	lookup := ""
+	if len(taskKey) > boardNoticeKeyLimit {
+		reportKey = "<task key>/<your alias>"
+		lookup = " The task key is cut above: `afm agent board get` lists the full task key."
+	}
+	return fmt.Sprintf("%s%s To take it, publish `in progress: <progress>` at %s "+
+		"(afm agent board publish --key %s --status \"in progress: <progress>\"). "+
+		"When finished, republish that same key with `done: <result>` and --expected-version <its current version> "+
+		"(afm agent board get --key %s shows it).",
+		task, lookup, reportKey, reportKey, reportKey)
+}
+
 // planBoardNotices plans one message from the author per reachable participant in req.Notify — one per
 // recipient, so no recipient or conversation-size limit can refuse the notices as a whole. A name that cannot
 // receive a message now is skipped with a log line. Each message id is derived from the publish's request id
@@ -166,8 +185,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 	if len(req.Notify) == 0 {
 		return nil, nil
 	}
-	key := clipForNotice(req.Key, boardNoticeKeyLimit)
-	body := fmt.Sprintf("New task on the board: %s — %s. Report under %s/<your alias>.", key, clipForNotice(status, boardNoticeStatusLimit), key)
+	body := boardTaskNoticeBody(req.Key, status)
 	roster := o.liveRoster(rs)
 	var notices []plannedMessage
 	seen := map[agentcomm.ParticipantID]bool{req.Author: true}

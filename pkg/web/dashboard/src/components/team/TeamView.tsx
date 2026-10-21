@@ -2,13 +2,15 @@ import { useId, useState, type CSSProperties, type ReactElement, type SetStateAc
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { openMeshThread, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
-import { useMeshBoard, type MeshRoster } from '../../hooks/use-mesh'
+import type { MeshBoard, MeshRoster } from '../../hooks/use-mesh'
 import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
+import { boardTaskCount } from '../../lib/board-tasks'
 import { directPeer, findExistingDirectThread, mergeById, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { RunTeamList, teamStagesOf } from './RunTeamList'
 import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
 import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
-import { BoardPanel, boardTaskCount } from './BoardPanel'
+import { BoardPanel } from './BoardPanel'
+import { BoardLoadState } from './BoardLoadState'
 import { ActivityPanel } from './ActivityPanel'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 import { TabList, tabPanelProps } from '../tab-list'
@@ -19,7 +21,14 @@ export type TeamViewProps = {
   // roster — owned by App.tsx (ONE useMeshRoster poll for the whole dashboard, same "capability hook lives at
   // the top, passed down" convention useStageAssistants/useAssistantProfiles already follow), not fetched a
   // second time here. App.tsx also uses roster.enabled to decide whether the Team tab is even shown.
+  // roster.participants is already merged with the run agents added in this dashboard that the poll has not
+  // reported yet, so every view of the roster (people panel, Board tab, this view) reads ONE list.
   roster: MeshRoster
+  // onParticipantAdded — hands a run agent just attached from the "Add run agent" dialog to that shared list.
+  onParticipantAdded: (participant: MeshParticipant) => void
+  // board — also owned by App.tsx (ONE useMeshBoard poll shared with the run-wide Board tab); the Board tab
+  // here and its task count both read it.
+  board: MeshBoard
   stages: Stage[]
   events: AfmEvent[]
   profiles: AssistantProfile[]
@@ -30,10 +39,9 @@ type TeamTab = 'messages' | 'board' | 'activity'
 // TeamView — Agent Mesh Phase 7, T7.3: the run-wide Team workspace. Owns its OWN Messages/Board/Activity
 // tabs and conversation selection internally (WorkspaceView only ever needs to know "we're on 'team'" — see
 // use-workspace-view/workspace-view.ts's openTeam — a manual view that owns its own detail state).
-export function TeamView({ roster, stages, events, profiles }: TeamViewProps): ReactElement {
+export function TeamView({ roster, onParticipantAdded, board, stages, events, profiles }: TeamViewProps): ReactElement {
   const [tab, setTab] = useState<TeamTab>('messages')
   const tabsId = useId()
-  const board = useMeshBoard()
   const [activeConversation, setActiveConversation] = useState<ThreadConversationTarget | null>(null)
   const [addRunAgentOpen, setAddRunAgentOpen] = useState(false)
   // rosterOpen — the roster drawer on a narrow screen (CSS shows the toggle only there).
@@ -42,13 +50,11 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
     storageKey: 'afm.teamRosterWidth', defaultWidth: 260, container: 'self', direction: 1,
     drawerQuery: '(max-width: 760px)', drawerBelow: 560, toggleSelector: '.team-roster-toggle',
   })
-  // localThreads / localParticipants — threads and run agents this dashboard just created that the next
-  // roster poll (every 3s, see useMeshRoster) has not reported yet. Every lookup and the roster UI use the
-  // merged lists, so a person clicked before that poll lands in the thread that already exists (no second
-  // direct thread) and a new agent shows its name, not its id. Filtered against the roster rather than pruned
-  // on poll, so this needs no effect and is correct the instant the roster catches up.
+  // localThreads — threads this dashboard just created that the next roster poll (every 3s, see
+  // useMeshRoster) has not reported yet. Every lookup uses the merged list, so a person clicked before that
+  // poll lands in the thread that already exists (no second direct thread). Filtered against the roster rather
+  // than pruned on poll, so this needs no effect and is correct the instant the roster catches up.
   const [localThreads, setLocalThreads] = useState<MeshThread[]>([])
-  const [localParticipants, setLocalParticipants] = useState<MeshParticipant[]>([])
   // drafts — each conversation's unsent text by targetKey. Kept here, above the keyed <ThreadConversation>,
   // because a direct conversation's first send remounts it under its new thread's key (handleThreadOpened
   // moves the draft along), and text typed while that send was in flight must not be lost.
@@ -66,7 +72,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
   const createSubmitter = useRetryableSubmit<{ title: string; memberIds: string[] }>('mesh-conversation', activeKey)
 
   const threads = mergeById(roster.threads, localThreads)
-  const participants = mergeById(roster.participants, localParticipants)
+  const participants = roster.participants
 
   function handleSelectParticipant(p: MeshParticipant): void {
     setRosterOpen(false)
@@ -313,7 +319,9 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
         )}
         {tab === 'board' && (
           <div className="team-tab-panel" {...tabPanelProps(tabsId, 'board')}>
-            <BoardPanel board={board} participants={participants} stages={teamStages} />
+            <BoardLoadState board={board}>
+              <BoardPanel board={board} participants={participants} stages={teamStages} />
+            </BoardLoadState>
           </div>
         )}
         {tab === 'activity' && (
@@ -328,7 +336,7 @@ export function TeamView({ roster, stages, events, profiles }: TeamViewProps): R
           onAttached={(result, participant) => {
             setAddRunAgentOpen(false)
             // Show the new agent and open its conversation right away (the next poll confirms both).
-            setLocalParticipants((prev) => [...prev, participant])
+            onParticipantAdded(participant)
             openThread({ id: result.thread_id, title: participantLabel(participant), scope: 'run', members: ['user', result.participant_id], status: 'open' })
             setTab('messages')
           }}

@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-21
 
+### Improvement: show board tasks by status
+
+The dashboard now has a run-wide Board tab with Todo, In progress, and Done
+columns, search, assignee filtering, and a completion count. Team's Board keeps
+its mixed layout while task cards use gray, blue, and green status colors. Agents
+claim and finish tasks through their own `in progress:` and `done:` board reports;
+people can post tasks but cannot set their status. See [Board tasks](docs/collaboration.md#board-tasks).
+
 ### Improvement: show host-local message times in conversations and feeds
 
 The stage Feed, Full feed, Side agent history, and Team and stage conversations

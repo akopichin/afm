@@ -19,6 +19,23 @@ func TestAgentComm_IncludesOwnIdAndOperations(t *testing.T) {
 	}
 }
 
+// The board instruction spells out the exact task convention a dashboard can read back: claim with
+// `in progress:`, finish with `done:` on the same own key, updating with the current expected version.
+func TestAgentComm_BoardTaskConvention(t *testing.T) {
+	block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true})
+	for _, want := range []string{
+		"`<task key>/<your alias>`",
+		"`in progress: <progress>`",
+		"`done: <result>`",
+		"--expected-version",
+		"Only a key's author can update the key itself",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("board instruction missing %q:\n%s", want, block)
+		}
+	}
+}
+
 func TestAgentComm_SideAgentHasNoWaitResumePromise(t *testing.T) {
 	block := SideAgentCommunicationBlock("side:run-1")
 	for _, want := range []string{"side:run-1", "afm agent list", "afm agent send", "afm agent reply", "afm agent inbox"} {

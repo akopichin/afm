@@ -51,7 +51,11 @@ func TestPublish_NotifyWakesIdleRunAgent(t *testing.T) {
 	if len(inbox) != 1 {
 		t.Fatalf("messages to the agent = %d, want exactly 1", len(inbox))
 	}
-	want := "New task on the board: task/csv-export — CSV export. Report under task/csv-export/<your alias>."
+	want := "New task on the board: task/csv-export — CSV export. " +
+		"To take it, publish `in progress: <progress>` at task/csv-export/<your alias> " +
+		"(afm agent board publish --key task/csv-export/<your alias> --status \"in progress: <progress>\"). " +
+		"When finished, republish that same key with `done: <result>` and --expected-version <its current version> " +
+		"(afm agent board get --key task/csv-export/<your alias> shows it)."
 	if body := store.Snapshot().Assistants.Mesh.Messages[inbox[0]].Body; body != want {
 		t.Fatalf("notification = %q, want %q", body, want)
 	}
@@ -142,6 +146,35 @@ func TestPublish_NotifyNeverFailsThePublish(t *testing.T) {
 	}
 	if got := rs.Assistants.Mesh.Inbox[meshStageParticipantID(assistantsTestStageID)]; len(got) != 0 {
 		t.Fatalf("the finished stage got %d messages, want none", len(got))
+	}
+}
+
+// A task key longer than the notice limit is quoted only in part, so the notice must not offer the clipped
+// text as a report path: it sends the agent to the board for the full key instead.
+func TestPublish_NoticeForLongKeyDirectsToBoardLookup(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	stubPassingHelper(o)
+	t.Cleanup(o.concurrency.WaitAgents)
+	agent := addTestRunAgent(t, o, "op-add", nil)
+	key := "task/" + strings.Repeat("k", boardNoticeKeyLimit)
+
+	if _, err := publishAsUser(o, "op-long-key", key, "long key task", 0, agent.ParticipantID); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	inbox := store.Snapshot().Assistants.Mesh.Inbox[agent.ParticipantID]
+	if len(inbox) != 1 {
+		t.Fatalf("messages to the agent = %d, want exactly 1", len(inbox))
+	}
+	body := store.Snapshot().Assistants.Mesh.Messages[inbox[0]].Body
+	clipped := clipForNotice(key, boardNoticeKeyLimit)
+	if strings.Contains(body, clipped+"/<your alias>") || strings.Contains(body, key) {
+		t.Fatalf("notice offers a clipped or full over-limit key as a report path: %q", body)
+	}
+	for _, want := range []string{"afm agent board get", "<task key>/<your alias>", "in progress: <progress>", "done: <result>", "--expected-version"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("notice missing %q: %q", want, body)
+		}
 	}
 }
 

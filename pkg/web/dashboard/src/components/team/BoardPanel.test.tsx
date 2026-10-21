@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { BoardPanel, boardTaskCount, type BoardPanelProps } from './BoardPanel'
+import { BoardPanel, type BoardPanelProps } from './BoardPanel'
 import { useMeshBoard } from '../../hooks/use-mesh'
+import { boardTaskCount } from '../../lib/board-tasks'
 
 // BoardWithPoll — BoardPanel with the real board poll its parent (TeamView) owns.
 function BoardWithPoll(props: Omit<BoardPanelProps, 'board'>) {
@@ -54,7 +55,19 @@ describe('BoardPanel', () => {
     expect(publish.mock.calls[0]?.[0]).toMatchObject({ key: 'task/csv-export', status: 'CSV export — Add GET /todos.csv' })
   })
 
-  test("agents' reports (<task key>/<alias>) are listed under their task, by name", async () => {
+  test('a posted task shows on the board after the reload', async () => {
+    const posted = { author_id: 'user', key: 'task/csv-export', version: 1, status: 'CSV export', seq: 1, ts: '2026-10-18T00:00:00Z' }
+    const get = vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValueOnce({ entries: [] }).mockResolvedValue({ entries: [posted] })
+    vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted)
+    render(<BoardWithPoll participants={participants} stages={stages} />)
+    await waitFor(() => expect(screen.getByText(/Nothing on the board yet/)).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    expect(await screen.findByRole('button', { name: 'CSV export, Todo' })).toBeInTheDocument()
+    expect(get.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test("agents' reports (<task key>/<alias>) stay nested in their task: the card shows the latest, details list them", async () => {
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
       entries: [
         { author_id: 'user', key: 'task/csv-export', version: 1, status: 'CSV export — Add GET /todos.csv', seq: 1, ts: '2026-10-18T00:00:00Z' },
@@ -62,11 +75,124 @@ describe('BoardPanel', () => {
       ],
     })
     render(<BoardWithPoll participants={participants} stages={stages} />)
-    const task = await screen.findByRole('article', { name: /csv-export/ })
-    expect(within(task).getByText('CSV export — Add GET /todos.csv')).toBeInTheDocument()
-    expect(within(task).getByText('API')).toBeInTheDocument()
-    expect(within(task).getByText('done: GET /todos.csv added')).toBeInTheDocument()
-    expect(screen.queryByRole('article', { name: /task\/csv-export\/api/ })).toBeNull()
+    const card = await screen.findByRole('button', { name: 'CSV export, Done' })
+    expect(within(card).getAllByText('API').length).toBeGreaterThan(0)
+    expect(within(card).getByText(/done: GET \/todos.csv added/)).toBeInTheDocument()
+    expect(document.querySelectorAll('.board-task-card')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /task\/csv-export\/api/ })).toBeNull()
+    expect(screen.queryByRole('article')).toBeNull()
+    fireEvent.click(card)
+    const reports = within(screen.getByRole('dialog', { name: 'Task details' })).getByRole('list', { name: 'Reports' })
+    expect(within(reports).getByText('done: GET /todos.csv added')).toBeInTheDocument()
+  })
+
+  test('tasks sit together in one ungrouped grid and each takes the colour of its status', async () => {
+    const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [
+        { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 },
+        { ...at, author_id: 'user', key: 'task/b', status: 'Beta', seq: 2 },
+        { ...at, author_id: 'stage:api', key: 'task/b/api', status: 'in progress: wiring', seq: 3 },
+        { ...at, author_id: 'user', key: 'task/c', status: 'Gamma', seq: 4 },
+        { ...at, author_id: 'stage:api', key: 'task/c/api', status: 'done: shipped', seq: 5 },
+      ],
+    })
+    const { container } = render(<BoardWithPoll participants={participants} stages={stages} />)
+    expect(await screen.findByRole('button', { name: 'Alpha, Todo' })).toHaveAttribute('data-status', 'todo')
+    expect(screen.getByRole('button', { name: 'Beta, In progress' })).toHaveAttribute('data-status', 'in_progress')
+    expect(screen.getByRole('button', { name: 'Gamma, Done' })).toHaveAttribute('data-status', 'done')
+    const grids = container.querySelectorAll('.team-board-list')
+    expect(grids).toHaveLength(1)
+    expect(grids[0]!.querySelectorAll('.board-task-card')).toHaveLength(3)
+    expect(container.querySelector('[aria-label$=" tasks"]')).toBeNull()
+  })
+
+  test('the legend names the three statuses with their task counts', async () => {
+    const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [
+        { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 },
+        { ...at, author_id: 'user', key: 'task/b', status: 'Beta', seq: 2 },
+        { ...at, author_id: 'stage:api', key: 'task/b/api', status: 'in progress: wiring', seq: 3 },
+      ],
+    })
+    render(<BoardWithPoll participants={participants} stages={stages} />)
+    const legend = await screen.findByRole('list', { name: 'Statuses' })
+    expect(within(legend).getByText('Todo').closest('li')).toHaveTextContent('1')
+    expect(within(legend).getByText('In progress').closest('li')).toHaveTextContent('1')
+    expect(within(legend).getByText('Done').closest('li')).toHaveTextContent('0')
+  })
+
+  test('cards follow the board poll: a new report recolours the card', async () => {
+    vi.useFakeTimers()
+    try {
+      const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
+      const task = { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 }
+      vi.spyOn(meshClient, 'getMeshBoard')
+        .mockResolvedValueOnce({ entries: [task] })
+        .mockResolvedValue({ entries: [task, { ...at, author_id: 'stage:api', key: 'task/a/api', status: 'done: shipped', seq: 2 }] })
+      render(<BoardWithPoll participants={participants} stages={stages} />)
+      await act(async () => {})
+      expect(screen.getByRole('button', { name: 'Alpha, Todo' })).toHaveAttribute('data-status', 'todo')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000)
+      })
+      expect(screen.getByRole('button', { name: 'Alpha, Done' })).toHaveAttribute('data-status', 'done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('facts keep their article next to the task cards, and facts are not cards', async () => {
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [
+        { author_id: 'user', key: 'task/a', version: 1, status: 'Alpha', seq: 1, ts: '2026-10-18T00:00:00Z' },
+        { author_id: 'run:t-1', key: 'qa:report', version: 3, status: 'ready', seq: 2, ts: '2026-10-18T00:00:00Z', artifact_refs: ['qa/out.txt'] },
+      ],
+    })
+    render(<BoardWithPoll participants={participants} stages={stages} />)
+    const fact = await screen.findByRole('article', { name: 'qa:report' })
+    expect(within(fact).getByText('v3')).toBeInTheDocument()
+    expect(within(fact).getByText('qa/out.txt')).toBeInTheDocument()
+    expect(screen.getAllByRole('article')).toHaveLength(1)
+    expect(document.querySelectorAll('.board-task-card')).toHaveLength(1)
+  })
+
+  test('a card opens the task details and Close returns focus to the card', async () => {
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [{ author_id: 'user', key: 'task/a', version: 1, status: 'Alpha — Do the thing', seq: 1, ts: '2026-10-18T00:00:00Z' }],
+    })
+    render(<BoardWithPoll participants={participants} stages={stages} />)
+    const card = await screen.findByRole('button', { name: 'Alpha, Todo' })
+    card.focus()
+    fireEvent.click(card)
+    const dialog = screen.getByRole('dialog', { name: 'Task details' })
+    expect(within(dialog).getByText('Do the thing')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('combobox')).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: /close/i }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(card).toHaveFocus()
+  })
+
+  test('an open dialog shows the report that arrives on the next poll', async () => {
+    vi.useFakeTimers()
+    try {
+      const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
+      const task = { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 }
+      vi.spyOn(meshClient, 'getMeshBoard')
+        .mockResolvedValueOnce({ entries: [task] })
+        .mockResolvedValue({ entries: [task, { ...at, author_id: 'stage:api', key: 'task/a/api', status: 'done: shipped', seq: 2 }] })
+      render(<BoardWithPoll participants={participants} stages={stages} />)
+      await act(async () => {})
+      fireEvent.click(screen.getByRole('button', { name: 'Alpha, Todo' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000)
+      })
+      const dialog = screen.getByRole('dialog', { name: 'Task details' })
+      expect(within(dialog).getByText('done: shipped')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test('working agents are listed under Notify and all start checked', async () => {

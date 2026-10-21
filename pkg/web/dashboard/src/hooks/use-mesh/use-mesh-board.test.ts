@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { useMeshBoard } from './use-mesh-board'
 import * as meshClient from '../../api/mesh-client'
@@ -35,5 +35,61 @@ describe('useMeshBoard', () => {
       await reloaded
     })
     expect(result.current.entries.map((e) => e.key)).toEqual(['task/old', 'task/new'])
+  })
+
+  test('does not request the board while the mesh is not enabled, and starts once it is', async () => {
+    const spy = vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [entry('task/a')] })
+    const { result, rerender } = renderHook(({ enabled }) => useMeshBoard(enabled), { initialProps: { enabled: false } })
+    await act(async () => {})
+    expect(spy).not.toHaveBeenCalled()
+    expect(result.current.status).toBe('loading')
+
+    rerender({ enabled: true })
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(result.current.entries.map((e) => e.key)).toEqual(['task/a'])
+  })
+
+  test('is loading until the first fetch lands, then ready — an empty board is ready, not loading', async () => {
+    let resolveFirst!: (v: { entries: meshClient.MeshBoardEntry[] }) => void
+    vi.spyOn(meshClient, 'getMeshBoard').mockReturnValueOnce(new Promise((res) => (resolveFirst = res)))
+    const { result } = renderHook(() => useMeshBoard())
+    expect(result.current.status).toBe('loading')
+
+    await act(async () => resolveFirst({ entries: [] }))
+    expect(result.current.status).toBe('ready')
+    expect(result.current.entries).toEqual([])
+  })
+
+  test('a first-load failure is an error (not an empty board) and Retry recovers through reload()', async () => {
+    const spy = vi
+      .spyOn(meshClient, 'getMeshBoard')
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce({ entries: [entry('task/a')] })
+    const { result } = renderHook(() => useMeshBoard())
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.entries).toEqual([])
+
+    await act(async () => result.current.reload())
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(result.current.status).toBe('ready')
+    expect(result.current.entries.map((e) => e.key)).toEqual(['task/a'])
+  })
+
+  test('a failed refresh keeps the last snapshot as stale until a fetch succeeds again', async () => {
+    vi.spyOn(meshClient, 'getMeshBoard')
+      .mockResolvedValueOnce({ entries: [entry('task/a')] })
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce({ entries: [entry('task/a'), entry('task/b')] })
+    const { result } = renderHook(() => useMeshBoard())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    await act(async () => result.current.reload())
+    expect(result.current.status).toBe('stale')
+    expect(result.current.entries.map((e) => e.key)).toEqual(['task/a'])
+
+    await act(async () => result.current.reload())
+    expect(result.current.status).toBe('ready')
+    expect(result.current.entries.map((e) => e.key)).toEqual(['task/a', 'task/b'])
   })
 })

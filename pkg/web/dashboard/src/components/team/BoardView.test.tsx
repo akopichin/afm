@@ -1,0 +1,222 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import * as meshClient from '../../api/mesh-client'
+import type { MeshBoardEntry, MeshParticipant } from '../../api/mesh-client'
+import type { MeshBoard } from '../../hooks/use-mesh'
+import { BoardView } from './BoardView'
+
+const participants: MeshParticipant[] = [
+  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
+  { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
+]
+const stages = [{ id: 'api', title: 'API', status: 'running' }]
+
+function entry(author_id: string, key: string, status: string, seq: number): MeshBoardEntry {
+  return { author_id, key, version: 1, status, seq, ts: '2026-10-18T00:00:00Z' }
+}
+
+// A board with one task per situation: todo, in progress, done and one with two claimants.
+const entries: MeshBoardEntry[] = [
+  entry('user', 'task/csv-export', 'CSV export — Add GET /todos.csv', 1),
+  entry('user', 'task/login-fix', 'Login fix — Session cookie expires early', 2),
+  entry('stage:api', 'task/login-fix/api', 'in progress: reproducing', 3),
+  entry('user', 'task/docs', 'Docs', 4),
+  entry('stage:api', 'task/docs/api', 'done: written', 5),
+  entry('user', 'task/release', 'Release', 6),
+  entry('stage:api', 'task/release/api', 'done: tagged', 7),
+  entry('run:t-1', 'task/release/qa', 'in progress: smoke test', 8),
+]
+
+function boardOf(list: MeshBoardEntry[], overrides: Partial<MeshBoard> = {}): MeshBoard {
+  return { entries: list, status: 'ready', reload: vi.fn(() => Promise.resolve()), ...overrides }
+}
+
+function renderView(board: MeshBoard) {
+  return render(<BoardView board={board} participants={participants} stages={stages} />)
+}
+
+function lane(name: string): HTMLElement {
+  return screen.getByRole('region', { name: `${name} tasks` })
+}
+
+function cardTitles(laneName: string): string[] {
+  return within(lane(laneName))
+    .queryAllByRole('button')
+    .map((b) => b.getAttribute('aria-label') ?? '')
+}
+
+describe('BoardView', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('renders Todo, In progress and Done lanes in that order, each task in exactly one', () => {
+    renderView(boardOf(entries))
+    const lanes = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))
+    expect(lanes).toEqual(['Todo tasks', 'In progress tasks', 'Done tasks'])
+    expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
+    expect(cardTitles('In progress')).toEqual(['Login fix, In progress', 'Release, In progress'])
+    expect(cardTitles('Done')).toEqual(['Docs, Done'])
+  })
+
+  test('shows a count per lane and keeps an empty lane visible with 0', () => {
+    renderView(boardOf([entry('user', 'task/csv-export', 'CSV export', 1)]))
+    expect(within(lane('Todo')).getByText('1')).toBeInTheDocument()
+    expect(within(lane('In progress')).getByText('0')).toBeInTheDocument()
+    expect(within(lane('Done')).getByText('0')).toBeInTheDocument()
+    expect(within(lane('Done')).getByText('No tasks')).toBeInTheDocument()
+  })
+
+  test('an empty board still shows the three lanes and the New task button', () => {
+    renderView(boardOf([]))
+    expect(screen.getAllByRole('region')).toHaveLength(3)
+    expect(screen.getByRole('button', { name: 'New task' })).toBeInTheDocument()
+  })
+
+  test('shows how many tasks are completed', () => {
+    renderView(boardOf(entries))
+    expect(screen.getByText('1 of 4 completed')).toBeInTheDocument()
+  })
+
+  test('a changed board moves the card between lanes', () => {
+    const { rerender } = renderView(boardOf(entries))
+    expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
+    rerender(
+      <BoardView
+        board={boardOf([...entries, entry('run:t-1', 'task/csv-export/qa', 'done: shipped', 9)])}
+        participants={participants}
+        stages={stages}
+      />,
+    )
+    expect(cardTitles('Todo')).toEqual([])
+    expect(cardTitles('Done')).toEqual(['CSV export, Done', 'Docs, Done'])
+    expect(screen.getByText('2 of 4 completed')).toBeInTheDocument()
+  })
+
+  test('search matches the key, the title and the details', () => {
+    renderView(boardOf(entries))
+    const search = screen.getByRole('searchbox', { name: 'Search tasks' })
+    fireEvent.change(search, { target: { value: 'COOKIE' } })
+    expect(cardTitles('In progress')).toEqual(['Login fix, In progress'])
+    expect(cardTitles('Todo')).toEqual([])
+    fireEvent.change(search, { target: { value: 'csv' } })
+    expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
+    fireEvent.change(search, { target: { value: 'task/docs' } })
+    expect(cardTitles('Done')).toEqual(['Docs, Done'])
+    expect(within(lane('Todo')).getByText('No matching tasks')).toBeInTheDocument()
+  })
+
+  test('the assignee filter lists the live roster, Unassigned, and matches any claimant', () => {
+    renderView(boardOf(entries))
+    const filter = screen.getByRole('combobox', { name: 'Assignee' })
+    expect(within(filter).getAllByRole('option').map((o) => o.textContent)).toEqual(['All assignees', 'Unassigned', 'API', 'QA'])
+
+    fireEvent.change(filter, { target: { value: 'run:t-1' } })
+    expect(cardTitles('In progress')).toEqual(['Release, In progress'])
+    expect(cardTitles('Done')).toEqual([])
+
+    fireEvent.change(filter, { target: { value: 'stage:api' } })
+    expect(cardTitles('In progress')).toEqual(['Login fix, In progress', 'Release, In progress'])
+    expect(cardTitles('Done')).toEqual(['Docs, Done'])
+
+    fireEvent.change(filter, { target: { value: 'unassigned' } })
+    expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
+    expect(cardTitles('In progress')).toEqual([])
+  })
+
+  test('a filter says how many tasks it shows', () => {
+    renderView(boardOf(entries))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'docs' } })
+    expect(screen.getByText('1 shown')).toBeInTheDocument()
+    expect(screen.getByText('1 of 4 completed')).toBeInTheDocument()
+  })
+
+  test('a card opens the task details, Escape closes them and focus returns to the card', () => {
+    renderView(boardOf(entries))
+    const card = screen.getByRole('button', { name: 'Login fix, In progress' })
+    card.focus()
+    fireEvent.click(card)
+    const dialog = screen.getByRole('dialog', { name: 'Task details' })
+    expect(within(dialog).getByText('in progress: reproducing')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(card).toHaveFocus()
+  })
+
+  test('the open details follow the board poll', () => {
+    const { rerender } = renderView(boardOf(entries))
+    fireEvent.click(screen.getByRole('button', { name: 'Login fix, In progress' }))
+    rerender(
+      <BoardView
+        board={boardOf([...entries, entry('stage:api', 'task/login-fix/api', 'done: fixed', 9)])}
+        participants={participants}
+        stages={stages}
+      />,
+    )
+    expect(within(screen.getByRole('dialog', { name: 'Task details' })).getByText('done: fixed')).toBeInTheDocument()
+  })
+
+  test('New task opens a dialog with the task form; Escape closes it', () => {
+    renderView(boardOf(entries))
+    const opener = screen.getByRole('button', { name: 'New task' })
+    opener.focus()
+    fireEvent.click(opener)
+    const dialog = screen.getByRole('dialog', { name: 'New task' })
+    expect(within(dialog).getByLabelText('Task')).toHaveFocus()
+    expect(within(dialog).getByRole('button', { name: 'Post task' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(opener).toHaveFocus()
+  })
+
+  test('a posted task is revealed in Todo even when the filters hid it: filters clear, card focused, announced', async () => {
+    vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
+    const posted = entry('user', 'task/new-thing', 'New thing', 10)
+    const reload = vi.fn(() => Promise.resolve())
+    const { rerender } = renderView(boardOf(entries, { reload }))
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'docs' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+
+    await waitFor(() => expect(reload).toHaveBeenCalled())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('searchbox', { name: 'Search tasks' })).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('all')
+    expect(screen.getByRole('status', { name: 'Board updates' })).toHaveTextContent('Task added to Todo')
+
+    // The poll delivers the new task.
+    rerender(<BoardView board={boardOf([...entries, posted], { reload })} participants={participants} stages={stages} />)
+    const card = within(lane('Todo')).getByRole('button', { name: 'New thing, Todo' })
+    await waitFor(() => expect(card).toHaveFocus())
+  })
+
+  test('a task that is already on the board when the post resolves is focused too', async () => {
+    vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
+    const posted = entry('user', 'task/new-thing', 'New thing', 10)
+    let rerenderView: (b: MeshBoard) => void = () => {}
+    const reload = vi.fn(() => {
+      rerenderView(boardOf([...entries, posted]))
+      return Promise.resolve()
+    })
+    const { rerender } = renderView(boardOf(entries, { reload }))
+    rerenderView = (b) => rerender(<BoardView board={{ ...b, reload }} participants={participants} stages={stages} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+
+    const card = await screen.findByRole('button', { name: 'New thing, Todo' })
+    await waitFor(() => expect(card).toHaveFocus())
+  })
+
+  test('the board shows no status control: agents own the status', () => {
+    renderView(boardOf(entries))
+    expect(screen.queryByRole('radio')).toBeNull()
+    // The only select is the assignee filter.
+    expect(screen.getAllByRole('combobox')).toHaveLength(1)
+  })
+})

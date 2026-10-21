@@ -21,6 +21,7 @@ export interface UseWorkspaceView {
   openHistory: (view: 'plan-history' | 'dialog-history') => void
   openAssistant: () => void
   openTeam: () => void
+  openBoard: () => void
 }
 
 export function useWorkspaceView(
@@ -50,8 +51,9 @@ export function useWorkspaceView(
   )
   const openAssistant = useCallback(() => dispatch({ type: 'openAssistant' }), [])
   const openTeam = useCallback(() => dispatch({ type: 'openTeam' }), [])
+  const openBoard = useCallback(() => dispatch({ type: 'openBoard' }), [])
 
-  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam }
+  return { state, activeItem: activeItem(state), openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam, openBoard }
 }
 
 export type { WorkspaceState, WorkspaceView }
