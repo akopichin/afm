@@ -2051,6 +2051,29 @@ describe('App', () => {
     expect(sendBodies).toEqual([{ requestId: sendBodies[0]!.requestId, body: 'ship it' }])
   }, 15000)
 
+  test('a Team is not kept mounted for a run whose mesh probe failed', async () => {
+    let runId = 'app-mesh-a'
+    let meshUp = true
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', run_id: runId, stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      if (url.includes('/api/mesh/') && !meshUp) return { ok: false, status: 404, json: async () => ({}) } as Response
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }] }) } as Response
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [], summaries: {} }) } as Response
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    const { container } = render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    await waitFor(() => expect(container.querySelector('.team-view')).not.toBeNull())
+
+    // Run B arrives while Team is shown, and B's mesh probe fails.
+    meshUp = false
+    runId = 'app-mesh-b'
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull(), { timeout: 5000 })
+    expect(container.querySelector('.team-view')).toBeNull()
+  }, 15000)
+
   test('a new run does not mount its Team until Team is opened in that run', async () => {
     let runId = 'app-run-a'
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

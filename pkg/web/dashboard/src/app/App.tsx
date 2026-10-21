@@ -723,7 +723,7 @@ export function App(): ReactElement {
                 )}
                 {/* Team stays mounted after it is first opened and is only hidden on other views: its drafts,
                     in-flight sends (with their idempotency keys), selection and reading position live in it. */}
-                {teamOpenedRun === runId && (
+                {teamOpenedRun === runId && meshRoster.enabled && (
                   <div style={{ display: wsState.view === 'team' ? 'contents' : 'none' }}>
                     <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
                   </div>
