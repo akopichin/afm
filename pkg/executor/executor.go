@@ -542,7 +542,7 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 				textBuf.WriteString(o.Content)
 			}
 			if o.Type == ObservationToolAction && o.Tool == toolNameWrite {
-				if abs, absErr := filepath.Abs(o.Content); o.Content != "" && absErr == nil && abs == absOut {
+				if abs, absErr := AgentPath(e.cfg.Dir, o.Content); o.Content != "" && absErr == nil && abs == absOut {
 					agentWroteOutFile = true
 				}
 			}
@@ -576,6 +576,16 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 		return nil
 	}
 	return os.WriteFile(outFile, []byte(textBuf.String()), 0644)
+}
+
+// AgentPath resolves a path an agent reported (e.g. a Write tool's file_path) to an absolute path: a relative
+// path is relative to the agent's working directory dir, which may differ from afm's (a worktree). An empty
+// dir means the agent inherited afm's working directory.
+func AgentPath(dir, p string) (string, error) {
+	if filepath.IsAbs(p) || dir == "" {
+		return filepath.Abs(p)
+	}
+	return filepath.Abs(filepath.Join(dir, p))
 }
 
 // WrittenFiles возвращает пути файлов, записанных агентом через Write tool, в порядке появления событий в

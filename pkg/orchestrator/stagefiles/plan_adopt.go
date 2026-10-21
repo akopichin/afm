@@ -9,9 +9,9 @@ import (
 	"github.com/akopichin/afm/pkg/prompts"
 )
 
-// adoptWrittenPlan ищет валидный план среди файлов, которые планирующий агент записал через Write tool, и
-// копирует найденный план в outFile.
-func AdoptWrittenPlan(logFile, outFile string) bool {
+// AdoptWrittenPlan ищет валидный план среди файлов, которые планирующий агент записал через Write tool, и
+// копирует найденный план в outFile. agentDir — рабочий каталог агента: от него считаются относительные пути.
+func AdoptWrittenPlan(logFile, outFile, agentDir string) bool {
 	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
 	absOut, err := filepath.Abs(outFile)
 	if err != nil {
@@ -20,7 +20,7 @@ func AdoptWrittenPlan(logFile, outFile string) bool {
 
 	files := executor.WrittenFiles(jsonlFile)
 	for i := len(files) - 1; i >= 0; i-- {
-		abs, absErr := filepath.Abs(files[i])
+		abs, absErr := executor.AgentPath(agentDir, files[i])
 		if absErr != nil || abs == absOut {
 			// outFile уже проверен валидацией — не кандидат.
 			continue

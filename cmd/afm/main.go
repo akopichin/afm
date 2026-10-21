@@ -20,6 +20,16 @@ var debugEnabled bool
 // (Makefile build/install, Dockerfile.runtime ARG AFM_VERSION). По умолчанию "dev".
 var version = "dev"
 
+// absRootDir — afm-root (rootDir: флаг --dir, иначе AFM_DIR, иначе ".") абсолютным путём на момент вызова.
+// Пути, выведенные из afm-root (раны, worktree, root_dir, память), уходят агентам, чей CWD может быть
+// worktree, поэтому они должны быть абсолютными.
+func absRootDir() string {
+	if abs, err := filepath.Abs(rootDir); err == nil {
+		return abs
+	}
+	return rootDir
+}
+
 // fmDir возвращает путь к служебному каталогу .afm относительно rootDir. rootDir задаётся флагом --dir,
 // иначе переменной AFM_DIR, иначе "." (PersistentPreRunE в корневой команде).
 func fmDir() string {

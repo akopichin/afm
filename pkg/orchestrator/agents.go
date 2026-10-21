@@ -156,7 +156,7 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 	planMD, _ := os.ReadFile(outFile)
 	issues := prompts.ValidatePlan(string(planMD), stagefiles.RequiredPlanSections)
 	if !issues.IsClean() {
-		if stagefiles.AdoptWrittenPlan(logFile, outFile) {
+		if stagefiles.AdoptWrittenPlan(logFile, outFile, o.opts.RootDir) {
 			return nil
 		}
 		return &MissingSectionsError{Missing: issues.MissingSections}
@@ -201,7 +201,7 @@ func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, sta
 		planMD, _ := os.ReadFile(outFile)
 		issues := prompts.ValidatePlan(string(planMD), stagefiles.RequiredPlanSections)
 		if !issues.IsClean() {
-			if stagefiles.AdoptWrittenPlan(logFile, outFile) {
+			if stagefiles.AdoptWrittenPlan(logFile, outFile, o.opts.RootDir) {
 				return nil
 			}
 			if s.Interactive {

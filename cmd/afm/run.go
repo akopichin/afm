@@ -91,7 +91,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			wtDir, wtLock, err := resolveWorktree(context.Background(), rootDir, f, cfg, mode, worktreeName)
+			wtDir, wtLock, err := resolveWorktree(context.Background(), absRootDir(), f, cfg, mode, worktreeName)
 			if err != nil {
 				return err // resolveWorktree's own errors already carry a "worktree: " prefix
 			}
@@ -112,7 +112,7 @@ func newRunCmd() *cobra.Command {
 			}
 
 			if cfg.Docker.IsDockerEnabled() {
-				return reexecFlow(rootDir, f, cfg, hooks, wtDir)
+				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir)
 			}
 
 			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
@@ -155,6 +155,10 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		return err
 	}
 	defer store.Close()
+	// Absolute: run paths reach agents (prompts, AFM_SCRATCH_DIR, report links) whose CWD may be a worktree.
+	if abs, absErr := filepath.Abs(runDir); absErr == nil {
+		runDir = abs
+	}
 
 	// Collection remains enabled even when cost display is disabled.
 	acct, acctErr := accounting.Open(runDir, accounting.NewResolver(cfg.Pricing))
@@ -176,7 +180,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	fmt.Printf("afm: running %q\n", f.Name)
 	fmt.Printf("  run dir: %s\n", runDir)
 
-	env, err := prepareRunEnvironment(rootDir, f, cfg, opts.worktreeDir)
+	env, err := prepareRunEnvironment(absRootDir(), f, cfg, opts.worktreeDir)
 	if err != nil {
 		return err
 	}
@@ -233,7 +237,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	}
 
 	var orch *orchestrator.Orchestrator
-	hooksDisp, err := prepareLifecycleDispatcher(rootDir, lifecyclehooks.DispatcherConfig{
+	hooksDisp, err := prepareLifecycleDispatcher(absRootDir(), lifecyclehooks.DispatcherConfig{
 		FlowName: f.Name,
 		RunID:    runID,
 		RunDir:   runDir,
@@ -271,7 +275,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
 		Team:               f.Team,
-		SecretValues:       loadRedactionSecrets(rootDir, cfg, hooks),
+		SecretValues:       loadRedactionSecrets(absRootDir(), cfg, hooks),
 	}
 	if ws != nil {
 		orchOpts.ResolveFile = workspaceResolveFile(ws)
