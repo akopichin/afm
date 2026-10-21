@@ -188,13 +188,15 @@ export function TeamView({ runId, active = true, roster, stages, events, profile
 
   const wasDrawerRef = useRef(resize.isDrawer)
   useEffect(() => {
+    // A hidden Team ignores width changes: the list/detail choice the reader left is kept for their return.
+    if (!active) return
     if (!wasDrawerRef.current && resize.isDrawer) {
       const roster = document.getElementById('team-roster')
       const focusedRoster = roster?.contains(document.activeElement) ?? false
       setMobileDetail(!focusedRoster && (tab !== 'messages' || selectedConversation !== null))
     }
     wasDrawerRef.current = resize.isDrawer
-  }, [resize.isDrawer, selectedConversation, tab])
+  }, [active, resize.isDrawer, selectedConversation, tab])
 
   useEffect(() => {
     if (!returnToListFocusRef.current || !resize.isDrawer || mobileDetail) return

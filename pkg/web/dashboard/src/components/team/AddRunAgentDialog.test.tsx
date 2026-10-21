@@ -41,6 +41,21 @@ describe('AddRunAgentDialog', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
+  test('a dialog shown again takes the keyboard focus back', () => {
+    const onAttached = vi.fn()
+    const onCancel = vi.fn()
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    const view = render(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={onCancel} active />)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    view.rerender(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={onCancel} active={false} />)
+    act(() => outside.focus())
+    view.rerender(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={onCancel} active />)
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    outside.remove()
+  })
+
   test('Cancel creates nothing', () => {
     const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
     const { onCancel } = renderDialog()

@@ -37,10 +37,12 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage,
 
   const selected = available.find((p) => p.id === profileId) ?? null
 
+  // Focus moves into the dialog when it opens and again whenever its view is shown after being hidden.
   useEffect(() => {
+    if (!active) return
     const modal = modalRef.current
     if (modal !== null) visibleFocusables(modal)[0]?.focus()
-  }, [])
+  }, [active])
 
   useEffect(() => {
     if (!active) return

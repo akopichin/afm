@@ -406,6 +406,27 @@ describe('TeamView', () => {
     expect(log.scrollTop).toBe(80)
   })
 
+  test('a hidden Team keeps the narrow list the reader left while the window is resized', () => {
+    mockThreadAndBoardFetches()
+    const width = mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: 'mt-hidden-resize', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const roster = enabledRoster({ threads: [thread] })
+    const view = render(<TeamView runId="hidden-resize" active roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to conversations' }))
+    expect(layout).not.toHaveClass('mobile-detail')
+
+    // Another view is shown; the window is widened and narrowed again meanwhile.
+    view.rerender(<TeamView runId="hidden-resize" active={false} roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    act(() => (document.activeElement as HTMLElement | null)?.blur())
+    width.resize(1200)
+    width.resize(390)
+    view.rerender(<TeamView runId="hidden-resize" active roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(layout).toHaveClass('drawer')
+    expect(layout).not.toHaveClass('mobile-detail')
+  })
+
   test('wide detail focus keeps the narrow conversation after previously showing detail', () => {
     mockThreadAndBoardFetches()
     const width = mockTeamWidth(390)

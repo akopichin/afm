@@ -2008,6 +2008,49 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /QA.*New messages/ })).toBeInTheDocument()
   })
 
+  test('a send still in flight survives Team -> Feed -> Team: no second POST, and its completion trims only the sent text', async () => {
+    const sendBodies: { requestId: string; body: string }[] = []
+    let resolveSend: (receipt: unknown) => void = () => {}
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', run_id: 'app-send-flight', stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }, { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA', reachable: true }] }) } as Response
+      if (url.includes('/api/mesh/threads/mt-send/messages') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { request_id: string; body: string }
+        sendBodies.push({ requestId: body.request_id, body: body.body })
+        const receipt = await new Promise((resolve) => { resolveSend = resolve })
+        return { ok: true, json: async () => receipt } as Response
+      }
+      if (url.includes('/api/mesh/threads/mt-send')) return { ok: true, json: async () => ({ messages: [], next_cursor: 0 }) } as Response
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [{ id: 'mt-send', title: 'QA', scope: 'run', members: ['user', 'run:qa'], status: 'open' }], summaries: {} }) } as Response
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    render(<App />)
+    const workspaceTabs = () => within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(await screen.findByRole('button', { name: /QA/ }))
+    const composer = await screen.findByPlaceholderText('Message QA…')
+    fireEvent.change(composer, { target: { value: 'ship it' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendBodies).toHaveLength(1))
+    fireEvent.change(composer, { target: { value: 'ship it and then rest' } })
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Feed' }))
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    // Still the same in-flight send: a click does not start a second one.
+    fireEvent.click(screen.getByRole('button', { name: /^Send/ }))
+    expect(sendBodies).toHaveLength(1)
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Feed' }))
+    await act(async () => {
+      resolveSend({ message_id: 'mm-1', thread_id: 'mt-send', seq: 5 })
+    })
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    await waitFor(() => expect(screen.getByPlaceholderText('Message QA…')).toHaveValue('and then rest'))
+    expect(sendBodies).toEqual([{ requestId: sendBodies[0]!.requestId, body: 'ship it' }])
+  }, 15000)
+
   test('a new run does not mount its Team until Team is opened in that run', async () => {
     let runId = 'app-run-a'
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
