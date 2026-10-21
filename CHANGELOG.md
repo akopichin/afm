@@ -3,6 +3,15 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-21
+
+### Fix: honor the configured model in Claude Docker recipes
+
+Claude recipe wrappers now pass their configured model explicitly on every
+invocation, including resumed sessions. A model selected in Claude Code settings,
+the inherited environment, or client arguments no longer overrides the recipe.
+See [Docker mode](docs/docker.md#non-claude-agents-in-docker-autoshim).
+
 ## 2026-10-20
 
 ### Improvement: address the Side agent through Agent Mesh
