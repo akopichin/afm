@@ -35,6 +35,7 @@ function renderList(overrides: Partial<Parameters<typeof RunTeamList>[0]> = {}) 
       participants={participants}
       threads={threads}
       stages={stages}
+      listView="people"
       onSelectParticipant={onSelectParticipant}
       onSelectThread={onSelectThread}
       onAddRunAgent={onAddRunAgent}
@@ -57,11 +58,70 @@ function stageRowNames(): string[] {
 }
 
 describe('RunTeamList', () => {
-  test('groups participants under "This run", "Stages" and "Conversations"', () => {
+  test('New to you count is the number of marked conversations', () => {
+    render(<RunTeamList participants={participants} threads={threads} stages={stages}
+      listView="conversations" onAddRunAgent={vi.fn()} onNewOnlyChange={vi.fn()}
+      unreadThreadIds={new Set(threads.map((thread) => thread.id))} />)
+    expect(screen.getByRole('button', { name: 'New to you 2' })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('button', { name: /New messages/ })).toHaveLength(2)
+  })
+
+  test('New to you filters marked conversations, stays removable when empty, and keeps the selected thread outside the list', () => {
+    const onNewOnlyChange = vi.fn()
+    const { rerender } = render(<RunTeamList participants={participants} threads={threads} stages={stages}
+      listView="conversations" selectedThreadId="mt-1" onAddRunAgent={vi.fn()}
+      unreadThreadIds={new Set(['mt-e95e00425b9b4640a0bc'])} newOnly onNewOnlyChange={onNewOnlyChange} />)
+    const filter = screen.getByRole('button', { name: /New to you.*1/ })
+    expect(filter).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: /Hand-off/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /Commit & cleanup.*New messages/ })).toBeInTheDocument()
+    rerender(<RunTeamList participants={participants} threads={threads} stages={stages}
+      listView="conversations" selectedThreadId="mt-1" onAddRunAgent={vi.fn()}
+      unreadThreadIds={new Set()} newOnly onNewOnlyChange={onNewOnlyChange} />)
+    expect(screen.getByText("You're all caught up")).toBeInTheDocument()
+    fireEvent.click(filter)
+    expect(onNewOnlyChange).toHaveBeenCalledWith(false)
+  })
+
+  test('focus moves to the active filter if reading removes its focused conversation row', () => {
+    const common = { participants, threads, stages, listView: 'conversations' as const,
+      onAddRunAgent: vi.fn(), newOnly: true, onNewOnlyChange: vi.fn() }
+    const { rerender } = render(<RunTeamList {...common} unreadThreadIds={new Set([threads[0]!.id])} />)
+    screen.getByRole('button', { name: /Hand-off.*New messages/ }).focus()
+    rerender(<RunTeamList {...common} unreadThreadIds={new Set()} />)
+    expect(screen.getByRole('button', { name: /New to you.*0/ })).toHaveFocus()
+  })
+  test('Team People stably puts only working run and Side agents first after a roster update', () => {
+    const people: MeshParticipant[] = [
+      { id: 'run:waiting', kind: 'run_agent', scope: 'run', display_name: 'Waiting', reachable: true, activity: 'waiting' },
+      { id: 'side:working', kind: 'side_agent', scope: 'run', display_name: 'Side working', reachable: true, activity: 'working' },
+      { id: 'run:idle', kind: 'run_agent', scope: 'run', display_name: 'Idle', reachable: true, activity: 'idle' },
+      { id: 'run:working', kind: 'run_agent', scope: 'run', display_name: 'Run working', reachable: true, activity: 'working' },
+    ]
+    const view = render(<RunTeamList participants={people} stages={stages} listView="people" onAddRunAgent={vi.fn()} />)
+    const names = () => within(screen.getByRole('region', { name: 'This run' })).getAllByRole('button')
+      .map((row) => row.querySelector('.team-person-name')?.textContent)
+    expect(names()).toEqual(['Side working', 'Run working', 'Waiting', 'Idle'])
+    view.rerender(<RunTeamList participants={people.map((p) => p.id === 'run:waiting' ? { ...p, activity: 'working' } : p)} stages={stages} listView="people" onAddRunAgent={vi.fn()} />)
+    expect(names()).toEqual(['Waiting', 'Side working', 'Run working', 'Idle'])
+  })
+
+  test('Team Stages can collapse while preserving flow order and nested helpers when reopened', () => {
+    renderList()
+    const toggle = screen.getByRole('button', { name: /Stages/ })
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(inStages().queryByRole('button', { name: /Correctness helper/ })).toBeNull()
+    fireEvent.click(toggle)
+    expect(stageRowNames()).toEqual(['Plan', 'Implement feature', 'Commit & cleanup'])
+    expect(screen.getByText('Correctness helper').closest('button')).toHaveClass('nested')
+  })
+
+  test('People keeps run and stage groups separate from Conversations', () => {
     renderList()
     expect(screen.getByRole('region', { name: 'This run' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Stages' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Conversations' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Conversations' })).toBeNull()
   })
 
   test('stages follow the flow order, not the server id order', () => {
@@ -124,6 +184,7 @@ describe('RunTeamList', () => {
     renderList()
     const names = within(screen.getByRole('region', { name: 'Stages' }))
       .getAllByRole('button')
+      .filter((button) => button.classList.contains('team-person-row'))
       .map((b) => b.querySelector('.team-person-name')?.textContent)
     expect(names).toEqual(['Plan', 'Implement feature', 'Correctness helper', 'Commit & cleanup'])
     const helperRow = screen.getByText('Correctness helper').closest('button') as HTMLElement
@@ -171,7 +232,7 @@ describe('RunTeamList', () => {
   })
 
   test('conversations are named by title, or by the other member when untitled', () => {
-    const { onSelectThread } = renderList()
+    const { onSelectThread } = renderList({ listView: 'conversations' })
     const conversations = screen.getByRole('region', { name: 'Conversations' })
     expect(within(conversations).getByText('Commit & cleanup')).toBeInTheDocument()
     expect(within(conversations).queryByText(/^mt-/)).toBeNull()
@@ -327,10 +388,11 @@ describe('RunTeamList without focusStageId (the Team tab)', () => {
         onSelectParticipant={vi.fn()}
         onSelectThread={vi.fn()}
         onAddRunAgent={vi.fn()}
+        listView="people"
         open
       />,
     )
-    expect(screen.getAllByRole('region').map((r) => r.querySelector('h3')?.firstChild?.textContent)).toEqual(['This run', 'Stages', 'Conversations'])
+    expect(screen.getAllByRole('region').map((r) => r.querySelector('h3')?.textContent)).toEqual(['This run', '▾ Stages'])
     const nav = screen.getByRole('navigation', { name: 'Team roster' })
     expect(nav).toHaveAttribute('id', 'team-roster')
     expect(nav).toHaveClass('team-roster', 'open')
@@ -342,4 +404,3 @@ describe('RunTeamList without focusStageId (the Team tab)', () => {
     expect(screen.getByRole('button', { name: 'Add run agent' })).toBeInTheDocument()
   })
 })
-

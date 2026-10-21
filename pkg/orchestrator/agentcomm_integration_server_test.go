@@ -42,12 +42,8 @@ func (a meshServerActionsForTest) ListParticipants(ctx context.Context) ([]agent
 	return page.Participants, nil
 }
 
-func (a meshServerActionsForTest) Threads(ctx context.Context) ([]agentcomm.Thread, error) {
-	page, err := a.orch.ListThreads(ctx, orchestrator.ListThreadsRequest{Participant: "user", Actor: state.Actor{Kind: "user"}})
-	if err != nil {
-		return nil, err
-	}
-	return page.Threads, nil
+func (a meshServerActionsForTest) Threads(ctx context.Context) (orchestrator.ThreadPage, error) {
+	return a.orch.ListThreads(ctx, orchestrator.ListThreadsRequest{Participant: "user", Actor: state.Actor{Kind: "user"}})
 }
 
 func (a meshServerActionsForTest) OpenThread(ctx context.Context, requestID string, req server.MeshOpenThreadRequest) (agentcomm.Thread, error) {
@@ -63,6 +59,13 @@ func (a meshServerActionsForTest) OpenThread(ctx context.Context, requestID stri
 
 func (a meshServerActionsForTest) CloseThread(ctx context.Context, requestID, threadID string) error {
 	return a.orch.CloseThread(ctx, orchestrator.CloseThreadRequest{OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Actor: state.Actor{Kind: "user"}})
+}
+
+func (a meshServerActionsForTest) UpdateThreadTitle(ctx context.Context, requestID, threadID string, req server.MeshTopicRequest) (orchestrator.UpdateThreadTitleReceipt, error) {
+	return a.orch.UpdateThreadTitle(ctx, orchestrator.UpdateThreadTitleRequest{
+		OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Title: req.Title,
+		ExpectedTitleSeq: req.ExpectedTitleSeq, Actor: state.Actor{Kind: "user"},
+	})
 }
 
 func (a meshServerActionsForTest) Send(ctx context.Context, requestID string, req server.MeshUserSendRequest) (server.MeshSendReceipt, error) {

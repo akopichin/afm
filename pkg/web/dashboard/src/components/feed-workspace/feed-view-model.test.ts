@@ -569,6 +569,17 @@ describe('mesh_* — Agent Mesh notice events (T7.2): real presentation rows, no
     expect(items[0]?.text).toContain('Report format')
   })
 
+  it('mesh_thread title updates distinguish rename and clear from opening', () => {
+    const items = toFeedItems([
+      ev('mesh_thread', { thread_id: 't1', action: 'title_updated', title: 'New topic' }, '', '2026-10-18T10:00:01Z'),
+      ev('mesh_thread', { thread_id: 't1', action: 'title_updated', title: '' }, '', '2026-10-18T10:00:02Z'),
+    ])
+    expect(items.map(item => item.text)).toEqual([
+      'thread t1 renamed: New topic',
+      'thread t1 title cleared',
+    ])
+  })
+
   it('mesh_thread (closed) names the thread id and says it closed', () => {
     const items = toFeedItems([ev('mesh_thread', { thread_id: 't1', status: 'closed' }, '', '2026-10-18T10:00:00Z')])
     expect(items).toHaveLength(1)

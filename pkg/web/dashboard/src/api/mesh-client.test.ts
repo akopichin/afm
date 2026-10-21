@@ -11,6 +11,7 @@ import {
   openMeshThread,
   sendMeshMessage,
   sendMeshMessageTo,
+  updateMeshThreadTitle,
 } from './mesh-client'
 
 describe('mesh-client', () => {
@@ -54,6 +55,37 @@ describe('mesh-client', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/threads')
     expect(res.threads).toHaveLength(1)
     expect(res.threads[0]?.id).toBe('mt-1')
+    expect(res.summaries).toEqual({})
+  })
+
+  test('listMeshThreads decodes keyed summaries and defaults an absent title revision to zero', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        threads: [{ id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }],
+        summaries: {
+          'mt-1': {
+            last_message: { id: 'm-7', seq: 7, created_at: '2026-10-21T10:00:00Z', sender_id: 'run:qa', preview: 'Saved message' },
+            last_other_message_seq: 7,
+          },
+          'mt-2': { last_other_message_seq: 0, title_seq: 4 },
+        },
+      }),
+    } as Response)
+
+    expect(await listMeshThreads()).toEqual({
+      threads: [{ id: 'mt-1', scope: 'run', members: ['user', 'run:qa'], status: 'open' }],
+      summaries: {
+        'mt-1': {
+          last_message: { id: 'm-7', seq: 7, created_at: '2026-10-21T10:00:00Z', sender_id: 'run:qa', preview: 'Saved message' },
+          last_other_message_seq: 7,
+          title_seq: 0,
+        },
+        'mt-2': { last_other_message_seq: 0, title_seq: 4 },
+      },
+    })
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   test('getMeshThread builds the cursor/limit query string', async () => {
@@ -97,6 +129,23 @@ describe('mesh-client', () => {
         body: JSON.stringify({ request_id: 'req-1', title: 'Hand-off', scope: 'run', member_ids: ['run:qa'] }),
       }),
     )
+  })
+
+  test('updateMeshThreadTitle posts a revisioned topic edit and preserves conflict status', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true, status: 200, json: async () => ({ title: 'New topic', title_seq: 17 }),
+    } as Response).mockResolvedValueOnce({
+      ok: false, status: 409, json: async () => ({ error: 'operation_conflict', message: 'topic changed' }),
+    } as Response)
+
+    await expect(updateMeshThreadTitle('mt/a', { requestId: 'edit-1', title: 'New topic', expectedTitleSeq: 7 }))
+      .resolves.toEqual({ title: 'New topic', title_seq: 17 })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/threads/mt%2Fa/topic', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ request_id: 'edit-1', title: 'New topic', expected_title_seq: 7 }),
+    }))
+    await expect(updateMeshThreadTitle('mt/a', { requestId: 'edit-2', title: '', expectedTitleSeq: 7 }))
+      .rejects.toMatchObject({ status: 409, code: 'operation_conflict', message: 'topic changed' })
   })
 
   test('sendMeshMessage posts into the thread named in the URL, defaulting kind to "message"', async () => {

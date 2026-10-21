@@ -48,6 +48,23 @@ stop blocking root-stage completion). Concretely:
   consumer already relies on. The strict rule above is specifically about the
   *discriminators* (`kind`, `schema_version`), not about every field on a record.
 
+## Conversation topic edits
+
+Editing or clearing a Team conversation topic commits a
+`mesh_thread_title_updated` effect in an operation. Its payload contains the
+replacement `title` (empty to clear) and `expected_title_seq`, the previous
+topic revision. The effect's journal sequence becomes the new revision. Replay
+checks that revision and stores the display-title override separately from the
+original `mesh_thread_opened` descriptor, which remains unchanged. A topic edit
+also advances the thread metadata cursor, so a stage feed can see the new title
+without a new message; it does not change message order.
+
+This is a new control kind, not an additive field on `mesh_thread_opened`.
+Current afm can replay older journals with no topic edits. An older binary that
+does not recognize `mesh_thread_title_updated` cannot replay a journal containing
+it: the unknown kind produces the incompatibility error described above. Use a
+binary that knows this kind to resume such a run.
+
 ## Additive fields
 
 Fields added to an existing record kind are optional: a journal written before a

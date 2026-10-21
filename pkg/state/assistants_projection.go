@@ -570,6 +570,8 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyMeshParticipantAdded(as, c, dryRun)
 	case kindMeshThreadOpened:
 		return applyMeshThreadOpened(as, c, dryRun)
+	case kindMeshThreadTitleUpdated:
+		return applyMeshThreadTitleUpdated(as, c, dryRun)
 	case kindMeshThreadClosed:
 		return applyMeshThreadClosed(as, c, dryRun)
 	case kindMeshMessageSent:

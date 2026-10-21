@@ -44,12 +44,8 @@ func (a meshActions) ListParticipants(ctx context.Context) ([]agentcomm.Particip
 // orchestrator.ListThreads already treats meshUIParticipant ("user") as the run owner who sees every thread,
 // not just the ones naming it as a Member (the same carve-out ReadThread/Inbox use elsewhere on this
 // adapter) — exactly what the Team view's "Conversations" grouping needs.
-func (a meshActions) Threads(ctx context.Context) ([]agentcomm.Thread, error) {
-	page, err := a.orch.ListThreads(ctx, orchestrator.ListThreadsRequest{Participant: meshUIParticipant, Actor: meshUIActor})
-	if err != nil {
-		return nil, err
-	}
-	return page.Threads, nil
+func (a meshActions) Threads(ctx context.Context) (orchestrator.ThreadPage, error) {
+	return a.orch.ListThreads(ctx, orchestrator.ListThreadsRequest{Participant: meshUIParticipant, Actor: meshUIActor})
 }
 
 // OpenThread ensures the human is a member of every thread it opens through this endpoint — a thread the
@@ -69,6 +65,13 @@ func (a meshActions) OpenThread(ctx context.Context, requestID string, req serve
 func (a meshActions) CloseThread(ctx context.Context, requestID, threadID string) error {
 	return a.orch.CloseThread(ctx, orchestrator.CloseThreadRequest{
 		OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Actor: meshUIActor,
+	})
+}
+
+func (a meshActions) UpdateThreadTitle(ctx context.Context, requestID, threadID string, req server.MeshTopicRequest) (orchestrator.UpdateThreadTitleReceipt, error) {
+	return a.orch.UpdateThreadTitle(ctx, orchestrator.UpdateThreadTitleRequest{
+		OperationID: requestID, ThreadID: agentcomm.ThreadID(threadID), Title: req.Title,
+		ExpectedTitleSeq: req.ExpectedTitleSeq, Actor: meshUIActor,
 	})
 }
 

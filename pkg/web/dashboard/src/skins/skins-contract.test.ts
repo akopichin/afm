@@ -199,24 +199,21 @@ describe('skins CSS contract — shared chat composer (feed, Team, side agent)',
 })
 
 describe('skins CSS contract — Team on narrow screens', () => {
-  it('turns the roster into a drawer below 760px instead of squeezing the conversation', () => {
-    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 760px)'))
-    // The stage people panel embeds the same roster and has a drawer of its own, so it is exempt.
-    expect(narrow).toMatch(/\.team-roster:not\(\.team-roster-embedded\) \{[^}]*position:\s*absolute/)
-    expect(narrow).toMatch(/\.team-roster\.open \{[^}]*visibility:\s*visible/)
-    expect(narrow).toMatch(/\.team-roster-toggle \{[^}]*display:\s*grid/)
+  it('gives the measured narrow Team panel one full-width slot for list and detail', () => {
+    expect(rule(meshCss, '.team-view.drawer')).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/)
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster:not\(\.team-roster-embedded\)\s*\{[^}]*width:\s*100%/)
+    expect(meshCss).toMatch(/\.team-view\.drawer\.mobile-detail\s+\.team-roster:not\(\.team-roster-embedded\),[\s\S]*?\.team-view\.drawer\s+\.team-roster-resizer\s*\{\s*display:\s*none/)
   })
 
-  it('hides the Run team separator at the 760px viewport breakpoint', () => {
-    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 760px)'))
-    expect(narrow).toMatch(/\.team-roster-resizer\s*\{[^}]*display:\s*none/)
+  it('keeps the narrow header and Back control visible while hiding inactive detail', () => {
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-main\s*\{\s*display:\s*contents/)
+    expect(meshCss).toMatch(/\.team-view\.drawer:not\(\.mobile-detail\)\s+\.team-main\s*>\s*:not\(\.team-header\)/)
+    expect(rule(meshCss, '.team-back-button')).toMatch(/color:\s*var\(--text-secondary\)/)
   })
 
-  it('also uses the same fixed-width drawer when the measured Team container is narrow', () => {
-    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster:not\(\.team-roster-embedded\)\s*\{[^}]*position:\s*absolute[^}]*width:\s*min\(300px, 85%\)/)
-    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster-toggle\s*\{[^}]*display:\s*grid/)
-    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster-scrim\s*\{[^}]*display:\s*block/)
-    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster-resizer\s*\{[^}]*display:\s*none/)
+  it('leaves the stage Feed People drawer separate from Team layout rules', () => {
+    expect(meshCss).toMatch(/\.team-view\.drawer\s+\.team-roster:not\(\.team-roster-embedded\)/)
+    expect(meshCss).toMatch(/\.team-roster\.team-roster-embedded\s*\{[^}]*width:\s*auto/)
   })
 })
 

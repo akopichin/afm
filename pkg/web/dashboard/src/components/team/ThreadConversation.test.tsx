@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { ThreadConversation } from './ThreadConversation'
+import { conversationSubtitle, ThreadConversation } from './ThreadConversation'
 import * as meshClient from '../../api/mesh-client'
-import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
+import type { MeshMessage, MeshParticipant, MeshThread } from '../../api/mesh-client'
 
 const qa: MeshParticipant = { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true }
 const thread: MeshThread = { id: 'mt-1', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
@@ -35,6 +35,20 @@ describe('ThreadConversation', () => {
     render(<ThreadConversation target={{ kind: 'direct', participant: qa }} />)
     expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
     expect(screen.getByText('No messages yet')).toBeInTheDocument()
+  })
+
+  test('a titled conversation identifies its participants beneath the topic', () => {
+    expect(conversationSubtitle({ kind: 'thread', thread }, [qa])).toContain('QA reviewer')
+    const group: MeshThread = { ...thread, members: ['user', 'run:qa', 'stage:implement'] }
+    expect(conversationSubtitle({ kind: 'thread', thread: group }, [qa])).toContain('QA reviewer')
+  })
+
+  test('the composer names members under a titled discussion', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', display_name: 'API reviewer', reachable: true }
+    const group: MeshThread = { ...thread, members: ['user', qa.id, api.id] }
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
+    expect(screen.getByText(/Everyone in this conversation · QA reviewer, API reviewer/)).toBeInTheDocument()
   })
 
   test('the empty state sits in the same messages area as messages do, so the composer never jumps', () => {
@@ -138,12 +152,25 @@ describe('ThreadConversation', () => {
     const onThreadOpened = vi.fn()
     const { rerender } = render(<ThreadConversation target={{ kind: 'direct', participant: qa }} onThreadOpened={onThreadOpened} />)
     // The roster poll catches up with a direct thread opened elsewhere (e.g. from the feed).
-    rerender(<ThreadConversation target={{ kind: 'direct', participant: qa }} threads={[thread]} onThreadOpened={onThreadOpened} />)
+    const untitled = { ...thread, title: '' }
+    rerender(<ThreadConversation target={{ kind: 'direct', participant: qa }} threads={[thread, untitled]} onThreadOpened={onThreadOpened} />)
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'hi' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-1', expect.objectContaining({ body: 'hi' })))
     expect(openSpy).not.toHaveBeenCalled()
-    expect(onThreadOpened).toHaveBeenCalledWith(thread)
+    expect(onThreadOpened).toHaveBeenCalledWith(untitled)
+  })
+
+  test('a direct send opens a separate untitled DM when only a titled task thread exists', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const unnamed: MeshThread = { ...thread, id: 'mt-dm', title: '' }
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(unnamed)
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    render(<ThreadConversation target={{ kind: 'direct', participant: qa }} threads={[thread]} participants={[qa]} />)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'hi' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-dm', expect.objectContaining({ body: 'hi' })))
+    expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '', memberIds: ['run:qa'] }))
   })
 
   test('says so when the only other member has finished and cannot reply', () => {
@@ -168,13 +195,82 @@ describe('ThreadConversation', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  test('a closed thread keeps Send disabled for mouse and keyboard', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const send = vi.spyOn(meshClient, 'sendMeshMessage')
+    const view = render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    fireEvent.change(screen.getByPlaceholderText('Message Hand-off…'), { target: { value: 'late note' } })
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+    view.rerender(<ThreadConversation target={{ kind: 'thread', thread: { ...thread, status: 'closed' } }} participants={[qa]} />)
+    const button = screen.getByRole('button', { name: 'Send' })
+    expect(button).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent('This conversation is closed')
+    expect(screen.getByPlaceholderText('Message Hand-off…')).toBeDisabled()
+    expect(screen.getByPlaceholderText('Message Hand-off…')).toHaveValue('late note')
+    fireEvent.click(button)
+    fireEvent.keyDown(screen.getByPlaceholderText('Message Hand-off…'), { key: 'Enter', ctrlKey: true })
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  test('reports only rendered incoming seq while the visible reader is at bottom', async () => {
+    const onMessagesRead = vi.fn()
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
+      { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'new', seq: 2, created_at: '' },
+      { id: 'm2', thread_id: 'mt-1', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message', body: 'sent', seq: 3, created_at: '' },
+    ], next_cursor: 3 })
+    const view = render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} readEnabled={false} onMessagesRead={onMessagesRead} />)
+    await waitFor(() => expect(screen.getByText('new')).toBeInTheDocument())
+    expect(onMessagesRead).not.toHaveBeenCalled()
+    view.rerender(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} readEnabled onMessagesRead={onMessagesRead} />)
+    await waitFor(() => expect(onMessagesRead).toHaveBeenCalledWith('mt-1', 2))
+  })
+
+  test('local read reporting leaves a server delivery failure receipt visible', async () => {
+    const onMessagesRead = vi.fn()
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', display_name: 'Side agent', reachable: true }
+    const sideThread: MeshThread = { id: 'mt-read-receipt', scope: 'run', members: ['user', 'side:r1'], status: 'open' }
+    const message: MeshMessage = { id: 'failed', thread_id: sideThread.id, sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'please check', side_agent_failed: true, seq: 2, created_at: '' }
+    const incoming: MeshMessage = { id: 'reply', thread_id: sideThread.id, sender_id: 'side:r1', recipient_ids: ['user'], kind: 'reply', body: 'answer', seq: 3, created_at: '' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message, incoming], next_cursor: 3 })
+    render(<ThreadConversation target={{ kind: 'thread', thread: sideThread }} participants={[side]} readEnabled onMessagesRead={onMessagesRead} />)
+    await waitFor(() => expect(onMessagesRead).toHaveBeenCalledWith(sideThread.id, 3))
+    expect(screen.getByText('Could not answer')).toBeInTheDocument()
+    expect(message.side_agent_failed).toBe(true)
+  })
+
+  test('a hidden document and a reader midway through the log do not report the message until visible at bottom', async () => {
+    const onMessagesRead = vi.fn()
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
+      { id: 'm1', thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'unread', seq: 4, created_at: '' },
+    ], next_cursor: 4 })
+    const view = render(<ThreadConversation target={{ kind: 'thread', thread }} readEnabled onMessagesRead={onMessagesRead} />)
+    await waitFor(() => expect(screen.getByText('unread')).toBeInTheDocument())
+    expect(onMessagesRead).not.toHaveBeenCalled()
+    const log = screen.getByRole('log', { name: 'Messages' })
+    vi.spyOn(log, 'scrollHeight', 'get').mockReturnValue(1000)
+    vi.spyOn(log, 'clientHeight', 'get').mockReturnValue(100)
+    log.scrollTop = 300
+    fireEvent.scroll(log)
+    hidden.mockReturnValue(false)
+    fireEvent(document, new Event('visibilitychange'))
+    expect(onMessagesRead).not.toHaveBeenCalled()
+    // A rerender while the reader stays midway must not acknowledge it either.
+    view.rerender(<ThreadConversation target={{ kind: 'thread', thread }} readEnabled onMessagesRead={onMessagesRead} />)
+    expect(onMessagesRead).not.toHaveBeenCalled()
+    log.scrollTop = 900
+    fireEvent.scroll(log)
+    await waitFor(() => expect(onMessagesRead).toHaveBeenCalledWith('mt-1', 4))
+    hidden.mockRestore()
+  })
+
   test('@ in a group conversation lists its members; picking one addresses only them', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
     const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API: due dates', stage_id: 'api', reachable: true }
     const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
-    expect(screen.getByText('Everyone in this conversation')).toBeInTheDocument()
+    expect(screen.getByText('Everyone in this conversation · QA reviewer, API: due dates')).toBeInTheDocument()
 
     const input = screen.getByPlaceholderText('Message Due dates…') as HTMLTextAreaElement
     fireEvent.change(input, { target: { value: '@', selectionStart: 1 } })
@@ -202,7 +298,7 @@ describe('ThreadConversation', () => {
     fireEvent.change(input, { target: { value: '@api please check' } })
     expect(screen.getByText('API')).toBeInTheDocument()
     fireEvent.change(input, { target: { value: 'please check' } })
-    expect(screen.getByText('Everyone in this conversation')).toBeInTheDocument()
+    expect(screen.getByText('Everyone in this conversation · QA reviewer, API')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['run:qa', 'stage:api'] })))
   })
@@ -254,6 +350,25 @@ describe('ThreadConversation', () => {
 
     await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-1', expect.objectContaining({ recipientIds: ['run:qa'], body: 'follow up' })))
     expect(openSpy).not.toHaveBeenCalled()
+  })
+
+  test('reports a durable send receipt even when selection changes, but never reports a failed send', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    let resolveSend!: (value: meshClient.MeshSendReceipt) => void
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage')
+      .mockRejectedValueOnce(new Error('send failed'))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSend = resolve }))
+    const onMessageSent = vi.fn()
+    const view = render(<ThreadConversation target={{ kind: 'thread', thread }} onMessageSent={onMessageSent} />)
+    fireEvent.change(screen.getByPlaceholderText('Message Hand-off…'), { target: { value: 'first' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('send failed'))
+    expect(onMessageSent).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(2))
+    view.unmount()
+    await act(async () => resolveSend({ message_id: 'm9', seq: 9 }))
+    expect(onMessageSent).toHaveBeenCalledWith(thread, { message_id: 'm9', seq: 9 })
   })
 
   test('a failed send surfaces an error and keeps the draft', async () => {
@@ -392,6 +507,6 @@ describe('ThreadConversation', () => {
     const group: MeshThread = { id: 'mt-g', title: 'Review', scope: 'run', members: ['user', 'run:t-1', 'run:t-2'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa1, qa2]} />)
     fireEvent.change(screen.getByPlaceholderText('Message Review…'), { target: { value: '@qa hi' } })
-    expect(screen.getByText('Everyone in this conversation')).toBeInTheDocument()
+    expect(screen.getByText('Everyone in this conversation · QA one, QA two')).toBeInTheDocument()
   })
 })

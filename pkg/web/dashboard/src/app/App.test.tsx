@@ -1976,8 +1976,35 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Team' })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
 
-    await waitFor(() => expect(screen.getByText('This run')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Conversations' })).toHaveAttribute('aria-selected', 'true'))
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }))
+    expect(screen.getByText('This run')).toBeInTheDocument()
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()
+  })
+
+  test('baselines new messages when App first gets a roster, before Team is opened', async () => {
+    let calls = 0
+    let newMessage = false
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', run_id: 'app-unread-baseline', stages: [], accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: [] }) } as Response
+      if (url.includes('/api/mesh/threads/mt-app')) return { ok: true, json: async () => ({ messages: [], next_cursor: 0 }) } as Response
+      if (url.includes('/api/mesh/threads')) {
+        calls++
+        return { ok: true, json: async () => ({ threads: [{ id: 'mt-app', title: 'QA', scope: 'run', members: ['user', 'run:qa'], status: 'open' }], summaries: { 'mt-app': { last_other_message_seq: newMessage ? 2 : 1, title_seq: 0 } } }) } as Response
+      }
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Team' })).toBeInTheDocument())
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
+    newMessage = true
+    await new Promise((resolve) => setTimeout(resolve, 3100))
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
+    fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
+    expect(screen.getByRole('button', { name: /QA.*New messages/ })).toBeInTheDocument()
   })
 
   // The stage Feed's people panel. A click on a person adds them to the Feed composer's recipients (Message

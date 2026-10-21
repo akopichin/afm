@@ -23,6 +23,7 @@ import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assista
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
+import { baselineTeamUnread } from '../lib/team-unread'
 import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -150,7 +151,12 @@ export function App(): ReactElement {
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
   // probe-the-first-fetch result IS the capability signal the Team tab gates on (see use-mesh-roster.ts's own
   // comment). TeamView receives the SAME roster as a prop rather than polling it a second time.
-  const meshRoster = useMeshRoster()
+  const meshRoster = useMeshRoster(runId)
+  useEffect(() => {
+    if (runId !== '' && meshRoster.runId === runId && meshRoster.enabled) {
+      baselineTeamUnread(runId, meshRoster.summaries ?? {})
+    }
+  }, [runId, meshRoster])
   // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
   // composer (seq makes a second click on the same person a new pick).
   const [peopleOpen, setPeopleOpen] = useState(false)
@@ -608,7 +614,7 @@ export function App(): ReactElement {
                   // Team (T7.3) — global, like Cost/Full feed above: must be checked BEFORE the
                   // `workspaceStage === null` Feed fallback below, since Team has no selected-stage
                   // dependency at all (a never-selected stage must still show Team, not Feed).
-                  <TeamView roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
+                  <TeamView key={runId} runId={runId} roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
                   <div className="stage-feed-layout">
                     <FeedWorkspace

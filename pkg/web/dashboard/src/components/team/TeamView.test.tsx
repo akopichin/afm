@@ -5,6 +5,7 @@ import * as meshClient from '../../api/mesh-client'
 import type { MeshRoster } from '../../hooks/use-mesh'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
+import { isTeamUnread } from '../../lib/team-unread'
 
 function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
@@ -36,7 +37,7 @@ function mockThreadAndBoardFetches(): void {
 }
 
 function renderTeamView(stages: Stage[] = [makeStage()], events: AfmEvent[] = [], roster: MeshRoster = enabledRoster()) {
-  return render(<TeamView roster={roster} stages={stages} events={events} profiles={profiles} />)
+  return render(<TeamView runId="test-existing" roster={roster} stages={stages} events={events} profiles={profiles} />)
 }
 
 function mockTeamWidth(initialWidth: number) {
@@ -79,6 +80,33 @@ function teamSeparator() {
   return screen.getByRole('separator', { name: 'Resize run team panel' })
 }
 
+function showPeople(): void {
+  fireEvent.click(screen.getByRole('tab', { name: 'People' }))
+}
+
+function showConversations(): void {
+  fireEvent.click(screen.getByRole('tab', { name: 'Conversations' }))
+}
+
+function peopleRegion(name: 'This run' | 'Stages'): HTMLElement {
+  showPeople()
+  return screen.getByRole('region', { name })
+}
+
+function pickRunPerson(name: RegExp): void {
+  fireEvent.click(within(peopleRegion('This run')).getByRole('button', { name }))
+}
+
+function clickCreateConversation(): void {
+  const submit = screen.queryByRole('button', { name: 'Create conversation' })
+  fireEvent.click(submit ?? screen.getByRole('button', { name: 'New conversation' }))
+}
+
+function openAddRunAgent(): void {
+  showPeople()
+  fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+}
+
 describe('TeamView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -86,6 +114,803 @@ describe('TeamView', () => {
     localStorage.clear()
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
+  })
+
+  test('Board and People keep a new marker until Messages shows the rendered incoming message', async () => {
+    const thread: meshClient.MeshThread = { id: 'mt-unread-board', title: 'QA hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const summary = (seq: number): meshClient.MeshThreadSummary => ({ last_other_message_seq: seq, title_seq: 0 })
+    const message: meshClient.MeshMessage = { id: 'm2', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'new answer', seq: 2, created_at: '' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    const initial = enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(1) } })
+    const view = render(<TeamView runId="unread-board-people" roster={initial} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    view.rerender(<TeamView runId="unread-board-people" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(2) } })}
+      stages={[makeStage()]} events={[]} profiles={profiles} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Conversations' }))
+    expect(screen.getByRole('button', { name: /New to you.*1/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Messages' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /New to you.*0/ })).toBeInTheDocument())
+  })
+
+  test.each([false, true])('visible Messages marks incoming read while People is selected (narrow=%s)', async (narrow) => {
+    if (narrow) mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: `mt-people-${narrow}`, title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const message: meshClient.MeshMessage = { id: 'incoming', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'ready', seq: 2, created_at: '' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
+    const view = render(<TeamView runId={`people-read-${narrow}`} roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    showPeople()
+    view.rerender(<TeamView runId={`people-read-${narrow}`} roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    if (narrow) pickRunPerson(/^QA reviewer/)
+    else fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
+    await waitFor(() => expect(screen.getByText('ready')).toBeInTheDocument())
+    showConversations()
+    await waitFor(() => expect(screen.getByRole('button', { name: /New to you.*0/ })).toBeInTheDocument())
+  })
+
+  test('New conversation form covering a selected chat does not clear its incoming marker', async () => {
+    const thread: meshClient.MeshThread = { id: 'mt-covered', title: 'Review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const message: meshClient.MeshMessage = { id: 'incoming', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'covered message', seq: 2, created_at: '' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
+    const view = render(<TeamView runId="covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    clickCreateConversation()
+    view.rerender(<TeamView runId="covered-read" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    await waitFor(() => expect(screen.getByText('covered message')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /New to you.*1/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /New to you.*0/ })).toBeInTheDocument())
+  })
+
+  test('Add run agent dialog keeps incoming unread until the visible chat is uncovered', async () => {
+    const thread: meshClient.MeshThread = { id: 'mt-agent-covered', title: 'Review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const message: meshClient.MeshMessage = { id: 'incoming', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'arrived under dialog', seq: 2, created_at: '' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
+    const view = render(<TeamView runId="agent-covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    openAddRunAgent()
+    view.rerender(<TeamView runId="agent-covered-read" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    await waitFor(() => expect(screen.getByText('arrived under dialog')).toBeInTheDocument())
+    expect(isTeamUnread('agent-covered-read', thread.id, 2)).toBe(true)
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Add run agent' })).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(isTeamUnread('agent-covered-read', thread.id, 2)).toBe(false))
+  })
+
+  test('a new thread after the page baseline is marked without changing server receipts', async () => {
+    mockThreadAndBoardFetches()
+    const send = vi.spyOn(meshClient, 'sendMeshMessage')
+    const topic = vi.spyOn(meshClient, 'updateMeshThreadTitle')
+    const thread: meshClient.MeshThread = { id: 'mt-late-thread', title: 'Late review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = render(<TeamView runId="late-thread" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamView runId="late-thread" roster={enabledRoster({ threads: [thread], summaries: {
+      [thread.id]: { last_other_message_seq: 4, title_seq: 0 },
+    } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('button', { name: /Late review.*New messages/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /New to you.*1/ })).toBeInTheDocument()
+    expect(send).not.toHaveBeenCalled()
+    expect(topic).not.toHaveBeenCalled()
+  })
+
+  test('Team remount retains a marker, a new run baselines it, and filtering preserves the selected draft', () => {
+    mockThreadAndBoardFetches()
+    const first: meshClient.MeshThread = { id: 'mt-unread-first', title: 'First thread', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const second: meshClient.MeshThread = { id: 'mt-unread-second', title: 'Second thread', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    const roster = (seq: number) => enabledRoster({ threads: [first, second], summaries: {
+      [first.id]: { last_other_message_seq: 1, title_seq: 0 },
+      [second.id]: { last_other_message_seq: seq, title_seq: 0 },
+    } })
+    const view = render(<TeamView runId="unread-remount" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.change(screen.getByPlaceholderText('Message First thread…'), { target: { value: 'draft stays' } })
+    view.rerender(<TeamView runId="unread-remount" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('button', { name: /Second thread.*New messages/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /New to you.*1/ }))
+    expect(screen.queryByRole('button', { name: /First thread/ })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'First thread' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message First thread…')).toHaveValue('draft stays')
+    view.unmount()
+    const remount = render(<TeamView runId="unread-remount" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('button', { name: /Second thread.*New messages/ })).toBeInTheDocument()
+    remount.rerender(<TeamView runId="unread-new-run" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.queryByRole('button', { name: /Second thread.*New messages/ })).toBeNull()
+  })
+
+  test('an own send does not clear an older incoming marker that the log has not rendered', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-unread-send', title: 'QA hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: {
+      last_other_message_seq: seq, title_seq: 0,
+    } } })
+    const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'own', seq: 5 })
+    const view = render(<TeamView runId="unread-own-send" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }))
+    view.rerender(<TeamView runId="unread-own-send" roster={roster(4)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Conversations' }))
+    fireEvent.change(screen.getByPlaceholderText('Message QA hand-off…'), { target: { value: 'my follow-up' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(send).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toHaveTextContent('Message sent'))
+    // A lagging poll must not replace the latest incoming seq remembered beside the local receipt.
+    view.rerender(<TeamView runId="unread-own-send" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toBeInTheDocument()
+    view.rerender(<TeamView runId="unread-own-send" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: {
+      last_message: { id: 'own', seq: 5, sender_id: 'user', preview: 'my follow-up', created_at: '' },
+      last_other_message_seq: 2, title_seq: 0,
+    } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toBeInTheDocument()
+  })
+
+  test('narrow Team starts with the list, then Back restores its scroll and keeps the same conversation', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const roster = screen.getByRole('navigation', { name: 'Team roster' })
+    expect(layout).toHaveClass('drawer')
+    expect(layout).not.toHaveClass('mobile-detail')
+    roster.scrollTop = 177
+    const row = within(roster).getByRole('button', { name: /Release/ })
+    fireEvent.click(row)
+    expect(layout).toHaveClass('mobile-detail')
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toBeInTheDocument()
+    const composer = screen.getByPlaceholderText('Message Release…')
+    expect(composer).toHaveFocus()
+    fireEvent.change(composer, { target: { value: 'draft on mobile' } })
+    const log = screen.getByRole('log', { name: 'Messages' })
+    log.scrollTop = 90
+    fireEvent.click(screen.getByRole('button', { name: 'Back to conversations' }))
+    expect(layout).not.toHaveClass('mobile-detail')
+    expect(roster.scrollTop).toBe(177)
+    expect(row).toHaveFocus()
+    fireEvent.click(row)
+    expect(screen.getByPlaceholderText('Message Release…')).toBe(composer)
+    expect(composer).toHaveValue('draft on mobile')
+    expect(screen.getByRole('log', { name: 'Messages' })).toBe(log)
+    expect(log.scrollTop).toBe(90)
+  })
+
+  test('narrow closed detail explains why its saved draft cannot be sent', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: 'mt-narrow-closed', title: 'Archive', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Archive/ }))
+    const composer = screen.getByPlaceholderText('Message Archive…')
+    fireEvent.change(composer, { target: { value: 'saved draft' } })
+    composer.focus()
+    expect(composer).toHaveFocus()
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, status: 'closed' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(view.container.querySelector('.team-view')).toHaveClass('mobile-detail')
+    expect(screen.getByRole('status')).toHaveTextContent('This conversation is closed')
+    expect(screen.getByRole('status')).toHaveFocus()
+    expect(composer).toBeDisabled()
+    expect(composer).toHaveValue('saved draft')
+  })
+
+  test('opening a closed conversation on narrow screens focuses Back', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: 'mt-closed-focus', title: 'Archive', scope: 'run', members: ['user', 'run:qa'], status: 'closed' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Archive/ }))
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toHaveFocus()
+  })
+
+  test('read-only conversation focuses visible detail and Back restores the roster row', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(390)
+    const thread: meshClient.MeshThread = {
+      id: 'mt-agents', title: 'Agent exchange', scope: 'run',
+      members: ['run:qa', 'stage:implement'], status: 'open',
+    }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const roster = screen.getByRole('navigation', { name: 'Team roster' })
+    const row = within(roster).getByRole('button', { name: /Agent exchange/ })
+    row.focus()
+    fireEvent.click(row)
+
+    expect(layout).toHaveClass('drawer', 'mobile-detail')
+    expect(screen.getByRole('status')).toHaveTextContent('The agents are talking between themselves')
+    expect(screen.queryByRole('textbox', { name: /Message Agent exchange/ })).toBeNull()
+    const back = screen.getByRole('button', { name: 'Back to conversations' })
+    expect(back).toHaveFocus()
+
+    fireEvent.click(back)
+    expect(layout).not.toHaveClass('mobile-detail')
+    expect(row).toHaveFocus()
+    fireEvent.click(row)
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toHaveFocus()
+  })
+
+  test('desktop to narrow and back keeps a focused draft and reading position', () => {
+    mockThreadAndBoardFetches()
+    const width = mockTeamWidth(1200)
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const composer = screen.getByPlaceholderText('Message Release…')
+    fireEvent.change(composer, { target: { value: 'keep me' } })
+    composer.focus()
+    const log = screen.getByRole('log', { name: 'Messages' })
+    log.scrollTop = 101
+    width.resize(390)
+    expect(layout).toHaveClass('drawer', 'mobile-detail')
+    expect(composer).toHaveFocus()
+    width.resize(1200)
+    expect(layout).not.toHaveClass('drawer')
+    expect(screen.getByPlaceholderText('Message Release…')).toBe(composer)
+    expect(composer).toHaveValue('keep me')
+    expect(log.scrollTop).toBe(101)
+  })
+
+  test('wide roster focus restores the narrow list after previously showing detail', () => {
+    mockThreadAndBoardFetches()
+    const width = mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const roster = screen.getByRole('navigation', { name: 'Team roster' })
+    const row = within(roster).getByRole('button', { name: /Release/ })
+    roster.scrollTop = 140
+    fireEvent.click(row)
+    expect(layout).toHaveClass('drawer', 'mobile-detail')
+    const composer = screen.getByPlaceholderText('Message Release…')
+    fireEvent.change(composer, { target: { value: 'keep this draft' } })
+    const log = screen.getByRole('log', { name: 'Messages' })
+    log.scrollTop = 80
+
+    width.resize(1200)
+    act(() => row.focus())
+    expect(row).toHaveFocus()
+    width.resize(390)
+    expect(layout).toHaveClass('drawer')
+    expect(layout).not.toHaveClass('mobile-detail')
+    expect(roster).toHaveClass('open')
+    expect(row).toHaveFocus()
+    expect(roster.scrollTop).toBe(140)
+    expect(screen.getByPlaceholderText('Message Release…')).toBe(composer)
+    expect(composer).toHaveValue('keep this draft')
+    expect(log).toBeInTheDocument()
+    expect(log.scrollTop).toBe(80)
+  })
+
+  test('wide detail focus keeps the narrow conversation after previously showing detail', () => {
+    mockThreadAndBoardFetches()
+    const width = mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ }))
+    const composer = screen.getByPlaceholderText('Message Release…')
+    width.resize(1200)
+    act(() => composer.focus())
+    width.resize(390)
+    expect(layout).toHaveClass('drawer', 'mobile-detail')
+    expect(composer).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toBeInTheDocument()
+  })
+
+  test.each(['Board', 'Activity'])('narrowing keeps the %s panel visible without a selected conversation', (tabName) => {
+    mockThreadAndBoardFetches()
+    const width = mockTeamWidth(1200)
+    const view = renderTeamView()
+    const layout = view.container.querySelector('.team-view') as HTMLElement
+    const tab = screen.getByRole('tab', { name: new RegExp(tabName) })
+    fireEvent.click(tab)
+    expect(tab).toHaveAttribute('aria-selected', 'true')
+    const panel = screen.getByRole('tabpanel', { name: new RegExp(tabName) })
+
+    width.resize(390)
+    expect(layout).toHaveClass('drawer', 'mobile-detail')
+    expect(screen.getByRole('tabpanel', { name: new RegExp(tabName) })).toBe(panel)
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).not.toHaveClass('open')
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toBeInTheDocument()
+  })
+
+  test('chooses the newest once after first loaded roster, then preserves row focus, selection and draft on reorder', async () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(1200)
+    const older: meshClient.MeshThread = { id: 'mt-old', title: 'Older', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const newer: meshClient.MeshThread = { id: 'mt-new', title: 'Newer', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    const summary = (seq: number): meshClient.MeshThreadSummary => ({ last_message: {
+      id: `m${seq}`, seq, created_at: '2026-10-21T11:00:00Z', sender_id: 'run:qa', preview: `Message ${seq}`,
+    }, last_other_message_seq: seq, title_seq: 0 })
+    const view = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [older, newer], summaries: { 'mt-old': summary(1), 'mt-new': summary(2) } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('heading', { name: 'Newer' })).toBeInTheDocument()
+    const nav = screen.getByRole('navigation', { name: 'Team roster' })
+    const rows = () => within(nav).getAllByRole('button').filter((button) => button.classList.contains('team-thread-item'))
+    expect(rows().map((row) => row.textContent)).toEqual([expect.stringContaining('Newer'), expect.stringContaining('Older')])
+    expect(rows()[0]).toHaveTextContent('QA reviewer: Message 2')
+    const focusedRow = rows()[0]!
+    focusedRow.focus()
+    fireEvent.change(screen.getByPlaceholderText('Message Newer…'), { target: { value: 'keep this draft' } })
+    const composer = screen.getByPlaceholderText('Message Newer…')
+    const conversationLog = screen.getByRole('log', { name: 'Messages' })
+    conversationLog.scrollTop = 140
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [older, newer], summaries: { 'mt-old': summary(3), 'mt-new': summary(2) } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(rows().map((row) => row.textContent)).toEqual([expect.stringContaining('Older'), expect.stringContaining('Newer')])
+    expect(rows()[0]).toHaveTextContent('QA reviewer: Message 3')
+    expect(focusedRow).toHaveFocus()
+    expect(screen.getByRole('heading', { name: 'Newer' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Newer…')).toBe(composer)
+    expect(composer).toHaveValue('keep this draft')
+    expect(screen.getByRole('log', { name: 'Messages' })).toBe(conversationLog)
+    expect(conversationLog.scrollTop).toBe(140)
+  })
+
+  test('moves an own send on its receipt, then replaces safe provisional fields with saved and roster fields', async () => {
+    mockThreadAndBoardFetches()
+    const first: meshClient.MeshThread = { id: 'mt-first', title: 'First', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const second: meshClient.MeshThread = { id: 'mt-second', title: 'Second', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    const summary = (seq: number, preview: string, createdAt = '2026-10-21T10:00:00Z'): meshClient.MeshThreadSummary => ({
+      last_message: { id: `m${seq}`, seq, created_at: createdAt, sender_id: 'run:qa', preview }, last_other_message_seq: seq, title_seq: 0,
+    })
+    const stale = enabledRoster({ threads: [first, second], summaries: { 'mt-first': summary(2, 'Old'), 'mt-second': summary(5, 'Other') } })
+    let resolveRead!: (page: meshClient.MeshMessagePage) => void
+    vi.mocked(meshClient.getMeshThread).mockImplementation((_id, cursor) => cursor === 9
+      ? new Promise((resolve) => { resolveRead = resolve })
+      : Promise.resolve({ messages: [], next_cursor: 0 }))
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm10', seq: 10 })
+    const view = renderTeamView([makeStage()], [], stale)
+    const rows = () => within(screen.getByRole('navigation', { name: 'Team roster' })).getAllByRole('button').filter((button) => button.classList.contains('team-thread-item'))
+    fireEvent.click(rows()[1]!)
+    const composer = screen.getByPlaceholderText('Message First…')
+    fireEvent.change(composer, { target: { value: 'secret submitted body' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(rows()[0]).toHaveTextContent('First'))
+    expect(rows()[0]).toHaveTextContent('You: Message sent')
+    expect(rows()[0]).not.toHaveTextContent('secret submitted body')
+    expect(meshClient.getMeshThread).toHaveBeenCalledWith('mt-first', 9)
+    expect(screen.getByPlaceholderText('Message First…')).toBe(composer)
+    view.rerender(<TeamView runId="test-existing" roster={stale} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(rows()[0]).toHaveTextContent('Message sent')
+
+    await act(async () => resolveRead({ messages: [{
+      id: 'm10', thread_id: 'mt-first', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message',
+      body: 'saved [REDACTED]\n  body', seq: 10, created_at: '2026-10-21T09:00:00Z',
+    }], next_cursor: 10 }))
+    expect(rows()[0]).toHaveTextContent('You: saved [REDACTED] body')
+    expect(within(rows()[0]!).getByRole('time')).toHaveAttribute('datetime', '2026-10-21T09:00:00Z')
+    const durable = enabledRoster({ threads: [first, second], summaries: { 'mt-first': summary(10, 'Roster redacted'), 'mt-second': summary(5, 'Other') } })
+    view.rerender(<TeamView runId="test-existing" roster={durable} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(rows()[0]).toHaveTextContent('Roster redacted')
+    view.rerender(<TeamView runId="test-existing" roster={stale} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(rows()[0]).toHaveTextContent('Roster redacted')
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('a failed follow-up read leaves the committed send visible and does not retry it', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    vi.mocked(meshClient.getMeshThread).mockImplementation((_id, cursor) => cursor === 6
+      ? Promise.reject(new Error('read failed'))
+      : Promise.resolve({ messages: [], next_cursor: 0 }))
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm7', seq: 7 })
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ }))
+    fireEvent.change(screen.getByPlaceholderText('Message Release…'), { target: { value: 'private message' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const row = within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ })
+    await waitFor(() => expect(row).toHaveTextContent('You: Message sent'))
+    expect(row).not.toHaveTextContent('private message')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('a late receipt read cannot overwrite a newer roster message', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    let resolveRead!: (page: meshClient.MeshMessagePage) => void
+    vi.mocked(meshClient.getMeshThread).mockImplementation((_id, cursor) => cursor === 9
+      ? new Promise((resolve) => { resolveRead = resolve })
+      : Promise.resolve({ messages: [], next_cursor: 0 }))
+    vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm10', seq: 10 })
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ }))
+    fireEvent.change(screen.getByPlaceholderText('Message Release…'), { target: { value: 'submitted' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const row = within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ })
+    await waitFor(() => expect(row).toHaveTextContent('Message sent'))
+
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread], summaries: { 'mt-1': {
+      last_message: { id: 'm12', seq: 12, created_at: '2026-10-21T12:00:00Z', sender_id: 'run:qa', preview: 'Newer reply' },
+      last_other_message_seq: 12, title_seq: 0,
+    } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    await act(async () => resolveRead({ messages: [{
+      id: 'm10', thread_id: 'mt-1', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message',
+      body: 'Old saved body', seq: 10, created_at: '2026-10-21T11:00:00Z',
+    }], next_cursor: 10 }))
+    expect(row).toHaveTextContent('QA reviewer: Newer reply')
+    expect(row).not.toHaveTextContent('Old saved body')
+  })
+
+  test('does not auto-select after user interaction before roster data arrives, or on a narrow first load', () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const pending = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }))
+    pending.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument()
+    pending.unmount()
+
+    mockTeamWidth(341)
+    const narrow = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
+    narrow.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(narrow.container.querySelector('.team-view')).not.toHaveClass('mobile-detail')
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release')).toBeInTheDocument()
+  })
+
+  test('updates selected thread metadata from roster without remounting its conversation', async () => {
+    mockThreadAndBoardFetches()
+    const oldThread: meshClient.MeshThread = { id: 'mt-1', title: 'Old topic', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [oldThread] }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Old topic'))
+    const composer = screen.getByPlaceholderText('Message Old topic…')
+    fireEvent.change(composer, { target: { value: 'draft' } })
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...oldThread, title: 'Fresh topic', status: 'closed' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('heading', { name: 'Fresh topic' })).toBeInTheDocument()
+    expect(screen.getByText('Closed')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Fresh topic…')).toBe(composer)
+    expect(composer).toHaveValue('draft')
+  })
+
+  test('edits a topic using roster revision, keeps failed input, retries with one request ID, and refreshes without reordering messages', async () => {
+    mockThreadAndBoardFetches()
+    const first: meshClient.MeshThread = { id: 'mt-first', title: 'Old topic', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const second: meshClient.MeshThread = { id: 'mt-second', title: 'Other', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    const summary = (seq: number, titleSeq: number): meshClient.MeshThreadSummary => ({
+      last_message: { id: `m${seq}`, seq, created_at: '', sender_id: 'run:qa', preview: 'Last message' },
+      last_other_message_seq: seq, title_seq: titleSeq,
+    })
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle')
+      .mockRejectedValueOnce(new Error('Connection lost'))
+      .mockResolvedValueOnce({ title: 'Fresh topic', title_seq: 9 })
+    const roster = enabledRoster({ threads: [first, second], summaries: { 'mt-first': summary(2, 7), 'mt-second': summary(5, 0) } })
+    const view = renderTeamView([makeStage()], [], roster)
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Old topic/ }))
+    const composer = screen.getByPlaceholderText('Message Old topic…')
+    fireEvent.change(composer, { target: { value: 'Keep this draft' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    const input = screen.getByRole('textbox', { name: 'Conversation topic' })
+    expect(input).toHaveFocus()
+    fireEvent.change(input, { target: { value: 'Fresh topic' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Connection lost'))
+    expect(input).toHaveValue('Fresh topic')
+    expect(screen.getByRole('heading', { name: 'Old topic' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Conversation topic' })).toBeNull())
+    expect(screen.getByRole('button', { name: 'Edit topic' })).toHaveFocus()
+    expect(edit).toHaveBeenCalledTimes(2)
+    expect(edit.mock.calls[0]).toEqual(edit.mock.calls[1])
+    expect(edit.mock.calls[0]?.[1]).toMatchObject({ title: 'Fresh topic', expectedTitleSeq: 7 })
+
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...first, title: 'Fresh topic' }, second], summaries: {
+      'mt-first': summary(2, 9), 'mt-second': summary(5, 0),
+    } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const rows = within(screen.getByRole('navigation', { name: 'Team roster' })).getAllByRole('button')
+      .filter((button) => button.classList.contains('team-thread-item'))
+    expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining('Other'), expect.stringContaining('Fresh topic')])
+    expect(screen.getByRole('heading', { name: 'Fresh topic' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Fresh topic…')).toBe(composer)
+    expect(composer).toHaveValue('Keep this draft')
+  })
+
+  test('clears a closed thread topic after fresh roster', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-closed', title: 'Archive', scope: 'run', members: ['user', 'run:qa'], status: 'closed' }
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle').mockResolvedValue({ title: '', title_seq: 13 })
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread], summaries: { 'mt-closed': {
+      last_other_message_seq: 0, title_seq: 11,
+    } } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear topic' }))
+    await waitFor(() => expect(edit).toHaveBeenCalledWith('mt-closed', expect.objectContaining({ title: '', expectedTitleSeq: 11 })))
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, title: '' }], summaries: { 'mt-closed': {
+      last_other_message_seq: 0, title_seq: 13,
+    } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /QA reviewer/ })).toBeInTheDocument()
+  })
+
+  test('shows a recoverable topic conflict, preserving the draft and using the next roster revision', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Old', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle')
+      .mockRejectedValueOnce(new meshClient.MeshApiError('/api/mesh/threads/mt-1/topic', 409, 'operation_conflict'))
+      .mockResolvedValueOnce({ title: 'Mine', title_seq: 12 })
+    const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread], summaries: { 'mt-1': {
+      last_other_message_seq: 0, title_seq: 8,
+    } } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Topic changed elsewhere'))
+    expect(screen.getByRole('textbox', { name: 'Conversation topic' })).toHaveValue('Mine')
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, title: 'Theirs' }], summaries: { 'mt-1': {
+      last_other_message_seq: 0, title_seq: 10,
+    } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('textbox', { name: 'Conversation topic' })).toHaveValue('Mine')
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(edit).toHaveBeenCalledTimes(2))
+    expect(edit.mock.calls[0]?.[1]).toMatchObject({ expectedTitleSeq: 8 })
+    expect(edit.mock.calls[1]?.[1]).toMatchObject({ expectedTitleSeq: 10 })
+    expect(edit.mock.calls[1]?.[1].requestId).not.toBe(edit.mock.calls[0]?.[1].requestId)
+  })
+
+  test('a topic conflict waits for a newer roster revision before showing the current topic or retrying', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-topic-wait', title: 'Original', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle')
+      .mockRejectedValueOnce(new meshClient.MeshApiError('/api/mesh/threads/mt-topic-wait/topic', 409, 'operation_conflict'))
+      .mockResolvedValueOnce({ title: 'Mine', title_seq: 11 })
+    const roster = (title: string, seq: number) => enabledRoster({ threads: [{ ...thread, title }], summaries: {
+      [thread.id]: { last_other_message_seq: 0, title_seq: seq },
+    } })
+    const view = render(<TeamView runId="topic-wait" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Topic changed elsewhere'))
+    expect(screen.queryByText(/Current topic:/)).toBeNull()
+    expect(screen.getByText(/Waiting for the latest topic/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save topic' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Clear topic' })).toBeDisabled()
+    view.rerender(<TeamView runId="topic-wait" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    expect(edit).toHaveBeenCalledTimes(1)
+    view.rerender(<TeamView runId="topic-wait" roster={roster('Theirs', 10)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByText('Current topic: Theirs')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save topic' })).toBeEnabled()
+  })
+
+  test('a rebased topic retry keeps its reviewed revision and request ID after a lost response', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-topic-rebase-lost', title: 'Original', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    let durableEdits = 0
+    let committedRequestId = ''
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle').mockImplementation(async (_id, input) => {
+      if (input.expectedTitleSeq === 8) throw new meshClient.MeshApiError('/api/mesh/threads/mt-topic-rebase-lost/topic', 409, 'operation_conflict')
+      if (input.requestId !== committedRequestId) {
+        committedRequestId = input.requestId
+        durableEdits++
+        throw new Error('Connection lost')
+      }
+      return { title: input.title, title_seq: 11 }
+    })
+    const roster = (title: string, seq: number) => enabledRoster({ threads: [{ ...thread, title }], summaries: {
+      [thread.id]: { last_other_message_seq: 0, title_seq: seq },
+    } })
+    const view = render(<TeamView runId="topic-rebase-lost" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Topic changed elsewhere'))
+    view.rerender(<TeamView runId="topic-rebase-lost" roster={roster('Theirs', 10)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Connection lost'))
+    view.rerender(<TeamView runId="topic-rebase-lost" roster={roster('Someone else', 12)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(edit).toHaveBeenCalledTimes(3))
+    expect(edit.mock.calls[2]).toEqual(edit.mock.calls[1])
+    expect(edit.mock.calls[1]?.[1]).toMatchObject({ title: 'Mine', expectedTitleSeq: 10 })
+    expect(durableEdits).toBe(1)
+  })
+
+  test.each([false, true])('New conversation closes topic editing and names the form context (narrow=%s)', (narrow) => {
+    mockThreadAndBoardFetches()
+    if (narrow) mockTeamWidth(390)
+    const thread: meshClient.MeshThread = { id: `mt-topic-create-${narrow}`, title: 'Review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+    if (narrow) fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Review/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Unsent topic edit' } })
+    if (narrow) fireEvent.click(screen.getByRole('button', { name: 'Back to conversations' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New conversation' }))
+    expect(screen.getByRole('heading', { name: 'New conversation' })).toBeInTheDocument()
+    expect(screen.getByText('Choose a topic and participants')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Conversation topic' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit topic' })).toBeNull()
+    expect(screen.getByPlaceholderText('What is this about?')).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    if (narrow) fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Review/ }))
+    expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Conversation topic' })).toBeNull()
+  })
+
+  test('topic edit keeps its opening revision when roster changes before first Save', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-topic-stale', title: 'Original', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle').mockRejectedValue(new meshClient.MeshApiError('/api/mesh/threads/mt-topic-stale/topic', 409, 'operation_conflict'))
+    const view = render(<TeamView runId="topic-stale" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 4 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
+    view.rerender(<TeamView runId="topic-stale" roster={enabledRoster({ threads: [{ ...thread, title: 'Theirs' }], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 5 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(edit).toHaveBeenCalled())
+    expect(edit.mock.calls[0]?.[1].expectedTitleSeq).toBe(4)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Topic changed elsewhere'))
+    expect(screen.getByRole('textbox', { name: 'Conversation topic' })).toHaveValue('Mine')
+    expect(screen.getByRole('heading', { name: 'Theirs' })).toBeInTheDocument()
+  })
+
+  test('lost topic response retries the committed intent after another roster edit', async () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-topic-lost', title: 'Original', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    let durableEdits = 0
+    const receipts = new Map<string, meshClient.MeshThreadTitleReceipt>()
+    const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle').mockImplementation(async (_id, input) => {
+      let receipt = receipts.get(input.requestId)
+      if (!receipt) {
+        durableEdits++
+        receipt = { title: input.title, title_seq: 5 }
+        receipts.set(input.requestId, receipt)
+        throw new Error('Connection lost')
+      }
+      return receipt
+    })
+    const view = render(<TeamView runId="topic-lost" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 4 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Connection lost'))
+    view.rerender(<TeamView runId="topic-lost" roster={enabledRoster({ threads: [{ ...thread, title: 'Another edit' }], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 6 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    await waitFor(() => expect(edit).toHaveBeenCalledTimes(2))
+    expect(edit.mock.calls[1]).toEqual(edit.mock.calls[0])
+    expect(durableEdits).toBe(1)
+  })
+
+  test('a late topic reply does not close the editor for the newly selected thread', async () => {
+    mockThreadAndBoardFetches()
+    const threads: meshClient.MeshThread[] = [
+      { id: 'mt-a', title: 'A', scope: 'run', members: ['user', 'run:qa'], status: 'open' },
+      { id: 'mt-b', title: 'B', scope: 'run', members: ['user', 'stage:implement'], status: 'open' },
+    ]
+    let resolveEdit!: (receipt: meshClient.MeshThreadTitleReceipt) => void
+    vi.spyOn(meshClient, 'updateMeshThreadTitle').mockImplementation(() => new Promise((resolve) => { resolveEdit = resolve }))
+    renderTeamView([makeStage()], [], enabledRoster({ threads }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /^A/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'A changed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /^B/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'B changed' } })
+    await act(async () => resolveEdit({ title: 'A changed', title_seq: 7 }))
+    expect(screen.getByRole('textbox', { name: 'Conversation topic' })).toHaveValue('B changed')
+  })
+
+  test('keeps a locally created conversation until the roster catches up, then uses its fresh metadata', async () => {
+    mockThreadAndBoardFetches()
+    const created: meshClient.MeshThread = { id: 'mt-local', title: 'Local topic', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(created)
+    const view = renderTeamView()
+    clickCreateConversation()
+    fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Local topic' } })
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    clickCreateConversation()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Local topic' })).toBeInTheDocument())
+    const composer = screen.getByPlaceholderText('Message Local topic…')
+    fireEvent.change(composer, { target: { value: 'waiting on roster' } })
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Local topic')).toBeInTheDocument()
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...created, title: 'Durable topic' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('heading', { name: 'Durable topic' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Durable topic…')).toBe(composer)
+    expect(composer).toHaveValue('waiting on roster')
+  })
+
+  test('opens Conversations first, switches to People with the keyboard, and keeps a selected draft', () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const manyAgents: meshClient.MeshParticipant[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `run:agent-${i}`, kind: 'run_agent', scope: 'run', display_name: `Agent ${i}`, reachable: true,
+    }))
+    renderTeamView([makeStage()], [], enabledRoster({ participants: [...participants, ...manyAgents], threads: [thread] }))
+
+    const navigation = screen.getByRole('navigation', { name: 'Team roster' })
+    expect(within(navigation).getByRole('tab', { name: /Conversations/ })).toHaveAttribute('aria-selected', 'true')
+    expect(within(navigation).getByText('Release')).toBeInTheDocument()
+    expect(within(navigation).queryByText('Agent 0')).toBeNull()
+    fireEvent.click(within(navigation).getByText('Release'))
+    fireEvent.change(screen.getByPlaceholderText('Message Release…'), { target: { value: 'draft' } })
+
+    const conversations = within(navigation).getByRole('tab', { name: /Conversations/ })
+    conversations.focus()
+    fireEvent.keyDown(conversations, { key: 'ArrowRight' })
+    expect(within(navigation).getByRole('tab', { name: /People/ })).toHaveFocus()
+    expect(within(navigation).getByText('Agent 0')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Release…')).toHaveValue('draft')
+    fireEvent.keyDown(within(navigation).getByRole('tab', { name: /People/ }), { key: 'ArrowLeft' })
+    expect(within(navigation).getByText('Release')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Release…')).toHaveValue('draft')
+  })
+
+  test('searches the current list by thread preview or participant handle without changing selection', () => {
+    mockThreadAndBoardFetches()
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({
+      participants: participants.map((p) => p.id === 'run:qa' ? { ...p, alias: 'reviewer' } : p),
+      threads: [thread], summaries: { 'mt-1': { last_message: { id: 'm1', seq: 1, created_at: '', sender_id: 'run:qa', preview: 'Ship checklist' }, last_other_message_seq: 1, title_seq: 0 } },
+    }))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release'))
+    const search = screen.getByRole('searchbox', { name: 'Search conversations' })
+    search.focus()
+    fireEvent.change(search, { target: { value: 'QA reviewer' } })
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release')).toBeInTheDocument()
+    fireEvent.change(search, { target: { value: '@reviewer' } })
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release')).toBeInTheDocument()
+    fireEvent.change(search, { target: { value: 'ship checklist' } })
+    expect(search).toHaveFocus()
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release')).toBeInTheDocument()
+    fireEvent.change(search, { target: { value: 'missing' } })
+    expect(screen.getByText('No matching conversations')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /People/ }))
+    const peopleSearch = screen.getByRole('searchbox', { name: 'Search people' })
+    fireEvent.change(peopleSearch, { target: { value: 'reviewer' } })
+    expect(screen.getByText('@reviewer')).toBeInTheDocument()
+    expect(screen.queryByText('Implement agent')).toBeNull()
+  })
+
+  test('offers the current list action and returns focus after cancelling creation', () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+    const newConversation = screen.getByRole('button', { name: 'New conversation' })
+    expect(screen.getByRole('button', { name: 'Browse people' })).toBeInTheDocument()
+    fireEvent.click(newConversation)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(newConversation).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Browse people' }))
+    expect(screen.getByRole('tab', { name: 'People' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Add run agent' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New conversation' })).toBeNull()
+  })
+
+  test.each([
+    { layout: 'wide', width: null },
+    { layout: 'narrow drawer', width: 341 },
+  ])('returns focus to the persistent list action when the empty-state opener disappears in the $layout layout', async ({ width }) => {
+    mockThreadAndBoardFetches()
+    if (width !== null) mockTeamWidth(width)
+    const view = renderTeamView()
+    await act(async () => {})
+
+    const emptyStateAction = screen.getByRole('button', { name: 'Start a conversation' })
+    fireEvent.click(emptyStateAction)
+    const thread: meshClient.MeshThread = { id: 'mt-new', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(emptyStateAction.isConnected).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    if (width !== null) expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
+    expect(screen.getByRole('button', { name: 'New conversation' })).toHaveFocus()
+  })
+
+  test('returns focus to the list action after cancelling in the narrow drawer', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(341)
+    renderTeamView()
+    fireEvent.click(screen.getByRole('button', { name: 'New conversation' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
+    expect(screen.getByRole('button', { name: 'New conversation' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('tab', { name: 'People' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Add run agent' })).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
+    expect(screen.getByRole('button', { name: 'Add run agent' })).toHaveFocus()
   })
 
   test('keeps side in the run roster and shows its durable terminal failure beside the original message', async () => {
@@ -97,7 +922,8 @@ describe('TeamView', () => {
     ], next_cursor: 1 })
     renderTeamView([makeStage()], [{ type: 'side_agent_mesh_failure', payload: { source_message_id: 'm1' }, stageId: '', timestamp: '' }],
       enabledRoster({ participants: [...participants, side], threads: [thread] }))
-    expect(within(screen.getByRole('region', { name: 'This run' })).getAllByText('Side agent').length).toBeGreaterThan(0)
+    expect(within(peopleRegion('This run')).getAllByText('Side agent').length).toBeGreaterThan(0)
+    showConversations()
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
     await waitFor(() => expect(screen.getByText('Could not answer')).toBeInTheDocument())
   })
@@ -128,19 +954,19 @@ describe('TeamView', () => {
     expect(document.querySelector('[data-message-id="m1"]')).not.toHaveTextContent('Could not answer')
   })
 
-  test('roster groups participants under "This run", "Stages" and "Conversations"', () => {
+  test('Conversations is the initial list and People keeps the run and stage groups', () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    expect(screen.getByRole('region', { name: 'This run' })).toBeInTheDocument()
-    expect(within(screen.getByRole('region', { name: 'Stages' })).getByText('Implement agent')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Conversations' })).toBeInTheDocument()
+    expect(peopleRegion('This run')).toBeInTheDocument()
+    expect(within(peopleRegion('Stages')).getByText('Implement agent')).toBeInTheDocument()
   })
 
   test('the conversation header names the selected person and what they are', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
     expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     expect(await screen.findByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
     expect(screen.getByText('Direct conversation · Run agent')).toBeInTheDocument()
   })
@@ -151,7 +977,7 @@ describe('TeamView', () => {
     renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Hand-off'))
     expect(screen.getByRole('heading', { name: 'Hand-off' })).toBeInTheDocument()
-    expect(screen.getByText('3 participants · you and 2 agents')).toBeInTheDocument()
+    expect(screen.getByText('3 participants · you and 2 agents · QA reviewer, Implement agent')).toBeInTheDocument()
   })
 
   test('a conversation agents started between themselves does not count you in it', () => {
@@ -159,7 +985,7 @@ describe('TeamView', () => {
     const thread: meshClient.MeshThread = { id: 'mt-8', title: 'Pairing', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Pairing'))
-    expect(screen.getByText('2 participants · 2 agents')).toBeInTheDocument()
+    expect(screen.getByText('2 participants · 2 agents · QA reviewer, Implement agent')).toBeInTheDocument()
   })
 
   test('tabs are "Messages", "Board", "Activity"', () => {
@@ -190,16 +1016,81 @@ describe('TeamView', () => {
   test('a direct conversation opens from a person row', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
   })
 
-  test('"Create conversation" requires a topic and at least one participant', () => {
+  test('"Create conversation" requires at least one participant, even with no topic', () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
-    expect(screen.getByText('Enter a topic and select at least one participant.')).toBeInTheDocument()
+    clickCreateConversation()
+    clickCreateConversation()
+    expect(screen.getByText('Choose at least one participant.')).toBeInTheDocument()
+  })
+
+  test('an empty topic opens an untitled conversation with participant names', async () => {
+    mockThreadAndBoardFetches()
+    const opened: meshClient.MeshThread = { id: 'mt-dm', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(opened)
+    renderTeamView()
+    clickCreateConversation()
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    clickCreateConversation()
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '', memberIds: ['run:qa'] })))
+    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
+  })
+
+  test('an untitled group still creates a distinct conversation', async () => {
+    mockThreadAndBoardFetches()
+    const existing: meshClient.MeshThread = { id: 'mt-dm', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const group: meshClient.MeshThread = { id: 'mt-group', scope: 'run', members: ['user', 'run:qa', 'stage:implement'], status: 'open' }
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(group)
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [existing] }))
+    clickCreateConversation()
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    fireEvent.click(screen.getByText('Implement agent', { selector: 'label span' }))
+    clickCreateConversation()
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '', memberIds: ['run:qa', 'stage:implement'] })))
+    expect(screen.getByRole('heading', { name: 'QA reviewer, Implement agent' })).toBeInTheDocument()
+  })
+
+  test('repeated unnamed single-person creation returns the newest DM without opening another thread', async () => {
+    mockThreadAndBoardFetches()
+    const older: meshClient.MeshThread = { id: 'mt-old', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const newer: meshClient.MeshThread = { ...older, id: 'mt-new' }
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread')
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [older, newer], summaries: {
+      'mt-old': { last_message: { id: 'm9', seq: 9, created_at: '', sender_id: 'run:qa', preview: '' }, last_other_message_seq: 9, title_seq: 0 },
+      'mt-new': { last_message: { id: 'm12', seq: 12, created_at: '', sender_id: 'run:qa', preview: '' }, last_other_message_seq: 12, title_seq: 0 },
+    } }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('button', { name: /QA reviewer/ })[1]!)
+    clickCreateConversation()
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    clickCreateConversation()
+    await waitFor(() => expect(screen.queryByPlaceholderText('What is this about?')).toBeNull())
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByText('QA reviewer', { selector: '.team-thread-title' })[0]?.closest('button')).toHaveAttribute('aria-pressed', 'true')
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
+  })
+
+  test('People selects the newest untitled DM while keeping a newer titled task conversation in the list', () => {
+    mockThreadAndBoardFetches()
+    const task: meshClient.MeshThread = { id: 'mt-task', title: 'Review task', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const oldDM: meshClient.MeshThread = { ...task, id: 'mt-old', title: '' }
+    const newDM: meshClient.MeshThread = { ...task, id: 'mt-new', title: '' }
+    const summary = (seq: number): meshClient.MeshThreadSummary => ({
+      last_message: { id: `m${seq}`, seq, created_at: '', sender_id: 'run:qa', preview: '' }, last_other_message_seq: seq, title_seq: 0,
+    })
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread')
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [oldDM, task, newDM], summaries: {
+      'mt-old': summary(10), 'mt-task': summary(30), 'mt-new': summary(20),
+    } }))
+    pickRunPerson(/^QA reviewer/)
+    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Review task/ })).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByText('QA reviewer', { selector: '.team-thread-title' })[0]?.closest('button')).toHaveAttribute('aria-pressed', 'true')
+    expect(openSpy).not.toHaveBeenCalled()
   })
 
   test('"Create conversation" opens a new thread once a topic and a participant are chosen', async () => {
@@ -208,10 +1099,10 @@ describe('TeamView', () => {
       id: 'mt-9', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open',
     })
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Hand-off' } })
     fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Hand-off', scope: 'run', memberIds: ['run:qa'] })))
     await waitFor(() => expect(screen.getByPlaceholderText('Message Hand-off…')).toBeInTheDocument())
   })
@@ -220,7 +1111,7 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const done: meshClient.MeshParticipant = { id: 'stage:plan', kind: 'stage_agent', scope: 'stage', stage_id: 'plan', display_name: 'Plan agent', reachable: false }
     renderTeamView([makeStage(), makeStage({ id: 'plan', name: 'Plan', status: 'done' })], [], enabledRoster({ participants: [...participants, done] }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     const form = document.querySelector('.team-create-conversation-participants') as HTMLElement
     expect(within(form).getByText('QA reviewer')).toBeInTheDocument()
     expect(within(form).queryByText('Plan agent')).toBeNull()
@@ -230,7 +1121,7 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    openAddRunAgent()
 
     const dialog = screen.getByRole('dialog', { name: 'Add run agent' })
     expect(within(dialog).getByText('Configured executor')).toBeInTheDocument()
@@ -244,6 +1135,7 @@ describe('TeamView', () => {
   test('a paused participant shows "Paused"', () => {
     mockThreadAndBoardFetches()
     renderTeamView([makeStage({ status: 'paused' })])
+    showPeople()
     expect(screen.getByText('Paused')).toBeInTheDocument()
   })
 
@@ -254,7 +1146,7 @@ describe('TeamView', () => {
     const threadB: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [threadA, threadB] }))
 
-    fireEvent.click(screen.getByText('With QA'))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('With QA'))
     await waitFor(() => expect(screen.getByPlaceholderText('Message With QA…')).toBeInTheDocument())
 
     fireEvent.click(screen.getByText('With Implement agent'))
@@ -275,7 +1167,7 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('boom'))
     renderTeamView()
 
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
 
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
@@ -288,21 +1180,21 @@ describe('TeamView', () => {
   test('re-selecting the same person after a successful first send returns to the opened thread instead of opening a second one', async () => {
     mockThreadAndBoardFetches()
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({
-      id: 'mt-9', title: 'QA reviewer', scope: 'run', members: ['user', 'run:qa'], status: 'open',
+      id: 'mt-9', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open',
     })
     vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
     // roster.threads intentionally stays empty throughout — the 3s poll has not caught up with the thread
     // the send below opens, which is exactly the window the duplicate-thread bug lived in.
     renderTeamView()
 
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1))
 
     // The thread now also shows under Conversations right away; click the PERSON row again.
-    fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toBeInTheDocument())
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'again' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -316,7 +1208,7 @@ describe('TeamView', () => {
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-9', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
     vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ message_id: 'm1', seq: 1 })
     renderTeamView()
-    const runRegion = () => screen.getByRole('region', { name: 'This run' })
+    const runRegion = () => peopleRegion('This run')
 
     fireEvent.click(within(runRegion()).getByRole('button', { name: /^QA reviewer/ }))
     fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'first' } })
@@ -324,7 +1216,7 @@ describe('TeamView', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
 
     // Leave and come back before any roster poll: the thread opened by the failed attempt must be reused.
-    fireEvent.click(within(screen.getByRole('region', { name: 'Stages' })).getByRole('button', { name: /^Implement agent/ }))
+    fireEvent.click(within(peopleRegion('Stages')).getByRole('button', { name: /^Implement agent/ }))
     fireEvent.click(within(runRegion()).getByRole('button', { name: /^QA reviewer/ }))
     fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'second' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -332,49 +1224,247 @@ describe('TeamView', () => {
     expect(openSpy).toHaveBeenCalledTimes(1)
   })
 
-  test('a conversation created with the form shows up in Conversations at once and is reused for that person', async () => {
+  test('a failed first send keeps its draft when People reselects the opened thread before a roster poll', async () => {
     mockThreadAndBoardFetches()
-    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-7', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-9', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage')
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ message_id: 'm1', seq: 1 })
+    renderTeamView()
+
+    pickRunPerson(/^QA reviewer/)
+    fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'))
+
+    // The successful open is still local; the roster has not reported this thread yet.
+    fireEvent.click(within(peopleRegion('Stages')).getByRole('button', { name: /^Implement agent/ }))
+    pickRunPerson(/^QA reviewer/)
+    expect(screen.getByPlaceholderText('Message QA reviewer…')).toHaveValue('please review')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(2))
+    expect(sendSpy).toHaveBeenLastCalledWith('mt-9', expect.objectContaining({ body: 'please review' }))
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toHaveValue(''))
+  })
+
+  test.each(['People', 'Conversations'])(
+    'a committed direct send with a lost response retries once after reselecting through %s',
+    async (via) => {
+      mockThreadAndBoardFetches()
+      const opened: meshClient.MeshThread = { id: 'mt-9', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+      const other: meshClient.MeshThread = { id: 'mt-b', title: 'Other', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+      const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(opened)
+      const durable = new Map<string, { message_id: string; seq: number }>()
+      let loseFirstResponse = true
+      const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockImplementation(async (_threadId, input) => {
+        let receipt = durable.get(input.requestId)
+        if (receipt === undefined) {
+          receipt = { message_id: `m${durable.size + 1}`, seq: durable.size + 1 }
+          durable.set(input.requestId, receipt)
+        }
+        if (loseFirstResponse) {
+          loseFirstResponse = false
+          throw new Error('response lost')
+        }
+        return receipt
+      })
+      renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
+
+      pickRunPerson(/^QA reviewer/)
+      fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('response lost'))
+      expect(durable.size).toBe(1)
+
+      fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Other'))
+      if (via === 'People') {
+        pickRunPerson(/^QA reviewer/)
+      } else {
+        showConversations()
+        fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /QA reviewer/ }))
+      }
+      expect(screen.getByPlaceholderText('Message QA reviewer…')).toHaveValue('please review')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(2))
+      expect(sendSpy.mock.calls[1]?.[1].requestId).toBe(sendSpy.mock.calls[0]?.[1].requestId)
+      expect(durable.size).toBe(1)
+      expect(openSpy).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(screen.getByPlaceholderText('Message QA reviewer…')).toHaveValue(''))
+
+      // A later deliberate send of identical text is a new intent after the retry succeeded.
+      fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(3))
+      expect(sendSpy.mock.calls[2]?.[1].requestId).not.toBe(sendSpy.mock.calls[0]?.[1].requestId)
+      expect(durable.size).toBe(2)
+    },
+  )
+
+  test('a lost direct open response keeps its request id after switching away and back', async () => {
+    mockThreadAndBoardFetches()
+    const opened: meshClient.MeshThread = { id: 'mt-9', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce(opened)
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
+
+    pickRunPerson(/^QA reviewer/)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
+    expect(sendSpy).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('With Implement agent'))
+    pickRunPerson(/^QA reviewer/)
+    expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('please review')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-9', expect.objectContaining({ body: 'please review' })))
+    expect(openSpy).toHaveBeenCalledTimes(2)
+    expect(openSpy.mock.calls[1]?.[0].requestId).toBe(openSpy.mock.calls[0]?.[0].requestId)
+    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+  })
+
+  test('New conversation reuses a pending direct open after its response was lost', async () => {
+    mockThreadAndBoardFetches()
+    const opened: meshClient.MeshThread = { id: 'mt-9', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const durable = new Map<string, meshClient.MeshThread>()
+    let loseFirstResponse = true
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockImplementation(async (input) => {
+      if (!durable.has(input.requestId)) durable.set(input.requestId, opened)
+      if (loseFirstResponse) {
+        loseFirstResponse = false
+        throw new Error('response lost')
+      }
+      return durable.get(input.requestId)!
+    })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    renderTeamView()
+
+    pickRunPerson(/^QA reviewer/)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('response lost'))
+    expect(sendSpy).not.toHaveBeenCalled()
+
+    clickCreateConversation()
+    fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+    clickCreateConversation()
+
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2))
+    expect(openSpy.mock.calls[1]?.[0].requestId).toBe(openSpy.mock.calls[0]?.[0].requestId)
+    expect(durable.size).toBe(1)
+    expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message QA reviewer…')).toHaveValue('please review')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-9', expect.objectContaining({ body: 'please review' })))
+  })
+
+  test('a titled conversation stays in Conversations when People starts a separate unnamed DM', async () => {
+    mockThreadAndBoardFetches()
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread')
+      .mockResolvedValueOnce({ id: 'mt-7', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
+      .mockResolvedValueOnce({ id: 'mt-dm', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
     vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Release' } })
     fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     await waitFor(() => expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Release')).toBeInTheDocument())
 
-    fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
-    fireEvent.change(await screen.findByPlaceholderText('Message Release…'), { target: { value: 'hi' } })
+    pickRunPerson(/^QA reviewer/)
+    fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'hi' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalledWith('mt-7', expect.objectContaining({ body: 'hi' })))
-    expect(openSpy).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2))
+    expect(openSpy).toHaveBeenLastCalledWith(expect.objectContaining({ title: '', memberIds: ['run:qa'] }))
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Release')).toBeInTheDocument()
+  })
+
+  test('two topics with one person stay independently selectable beside their untitled DM', async () => {
+    mockThreadAndBoardFetches()
+    const first: meshClient.MeshThread = { id: 'mt-release', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const second: meshClient.MeshThread = { ...first, id: 'mt-verification', title: 'Verification' }
+    const dm: meshClient.MeshThread = { ...first, id: 'mt-dm', title: '' }
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread')
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+      .mockResolvedValueOnce(dm)
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm1', seq: 1 })
+    renderTeamView()
+
+    for (const topic of ['Release', 'Verification']) {
+      clickCreateConversation()
+      fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: topic } })
+      fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
+      clickCreateConversation()
+      await waitFor(() => expect(screen.getByRole('heading', { name: topic })).toBeInTheDocument())
+    }
+    expect(openSpy.mock.calls.slice(0, 2).map(([input]) => input.title)).toEqual(['Release', 'Verification'])
+
+    pickRunPerson(/^QA reviewer/)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'direct note' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-dm', expect.objectContaining({ body: 'direct note' })))
+    expect(openSpy).toHaveBeenCalledTimes(3)
+    expect(openSpy.mock.calls[2]?.[0]).toEqual(expect.objectContaining({ title: '', memberIds: ['run:qa'] }))
+
+    const rows = within(screen.getByRole('region', { name: 'Conversations' }))
+    for (const [topic, threadId] of [['Release', 'mt-release'], ['Verification', 'mt-verification']] as const) {
+      fireEvent.click(rows.getByRole('button', { name: new RegExp(topic) }))
+      expect(screen.getByRole('heading', { name: topic })).toBeInTheDocument()
+      fireEvent.change(screen.getByPlaceholderText(`Message ${topic}…`), { target: { value: `note for ${topic}` } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(sendSpy).toHaveBeenCalledWith(threadId, expect.objectContaining({ body: `note for ${topic}` })))
+    }
+    expect(rows.getAllByRole('button', { name: /QA reviewer/ })).toHaveLength(3)
   })
 
   test('a new run agent is shown by name right away, never by its participant id', async () => {
     mockThreadAndBoardFetches()
     vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't1', participant_id: 'run:t-1', thread_id: 'mt-5' })
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    openAddRunAgent()
     const dialog = screen.getByRole('dialog', { name: 'Add run agent' })
     fireEvent.change(within(dialog).getByPlaceholderText('What should this run agent do?'), { target: { value: 'watch tests' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add run agent' }))
     expect(await screen.findByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
     expect(screen.queryByText(/run:t-1/)).toBeNull()
-    expect(within(screen.getByRole('region', { name: 'This run' })).getAllByText('QA reviewer').length).toBeGreaterThan(0)
+    expect(within(peopleRegion('This run')).getAllByText('QA reviewer').length).toBeGreaterThan(0)
   })
 
-  test('the roster drawer toggle (narrow screens) opens the roster and picking someone closes it', async () => {
+  test('Add run agent task stays titled in Conversations while People starts an untitled DM', async () => {
     mockThreadAndBoardFetches()
+    vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ task_id: 't1', participant_id: 'run:t-1', thread_id: 'mt-task' })
+    const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-dm', scope: 'run', members: ['user', 'run:t-1'], status: 'open' })
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'm2', seq: 2 })
+    renderTeamView([makeStage()], [], enabledRoster({ participants: participants.filter((p) => p.id !== 'run:qa') }))
+    openAddRunAgent()
+    const dialog = screen.getByRole('dialog', { name: 'Add run agent' })
+    fireEvent.change(within(dialog).getByPlaceholderText('What should this run agent do?'), { target: { value: 'watch tests' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('QA reviewer')).toBeInTheDocument())
+    pickRunPerson(/^QA reviewer/)
+    expect(openSpy).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'hello' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-dm', expect.objectContaining({ body: 'hello' })))
+    expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '', memberIds: ['run:t-1'] }))
+    expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByText('QA reviewer').length).toBe(2)
+  })
+
+  test('the narrow list opens a conversation when a person is picked', async () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(341)
     renderTeamView()
-    const toggle = screen.getByRole('button', { name: 'Show team roster' })
     const roster = screen.getByRole('navigation', { name: 'Team roster' })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(roster).not.toHaveClass('open')
-    fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(roster).toHaveClass('open')
-    fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     expect(roster).not.toHaveClass('open')
+    expect(screen.getByRole('button', { name: 'Back to people' })).toBeInTheDocument()
     expect(await screen.findByPlaceholderText('Message QA reviewer…')).toBeInTheDocument()
   })
 
@@ -474,25 +1564,20 @@ describe('TeamView', () => {
     expect(layout.style.getPropertyValue('--team-roster-width')).toBe('500px')
   })
 
-  test('a measured Team container that narrows into drawer mode transfers separator focus', () => {
+  test('a measured Team container that narrows into list mode transfers separator focus', () => {
     mockThreadAndBoardFetches()
     const measured = mockTeamWidth(600)
     const view = renderTeamView()
     const layout = view.container.querySelector('.team-view') as HTMLElement
     const handle = teamSeparator()
-    const toggle = screen.getByRole('button', { name: 'Show team roster' })
     handle.focus()
 
     measured.resize(341)
     expect(layout).toHaveClass('drawer')
     expect(handle).toHaveAttribute('aria-hidden', 'true')
     expect(handle).toHaveAttribute('tabindex', '-1')
-    expect(toggle).toHaveFocus()
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(toggle)
+    expect(screen.getByRole('tab', { name: 'Messages' })).toHaveFocus()
     expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
-    fireEvent.click(screen.getByRole('button', { name: 'Close team roster' }))
-    expect(screen.getByRole('navigation', { name: 'Team roster' })).not.toHaveClass('open')
   })
 
   test('an initially narrow Team container starts in drawer mode', () => {
@@ -503,7 +1588,8 @@ describe('TeamView', () => {
     const handle = view.container.querySelector('.team-roster-resizer')
     expect(handle).toHaveAttribute('aria-hidden', 'true')
     expect(handle).toHaveAttribute('tabindex', '-1')
-    expect(screen.getByRole('button', { name: 'Show team roster' })).toBeInTheDocument()
+    expect(view.container.querySelector('.team-view')).not.toHaveClass('mobile-detail')
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
   })
 
   test('keeps measuring Team after a temporary disabled state', () => {
@@ -511,14 +1597,14 @@ describe('TeamView', () => {
     const measured = mockTeamWidth(600)
     const initialRoster = enabledRoster({ probed: false })
     const view = render(
-      <TeamView roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
+      <TeamView runId="test-existing" roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
     )
     const firstLayout = view.container.querySelector('.team-view')
     expect(teamSeparator()).toHaveAttribute('aria-valuemax', '280')
 
-    view.rerender(<TeamView roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
-    view.rerender(<TeamView roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamView runId="test-existing" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
     const nextLayout = view.container.querySelector('.team-view')
     expect(nextLayout).toBe(firstLayout)
 
@@ -568,14 +1654,74 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     renderTeamView()
     const messages = screen.getByRole('tab', { name: 'Messages' })
-    expect(messages).toHaveAttribute('aria-controls', screen.getByRole('tabpanel').id)
+    expect(messages).toHaveAttribute('aria-controls', screen.getByRole('tabpanel', { name: 'Messages' }).id)
     messages.focus()
     fireEvent.keyDown(messages, { key: 'ArrowRight' })
     const board = screen.getByRole('tab', { name: /^Board/ })
     expect(board).toHaveFocus()
     expect(board).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', board.id)
+    expect(screen.getByRole('tabpanel', { name: /Board/ })).toHaveAttribute('aria-labelledby', board.id)
     expect(screen.getByRole('button', { name: 'Post task' })).toBeInTheDocument()
+  })
+
+  test('run-wide tabs sit above the conversation, hide its heading, and restore its selection and draft', async () => {
+    mockThreadAndBoardFetches()
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [
+      { author_id: 'user', key: 'task/release', version: 1, status: 'Release', seq: 1, ts: '' },
+      { author_id: 'run:qa', key: 'task/release/run:qa', version: 1, status: 'Done', seq: 2, ts: '' },
+      { author_id: 'user', key: 'fact/build', version: 1, status: 'Ready', seq: 3, ts: '' },
+    ] })
+    const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release'))
+    const heading = screen.getByRole('heading', { name: 'Release' })
+    const tabs = screen.getByRole('tablist', { name: 'Team' })
+    expect(tabs.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const composer = screen.getByPlaceholderText('Message Release…')
+    fireEvent.change(composer, { target: { value: 'draft for QA' } })
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: /^Board/ })).toHaveTextContent('1'))
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.queryByRole('heading', { name: 'Release' })).toBeNull()
+    expect(screen.getByRole('tabpanel', { name: /^Board/ })).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('e.g. CSV export'), { target: { value: 'board draft' } })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    expect(screen.queryByRole('heading', { name: 'Release' })).toBeNull()
+    expect(screen.getByRole('tabpanel', { name: 'Activity' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByPlaceholderText('e.g. CSV export')).toHaveValue('board draft')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Messages' }))
+    expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Release…')).toBe(composer)
+    expect(composer).toHaveValue('draft for QA')
+  })
+
+  test('switching run-wide tabs preserves the initially selected conversation', () => {
+    mockThreadAndBoardFetches()
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [
+      { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' },
+    ] }))
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Messages' }))
+    expect(screen.getByRole('heading', { name: 'Release' })).toBeInTheDocument()
+  })
+
+  test('Back returns from Board and Activity to the narrow list', () => {
+    mockThreadAndBoardFetches()
+    mockTeamWidth(341)
+    renderTeamView()
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to conversations' }))
+    expect(screen.getByRole('navigation', { name: 'Team roster' })).toHaveClass('open')
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    expect(screen.getByRole('button', { name: 'Back to conversations' })).toBeInTheDocument()
   })
 
   test('a direct send that finishes after the user picked another conversation does not switch back to it', async () => {
@@ -587,12 +1733,12 @@ describe('TeamView', () => {
     const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
 
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())
 
-    fireEvent.click(screen.getByText('With Implement agent'))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('With Implement agent'))
     await act(async () => resolveSend({ message_id: 'm1', seq: 1 }))
     expect(screen.getByRole('heading', { name: 'With Implement agent' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Message With Implement agent…')).toBeInTheDocument()
@@ -605,11 +1751,12 @@ describe('TeamView', () => {
     const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Hand-off' } })
     fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
-    fireEvent.click(screen.getByText('With Implement agent'))
+    clickCreateConversation()
+    pickRunPerson(/^QA reviewer/)
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('With Implement agent'))
     await act(async () => resolveOpen({ id: 'mt-9', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }))
 
     expect(screen.getByRole('heading', { name: 'With Implement agent' })).toBeInTheDocument()
@@ -623,7 +1770,7 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'sendMeshMessage').mockReturnValue(new Promise((res) => (resolveSend = res)))
     renderTeamView()
 
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     const composer = screen.getByPlaceholderText('Message QA reviewer…')
     fireEvent.change(composer, { target: { value: 'please review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -640,11 +1787,11 @@ describe('TeamView', () => {
     const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [other] }))
 
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'half-written' } })
     fireEvent.click(screen.getByText('With Implement agent'))
     expect((screen.getByPlaceholderText('Message With Implement agent…') as HTMLTextAreaElement).value).toBe('')
-    fireEvent.click(screen.getByRole('button', { name: /^QA reviewer/ }))
+    pickRunPerson(/^QA reviewer/)
     expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('half-written')
   })
 
@@ -656,7 +1803,7 @@ describe('TeamView', () => {
     const other: meshClient.MeshThread = { id: 'mt-b', title: 'With Implement agent', scope: 'run', members: ['user', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [withQA, other] }))
 
-    fireEvent.click(screen.getByText('With QA'))
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('With QA'))
     fireEvent.change(screen.getByPlaceholderText('Message With QA…'), { target: { value: 'please review' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())
@@ -673,10 +1820,10 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'openMeshThread').mockReturnValue(new Promise((res) => (resolveOpen = res)))
     renderTeamView()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Hand-off' } })
     fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
 
     expect(screen.getByPlaceholderText('What is this about?')).toBeDisabled()
     for (const box of screen.getAllByRole('checkbox')) expect(box).toBeDisabled()
@@ -688,12 +1835,12 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockRejectedValue(new Error('network'))
     renderTeamView()
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     fireEvent.change(screen.getByPlaceholderText('What is this about?'), { target: { value: 'Hand-off' } })
     fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
-    fireEvent.click(screen.getByRole('button', { name: 'Create conversation' }))
+    clickCreateConversation()
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2))
     expect(openSpy.mock.calls[1]?.[0].requestId).toBe(openSpy.mock.calls[0]?.[0].requestId)
   })

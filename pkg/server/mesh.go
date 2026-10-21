@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 // Agent Mesh Phase 7, T7.1: /api/mesh/* — the UI-facing adapter over the shared Service. Unlike
@@ -27,9 +28,10 @@ import (
 // convention as AgentMeshActions/AssistantActions).
 type MeshActions interface {
 	ListParticipants(ctx context.Context) ([]agentcomm.Participant, error)
-	Threads(ctx context.Context) ([]agentcomm.Thread, error)
+	Threads(ctx context.Context) (orchestrator.ThreadPage, error)
 	OpenThread(ctx context.Context, requestID string, req MeshOpenThreadRequest) (agentcomm.Thread, error)
 	CloseThread(ctx context.Context, requestID, threadID string) error
+	UpdateThreadTitle(ctx context.Context, requestID, threadID string, req MeshTopicRequest) (orchestrator.UpdateThreadTitleReceipt, error)
 	// Send is the human's message: into req.ThreadID, or — without one — to req.Recipients (aliases or ids)
 	// in the conversation the Service picks or opens for them (orchestrator.SendFromAgent).
 	Send(ctx context.Context, requestID string, req MeshUserSendRequest) (MeshSendReceipt, error)
@@ -54,6 +56,12 @@ type MeshOpenThreadRequest struct {
 	MaxMessages int      `json:"max_messages,omitempty"`
 	// OriginStage — the stage whose feed the thread is opened from, so it shows in that feed.
 	OriginStage string `json:"origin_stage,omitempty"`
+}
+
+// MeshTopicRequest contains only the topic edit and its expected revision; the adapter supplies the actor.
+type MeshTopicRequest struct {
+	Title            string `json:"title"`
+	ExpectedTitleSeq uint64 `json:"expected_title_seq"`
 }
 
 // MeshUserSendRequest is the body of the human's sends: POST /api/mesh/messages (no thread — the server
@@ -126,6 +134,7 @@ const (
 	meshSegAttachAndSend  = "attach-and-send"
 	meshSegThreadMessages = "messages"
 	meshSegThreadClose    = "close"
+	meshSegThreadTopic    = "topic"
 	meshSegStages         = "stages"
 )
 
@@ -162,6 +171,8 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshSend(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == meshSegThreads && segs[1] != "" && segs[2] == meshSegThreadClose && r.Method == http.MethodPost:
 		s.handleMeshCloseThread(w, r, segs[1])
+	case len(segs) == 3 && segs[0] == meshSegThreads && segs[1] != "" && segs[2] == meshSegThreadTopic && r.Method == http.MethodPost:
+		s.handleMeshUpdateThreadTitle(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == meshSegStages && segs[2] == meshSegThreadMessages && r.Method == http.MethodGet:
 		s.handleMeshStageMessages(w, r, segs[1])
 	default:
@@ -183,12 +194,18 @@ func (s *Server) handleMeshParticipants(w http.ResponseWriter, r *http.Request) 
 // run, mirroring ReadThread's own carve-out). Like handleMeshParticipants/handleMeshBoard, this is a read with
 // no actor to resolve and no same-origin requirement — see the other GET handlers on this surface.
 func (s *Server) handleMeshThreads(w http.ResponseWriter, r *http.Request) {
-	threads, err := s.mesh.Threads(r.Context())
+	page, err := s.mesh.Threads(r.Context())
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"threads": threads})
+	if page.Threads == nil {
+		page.Threads = []agentcomm.Thread{}
+	}
+	if page.Summaries == nil {
+		page.Summaries = map[agentcomm.ThreadID]orchestrator.ThreadSummary{}
+	}
+	writeJSON(w, page)
 }
 
 func (s *Server) handleMeshBoard(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +367,39 @@ func (s *Server) handleMeshCloseThread(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	writeJSON(w, map[string]string{keyStatus: "ok"})
+}
+
+func (s *Server) handleMeshUpdateThreadTitle(w http.ResponseWriter, r *http.Request, threadID string) {
+	if !sameOriginOK(r) {
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	if !isValidStageID(threadID) {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_thread_id")
+		return
+	}
+	var body struct {
+		RequestID        string  `json:"request_id"`
+		Title            *string `json:"title"`
+		ExpectedTitleSeq *uint64 `json:"expected_title_seq"`
+	}
+	if !decodeAgentMeshBody(w, r, &body) {
+		return
+	}
+	if body.RequestID == "" {
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
+		return
+	}
+	if body.Title == nil || body.ExpectedTitleSeq == nil {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_request_body")
+		return
+	}
+	receipt, err := s.mesh.UpdateThreadTitle(r.Context(), body.RequestID, threadID, MeshTopicRequest{Title: *body.Title, ExpectedTitleSeq: *body.ExpectedTitleSeq})
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, receipt)
 }
 
 // handleMeshAttachAndSend decodes into MeshAttachAndSendRequest ONLY — there is no command/model/executor

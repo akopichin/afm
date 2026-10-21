@@ -95,6 +95,21 @@ export type MeshThread = {
   origin_stage?: string
 }
 
+// MeshThreadSummary mirrors the scoped summary in agentcomm.ThreadPage. The map is keyed by thread id.
+export type MeshThreadSummary = {
+  last_message?: {
+    id: string
+    seq: number
+    created_at: string
+    sender_id: string
+    preview: string
+  }
+  last_other_message_seq: number
+  title_seq: number
+}
+
+export type MeshThreadSummaries = Record<string, MeshThreadSummary>
+
 // MeshMessage mirrors agentcomm.Message.
 export type MeshMessage = {
   id: string
@@ -175,9 +190,16 @@ export async function listMeshParticipants(): Promise<{ participants: MeshPartic
 
 // listMeshThreads reads every thread the human dashboard operator belongs to — GET /api/mesh/threads (bare
 // list form, the T7.3 dependency landed in pkg/server/mesh.go's handleMeshThreads).
-export async function listMeshThreads(): Promise<{ threads: MeshThread[] }> {
-  const body = await meshGet<{ threads?: MeshThread[] | null }>('/api/mesh/threads')
-  return { threads: body.threads ?? [] }
+export async function listMeshThreads(): Promise<{ threads: MeshThread[]; summaries: MeshThreadSummaries }> {
+  const body = await meshGet<{ threads?: MeshThread[] | null; summaries?: Record<string, Partial<MeshThreadSummary>> | null }>('/api/mesh/threads')
+  const summaries: MeshThreadSummaries = Object.fromEntries(
+    Object.entries(body.summaries ?? {}).map(([id, summary]) => [id, {
+      ...(summary.last_message === undefined ? {} : { last_message: summary.last_message }),
+      last_other_message_seq: summary.last_other_message_seq ?? 0,
+      title_seq: summary.title_seq ?? 0,
+    }]),
+  )
+  return { threads: body.threads ?? [], summaries }
 }
 
 // getMeshThread reads one page of a thread's messages — GET /api/mesh/threads/{id}.
@@ -236,6 +258,19 @@ export async function openMeshThread(req: OpenMeshThreadRequest): Promise<MeshTh
     member_ids: req.memberIds,
     ...(req.maxMessages !== undefined ? { max_messages: req.maxMessages } : {}),
     ...(req.originStage !== undefined ? { origin_stage: req.originStage } : {}),
+  })
+}
+
+export type MeshThreadTitleReceipt = { title: string; title_seq: number }
+
+export async function updateMeshThreadTitle(
+  threadId: string,
+  req: { requestId: string; title: string; expectedTitleSeq: number },
+): Promise<MeshThreadTitleReceipt> {
+  return meshPost<MeshThreadTitleReceipt>(`/api/mesh/threads/${encodeURIComponent(threadId)}/topic`, {
+    request_id: req.requestId,
+    title: req.title,
+    expected_title_seq: req.expectedTitleSeq,
   })
 }
 

@@ -61,7 +61,9 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 		return SendReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("unknown origin stage %q", originStage)}
 	}
 	members := conversationMembers(req.Sender, req.Recipients)
-	if th := openThreadWithMembers(rs, members, req.Sender, originStage); th != "" {
+	directWithHuman := len(req.Recipients) == 1 && req.Sender != req.Recipients[0] &&
+		(req.Sender == meshUserParticipantID || req.Recipients[0] == meshUserParticipantID)
+	if th := selectOpenThreadWithMembers(rs, members, req.Sender, originStage, directWithHuman); th != "" {
 		req.ThreadID = th
 		return o.Send(ctx, req)
 	}
@@ -223,7 +225,15 @@ func agentMemberSet(members []agentcomm.ParticipantID) []agentcomm.ParticipantID
 // conversation it does not show; "" — any conversation. sender — who writes: a conversation it is not a member
 // of cannot take its message (the human is not in the agents' conversations opened before D1).
 func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID, sender agentcomm.ParticipantID, shownIn string) agentcomm.ThreadID {
+	return selectOpenThreadWithMembers(rs, members, sender, shownIn, false)
+}
+
+// Direct human-agent sends use Team's untitled-DM and latest-message rule; board notices keep the
+// existing first-matching-conversation rule through openThreadWithMembers.
+func selectOpenThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID, sender agentcomm.ParticipantID, shownIn string, directWithHuman bool) agentcomm.ThreadID {
 	want := agentMemberSet(members)
+	var selected agentcomm.ThreadID
+	var latestSeq uint64
 	for _, id := range rs.Assistants.Mesh.ThreadOrder {
 		th := rs.Assistants.Mesh.Threads[id]
 		if th == nil || th.Status != agentcomm.ThreadOpen || !slices.Equal(agentMemberSet(th.Members), want) || !slices.Contains(th.Members, sender) {
@@ -235,7 +245,23 @@ func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID,
 		if _, discussion := discussionStageOfThread(rs, id); discussion {
 			continue
 		}
-		return id
+		if !directWithHuman {
+			return id
+		}
+		if len(th.Members) != 2 || !slices.Contains(th.Members, meshUserParticipantID) {
+			continue
+		}
+		view, _ := rs.Assistants.Mesh.ThreadView(id)
+		if view.Title != "" {
+			continue
+		}
+		var seq uint64
+		if messages := rs.Assistants.Mesh.MessagesByThread[id]; len(messages) > 0 {
+			seq = rs.Assistants.Mesh.Messages[messages[len(messages)-1]].Seq
+		}
+		if selected == "" || seq >= latestSeq {
+			selected, latestSeq = id, seq
+		}
 	}
-	return ""
+	return selected
 }

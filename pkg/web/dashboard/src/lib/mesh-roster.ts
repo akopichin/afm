@@ -1,7 +1,7 @@
 // mesh-roster — общие чистые хелперы над ростером mesh для Team, ленты и меню упоминаний: человекочитаемые
 // имена вместо внутренних id (`mt-…`, `side:<run-id>`) и поиск личного треда с участником.
 
-import type { MeshParticipant, MeshThread } from '../api/mesh-client'
+import type { MeshParticipant, MeshThread, MeshThreadSummaries } from '../api/mesh-client'
 
 const USER_ID = 'user'
 
@@ -152,16 +152,21 @@ export function threadLabel(thread: MeshThread, participants: MeshParticipant[])
   return others.length > 0 ? others.join(', ') : thread.id
 }
 
-// findExistingDirectThread — уже открытый тред ровно из двух участников (оператор + participant). Повторное
-// обращение к тому же участнику должно попасть в ЭТОТ разговор: OpenThread на каждый вызов создаёт новый
-// тред, дедупликации по составу на сервере нет. Групповой тред, где участник тоже есть, сюда намеренно не
-// подходит — отправка никогда не превращает личный разговор в групповой.
-export function findExistingDirectThread(threads: MeshThread[], participantId: string): MeshThread | null {
-  return (
-    threads.find(
-      (t) => t.status === 'open' && t.members.length === 2 && t.members.includes(participantId) && t.members.includes(USER_ID),
-    ) ?? null
-  )
+// An untitled two-member conversation is the reusable DM. A titled conversation with the same members is
+// a separate discussion. When several DMs exist, use the latest durable message seq; ties follow open order.
+export function findExistingDirectThread(threads: MeshThread[], participantId: string, summaries: MeshThreadSummaries = {}): MeshThread | null {
+  let latest: MeshThread | null = null
+  let latestSeq = -1
+  for (const thread of threads) {
+    if (thread.status !== 'open' || thread.title || thread.members.length !== 2 ||
+        !thread.members.includes(participantId) || !thread.members.includes(USER_ID)) continue
+    const seq = summaries[thread.id]?.last_message?.seq ?? 0
+    if (seq >= latestSeq) {
+      latest = thread
+      latestSeq = seq
+    }
+  }
+  return latest
 }
 
 // directPeer — the other person of a one-to-one conversation (the operator and exactly one participant), so it

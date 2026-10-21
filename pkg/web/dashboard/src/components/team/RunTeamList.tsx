@@ -1,9 +1,10 @@
-import type { ReactElement, ReactNode } from 'react'
-import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
-import { activityLabel, activityPresence, participantLabel, participantRole, stagePresence, type Presence } from '../../lib/mesh-roster'
+import { useId, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode, type Ref } from 'react'
+import type { MeshParticipant, MeshThread, MeshThreadSummaries } from '../../api/mesh-client'
+import { activityLabel, activityPresence, participantLabel, participantRole, stagePresence, threadLabel, type Presence } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 import { STAGE_STATUS_LABELS, type Stage, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
+import { TabList, tabPanelProps } from '../tab-list'
 
 export type RunTeamListStage = { id: string; title: string; status: string }
 
@@ -14,7 +15,7 @@ export function teamStagesOf(stages: Stage[]): RunTeamListStage[] {
 
 export type RunTeamListProps = {
   participants: MeshParticipant[]
-  // threads/onSelectThread — the "Conversations" group; only the Team tab (no focusStageId) shows it.
+  // threads/onSelectThread — the Team-only Conversations list; focusStageId shows only People.
   threads?: MeshThread[]
   // stages — the SAME live Stage list App.tsx already polls (/api/status), in flow order. It orders the
   // "Stages" group and gives each stage row its live status: Participant.Reachable only tracks whether a
@@ -25,15 +26,25 @@ export type RunTeamListProps = {
   onSelectParticipant?: (participant: MeshParticipant) => void
   onSelectThread?: (thread: MeshThread) => void
   onAddRunAgent: () => void
+  listView?: 'conversations' | 'people'
+  onListViewChange?: (view: 'conversations' | 'people') => void
+  search?: string
+  onSearchChange?: (value: string) => void
+  summaries?: MeshThreadSummaries
+  unreadThreadIds?: ReadonlySet<string>
+  newOnly?: boolean
+  onNewOnlyChange?: (next: boolean) => void
+  onCreateConversation?: (opener: HTMLButtonElement) => void
+  actionButtonRef?: Ref<HTMLButtonElement>
   // onAttachHelper — focus mode only: "Attach helper to stage…" next to "Add run agent…" (a helper works for
   // this stage, a run agent for the whole run). Undefined — no such button.
   onAttachHelper?: () => void
   // id — the root element's id (a drawer toggle's aria-controls) and the prefix of its group headings' ids,
   // so a second embedded roster never duplicates the Team tab's ids.
   id?: string
-  // drawer — false: never a drawer of its own (an embedding view owns its layout); open is then ignored.
+  // drawer — false: an embedding view owns layout; open is then ignored.
   drawer?: boolean
-  // open — on a narrow screen the roster is a drawer; open slides it in (ignored on wide screens).
+  // open — the embedding layout marks the roster as the visible narrow panel.
   open?: boolean
   // focusStageId — the roster as one stage's "people you can talk to" (the stage Feed's side panel): groups
   // "This stage" (its agent and helpers), "Run agents", "Other stages" in flow order; each row shows its
@@ -119,18 +130,45 @@ function stageOrder(stageParticipants: MeshParticipant[], stages: RunTeamListSta
   return order
 }
 
-// RunTeamList — the Team view's roster: "This run" (run-scoped participants: run agents and the Side agent),
-// "Stages" (one row per stage agent in flow order, with that stage's helpers nested right under it) and
-// "Conversations" (every thread the operator belongs to). The human operator itself ("user") is never listed.
-// With focusStageId it is one stage's people panel instead (see RunTeamListProps.focusStageId).
+// RunTeamList — the Team navigation rail. Conversations is the initial list; People groups the run agents,
+// Side agent, stages and helpers. With focusStageId it remains the stage Feed's focused People panel.
 export function RunTeamList({
   participants, threads = [], stages, selectedParticipantId = null, selectedThreadId = null,
   onSelectParticipant, onSelectThread, onAddRunAgent, id = 'team-roster', drawer = true, open = false,
-  focusStageId, onPick, pickHint, onAttachHelper,
+  focusStageId, onPick, pickHint, onAttachHelper, listView = 'conversations', onListViewChange,
+  search = '', onSearchChange, summaries = {}, unreadThreadIds, newOnly = false, onNewOnlyChange,
+  onCreateConversation, actionButtonRef,
 }: RunTeamListProps): ReactElement {
+  const listTabsId = useId()
+  const newFilterRef = useRef<HTMLButtonElement>(null)
+  const focusedThreadRowRef = useRef<HTMLButtonElement | null>(null)
+  const [stagesExpanded, setStagesExpanded] = useState(true)
   const focused = focusStageId !== undefined
   const runParticipants = participants.filter((p) => p.scope === 'run' && p.kind !== 'user')
   const stageParticipants = participants.filter((p) => p.scope === 'stage' && p.stage_id !== undefined && p.stage_id !== '')
+  const query = search.trim().toLocaleLowerCase()
+  const matchesPerson = (p: MeshParticipant): boolean =>
+    `${participantLabel(p)} ${p.alias ?? ''} ${p.alias ? `@${p.alias}` : ''}`.toLocaleLowerCase().includes(query)
+  const matchingRunParticipants = runParticipants.filter(matchesPerson)
+  // The two filters keep roster order within each presence group, including across polls.
+  const visibleRunParticipants = [
+    ...matchingRunParticipants.filter((p) => participantPresence(p, undefined) === 'working'),
+    ...matchingRunParticipants.filter((p) => participantPresence(p, undefined) !== 'working'),
+  ]
+  const visibleStageParticipants = stageParticipants.filter(matchesPerson)
+  const unreadCount = threads.filter((t) => unreadThreadIds?.has(t.id)).length
+  const visibleThreads = threads.filter((t) => {
+    if (newOnly && !unreadThreadIds?.has(t.id)) return false
+    const members = t.members.map((id) => participants.find((p) => p.id === id)).filter((p): p is MeshParticipant => p !== undefined)
+    const terms = [threadLabel(t, participants), t.title ?? '', summaries[t.id]?.last_message?.preview ?? '',
+      ...members.flatMap((p) => [participantLabel(p), p.alias ?? '', p.alias ? `@${p.alias}` : ''])]
+    return terms.some((term) => term.toLocaleLowerCase().includes(query))
+  })
+  useLayoutEffect(() => {
+    if (!newOnly || focusedThreadRowRef.current?.isConnected !== false || document.activeElement !== document.body) return
+    newFilterRef.current?.focus()
+    focusedThreadRowRef.current = null
+  }, [newOnly, visibleThreads])
 
   function renderRow(p: MeshParticipant, nested = false): ReactElement {
     const stage = stages.find((s) => s.id === p.stage_id)
@@ -178,8 +216,8 @@ export function RunTeamList({
   }
 
   // A stage agent first, then its helpers; a helper whose stage agent isn't in the roster still shows up.
-  function renderStage(stageId: string): ReactElement[] {
-    const members = stageParticipants.filter((p) => p.stage_id === stageId)
+  function renderStage(stageId: string, source = stageParticipants): ReactElement[] {
+    const members = source.filter((p) => p.stage_id === stageId)
     const agents = members.filter((p) => p.kind === 'stage_agent')
     const helpers = members.filter((p) => p.kind !== 'stage_agent')
     return [...agents.map((p) => renderRow(p)), ...helpers.map((p) => renderRow(p, agents.length > 0))]
@@ -205,7 +243,7 @@ export function RunTeamList({
         </RosterGroup>
         {otherStages.length > 0 && (
           <RosterGroup id={`${id}-other`} label="Other stages" count={otherCount}>
-            <ul className="team-roster-list">{otherStages.flatMap(renderStage)}</ul>
+            <ul className="team-roster-list">{otherStages.flatMap((stageId) => renderStage(stageId))}</ul>
           </RosterGroup>
         )}
         <div className="team-add-agent-bottom">
@@ -225,35 +263,92 @@ export function RunTeamList({
   return (
     <nav id={id} className={rootClass} aria-label="Team roster">
       <div className="team-roster-top">
-        <h2 className="team-roster-title">Run team</h2>
-        <button type="button" className="btn btn-send team-add-run-agent" onClick={onAddRunAgent}>
-          <span aria-hidden="true">+</span> Add run agent
+        <h2 className="team-roster-title">{listView === 'conversations' ? 'Conversations' : 'People'}</h2>
+        <button
+          ref={actionButtonRef}
+          type="button"
+          className="team-icon-btn team-roster-action"
+          aria-label={listView === 'conversations' ? 'New conversation' : 'Add run agent'}
+          title={listView === 'conversations' ? 'New conversation' : 'Add run agent'}
+          onClick={listView === 'conversations' ? (event) => onCreateConversation?.(event.currentTarget) : onAddRunAgent}
+        >+
         </button>
       </div>
-
-      <section className="team-roster-group" aria-labelledby={`${id}-run`}>
-        <h3 id={`${id}-run`}>This run</h3>
-        {runParticipants.length === 0 ? (
-          <p className="team-roster-empty empty-hint">No run-scoped agents yet</p>
-        ) : (
-          <ul className="team-roster-list">{runParticipants.map((p) => renderRow(p))}</ul>
-        )}
-      </section>
-
-      {stageParticipants.length > 0 && (
-        <section className="team-roster-group" aria-labelledby={`${id}-stages`}>
-          <h3 id={`${id}-stages`}>Stages</h3>
-          <ul className="team-roster-list">{stageOrder(stageParticipants, stages).flatMap(renderStage)}</ul>
-        </section>
+      <TabList
+        idPrefix={listTabsId}
+        ariaLabel="Team navigation"
+        className="team-list-tabs"
+        tabClassName="team-list-tab"
+        selected={listView}
+        onSelect={(view) => onListViewChange?.(view)}
+        tabs={[{ id: 'conversations', label: 'Conversations' }, { id: 'people', label: 'People' }]}
+      />
+      <label className="team-roster-search">
+        <span aria-hidden="true">⌕</span>
+        <input
+          type="search"
+          aria-label={listView === 'conversations' ? 'Search conversations' : 'Search people'}
+          placeholder={listView === 'conversations' ? 'Search conversations' : 'Search people'}
+          value={search}
+          onChange={(event) => onSearchChange?.(event.target.value)}
+        />
+      </label>
+      {listView === 'conversations' && onNewOnlyChange !== undefined && (
+        <button ref={newFilterRef} type="button" className={`team-new-filter${newOnly ? ' active' : ''}`}
+          aria-pressed={newOnly} onClick={() => onNewOnlyChange(!newOnly)}>
+          New to you <span className="team-new-filter-count">{unreadCount}</span>
+        </button>
       )}
-
-      <section className="team-roster-group" aria-labelledby={`${id}-conversations`}>
-        <h3 id={`${id}-conversations`}>
-          Conversations
-          {threads.length > 0 && <span className="team-roster-count" aria-hidden="true">{threads.length}</span>}
-        </h3>
-        <ThreadList threads={threads} participants={participants} selectedThreadId={selectedThreadId} onSelect={(t) => onSelectThread?.(t)} />
-      </section>
+      {listView === 'conversations' ? (
+        <div className="team-roster-results" {...tabPanelProps(listTabsId, 'conversations')}
+          onFocusCapture={(event) => {
+            focusedThreadRowRef.current = (event.target as HTMLElement).closest<HTMLButtonElement>('.team-thread-item')
+          }}>
+          <section className="team-roster-group" aria-labelledby={`${id}-conversations`}>
+            <h3 id={`${id}-conversations`}>Conversations<span className="team-roster-count" aria-hidden="true">{threads.length}</span></h3>
+            {visibleThreads.length === 0 ? (
+              <div className="team-roster-empty-state">
+                <p className="team-thread-list-empty empty-hint">{newOnly ? "You're all caught up" : query === '' ? 'No conversations yet' : 'No matching conversations'}</p>
+                {!newOnly && query === '' && <button type="button" className="btn" onClick={(event) => onCreateConversation?.(event.currentTarget)}>Start a conversation</button>}
+                {!newOnly && <button type="button" className="btn" onClick={() => {
+                  onListViewChange?.('people')
+                  document.getElementById(`${listTabsId}-tab-people`)?.focus()
+                }}>Browse people</button>}
+              </div>
+            ) : (
+              <ThreadList threads={visibleThreads} participants={participants} summaries={summaries} unreadThreadIds={unreadThreadIds} selectedThreadId={selectedThreadId} onSelect={(t) => onSelectThread?.(t)} />
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="team-roster-results" {...tabPanelProps(listTabsId, 'people')}>
+          <section className="team-roster-group" aria-labelledby={`${id}-run`}>
+            <h3 id={`${id}-run`}>This run</h3>
+            {visibleRunParticipants.length === 0 ? (
+              <p className="team-roster-empty empty-hint">{query === '' ? 'No run-scoped agents yet' : 'No matching run agents'}</p>
+            ) : (
+              <ul className="team-roster-list">{visibleRunParticipants.map((p) => renderRow(p))}</ul>
+            )}
+          </section>
+          {stageParticipants.length > 0 && (
+            <section className="team-roster-group" aria-labelledby={`${id}-stages`}>
+              <h3 id={`${id}-stages`}>
+                <button type="button" className="team-stages-toggle" aria-expanded={stagesExpanded}
+                  aria-controls={`${id}-stage-rows`} onClick={() => setStagesExpanded((value) => !value)}>
+                  <span aria-hidden="true">{stagesExpanded ? '▾' : '▸'}</span> Stages
+                </button>
+              </h3>
+              <div id={`${id}-stage-rows`} hidden={!stagesExpanded}>
+                {visibleStageParticipants.length === 0 ? (
+                  <p className="team-roster-empty empty-hint">{query === '' ? 'No stages yet' : 'No matching stage agents'}</p>
+                ) : (
+                  <ul className="team-roster-list">{stageOrder(visibleStageParticipants, stages).flatMap((stageId) => renderStage(stageId, visibleStageParticipants))}</ul>
+                )}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
     </nav>
   )
 }

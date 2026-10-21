@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -42,6 +43,61 @@ func setupMeshThread(t *testing.T, members ...string) AssistantsState {
 	}
 	mustApply(t, &as, meshThreadOpenedControl("th-1", members))
 	return as
+}
+
+func TestMesh_ThreadTitleOverridePreservesOpeningDescriptorAndClone(t *testing.T) {
+	as := setupMeshThread(t, "a", "b")
+	update := &Control{Kind: "mesh_thread_title_updated", SchemaVersion: ControlSchemaVersion, Seq: 8,
+		Actor: Actor{Kind: "user"}, Target: Target{ThreadID: "th-1"}, Payload: json.RawMessage(`{"title":"Review"}`)}
+	if err := dispatchControlKind(&as, update, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := as.Mesh.ThreadTitles["th-1"]; got.Title != "Review" || got.Seq != 8 {
+		t.Fatalf("override = %+v", got)
+	}
+	if as.Mesh.Threads["th-1"].Title != "" || as.Mesh.ThreadChangedSeq["th-1"] != 8 {
+		t.Fatal("title edit changed opening descriptor or missed feed revision")
+	}
+	cloned := as.Mesh.clone()
+	cloned.ThreadTitles["th-1"] = MeshThreadTitle{Title: "Other", Seq: 9}
+	if as.Mesh.ThreadTitles["th-1"].Title != "Review" {
+		t.Fatal("clone shares title map")
+	}
+	update.Seq, update.Payload = 10, json.RawMessage(`{"title":"","expected_title_seq":8}`)
+	if err := dispatchControlKind(&as, update, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := as.Mesh.ThreadTitles["th-1"]; got.Title != "" || got.Seq != 10 {
+		t.Fatalf("cleared override = %+v", got)
+	}
+	if err := dispatchControlKind(&as, meshThreadOpenedControl("th-1", []string{"a", "b"}), false); err != nil {
+		t.Fatalf("original open after rename: %v", err)
+	}
+}
+
+func TestMesh_ThreadTitleUpdateValidatesDurableTransition(t *testing.T) {
+	for _, tc := range []struct {
+		name, thread, actor, payload string
+	}{
+		{"unknown thread", "missing", "user", `{"title":"New"}`},
+		{"unauthorized actor", "th-1", "assistant", `{"title":"New"}`},
+		{"whitespace title", "th-1", "user", `{"title":"   "}`},
+		{"control character", "th-1", "user", `{"title":"bad\nline"}`},
+		{"too long", "th-1", "user", `{"title":"` + strings.Repeat("x", 201) + `"}`},
+		{"stale revision", "th-1", "user", `{"title":"New","expected_title_seq":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			as := setupMeshThread(t, "a")
+			c := &Control{Kind: kindMeshThreadTitleUpdated, SchemaVersion: ControlSchemaVersion, Seq: 4,
+				Actor: Actor{Kind: tc.actor}, Target: Target{ThreadID: tc.thread}, Payload: json.RawMessage(tc.payload)}
+			if err := dispatchControlKind(&as, c, false); err == nil {
+				t.Fatal("invalid update accepted")
+			}
+			if len(as.Mesh.ThreadTitles) != 0 {
+				t.Fatal("invalid update changed title state")
+			}
+		})
+	}
 }
 
 func TestMesh_MessageSentCreatesInboxAndReceipts(t *testing.T) {

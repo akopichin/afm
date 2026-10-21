@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
-import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
+import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshSendReceipt, type MeshThread, type MeshThreadSummaries } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
@@ -26,20 +26,29 @@ export type ThreadConversationProps = {
   // (TeamView) can fold this conversation into the roster's "Conversations" group instead of treating the NEXT
   // click on the same person row as yet another fresh direct target (which would open a second thread).
   onThreadOpened?: (thread: MeshThread) => void
-  // onThreadCreated — fired as soon as a thread is opened, even if the message that follows fails to send,
-  // so the parent knows about it right away (a later click on the same person must not open another one).
-  onThreadCreated?: (thread: MeshThread) => void
+  // A direct thread can be learned from the roster or returned by the open request before its first send.
+  // Let the parent remember it and discard the pending open request id in either case.
+  onDirectThreadResolved?: (participantId: string, thread: MeshThread) => void
+  getDirectOpenRequestId?: (participantId: string) => string
+  // TeamView keeps unsettled send IDs above this keyed component, including the direct-to-thread remount.
+  getSendRequestId?: (threadId: string, recipientIds: string[], body: string, proposedId: string) => string
+  onSendSucceeded?: (target: ThreadConversationTarget, thread: MeshThread, submitted: string, requestId: string) => void
+  // Report a committed send even if this conversation was unmounted while the request was in flight.
+  onMessageSent?: (thread: MeshThread, receipt: MeshSendReceipt) => void
   // participants — the roster, to name an untitled thread and each message's sender instead of showing ids.
   participants?: MeshParticipant[]
   // threads — the latest known threads. A direct target re-checks them when SENDING, not only when the person
   // was clicked: the roster poll may learn about an existing direct thread after the click.
   threads?: MeshThread[]
+  summaries?: MeshThreadSummaries
   // draft / onDraftChange — the composer's text, when the parent keeps it. TeamView does, so that text typed
   // while the first message of a direct conversation is sending survives the remount onThreadOpened causes.
   // Without them the component keeps its own draft.
   draft?: string
   onDraftChange?: Dispatch<SetStateAction<string>>
   sideFailures?: ReadonlySet<string>
+  readEnabled?: boolean
+  onMessagesRead?: (threadId: string, lastRenderedOtherSeq: number) => void
 }
 
 // targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
@@ -64,12 +73,18 @@ export function conversationTitle(target: ThreadConversationTarget, participants
 export function conversationSubtitle(target: ThreadConversationTarget, participants: MeshParticipant[]): string {
   if (target.kind === 'direct') return `Direct conversation · ${participantRole(target.participant.kind)}`
   const peer = directPeer(target.thread, participants)
-  if (peer !== undefined) return `Direct conversation · ${participantRole(peer.kind)}`
+  if (peer !== undefined) {
+    const member = target.thread.title ? `${participantLabel(peer)} · ` : ''
+    return `Direct conversation · ${member}${participantRole(peer.kind)}`
+  }
   const agents = target.thread.members.filter((m) => m !== 'user').length
   const agentsText = `${agents} ${agents === 1 ? 'agent' : 'agents'}`
   // A conversation agents started between themselves does not include you.
   const who = target.thread.members.includes('user') ? `you and ${agentsText}` : agentsText
-  return `${target.thread.members.length} participants · ${who}`
+  const names = target.thread.title
+    ? ` · ${target.thread.members.filter((id) => id !== 'user').map((id) => senderLabel(id, participants)).join(', ')}`
+    : ''
+  return `${target.thread.members.length} participants · ${who}${names}`
 }
 
 // otherMemberIds — every OTHER member of the conversation: a direct target has exactly one (the person
@@ -119,12 +134,15 @@ function otherMembers(target: ThreadConversationTarget, opened: MeshThread | nul
 }
 
 // routeAll — the default recipient line: the person in a direct conversation, everyone still here in a thread.
-function routeAll(target: ThreadConversationTarget, label: string): string {
-  return target.kind === 'direct' ? label : 'Everyone in this conversation'
+function routeAll(target: ThreadConversationTarget, label: string, participants: MeshParticipant[]): string {
+  if (target.kind === 'direct') return label
+  const names = target.thread.members.filter((id) => id !== 'user').map((id) => senderLabel(id, participants))
+  if (names.length === 1) return names[0]!
+  return target.thread.title ? `Everyone in this conversation · ${names.join(', ')}` : 'Everyone in this conversation'
 }
 
 export function ThreadConversation(props: ThreadConversationProps): ReactElement {
-  const { target, onThreadOpened, onThreadCreated, participants = [], threads = [], sideFailures = new Set<string>() } = props
+  const { target, onThreadOpened, onDirectThreadResolved, getDirectOpenRequestId, getSendRequestId, onSendSucceeded, onMessageSent, participants = [], threads = [], summaries = {}, sideFailures = new Set<string>(), readEnabled = false, onMessagesRead } = props
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [ownDraft, setOwnDraft] = useState('')
   const draft = props.draft ?? ownDraft
@@ -141,9 +159,8 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   // from the failed attempt already, so a plain "did this call just open it" check misses the retry).
   const notifiedRef = useRef<boolean>(target?.kind === 'thread')
 
-  // openRequestIdRef — one id for opening this conversation's thread, reused by every retry: if the server
-  // created the thread but the response was lost, the retry gets that same thread back instead of a second one.
-  const openRequestIdRef = useRef<string>(genMeshRequestId('mesh-open'))
+  // Standalone callers keep an id here. TeamView owns the id by participant so it survives a keyed remount.
+  const openRequestIdRef = useRef<string | null>(null)
 
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_INPUT_HEIGHT)
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
@@ -173,6 +190,27 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   const mentioned = members.filter((p) => draftMentions(draft, handleOf(p))).map((p) => p.id)
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
+  const closed = openedThread?.status === 'closed' || (target?.kind === 'thread' && target.thread.status === 'closed')
+  const closedNoticeRef = useRef<HTMLParagraphElement>(null)
+  const composerWasFocusedRef = useRef(false)
+
+  useLayoutEffect(() => {
+    if (closed && composerWasFocusedRef.current) closedNoticeRef.current?.focus()
+    if (!closed) composerWasFocusedRef.current = false
+  }, [closed])
+
+  useEffect(() => {
+    if (!readEnabled || threadId === null || onMessagesRead === undefined || messages.length === 0) return
+    // useMeshThread commits only complete pages. This effect runs after the log has rendered those messages.
+    const lastOtherSeq = messages.reduce((seq, message) => message.sender_id === 'user' ? seq : Math.max(seq, message.seq), 0)
+    if (lastOtherSeq === 0) return
+    const markVisible = () => {
+      if (!document.hidden && log.stick) onMessagesRead(threadId, lastOtherSeq)
+    }
+    markVisible()
+    document.addEventListener('visibilitychange', markVisible)
+    return () => document.removeEventListener('visibilitychange', markVisible)
+  }, [readEnabled, threadId, messages, log.stick, onMessagesRead])
 
   if (target === null) {
     return <div className="team-conversation-empty empty-hint">Select a person or a conversation to see its messages</div>
@@ -182,22 +220,27 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   const reachability = splitByReachability(otherMemberIds(target, openedThread), participants)
   const notice = unreachableNotice(reachability)
   const recipientIds = mentioned.length > 0 ? mentioned : reachability.reachable
-  const canSend = draft.trim() !== '' && recipientIds.length > 0
+  const canSend = draft.trim() !== '' && recipientIds.length > 0 && !closed
   // readOnly — a conversation agents started between themselves: you can read along, but only members may
   // write into it (the server refuses anyone else).
   const readOnly = target.kind === 'thread' && !target.thread.members.includes('user')
 
   // ensureThread — the conversation's thread, opened on the first send of a direct conversation.
   async function ensureThread(current: ThreadConversationTarget): Promise<MeshThread> {
-    const known = openedThread ?? (current.kind === 'direct' ? findExistingDirectThread(threads, current.participant.id) : null)
-    if (known !== null) return known
+    const known = openedThread ?? (current.kind === 'direct' ? findExistingDirectThread(threads, current.participant.id, summaries) : null)
+    if (known !== null) {
+      if (current.kind === 'direct') onDirectThreadResolved?.(current.participant.id, known)
+      return known
+    }
     const thread = await openMeshThread({
-      requestId: openRequestIdRef.current,
+      requestId: current.kind === 'direct'
+        ? getDirectOpenRequestId?.(current.participant.id) ?? (openRequestIdRef.current ??= genMeshRequestId('mesh-open'))
+        : (openRequestIdRef.current ??= genMeshRequestId('mesh-open')),
       title: '',
       scope: 'run',
       memberIds: current.kind === 'direct' ? [current.participant.id] : [],
     })
-    onThreadCreated?.(thread)
+    if (current.kind === 'direct') onDirectThreadResolved?.(current.participant.id, thread)
     return thread
   }
 
@@ -210,10 +253,13 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
       async (p, requestId) => {
         const thread = await ensureThread(current)
         setOpenedThread(thread)
-        await sendMeshMessage(thread.id, { requestId, recipientIds: [...p.recipientIds], body: p.body })
+        const sendRequestId = getSendRequestId?.(thread.id, p.recipientIds, p.body, requestId) ?? requestId
+        const receipt = await sendMeshMessage(thread.id, { requestId: sendRequestId, recipientIds: [...p.recipientIds], body: p.body })
         // Here rather than in onSuccess: a draft kept by the parent outlives this conversation view, and a
         // message that was sent must not wait there to be sent again after the user switched away and back.
-        setDraft((cur) => removeSubmittedText(cur, submitted))
+        if (onSendSucceeded) onSendSucceeded(current, thread, submitted, sendRequestId)
+        else setDraft((cur) => removeSubmittedText(cur, submitted))
+        onMessageSent?.(thread, receipt)
         return thread
       },
       {
@@ -254,10 +300,11 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         </p>
       ) : (
         <>
-        {notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
+        {closed ? <p ref={closedNoticeRef} className="team-conversation-notice" role="status" tabIndex={-1}>This conversation is closed. Messages are read-only.</p>
+          : notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
         <div className="team-conversation-route">
           <span>From you →</span>
-          <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label)}</strong>
+          <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label, participants)}</strong>
           {mentioned.length === 0 && notice === null && reachability.finished.length > 0 && (
             <span className="team-conversation-route-skipped">{skippedNote(reachability.finished)}</span>
           )}
@@ -269,7 +316,10 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
             ref={setInputRef}
             className="chat-composer-input"
             placeholder={`Message ${label}…`}
+            disabled={closed}
             value={draft}
+            onFocus={() => { composerWasFocusedRef.current = true }}
+            onBlur={(event) => { if (!event.currentTarget.disabled) composerWasFocusedRef.current = false }}
             onChange={(e) => {
               setDraft(e.target.value)
               mention.onInput(e.target.value, e.target.selectionStart ?? e.target.value.length)

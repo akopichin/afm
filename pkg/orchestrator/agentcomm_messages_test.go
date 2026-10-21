@@ -2,15 +2,331 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
+
+func TestMesh_OpenThreadRedactsSecretBeforeCommit(t *testing.T) {
+	o, _ := newRedactingTestOrchestrator(t)
+	ctx := context.Background()
+	req := OpenThreadRequest{
+		OperationID: "secret-open", Title: "Topic " + redactionTestSecret, Scope: agentcomm.ScopeStage,
+		Members: []agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(assistantsTestStageID)},
+		Actor:   state.Actor{Kind: "user"},
+	}
+	wantTitle := o.RedactSecrets(req.Title)
+	first, err := o.OpenThread(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Title != wantTitle {
+		t.Fatalf("open receipt title = %q, want %q", first.Title, wantTitle)
+	}
+	page, err := o.ListThreads(ctx, ListThreadsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Threads) != 1 || page.Threads[0].Title != wantTitle {
+		t.Fatalf("listed threads = %+v, want redacted title %q", page.Threads, wantTitle)
+	}
+	notices := noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread)
+	if len(notices) != 1 || notices[0].Data["title"] != wantTitle {
+		t.Fatalf("thread notices = %+v, want redacted title %q", notices, wantTitle)
+	}
+	assertNoSecretIn(t, journalOf(o), filepath.Join(o.opts.RunDir, "notices.jsonl"))
+
+	retry, err := o.OpenThread(ctx, req)
+	if err != nil || !reflect.DeepEqual(retry, first) {
+		t.Fatalf("open retry = %+v, %v; want %+v", retry, err, first)
+	}
+	if got := noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread); len(got) != len(notices) {
+		t.Fatalf("retry published another thread notice: %+v", got)
+	}
+	changed := req
+	changed.Title = "Different topic"
+	if _, err := o.OpenThread(ctx, changed); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("changed request with same id = %v, want conflict", err)
+	}
+	assertNoSecretIn(t, journalOf(o), filepath.Join(o.opts.RunDir, "notices.jsonl"))
+}
+
+func TestMesh_OpenThreadRetryOfLegacyUnredactedTitle(t *testing.T) {
+	o, store := newRedactingTestOrchestrator(t)
+	req := OpenThreadRequest{
+		OperationID: "legacy-secret-open", Title: "Topic " + redactionTestSecret, Scope: agentcomm.ScopeStage,
+		Members: []agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(assistantsTestStageID)},
+		Actor:   state.Actor{Kind: "user"},
+	}
+	threadID := deriveMeshThreadID(req.OperationID)
+	effects, err := threadOpenEffects(store.Snapshot(), threadID, req.Title, req.Scope, req.Members, req.MaxMessages, req.OriginStage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyRunOperation(state.Operation{
+		ID: req.OperationID, Kind: opKindMeshOpenThread, Actor: req.Actor, Effects: effects,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	beforeSeq := store.Snapshot().LastSeq
+	beforeNotices := len(noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread))
+	retry, err := o.OpenThread(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != threadID || retry.Title != o.RedactSecrets(req.Title) {
+		t.Fatalf("legacy retry = %+v, want id %s and redacted title", retry, threadID)
+	}
+	if got := store.Snapshot().LastSeq; got != beforeSeq {
+		t.Fatalf("legacy retry committed another event: seq %d, want %d", got, beforeSeq)
+	}
+	if got := len(noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread)); got != beforeNotices {
+		t.Fatalf("legacy retry published a thread notice: got %d, want %d", got, beforeNotices)
+	}
+}
+
+func TestMesh_UpdateThreadTitleRedactsSecretBeforeCommit(t *testing.T) {
+	o, store := newRedactingTestOrchestrator(t)
+	ctx := context.Background()
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "secret-topic-open", Title: "Original", Scope: agentcomm.ScopeStage,
+		Members: []agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(assistantsTestStageID)},
+		Actor:   state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rawTitle = "Topic " + redactionTestSecret
+	want := o.RedactSecrets(rawTitle)
+	if strings.Contains(want, redactionTestSecret) {
+		t.Fatal("test secret was not configured for redaction")
+	}
+	req := UpdateThreadTitleRequest{OperationID: "secret-topic-edit", ThreadID: thread.ID,
+		Title: " " + rawTitle + " ", ExpectedTitleSeq: 0, Actor: state.Actor{Kind: "user"}}
+	first, err := o.UpdateThreadTitle(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Title != want {
+		t.Fatalf("title receipt = %q, want %q", first.Title, want)
+	}
+	if got := store.Snapshot().Assistants.Mesh.ThreadTitles[thread.ID].Title; got != want {
+		t.Fatalf("stored title = %q, want %q", got, want)
+	}
+	page, err := o.ListThreads(ctx, ListThreadsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := page.Threads[0].Title; got != want {
+		t.Fatalf("visible title = %q, want %q", got, want)
+	}
+	notices := noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread)
+	if got := notices[len(notices)-1].Data["title"]; got != want {
+		t.Fatalf("title notice = %v, want %q", got, want)
+	}
+	assertNoSecretIn(t, journalOf(o), filepath.Join(o.opts.RunDir, "notices.jsonl"))
+
+	if _, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{OperationID: "secret-topic-later", ThreadID: thread.ID,
+		Title: "Later", ExpectedTitleSeq: first.TitleSeq, Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := o.UpdateThreadTitle(ctx, req)
+	if err != nil || retry != first {
+		t.Fatalf("retry = %+v, %v; want %+v", retry, err, first)
+	}
+	page, err = o.ListThreads(ctx, ListThreadsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := page.Threads[0].Title; got != "Later" {
+		t.Fatalf("retry changed current title to %q", got)
+	}
+	assertNoSecretIn(t, journalOf(o), filepath.Join(o.opts.RunDir, "notices.jsonl"))
+}
+
+func TestMesh_UpdateThreadTitleRevisionRetryAndFeed(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	open := OpenThreadRequest{OperationID: "topic-open", Title: "Original", Scope: agentcomm.ScopeStage,
+		Members:     []agentcomm.ParticipantID{meshUserParticipantID, meshStageParticipantID(assistantsTestStageID)},
+		OriginStage: assistantsTestStageID, Actor: state.Actor{Kind: "user"}}
+	thread, err := o.OpenThread(ctx, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, err := o.Send(ctx, SendRequest{OperationID: "topic-message", ThreadID: thread.ID,
+		Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{meshStageParticipantID(assistantsTestStageID)},
+		Kind: agentcomm.MessageKindMessage, Body: "hello", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := o.StageMessages(assistantsTestStageID, 0, 0).NextCursor
+	first, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{OperationID: "topic-1", ThreadID: thread.ID,
+		Title: "Renamed", ExpectedTitleSeq: 0, Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Title != "Renamed" || first.TitleSeq <= before {
+		t.Fatalf("receipt = %+v", first)
+	}
+	threadNotices := noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread)
+	if got := threadNotices[len(threadNotices)-1].Data; got["action"] != "title_updated" || got["title"] != "Renamed" {
+		t.Fatalf("rename notice = %+v", got)
+	}
+	page, err := o.ListThreads(ctx, ListThreadsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Threads[0].Title != "Renamed" || page.Summaries[thread.ID].TitleSeq != first.TitleSeq {
+		t.Fatalf("list = %+v", page)
+	}
+	if page.Summaries[thread.ID].LastMessage.Seq != sent.Seq {
+		t.Fatal("title changed message recency")
+	}
+	if store.Snapshot().Assistants.Mesh.Threads[thread.ID].Title != "Original" {
+		t.Fatal("opening title was mutated")
+	}
+	feed := o.StageMessages(assistantsTestStageID, before, 0)
+	if len(feed.Messages) != 0 || len(feed.Threads) != 1 || feed.Threads[0].Title != "Renamed" {
+		t.Fatalf("feed = %+v", feed)
+	}
+	if _, err := o.OpenThread(ctx, open); err != nil {
+		t.Fatalf("original open retry: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, id := range []string{"topic-2a", "topic-2b"} {
+		wg.Go(func() {
+			_, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{OperationID: id, ThreadID: thread.ID,
+				Title: id, ExpectedTitleSeq: first.TitleSeq, Actor: state.Actor{Kind: "user"}})
+			results <- err
+		})
+	}
+	wg.Wait()
+	close(results)
+	okCount, staleCount := 0, 0
+	for err := range results {
+		if err == nil {
+			okCount++
+		} else {
+			var rejected *state.OperationRejectedError
+			if errors.As(err, &rejected) && rejected.Code == assistants.CodeStaleRevision {
+				staleCount++
+			} else {
+				t.Fatalf("edit error: %v", err)
+			}
+		}
+	}
+	if okCount != 1 || staleCount != 1 {
+		t.Fatalf("concurrent edits: success=%d stale=%d", okCount, staleCount)
+	}
+	retry, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{OperationID: "topic-1", ThreadID: thread.ID,
+		Title: "Renamed", ExpectedTitleSeq: 0, Actor: state.Actor{Kind: "user"}})
+	if err != nil || retry != first {
+		t.Fatalf("retry = %+v, %v; want %+v", retry, err, first)
+	}
+	if _, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{OperationID: "topic-1", ThreadID: thread.ID,
+		Title: "Different", ExpectedTitleSeq: 0, Actor: state.Actor{Kind: "user"}}); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("changed retry = %v, want request id conflict", err)
+	}
+	current, err := o.ListThreads(ctx, ListThreadsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentSeq := current.Summaries[thread.ID].TitleSeq
+	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "topic-close", ThreadID: thread.ID, Actor: state.Actor{Kind: "user"}}); err != nil {
+		t.Fatal(err)
+	}
+	closeCursor := o.StageMessages(assistantsTestStageID, feed.NextCursor, 0).NextCursor
+	clearReceipt, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{OperationID: "topic-clear", ThreadID: thread.ID,
+		Title: "", ExpectedTitleSeq: currentSeq, Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadNotices = noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventMeshThread)
+	if got := threadNotices[len(threadNotices)-1].Data; got["action"] != "title_updated" || got["title"] != "" {
+		t.Fatalf("clear notice = %+v", got)
+	}
+	page, err = o.ListThreads(ctx, ListThreadsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Threads[0].Title != "" || page.Threads[0].Status != agentcomm.ThreadClosed || page.Summaries[thread.ID].TitleSeq != clearReceipt.TitleSeq || page.Summaries[thread.ID].LastMessage.Seq != sent.Seq {
+		t.Fatalf("cleared closed thread = %+v", page)
+	}
+	clearedFeed := o.StageMessages(assistantsTestStageID, closeCursor, 0)
+	if len(clearedFeed.Messages) != 0 || len(clearedFeed.Threads) != 1 || clearedFeed.Threads[0].Title != "" || clearedFeed.Threads[0].Status != agentcomm.ThreadClosed || clearedFeed.NextCursor != clearReceipt.TitleSeq {
+		t.Fatalf("caught-up feed after clear = %+v", clearedFeed)
+	}
+	replayed, err := state.LoadRunState(o.opts.RunDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replayed.Assistants.Mesh.ThreadTitles[thread.ID]; got.Title != "" || got.Seq != clearReceipt.TitleSeq {
+		t.Fatalf("replayed title = %+v", got)
+	}
+	if replayed.Assistants.Mesh.Threads[thread.ID].Title != "Original" {
+		t.Fatal("replay changed opening descriptor")
+	}
+	if got, _ := replayed.Assistants.Mesh.ThreadView(thread.ID); got.Title != "" || got.Status != agentcomm.ThreadClosed {
+		t.Fatalf("replayed view = %+v", got)
+	}
+}
+
+func TestMesh_DiscussionPostAfterTitleUpdateKeepsOpeningDescriptor(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	post := PostMessageRequest{
+		OperationID: "discussion-before-title", StageID: assistantsTestStageID,
+		AuthorKind: assistants.AuthorHuman, Round: assistants.RoundFreeform,
+		Body: "first", Actor: state.Actor{Kind: "user"},
+	}
+	if _, err := o.PostDiscussionMessage(ctx, post); err != nil {
+		t.Fatal(err)
+	}
+	threadID := deriveDiscussionThreadID(assistantsTestStageID)
+	if _, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{
+		OperationID: "discussion-title-update", ThreadID: threadID,
+		Title: "Renamed discussion", ExpectedTitleSeq: 0, Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	post.OperationID = "discussion-after-title"
+	post.Body = "second"
+	secondID, err := o.PostDiscussionMessage(ctx, post)
+	if err != nil {
+		t.Fatalf("post after title update: %v", err)
+	}
+	page, err := o.ReadThread(ctx, ReadThreadRequest{ThreadID: threadID, Reader: meshUserParticipantID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 2 || page.Messages[1].ID != agentcomm.MessageID(secondID) || page.Messages[1].Body != "second" {
+		t.Fatalf("mirrored discussion after title update = %+v", page)
+	}
+	if got := o.DiscussionMessages(assistantsTestStageID); len(got) != 2 || got[1].ID != secondID {
+		t.Fatalf("discussion messages = %+v, want second message %s", got, secondID)
+	}
+	rs := store.Snapshot()
+	if view, ok := rs.Assistants.Mesh.ThreadView(threadID); !ok || view.Title != "Renamed discussion" {
+		t.Fatalf("thread view = %+v, %v, want renamed title", view, ok)
+	}
+	if got := rs.Assistants.Mesh.Threads[threadID].Title; got != "" {
+		t.Fatalf("opening descriptor title changed to %q", got)
+	}
+}
 
 // Agent Mesh Phase 2, T2.2: OpenThread/CloseThread/Send/ReadThread/ReadInbox/Acknowledge.
 
@@ -513,5 +829,176 @@ func TestMesh_ListThreadsForTheHumanSeesEveryThread(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("ListThreads(human) did not include thread %s the human is not a member of", thread.ID)
+	}
+}
+
+func TestMesh_ListThreadsStageOnlyMessageIsOtherToHuman(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "summary-stage-only", Scope: agentcomm.ScopeRun,
+		Members: []agentcomm.ParticipantID{meshUserParticipantID, stage},
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	message, err := o.Send(ctx, SendRequest{
+		OperationID: "summary-stage-only-message", ThreadID: thread.ID,
+		Sender: stage, Recipients: []agentcomm.ParticipantID{meshUserParticipantID},
+		Kind: agentcomm.MessageKindMessage, Body: "stage message",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	for _, participant := range []agentcomm.ParticipantID{stage, meshUserParticipantID} {
+		page, err := o.ListThreads(ctx, ListThreadsRequest{Participant: participant})
+		if err != nil {
+			t.Fatalf("ListThreads(%s): %v", participant, err)
+		}
+		if got := page.Summaries[thread.ID].LastOtherMessageSeq; got != message.Seq {
+			t.Errorf("ListThreads(%s) last other seq = %d, want stage message seq %d", participant, got, message.Seq)
+		}
+	}
+}
+
+func TestMesh_ListThreadsSummariesAreScopedAndReplayStable(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	stage := meshStageParticipantID(assistantsTestStageID)
+
+	open := func(id string, members ...agentcomm.ParticipantID) agentcomm.Thread {
+		t.Helper()
+		th, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: id, Scope: agentcomm.ScopeRun, Members: members})
+		if err != nil {
+			t.Fatalf("OpenThread(%s): %v", id, err)
+		}
+		return th
+	}
+	main := open("summary-main", meshUserParticipantID, stage)
+	empty := open("summary-empty", meshUserParticipantID, stage)
+	private := open("summary-private", meshUserParticipantID)
+
+	send := func(id string, thread agentcomm.ThreadID, sender, recipient agentcomm.ParticipantID, kind agentcomm.MessageKind, body string, reply *agentcomm.MessageID, auto bool) SendReceipt {
+		t.Helper()
+		r, err := o.Send(ctx, SendRequest{OperationID: id, ThreadID: thread, Sender: sender, Recipients: []agentcomm.ParticipantID{recipient}, Kind: kind, Body: body, InReplyTo: reply, AutoResult: auto})
+		if err != nil {
+			t.Fatalf("Send(%s): %v", id, err)
+		}
+		return r
+	}
+	first := send("summary-first", main.ID, meshUserParticipantID, stage, agentcomm.MessageKindMessage, "first", nil, false)
+	second := send("summary-reply", main.ID, stage, meshUserParticipantID, agentcomm.MessageKindReply, "  <b>reply</b>\n  with\tspaces  ", &first.MessageID, false)
+	send("summary-own-between", main.ID, meshUserParticipantID, stage, agentcomm.MessageKindMessage, "own message", nil, false)
+	last := send("summary-result", main.ID, stage, meshUserParticipantID, agentcomm.MessageKindResult, "turn result", &first.MessageID, true)
+	ownAfter := send("summary-own-after", main.ID, meshUserParticipantID, stage, agentcomm.MessageKindMessage, "latest own", nil, false)
+	firstPage, err := o.ReadThread(ctx, ReadThreadRequest{ThreadID: main.ID, Reader: stage, Limit: 1})
+	if err != nil || len(firstPage.Messages) != 1 || firstPage.NextCursor != first.Seq {
+		t.Fatalf("first message page = %+v, err %v", firstPage, err)
+	}
+	secondPage, err := o.ReadThread(ctx, ReadThreadRequest{ThreadID: main.ID, Reader: stage, Cursor: firstPage.NextCursor, Limit: 1})
+	if err != nil || len(secondPage.Messages) != 1 || secondPage.NextCursor != second.Seq {
+		t.Fatalf("second message page = %+v, err %v", secondPage, err)
+	}
+	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "summary-close", ThreadID: main.ID}); err != nil {
+		t.Fatalf("CloseThread: %v", err)
+	}
+
+	before := store.Snapshot()
+	page, err := o.ListThreads(ctx, ListThreadsRequest{Participant: stage})
+	if err != nil {
+		t.Fatalf("ListThreads(stage): %v", err)
+	}
+	if len(page.Threads) != 2 || page.Threads[0].ID != main.ID || page.Threads[1].ID != empty.ID {
+		t.Fatalf("stage threads = %v, want main then empty", page.Threads)
+	}
+	if len(page.Summaries) != 2 {
+		t.Fatalf("stage summaries = %v, want exactly two", page.Summaries)
+	}
+	if _, ok := page.Summaries[private.ID]; ok {
+		t.Fatal("non-member can see private summary")
+	}
+	got := page.Summaries[main.ID]
+	if got.LastMessage == nil || got.LastMessage.ID != ownAfter.MessageID || got.LastMessage.Seq != ownAfter.Seq ||
+		got.LastMessage.CreatedAt != before.Assistants.Mesh.Messages[ownAfter.MessageID].CreatedAt ||
+		got.LastMessage.SenderID != meshUserParticipantID || got.LastMessage.Preview != "latest own" ||
+		got.LastOtherMessageSeq != last.Seq || got.TitleSeq != 0 {
+		t.Fatalf("stage summary = %+v, want latest own message and last other message %d", got, last.Seq)
+	}
+	if got := page.Summaries[empty.ID]; got.LastMessage != nil || got.LastOtherMessageSeq != 0 || got.TitleSeq != 0 {
+		t.Fatalf("empty thread summary = %+v", got)
+	}
+	mainJSON, err := json.Marshal(page.Summaries[main.ID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mainSummary map[string]json.RawMessage
+	if err := json.Unmarshal(mainJSON, &mainSummary); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mainSummary["other_message_seqs"]; ok {
+		t.Fatalf("summary includes unneeded other_message_seqs: %s", mainJSON)
+	}
+	emptyJSON, err := json.Marshal(page.Summaries[empty.ID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var emptySummary map[string]json.RawMessage
+	if err := json.Unmarshal(emptyJSON, &emptySummary); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := emptySummary["other_message_seqs"]; ok {
+		t.Fatalf("empty summary includes unneeded other_message_seqs: %s", emptyJSON)
+	}
+	if after := store.Snapshot(); !reflect.DeepEqual(before.Assistants.Mesh.Receipts, after.Assistants.Mesh.Receipts) || before.LastSeq != after.LastSeq {
+		t.Fatal("ListThreads changed receipts or journal sequence")
+	}
+
+	human, err := o.ListThreads(ctx, ListThreadsRequest{Participant: meshUserParticipantID})
+	if err != nil {
+		t.Fatalf("ListThreads(human): %v", err)
+	}
+	if len(human.Summaries) != 3 || human.Summaries[main.ID].LastOtherMessageSeq != last.Seq {
+		t.Fatalf("human summaries = %+v", human.Summaries)
+	}
+	if human.Summaries[main.ID].LastMessage.Seq <= second.Seq {
+		t.Fatal("last message did not use commit sequence")
+	}
+
+	store.Close()
+	store2, err := state.Open(o.opts.RunDir, []string{assistantsTestStageID})
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store2.Close()
+	replayed, err := reopenAssistantsOrchestrator(o, store2).ListThreads(ctx, ListThreadsRequest{Participant: stage})
+	if err != nil {
+		t.Fatalf("ListThreads after replay: %v", err)
+	}
+	beforeJSON, err := json.Marshal(page)
+	if err != nil {
+		t.Fatalf("marshal page: %v", err)
+	}
+	afterJSON, err := json.Marshal(replayed)
+	if err != nil {
+		t.Fatalf("marshal replayed page: %v", err)
+	}
+	if string(beforeJSON) != string(afterJSON) {
+		t.Fatalf("replayed page differs: before=%s after=%s", beforeJSON, afterJSON)
+	}
+}
+
+func TestMesh_ThreadSummaryPreviewUsesRunesAndSavedPlainText(t *testing.T) {
+	stamp := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	old := &agentcomm.Message{ID: "old", Seq: 6, Sender: "user", CreatedAt: stamp, Body: "old"}
+	message := &agentcomm.Message{ID: "msg", Seq: 7, Sender: "agent", CreatedAt: stamp, Body: strings.Repeat("é", 159) + " \n <b>tail</b>"}
+	got := summarizeThreadMessages(state.MeshState{
+		Messages:         map[agentcomm.MessageID]*agentcomm.Message{old.ID: old, message.ID: message},
+		MessagesByThread: map[agentcomm.ThreadID][]agentcomm.MessageID{"thread": {old.ID, message.ID}},
+	}, "thread")
+	if got.LastMessage == nil || got.LastMessage.Preview != strings.Repeat("é", 159)+" " || len([]rune(got.LastMessage.Preview)) != 160 || got.LastOtherMessageSeq != 7 {
+		t.Fatalf("Unicode preview = %+v", got)
 	}
 }

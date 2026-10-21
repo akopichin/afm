@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -68,6 +72,70 @@ func TestMeshActions_SendToSetByAlias(t *testing.T) {
 	}
 	if n := len(store.Snapshot().Assistants.Mesh.Messages); n != 1 {
 		t.Fatalf("messages = %d, want 1", n)
+	}
+}
+
+func TestMeshActions_UpdateThreadTitleHTTP_IdempotentAfterLaterEdit(t *testing.T) {
+	a, store := newMeshAdapterTestActions(t, "impl")
+	thread, err := a.OpenThread(context.Background(), "req-open-topic", server.MeshOpenThreadRequest{
+		Scope: "run", Title: "Original", Members: []string{"stage:impl"},
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	if err := a.CloseThread(context.Background(), "req-close-topic", string(thread.ID)); err != nil {
+		t.Fatalf("CloseThread: %v", err)
+	}
+	srv := server.New(server.Config{Mesh: a})
+	post := func(requestID, title string, expected uint64) (int, orchestrator.UpdateThreadTitleReceipt, map[string]any) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{
+			"request_id": requestID, "title": title, "expected_title_seq": expected,
+			"actor": map[string]any{"kind": "agent", "id": "stage:impl"},
+		})
+		if err != nil {
+			t.Fatalf("marshal topic: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/mesh/threads/"+string(thread.ID)+"/topic", bytes.NewReader(body))
+		req.Header.Set("Origin", "http://"+req.Host)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		var receipt orchestrator.UpdateThreadTitleReceipt
+		var response map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if w.Code == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
+				t.Fatalf("decode receipt: %v", err)
+			}
+		}
+		return w.Code, receipt, response
+	}
+	firstStatus, first, response := post("req-topic-first", "First", 0)
+	if firstStatus != http.StatusOK || first.Title != "First" || first.TitleSeq == 0 {
+		t.Fatalf("first edit: HTTP %d, receipt %+v, body %v", firstStatus, first, response)
+	}
+	secondStatus, second, response := post("req-topic-second", "Second", first.TitleSeq)
+	if secondStatus != http.StatusOK || second.Title != "Second" || second.TitleSeq <= first.TitleSeq {
+		t.Fatalf("second edit: HTTP %d, receipt %+v, body %v", secondStatus, second, response)
+	}
+	clearStatus, cleared, response := post("req-topic-clear", "", second.TitleSeq)
+	if clearStatus != http.StatusOK || cleared.Title != "" || cleared.TitleSeq <= second.TitleSeq {
+		t.Fatalf("clear: HTTP %d, receipt %+v, body %v", clearStatus, cleared, response)
+	}
+	staleStatus, _, response := post("req-topic-stale", "Stale", first.TitleSeq)
+	if staleStatus != http.StatusConflict || response["error"] != "stale_revision" {
+		t.Fatalf("stale edit: HTTP %d, body %v", staleStatus, response)
+	}
+	beforeRetry := store.Snapshot().LastSeq
+	retryStatus, retry, response := post("req-topic-first", "First", 0)
+	if retryStatus != http.StatusOK || retry != first {
+		t.Fatalf("retry: HTTP %d, receipt %+v, body %v; want %+v", retryStatus, retry, response, first)
+	}
+	snap := store.Snapshot()
+	if snap.LastSeq != beforeRetry || snap.Assistants.Mesh.ThreadTitles[thread.ID].Title != "" || snap.Assistants.Mesh.ThreadTitles[thread.ID].Seq != cleared.TitleSeq {
+		t.Fatalf("retry changed state: seq %d -> %d, title %+v", beforeRetry, snap.LastSeq, snap.Assistants.Mesh.ThreadTitles[thread.ID])
 	}
 }
 

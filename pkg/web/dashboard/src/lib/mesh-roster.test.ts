@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { MeshParticipant, MeshThread } from '../api/mesh-client'
-import { boardNotifyCandidates, mentionHandle, mentionHandles, participantInitials, participantLabel, senderLabel, threadLabel } from './mesh-roster'
+import { boardNotifyCandidates, findExistingDirectThread, mentionHandle, mentionHandles, participantInitials, participantLabel, senderLabel, threadLabel } from './mesh-roster'
 
 const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'claude', reachable: true }
 const commit: MeshParticipant = { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', alias: 'commit', display_name: 'Commit & cleanup', stage_id: 'commit', reachable: true }
@@ -57,6 +57,19 @@ describe('mesh-roster', () => {
   test('an untitled thread with no other members falls back to its id', () => {
     const lonely: MeshThread = { id: 'mt-3', scope: 'run', members: ['user'], status: 'open' }
     expect(threadLabel(lonely, [])).toBe('mt-3')
+  })
+
+  test('direct lookup uses the newest open untitled two-member thread by durable message seq', () => {
+    const dm = (id: string, title = '', status = 'open', members = ['user', commit.id]): MeshThread =>
+      ({ id, title, scope: 'run', members, status })
+    const threads = [dm('older'), dm('task', 'Task title'), dm('newer'), dm('closed', '', 'closed'), dm('group', '', 'open', ['user', commit.id, side.id])]
+    const summaries = {
+      older: { last_message: { id: 'm10', seq: 10, created_at: '', sender_id: commit.id, preview: '' }, last_other_message_seq: 10, title_seq: 0 },
+      newer: { last_message: { id: 'm20', seq: 20, created_at: '', sender_id: commit.id, preview: '' }, last_other_message_seq: 20, title_seq: 0 },
+      task: { last_message: { id: 'm30', seq: 30, created_at: '', sender_id: commit.id, preview: '' }, last_other_message_seq: 30, title_seq: 0 },
+    }
+    expect(findExistingDirectThread(threads, commit.id, summaries)?.id).toBe('newer')
+    expect(findExistingDirectThread([dm('task', 'Task title')], commit.id, summaries)).toBeNull()
   })
 
   test('boardNotifyCandidates keeps reachable run agents and stage agents of working stages', () => {

@@ -285,9 +285,14 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // observational only, fires every time a thread opens naming them, not just on first add.
       return { actor: 'system', tone: 'neutral', kind: 'status', text: `${str(obj.participant_id)} joined the mesh`, mono: false }
     case 'mesh_thread': {
-      // 'closed' comes with status:"closed" and no title; opening always carries a title (possibly empty).
+      // Legacy opening notices have a title (possibly empty) and no action marker.
       if (str(obj.status) === 'closed') {
         return { actor: 'system', tone: 'neutral', kind: 'status', text: `thread ${str(obj.thread_id)} closed`, mono: false }
+      }
+      if (str(obj.action) === 'title_updated') {
+        const title = str(obj.title)
+        const text = title !== '' ? `thread ${str(obj.thread_id)} renamed: ${title}` : `thread ${str(obj.thread_id)} title cleared`
+        return { actor: 'system', tone: 'neutral', kind: 'status', text, mono: false }
       }
       const title = str(obj.title)
       const text = title !== '' ? `thread opened: ${title}` : `thread ${str(obj.thread_id)} opened`
