@@ -135,6 +135,38 @@ describe('skins CSS contract — mesh.css is imported by every skin (T7.3)', () 
   it('coffee imports mesh.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
 })
 
+describe('skins CSS contract — shared message time', () => {
+  it('uses one grid cell for both labels and pads the target without changing row width', () => {
+    expect(rule(meshCss, '.message-time')).toMatch(/display:\s*inline-grid/)
+    expect(rule(meshCss, '.message-time')).toMatch(/padding:\s*8px 10px/)
+    expect(rule(meshCss, '.message-time')).toMatch(/margin:\s*-8px -10px/)
+    expect(rule(meshCss, '.message-time')).toMatch(/font-variant-numeric:\s*tabular-nums/)
+    expect(rule(meshCss, '.message-time > span')).toMatch(/grid-area:\s*1 \/ 1/)
+  })
+
+  it('reveals the gap on hover, keyboard focus, and focus within interactive feed rows', () => {
+    expect(meshCss).toMatch(/\.message-time:hover \.message-time-clock/)
+    expect(meshCss).toMatch(/\.message-time:focus-visible \.message-time-gap/)
+    expect(meshCss).toMatch(/\.feed-item-navigable:focus-visible \.message-time \.message-time-gap/)
+    expect(meshCss).toMatch(/\.feed-thought-row:focus-within \.message-time \.message-time-gap/)
+  })
+
+  it('switches without animation under reduced motion', () => {
+    expect(meshCss).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.message-time > span\s*\{[^}]*transition:\s*none/)
+  })
+
+  it('keeps the reply button clear of the thought timestamp hover target', () => {
+    const thought = rule(feedWorkspaceCss, '.feed-item-thought')
+    const reply = rule(feedWorkspaceCss, '.feed-thought-reply')
+    const time = rule(meshCss, '.message-time')
+    const reserved = Number(thought.match(/padding-right:\s*(\d+)px/)?.[1] ?? 0)
+    const buttonRight = Number(reply.match(/right:\s*(\d+)px/)?.[1] ?? 0)
+    const buttonWidth = Number(reply.match(/width:\s*(\d+)px/)?.[1] ?? 0)
+    const timeHoverExtension = Number(time.match(/margin:\s*-\d+px\s+-(\d+)px/)?.[1] ?? 0)
+    expect(reserved).toBeGreaterThanOrEqual(buttonRight + buttonWidth + timeHoverExtension)
+  })
+})
+
 describe('skins CSS contract — Team view leans ONLY on the semantic token layer (T7.3)', () => {
   function allVarNames(css: string): Set<string> {
     return new Set([...css.matchAll(/var\((--[a-zA-Z0-9-]+)/g)].map((m) => m[1] as string))

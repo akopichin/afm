@@ -17,6 +17,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/secrets"
+	"github.com/akopichin/afm/pkg/timezone"
 )
 
 // containerHome — домашний каталог non-root пользователя внутри контейнера.
@@ -366,6 +367,23 @@ func ReExec(cfg ReExecConfig) error {
 		"-e", "AFM_HOST_UID="+strconv.Itoa(os.Getuid()),
 		"-e", "AFM_HOST_GID="+strconv.Itoa(os.Getgid()),
 	)
+	// Часовой пояс хоста — не секрет, передаём значением: зона контейнера (обычно
+	// UTC) не совпадает с хостовой, а dashboard показывает время по зоне хоста.
+	hostTZ := timezone.Host()
+	args = append(args,
+		"-e", timezone.EnvHostTimeZone+"="+hostTZ.Name,
+		"-e", timezone.EnvHostUTCOffsetMinutes+"="+strconv.Itoa(hostTZ.OffsetMinutes),
+	)
+	// Без IANA-имени передаём правила зоны: контейнер пересчитывает текущее
+	// смещение при каждом status-запросе, включая переход DST после запуска.
+	if hostTZ.Name == "" {
+		if zoneFile := timezone.HostZoneFile(); zoneFile != "" {
+			args = append(args,
+				"-v", zoneFile+":"+timezone.ContainerZoneFile+":ro",
+				"-e", timezone.EnvHostZoneFile+"="+timezone.ContainerZoneFile,
+			)
+		}
+	}
 	// AFM_DEBUG — не секрет, передаём значением, чтобы --debug/AFM_DEBUG на
 	// хосте включал логирование промптов и внутри контейнера.
 	if os.Getenv("AFM_DEBUG") != "" {

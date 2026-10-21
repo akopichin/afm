@@ -1,7 +1,10 @@
-import { describe, expect, test, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ConversationMessage } from './ConversationMessage'
-import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
+import { ThreadConversation } from './ThreadConversation'
+import * as meshClient from '../../api/mesh-client'
+import type { MeshMessage, MeshParticipant, MeshThread } from '../../api/mesh-client'
+import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
 
 const participants: MeshParticipant[] = [
   { id: 'user', kind: 'user', scope: 'run', display_name: 'You', reachable: true },
@@ -20,6 +23,8 @@ function renderMessage(props: Partial<Parameters<typeof ConversationMessage>[0]>
 }
 
 describe('ConversationMessage', () => {
+  afterEach(() => vi.restoreAllMocks())
+
   test('shows the author, the command it runs, the recipients and the quoted message', () => {
     renderMessage()
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()
@@ -37,5 +42,34 @@ describe('ConversationMessage', () => {
     expect(onJumpToQuote).toHaveBeenCalledWith('m1')
     fireEvent.click(screen.getByRole('button', { name: '↩ Reply in conversation' }))
     expect(onReply).toHaveBeenCalled()
+  })
+
+  test.each([
+    ['direct', ['user', 'run:qa']],
+    ['group', ['user', 'run:qa', 'stage:impl']],
+  ])('Team %s messages show host time and gaps within the displayed thread', async (_kind, members) => {
+    const thread: MeshThread = { id: 'mt-1', scope: 'run', members, status: 'open' }
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [question, answer], next_cursor: 2 })
+    render(
+      <MessageTimeZoneProvider timeZone="Asia/Tokyo" utcOffsetMinutes={540}>
+        <ThreadConversation target={{ kind: 'thread', thread }} participants={participants} />
+      </MessageTimeZoneProvider>,
+    )
+    await waitFor(() => expect(document.querySelector('[data-message-id="m2"]')).not.toBeNull())
+
+    const first = document.querySelector('[data-message-id="m1"]') as HTMLElement
+    const second = document.querySelector('[data-message-id="m2"]') as HTMLElement
+    const firstTime = first.querySelector('time') as HTMLElement
+    const secondTime = second.querySelector('time') as HTMLElement
+    expect(firstTime).toHaveClass('message-time')
+    expect(firstTime).toHaveAttribute('tabindex', '0')
+    expect(firstTime).toHaveAttribute('title', expect.stringMatching(/Oct 19, 2026, 19:00:00 \(host time\).*first event \(\+0s\)/))
+    expect(firstTime.querySelector('.message-time-clock')).toHaveTextContent('19:00')
+    expect(firstTime.querySelector('.message-time-gap')).toHaveTextContent('+0s')
+    expect(secondTime.querySelector('.message-time-clock')).toHaveTextContent('19:01')
+    expect(secondTime.querySelector('.message-time-gap')).toHaveTextContent('+1m')
+    expect(secondTime).toHaveAttribute('title', expect.stringMatching(/19:01:00 \(host time\).*\+1m after previous/))
+    expect(first.querySelector('.team-conversation-message-header > time')).toBe(firstTime)
+    expect(second.querySelector('.team-conversation-message-header > time')).toBe(secondTime)
   })
 })

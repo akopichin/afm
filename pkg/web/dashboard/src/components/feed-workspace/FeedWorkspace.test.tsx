@@ -4,6 +4,9 @@ import type { AfmEvent } from '../../types'
 import { FeedWorkspace, FeedGroupView, feedItemSignature } from './FeedWorkspace'
 import type { FeedGroup, FeedItem } from './feed-view-model'
 import * as verifyReportClient from '../../api/verify-report-client'
+import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
+import { sideAgentFeedGroups } from '../side-agent/side-agent-feed-model'
+import type { SideAgentEvent } from '../../types/side-agent'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string): AfmEvent =>
   ({ type, payload, stageId, timestamp }) as AfmEvent
@@ -30,6 +33,55 @@ describe('FeedWorkspace', () => {
     const { container } = render(<FeedWorkspace events={[]} stageId={null} />)
     expect(container.querySelector('#feed-content')).toBeInTheDocument()
     expect(container.querySelectorAll('.feed-group')).toHaveLength(0)
+  })
+
+  it.each([
+    ['stage', 's1', false],
+    ['full', null, true],
+  ])('shows host-local clock and previous-event gap in the %s feed', (_name, stageId, showStageBadges) => {
+    const events = [
+      ev('stage_status_changed', 'running', 's1', '2026-10-21T05:31:09Z'),
+      ev('agent_action', { tool: 'read_file', detail: 'a' }, 's1', '2026-10-21T05:31:16Z'),
+      ev('agent_action', { tool: 'read_file', detail: 'b' }, 's1', '2026-10-21T05:33:16Z'),
+    ]
+    const { container } = render(
+      <MessageTimeZoneProvider timeZone="Asia/Tokyo" utcOffsetMinutes={0}>
+        <FeedWorkspace events={events} stageId={stageId} showStageBadges={showStageBadges} />
+      </MessageTimeZoneProvider>,
+    )
+    const times = Array.from(container.querySelectorAll('time.message-time'))
+    expect(times).toHaveLength(3)
+    expect(times.map((time) => time.querySelector('.message-time-clock')?.textContent)).toEqual(['14:31', '14:31', '14:33'])
+    expect(times.map((time) => time.querySelector('.message-time-gap')?.textContent)).toEqual(['+0s', '+7s', '+2m'])
+    expect(times[0]).toHaveAttribute('title', expect.stringContaining('first event (+0s)'))
+    expect(times[1]).toHaveAttribute('title', expect.stringContaining('+7s after previous'))
+    expect(times.every((time) => time.getAttribute('tabindex') === '0')).toBe(true)
+  })
+
+  it('omits a time label for an invalid event timestamp', () => {
+    const events = [ev('agent_action', { tool: 'read_file', detail: 'a' }, 's1', 'invalid')]
+    const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+    expect(container.querySelector('.feed-item')).toBeInTheDocument()
+    expect(container.querySelector('time.message-time')).toBeNull()
+  })
+
+  it('shows side-agent history through the same host-local time renderer', () => {
+    const sideEvent = (seq: number, timestamp: string, value: string): SideAgentEvent => ({
+      schemaVersion: 1, seq, conversationId: 'c1', turnId: 't1', timestamp,
+      type: 'assistant_text', data: { text: value },
+    })
+    const groups = sideAgentFeedGroups([
+      sideEvent(1, '2026-10-21T05:31:09Z', 'hello'),
+      sideEvent(2, '2026-10-21T05:31:16Z', 'again'),
+    ])
+    const { container } = render(
+      <MessageTimeZoneProvider timeZone="Asia/Tokyo" utcOffsetMinutes={0}>
+        {groups.map((group) => <FeedGroupView key={group.key} group={group} showStageBadges={false} />)}
+      </MessageTimeZoneProvider>,
+    )
+    const times = Array.from(container.querySelectorAll('time.message-time'))
+    expect(times.map((time) => time.querySelector('.message-time-clock')?.textContent)).toEqual(['14:31', '14:31'])
+    expect(times.map((time) => time.querySelector('.message-time-gap')?.textContent)).toEqual(['+0s', '+7s'])
   })
 
   it('renders agent narrative (agent_action tool="text") as prose, not a mono row', () => {
@@ -169,6 +221,10 @@ describe('FeedWorkspace', () => {
     const button = screen.getByRole('button', { name: /what next\?/ })
     expect(button.tagName).toBe('BUTTON')
     expect(button).toHaveClass('feed-item-navigable')
+    const time = button.querySelector('time.message-time')
+    expect(time).toBeInTheDocument()
+    expect(time).not.toHaveAttribute('tabindex')
+    expect(time?.querySelector('.message-time-gap')).toHaveTextContent('+0s')
     fireEvent.click(button)
     expect(onOpenDialog).toHaveBeenCalledWith('s1', 'planning', 'q1')
   })
@@ -285,7 +341,7 @@ describe('FeedWorkspace', () => {
       expect(kids[1]?.tagName).toBe('IMG')
       expect(kids[2]?.textContent).toContain('after')
       // timestamp — отдельный элемент РЯДА, не внутри колонки сегментов.
-      expect(wrap!.querySelector('.feed-item-gap')).toBeNull()
+      expect(wrap!.querySelector('.message-time')).toBeNull()
     })
 
     it('маркер внутри code-fence НЕ становится картинкой (остаётся текстом)', () => {
@@ -412,6 +468,20 @@ describe('FeedWorkspace', () => {
       render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} onReplyToThought={onReply} />)
       fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
       expect(onReply).toHaveBeenCalledWith('k1', 'мысль агента')
+    })
+
+    it('reply button keeps the thought time out of the tab order', () => {
+      const { container } = render(
+        <FeedGroupView group={groupOf([thoughtItem({ ts: Date.parse('2026-10-21T05:31:09Z'), gap: '0s' })])}
+          showStageBadges={false} onReplyToThought={vi.fn()} />,
+      )
+      const row = container.querySelector('.feed-thought-row')
+      expect(row?.querySelector('time.message-time')).toBeInTheDocument()
+      expect(row?.querySelector('time.message-time')).not.toHaveAttribute('tabindex')
+      const reply = screen.getByRole('button', { name: /reply to this thought/i })
+      reply.focus()
+      expect(document.activeElement).toBe(reply)
+      expect(row?.contains(reply)).toBe(true)
     })
 
     it('клик по ссылке <a> внутри мысли НЕ выбирает мысль (link guard)', () => {

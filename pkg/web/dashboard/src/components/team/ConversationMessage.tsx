@@ -3,10 +3,13 @@ import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
 import { participantRole, senderLabel } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
 import { AgentMessageBody } from '../agent-message/AgentMessageBody'
+import { formatEventGap } from '../feed-workspace/feed-view-model'
+import { MessageTime } from '../message-time/MessageTime'
 import { MeshAvatar } from './MeshAvatar'
 
 export type ConversationMessageProps = {
   message: MeshMessage
+  previousCreatedAt?: string
   participants: MeshParticipant[]
   // answered — the message this one replies to, quoted at the top of the bubble.
   answered?: MeshMessage
@@ -38,15 +41,10 @@ function roleLabel(role: string): string {
   }
 }
 
-function messageTime(createdAt: string): string {
-  const d = new Date(createdAt)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
@@ -76,7 +74,12 @@ export function ConversationMessage({ message, participants, answered, onJumpToQ
           )}
           {role !== undefined && <span className="conversation-role-chip">{roleLabel(role)}</span>}
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
-          <time dateTime={message.created_at}>{messageTime(message.created_at)}</time>
+          <MessageTime
+            timestamp={message.created_at}
+            gap={formatEventGap(Date.parse(message.created_at), previousCreatedAt === undefined ? NaN : Date.parse(previousCreatedAt))}
+            firstEvent={previousCreatedAt === undefined}
+            focusable
+          />
           {notAnswered && (
             <span className="conversation-not-answered" title="The stage finished without replying to this message">
               Not answered

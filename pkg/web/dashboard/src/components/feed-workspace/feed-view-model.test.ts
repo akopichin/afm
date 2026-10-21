@@ -76,12 +76,43 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
   it('computes a static gap-from-previous duration per item', () => {
     const items = toFeedItems([
       ev('stage_status_changed', 'running', 's1', '2026-07-10T10:00:00.000Z'),
-      ev('agent_action', { tool: 'a' }, 's1', '2026-07-10T10:00:05.000Z'),
-      ev('agent_action', { tool: 'b' }, 's1', '2026-07-10T10:01:35.000Z'),
+      ev('agent_action', { tool: 'a' }, 's1', '2026-07-10T10:00:07.000Z'),
+      ev('agent_action', { tool: 'b' }, 's1', '2026-07-10T10:02:07.000Z'),
     ])
-    expect(items[0]?.gap).toBe('—')
-    expect(items[1]?.gap).toBe('5s')
-    expect(items[2]?.gap).toBe('1m')
+    expect(items.map((item) => item.gap)).toEqual(['0s', '7s', '2m'])
+    expect(items.map((item) => item.firstEvent)).toEqual([true, false, false])
+    expect(items.map((item) => item.ts)).toEqual([
+      Date.parse('2026-07-10T10:00:00.000Z'),
+      Date.parse('2026-07-10T10:00:07.000Z'),
+      Date.parse('2026-07-10T10:02:07.000Z'),
+    ])
+  })
+
+  it('marks the first displayed event as first when a hidden event precedes it', () => {
+    const items = toFeedItems([
+      ev('ask_user', { phase: 'planning', id: 'q1' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('agent_action', { tool: 'read_file' }, 's1', '2026-07-10T10:00:07Z'),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ gap: '0s', firstEvent: true })
+  })
+
+  it('measures the gap between displayed events across a hidden event', () => {
+    const items = toFeedItems([
+      ev('agent_action', { tool: 'first' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('user_answered', { phase: 'planning', id: 'q1' }, 's1', '2026-07-10T10:01:00Z'),
+      ev('agent_action', { tool: 'second' }, 's1', '2026-07-10T10:02:00Z'),
+    ])
+    expect(items.map((item) => [item.gap, item.firstEvent])).toEqual([['0s', true], ['2m', false]])
+  })
+
+  it('keeps invalid timestamps without a clock and starts a new zero gap after one', () => {
+    const items = toFeedItems([
+      ev('agent_action', { tool: 'a' }, 's1', 'invalid'),
+      ev('agent_action', { tool: 'b' }, 's1', '2026-07-10T10:00:00Z'),
+    ])
+    expect(Number.isNaN(items[0]?.ts)).toBe(true)
+    expect(items.map((item) => item.gap)).toEqual(['—', '0s'])
   })
 
   it('gives same-timestamp same-type events unique stable keys', () => {
@@ -90,6 +121,7 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
       ev('agent_action', { tool: 'b' }, 's1', '2026-07-10T10:00:00Z'),
     ])
     expect(items[0]?.key).not.toBe(items[1]?.key)
+    expect(items.map((item) => [item.gap, item.firstEvent])).toEqual([['0s', true], ['0s', false]])
   })
 
   it('prefers seq for the key when present', () => {
@@ -720,11 +752,12 @@ describe('T8.2 — the Feed scenario: QA clarifying with a stage renders as one 
 })
 
 describe('formatEventGap', () => {
-  it('formats seconds/minutes/hours/days and em-dash for invalid', () => {
+  it('formats seconds/minutes/hours/days, zero for a first valid event, and em-dash for invalid current time', () => {
     expect(formatEventGap(5000, 0)).toBe('5s')
     expect(formatEventGap(90_000, 0)).toBe('1m')
     expect(formatEventGap(7_200_000, 0)).toBe('2h')
     expect(formatEventGap(172_800_000, 0)).toBe('2d')
+    expect(formatEventGap(0, NaN)).toBe('0s')
     expect(formatEventGap(NaN, 0)).toBe('—')
   })
 })

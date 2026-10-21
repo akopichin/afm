@@ -3,6 +3,17 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-21
+
+### Improvement: show host-local message times in conversations and feeds
+
+The stage Feed, Full feed, Side agent history, and Team and stage conversations
+now show `HH:MM` in the afm host's time zone. Hover or keyboard focus reveals the
+elapsed gap, with a full date, time, and gap in the timestamp's tooltip and
+accessible label. Automatic Docker mode carries the launching host's zone into
+the dashboard; a signed UTC offset is used when its IANA name is unavailable.
+See [Dashboard message times](docs/dashboard.md#message-times).
+
 ## 2026-10-20
 
 ### Improvement: address the Side agent through Agent Mesh

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
@@ -21,6 +22,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/pkg/timezone"
 )
 
 const (
@@ -71,6 +73,11 @@ type statusResponse struct {
 	// plus the ids of stages this round is holding paused.
 	FlowPauseState   string   `json:"flow_pause_state"`
 	FlowPausedStages []string `json:"flow_paused_stages,omitempty"`
+	// TimeZone/UTCOffsetMinutes — host time zone for rendering message times: the IANA name (empty when the
+	// zone is unknown — NOT a silent UTC) and the host's current signed UTC offset. The offset is a snapshot
+	// at status time and only a fallback when the name is unavailable; DST history resolves from the name.
+	TimeZone         string `json:"time_zone"`
+	UTCOffsetMinutes int    `json:"utc_offset_minutes"`
 	// RunCost/RunOverheadCost/CoverageIssues/Accounting — все четыре приходят из одного accounting.CostBundle
 	// и опускаются целиком, когда Server.accounting == nil.
 	RunCost         *accounting.CostView       `json:"run_cost,omitempty"`
@@ -145,6 +152,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	} else {
 		resp.FlowPauseState = reviewStateNone
 	}
+	// Resolve at status time: native runs use the local zone; Docker re-exec uses
+	// the host transport, including its zone file for current fallback offset.
+	var hostTZ timezone.Info
+	if config.ReExecedIntoContainer() {
+		hostTZ = timezone.FromTransport()
+	} else {
+		hostTZ = timezone.Host()
+	}
+	resp.TimeZone = hostTZ.Name
+	resp.UTCOffsetMinutes = hostTZ.OffsetMinutes
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

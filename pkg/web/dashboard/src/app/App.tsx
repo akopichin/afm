@@ -16,6 +16,7 @@ import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
 import { FileBrowserProvider } from '../components/file-browser'
 import { SideAgentProvider } from '../components/side-agent'
+import { MessageTimeZoneProvider } from '../lib/message-time-zone'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
@@ -71,6 +72,7 @@ export function App(): ReactElement {
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, runCost,
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh, runStatus,
+    timeZone, utcOffsetMinutes,
   } = useStatus()
 
   // Модалка ревью-раунда — открывается по клику ReviewBanner's "Send notes".
@@ -488,10 +490,13 @@ export function App(): ReactElement {
   }
 
   return (
-    // SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
-    // useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
-    // needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
-    // compile error, no runtime error, just a default/no-op context.
+    // MessageTimeZoneProvider стоит СНАРУЖИ SideAgentProvider: Feed, Team и история бокового агента
+    // должны видеть одну и ту же хост-зону для времени сообщений.
+    <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
+    {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
+        useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
+        needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
+        compile error, no runtime error, just a default/no-op context. */}
     <SideAgentProvider
       runId={runId}
       enabled={capabilities.sideAgent}
@@ -743,6 +748,7 @@ export function App(): ReactElement {
       )}
       </FileBrowserProvider>
     </SideAgentProvider>
+    </MessageTimeZoneProvider>
   )
 }
 

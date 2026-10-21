@@ -241,8 +241,8 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
           <p className="team-conversation-empty-messages empty-hint">No messages yet</p>
         ) : (
           <ul className="team-conversation-message-list">
-            {messages.map((m) => (
-              <ConversationMessage key={m.id} message={m} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} sideOutcome={sideAgentOutcome(m, messages, sideFailures)} />
+            {messages.map((m, index) => (
+              <ConversationMessage key={m.id} message={m} previousCreatedAt={messages[index - 1]?.created_at} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} sideOutcome={sideAgentOutcome(m, messages, sideFailures)} />
             ))}
           </ul>
         )}

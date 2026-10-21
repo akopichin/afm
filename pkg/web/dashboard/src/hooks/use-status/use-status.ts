@@ -49,6 +49,11 @@ export type FlowStatus = {
   // accounting — состояние учёта затрат: поддержано или нет на бэкенде.
   // Отсутствие поля трактуется как {supported: false} (старый бэкенд).
   accounting: AccountingState
+  // timeZone/utcOffsetMinutes — часовой пояс хоста afm (IANA-имя может быть пустым, offset — подписанные
+  // минуты от UTC). Оба отсутствуют у старого бэкенда: timeZone '' и utcOffsetMinutes null сигналят
+  // MessageTimeZoneProvider взять browser-local fallback.
+  timeZone: string
+  utcOffsetMinutes: number | null
 }
 
 const EMPTY_STATUS: FlowStatus = {
@@ -71,6 +76,8 @@ const EMPTY_STATUS: FlowStatus = {
   flowPausedStages: [],
   coverageIssues: [],
   accounting: { supported: false },
+  timeZone: '',
+  utcOffsetMinutes: null,
 }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages — уже упорядоченный массив
@@ -213,6 +220,11 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? toAccountingState(obj.accounting)
     : { supported: false }
 
+  const timeZone = typeof obj.time_zone === 'string' ? obj.time_zone : ''
+  const utcOffsetMinutes = typeof obj.utc_offset_minutes === 'number' && Number.isFinite(obj.utc_offset_minutes)
+    ? obj.utc_offset_minutes
+    : null
+
   return {
     flowName,
     stages,
@@ -236,6 +248,8 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     runOverheadCost,
     coverageIssues,
     accounting,
+    timeZone,
+    utcOffsetMinutes,
   }
 }
 
