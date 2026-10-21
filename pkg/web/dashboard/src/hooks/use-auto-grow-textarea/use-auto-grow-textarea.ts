@@ -12,12 +12,15 @@ export function useAutoGrowTextarea(
   // Значение, которое хук УЖЕ обработал для текущего узла. Скроллим ТОЛЬКО когда value реально изменилось
   // (пользователь печатает).
   const prevValue = useRef<string | null>(null)
+  // needsMeasure — значение сменилось, пока поле было скрыто (display: none): мерить нечего, перемерим при показе.
+  const needsMeasure = useRef(false)
 
   // Новый вызов callback-ref'а — это либо реально новый DOM-узел, либо unmount.
   const ref = useCallback((el: HTMLTextAreaElement | null) => {
     lastAutoHeight.current = null
     locked.current = false
     prevValue.current = null
+    needsMeasure.current = false
     setNode(el)
   }, [])
 
@@ -28,7 +31,13 @@ export function useAutoGrowTextarea(
       locked.current = false
     }
     if (locked.current) return
+    if (node.scrollHeight === 0 && node.clientHeight === 0) {
+      needsMeasure.current = true
+      prevValue.current = value
+      return
+    }
 
+    needsMeasure.current = false
     node.style.height = 'auto'
     const next = Math.min(node.scrollHeight, maxHeightPx)
     node.style.height = `${next}px`
@@ -52,6 +61,14 @@ export function useAutoGrowTextarea(
     if (node === null) return
 
     const obs = new ResizeObserver(() => {
+      if (needsMeasure.current && node.scrollHeight > 0) {
+        needsMeasure.current = false
+        node.style.height = 'auto'
+        const next = Math.min(node.scrollHeight, maxHeightPx)
+        node.style.height = `${next}px`
+        lastAutoHeight.current = next
+        return
+      }
       const current = parseFloat(node.style.height || '0')
       if (lastAutoHeight.current !== null && current !== lastAutoHeight.current) {
         locked.current = true
@@ -59,7 +76,7 @@ export function useAutoGrowTextarea(
     })
     obs.observe(node)
     return () => obs.disconnect()
-  }, [node])
+  }, [node, maxHeightPx])
 
   return ref
 }

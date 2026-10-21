@@ -447,7 +447,9 @@ export function App(): ReactElement {
   // Team — ГЛОБАЛЬНАЯ вкладка ростера/бесед Agent Mesh (T7.3), не привязана к выбранной стадии (как Cost
   // ниже), видна когда meshRoster.enabled (пробный запрос — см. его комментарий, у мэша нет своего поля в
   // status.capabilities).
-  if (meshRoster.enabled) {
+  // Team also waits for the run id: it keys Team's state, so a first status arriving after the mesh probe must
+  // not recreate an already opened Team.
+  if (meshRoster.enabled && runId !== '') {
     tabs.push({ id: 'team', label: 'Team' })
   }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.

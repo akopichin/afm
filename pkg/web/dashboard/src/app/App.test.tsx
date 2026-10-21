@@ -1953,7 +1953,7 @@ describe('App', () => {
         return {
           ok: true,
           json: async () => ({
-            flow_name: 'demo',
+            flow_name: 'demo', run_id: 'app-team-tab',
             stages: [stageView('s1', 'Propose', 'running')],
             accounting: { health: 'ok', has_data: false, show_money: true },
           }),
@@ -2006,6 +2006,28 @@ describe('App', () => {
     await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
     fireEvent.click(screen.getByRole('tab', { name: 'Team' }))
     expect(screen.getByRole('button', { name: /QA.*New messages/ })).toBeInTheDocument()
+  })
+
+  test('Team waits for the run id, so the first status never recreates an open Team', async () => {
+    let releaseStatus: () => void = () => {}
+    const statusReady = new Promise<void>((resolve) => { releaseStatus = resolve })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        await statusReady
+        return { ok: true, json: async () => ({ flow_name: 'demo', run_id: 'app-late-status', stages: [stageView('s1', 'Propose', 'running')], accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      }
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }] }) } as Response
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [], summaries: {} }) } as Response
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    render(<App />)
+    // The mesh probe has answered; the status has not.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull()
+    releaseStatus()
+    expect(await screen.findByRole('tab', { name: 'Team' })).toBeInTheDocument()
   })
 
   test('leaving Team for the Feed keeps its draft and does not read messages that arrive meanwhile', async () => {

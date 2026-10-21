@@ -66,6 +66,26 @@ describe('useAutoGrowTextarea', () => {
     vi.unstubAllGlobals()
   })
 
+  it('leaves a hidden field alone and measures it when it is shown again', () => {
+    const { rerender } = render(<TestComponent value="three lines" maxHeight={400} />)
+    const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
+    const layout = { scrollHeight: 90, clientHeight: 90 }
+    Object.defineProperty(textarea, 'scrollHeight', { get: () => layout.scrollHeight, configurable: true })
+    Object.defineProperty(textarea, 'clientHeight', { get: () => layout.clientHeight, configurable: true })
+    rerender(<TestComponent value="three lines and more" maxHeight={400} />)
+    expect(textarea.style.height).toBe('90px')
+
+    // display: none — no layout. A send that completes meanwhile trims the draft.
+    Object.assign(layout, { scrollHeight: 0, clientHeight: 0 })
+    rerender(<TestComponent value="more" maxHeight={400} />)
+    expect(textarea.style.height).toBe('90px')
+
+    // Shown again: the remaining draft is measured.
+    Object.assign(layout, { scrollHeight: 40, clientHeight: 40 })
+    lastObserver?.trigger()
+    expect(textarea.style.height).toBe('40px')
+  })
+
   it('grows height to scrollHeight as the value changes', () => {
     const { rerender } = render(<TestComponent value="" maxHeight={400} />)
     const textarea = screen.getByTestId('textarea') as HTMLTextAreaElement
