@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -38,5 +40,22 @@ func TestRunVerification_ShellStepRunsInProjectRoot(t *testing.T) {
 				t.Errorf("shell verify ran in %q, want %q", gotDir, tc.wantDir)
 			}
 		})
+	}
+}
+
+// The same through the real shell runner: the step passes only where the project's marker file exists.
+func TestRunVerification_RealShellStepSeesProjectRootFiles(t *testing.T) {
+	stage := flow.Stage{
+		ID:     verifyTestStageID,
+		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyShell, Run: "test -f only-in-worktree.marker"}}},
+	}
+	o, _ := newVerifyTestOrchestrator(t, stage)
+	o.opts.RootDir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(o.opts.RootDir, "only-in-worktree.marker"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := o.RunVerification(context.Background(), stage, phaseImplementation); err != nil {
+		t.Fatalf("shell verify must run in the project root and find the marker: %v", err)
 	}
 }

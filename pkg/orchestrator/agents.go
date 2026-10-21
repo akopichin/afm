@@ -107,7 +107,7 @@ func (o *Orchestrator) collectDependencyPlansNoticing(s flow.Stage) string {
 // collectArtifactsNoticing — тонкая обёртка над stagefiles.CollectArtifacts: ошибка сбора не фатальна,
 // только WARN в лог afm.
 func (o *Orchestrator) collectArtifactsNoticing(s flow.Stage, label string) string {
-	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.reg().Stages())
+	artCtx, artErr := stagefiles.CollectArtifacts(o.projectDir(), o.opts.RunDir, s, o.reg().Stages())
 	if artErr != nil {
 		log.Printf("WARN: collect artifacts for %s %s: %v", s.ID, label, artErr)
 	}
@@ -342,7 +342,7 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 
 		return nil
 	}, o.gateWithVerify(ctx, s, phaseImplementation, func() error {
-		return stagefiles.CheckCompletion(stageDir, ".", s)
+		return stagefiles.CheckCompletion(stageDir, o.projectDir(), s)
 	}), func() { o.spawnKind(ctx, s, kindImplementation, o.runImplementationWithFeedback) })
 }
 
@@ -388,7 +388,7 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 		rr := o.runnerFor(s, phaseReview)
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 	}, o.gateWithVerify(ctx, s, phaseReview, func() error {
-		return stagefiles.CheckCompletion(stageDir, ".", s)
+		return stagefiles.CheckCompletion(stageDir, o.projectDir(), s)
 	}), func() { o.spawnKind(ctx, s, kindReview, o.runReviewWithFeedback) })
 }
 

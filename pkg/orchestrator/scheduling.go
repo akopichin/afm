@@ -91,7 +91,7 @@ func (o *Orchestrator) activatePrePlannedStage(s flow.Stage) {
 	}
 	dst := filepath.Join(stageDir, "plan.md")
 	if s.Plan != "" {
-		if err := copyFile(resolvePlanSource(o.opts.RunDir, s), dst); err != nil {
+		if err := copyFile(resolvePlanSource(o.opts.RunDir, o.projectDir(), s), dst); err != nil {
 			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "copy plan failed")
 			return
 		}
@@ -274,7 +274,7 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 				o.Trigger(stageID, bus.EvFail, bus.GuardCtx{}, "mkdir failed")
 				return
 			}
-			if err := copyFile(resolvePlanSource(o.opts.RunDir, *stage), planPath); err != nil {
+			if err := copyFile(resolvePlanSource(o.opts.RunDir, o.projectDir(), *stage), planPath); err != nil {
 				o.Trigger(stageID, bus.EvFail, bus.GuardCtx{}, "copy plan failed: "+err.Error())
 				return
 			}

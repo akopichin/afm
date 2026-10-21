@@ -66,7 +66,7 @@ stages:
 | `depends_on` | no | IDs of stages that must complete first |
 | `eager_planning` | no | `true` — planning starts immediately when the flow runs, without waiting for `depends_on` |
 | `skills` | no | Claude skills for the agent |
-| `plan` | no | Path to a ready-made plan file (skips planning) |
+| `plan` | no | Path to a ready-made plan file (skips planning); `./` looks in dependency stage directories, other relative paths start at the agents' project root |
 | `command` | no | AI command for this stage (overrides `client.command` from the config) |
 | `max_parallel` | no | Limit on parallel stages for this command |
 | `interactive` | no | `true` — enables the [file-based dialog protocol](interactive-stages.md) with the user via the dashboard |

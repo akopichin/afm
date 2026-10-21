@@ -8,9 +8,10 @@ older ones further down. Dates follow the commits that shipped each change.
 ### Fix: shell verify checks the run's worktree
 
 A shell verify step such as `go test ./...` now runs in the agents' project root:
-the run's worktree or `flow.root_dir`, falling back to the afm-root. Previously it
-always ran in the afm-root, so a worktree run tested the main checkout instead of
-the changed code. See [Verify](docs/verify.md).
+the run's worktree, else `flow.root_dir`, else afm's working directory. Project
+artifacts (paths without `./`) and a stage's `plan:` file resolve from the same
+root. Previously they used afm's working directory, so a worktree run tested and
+read the main checkout instead of the changed code. See [Verify](docs/verify.md).
 
 ## 2026-10-21
 
