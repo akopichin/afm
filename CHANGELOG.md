@@ -3,6 +3,19 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-22
+
+### Fix: shell verify checks the run's worktree
+
+A shell verify step such as `go test ./...` now runs in the agents' project root:
+the run's worktree, else `flow.root_dir`, else afm's working directory. Project
+artifacts (paths without `./`) and a stage's `plan:` file resolve from the same
+root. Previously they used afm's working directory, so a worktree run tested and
+read the main checkout instead of the changed code. afm now resolves the
+run directory and project paths to absolute ones, so run, memory and helper scratch
+paths handed to agents stay valid from a worktree, and a plan an agent writes at a relative path is
+read from the agent's directory. See [Verify](docs/verify.md).
+
 ## 2026-10-21
 
 ### Improvement: make Team a conversation-first inbox

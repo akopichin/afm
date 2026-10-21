@@ -31,9 +31,14 @@ func TestResolvePlanSource(t *testing.T) {
 			want:  planPath,
 		},
 		{
-			name:  "fallback to literal path when no dependency has the file",
+			name:  "fallback to the project root when no dependency has the file",
 			stage: flow.Stage{Plan: "./plan.md", DependsOn: []string{"other"}},
-			want:  "./plan.md",
+			want:  "/wt/plan.md",
+		},
+		{
+			name:  "project-relative plan read from the project root (a worktree), not afm's CWD",
+			stage: flow.Stage{Plan: "docs/plans/change.md"},
+			want:  "/wt/docs/plans/change.md",
 		},
 		{
 			name:  "non-relative path returned as-is",
@@ -48,7 +53,7 @@ func TestResolvePlanSource(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolvePlanSource(dir, tt.stage); got != tt.want {
+			if got := resolvePlanSource(dir, "/wt", tt.stage); got != tt.want {
 				t.Errorf("resolvePlanSource = %q, want %q", got, tt.want)
 			}
 		})

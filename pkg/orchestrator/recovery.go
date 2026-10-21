@@ -157,7 +157,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				// barrier (Этап 7, T7.3: completeStage — not a bare Trigger(EvComplete) — checks
 				// RequiredBlocker and diverts to awaiting_assistants exactly like the live completion path
 				// would have; TestResumeByDoneMarkerDoesNotBypassBarrier).
-				if s.Verify.IsEmpty() && stagefiles.CheckCompletion(stageDir, ".", s) == nil {
+				if s.Verify.IsEmpty() && stagefiles.CheckCompletion(stageDir, o.projectDir(), s) == nil {
 					o.completeRecoveredStage(ctx, s, state.StatusRetrying, "recovered .done")
 				} else {
 					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
@@ -305,7 +305,7 @@ func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, s
 		completionErr = stagefiles.CheckAutonomousCompletion(stageDir)
 		reason = "recovered execution_summary.md"
 	} else {
-		completionErr = stagefiles.CheckCompletion(stageDir, ".", s)
+		completionErr = stagefiles.CheckCompletion(stageDir, o.projectDir(), s)
 	}
 	if completionErr == nil && s.Verify.IsEmpty() {
 		o.completeRecoveredStage(ctx, s, status, reason)

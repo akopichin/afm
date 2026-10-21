@@ -362,6 +362,40 @@ func TestRunPlanningKeepsAgentWrittenOutFile(t *testing.T) {
 	}
 }
 
+// The agent runs in its own directory (a worktree) and reports the plan it wrote by a relative path: that is
+// still the plan file, so the closing chat text must not overwrite it.
+func TestRunPlanningKeepsAgentWrittenOutFile_RelativePathInAgentDir(t *testing.T) {
+	agentDir := t.TempDir()
+	outFile := filepath.Join(agentDir, "plan.md")
+	logFile := filepath.Join(t.TempDir(), "planning.log")
+	planContent := "## Tasks\n\n- [ ] step 1\n"
+
+	script := fmt.Sprintf(
+		`printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"plan.md","content":"..."}}]}}\n'`+
+			"\nprintf '%%b' %q > plan.md"+
+			"\nprintf '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"plan saved to plan.md\"}]}}\n'"+
+			"\nprintf '{\"type\":\"result\",\"subtype\":\"success\"}\n'",
+		planContent,
+	)
+	ex := executor.New(executor.Config{
+		Command:     testCmdShell,
+		ExtraArgs:   []string{testFlagC, script},
+		IdleTimeout: 5 * time.Second,
+		Dir:         agentDir,
+	})
+
+	if err := ex.RunPlanning(context.Background(), "init", "generate a plan", outFile, logFile); err != nil {
+		t.Fatalf("RunPlanning: %v", err)
+	}
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read plan.md: %v", err)
+	}
+	if !strings.Contains(string(data), "## Tasks") {
+		t.Errorf("plan.md overwritten with chat text: got %q", string(data))
+	}
+}
+
 func TestWrittenFiles(t *testing.T) {
 	dir := t.TempDir()
 	jsonl := filepath.Join(dir, "planning.jsonl")

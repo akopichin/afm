@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -107,5 +108,15 @@ func TestResolveDebug(t *testing.T) {
 		if got := resolveDebug(c.flag, c.env); got != c.want {
 			t.Errorf("resolveDebug(%v,%q)=%v want %v", c.flag, c.env, got, c.want)
 		}
+	}
+}
+
+// A run hands paths derived from afm-root to agents whose CWD may be a worktree, so they are absolute.
+func TestAbsRootDir_IsAbsolute(t *testing.T) {
+	prev := rootDir
+	t.Cleanup(func() { rootDir = prev })
+	rootDir = "."
+	if got := absRootDir(); !filepath.IsAbs(got) {
+		t.Errorf("absRootDir() with rootDir=%q = %q, want an absolute path", rootDir, got)
 	}
 }

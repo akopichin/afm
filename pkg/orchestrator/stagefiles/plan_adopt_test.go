@@ -40,7 +40,7 @@ func TestAdoptWrittenPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !AdoptWrittenPlan(logFile, outFile) {
+	if !AdoptWrittenPlan(logFile, outFile, "") {
 		t.Fatal("adoptWrittenPlan=false, want true")
 	}
 	data, err := os.ReadFile(outFile)
@@ -69,7 +69,7 @@ func TestAdoptWrittenPlanSkipsOutFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if AdoptWrittenPlan(logFile, outFile) {
+	if AdoptWrittenPlan(logFile, outFile, "") {
 		t.Error("adoptWrittenPlan=true, want false (outFile is not a candidate)")
 	}
 }
@@ -78,7 +78,34 @@ func TestAdoptWrittenPlanSkipsOutFile(t *testing.T) {
 // нет кандидатов.
 func TestAdoptWrittenPlanNoLog(t *testing.T) {
 	dir := t.TempDir()
-	if AdoptWrittenPlan(filepath.Join(dir, "planning.log"), filepath.Join(dir, "plan.md")) {
+	if AdoptWrittenPlan(filepath.Join(dir, "planning.log"), filepath.Join(dir, "plan.md"), "") {
 		t.Error("adoptWrittenPlan=true, want false (no jsonl log)")
+	}
+}
+
+// A relative path in the agent's Write event means a file in the agent's own directory (a worktree), not in
+// afm's working directory.
+func TestAdoptWrittenPlan_RelativePathIsTheAgentsFile(t *testing.T) {
+	runDir := t.TempDir()
+	agentDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(agentDir, "docs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "docs", "plan.md"), []byte(validPlanMD), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var jsonl strings.Builder
+	writeWriteEvent(t, &jsonl, "docs/plan.md")
+	logFile := filepath.Join(runDir, "planning.log")
+	if err := os.WriteFile(filepath.Join(runDir, "planning.jsonl"), []byte(jsonl.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+	outFile := filepath.Join(runDir, "plan.md")
+
+	if !AdoptWrittenPlan(logFile, outFile, agentDir) {
+		t.Fatal("the plan the agent wrote in its own directory must be adopted")
+	}
+	if got, _ := os.ReadFile(outFile); string(got) != validPlanMD {
+		t.Errorf("adopted plan = %q, want the agent's file", got)
 	}
 }

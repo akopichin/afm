@@ -17,7 +17,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 )
 
-// Clock is the injectable time seam — mirrors the fingerprintFn/fingerprintDir seam convention used elsewhere
+// Clock is the injectable time seam — mirrors the fingerprintFn/projectDir seam convention used elsewhere
 // in this codebase (pkg/orchestrator/orchestrator.go) so Collector behavior is deterministic and testable
 // without real sleeps (TestCollector_DeterministicWithFakeClock).
 type Clock interface {

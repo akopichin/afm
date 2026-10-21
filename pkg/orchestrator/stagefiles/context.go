@@ -61,6 +61,9 @@ func resolveArtifactPath(projectDir, runDir, stageID, artifactPath string) strin
 	if strings.HasPrefix(artifactPath, "./") {
 		return filepath.Join(runDir, stageID, artifactPath[2:])
 	}
+	if filepath.IsAbs(artifactPath) {
+		return artifactPath
+	}
 	return filepath.Join(projectDir, artifactPath)
 }
 
@@ -120,6 +123,10 @@ func CollectArtifacts(projectDir, runDir string, stage flow.Stage, allStages []f
 					continue
 				}
 				return "", fmt.Errorf("required artifact %q (stage %q): %w", artName, stageID, err)
+			}
+			// Absolute, so the path means the same file from the agent's CWD whatever the project root is.
+			if abs, absErr := filepath.Abs(resolved); absErr == nil {
+				resolved = abs
 			}
 			fmt.Fprintf(&buf, "\n### %s (from %s): %s\n\nFile path: %s\n(Use Read tool to access this file)\n", artName, stageID, art.Description, resolved)
 			hasContent = true

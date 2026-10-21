@@ -1106,20 +1106,22 @@ func (o *Orchestrator) reviewTxnActive() bool { return o.reviewMarker.Load() != 
 // affected — callers only skip the transition that would START a new stage.
 func (o *Orchestrator) activationBlocked() bool { return o.activationHeld.Load() }
 
-// resolvePlanSource превращает путь stage.Plan в путь к существующему файлу. Plan — путь к существующему
-// файлу плана.
-func resolvePlanSource(runDir string, stage flow.Stage) string {
-	if stage.Plan == "" || !strings.HasPrefix(stage.Plan, "./") {
+// resolvePlanSource — откуда скопировать готовый `plan:` стадии. "./x" ищется в run-каталогах зависимостей,
+// иначе (как и любой относительный путь) — в корне проекта агентов projectDir; абсолютный путь — как есть.
+func resolvePlanSource(runDir, projectDir string, stage flow.Stage) string {
+	if stage.Plan == "" || filepath.IsAbs(stage.Plan) {
 		return stage.Plan
 	}
 	rel := strings.TrimPrefix(stage.Plan, "./")
-	for _, depID := range stage.DependsOn {
-		candidate := filepath.Join(runDir, depID, rel)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+	if strings.HasPrefix(stage.Plan, "./") {
+		for _, depID := range stage.DependsOn {
+			candidate := filepath.Join(runDir, depID, rel)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
 		}
 	}
-	return stage.Plan
+	return filepath.Join(projectDir, rel)
 }
 
 func copyFile(src, dst string) error {

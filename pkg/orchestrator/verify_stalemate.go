@@ -82,10 +82,10 @@ func workingTreeFingerprint(dir string) (string, bool) {
 	return hex.EncodeToString(h.Sum(nil)), true
 }
 
-// fingerprintDir — каталог для отпечатка рабочего дерева: project root, либо CWD, если root не задан.
-// Общий хелпер для B1 (review_patience) и наблюдательного verify_tree_modified — оба меряют отпечаток одного
-// и того же дерева.
-func (o *Orchestrator) fingerprintDir() string {
+// projectDir — корень проекта агентов (worktree рана или flow.root_dir), либо CWD afm, если root не задан.
+// Здесь shell-verify запускает проверки, а B1 (review_patience) и наблюдательный verify_tree_modified меряют
+// отпечаток рабочего дерева — все смотрят на одно и то же дерево.
+func (o *Orchestrator) projectDir() string {
 	if o.opts.RootDir != "" {
 		return o.opts.RootDir
 	}
