@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import { attachAndSendMesh, type MeshAttachAndSendResult, type MeshParticipant } from '../../api/mesh-client'
 import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import type { AssistantProfile } from '../../types/assistant-profile'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { useModalDialog } from '../../lib/focus-trap'
 
 export type AddRunAgentDialogProps = {
   profiles: AssistantProfile[]
@@ -21,8 +21,8 @@ export type AddRunAgentDialogProps = {
 // AttachHelperDialog, which attaches a task-scoped helper to one stage). Posts the SAME
 // POST /api/mesh/attach-and-send the Feed's attach preview (T7.5) will call — this dialog composes nothing
 // client-side, it only picks WHICH configured role to run; scope is always "run" with no stage id, the same
-// convention orchestrator.AddRunAgent's own thin wrapper uses. Mirrors AttachHelperDialog's focus-trap
-// (Escape/Tab via visibleFocusables) and modal-overlay/modal-content classes rather than reinventing them.
+// convention orchestrator.AddRunAgent's own thin wrapper uses. Uses the shared modal focus lifecycle
+// (useModalDialog) and modal-overlay/modal-content classes rather than reinventing them.
 export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage, active = true }: AddRunAgentDialogProps): ReactElement {
   const available = profiles.filter((p) => p.available)
   const [profileId, setProfileId] = useState(available[0]?.id ?? '')
@@ -37,38 +37,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage,
 
   const selected = available.find((p) => p.id === profileId) ?? null
 
-  // Focus moves into the dialog when it opens and again whenever its view is shown after being hidden.
-  useEffect(() => {
-    if (!active) return
-    const modal = modalRef.current
-    if (modal !== null) visibleFocusables(modal)[0]?.focus()
-  }, [active])
-
-  useEffect(() => {
-    if (!active) return
-    function onKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-        return
-      }
-      const modal = modalRef.current
-      if (e.key !== 'Tab' || modal === null) return
-      const items = visibleFocusables(modal)
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onCancel, active])
+  useModalDialog(modalRef, onCancel, undefined, active)
 
   const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitter.pending
 

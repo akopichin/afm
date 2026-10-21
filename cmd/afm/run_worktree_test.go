@@ -318,8 +318,9 @@ func TestResolveRun_WorktreeNameIsolatesRuns(t *testing.T) {
 		t.Fatalf("resolveRun: %v", err)
 	}
 	store2.Close()
-	if resumedDir != oldRunDir {
-		t.Errorf("resolveRun(worktree=flow): got %q, want it to resume %q", resumedDir, oldRunDir)
+	// resolveRun hands out an absolute run dir: its paths reach agents whose CWD may be a worktree.
+	if want, _ := filepath.Abs(oldRunDir); resumedDir != want {
+		t.Errorf("resolveRun(worktree=flow): got %q, want it to resume %q", resumedDir, want)
 	}
 }
 

@@ -25,7 +25,9 @@ stages:
 ```
 
 - `inline: true` (default) — the file's content is inserted into the prompt.
-- `inline: false` — the file's path is passed into the prompt instead.
+- `inline: false` — the file's absolute path is passed into the prompt instead.
+- A path without `./` is relative to the agents' project root: the run's worktree,
+  else `flow.root_dir`, else afm's working directory. An absolute path is used as is.
 - `optional: true` — if the file isn't found, the stage runs without it (a required
   artifact that's missing fails the consuming stage).
 

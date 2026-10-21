@@ -514,6 +514,24 @@ describe("workspaceReducer — 'team' view (Agent Mesh, T7.3)", () => {
   })
 })
 
+// 'board' — the run-wide Board tab next to Team: same manual, non-attention, stage-independent posture.
+describe("workspaceReducer — 'board' view", () => {
+  it('is reachable via openBoard and does not alter returnView', () => {
+    const cost = workspaceReducer(initialWorkspaceState, { type: 'openCost' })
+    const board = workspaceReducer(cost, { type: 'openBoard' })
+    expect(board.view).toBe('board')
+    expect(board.returnView).toBe('cost')
+  })
+
+  it('a genuine attention arrival opens over the Board and returns to Feed when it resolves', () => {
+    const board = workspaceReducer(initialWorkspaceState, { type: 'openBoard' })
+    const items: AttentionItem[] = [{ stageId: 's1', kind: 'approval', episode: 'e1' }]
+    const attention = workspaceReducer(board, { type: 'sync', items, suppressed: false })
+    expect(attention.view).toBe('attention')
+    expect(attention.returnView).toBe('feed')
+  })
+})
+
 describe("workspaceReducer — 'assistant' view (T3.10)", () => {
   it('is a valid WorkspaceView union member reachable via openAssistant', () => {
     const s = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })

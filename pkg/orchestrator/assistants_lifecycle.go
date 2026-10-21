@@ -123,7 +123,7 @@ type taskCancelEntry struct {
 }
 
 // runHelperTask is the body of one task's turn: build the prompt, fingerprint the tree before/after (reusing
-// the EXISTING o.fingerprintFn/o.fingerprintDir seam — never a second implementation), run the helper agent,
+// the EXISTING o.fingerprintFn/o.projectDir seam — never a second implementation), run the helper agent,
 // and classify its outcome into a terminal task status. Never calls Trigger/completeStage — a helper task's
 // outcome never changes its root stage's FSM status (Этап 3's acceptance criterion).
 func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.TaskID, task assistants.Task) {
@@ -204,7 +204,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 
 	waiter := o.taskMeshParticipant(taskID)
 	waitsBefore := o.meshWaitIDsOf(waiter)
-	beforeFP, beforeOK := o.fingerprintFn(o.fingerprintDir())
+	beforeFP, beforeOK := o.fingerprintFn(o.projectDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
 	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
 	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
@@ -220,7 +220,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		}
 		consumed = turn
 	}
-	if afterFP, afterOK := o.fingerprintFn(o.fingerprintDir()); beforeOK && afterOK && beforeFP != afterFP {
+	if afterFP, afterOK := o.fingerprintFn(o.projectDir()); beforeOK && afterOK && beforeFP != afterFP {
 		// Observation only — never changes the task's verdict (mirrors verify_tree_modified). Not an accusation
 		// either: the tree may have been changed by anybody while the helper ran, so the notice only says when.
 		agent := task.Title

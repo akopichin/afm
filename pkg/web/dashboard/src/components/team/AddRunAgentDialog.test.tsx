@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
+import { DialogOpenContext } from '../../lib/focus-trap'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import * as meshClient from '../../api/mesh-client'
 
@@ -39,6 +40,18 @@ describe('AddRunAgentDialog', () => {
     view.rerender(<AddRunAgentDialog profiles={profiles} onAttached={onAttached} onCancel={onCancel} active />)
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  test('a hidden dialog does not count as open, so attention can reach the view that is shown', () => {
+    const reports: boolean[] = []
+    const report = (open: boolean) => { reports.push(open) }
+    const props = { profiles, onAttached: vi.fn(), onCancel: vi.fn() }
+    const view = render(<DialogOpenContext.Provider value={report}><AddRunAgentDialog {...props} active /></DialogOpenContext.Provider>)
+    expect(reports).toEqual([true])
+    view.rerender(<DialogOpenContext.Provider value={report}><AddRunAgentDialog {...props} active={false} /></DialogOpenContext.Provider>)
+    expect(reports).toEqual([true, false])
+    view.rerender(<DialogOpenContext.Provider value={report}><AddRunAgentDialog {...props} active /></DialogOpenContext.Provider>)
+    expect(reports).toEqual([true, false, true])
   })
 
   test('a dialog shown again takes the keyboard focus back', () => {

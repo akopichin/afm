@@ -18,9 +18,9 @@ import (
 // `-s read-only`) cannot write its scratch directory either, and is told so instead — judged by the environment
 // this turn runs in (currentReadonlyEnforcement), not by the admission snapshot.
 func (o *Orchestrator) workspaceSection(task assistants.Task) string {
-	root, err := filepath.Abs(o.fingerprintDir())
+	root, err := filepath.Abs(o.projectDir())
 	if err != nil {
-		root = o.fingerprintDir()
+		root = o.projectDir()
 	}
 	var b strings.Builder
 	b.WriteString("## Workspace\n\n")

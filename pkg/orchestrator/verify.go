@@ -127,7 +127,7 @@ func (o *Orchestrator) verifyTreeFingerprint() (string, bool) {
 	if o.fingerprintFn == nil {
 		return "", false
 	}
-	return o.fingerprintFn(o.fingerprintDir())
+	return o.fingerprintFn(o.projectDir())
 }
 
 // verifyBackoffInterruptible спит d по часам рана; возвращает false, если Pause/Revise/cancel оборвали
@@ -224,7 +224,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 
 	plan, _ := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 	authorSummary, _ := os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
-	artCtx, artErr := stagefiles.CollectArtifacts(".", o.opts.RunDir, s, o.reg().Stages())
+	artCtx, artErr := stagefiles.CollectArtifacts(o.projectDir(), o.opts.RunDir, s, o.reg().Stages())
 	if artErr != nil {
 		log.Printf("WARN: collect artifacts for %s verify: %v", s.ID, artErr)
 	}
@@ -367,9 +367,10 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return executor.ErrUserInterrupted
 		}
 
-		// Shell-шаг: отменяемый процесс — CWD legacy ".".
+		// Shell-шаг: отменяемый процесс в корне проекта агентов, иначе `go test ./...` проверял бы не тот код,
+		// который меняли агенты.
 		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
-		out, runErr := o.runVerifyShell(shellCtx, ".", st.Run)
+		out, runErr := o.runVerifyShell(shellCtx, o.projectDir(), st.Run)
 		interruptedByPause := stop()
 
 		stepDir := stagefiles.StepDir(stageDir, verID, idx)

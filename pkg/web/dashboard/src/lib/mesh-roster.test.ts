@@ -83,4 +83,14 @@ describe('mesh-roster', () => {
     ]
     expect(boardNotifyCandidates([runAgent, goneRunAgent, commit, waitingStage, unknownStage, side], stages)).toEqual([runAgent, commit])
   })
+
+  test('boardNotifyCandidates offers a stage agent waiting for colleagues, since a message wakes it', () => {
+    const lead: MeshParticipant = { ...commit, id: 'stage:lead', stage_id: 'lead' }
+    const asking: MeshParticipant = { ...commit, id: 'stage:ask', stage_id: 'ask' }
+    const stages = [
+      { id: 'lead', status: 'awaiting_peer' },
+      { id: 'ask', status: 'awaiting_user_input' },
+    ]
+    expect(boardNotifyCandidates([lead, asking], stages)).toEqual([lead])
+  })
 })

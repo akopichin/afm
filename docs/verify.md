@@ -31,8 +31,8 @@ verify: shell and/or AI, run in order
 verify: "go test ./..."
 ```
 
-One shell step, run in the afm-root directory after
-`.done`. A non-zero exit is treated as "not actually done" — the author gets a
+One shell step, run in the agents' project root (the run's worktree, else
+`flow.root_dir`, else the afm process's working directory) after `.done`. A non-zero exit is treated as "not actually done" — the author gets a
 corrective retry with the command's output in the prompt, then `failed` once the
 correction budget is spent (default 1, configurable via
 [`verify.max_failures`](#the-correction-budget-verifymax_failures)).
@@ -446,11 +446,10 @@ purely informational — the step's verdict and the stage outcome are unaffected
   In Docker, even the generated codex wrapper uses full access inside the
   container. Other verifiers rely on the prompt; the Git fingerprint warning
   is best-effort, not a sandbox.
-- **Shell verify runs with CWD `"."`** (the afm-root), matching the pre-existing
-  legacy contract — **not** `flow.root_dir`. In a split deployment (e.g. Docker
-  with sources mounted elsewhere), a shell verify step can see a different
-  directory than an agent verify step, which correctly uses `root_dir`. Aligning
-  shell verify's CWD with `root_dir` is a separate follow-up.
+- **Shell verify runs where the agents run**: the run's worktree, else
+  `flow.root_dir`, else the afm process's working directory. Project artifacts
+  (paths without `./`) and a stage's `plan:` resolve from the same root. A shell step and an agent verify step
+  therefore see the same project directory.
 - **The correction budget is an independent, in-memory counter**
   (`verify.max_failures`, default 1 — see
   [The correction budget](#the-correction-budget-verifymax_failures)), separate

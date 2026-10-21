@@ -13,6 +13,17 @@ Team for the Feed and coming back keeps the selected conversation, its unsent
 draft and its reading position instead of reopening at the bottom with an empty
 composer. See [Team workspace](docs/dashboard.md#team-workspace).
 
+### Fix: shell verify checks the run's worktree
+
+A shell verify step such as `go test ./...` now runs in the agents' project root:
+the run's worktree, else `flow.root_dir`, else afm's working directory. Project
+artifacts (paths without `./`) and a stage's `plan:` file resolve from the same
+root. Previously they used afm's working directory, so a worktree run tested and
+read the main checkout instead of the changed code. afm now resolves the
+run directory and project paths to absolute ones, so run, memory and helper scratch
+paths handed to agents stay valid from a worktree, and a plan an agent writes at a relative path is
+read from the agent's directory. See [Verify](docs/verify.md).
+
 ## 2026-10-21
 
 ### Improvement: make Team a conversation-first inbox
@@ -34,6 +45,17 @@ and [Collaboration journal compatibility](docs/collaboration-journal.md#conversa
 Bump the pinned Claude Code CLI from 2.1.212 to 2.1.304 (the npm `stable` tag). The old CLI failed
 with an API error on `claude-opus-5-5`; 2.1.304 passed a live ARM64 container
 smoke check with a tool call at `xhigh` effort.
+
+### Improvement: show board tasks by status
+
+The dashboard now has a run-wide Board tab with Todo, In progress, and Done
+columns, search, assignee filtering, and a completion count. Team's Board keeps
+its mixed layout while task cards use gray, blue, and green status colors. Agents
+claim and finish tasks through their own `in progress:` and `done:` board reports;
+people can post tasks but cannot set their status. See [Board tasks](docs/collaboration.md#board-tasks).
+Dashboard dialogs, including the Feed's assistant preview, now keep a waiting
+action from switching the workspace while they are open, and return focus to
+where it was when they close.
 
 ### Improvement: show host-local message times in conversations and feeds
 

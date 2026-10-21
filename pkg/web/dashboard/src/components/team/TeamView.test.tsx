@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { TeamView } from './TeamView'
+import { TeamView, type TeamViewProps } from './TeamView'
 import * as meshClient from '../../api/mesh-client'
-import type { MeshRoster } from '../../hooks/use-mesh'
+import { mergeById } from '../../lib/mesh-roster'
+import { useMeshBoard, type MeshBoard, type MeshRoster } from '../../hooks/use-mesh'
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { isTeamUnread } from '../../lib/team-unread'
@@ -36,8 +38,17 @@ function mockThreadAndBoardFetches(): void {
   vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
 }
 
+// TeamViewWithBoard — TeamView with the real board poll its parent (App) owns.
+// It also plays App's part for added run agents: it merges them into the roster it passes down.
+function TeamViewWithBoard({ roster, ...props }: Omit<TeamViewProps, 'board' | 'onParticipantAdded'>) {
+  const board = useMeshBoard()
+  const [added, setAdded] = useState<meshClient.MeshParticipant[]>([])
+  const merged = { ...roster, participants: mergeById(roster.participants, added) }
+  return <TeamView board={board} roster={merged} onParticipantAdded={(p) => setAdded((prev) => [...prev, p])} {...props} />
+}
+
 function renderTeamView(stages: Stage[] = [makeStage()], events: AfmEvent[] = [], roster: MeshRoster = enabledRoster()) {
-  return render(<TeamView runId="test-existing" roster={roster} stages={stages} events={events} profiles={profiles} />)
+  return render(<TeamViewWithBoard runId="test-existing" roster={roster} stages={stages} events={events} profiles={profiles} />)
 }
 
 function mockTeamWidth(initialWidth: number) {
@@ -123,9 +134,9 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
     const initial = enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(1) } })
-    const view = render(<TeamView runId="unread-board-people" roster={initial} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="unread-board-people" roster={initial} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
-    view.rerender(<TeamView runId="unread-board-people" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(2) } })}
+    view.rerender(<TeamViewWithBoard runId="unread-board-people" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(2) } })}
       stages={[makeStage()]} events={[]} profiles={profiles} />)
     await waitFor(() => expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('tab', { name: 'People' }))
@@ -143,7 +154,7 @@ describe('TeamView', () => {
     const getThread = vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message(5)], next_cursor: 5 })
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(seq) } })
-    const view = render(<TeamView runId="unread-scrolled-up" roster={roster(5)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="unread-scrolled-up" roster={roster(5)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     await waitFor(() => expect(screen.getByText('ping 5')).toBeInTheDocument())
 
     // The reader scrolls the long log to its top: far from the bottom, so nothing new is read.
@@ -154,7 +165,7 @@ describe('TeamView', () => {
     fireEvent.scroll(log)
 
     getThread.mockResolvedValue({ messages: [message(5), message(6)], next_cursor: 6 })
-    view.rerender(<TeamView runId="unread-scrolled-up" roster={roster(6)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="unread-scrolled-up" roster={roster(6)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     await waitFor(() => expect(screen.getByText('ping 6')).toBeInTheDocument(), { timeout: 5000 })
     expect(screen.getByRole('button', { name: /New to you.*1/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Pinger.*New messages/ })).toBeInTheDocument()
@@ -167,9 +178,9 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
-    const view = render(<TeamView runId={`people-read-${narrow}`} roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId={`people-read-${narrow}`} roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     showPeople()
-    view.rerender(<TeamView runId={`people-read-${narrow}`} roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId={`people-read-${narrow}`} roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     if (narrow) pickRunPerson(/^QA reviewer/)
     else fireEvent.click(within(screen.getByRole('region', { name: 'This run' })).getByRole('button', { name: /^QA reviewer/ }))
     await waitFor(() => expect(screen.getByText('ready')).toBeInTheDocument())
@@ -183,9 +194,9 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
-    const view = render(<TeamView runId="covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     clickCreateConversation()
-    view.rerender(<TeamView runId="covered-read" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="covered-read" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     await waitFor(() => expect(screen.getByText('covered message')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /New to you.*1/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -198,9 +209,9 @@ describe('TeamView', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
-    const view = render(<TeamView runId="agent-covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="agent-covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     openAddRunAgent()
-    view.rerender(<TeamView runId="agent-covered-read" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="agent-covered-read" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     await waitFor(() => expect(screen.getByText('arrived under dialog')).toBeInTheDocument())
     expect(isTeamUnread('agent-covered-read', thread.id, 2)).toBe(true)
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Add run agent' })).getByRole('button', { name: 'Cancel' }))
@@ -212,8 +223,8 @@ describe('TeamView', () => {
     const send = vi.spyOn(meshClient, 'sendMeshMessage')
     const topic = vi.spyOn(meshClient, 'updateMeshThreadTitle')
     const thread: meshClient.MeshThread = { id: 'mt-late-thread', title: 'Late review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
-    const view = render(<TeamView runId="late-thread" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
-    view.rerender(<TeamView runId="late-thread" roster={enabledRoster({ threads: [thread], summaries: {
+    const view = render(<TeamViewWithBoard runId="late-thread" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="late-thread" roster={enabledRoster({ threads: [thread], summaries: {
       [thread.id]: { last_other_message_seq: 4, title_seq: 0 },
     } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('button', { name: /Late review.*New messages/ })).toBeInTheDocument()
@@ -230,18 +241,18 @@ describe('TeamView', () => {
       [first.id]: { last_other_message_seq: 1, title_seq: 0 },
       [second.id]: { last_other_message_seq: seq, title_seq: 0 },
     } })
-    const view = render(<TeamView runId="unread-remount" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="unread-remount" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.change(screen.getByPlaceholderText('Message First thread…'), { target: { value: 'draft stays' } })
-    view.rerender(<TeamView runId="unread-remount" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="unread-remount" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('button', { name: /Second thread.*New messages/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /New to you.*1/ }))
     expect(screen.queryByRole('button', { name: /First thread/ })).toBeNull()
     expect(screen.getByRole('heading', { name: 'First thread' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Message First thread…')).toHaveValue('draft stays')
     view.unmount()
-    const remount = render(<TeamView runId="unread-remount" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const remount = render(<TeamViewWithBoard runId="unread-remount" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('button', { name: /Second thread.*New messages/ })).toBeInTheDocument()
-    remount.rerender(<TeamView runId="unread-new-run" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    remount.rerender(<TeamViewWithBoard runId="unread-new-run" roster={roster(7)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.queryByRole('button', { name: /Second thread.*New messages/ })).toBeNull()
   })
 
@@ -252,18 +263,18 @@ describe('TeamView', () => {
       last_other_message_seq: seq, title_seq: 0,
     } } })
     const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'own', seq: 5 })
-    const view = render(<TeamView runId="unread-own-send" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="unread-own-send" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('tab', { name: 'People' }))
-    view.rerender(<TeamView runId="unread-own-send" roster={roster(4)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="unread-own-send" roster={roster(4)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('tab', { name: 'Conversations' }))
     fireEvent.change(screen.getByPlaceholderText('Message QA hand-off…'), { target: { value: 'my follow-up' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(send).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toHaveTextContent('Message sent'))
     // A lagging poll must not replace the latest incoming seq remembered beside the local receipt.
-    view.rerender(<TeamView runId="unread-own-send" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="unread-own-send" roster={roster(2)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('button', { name: /QA hand-off.*New messages/ })).toBeInTheDocument()
-    view.rerender(<TeamView runId="unread-own-send" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: {
+    view.rerender(<TeamViewWithBoard runId="unread-own-send" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: {
       last_message: { id: 'own', seq: 5, sender_id: 'user', preview: 'my follow-up', created_at: '' },
       last_other_message_seq: 2, title_seq: 0,
     } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
@@ -310,7 +321,7 @@ describe('TeamView', () => {
     fireEvent.change(composer, { target: { value: 'saved draft' } })
     composer.focus()
     expect(composer).toHaveFocus()
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, status: 'closed' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, status: 'closed' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(view.container.querySelector('.team-view')).toHaveClass('mobile-detail')
     expect(screen.getByRole('status')).toHaveTextContent('This conversation is closed')
     expect(screen.getByRole('status')).toHaveFocus()
@@ -411,18 +422,18 @@ describe('TeamView', () => {
     const width = mockTeamWidth(390)
     const thread: meshClient.MeshThread = { id: 'mt-hidden-resize', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const roster = enabledRoster({ threads: [thread] })
-    const view = render(<TeamView runId="hidden-resize" active roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="hidden-resize" active roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
     const layout = view.container.querySelector('.team-view') as HTMLElement
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Back to conversations' }))
     expect(layout).not.toHaveClass('mobile-detail')
 
     // Another view is shown; the window is widened and narrowed again meanwhile.
-    view.rerender(<TeamView runId="hidden-resize" active={false} roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="hidden-resize" active={false} roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
     act(() => (document.activeElement as HTMLElement | null)?.blur())
     width.resize(1200)
     width.resize(390)
-    view.rerender(<TeamView runId="hidden-resize" active roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="hidden-resize" active roster={roster} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(layout).toHaveClass('drawer')
     expect(layout).not.toHaveClass('mobile-detail')
   })
@@ -469,7 +480,7 @@ describe('TeamView', () => {
       id: `m${seq}`, seq, created_at: '2026-10-21T11:00:00Z', sender_id: 'run:qa', preview: `Message ${seq}`,
     }, last_other_message_seq: seq, title_seq: 0 })
     const view = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [older, newer], summaries: { 'mt-old': summary(1), 'mt-new': summary(2) } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [older, newer], summaries: { 'mt-old': summary(1), 'mt-new': summary(2) } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('heading', { name: 'Newer' })).toBeInTheDocument()
     const nav = screen.getByRole('navigation', { name: 'Team roster' })
     const rows = () => within(nav).getAllByRole('button').filter((button) => button.classList.contains('team-thread-item'))
@@ -481,7 +492,7 @@ describe('TeamView', () => {
     const composer = screen.getByPlaceholderText('Message Newer…')
     const conversationLog = screen.getByRole('log', { name: 'Messages' })
     conversationLog.scrollTop = 140
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [older, newer], summaries: { 'mt-old': summary(3), 'mt-new': summary(2) } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [older, newer], summaries: { 'mt-old': summary(3), 'mt-new': summary(2) } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(rows().map((row) => row.textContent)).toEqual([expect.stringContaining('Older'), expect.stringContaining('Newer')])
     expect(rows()[0]).toHaveTextContent('QA reviewer: Message 3')
     expect(focusedRow).toHaveFocus()
@@ -516,7 +527,7 @@ describe('TeamView', () => {
     expect(rows()[0]).not.toHaveTextContent('secret submitted body')
     expect(meshClient.getMeshThread).toHaveBeenCalledWith('mt-first', 9)
     expect(screen.getByPlaceholderText('Message First…')).toBe(composer)
-    view.rerender(<TeamView runId="test-existing" roster={stale} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={stale} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(rows()[0]).toHaveTextContent('Message sent')
 
     await act(async () => resolveRead({ messages: [{
@@ -526,9 +537,9 @@ describe('TeamView', () => {
     expect(rows()[0]).toHaveTextContent('You: saved [REDACTED] body')
     expect(within(rows()[0]!).getByRole('time')).toHaveAttribute('datetime', '2026-10-21T09:00:00Z')
     const durable = enabledRoster({ threads: [first, second], summaries: { 'mt-first': summary(10, 'Roster redacted'), 'mt-second': summary(5, 'Other') } })
-    view.rerender(<TeamView runId="test-existing" roster={durable} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={durable} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(rows()[0]).toHaveTextContent('Roster redacted')
-    view.rerender(<TeamView runId="test-existing" roster={stale} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={stale} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(rows()[0]).toHaveTextContent('Roster redacted')
     expect(sendSpy).toHaveBeenCalledTimes(1)
   })
@@ -566,7 +577,7 @@ describe('TeamView', () => {
     const row = within(screen.getByRole('navigation', { name: 'Team roster' })).getByRole('button', { name: /Release/ })
     await waitFor(() => expect(row).toHaveTextContent('Message sent'))
 
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread], summaries: { 'mt-1': {
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [thread], summaries: { 'mt-1': {
       last_message: { id: 'm12', seq: 12, created_at: '2026-10-21T12:00:00Z', sender_id: 'run:qa', preview: 'Newer reply' },
       last_other_message_seq: 12, title_seq: 0,
     } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
@@ -583,13 +594,13 @@ describe('TeamView', () => {
     const thread: meshClient.MeshThread = { id: 'mt-1', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const pending = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
     fireEvent.click(screen.getByRole('tab', { name: 'People' }))
-    pending.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    pending.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument()
     pending.unmount()
 
     mockTeamWidth(341)
     const narrow = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
-    narrow.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    narrow.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(narrow.container.querySelector('.team-view')).not.toHaveClass('mobile-detail')
     expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Release')).toBeInTheDocument()
   })
@@ -601,7 +612,7 @@ describe('TeamView', () => {
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Old topic'))
     const composer = screen.getByPlaceholderText('Message Old topic…')
     fireEvent.change(composer, { target: { value: 'draft' } })
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...oldThread, title: 'Fresh topic', status: 'closed' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [{ ...oldThread, title: 'Fresh topic', status: 'closed' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('heading', { name: 'Fresh topic' })).toBeInTheDocument()
     expect(screen.getByText('Closed')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Message Fresh topic…')).toBe(composer)
@@ -639,7 +650,7 @@ describe('TeamView', () => {
     expect(edit.mock.calls[0]).toEqual(edit.mock.calls[1])
     expect(edit.mock.calls[0]?.[1]).toMatchObject({ title: 'Fresh topic', expectedTitleSeq: 7 })
 
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...first, title: 'Fresh topic' }, second], summaries: {
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [{ ...first, title: 'Fresh topic' }, second], summaries: {
       'mt-first': summary(2, 9), 'mt-second': summary(5, 0),
     } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     const rows = within(screen.getByRole('navigation', { name: 'Team roster' })).getAllByRole('button')
@@ -660,7 +671,7 @@ describe('TeamView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
     fireEvent.click(screen.getByRole('button', { name: 'Clear topic' }))
     await waitFor(() => expect(edit).toHaveBeenCalledWith('mt-closed', expect.objectContaining({ title: '', expectedTitleSeq: 11 })))
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, title: '' }], summaries: { 'mt-closed': {
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, title: '' }], summaries: { 'mt-closed': {
       last_other_message_seq: 0, title_seq: 13,
     } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
@@ -681,7 +692,7 @@ describe('TeamView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Topic changed elsewhere'))
     expect(screen.getByRole('textbox', { name: 'Conversation topic' })).toHaveValue('Mine')
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, title: 'Theirs' }], summaries: { 'mt-1': {
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [{ ...thread, title: 'Theirs' }], summaries: { 'mt-1': {
       last_other_message_seq: 0, title_seq: 10,
     } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('textbox', { name: 'Conversation topic' })).toHaveValue('Mine')
@@ -701,7 +712,7 @@ describe('TeamView', () => {
     const roster = (title: string, seq: number) => enabledRoster({ threads: [{ ...thread, title }], summaries: {
       [thread.id]: { last_other_message_seq: 0, title_seq: seq },
     } })
-    const view = render(<TeamView runId="topic-wait" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="topic-wait" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
@@ -710,10 +721,10 @@ describe('TeamView', () => {
     expect(screen.getByText(/Waiting for the latest topic/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save topic' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Clear topic' })).toBeDisabled()
-    view.rerender(<TeamView runId="topic-wait" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="topic-wait" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     expect(edit).toHaveBeenCalledTimes(1)
-    view.rerender(<TeamView runId="topic-wait" roster={roster('Theirs', 10)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="topic-wait" roster={roster('Theirs', 10)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByText('Current topic: Theirs')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save topic' })).toBeEnabled()
   })
@@ -735,15 +746,15 @@ describe('TeamView', () => {
     const roster = (title: string, seq: number) => enabledRoster({ threads: [{ ...thread, title }], summaries: {
       [thread.id]: { last_other_message_seq: 0, title_seq: seq },
     } })
-    const view = render(<TeamView runId="topic-rebase-lost" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="topic-rebase-lost" roster={roster('Original', 8)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Topic changed elsewhere'))
-    view.rerender(<TeamView runId="topic-rebase-lost" roster={roster('Theirs', 10)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="topic-rebase-lost" roster={roster('Theirs', 10)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Connection lost'))
-    view.rerender(<TeamView runId="topic-rebase-lost" roster={roster('Someone else', 12)} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="topic-rebase-lost" roster={roster('Someone else', 12)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(edit).toHaveBeenCalledTimes(3))
     expect(edit.mock.calls[2]).toEqual(edit.mock.calls[1])
@@ -776,10 +787,10 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const thread: meshClient.MeshThread = { id: 'mt-topic-stale', title: 'Original', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const edit = vi.spyOn(meshClient, 'updateMeshThreadTitle').mockRejectedValue(new meshClient.MeshApiError('/api/mesh/threads/mt-topic-stale/topic', 409, 'operation_conflict'))
-    const view = render(<TeamView runId="topic-stale" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 4 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="topic-stale" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 4 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
-    view.rerender(<TeamView runId="topic-stale" roster={enabledRoster({ threads: [{ ...thread, title: 'Theirs' }], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 5 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="topic-stale" roster={enabledRoster({ threads: [{ ...thread, title: 'Theirs' }], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 5 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(edit).toHaveBeenCalled())
     expect(edit.mock.calls[0]?.[1].expectedTitleSeq).toBe(4)
@@ -803,12 +814,12 @@ describe('TeamView', () => {
       }
       return receipt
     })
-    const view = render(<TeamView runId="topic-lost" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 4 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    const view = render(<TeamViewWithBoard runId="topic-lost" roster={enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 4 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Edit topic' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Conversation topic' }), { target: { value: 'Mine' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Connection lost'))
-    view.rerender(<TeamView runId="topic-lost" roster={enabledRoster({ threads: [{ ...thread, title: 'Another edit' }], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 6 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="topic-lost" roster={enabledRoster({ threads: [{ ...thread, title: 'Another edit' }], summaries: { [thread.id]: { last_other_message_seq: 0, title_seq: 6 } } })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('button', { name: 'Save topic' }))
     await waitFor(() => expect(edit).toHaveBeenCalledTimes(2))
     expect(edit.mock.calls[1]).toEqual(edit.mock.calls[0])
@@ -847,9 +858,9 @@ describe('TeamView', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Local topic' })).toBeInTheDocument())
     const composer = screen.getByPlaceholderText('Message Local topic…')
     fireEvent.change(composer, { target: { value: 'waiting on roster' } })
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('Local topic')).toBeInTheDocument()
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [{ ...created, title: 'Durable topic' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [{ ...created, title: 'Durable topic' }] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByRole('heading', { name: 'Durable topic' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Message Durable topic…')).toBe(composer)
     expect(composer).toHaveValue('waiting on roster')
@@ -935,7 +946,7 @@ describe('TeamView', () => {
     const emptyStateAction = screen.getByRole('button', { name: 'Start a conversation' })
     fireEvent.click(emptyStateAction)
     const thread: meshClient.MeshThread = { id: 'mt-new', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(emptyStateAction.isConnected).toBe(false)
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -1056,6 +1067,97 @@ describe('TeamView', () => {
     const tab = screen.getByRole('tab', { name: 'Board' })
     await waitFor(() => expect(tab).toHaveTextContent('Board2'))
     expect(tab).not.toHaveTextContent('Board3')
+  })
+
+  test('the Board tab shows the tasks as coloured cards in one grid, next to the facts', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+      entries: [
+        { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' },
+        { key: 'task/export', status: 'CSV export', author_id: 'user', version: 1, seq: 2, ts: '' },
+        { key: 'task/export/implement', status: 'in progress: wiring', author_id: 'stage:implement', version: 1, seq: 3, ts: '' },
+        { key: 'api/ready', status: 'yes', author_id: 'stage:implement', version: 1, seq: 4, ts: '' },
+      ],
+    })
+    renderTeamView()
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(await screen.findByRole('button', { name: 'Health endpoint, Todo' })).toHaveAttribute('data-status', 'todo')
+    expect(screen.getByRole('button', { name: 'CSV export, In progress' })).toHaveAttribute('data-status', 'in_progress')
+    expect(screen.getByRole('article', { name: 'api/ready' })).toBeInTheDocument()
+    expect(document.querySelectorAll('.team-board-list')).toHaveLength(1)
+    expect(screen.getByRole('tab', { name: 'Messages' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Activity' })).toBeInTheDocument()
+  })
+
+  // The board poll is owned by App and passed in: TeamView only shows what it is given.
+  test('the Board tab shows what the owner passes in, without a second board poll', async () => {
+    mockThreadAndBoardFetches()
+    const poll = vi.spyOn(meshClient, 'getMeshBoard')
+    const board: MeshBoard = {
+      entries: [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }],
+      status: 'ready',
+      reload: async () => {},
+    }
+    render(<TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('tab', { name: /^Board/ })).toHaveTextContent('Board1')
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(await screen.findByRole('button', { name: 'Health endpoint, Todo' })).toBeInTheDocument()
+    expect(poll).not.toHaveBeenCalled()
+  })
+
+  test('the Board tab says it is loading, not that the board is empty, before the first fetch lands', () => {
+    mockThreadAndBoardFetches()
+    const board: MeshBoard = { entries: [], status: 'loading', reload: async () => {} }
+    render(<TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('status')).toHaveTextContent('Loading board')
+    expect(screen.queryByText(/Nothing on the board yet/)).toBeNull()
+  })
+
+  test('a first-load failure shows an error with Retry instead of an empty board', () => {
+    mockThreadAndBoardFetches()
+    const reload = vi.fn(async () => {})
+    const board: MeshBoard = { entries: [], status: 'error', reload }
+    render(<TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Board unavailable')
+    expect(screen.queryByText(/Nothing on the board yet/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  test('a failed refresh keeps the last cards under a stale-data warning with Retry', () => {
+    mockThreadAndBoardFetches()
+    const reload = vi.fn(async () => {})
+    const board: MeshBoard = {
+      entries: [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }],
+      status: 'stale',
+      reload,
+    }
+    render(<TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('alert')).toHaveTextContent('out of date')
+    expect(screen.getByRole('button', { name: 'Health endpoint, Todo' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  test('a failed refresh and its recovery keep the task typed in the Board form', () => {
+    mockThreadAndBoardFetches()
+    const entries = [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }]
+    const view = (status: MeshBoard['status']) => (
+      <TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={{ entries, status, reload: async () => {} }} stages={[makeStage()]} events={[]} profiles={profiles} />
+    )
+    const { rerender } = render(view('ready'))
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+    fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'all rows' } })
+    rerender(view('stale'))
+    expect(screen.getByRole('alert')).toHaveTextContent('out of date')
+    expect(screen.getByLabelText('Task')).toHaveValue('CSV export')
+    rerender(view('ready'))
+    expect(screen.getByLabelText('Task')).toHaveValue('CSV export')
+    expect(screen.getByLabelText('Details')).toHaveValue('all rows')
   })
 
   test('a direct conversation opens from a person row', async () => {
@@ -1642,14 +1744,14 @@ describe('TeamView', () => {
     const measured = mockTeamWidth(600)
     const initialRoster = enabledRoster({ probed: false })
     const view = render(
-      <TeamView runId="test-existing" roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
+      <TeamViewWithBoard runId="test-existing" roster={initialRoster} stages={[makeStage()]} events={[]} profiles={profiles} />,
     )
     const firstLayout = view.container.querySelector('.team-view')
     expect(teamSeparator()).toHaveAttribute('aria-valuemax', '280')
 
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ enabled: false })} stages={[makeStage()]} events={[]} profiles={profiles} />)
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
-    view.rerender(<TeamView runId="test-existing" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    view.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster()} stages={[makeStage()]} events={[]} profiles={profiles} />)
     const nextLayout = view.container.querySelector('.team-view')
     expect(nextLayout).toBe(firstLayout)
 
@@ -1695,7 +1797,7 @@ describe('TeamView', () => {
     expect(screen.getByText('Team is not available for this run')).toBeInTheDocument()
   })
 
-  test('the tabs follow the tab pattern: arrows switch tabs and each tab controls its panel', () => {
+  test('the tabs follow the tab pattern: arrows switch tabs and each tab controls its panel', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
     const messages = screen.getByRole('tab', { name: 'Messages' })
@@ -1706,7 +1808,7 @@ describe('TeamView', () => {
     expect(board).toHaveFocus()
     expect(board).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tabpanel', { name: /Board/ })).toHaveAttribute('aria-labelledby', board.id)
-    expect(screen.getByRole('button', { name: 'Post task' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Post task' })).toBeInTheDocument()
   })
 
   test('run-wide tabs sit above the conversation, hide its heading, and restore its selection and draft', async () => {

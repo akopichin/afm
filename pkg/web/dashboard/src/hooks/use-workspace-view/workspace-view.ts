@@ -5,8 +5,8 @@ import type { Stage } from '../../types'
 // часть attention-очереди — завершение/появление помощника никогда не открывает его автоматически.
 // 'team' (Agent Mesh, T7.3) — the Team view: run-wide roster (participants + conversations), gated behind
 // the mesh capability. Same manual posture as 'assistant': entered only via openTeam, never
-// part of the attention auto-open queue.
-export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'team'
+// part of the attention auto-open queue. 'board' — the run-wide Board tab beside Team, same posture and gate.
+export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'team' | 'board'
 
 // AttentionKind — вид элемента, требующего действия пользователя. 'assistants' (Этап 7, T7.9) — стадия в
 // awaiting_assistants, чей required-гейт требует решения человека (см. attentionKindForStatus ниже). NB: это
@@ -97,6 +97,9 @@ export type WorkspaceAction =
   // openTeam — пользователь открыл вкладку Team (Agent Mesh, T7.3): run-wide ручной read-only-ish вид (свой
   // композер на беседу), как и openAssistant — не часть attention-очереди, НЕ привязан к выбранной стадии.
   | { type: 'openTeam' }
+  // openBoard — пользователь открыл вкладку Board: run-wide, как и Team, не часть attention-очереди и не
+  // привязана к выбранной стадии.
+  | { type: 'openBoard' }
 
 // activeItem возвращает элемент, на котором сейчас сфокусирован attention, либо
 // null. Учитывает и view: в history/feed активного attention-элемента нет.
@@ -222,6 +225,8 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: 'assistant' }
     case 'openTeam':
       return { ...state, view: 'team' }
+    case 'openBoard':
+      return { ...state, view: 'board' }
     default:
       return state
   }

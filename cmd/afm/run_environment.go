@@ -28,7 +28,17 @@ func (e runEnvironment) Close() {
 
 func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, worktreeDir string) (runEnvironment, error) {
 	var env runEnvironment
-	var err error
+	// Absolute: the root, memory and wrapper paths reach agents whose CWD may be a worktree.
+	afmRoot, err := filepath.Abs(afmRoot)
+	if err != nil {
+		return env, err
+	}
+	if worktreeDir != "" {
+		worktreeDir, err = filepath.Abs(worktreeDir)
+		if err != nil {
+			return env, err
+		}
+	}
 	if worktreeDir != "" {
 		env.RootDir = worktreeDir // the worktree IS the effective project root
 	} else {

@@ -91,7 +91,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			wtDir, wtLock, err := resolveWorktree(context.Background(), rootDir, f, cfg, mode, worktreeName)
+			wtDir, wtLock, err := resolveWorktree(context.Background(), absRootDir(), f, cfg, mode, worktreeName)
 			if err != nil {
 				return err // resolveWorktree's own errors already carry a "worktree: " prefix
 			}
@@ -112,7 +112,7 @@ func newRunCmd() *cobra.Command {
 			}
 
 			if cfg.Docker.IsDockerEnabled() {
-				return reexecFlow(rootDir, f, cfg, hooks, wtDir)
+				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir)
 			}
 
 			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
@@ -233,7 +233,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	}
 
 	var orch *orchestrator.Orchestrator
-	hooksDisp, err := prepareLifecycleDispatcher(rootDir, lifecyclehooks.DispatcherConfig{
+	hooksDisp, err := prepareLifecycleDispatcher(absRootDir(), lifecyclehooks.DispatcherConfig{
 		FlowName: f.Name,
 		RunID:    runID,
 		RunDir:   runDir,
@@ -271,7 +271,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
 		Team:               f.Team,
-		SecretValues:       loadRedactionSecrets(rootDir, cfg, hooks),
+		SecretValues:       loadRedactionSecrets(absRootDir(), cfg, hooks),
 	}
 	if ws != nil {
 		orchOpts.ResolveFile = workspaceResolveFile(ws)
@@ -400,7 +400,11 @@ func resolveFlowPath(args []string) (string, error) {
 // --worktree override — see runNameFor), unless forceNew is set — the clear flags imply a fresh worktree,
 // which has no business resuming a run that may reference the previous checkout's state.
 func resolveRun(f *flow.Flow, runName string, forceNew bool) (runDir string, store *state.Store, err error) {
-	base := runsDir()
+	// Absolute: run paths reach agents (prompts, AFM_SCRATCH_DIR, report links) whose CWD may be a worktree.
+	base, err := filepath.Abs(runsDir())
+	if err != nil {
+		return "", nil, err
+	}
 
 	stageIDs := make([]string, len(f.Stages))
 	for i, s := range f.Stages {

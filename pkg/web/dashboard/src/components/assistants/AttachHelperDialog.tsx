@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import { attachAssistant, type AttachHelperRequest } from '../../api/run-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { useModalDialog } from '../../lib/focus-trap'
 
 export type AttachHelperDialogProps = {
   stageId: string
@@ -14,7 +14,7 @@ export type AttachHelperDialogProps = {
 // AttachHelperDialog — the human entry point for attaching a helper task to a stage (POST
 // /api/stages/{id}/assistants). Distinct from AttachAssistantDialog, which only CONFIRMS an action draft a
 // side-agent turn already proposed (confirmActionDraft); this one creates a fresh top-level task from the
-// operator's own choices. Escape/Tab-wrap focus-trap mirrors AttachAssistantDialog (visibleFocusables).
+// operator's own choices. Focus, Escape and Tab-wrap come from the shared useModalDialog.
 export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, onCancel }: AttachHelperDialogProps): ReactElement {
   const available = profiles.filter((p) => p.available)
   const [profileId, setProfileId] = useState(available[0]?.id ?? '')
@@ -26,35 +26,7 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
   const [error, setError] = useState<string | null>(null)
   const modalRef = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => {
-    const modal = modalRef.current
-    if (modal !== null) visibleFocusables(modal)[0]?.focus()
-  }, [])
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-        return
-      }
-      const modal = modalRef.current
-      if (e.key !== 'Tab' || modal === null) return
-      const items = visibleFocusables(modal)
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
+  useModalDialog(modalRef, onCancel)
 
   const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitting
 

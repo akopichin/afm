@@ -2316,6 +2316,103 @@ describe('App', () => {
     expect(screen.queryByText(/run:t-new/)).toBeNull()
   })
 
+  // A run agent added before the roster poll learns about it must count as an agent for the board's status
+  // projection in EVERY view: the same snapshot may not read Todo in Team's nested Board and Done in the Board tab.
+  function mockBoardWithNewAgentReport(): void {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo', run_id: 'app-board-agent', stages: [stageView('s1', 'Propose', 'running')],
+            capabilities: { collaboration: true }, accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/assistant-profiles')) {
+        return { ok: true, json: async () => ({ profiles: [{ id: 'qa', title: 'QA role', command: 'claude', available: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/attach-and-send')) {
+        return {
+          ok: true,
+          json: async () => ({
+            task_id: 't-new', participant_id: 'run:t-new', thread_id: 'mt-new',
+            participant: { id: 'run:t-new', kind: 'run_agent', scope: 'run', alias: 'qa-role', display_name: 'QA role', reachable: true },
+          }),
+        } as Response
+      }
+      // The roster poll never learns about the new agent during these tests.
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) {
+        return {
+          ok: true,
+          json: async () => ({
+            entries: [
+              { key: 'task/x', status: 'Ship it', author_id: 'user', version: 1, seq: 1, ts: '' },
+              { key: 'task/x/qa-role', status: 'done: shipped', author_id: 'run:t-new', version: 1, seq: 2, ts: '' },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+
+  test('board: an agent added in the people panel is a claimant in both the Team board and the Board tab', async () => {
+    mockBoardWithNewAgentReport()
+    render(<App />)
+
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    fireEvent.click(within(people).getByRole('button', { name: 'Add run agent…' }))
+    fireEvent.change(await screen.findByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await within(people).findByText('QA role')
+
+    const workspaceTabs = () => within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ }))
+    expect(await screen.findByLabelText('Done: 1')).toBeInTheDocument()
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Board' }))
+    expect(await within(screen.getByRole('region', { name: 'Done tasks' })).findAllByRole('button')).toHaveLength(1)
+    expect(within(screen.getByRole('region', { name: 'Todo tasks' })).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  test('board: an agent added from Team is a claimant in both the Board tab and the Team board', async () => {
+    mockBoardWithNewAgentReport()
+    render(<App />)
+
+    const workspaceTabs = () => within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'People' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add run agent' }))
+    const dialog = screen.getByRole('dialog', { name: 'Add run agent' })
+    fireEvent.change(within(dialog).getByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add run agent' }))
+    await screen.findByRole('heading', { name: 'QA role' })
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Board' }))
+    expect(await within(screen.getByRole('region', { name: 'Done tasks' })).findAllByRole('button')).toHaveLength(1)
+    expect(within(screen.getByRole('region', { name: 'Todo tasks' })).queryAllByRole('button')).toHaveLength(0)
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ }))
+    expect(await screen.findByLabelText('Done: 1')).toBeInTheDocument()
+  })
+
   // The split gate: Message for any non-script stage while the run is alive, Revise only where the Revise API
   // takes it; no composer once the run has ended.
   async function renderGate(stageStatus: string, runStatus: string): Promise<void> {
@@ -2464,6 +2561,105 @@ describe('App', () => {
     expect(screen.queryByRole('tab', { name: 'Discussion' })).toBeNull()
   })
 
+  // The run-wide Board tab sits beside Team behind the same mesh probe, and Team's nested Board and the Board
+  // tab read ONE board poll owned by App.
+  function mockMeshBoardRun(requests: string[], board: () => Response | Promise<Response>) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      requests.push(url)
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({ flow_name: 'demo', run_id: 'app-board-run', stages: [stageView('s1', 'Propose', 'running'), stageView('s2', 'Plan', 'done')] }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return { ok: true, json: async () => ({ participants: [{ id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) return board()
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+  const boardOk = (keys: string[]) => ({
+    ok: true,
+    json: async () => ({ entries: keys.map((key, i) => ({ key, status: key, author_id: 'user', version: 1, seq: i + 1, ts: '' })) }),
+  }) as Response
+  const boardRequests = (requests: string[]) => requests.filter((r) => r.includes('/api/mesh/board'))
+
+  test('Board tab: appears beside Team, opens with no stage selected, and survives a manual stage selection', async () => {
+    mockMeshBoardRun([], () => boardOk(['task/a']))
+    render(<App />)
+
+    const team = await screen.findByRole('tab', { name: 'Team' })
+    const board = screen.getByRole('tab', { name: 'Board' })
+    expect(team.nextElementSibling).toBe(board)
+
+    fireEvent.click(board)
+    expect(board).toHaveAttribute('aria-selected', 'true')
+    expect(document.querySelector('.workspace-header')).toBeNull()
+
+    // A stage without a pending attention item must not pull the run-wide Board away.
+    fireEvent.click(document.querySelectorAll<HTMLElement>('.stage-row')[1]!)
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(document.querySelector('.workspace-header')).toBeNull()
+  })
+
+  test('Board tab: with the mesh off there is no Board tab and no board request', async () => {
+    const requests: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      requests.push(url)
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }) } as Response
+      if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    render(<App />)
+
+    await waitFor(() => expect(requests.some((r) => r.includes('/api/mesh/participants'))).toBe(true))
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Board' })).toBeNull())
+    expect(boardRequests(requests)).toHaveLength(0)
+  })
+
+  test('Board tab: Team <-> Board reuses ONE board poll and its current entries', async () => {
+    const requests: string[] = []
+    mockMeshBoardRun(requests, () => boardOk(['task/a', 'task/b']))
+    render(<App />)
+
+    await screen.findByRole('tab', { name: 'Team' })
+    await waitFor(() => expect(boardRequests(requests)).toHaveLength(1))
+    const workspaceTabs = () => within(screen.getByRole('tablist', { name: 'Workspace' }))
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ }))
+    await waitFor(() => expect(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ })).toHaveTextContent('Board2'))
+
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Board' }))
+    // The Board tab renders the same entries as three status lanes: both new tasks are Todo.
+    expect(within(screen.getByRole('region', { name: 'Todo tasks' })).getAllByRole('button')).toHaveLength(2)
+    expect(within(screen.getByRole('region', { name: 'Done tasks' })).queryAllByRole('button')).toHaveLength(0)
+    expect(screen.getByText('0 of 2 completed')).toBeInTheDocument()
+    fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
+    expect(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ })).toHaveTextContent('Board2')
+    expect(boardRequests(requests)).toHaveLength(1)
+  })
+
+  test('Board tab: loading before the first fetch, then an error with Retry rather than zero tasks', async () => {
+    const requests: string[] = []
+    let calls = 0
+    mockMeshBoardRun(requests, () => (++calls === 1 ? ({ ok: false, status: 500, json: async () => ({}) } as Response) : boardOk(['task/a'])))
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Board unavailable')
+    expect(screen.queryByRole('region', { name: 'Todo tasks' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(within(screen.getByRole('region', { name: 'Todo tasks' })).getAllByRole('button')).toHaveLength(1)
+  })
+
   test('Agent Mesh T7.3: no Team tab when the mesh probe 404s (capability off)', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
@@ -2475,4 +2671,187 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
     await waitFor(() => expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull())
   })
+
+  // Board dialogs are overlays like any other modal: an attention item that arrives while one is open only
+  // glows, even when focus sits on a checkbox or a button (not an editable field).
+  // gate — when set, /api/status answers only after it resolves (to land a status in the same batch as a click).
+  type BoardAttentionRun = { asking: boolean; runId: string; boardFails: boolean; gate?: Promise<void> }
+  function mockBoardAttentionRun(run: BoardAttentionRun) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        if (run.gate !== undefined) await run.gate
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            run_id: run.runId,
+            stages: [
+              stageView('s1', 'Alpha', 'running'),
+              stageView('s2', 'Beta', run.asking ? 'awaiting_user_input' : 'running', run.asking ? QUESTION_FLAGS : {}),
+            ],
+            capabilities: { collaboration: true },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/assistant-profiles')) {
+        return { ok: true, json: async () => ({ profiles: [{ id: 'qa', title: 'QA role', command: 'claude', available: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/attach-and-send')) {
+        return {
+          ok: true,
+          json: async () => ({
+            task_id: 't-new', participant_id: 'run:t-new', thread_id: 'mt-new',
+            participant: { id: 'run:t-new', kind: 'run_agent', scope: 'run', alias: 'qa-role', display_name: 'QA role', reachable: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Alpha', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) {
+        if (run.boardFails) return { ok: false, status: 500, json: async () => ({}) } as Response
+        return { ok: true, json: async () => ({ entries: [{ key: `task/${run.runId}`, status: `Task of ${run.runId}`, author_id: 'user', version: 1, seq: 1, ts: '' }] }) } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+  const questionBeacon = () => screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))
+
+  test('Board tab: a question waits behind the New task dialog with focus on a Notify checkbox', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    await screen.findByRole('button', { name: 'Task of r1, Todo' })
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    const dialog = screen.getByRole('dialog', { name: 'New task' })
+    fireEvent.change(within(dialog).getByLabelText('Task'), { target: { value: 'Half typed task' } })
+    const checkbox = within(dialog).getByRole('checkbox')
+    act(() => checkbox.focus())
+    expect(document.activeElement).toBe(checkbox)
+
+    run.asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(questionBeacon()).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(screen.getByRole('dialog', { name: 'New task' })).getByLabelText('Task')).toHaveValue('Half typed task')
+
+    // Closing the dialog releases the waiting question.
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'New task' })).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+  })
+
+  test("Team's Board: a question waits behind the open task details with focus on its Close button", async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Task of r1, Todo' }))
+    const close = within(screen.getByRole('dialog', { name: 'Task details' })).getByRole('button', { name: 'Close task details' })
+    expect(close).toHaveFocus()
+
+    run.asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(questionBeacon()).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Team' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'Task details' })).toBeInTheDocument()
+  })
+
+  test("a run switch shows neither the old run's tasks nor the agents added in it", async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'run-a', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+
+    // Run A: an agent is added from the people panel and A's task is on the board.
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    fireEvent.click(within(people).getByRole('button', { name: 'Add run agent…' }))
+    fireEvent.change(await screen.findByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await within(people).findByText('QA role')
+    fireEvent.click(screen.getByRole('tab', { name: 'Board' }))
+    await screen.findByRole('button', { name: 'Task of run-a, Todo' })
+    expect(within(screen.getByRole('combobox', { name: 'Assignee' })).getByRole('option', { name: 'QA role' })).toBeInTheDocument()
+
+    // Run B: its first board fetch fails.
+    run.runId = 'run-b'
+    run.boardFails = true
+    emitStageStatus('s1', 'running')
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Board unavailable'))
+    expect(screen.queryByRole('button', { name: 'Task of run-a, Todo' })).toBeNull()
+
+    run.boardFails = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByRole('button', { name: 'Task of run-b, Todo' })
+    expect(within(screen.getByRole('combobox', { name: 'Assignee' })).queryByRole('option', { name: 'QA role' })).toBeNull()
+  })
+
+  // The dialog opens and the status with a new question lands in ONE render: the attention sync of that very
+  // commit must already see the dialog.
+  async function openWithQuestionInSameBatch(run: BoardAttentionRun, open: () => void): Promise<void> {
+    let release!: () => void
+    run.gate = new Promise<void>((resolve) => (release = resolve))
+    run.asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await act(async () => {
+      open()
+      release()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    run.gate = undefined
+    await waitFor(() => expect(questionBeacon()).toBe(true))
+  }
+
+  test('same batch: New task opening together with a question keeps the Board and the dialog', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    await screen.findByRole('button', { name: 'Task of r1, Todo' })
+
+    await openWithQuestionInSameBatch(run, () => fireEvent.click(screen.getByRole('button', { name: 'New task' })))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument()
+  })
+
+  test('same batch: Task details opening together with a question keep the Board and the dialog', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    const card = await screen.findByRole('button', { name: 'Task of r1, Todo' })
+
+    await openWithQuestionInSameBatch(run, () => fireEvent.click(card))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'Task details' })).toBeInTheDocument()
+  })
+
+  test('same batch: Team Add run agent opening together with a question keeps Team and the dialog', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'People' }))
+    const add = await screen.findByRole('button', { name: 'Add run agent' })
+
+    await openWithQuestionInSameBatch(run, () => fireEvent.click(add))
+    expect(screen.getByRole('tab', { name: 'Team' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'Add run agent' })).toBeInTheDocument()
+  })
 })
+

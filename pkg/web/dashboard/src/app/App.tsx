@@ -4,6 +4,9 @@ import { GlobalHeader } from '../components/global-header'
 import { StagesList, canAttachHelper } from '../components/stages-list'
 import { AssistantTaskView, AttachHelperDialog, AddStageDialog } from '../components/assistants'
 import { StagePeoplePanel, STAGE_PEOPLE_ID, TeamView } from '../components/team'
+import { BoardLoadState } from '../components/team/BoardLoadState'
+import { BoardView } from '../components/team/BoardView'
+import { teamStagesOf } from '../components/team/RunTeamList'
 import { AgentNoteModal } from '../components/agent-note-modal'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
@@ -17,12 +20,13 @@ import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescr
 import { FileBrowserProvider } from '../components/file-browser'
 import { SideAgentProvider } from '../components/side-agent'
 import { MessageTimeZoneProvider } from '../lib/message-time-zone'
+import { DialogOpenContext } from '../lib/focus-trap'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
 import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
-import { useMeshRoster } from '../hooks/use-mesh'
+import { useMeshBoard, useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
 import { baselineTeamUnread } from '../lib/team-unread'
 import type { MeshParticipant } from '../api/mesh-client'
@@ -65,6 +69,8 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants'])
 // NO_DELIVERIES — no delivery receipts (the stage Feed's mesh UI is off).
 const NO_DELIVERIES: ReadonlySet<string> = new Set()
+// NO_PARTICIPANTS — no locally added run agents in the current run.
+const NO_PARTICIPANTS: MeshParticipant[] = []
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 export function App(): ReactElement {
@@ -137,7 +143,17 @@ export function App(): ReactElement {
   // sideAgentOpen — видимость «бокового» агента. Входит в anyModalOpen, чтобы attention других стадий не
   // авто-открывался за открытой беседой (только сигналил).
   const [sideAgentOpen, setSideAgentOpen] = useState(false)
-  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen
+  // openDialogs — диалоги внутри видов (New task, Task details, Add run agent), открытые через useModalDialog:
+  // они сообщают о себе через DialogOpenContext и тоже входят в anyModalOpen. openDialogsRef — то же число
+  // сразу, без ожидания render: синк attention того же commit читает его через overlayOpenNow.
+  const [openDialogs, setOpenDialogs] = useState(0)
+  const openDialogsRef = useRef(0)
+  const reportDialogOpen = useCallback((open: boolean) => {
+    openDialogsRef.current += open ? 1 : -1
+    setOpenDialogs(openDialogsRef.current)
+  }, [])
+  const dialogOpenNow = useCallback(() => openDialogsRef.current > 0, [])
+  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen || openDialogs > 0
   const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
@@ -147,7 +163,7 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam } = useWorkspaceView(stages, editing, ownedHandledSigs)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs, dialogOpenNow)
 
   // meshRoster (Agent Mesh, T7.3) — the ONE useMeshRoster poll for the whole dashboard; there is no
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
@@ -165,16 +181,25 @@ export function App(): ReactElement {
       baselineTeamUnread(runId, meshRoster.summaries ?? {})
     }
   }, [runId, meshRoster])
+  // meshBoard — the ONE useMeshBoard poll: Team's Board tab and the run-wide Board tab read the same value, so
+  // switching between them never refetches. It starts only once the mesh probe succeeded.
+  const meshBoard = useMeshBoard(meshRoster.enabled, runId)
   // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
   // composer (seq makes a second click on the same person a new pick).
   const [peopleOpen, setPeopleOpen] = useState(false)
   const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
   const closePeople = useCallback(() => setPeopleOpen(false), [])
   // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
-  // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it.
-  const [addedParticipants, setAddedParticipants] = useState<MeshParticipant[]>([])
+  // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it. They
+  // belong to the run they were added in: another run starts without them.
+  const [added, setAdded] = useState<{ runId: string; participants: MeshParticipant[] }>({ runId, participants: [] })
+  const addedParticipants = added.runId === runId ? added.participants : NO_PARTICIPANTS
   const meshParticipants = useMemo(() => mergeById(meshRoster.participants, addedParticipants), [meshRoster.participants, addedParticipants])
-  const addParticipant = useCallback((p: MeshParticipant) => setAddedParticipants((prev) => [...prev, p]), [])
+  const mergedRoster = useMemo(() => ({ ...meshRoster, participants: meshParticipants }), [meshRoster, meshParticipants])
+  const addParticipant = useCallback(
+    (p: MeshParticipant) => setAdded((prev) => ({ runId, participants: prev.runId === runId ? [...prev.participants, p] : [p] })),
+    [runId],
+  )
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
@@ -216,7 +241,7 @@ export function App(): ReactElement {
   // статуса — тот же паттерн, что и у collaboration/accounting выше: застрявший на 'team' вид (капабилити
   // отключили на бэкенде между опросами) уводим в Feed.
   useEffect(() => {
-    if (meshRoster.probed && !meshRoster.enabled && wsState.view === 'team') openFeed()
+    if (meshRoster.probed && !meshRoster.enabled && (wsState.view === 'team' || wsState.view === 'board')) openFeed()
   }, [meshRoster.probed, meshRoster.enabled, wsState.view])
 
   // Клик по строке помощника в рейле: выбираем задачу и открываем её ленту.
@@ -265,7 +290,7 @@ export function App(): ReactElement {
       return
     }
     // Нет ожидающего действия.
-    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team') return
+    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team' || wsState.view === 'board') return
     if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
     else if (stage?.showDialog === true) openHistory('dialog-history')
     else if (stage?.showPlan === true) openHistory('plan-history')
@@ -403,7 +428,7 @@ export function App(): ReactElement {
     : null
 
   // Вкладки: Feed + контекстная detail-вкладка + отдельный маяк ожидания.
-  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team'
+  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team' || wsState.view === 'board'
   // В глобальном виде detail-таб выбранной стадии дублирует glow-маяк, если оба ведут в ОДНО и то же
   // ожидание — т.е. у стадии есть своё ожидание и маяк указывает на неё же.
   const duplicatesBeacon =
@@ -448,10 +473,10 @@ export function App(): ReactElement {
   // Team — ГЛОБАЛЬНАЯ вкладка ростера/бесед Agent Mesh (T7.3), не привязана к выбранной стадии (как Cost
   // ниже), видна когда meshRoster.enabled (пробный запрос — см. его комментарий, у мэша нет своего поля в
   // status.capabilities).
-  // Team also waits for the run id: it keys Team's state, so a first status arriving after the mesh probe must
-  // not recreate an already opened Team.
+  // Team and Board also wait for the run id: it keys their state, so a first status arriving after the mesh
+  // probe must not recreate an already opened Team.
   if (meshRoster.enabled && runId !== '') {
-    tabs.push({ id: 'team', label: 'Team' })
+    tabs.push({ id: 'team', label: 'Team' }, { id: 'board', label: 'Board' })
   }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.
   if (accounting.supported) {
@@ -460,12 +485,13 @@ export function App(): ReactElement {
   // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка, читает весь событийный поток флоу. Всегда ПОСЛЕДНЯЯ в
   // списке — правее Cost, а не второй сразу после Feed (тот же порядок, что и у Cost выше).
   tabs.push({ id: 'full-feed', label: 'Full feed' })
-  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'team' ? 'team' : 'detail'
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'team' ? 'team' : wsState.view === 'board' ? 'board' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
     if (id === 'cost') { openCost(); return }
     if (id === 'full-feed') { openFullFeed(); return }
     if (id === 'team') { openTeam(); return }
+    if (id === 'board') { openBoard(); return }
     if (id === 'beacon') {
       // Явный переход к ждущему действию.
       if (attentionTabItem !== null) {
@@ -507,6 +533,7 @@ export function App(): ReactElement {
     // MessageTimeZoneProvider стоит СНАРУЖИ SideAgentProvider: Feed, Team и история бокового агента
     // должны видеть одну и ту же хост-зону для времени сообщений.
     <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
+    <DialogOpenContext.Provider value={reportDialogOpen}>
     {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
         useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
         needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
@@ -580,7 +607,7 @@ export function App(): ReactElement {
                     лентой). Cost/Team — глобальные виды, не привязанные к стадии:
                     оставлять над ними имя/статус последней выбранной стадии
                     подразумевало бы несуществующий пер-стейдж фильтр. */}
-                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'full-feed' && wsState.view !== 'team' && (
+                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'full-feed' && wsState.view !== 'team' && wsState.view !== 'board' && (
                   <WorkspaceHeader
                     stage={workspaceStage}
                     connected={connected}
@@ -629,6 +656,12 @@ export function App(): ReactElement {
                   // dependency at all (a never-selected stage must still show Team, not Feed).
                   // Rendered below, outside this chain: Team stays mounted once opened (see teamOpenedRun).
                   null
+                ) : wsState.view === 'board' ? (
+                  // Board — global like Team, fed by the same meshBoard; BoardLoadState separates loading, unavailable
+                  // and stale data from "no tasks".
+                  <BoardLoadState board={meshBoard}>
+                    <BoardView key={runId} board={meshBoard} participants={meshParticipants} stages={teamStagesOf(stages)} />
+                  </BoardLoadState>
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
                   <div className="stage-feed-layout">
                     <FeedWorkspace
@@ -660,7 +693,7 @@ export function App(): ReactElement {
                       // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
                       // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
                       // and the plain note-to-agent composer (no Message/Revise tabs).
-                      mesh={stageMesh ? { roster: { ...meshRoster, participants: meshParticipants }, profiles: assistantProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts, sideFailures: meshSideFailures } : undefined}
+                      mesh={stageMesh ? { roster: mergedRoster, profiles: assistantProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts, sideFailures: meshSideFailures } : undefined}
                       reviseAvailable={reviseAvailable}
                     />
                     {showPeople && workspaceStage !== null && (
@@ -725,7 +758,7 @@ export function App(): ReactElement {
                     in-flight sends (with their idempotency keys), selection and reading position live in it. */}
                 {teamOpenedRun === runId && meshRoster.enabled && (
                   <div style={{ display: wsState.view === 'team' ? 'contents' : 'none' }}>
-                    <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={meshRoster} stages={stages} events={events} profiles={assistantProfiles} />
+                    <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={mergedRoster} onParticipantAdded={addParticipant} board={meshBoard} stages={stages} events={events} profiles={assistantProfiles} />
                   </div>
                 )}
               </>
@@ -770,6 +803,7 @@ export function App(): ReactElement {
       )}
       </FileBrowserProvider>
     </SideAgentProvider>
+    </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>
   )
 }

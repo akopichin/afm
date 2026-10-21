@@ -7,7 +7,7 @@ import {
   type AddStagePreviewView,
   type AddStageRequest,
 } from '../../api/run-client'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { useModalDialog } from '../../lib/focus-trap'
 
 export type AddStageDialogProps = {
   // capabilityEnabled — GET /api/status's capabilities.add_stage. The caller fetches this itself (this
@@ -39,7 +39,7 @@ function newRequestId(): string {
 }
 
 // AddStageDialog — dev-plan.md T9.6's modal for inserting a dynamic "agents: [auto]" stage into the live run.
-// Mirrors AttachAssistantDialog's modal mechanics (focus-trap via visibleFocusables, Escape-to-cancel,
+// Mirrors AttachAssistantDialog's modal mechanics (useModalDialog's focus-trap and Escape-to-cancel,
 // modal-overlay/modal-content classes, immediate-disable double-submit guard) and its
 // non-committal-until-explicit-confirm posture: nothing here mutates the run until "Add stage" is clicked, and
 // everything up to that point is a read-only preview rendered through GraphOperationPreview.
@@ -129,35 +129,7 @@ export function AddStageDialog({ capabilityEnabled, graphRevision, stages, onCom
     // eslint-disable-next-line react-hooks/exhaustive-deps -- revisionRef is a ref, intentionally not a dep
   }, [canPreview, kind, targetId, id, name, command, prompt, explicitDeps.join(',')])
 
-  useEffect(() => {
-    const modal = modalRef.current
-    if (modal !== null) visibleFocusables(modal)[0]?.focus()
-  }, [])
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-        return
-      }
-      const modal = modalRef.current
-      if (e.key !== 'Tab' || modal === null) return
-      const items = visibleFocusables(modal)
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
+  useModalDialog(modalRef, onCancel)
 
   function handleConfirm(): void {
     if (submitting || !capabilityEnabled || previewStatus !== 'ready') return

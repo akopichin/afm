@@ -65,3 +65,53 @@ func TestCollectDependencyPlans_NilWarnIsSafe(t *testing.T) {
 		t.Errorf("expected placeholder text with nil warn callback, got %q", got)
 	}
 }
+
+// Project artifacts live in the agents' project root (a worktree when the run uses one), not in afm's CWD.
+func TestCollectArtifacts_ProjectPathsResolveFromProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "docs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "docs", "api.yaml"), []byte("worktree contract"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	notInline := false
+	producer := flow.Stage{ID: "design", Artifacts: []flow.Artifact{
+		{Name: "api", Path: "docs/api.yaml"},
+		{Name: "ref", Path: "docs/api.yaml", Inline: &notInline},
+	}}
+	consumer := flow.Stage{ID: "build", Inputs: []flow.Input{{Ref: "design.api"}, {Ref: "design.ref"}}}
+
+	got, err := CollectArtifacts(projectDir, t.TempDir(), consumer, []flow.Stage{producer, consumer})
+	if err != nil {
+		t.Fatalf("CollectArtifacts: %v", err)
+	}
+	if !strings.Contains(got, "worktree contract") {
+		t.Errorf("inline artifact must come from the project root, got:\n%s", got)
+	}
+	if !strings.Contains(got, "File path: "+filepath.Join(projectDir, "docs", "api.yaml")) {
+		t.Errorf("a non-inline artifact must be handed over as an absolute path, got:\n%s", got)
+	}
+	if err := CheckCompletion(writeDone(t), projectDir, producer); err != nil {
+		t.Errorf("CheckCompletion must find the artifact in the project root: %v", err)
+	}
+}
+
+func TestResolveArtifactPath_KeepsAbsolutePath(t *testing.T) {
+	if got := resolveArtifactPath("/wt", "/run", "s", "/abs/out.md"); got != "/abs/out.md" {
+		t.Errorf("resolveArtifactPath = %q, want the absolute path unchanged", got)
+	}
+}
+
+// writeDone returns a stage dir that already has its .done marker.
+func writeDone(t *testing.T) string {
+	t.Helper()
+	stageDir := filepath.Join(t.TempDir(), "design")
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, ".done"), []byte("done"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return stageDir
+}

@@ -23,9 +23,10 @@ right (there is no three-column layout or bottom progress bar).
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
   *selected stage's own* event history, capped at its last 2,000 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
-  plan or Q&A history to reopen. When Agent Mesh is available, a run-wide **Team** tab
-  opens the participant roster and conversations (see
-  [Team conversations](collaboration.md#team-conversations)). The workspace also has a permanent
+  plan or Q&A history to reopen. When Agent Mesh is available, run-wide **Team** and
+  **Board** tabs appear beside each other. Team opens the participant roster and
+  conversations; Board groups tasks by status (see
+  [Board tasks](collaboration.md#board-tasks)). The workspace also has a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
   flow's last 10,000 events across every stage. Feed always reflects whichever
   stage is selected — including an old, already-completed one, which used to
@@ -89,6 +90,22 @@ selected conversation, its unsent draft and its reading position. On narrow scre
 from the list and use **Back** from the conversation; on wide screens, drag or
 keyboard-resize the divider. See [Team conversations](collaboration.md#team-conversations)
 for messaging and participant details.
+
+## Board tab
+
+The run-wide **Board** tab shows tasks in **Todo**, **In progress**, and **Done**
+columns. Task cards are gray, blue, and green, respectively. Search matches a
+task's key and text; the assignee filter can show one agent's tasks or unassigned
+tasks. The header shows completed tasks out of all tasks. **New task** opens the
+posting form, and selecting a card opens its text, assignees, and current reports.
+New tasks start in Todo. Status changes come from agent reports; there is no
+control for a person to move a task between columns.
+
+Team keeps its own **Board** subtab. It shows the same color-coded task cards in
+one mixed grid alongside non-task board entries, without status columns. Both
+views update from the shared board. While it loads, the Board tab says so; if
+loading fails, **Retry** is available. If a later refresh fails, the last loaded
+cards stay visible with an out-of-date warning.
 
 ## Message times
 
