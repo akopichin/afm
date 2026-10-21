@@ -1024,6 +1024,10 @@
   align-items: center;
   gap: 4px;
   cursor: pointer;
+  /* A long alias wraps inside the dialog instead of widening it. */
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .team-board-form-actions {
   display: flex;
@@ -1248,6 +1252,14 @@
   align-items: center;
   gap: 5px;
   min-width: 0;
+  max-width: 100%;
+}
+/* A long, unbreakable alias is cut, so the card keeps its lane's width. */
+.board-task-assignee-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .board-task-assignee .mesh-avatar {
   width: 20px;
@@ -1338,6 +1350,10 @@
   justify-content: space-between;
   gap: 12px;
   font-size: 12px;
+}
+.board-task-details-assignee-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .board-task-details-assignee-state {
   color: var(--text-muted);
@@ -1773,6 +1789,9 @@
 }
 .board-view-search,
 .board-view-assignee {
+  /* A long participant name in the filter never widens it past a narrow screen. */
+  min-width: 0;
+  max-width: 100%;
   font: inherit;
   font-size: 13px;
   padding: 6px 8px;

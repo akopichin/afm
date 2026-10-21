@@ -26,7 +26,7 @@ describe('BoardTaskForm', () => {
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
-    await waitFor(() => expect(onPosted).toHaveBeenCalledWith('task/csv-export'))
+    await waitFor(() => expect(onPosted).toHaveBeenCalledWith('task/csv-export', false))
     expect(publish.mock.calls[0]?.[0]).toMatchObject({ key: 'task/csv-export', status: 'CSV export — Add GET /todos.csv' })
     expect(screen.getByLabelText('Task')).toHaveValue('')
     expect(screen.getByLabelText('Details')).toHaveValue('')

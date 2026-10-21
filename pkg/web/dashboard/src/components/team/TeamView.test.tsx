@@ -1097,6 +1097,24 @@ describe('TeamView', () => {
     expect(reload).toHaveBeenCalledTimes(1)
   })
 
+  test('a failed refresh and its recovery keep the task typed in the Board form', () => {
+    mockThreadAndBoardFetches()
+    const entries = [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }]
+    const view = (status: MeshBoard['status']) => (
+      <TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={{ entries, status, reload: async () => {} }} stages={[makeStage()]} events={[]} profiles={profiles} />
+    )
+    const { rerender } = render(view('ready'))
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+    fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'all rows' } })
+    rerender(view('stale'))
+    expect(screen.getByRole('alert')).toHaveTextContent('out of date')
+    expect(screen.getByLabelText('Task')).toHaveValue('CSV export')
+    rerender(view('ready'))
+    expect(screen.getByLabelText('Task')).toHaveValue('CSV export')
+    expect(screen.getByLabelText('Details')).toHaveValue('all rows')
+  })
+
   test('a direct conversation opens from a person row', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()

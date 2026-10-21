@@ -162,4 +162,32 @@ describe('boardTopLevel', () => {
     expect(boardReportsOf(fact, entries)).toEqual([])
     expect(boardReportsOf(csv, entries).map((e) => e.key)).toEqual(['task/csv/agent'])
   })
+
+  // Team shows one level: an entry is hidden only when it is actually rendered under a visible parent.
+  test('a fact nested two levels deep stays visible: its parent is itself shown as a report', () => {
+    const api = entry('api', 'API', dev.id)
+    const ready = entry('api/ready', 'yes', dev.id)
+    const qaNote = entry('api/ready/qa', 'checked', qa.id)
+    const entries = [api, ready, qaNote]
+    expect(boardTopLevel(entries).map((e) => e.key)).toEqual(['api', 'api/ready/qa'])
+    expect(boardReportsOf(api, entries).map((e) => e.key)).toEqual(['api/ready'])
+  })
+
+  test('a key under a task that is not a direct report is shown as a fact, not lost', () => {
+    const entries = [task(), entry('task/csv/dev/note', 'a nested note', dev.id)]
+    expect(boardTopLevel(entries).map((e) => e.key)).toEqual(['task/csv', 'task/csv/dev/note'])
+    expect(only(boardTasks(entries, roster)).reports).toEqual([])
+  })
+
+  test('a nested key under a task report is shown as a fact; the report stays in the task', () => {
+    const entries = [task(), entry('task/csv/dev', 'done: delivered', dev.id), entry('task/csv/dev/note', 'in progress: unrelated', dev.id)]
+    expect(boardTopLevel(entries).map((e) => e.key)).toEqual(['task/csv', 'task/csv/dev/note'])
+    expect(only(boardTasks(entries, roster)).reports.map((r) => r.entry.key)).toEqual(['task/csv/dev'])
+  })
+
+  test('an empty alias ("task/csv/") is not a report, so it is shown as a fact', () => {
+    const entries = [task(), entry('task/csv/', 'done: empty alias', dev.id)]
+    expect(boardTopLevel(entries).map((e) => e.key)).toEqual(['task/csv', 'task/csv/'])
+  })
 })
+

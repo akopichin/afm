@@ -32,6 +32,9 @@ columns, search, assignee filtering, and a completion count. Team's Board keeps
 its mixed layout while task cards use gray, blue, and green status colors. Agents
 claim and finish tasks through their own `in progress:` and `done:` board reports;
 people can post tasks but cannot set their status. See [Board tasks](docs/collaboration.md#board-tasks).
+Dashboard dialogs, including the Feed's assistant preview, now keep a waiting
+action from switching the workspace while they are open, and return focus to
+where it was when they close.
 
 ### Improvement: show host-local message times in conversations and feeds
 

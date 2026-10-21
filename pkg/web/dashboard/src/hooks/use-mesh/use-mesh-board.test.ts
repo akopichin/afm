@@ -92,4 +92,31 @@ describe('useMeshBoard', () => {
     expect(result.current.status).toBe('ready')
     expect(result.current.entries.map((e) => e.key)).toEqual(['task/a', 'task/b'])
   })
+
+  test("a run switch drops the old run's board: a failed first fetch is an error, not the old run's stale board", async () => {
+    vi.spyOn(meshClient, 'getMeshBoard')
+      .mockResolvedValueOnce({ entries: [entry('task/a-run')] })
+      .mockRejectedValueOnce(new Error('network'))
+    const { result, rerender } = renderHook(({ runId }) => useMeshBoard(true, runId), { initialProps: { runId: 'A' } })
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    rerender({ runId: 'B' })
+    expect(result.current.status).toBe('loading')
+    expect(result.current.entries).toEqual([])
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.entries).toEqual([])
+  })
+
+  test("a response of the old run that lands after the switch is discarded", async () => {
+    let resolveOld!: (v: { entries: meshClient.MeshBoardEntry[] }) => void
+    vi.spyOn(meshClient, 'getMeshBoard')
+      .mockReturnValueOnce(new Promise((res) => (resolveOld = res)))
+      .mockReturnValueOnce(new Promise(() => {}))
+    const { result, rerender } = renderHook(({ runId }) => useMeshBoard(true, runId), { initialProps: { runId: 'A' } })
+    rerender({ runId: 'B' })
+    await act(async () => resolveOld({ entries: [entry('task/a-run')] }))
+    expect(result.current.status).toBe('loading')
+    expect(result.current.entries).toEqual([])
+  })
 })
+

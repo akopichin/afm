@@ -1,9 +1,9 @@
-import { useEffect, useRef, type ReactElement } from 'react'
+import { useRef, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { BoardTask } from '../../lib/board-tasks'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { useModalDialog } from '../../lib/focus-trap'
 import { senderLabel } from '../../lib/mesh-roster'
-import { BoardTaskStatusBadge, splitTaskText } from './BoardTaskCard'
+import { BoardTaskStatusBadge, findTaskCard, splitTaskText } from './BoardTaskCard'
 
 export type BoardTaskDetailsProps = {
   // task — read from the live projection on every render, so a report that arrives while the dialog is open shows.
@@ -18,40 +18,8 @@ export function BoardTaskDetails({ task, participants, onClose }: BoardTaskDetai
   const modalRef = useRef<HTMLDivElement | null>(null)
   const { title, description } = splitTaskText(task.text)
 
-  // Focus moves into the dialog and goes back to the card that opened it.
-  useEffect(() => {
-    const opener = document.activeElement
-    const modal = modalRef.current
-    if (modal !== null) visibleFocusables(modal)[0]?.focus()
-    return () => {
-      if (opener instanceof HTMLElement) opener.focus()
-    }
-  }, [])
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      const modal = modalRef.current
-      if (e.key !== 'Tab' || modal === null) return
-      const items = visibleFocusables(modal)
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  // Focus moves into the dialog and, on close, goes back to the task's card — the one the board shows now.
+  useModalDialog(modalRef, onClose, () => findTaskCard(task.key))
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Task details">
@@ -84,7 +52,7 @@ export function BoardTaskDetails({ task, participants, onClose }: BoardTaskDetai
           <ul className="board-task-details-assignees" aria-label="Assignees">
             {task.assignees.map((a) => (
               <li key={a.id}>
-                <span>{senderLabel(a.id, participants)}</span>
+                <span className="board-task-details-assignee-name">{senderLabel(a.id, participants)}</span>
                 <span className="board-task-details-assignee-state">{a.inProgress ? 'In progress' : 'Done'}</span>
               </li>
             ))}

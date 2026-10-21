@@ -41,6 +41,12 @@ export function BoardTaskStatusBadge({ status }: { status: BoardTaskStatus }): R
   )
 }
 
+// findTaskCard — the card that shows the task now, wherever the latest poll put it (a card that moved to another
+// lane is a new element).
+export function findTaskCard(key: string, root: ParentNode = document): HTMLElement | undefined {
+  return Array.from(root.querySelectorAll<HTMLElement>('.board-task-card[data-task-key]')).find((el) => el.dataset.taskKey === key)
+}
+
 export type BoardTaskCardProps = {
   task: BoardTask
   // participants — to name the assignees and the author of the latest report.
@@ -59,6 +65,7 @@ export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps
     <button
       type="button"
       className="board-task-card"
+      data-task-key={task.key}
       data-status={task.status}
       aria-label={`${title}, ${BOARD_STATUS_LABEL[task.status]}`}
       onClick={() => onOpen(task)}
@@ -83,7 +90,7 @@ export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps
             return (
               <span key={a.id} className="board-task-assignee">
                 <MeshAvatar name={name} kind={participants.find((p) => p.id === a.id)?.kind ?? 'run_agent'} size="small" />
-                <span>{name}</span>
+                <span className="board-task-assignee-name">{name}</span>
               </span>
             )
           })

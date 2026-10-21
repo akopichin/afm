@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import * as meshClient from '../../api/mesh-client'
 import type { MeshBoardEntry, MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
+import { BoardLoadState } from './BoardLoadState'
 import { BoardView } from './BoardView'
 
 const participants: MeshParticipant[] = [
@@ -218,5 +219,86 @@ describe('BoardView', () => {
     expect(screen.queryByRole('radio')).toBeNull()
     // The only select is the assignee filter.
     expect(screen.getAllByRole('combobox')).toHaveLength(1)
+  })
+
+  // App wraps the Board tab in BoardLoadState: a failed refresh and its recovery must keep the open form, its
+  // text and the filters.
+  test('ready -> stale -> ready keeps the filters and the open New task form with its text', () => {
+    const view = (status: MeshBoard['status']) => {
+      const board = boardOf(entries, { status })
+      return (
+        <BoardLoadState board={board}>
+          <BoardView board={board} participants={participants} stages={stages} />
+        </BoardLoadState>
+      )
+    }
+    const { rerender } = render(view('ready'))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'docs' } })
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Half typed' } })
+
+    rerender(view('stale'))
+    expect(screen.getByRole('alert')).toHaveTextContent('out of date')
+    expect(screen.getByLabelText('Task')).toHaveValue('Half typed')
+    rerender(view('ready'))
+    expect(screen.getByRole('dialog', { name: 'New task' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Task')).toHaveValue('Half typed')
+    expect(screen.getByRole('searchbox', { name: 'Search tasks' })).toHaveValue('docs')
+  })
+
+  test('text typed while a task is being posted keeps the New task dialog open with that text', async () => {
+    let resolvePublish!: (v: MeshBoardEntry) => void
+    vi.spyOn(meshClient, 'publishMeshBoard').mockReturnValue(new Promise((res) => (resolvePublish = res)))
+    const reload = vi.fn(() => Promise.resolve())
+    renderView(boardOf(entries, { reload }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV import' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'next: XLSX import' } })
+    await act(async () => resolvePublish(entry('user', 'task/csv-import', 'CSV import', 10)))
+
+    expect(reload).toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: 'New task' })
+    expect(within(dialog).getByLabelText('Task')).toHaveValue('')
+    expect(within(dialog).getByLabelText('Details')).toHaveValue('next: XLSX import')
+    expect(screen.getByRole('status', { name: 'Board updates' })).toHaveTextContent('Task added to Todo')
+  })
+
+  test('closing the details of a task that moved to another lane returns focus to its card there', () => {
+    const { rerender } = renderView(boardOf(entries))
+    const card = screen.getByRole('button', { name: 'CSV export, Todo' })
+    card.focus()
+    fireEvent.click(card)
+    rerender(
+      <BoardView
+        board={boardOf([...entries, entry('run:t-1', 'task/csv-export/qa', 'done: shipped', 9)])}
+        participants={participants}
+        stages={stages}
+      />,
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(within(lane('Done')).getByRole('button', { name: 'CSV export, Done' })).toHaveFocus()
+  })
+
+  test('a posted task that arrives while another dialog is open does not take focus behind it', async () => {
+    vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
+    const reload = vi.fn(() => Promise.resolve())
+    const { rerender } = renderView(boardOf(entries, { reload }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // Before the poll brings the new card, the operator opens another task.
+    fireEvent.click(screen.getByRole('button', { name: 'Docs, Done' }))
+    const details = screen.getByRole('dialog', { name: 'Task details' })
+    const close = within(details).getByRole('button', { name: 'Close task details' })
+    expect(close).toHaveFocus()
+
+    rerender(<BoardView board={boardOf([...entries, entry('user', 'task/new-thing', 'New thing', 10)], { reload })} participants={participants} stages={stages} />)
+    expect(close).toHaveFocus()
   })
 })

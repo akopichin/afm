@@ -5,6 +5,7 @@ import { boardTasks, type BoardTask } from '../../lib/board-tasks'
 import tokensCss from '../../../skins/base/tokens.css?raw'
 import meshCss from '../../../skins/base/mesh.css?raw'
 import { BoardTaskCard } from './BoardTaskCard'
+import { BoardTaskDetails } from './BoardTaskDetails'
 
 const participants: MeshParticipant[] = [
   { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
@@ -113,3 +114,44 @@ describe('board status colors', () => {
     expect(new Set([fg('todo'), fg('in-progress'), fg('done')]).size).toBe(3)
   })
 })
+
+// A long participant name (an unbreakable alias) must never push the filter or a card wider than a narrow screen.
+describe('long participant names', () => {
+  test('the assignee filter can shrink to the width it is given', () => {
+    const rule = block(meshCss, '.board-view-assignee {')
+    expect(rule).toMatch(/min-width:\s*0/)
+    expect(rule).toMatch(/max-width:\s*100%/)
+  })
+
+  test("a card's assignee name is cut with an ellipsis", () => {
+    expect(block(meshCss, '.board-task-assignee {')).toMatch(/max-width:\s*100%/)
+    const name = block(meshCss, '.board-task-assignee-name {')
+    expect(name).toMatch(/min-width:\s*0/)
+    expect(name).toMatch(/overflow:\s*hidden/)
+    expect(name).toMatch(/text-overflow:\s*ellipsis/)
+    expect(name).toMatch(/white-space:\s*nowrap/)
+  })
+
+  test('the details and the Notify list wrap a long name instead of overflowing', () => {
+    for (const selector of ['.board-task-details-assignee-name {', '.team-board-notify-option {']) {
+      const rule = block(meshCss, selector)
+      expect(rule).toMatch(/min-width:\s*0/)
+      expect(rule).toMatch(/overflow-wrap:\s*anywhere/)
+    }
+  })
+
+  test('the card and the details mark the name for those rules', () => {
+    const task = boardTasks(
+      [
+        { author_id: 'user', key: 'task/a', version: 1, status: 'A', seq: 1, ts: '' },
+        { author_id: 'run:t-1', key: 'task/a/qa', version: 1, status: 'in progress: x', seq: 2, ts: '' },
+      ],
+      participants,
+    )[0]!
+    render(<BoardTaskCard task={task} participants={participants} onOpen={() => {}} />)
+    expect(document.querySelector('.board-task-assignee-name')).toHaveTextContent('QA')
+    render(<BoardTaskDetails task={task} participants={participants} onClose={() => {}} />)
+    expect(document.querySelector('.board-task-details-assignee-name')).toHaveTextContent('QA')
+  })
+})
+

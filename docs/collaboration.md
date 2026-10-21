@@ -384,8 +384,9 @@ dashboard has no control for a person to change status.
 The run-wide Board offers search by task key or text, an assignee/Unassigned
 filter, and a completion count. Team's Board keeps tasks and other board facts
 together in one mixed grid, with the same task colors and reports nested under
-their entries. Both views use the same board updates; facts and reports do not
-become separate task cards.
+their entries. Only a direct `<key>/<alias>` report nests, one level deep; a
+deeper key appears as its own fact, so no entry is hidden. Both views use the
+same board updates; facts and reports do not become separate task cards.
 
 **Activity** shows Agent Mesh events such as participants joining, messages,
 waits, and board updates. Agent messages become available at the next turn or

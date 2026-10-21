@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import { ActionCard } from './ActionCard'
 import { attachAndSendMesh, genMeshRequestId, type MeshAttachAndSendResult } from '../../api/mesh-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { useModalDialog } from '../../lib/focus-trap'
 
 export type AttachAssistantDialogProps = {
   profileId: string
@@ -29,8 +29,8 @@ export type AttachAssistantDialogProps = {
 // attach-and-send to a configured profile (dev-plan.md T4.6/T7.5). "Attach and send" calls the T6.2-backed
 // composite (attachAndSendMesh → POST /api/mesh/attach-and-send) directly — NOT confirmActionDraft, which was
 // this dialog's original Side-agent-draft-confirm path (Этап 4a) and has no other live caller today (T7.5's
-// job folds that unmounted flow into the mesh composite rather than keeping two). Mirrors FileBrowserModal's
-// Escape/Tab-wrap focus-trap (visibleFocusables) rather than reinventing one.
+// job folds that unmounted flow into the mesh composite rather than keeping two). Uses the shared modal
+// focus lifecycle (useModalDialog) rather than reinventing one.
 export function AttachAssistantDialog({
   profileId, stageId, title, instruction, mode, profiles, stages, maxDepth, onConfirmed, onCancel,
 }: AttachAssistantDialogProps): ReactElement {
@@ -50,35 +50,7 @@ export function AttachAssistantDialog({
   const remainingDepth = maxDepth === undefined ? undefined : maxDepth - 1
   const atDepthLimit = remainingDepth !== undefined && remainingDepth < 0
 
-  useEffect(() => {
-    const modal = modalRef.current
-    if (modal !== null) visibleFocusables(modal)[0]?.focus()
-  }, [])
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onCancel()
-        return
-      }
-      const modal = modalRef.current
-      if (e.key !== 'Tab' || modal === null) return
-      const items = visibleFocusables(modal)
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
+  useModalDialog(modalRef, onCancel)
 
   function handleConfirm(): void {
     if (submitting || atDepthLimit) return

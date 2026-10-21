@@ -18,9 +18,12 @@ export type MeshBoard = {
   reload: () => Promise<void>
 }
 
-type BoardSnapshot = { entries: MeshBoardEntry[]; loaded: boolean; failed: boolean }
+// BoardSnapshot — what the polls of one run learned; runId keeps one run's board out of another's.
+type BoardSnapshot = { runId: string; entries: MeshBoardEntry[]; loaded: boolean; failed: boolean }
 
-const INITIAL: BoardSnapshot = { entries: [], loaded: false, failed: false }
+function initialSnapshot(runId: string): BoardSnapshot {
+  return { runId, entries: [], loaded: false, failed: false }
+}
 
 function statusOf({ loaded, failed }: BoardSnapshot): MeshBoardStatus {
   if (!failed) return loaded ? 'ready' : 'loading'
@@ -29,9 +32,11 @@ function statusOf({ loaded, failed }: BoardSnapshot): MeshBoardStatus {
 
 // useMeshBoard — the shared board (GET /api/mesh/board). Owned by App.tsx (ONE poll for the dashboard); the
 // Team view's Board tab and the run-wide Board tab both read this value. It polls only while the mesh
-// capability is `enabled`, so a run without the mesh never requests the board.
-export function useMeshBoard(enabled = true): MeshBoard {
-  const [snapshot, setSnapshot] = useState<BoardSnapshot>(INITIAL)
+// capability is `enabled`, so a run without the mesh never requests the board. A new runId starts from
+// "loading": the old run's tasks are never shown, and a response of the old run's poll is discarded.
+export function useMeshBoard(enabled = true, runId = ''): MeshBoard {
+  const [stored, setSnapshot] = useState<BoardSnapshot>(() => initialSnapshot(runId))
+  const snapshot = stored.runId === runId ? stored : initialSnapshot(runId)
 
   const pollRef = useRef<SerialPoll | null>(null)
 
@@ -42,11 +47,11 @@ export function useMeshBoard(enabled = true): MeshBoard {
       (isStopped) =>
         getMeshBoard().then(
           (res) => {
-            if (!isStopped()) setSnapshot({ entries: res.entries ?? [], loaded: true, failed: false })
+            if (!isStopped()) setSnapshot({ runId, entries: res.entries ?? [], loaded: true, failed: false })
           },
           () => {
             // Keep the last snapshot; only flag that it may be out of date until a fetch succeeds again.
-            if (!isStopped()) setSnapshot((prev) => ({ ...prev, failed: true }))
+            if (!isStopped()) setSnapshot((prev) => ({ ...(prev.runId === runId ? prev : initialSnapshot(runId)), failed: true }))
           },
         ),
       POLL_INTERVAL_MS,
@@ -56,7 +61,7 @@ export function useMeshBoard(enabled = true): MeshBoard {
       poll.stop()
       pollRef.current = null
     }
-  }, [enabled])
+  }, [enabled, runId])
 
   const reload = useCallback(() => pollRef.current?.now() ?? Promise.resolve(), [])
 

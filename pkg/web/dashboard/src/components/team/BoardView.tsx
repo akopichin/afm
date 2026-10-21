@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
 import { boardTasks, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { useModalDialog } from '../../lib/focus-trap'
 import { participantLabel } from '../../lib/mesh-roster'
-import { BOARD_STATUS_LABEL, BoardTaskCard } from './BoardTaskCard'
+import { BOARD_STATUS_LABEL, BoardTaskCard, findTaskCard } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { BoardTaskForm } from './BoardTaskForm'
 import type { RunTeamListStage } from './RunTeamList'
@@ -41,7 +41,8 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const [newTaskOpen, setNewTaskOpen] = useState(false)
   // Only the key is kept: the dialog reads the task from the latest poll, and closes if the task is gone.
   const [openKey, setOpenKey] = useState<string | null>(null)
-  // focusKey — a task just posted: it takes focus as soon as its card is on the board.
+  // focusKey — a task just posted: it takes focus as soon as its card is on the board, unless a dialog is open
+  // by then (opening one drops it, so focus never jumps behind a dialog).
   const [focusKey, setFocusKey] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
   const lanesRef = useRef<HTMLDivElement | null>(null)
@@ -55,24 +56,37 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const shown = tasks.filter((t) => matchesSearch(t, query) && matchesAssignee(t, assignee))
   const doneCount = tasks.filter((t) => t.status === 'done').length
 
-  useEffect(() => {
-    if (focusKey === null) return
-    const item = Array.from(lanesRef.current?.querySelectorAll<HTMLElement>('[data-task-key]') ?? []).find(
-      (el) => el.dataset.taskKey === focusKey,
-    )
-    if (item === undefined) return
-    item.querySelector('button')?.focus()
-    setFocusKey(null)
-  }, [focusKey, board.entries])
+  const dialogOpen = newTaskOpen || openKey !== null
 
-  // A new task is always Todo, so the filters that could hide it are cleared and its card is focused once it arrives.
-  function handlePosted(key: string): void {
+  useEffect(() => {
+    if (focusKey === null || dialogOpen || lanesRef.current === null) return
+    const card = findTaskCard(focusKey, lanesRef.current)
+    if (card === undefined) return
+    card.focus()
+    setFocusKey(null)
+  }, [focusKey, dialogOpen, board.entries])
+
+  function openNewTask(): void {
+    setAnnouncement('')
+    setFocusKey(null)
+    setNewTaskOpen(true)
+  }
+
+  function openDetails(key: string): void {
+    setFocusKey(null)
+    setOpenKey(key)
+  }
+
+  // A new task is always Todo, so the filters that could hide it are cleared. The dialog closes and the card is
+  // focused once it arrives — unless text typed while posting is still in the form: then the dialog stays open.
+  function handlePosted(key: string, draftRemains: boolean): void {
     setSearch('')
     setAssignee(ALL_ASSIGNEES)
-    setNewTaskOpen(false)
-    setFocusKey(key)
     setAnnouncement('Task added to Todo')
     void board.reload()
+    if (draftRemains) return
+    setNewTaskOpen(false)
+    setFocusKey(key)
   }
 
   return (
@@ -91,10 +105,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
         <button
           type="button"
           className="btn btn-send"
-          onClick={() => {
-            setAnnouncement('')
-            setNewTaskOpen(true)
-          }}
+          onClick={openNewTask}
         >
           New task
         </button>
@@ -138,8 +149,8 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
               ) : (
                 <ul className="board-lane-cards">
                   {laneTasks.map((task) => (
-                    <li key={task.key} data-task-key={task.key}>
-                      <BoardTaskCard task={task} participants={participants} onOpen={(t) => setOpenKey(t.key)} />
+                    <li key={task.key}>
+                      <BoardTaskCard task={task} participants={participants} onOpen={(t) => openDetails(t.key)} />
                     </li>
                   ))}
                 </ul>
@@ -160,48 +171,15 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
 type NewTaskDialogProps = {
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
-  onPosted: (key: string) => void
+  onPosted: (key: string, draftRemains: boolean) => void
   onClose: () => void
 }
 
 // NewTaskDialog — the task form in a modal: focus moves into it, Tab stays inside, Escape closes it and focus
-// goes back to the button that opened it. Same keyboard contract as BoardTaskDetails.
+// goes back to the button that opened it (the shared useModalDialog, like BoardTaskDetails).
 function NewTaskDialog({ participants, stages, onPosted, onClose }: NewTaskDialogProps): ReactElement {
   const modalRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const opener = document.activeElement
-    const modal = modalRef.current
-    if (modal !== null) visibleFocusables(modal)[0]?.focus()
-    return () => {
-      if (opener instanceof HTMLElement) opener.focus()
-    }
-  }, [])
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      const modal = modalRef.current
-      if (e.key !== 'Tab' || modal === null) return
-      const items = visibleFocusables(modal)
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  useModalDialog(modalRef, onClose)
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="New task">

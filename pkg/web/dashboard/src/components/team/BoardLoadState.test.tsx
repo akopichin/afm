@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import { BoardLoadState } from './BoardLoadState'
@@ -37,5 +38,19 @@ describe('BoardLoadState', () => {
     expect(screen.getByText('content')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  // A failed refresh (ready -> stale) and its recovery must not remount the content: a typed draft would vanish.
+  test('ready -> stale -> ready keeps the content mounted, with its state', () => {
+    function Draft() {
+      const [text, setText] = useState('')
+      return <input aria-label="Draft" value={text} onChange={(e) => setText(e.target.value)} />
+    }
+    const { rerender } = render(<BoardLoadState board={board('ready')}><Draft /></BoardLoadState>)
+    fireEvent.change(screen.getByLabelText('Draft'), { target: { value: 'half a task' } })
+    rerender(<BoardLoadState board={board('stale')}><Draft /></BoardLoadState>)
+    expect(screen.getByLabelText('Draft')).toHaveValue('half a task')
+    rerender(<BoardLoadState board={board('ready')}><Draft /></BoardLoadState>)
+    expect(screen.getByLabelText('Draft')).toHaveValue('half a task')
   })
 })

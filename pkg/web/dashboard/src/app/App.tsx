@@ -20,6 +20,7 @@ import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescr
 import { FileBrowserProvider } from '../components/file-browser'
 import { SideAgentProvider } from '../components/side-agent'
 import { MessageTimeZoneProvider } from '../lib/message-time-zone'
+import { DialogOpenContext } from '../lib/focus-trap'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
 import { useSelectedStage } from '../hooks/use-selected-stage'
@@ -68,6 +69,8 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
 const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_approval', 'awaiting_assistants'])
 // NO_DELIVERIES — no delivery receipts (the stage Feed's mesh UI is off).
 const NO_DELIVERIES: ReadonlySet<string> = new Set()
+// NO_PARTICIPANTS — no locally added run agents in the current run.
+const NO_PARTICIPANTS: MeshParticipant[] = []
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 export function App(): ReactElement {
@@ -140,7 +143,11 @@ export function App(): ReactElement {
   // sideAgentOpen — видимость «бокового» агента. Входит в anyModalOpen, чтобы attention других стадий не
   // авто-открывался за открытой беседой (только сигналил).
   const [sideAgentOpen, setSideAgentOpen] = useState(false)
-  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen
+  // openDialogs — диалоги внутри видов (New task, Task details, Add run agent), открытые через useModalDialog:
+  // они сообщают о себе через DialogOpenContext и тоже входят в anyModalOpen.
+  const [openDialogs, setOpenDialogs] = useState(0)
+  const reportDialogOpen = useCallback((open: boolean) => setOpenDialogs((n) => n + (open ? 1 : -1)), [])
+  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen || openDialogs > 0
   const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
@@ -164,18 +171,23 @@ export function App(): ReactElement {
   }, [runId, meshRoster])
   // meshBoard — the ONE useMeshBoard poll: Team's Board tab and the run-wide Board tab read the same value, so
   // switching between them never refetches. It starts only once the mesh probe succeeded.
-  const meshBoard = useMeshBoard(meshRoster.enabled)
+  const meshBoard = useMeshBoard(meshRoster.enabled, runId)
   // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
   // composer (seq makes a second click on the same person a new pick).
   const [peopleOpen, setPeopleOpen] = useState(false)
   const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
   const closePeople = useCallback(() => setPeopleOpen(false), [])
   // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
-  // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it.
-  const [addedParticipants, setAddedParticipants] = useState<MeshParticipant[]>([])
+  // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it. They
+  // belong to the run they were added in: another run starts without them.
+  const [added, setAdded] = useState<{ runId: string; participants: MeshParticipant[] }>({ runId, participants: [] })
+  const addedParticipants = added.runId === runId ? added.participants : NO_PARTICIPANTS
   const meshParticipants = useMemo(() => mergeById(meshRoster.participants, addedParticipants), [meshRoster.participants, addedParticipants])
   const mergedRoster = useMemo(() => ({ ...meshRoster, participants: meshParticipants }), [meshRoster, meshParticipants])
-  const addParticipant = useCallback((p: MeshParticipant) => setAddedParticipants((prev) => [...prev, p]), [])
+  const addParticipant = useCallback(
+    (p: MeshParticipant) => setAdded((prev) => ({ runId, participants: prev.runId === runId ? [...prev.participants, p] : [p] })),
+    [runId],
+  )
 
   // Забываем Pause-on-focus ownership после внешнего Continue или завершения стадии, чтобы Send не вызвал
   // лишний Continue.
@@ -507,6 +519,7 @@ export function App(): ReactElement {
     // MessageTimeZoneProvider стоит СНАРУЖИ SideAgentProvider: Feed, Team и история бокового агента
     // должны видеть одну и ту же хост-зону для времени сообщений.
     <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
+    <DialogOpenContext.Provider value={reportDialogOpen}>
     {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
         useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
         needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
@@ -632,7 +645,7 @@ export function App(): ReactElement {
                   // Board — global like Team, fed by the same meshBoard; BoardLoadState separates loading, unavailable
                   // and stale data from "no tasks".
                   <BoardLoadState board={meshBoard}>
-                    <BoardView board={meshBoard} participants={meshParticipants} stages={teamStagesOf(stages)} />
+                    <BoardView key={runId} board={meshBoard} participants={meshParticipants} stages={teamStagesOf(stages)} />
                   </BoardLoadState>
                 ) : wsState.view === 'feed' || workspaceStage === null ? (
                   <div className="stage-feed-layout">
@@ -768,6 +781,7 @@ export function App(): ReactElement {
       )}
       </FileBrowserProvider>
     </SideAgentProvider>
+    </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>
   )
 }

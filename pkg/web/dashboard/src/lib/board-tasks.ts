@@ -46,23 +46,31 @@ function markerOf(text: string): ReportMarker | null {
   return null
 }
 
-// reportParent — the entry a report is filed under ("<key>/<alias>" under "<key>"), if any. A real task is always
-// top-level, even when a fact's key (like "task") happens to prefix it; the nearest (longest) parent key wins.
-function reportParent(entry: MeshBoardEntry, entries: MeshBoardEntry[]): MeshBoardEntry | undefined {
+// reportParentKey — the key an entry is filed under as a report: "<parent>/<alias>" → "<parent>", with a nonempty
+// alias. The one rule for a report, used by tasks and by Team's facts alike. A task is never a report, even when
+// a fact's key (like "task") happens to prefix it.
+function reportParentKey(entry: MeshBoardEntry): string | undefined {
   if (isTaskKey(entry.key)) return undefined
-  return entries
-    .filter((t) => t.key !== entry.key && entry.key.startsWith(t.key + '/'))
-    .reduce<MeshBoardEntry | undefined>((best, t) => (best === undefined || t.key.length > best.key.length ? t : best), undefined)
+  const slash = entry.key.lastIndexOf('/')
+  if (slash <= 0 || slash === entry.key.length - 1) return undefined
+  return entry.key.slice(0, slash)
 }
 
-// boardTopLevel — the board's own entries (tasks and facts), without the reports filed under them.
+// boardTopLevel — the entries Team shows on their own (tasks and facts). Team shows one level: an entry is
+// hidden only when it is rendered as a report under a parent that is itself shown, so no entry is ever lost.
 export function boardTopLevel(entries: MeshBoardEntry[]): MeshBoardEntry[] {
-  return entries.filter((e) => reportParent(e, entries) === undefined)
+  const shown = new Set<string>()
+  // A parent's key is shorter than its report's, so going from short keys to long ones decides parents first.
+  for (const e of [...entries].sort((a, b) => a.key.length - b.key.length)) {
+    const parent = reportParentKey(e)
+    if (parent === undefined || !shown.has(parent)) shown.add(e.key)
+  }
+  return entries.filter((e) => shown.has(e.key))
 }
 
-// boardReportsOf — the reports filed under entry, in board order.
+// boardReportsOf — the reports filed under a shown entry, in board order.
 export function boardReportsOf(entry: MeshBoardEntry, entries: MeshBoardEntry[]): MeshBoardEntry[] {
-  return entries.filter((e) => reportParent(e, entries)?.key === entry.key)
+  return entries.filter((e) => reportParentKey(e) === entry.key)
 }
 
 // boardTaskCount — the tasks on the board (the Board tab's badge): direct "task/<slug>" keys, not facts or reports.
@@ -71,11 +79,7 @@ export function boardTaskCount(entries: MeshBoardEntry[]): number {
 }
 
 function taskReports(task: MeshBoardEntry, entries: MeshBoardEntry[], agentIds: ReadonlySet<string>): BoardReport[] {
-  // Only direct "<task key>/<alias>" entries are reports: the alias is nonempty and has no further "/".
-  const prefix = task.key + '/'
-  const children = entries.filter(
-    (e) => e.key.startsWith(prefix) && e.key.length > prefix.length && !e.key.includes('/', prefix.length),
-  )
+  const children = boardReportsOf(task, entries)
   // An agent's current report is its latest one; other authors cannot claim, so all their entries stay visible.
   const latestByAgent = new Map<string, MeshBoardEntry>()
   for (const e of children) {

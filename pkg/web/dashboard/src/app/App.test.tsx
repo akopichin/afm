@@ -2523,4 +2523,132 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
     await waitFor(() => expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull())
   })
+
+  // Board dialogs are overlays like any other modal: an attention item that arrives while one is open only
+  // glows, even when focus sits on a checkbox or a button (not an editable field).
+  type BoardAttentionRun = { asking: boolean; runId: string; boardFails: boolean }
+  function mockBoardAttentionRun(run: BoardAttentionRun) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo',
+            run_id: run.runId,
+            stages: [
+              stageView('s1', 'Alpha', 'running'),
+              stageView('s2', 'Beta', run.asking ? 'awaiting_user_input' : 'running', run.asking ? QUESTION_FLAGS : {}),
+            ],
+            capabilities: { collaboration: true },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/assistant-profiles')) {
+        return { ok: true, json: async () => ({ profiles: [{ id: 'qa', title: 'QA role', command: 'claude', available: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/attach-and-send')) {
+        return {
+          ok: true,
+          json: async () => ({
+            task_id: 't-new', participant_id: 'run:t-new', thread_id: 'mt-new',
+            participant: { id: 'run:t-new', kind: 'run_agent', scope: 'run', alias: 'qa-role', display_name: 'QA role', reachable: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Alpha', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) {
+        if (run.boardFails) return { ok: false, status: 500, json: async () => ({}) } as Response
+        return { ok: true, json: async () => ({ entries: [{ key: `task/${run.runId}`, status: `Task of ${run.runId}`, author_id: 'user', version: 1, seq: 1, ts: '' }] }) } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+  const questionBeacon = () => screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))
+
+  test('Board tab: a question waits behind the New task dialog with focus on a Notify checkbox', async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    await screen.findByRole('button', { name: 'Task of r1, Todo' })
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    const dialog = screen.getByRole('dialog', { name: 'New task' })
+    fireEvent.change(within(dialog).getByLabelText('Task'), { target: { value: 'Half typed task' } })
+    const checkbox = within(dialog).getByRole('checkbox')
+    act(() => checkbox.focus())
+    expect(document.activeElement).toBe(checkbox)
+
+    run.asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(questionBeacon()).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(screen.getByRole('dialog', { name: 'New task' })).getByLabelText('Task')).toHaveValue('Half typed task')
+
+    // Closing the dialog releases the waiting question.
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'New task' })).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+  })
+
+  test("Team's Board: a question waits behind the open task details with focus on its Close button", async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'r1', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Task of r1, Todo' }))
+    const close = within(screen.getByRole('dialog', { name: 'Task details' })).getByRole('button', { name: 'Close task details' })
+    expect(close).toHaveFocus()
+
+    run.asking = true
+    emitStageStatus('s2', 'awaiting_user_input')
+    await waitFor(() => expect(questionBeacon()).toBe(true))
+    expect(screen.getByRole('tab', { name: 'Team' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('dialog', { name: 'Task details' })).toBeInTheDocument()
+  })
+
+  test("a run switch shows neither the old run's tasks nor the agents added in it", async () => {
+    const run: BoardAttentionRun = { asking: false, runId: 'run-a', boardFails: false }
+    mockBoardAttentionRun(run)
+    render(<App />)
+
+    // Run A: an agent is added from the people panel and A's task is on the board.
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    fireEvent.click(within(people).getByRole('button', { name: 'Add run agent…' }))
+    fireEvent.change(await screen.findByPlaceholderText('What should this run agent do?'), { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await within(people).findByText('QA role')
+    fireEvent.click(screen.getByRole('tab', { name: 'Board' }))
+    await screen.findByRole('button', { name: 'Task of run-a, Todo' })
+    expect(within(screen.getByRole('combobox', { name: 'Assignee' })).getByRole('option', { name: 'QA role' })).toBeInTheDocument()
+
+    // Run B: its first board fetch fails.
+    run.runId = 'run-b'
+    run.boardFails = true
+    emitStageStatus('s1', 'running')
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Board unavailable'))
+    expect(screen.queryByRole('button', { name: 'Task of run-a, Todo' })).toBeNull()
+
+    run.boardFails = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByRole('button', { name: 'Task of run-b, Todo' })
+    expect(within(screen.getByRole('combobox', { name: 'Assignee' })).queryByRole('option', { name: 'QA role' })).toBeNull()
+  })
 })
+

@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import { publishMeshBoard, type MeshParticipant } from '../../api/mesh-client'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { boardNotifyCandidates, participantLabel } from '../../lib/mesh-roster'
@@ -12,8 +12,8 @@ export type BoardTaskFormProps = {
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
   // onPosted — the task was published under `key`; the caller refreshes its board (and may close the dialog
-  // the form sits in).
-  onPosted: (key: string) => void
+  // the form sits in). draftRemains — text typed while the post was in flight is still in the form.
+  onPosted: (key: string, draftRemains: boolean) => void
 }
 
 // taskKey — "task/<slug>" for a task title ("CSV export" → "task/csv-export").
@@ -35,6 +35,9 @@ export function BoardTaskForm({ participants, stages, onPosted }: BoardTaskFormP
   const [uncheckedIds, setUncheckedIds] = useState<ReadonlySet<string>>(new Set())
   // submitter — a retry of the same task reuses its request id; an edited task is a new one.
   const submitter = useRetryableSubmit<{ key: string; status: string; notify: string[] }>('mesh-board')
+  // draftRef — the form's text as last rendered: a post that resolves later reads what was typed meanwhile.
+  const draftRef = useRef({ title, details })
+  draftRef.current = { title, details }
 
   const candidates = boardNotifyCandidates(participants, stages)
   const notifyIds = candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id)
@@ -57,9 +60,11 @@ export function BoardTaskForm({ participants, stages, onPosted }: BoardTaskFormP
       (p, requestId) => publishMeshBoard({ requestId, key: p.key, status: p.status, notify: [...p.notify] }),
       {
         onSuccess: () => {
-          setTitle((cur) => removeSubmittedText(cur, submittedTitle))
-          setDetails((cur) => removeSubmittedText(cur, submittedDetails))
-          onPosted(key)
+          const restTitle = removeSubmittedText(draftRef.current.title, submittedTitle)
+          const restDetails = removeSubmittedText(draftRef.current.details, submittedDetails)
+          setTitle(restTitle)
+          setDetails(restDetails)
+          onPosted(key, restTitle.trim() !== '' || restDetails.trim() !== '')
         },
       },
     )
