@@ -5,6 +5,12 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-21
 
+### Fix: Claude Opus 5.5 in the runtime image
+
+Bump the pinned Claude Code CLI from 2.1.212 to 2.1.304 (the npm `stable` tag). The old CLI failed
+with an API error on `claude-opus-5-5`; 2.1.304 passed a live ARM64 container
+smoke check with a tool call at `xhigh` effort.
+
 ### Improvement: show host-local message times in conversations and feeds
 
 The stage Feed, Full feed, Side agent history, and Team and stage conversations
