@@ -398,6 +398,20 @@ describe('ThreadConversation', () => {
     expect(onThreadOpened).not.toHaveBeenCalled()
   })
 
+  test('a direct conversation whose opened thread is closed meanwhile follows the roster and stops sending', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)
+    const sendSpy = vi.spyOn(meshClient, 'sendMeshMessage').mockRejectedValue(new Error('boom'))
+    const view = render(<ThreadConversation target={{ kind: 'direct', participant: qa }} threads={[]} />)
+    fireEvent.change(screen.getByPlaceholderText('Message QA reviewer…'), { target: { value: 'please review' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
+
+    view.rerender(<ThreadConversation target={{ kind: 'direct', participant: qa }} threads={[{ ...thread, status: 'closed' }]} />)
+    expect(screen.getByRole('button', { name: /Send/ })).toBeDisabled()
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+  })
+
   test('a successful retry after a failed send still notifies the parent of the opened thread', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const openSpy = vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue(thread)

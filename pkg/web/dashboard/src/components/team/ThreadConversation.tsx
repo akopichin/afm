@@ -190,7 +190,10 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   const mentioned = members.filter((p) => draftMentions(draft, handleOf(p))).map((p) => p.id)
   const threadId = openedThread?.id ?? null
   const messages = useMeshThread(threadId)
-  const closed = openedThread?.status === 'closed' || (target?.kind === 'thread' && target.thread.status === 'closed')
+  // The roster's current record of the opened thread wins over the snapshot taken when it was opened, so a thread
+  // closed meanwhile (e.g. while Team was hidden) stops accepting messages.
+  const liveThread = openedThread === null ? null : threads.find((t) => t.id === openedThread.id) ?? openedThread
+  const closed = liveThread?.status === 'closed' || (target?.kind === 'thread' && target.thread.status === 'closed')
   const closedNoticeRef = useRef<HTMLParagraphElement>(null)
   const composerWasFocusedRef = useRef(false)
 

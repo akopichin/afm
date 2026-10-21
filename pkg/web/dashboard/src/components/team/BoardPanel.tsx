@@ -17,13 +17,15 @@ export type BoardPanelProps = {
   participants: MeshParticipant[]
   // stages — live stage statuses: only agents of working stages are offered for notification.
   stages: RunTeamListStage[]
+  // active — the panel is visible; a hidden panel's open task details keep their state but not focus or keys.
+  active?: boolean
 }
 
 // BoardPanel — the Team view's "Board" tab: the shared board. The operator posts tasks for the agents here;
 // tasks are cards coloured by status (Todo, In progress, Done) in ONE mixed grid with the agents' facts — the
 // grouped columns are the Board tab's. Agents report on a task under "<task key>/<alias>"; reports stay inside the
 // task's card and details and never become cards of their own.
-export function BoardPanel({ board, participants, stages }: BoardPanelProps): ReactElement {
+export function BoardPanel({ board, participants, stages, active = true }: BoardPanelProps): ReactElement {
   const { entries } = board
   const tasks = boardTasks(entries, participants)
   const taskByKey = new Map(tasks.map((t) => [t.key, t]))
@@ -100,7 +102,7 @@ export function BoardPanel({ board, participants, stages }: BoardPanelProps): Re
         </>
       )}
 
-      {openTask !== undefined && <BoardTaskDetails task={openTask} participants={participants} onClose={() => setOpenKey(null)} />}
+      {openTask !== undefined && <BoardTaskDetails task={openTask} participants={participants} onClose={() => setOpenKey(null)} active={active} />}
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest'
 import type { MeshBoardEntry, MeshParticipant } from '../../api/mesh-client'
 import { boardTasks, type BoardTask } from '../../lib/board-tasks'
 import { BoardTaskDetails } from './BoardTaskDetails'
+import { DialogOpenContext } from '../../lib/focus-trap'
 
 const participants: MeshParticipant[] = [
   { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
@@ -27,6 +28,20 @@ const twoClaimants = task([
 ])
 
 describe('BoardTaskDetails', () => {
+  test('details in a hidden Team do not count as open and ignore Escape, until shown again', () => {
+    const reports: boolean[] = []
+    const report = (open: boolean) => { reports.push(open) }
+    const onClose = vi.fn()
+    const view = render(<DialogOpenContext.Provider value={report}><BoardTaskDetails task={twoClaimants} participants={participants} onClose={onClose} active={false} /></DialogOpenContext.Provider>)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(reports).toEqual([])
+    view.rerender(<DialogOpenContext.Provider value={report}><BoardTaskDetails task={twoClaimants} participants={participants} onClose={onClose} active /></DialogOpenContext.Provider>)
+    expect(reports).toEqual([true])
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   test('shows the task version and each artifact ref', () => {
     const withRefs = task([{ ...base, version: 2, artifact_refs: ['plan.md', 'artifacts/report.txt'] }])
     render(<BoardTaskDetails task={withRefs} participants={participants} onClose={() => {}} />)

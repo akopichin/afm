@@ -629,7 +629,7 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
         {visitedTabs.current.has('board') && (
           <div className="team-tab-panel" hidden={tab !== 'board'} {...tabPanelProps(tabsId, 'board')}>
             <BoardLoadState board={board}>
-              <BoardPanel board={board} participants={participants} stages={teamStages} />
+              <BoardPanel board={board} participants={participants} stages={teamStages} active={active && tab === 'board' && (!resize.isDrawer || mobileDetail)} />
             </BoardLoadState>
           </div>
         )}

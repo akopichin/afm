@@ -10,16 +10,18 @@ export type BoardTaskDetailsProps = {
   task: BoardTask
   participants: MeshParticipant[]
   onClose: () => void
+  // active — the details' view is visible (Team stays mounted while hidden): see useModalDialog.
+  active?: boolean
 }
 
 // BoardTaskDetails — the dialog behind a task card, the same in Team and the Board tab: status, who works on the
 // task, its text, author and each agent's current report. Read-only on purpose — agents own the status.
-export function BoardTaskDetails({ task, participants, onClose }: BoardTaskDetailsProps): ReactElement {
+export function BoardTaskDetails({ task, participants, onClose, active = true }: BoardTaskDetailsProps): ReactElement {
   const modalRef = useRef<HTMLDivElement | null>(null)
   const { title, description } = splitTaskText(task.text)
 
   // Focus moves into the dialog and, on close, goes back to the task's card — the one the board shows now.
-  useModalDialog(modalRef, onClose, () => findTaskCard(task.key))
+  useModalDialog(modalRef, onClose, () => findTaskCard(task.key), active)
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Task details">
