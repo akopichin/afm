@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -93,8 +94,9 @@ func TestSideAgent_CapabilityAbsentWhenNil(t *testing.T) {
 	if resp.Capabilities.SideAgent {
 		t.Error("expected capabilities.side_agent=false when service nil")
 	}
-	if resp.RunID != "" {
-		t.Errorf("expected empty run_id, got %q", resp.RunID)
+	// Team keys its page-local unread cursors by run_id, so the status reports the run even with no side agent.
+	if want := filepath.Base(srv.runDir); resp.RunID != want {
+		t.Errorf("run_id = %q, want the run directory name %q", resp.RunID, want)
 	}
 	// Routes must 404 (old server unaffected).
 	for _, path := range []string{"/api/side-agent", "/api/side-agent/messages", "/api/side-agent/stream"} {

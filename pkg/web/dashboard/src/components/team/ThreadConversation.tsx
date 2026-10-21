@@ -3,7 +3,7 @@ import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
-import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
+import { useStickToBottom, type ScrollMemory } from '../../hooks/use-stick-to-bottom'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
 import { MentionMenu } from '../assistants/AssistantMentionMenu'
 import { draftMentions, filterMentionProfiles } from '../assistants/mention-match'
@@ -48,6 +48,8 @@ export type ThreadConversationProps = {
   onDraftChange?: Dispatch<SetStateAction<string>>
   sideFailures?: ReadonlySet<string>
   readEnabled?: boolean
+  // scrollMemory — where this conversation's log was left, so it reopens there instead of at the bottom.
+  scrollMemory?: ScrollMemory
   onMessagesRead?: (threadId: string, lastRenderedOtherSeq: number) => void
 }
 
@@ -142,7 +144,7 @@ function routeAll(target: ThreadConversationTarget, label: string, participants:
 }
 
 export function ThreadConversation(props: ThreadConversationProps): ReactElement {
-  const { target, onThreadOpened, onDirectThreadResolved, getDirectOpenRequestId, getSendRequestId, onSendSucceeded, onMessageSent, participants = [], threads = [], summaries = {}, sideFailures = new Set<string>(), readEnabled = false, onMessagesRead } = props
+  const { target, onThreadOpened, onDirectThreadResolved, getDirectOpenRequestId, getSendRequestId, onSendSucceeded, onMessageSent, participants = [], threads = [], summaries = {}, sideFailures = new Set<string>(), readEnabled = false, onMessagesRead, scrollMemory } = props
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [ownDraft, setOwnDraft] = useState('')
   const draft = props.draft ?? ownDraft
@@ -151,7 +153,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   // conversation (see targetKey), so a late response is fenced out by unmount alone.
   const submitter = useRetryableSubmit<{ recipientIds: string[]; body: string }>('mesh-send')
   // log — opens at the latest message and follows new ones, unless the reader scrolled up.
-  const log = useStickToBottom<HTMLDivElement>()
+  const log = useStickToBottom<HTMLDivElement>(scrollMemory)
   // notifiedRef — whether the parent has already been told about openedThread. A 'thread' target starts
   // already known to the parent (it IS activeConversation), so it starts true. A 'direct' target starts
   // false: once its first message opens a real thread, the parent must hear about it exactly once — even if

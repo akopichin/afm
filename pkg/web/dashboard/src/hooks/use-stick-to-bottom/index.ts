@@ -1,1 +1,1 @@
-export { useStickToBottom } from './use-stick-to-bottom'
+export { useStickToBottom, type ScrollMemory, type ScrollPosition } from './use-stick-to-bottom'

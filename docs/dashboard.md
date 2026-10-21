@@ -84,7 +84,8 @@ changes persist after reload and do not change message order. **New to you**
 counts conversations with new incoming messages in this dashboard page, and
 filters the list when pressed. Reading at the bottom of a visible conversation
 clears its marker; reading while scrolled up does not. The first roster snapshot
-sets the baseline, and reloading the page resets it. On narrow screens, select
+sets the baseline, and reloading the page resets it. Leaving Team for the Feed and coming back keeps the
+selected conversation, its unsent draft and its reading position. On narrow screens, select
 from the list and use **Back** from the conversation; on wide screens, drag or
 keyboard-resize the divider. See [Team conversations](collaboration.md#team-conversations)
 for messaging and participant details.

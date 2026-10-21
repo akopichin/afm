@@ -24,6 +24,9 @@ type Actor struct {
 	ID   string `json:"id,omitempty"`
 }
 
+// ActorKindUser — Actor.Kind человека, работающего через дашборд или CLI.
+const ActorKindUser = "user"
+
 // Target называет основную сущность, которой адресована control-запись (задача помощника и/или её корневая
 // стадия). Поля опциональны — у flow-уровневых записей (например policy_set) может не быть ни задачи,
 // ни конкретной стадии. MessageID/ProposalID/IntentID (T6.1/T6.4/T6.6) следуют тому же соглашению, что и

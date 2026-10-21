@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-22
+
+### Fix: Team unread markers and drafts
+
+**New to you** and the per-conversation **New messages** markers now work when the
+side agent is disabled; the dashboard status always reports the run id. Leaving
+Team for the Feed and coming back keeps the selected conversation, its unsent
+draft and its reading position instead of reopening at the bottom with an empty
+composer. See [Team workspace](docs/dashboard.md#team-workspace).
+
 ## 2026-10-21
 
 ### Improvement: make Team a conversation-first inbox

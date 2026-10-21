@@ -403,7 +403,7 @@ func applyMeshThreadTitleUpdated(as *AssistantsState, c *Control, dryRun bool) e
 	if _, ok := as.Mesh.Threads[id]; !ok {
 		return meshRejected(assistants.CodeNotFound, "unknown thread %s", id)
 	}
-	if c.Actor.Kind != "user" {
+	if c.Actor.Kind != ActorKindUser {
 		return meshRejected(assistants.CodeActorNotAllowed, "only the run owner may edit a thread title")
 	}
 	var p MeshThreadTitleUpdatedPayload

@@ -49,8 +49,8 @@ func writeActionError(w http.ResponseWriter, err error, fallbackMsg string, fall
 type statusResponse struct {
 	FlowName string `json:"flow_name"`
 	Version  string `json:"version,omitempty"`
-	// RunID — id разговора бокового агента (== run_id). Непусто только когда
-	// боковой агент подключён (Config.SideAgent != nil); иначе опускается.
+	// RunID — id рана (имя run directory). Им же назван разговор бокового агента, а Team хранит по нему
+	// курсоры непрочитанного, поэтому поле есть и без бокового агента.
 	RunID                string          `json:"run_id,omitempty"`
 	StartedAt            time.Time       `json:"started_at"`
 	RunStatus            state.RunStatus `json:"run_status,omitempty"`
@@ -141,6 +141,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Capabilities.AddStage = s.graphActions != nil
 	if s.graphActions != nil {
 		resp.GraphRevision = s.graphActions.GraphRevision()
+	}
+	if s.runDir != "" {
+		resp.RunID = filepath.Base(s.runDir)
 	}
 	if s.sideAgent != nil {
 		resp.RunID = s.sideAgent.ConversationID()
