@@ -70,6 +70,17 @@ func TestMesh_RoundTripDecodeEveryKind(t *testing.T) {
 			target: Target{ThreadID: "th-1"},
 		},
 		{
+			kind: kindMeshThreadTitleUpdated, target: Target{ThreadID: "th-1"},
+			payload: mustMarshal(t, MeshThreadTitleUpdatedPayload{Title: "New topic", ExpectedTitleSeq: 3}),
+			check: func(t *testing.T, raw json.RawMessage) {
+				var p MeshThreadTitleUpdatedPayload
+				mustUnmarshal(t, raw, &p)
+				if p.Title != "New topic" || p.ExpectedTitleSeq != 3 {
+					t.Fatalf("payload = %+v", p)
+				}
+			},
+		},
+		{
 			kind:    kindMeshMessageSent,
 			target:  Target{MessageID: "m2", ThreadID: "th-1"},
 			payload: mustMarshal(t, MeshMessageSentPayload{Sender: "a", Recipients: []string{"b"}, Kind: string(agentcomm.MessageKindReply), InReplyTo: &inReplyTo, Body: "re"}),
@@ -277,6 +288,46 @@ func TestMesh_ReplayEquivalence(t *testing.T) {
 	if !reflect.DeepEqual(rs1.Assistants.Mesh, rs2.Assistants.Mesh) {
 		t.Fatalf("Mesh state differs across two independent replays of the identical journal:\nfirst:  %+v\nsecond: %+v", rs1.Assistants.Mesh, rs2.Assistants.Mesh)
 	}
+	if len(rs1.Assistants.Mesh.ThreadTitles) != 0 {
+		t.Fatalf("journal without title effects gained overrides: %+v", rs1.Assistants.Mesh.ThreadTitles)
+	}
+}
+
+func TestMesh_ThreadTitleWriteFailureLeavesProjectionAndJournalUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.lock.Unlock() // eventsLog is closed below to simulate a failed write.
+	for _, c := range []*Control{
+		meshParticipantAddedControl("member", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)),
+		meshThreadOpenedControl("thread", []string{"member"}),
+	} {
+		if err := store.AppendControl(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := store.Snapshot()
+	store.eventsLog.Close()
+	payload := mustMarshal(t, MeshThreadTitleUpdatedPayload{Title: "New"})
+	_, err = store.ApplyRunOperation(Operation{ID: "failed-title", Kind: "mesh_update_thread_title",
+		Actor: Actor{Kind: "user"}, Effects: []Effect{{Kind: kindMeshThreadTitleUpdated,
+			Target: Target{ThreadID: "thread"}, Payload: payload}}}, nil)
+	if err == nil {
+		t.Fatal("closed journal accepted title update")
+	}
+	after := store.Snapshot()
+	if after.LastSeq != before.LastSeq || len(after.Assistants.Mesh.ThreadTitles) != 0 || after.Assistants.Mesh.ThreadChangedSeq["thread"] != before.Assistants.Mesh.ThreadChangedSeq["thread"] {
+		t.Fatalf("failed write changed projection: before=%d after=%d titles=%+v", before.LastSeq, after.LastSeq, after.Assistants.Mesh.ThreadTitles)
+	}
+	replayed, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.LastSeq != before.LastSeq || len(replayed.Assistants.Mesh.ThreadTitles) != 0 {
+		t.Fatal("failed write reached journal")
+	}
 }
 
 // ---- registry sweep: every kindMesh* constant is registered AND dispatchable ----
@@ -326,6 +377,13 @@ func TestMesh_AllKindsRegisteredAndDispatchable(t *testing.T) {
 		kindMeshThreadOpened: func(t *testing.T, as *AssistantsState) *Control {
 			mustApply(t, as, meshParticipantAddedControl("reg-member", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)))
 			return meshThreadOpenedControl("reg-thread", []string{"reg-member"})
+		},
+		kindMeshThreadTitleUpdated: func(t *testing.T, as *AssistantsState) *Control {
+			mustApply(t, as, meshParticipantAddedControl("reg-title-member", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)))
+			mustApply(t, as, meshThreadOpenedControl("reg-title-thread", []string{"reg-title-member"}))
+			return &Control{Kind: kindMeshThreadTitleUpdated, SchemaVersion: ControlSchemaVersion, Seq: 4,
+				Actor: Actor{Kind: "user"}, Target: Target{ThreadID: "reg-title-thread"},
+				Payload: mustMarshal(t, MeshThreadTitleUpdatedPayload{Title: "New topic"})}
 		},
 		kindMeshThreadClosed: func(t *testing.T, as *AssistantsState) *Control {
 			mustApply(t, as, meshParticipantAddedControl("reg-member2", string(agentcomm.KindHelper), string(agentcomm.ScopeStage)))

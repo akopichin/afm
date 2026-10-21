@@ -66,6 +66,30 @@ right (there is no three-column layout or bottom progress bar).
   [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
   can add a stage to a live run. See [Helpers and collaboration](collaboration.md).
 
+## Team workspace
+
+Team appears when the dashboard's first Agent Mesh roster probe succeeds; a 404
+hides it. This gate is separate from stage collaboration. Under **Messages**, the
+left pane opens on **Conversations**; switch to **People** to find a participant.
+Search applies to the visible list. The action above it is **New conversation**
+or **Add run agent**, respectively. Conversation rows show the latest saved
+message preview and relative time, and sort by message sequence rather than wall
+clock time. On wide screens, the newest conversation is selected on first load
+unless you choose something else. **Board** and **Activity** cover the whole run
+and have no conversation heading.
+
+A conversation can have an optional topic. Select a person for an untitled
+direct message, or create a titled discussion with the same person without
+merging them. **Edit topic** can save or clear the selected conversation's topic;
+changes persist after reload and do not change message order. **New to you**
+counts conversations with new incoming messages in this dashboard page, and
+filters the list when pressed. Reading at the bottom of a visible conversation
+clears its marker; reading while scrolled up does not. The first roster snapshot
+sets the baseline, and reloading the page resets it. On narrow screens, select
+from the list and use **Back** from the conversation; on wide screens, drag or
+keyboard-resize the divider. See [Team conversations](collaboration.md#team-conversations)
+for messaging and participant details.
+
 ## Board tab
 
 The run-wide **Board** tab shows tasks in **Todo**, **In progress**, and **Done**

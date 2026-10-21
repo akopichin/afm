@@ -201,8 +201,10 @@ func TestAdmission_AncestorHoldBlocksChild(t *testing.T) {
 	var calls atomic.Int32
 	var childRan atomic.Bool
 	parentRelease := make(chan struct{})
+	parentStarted := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		if calls.Add(1) == 1 {
+			close(parentStarted)
 			awaitRelease(t, parentRelease)
 			return passResultOutcome(), nil
 		}
@@ -212,6 +214,11 @@ func TestAdmission_AncestorHoldBlocksChild(t *testing.T) {
 
 	parentID := attachTestTask(context.Background(), t, o, "op-parent")
 	waitForTaskStatus(t, store, parentID, assistants.StatusRunning, 2*time.Second)
+	select {
+	case <-parentStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("parent helper did not start")
+	}
 
 	childIDs, err := o.admitChildren(context.Background(), "op-child", parentID, oneChild(), state.Actor{Kind: "assistant", ID: string(parentID)}, "", nil)
 	if err != nil {
@@ -248,9 +255,11 @@ func TestAdmission_AncestorHoldBlocksGrandchild(t *testing.T) {
 	var calls atomic.Int32
 	var childRan, grandchildRan atomic.Bool
 	rootRelease := make(chan struct{})
+	rootStarted := make(chan struct{})
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		switch calls.Add(1) {
 		case 1: // deterministically the root's turn — attached and spawned before anything else exists
+			close(rootStarted)
 			awaitRelease(t, rootRelease)
 			return passResultOutcome(), nil
 		case 2:
@@ -263,6 +272,11 @@ func TestAdmission_AncestorHoldBlocksGrandchild(t *testing.T) {
 
 	rootID := attachTestTask(context.Background(), t, o, "op-root")
 	waitForTaskStatus(t, store, rootID, assistants.StatusRunning, 2*time.Second)
+	select {
+	case <-rootStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("root helper did not start")
+	}
 
 	childIDs, err := o.admitChildren(context.Background(), "op-child", rootID, oneChild(), state.Actor{Kind: "assistant", ID: string(rootID)}, "", nil)
 	if err != nil {

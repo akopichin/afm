@@ -29,6 +29,7 @@ type Service interface {
 	ListParticipants(context.Context, ListParticipantsRequest) (ParticipantPage, error)
 	ListThreads(context.Context, ListThreadsRequest) (ThreadPage, error)
 	OpenThread(context.Context, OpenThreadRequest) (agentcomm.Thread, error)
+	UpdateThreadTitle(context.Context, UpdateThreadTitleRequest) (UpdateThreadTitleReceipt, error)
 	CloseThread(context.Context, CloseThreadRequest) error
 	Send(context.Context, SendRequest) (SendReceipt, error)
 	ReadInbox(context.Context, ReadInboxRequest) (MessagePage, error)
@@ -71,7 +72,25 @@ type ListThreadsRequest struct {
 // *within* one thread); a thread listing is one row per conversation, not per message, so it stays small in
 // practice. Revisit with real paging if that assumption stops holding.
 type ThreadPage struct {
-	Threads []agentcomm.Thread
+	Threads   []agentcomm.Thread                   `json:"threads"`
+	Summaries map[agentcomm.ThreadID]ThreadSummary `json:"summaries"`
+}
+
+// ThreadSummary is derived from the same mesh snapshot as the thread list. TitleSeq is zero until a
+// separate title override has been committed; it does not change the immutable opening descriptor.
+type ThreadSummary struct {
+	LastMessage         *ThreadSummaryMessage `json:"last_message,omitempty"`
+	LastOtherMessageSeq uint64                `json:"last_other_message_seq"`
+	TitleSeq            uint64                `json:"title_seq"`
+}
+
+// ThreadSummaryMessage contains only the saved, redacted text needed for a conversation row.
+type ThreadSummaryMessage struct {
+	ID        agentcomm.MessageID     `json:"id"`
+	Seq       uint64                  `json:"seq"`
+	CreatedAt time.Time               `json:"created_at"`
+	SenderID  agentcomm.ParticipantID `json:"sender_id"`
+	Preview   string                  `json:"preview"`
 }
 
 // OpenThreadRequest's Members is the thread's FIXED member set (agentcomm.Thread's own doc comment).
@@ -92,6 +111,20 @@ type CloseThreadRequest struct {
 	OperationID string
 	ThreadID    agentcomm.ThreadID
 	Actor       state.Actor
+}
+
+// UpdateThreadTitleRequest edits only the display title; an empty Title clears it.
+type UpdateThreadTitleRequest struct {
+	OperationID      string
+	ThreadID         agentcomm.ThreadID
+	Title            string
+	ExpectedTitleSeq uint64
+	Actor            state.Actor
+}
+
+type UpdateThreadTitleReceipt struct {
+	Title    string `json:"title"`
+	TitleSeq uint64 `json:"title_seq"`
 }
 
 // SendRequest.Sender is the message's author. It MUST be set by the authenticated caller — the Phase 3

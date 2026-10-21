@@ -27,6 +27,7 @@ import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assista
 import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshBoard, useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
+import { baselineTeamUnread } from '../lib/team-unread'
 import type { MeshParticipant } from '../api/mesh-client'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
@@ -155,7 +156,12 @@ export function App(): ReactElement {
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
   // probe-the-first-fetch result IS the capability signal the Team tab gates on (see use-mesh-roster.ts's own
   // comment). TeamView receives the SAME roster as a prop rather than polling it a second time.
-  const meshRoster = useMeshRoster()
+  const meshRoster = useMeshRoster(runId)
+  useEffect(() => {
+    if (runId !== '' && meshRoster.runId === runId && meshRoster.enabled) {
+      baselineTeamUnread(runId, meshRoster.summaries ?? {})
+    }
+  }, [runId, meshRoster])
   // meshBoard — the ONE useMeshBoard poll: Team's Board tab and the run-wide Board tab read the same value, so
   // switching between them never refetches. It starts only once the mesh probe succeeded.
   const meshBoard = useMeshBoard(meshRoster.enabled)
@@ -621,7 +627,7 @@ export function App(): ReactElement {
                   // Team (T7.3) — global, like Cost/Full feed above: must be checked BEFORE the
                   // `workspaceStage === null` Feed fallback below, since Team has no selected-stage
                   // dependency at all (a never-selected stage must still show Team, not Feed).
-                  <TeamView roster={mergedRoster} onParticipantAdded={addParticipant} board={meshBoard} stages={stages} events={events} profiles={assistantProfiles} />
+                  <TeamView key={runId} runId={runId} roster={mergedRoster} onParticipantAdded={addParticipant} board={meshBoard} stages={stages} events={events} profiles={assistantProfiles} />
                 ) : wsState.view === 'board' ? (
                   // Board — global like Team, fed by the same meshBoard; BoardLoadState separates loading, unavailable
                   // and stale data from "no tasks".

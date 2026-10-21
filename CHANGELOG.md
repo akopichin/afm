@@ -5,6 +5,26 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-21
 
+### Improvement: make Team a conversation-first inbox
+
+Team now opens on Conversations, with People one switch away. Conversations sort
+by their latest saved message, show author and preview, and offer search and a
+page-local **New to you** filter. Working run agents appear first in People;
+Board and Activity show run-wide content. Narrow screens use a list and a
+conversation view with **Back**.
+
+Conversation topics are optional. An untitled direct message remains separate
+from a titled discussion with the same person. You can edit or clear a topic,
+including on a closed conversation; the change survives replay without changing
+message order. See [Team conversations](docs/collaboration.md#team-conversations)
+and [Collaboration journal compatibility](docs/collaboration-journal.md#conversation-topic-edits).
+
+### Fix: Claude Opus 5.5 in the runtime image
+
+Bump the pinned Claude Code CLI from 2.1.212 to 2.1.304 (the npm `stable` tag). The old CLI failed
+with an API error on `claude-opus-5-5`; 2.1.304 passed a live ARM64 container
+smoke check with a tool call at `xhigh` effort.
+
 ### Improvement: show board tasks by status
 
 The dashboard now has a run-wide Board tab with Todo, In progress, and Done

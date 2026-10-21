@@ -67,8 +67,7 @@ func (o *Orchestrator) StageMessages(stageID string, cursor uint64, limit int) S
 				continue
 			}
 			if seq := mesh.ThreadChangedSeq[id]; seq > cursor {
-				thread := *th
-				thread.Members = slices.Clone(th.Members)
+				thread, _ := mesh.ThreadView(id)
 				changed = append(changed, changedThread{thread, seq})
 			}
 			msgs = append(msgs, messagesAfter(mesh, id, cursor, limit)...)

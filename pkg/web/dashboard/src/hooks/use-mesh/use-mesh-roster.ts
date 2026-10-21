@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { MeshApiError, listMeshParticipants, listMeshThreads, type MeshParticipant, type MeshThread } from '../../api/mesh-client'
+import { MeshApiError, listMeshParticipants, listMeshThreads, type MeshParticipant, type MeshThread, type MeshThreadSummaries } from '../../api/mesh-client'
 import { startSerialPoll } from '../../lib/serial-poll'
 
 // Poll interval — independent of /api/status's own poll, same posture as useStageAssistants/
@@ -8,6 +8,8 @@ import { startSerialPoll } from '../../lib/serial-poll'
 const POLL_INTERVAL_MS = 3000
 
 export type MeshRoster = {
+  // The run whose poll produced this snapshot. A run switch cannot reuse an old run's summaries.
+  runId?: string
   // enabled — whether the mesh capability is actually on. There is no status.capabilities.mesh field today
   // (unlike collaboration/addStage/sideAgent, whose status field gates the equivalent hook elsewhere): the
   // Phase 7 HTTP surface (pkg/server/mesh.go) nils out and 404s when the capability is off, with no separate
@@ -21,15 +23,17 @@ export type MeshRoster = {
   probed: boolean
   participants: MeshParticipant[]
   threads: MeshThread[]
+  // Older callers can construct a roster without summaries; this hook always supplies a map.
+  summaries?: MeshThreadSummaries
 }
 
-const EMPTY: MeshRoster = { enabled: false, probed: false, participants: [], threads: [] }
+const EMPTY: MeshRoster = { enabled: false, probed: false, participants: [], threads: [], summaries: {} }
 
 // useMeshRoster is the Team view's one read hook for "who is in the mesh and what conversations exist" —
 // GET /api/mesh/participants + GET /api/mesh/threads, polled together. A transient error on a LATER poll
 // keeps the last known roster (same posture as useStageAssistants); a 404 on the FIRST poll is treated as
 // "capability off" and stops polling.
-export function useMeshRoster(): MeshRoster {
+export function useMeshRoster(runId = ''): MeshRoster {
   const [state, setState] = useState<MeshRoster>(EMPTY)
 
   useEffect(() => {
@@ -40,7 +44,7 @@ export function useMeshRoster(): MeshRoster {
         Promise.all([listMeshParticipants(), listMeshThreads()]).then(
           ([p, t]) => {
             first = false
-            if (!isStopped()) setState({ enabled: true, probed: true, participants: p.participants, threads: t.threads })
+            if (!isStopped()) setState({ runId, enabled: true, probed: true, participants: p.participants, threads: t.threads, summaries: t.summaries })
           },
           (err: unknown) => {
             const wasFirst = first
@@ -48,15 +52,15 @@ export function useMeshRoster(): MeshRoster {
             if (isStopped() || !wasFirst) return // later-poll transient error: keep whatever roster we already have
             // A 404 on the first poll: the capability is off for good (it does not flip on mid-run).
             if (err instanceof MeshApiError && err.status === 404) poll.stop()
-            setState(EMPTY_PROBED)
+            setState({ ...EMPTY_PROBED, runId })
           },
         ),
       POLL_INTERVAL_MS,
     )
     return poll.stop
-  }, [])
+  }, [runId])
 
-  return state
+  return state.runId === runId ? state : { ...EMPTY, runId }
 }
 
-const EMPTY_PROBED: MeshRoster = { enabled: false, probed: true, participants: [], threads: [] }
+const EMPTY_PROBED: MeshRoster = { enabled: false, probed: true, participants: [], threads: [], summaries: {} }

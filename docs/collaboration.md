@@ -217,13 +217,25 @@ existing task instances.
 
 ## Team conversations
 
-The run-wide **Team** tab appears when Agent Mesh is available. Its roster lists
-run agents and the Side agent under **This run**, stage agents in flow order under
-**Stages** (with their live status and their helpers nested below), and existing
-conversations under **Conversations**. Each row shows the `@name` used to address
-that participant and what it is doing: a stage's status, or for a run agent or
-helper whether it is **Working**, **Waiting** (for a colleague), **Idle** (between
-turns), **Paused**, or **Done**; the presence dot follows the same state.
+The run-wide **Team** tab appears after the Agent Mesh probe succeeds, even if
+stage collaboration is disabled. A first probe that returns 404 hides Team;
+the stage Feed's People panel has its own collaboration gate. Team opens on
+**Messages → Conversations**. Switch the list to **People** to find run agents
+and the Side agent under **This run**, or stage agents in flow order under the
+collapsible **Stages** group, with helpers beneath their stage agent. Working
+run and Side agents appear first; the remaining run agents keep their roster
+order. People rows show each `@name`, status, and presence dot. Search filters
+the current list by conversation topic, member, handle, or message preview, or
+by name and handle in People. The list switch also works with the arrow keys.
+
+Conversations are ordered by the latest saved message sequence, with empty
+conversations after those with messages. Each row shows its topic (or member
+names), members, the latest message's author and plain-text preview, and its
+relative time. A successful send moves its conversation to the top immediately;
+the saved, redacted preview replaces the temporary **Message sent** label when
+it arrives. Incoming messages reorder rows without changing the selected
+conversation. **Board** and **Activity** are run-wide tabs above the conversation
+header, so neither depends on the selected conversation.
 
 To ask the Side agent about the run, select it under **This run** and send a
 message such as `Summarize the latest test failure`. Its handle is `@side`; a
@@ -249,20 +261,41 @@ is limited to the space available; your saved width returns when it grows again.
 If browser storage is unavailable, resizing still works, but the width is not
 retained.
 
-Select a person to read or send a direct message; the first send opens a
-conversation, and selecting that person again returns to it. The **+** button in
-the conversation header creates a group conversation after you enter a topic and
-choose participants; stages and helpers that have already finished are not
-offered. In a conversation, type `@` to address only some of its members; without
-a mention the message goes to everyone in it who can still answer. Members that
+Select a person to read or send an untitled direct message; the first send opens
+it, and selecting that person again returns to the newest open untitled direct
+conversation. A titled conversation with the same person remains separate.
+Use **New conversation** above Conversations to choose one or more participants
+and, optionally, a topic. Stages and helpers that have already finished are not
+offered. An untitled one-person conversation reuses the existing direct message;
+a titled conversation stays distinct. **Edit topic** on a selected conversation
+can rename or clear its topic, including after the conversation is closed. A
+concurrent edit shows a conflict so you can review the latest topic and retry;
+clearing falls back to member names. Topic changes survive reload without moving
+the conversation in the list. The titled task conversation created by **Add run
+agent** remains in Conversations; selecting that agent in People opens its
+separate untitled direct message.
+
+In a conversation, type `@` to address only some of its members; without a
+mention the message goes to everyone in it who can still answer. Members that
 have already finished are named above the composer and left out; when nobody can
 answer any more, sending is turned off. When two agents share a name, the `@`
 menu inserts a handle that addresses only the one you picked. The **Messages**,
-**Board** and **Activity** tabs work with the arrow keys. A conversation opens at its latest
-message, and a reply quotes the message it answers. At viewport widths of 760 px
-or less, or when the Team area is narrower than 560 px, the roster becomes a
-left-side drawer opened with **☰**. Its resize divider is hidden; if the divider
-had keyboard focus when the layout changed, focus moves to **☰**.
+**Board** and **Activity** tabs work with the arrow keys. A conversation opens at
+its latest message, and a reply quotes the message it answers.
+
+**New to you** shows the number of conversations with new messages from someone
+else. Turn it on to show only those conversations; an empty filter says **You're
+all caught up**. A marked row stays marked while you read older messages, and
+clears when its incoming messages are rendered at the bottom of the visible
+Messages view. Your own sends do not clear an earlier marker. These markers are
+local to this dashboard page: its first successful roster snapshot sets the
+baseline for the run, switching away from Team keeps that baseline, and a page
+reload starts a fresh one. They do not acknowledge messages to Agent Mesh.
+
+On narrow screens (760 px or less, or when Team has less than 560 px), Team shows
+the list first, then the selected conversation. Use **Back** to return to the
+list; the resize divider is hidden. Wider layouts show both panes and retain the
+keyboard-resizable divider.
 
 **Add run agent** starts a standing agent from an available configured profile.
 Choose a role, enter an instruction, and optionally give it a title and a first

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
@@ -37,6 +38,7 @@ func (o *Orchestrator) OpenThread(ctx context.Context, req OpenThreadRequest) (a
 	if !req.Scope.Valid() {
 		return agentcomm.Thread{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("invalid scope %q (want stage or run)", req.Scope)}
 	}
+	req.Title = o.RedactSecrets(req.Title)
 
 	threadID := deriveMeshThreadID(req.OperationID)
 	if th, replayed, err := o.replayedOpenThread(threadID, req); replayed {
@@ -87,7 +89,7 @@ func (o *Orchestrator) replayedOpenThread(threadID agentcomm.ThreadID, req OpenT
 	for i, m := range req.Members {
 		members[i] = string(m)
 	}
-	if !found || agentcomm.ThreadID(target.ThreadID) != threadID || p.Title != req.Title || p.Scope != string(req.Scope) ||
+	if !found || agentcomm.ThreadID(target.ThreadID) != threadID || !o.sameRedactedText(p.Title, req.Title) || p.Scope != string(req.Scope) ||
 		p.MaxMessages != req.MaxMessages || p.OriginStage != req.OriginStage || !slices.Equal(p.Members, members) {
 		return agentcomm.Thread{}, true, state.OperationIDConflictError(req.OperationID)
 	}
@@ -120,6 +122,57 @@ func (o *Orchestrator) publishThreadOpened(threadID agentcomm.ThreadID, title st
 		o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(m)}})
 	}
 	o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(threadID), "title": title}})
+}
+
+// UpdateThreadTitle commits a compare-and-set display title. The store checks the revision under
+// its write lock and returns the original seq for a repeated operation id, even after later edits.
+func (o *Orchestrator) UpdateThreadTitle(ctx context.Context, req UpdateThreadTitleRequest) (UpdateThreadTitleReceipt, error) {
+	if req.OperationID == "" {
+		return UpdateThreadTitleReceipt{}, errors.New("agentcomm: operation id is required")
+	}
+	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
+		return UpdateThreadTitleReceipt{}, err
+	}
+	if req.Actor.Kind != actorKindUser {
+		return UpdateThreadTitleReceipt{}, &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only the run owner may edit a thread title"}
+	}
+	title := o.RedactSecrets(strings.TrimSpace(req.Title))
+	if committed, ok, err := o.opts.Store.CommittedOperation(req.OperationID, "mesh_update_thread_title"); err != nil {
+		return UpdateThreadTitleReceipt{}, err
+	} else if ok {
+		var p state.MeshThreadTitleUpdatedPayload
+		target, found, err := committed.Effect("mesh_thread_title_updated", &p)
+		if err != nil {
+			return UpdateThreadTitleReceipt{}, err
+		}
+		if !found || target.ThreadID != string(req.ThreadID) || !o.sameRedactedText(p.Title, title) || p.ExpectedTitleSeq != req.ExpectedTitleSeq {
+			return UpdateThreadTitleReceipt{}, state.OperationIDConflictError(req.OperationID)
+		}
+		return UpdateThreadTitleReceipt{Title: title, TitleSeq: committed.Result.Seq}, nil
+	}
+	eff, err := marshalEffect("mesh_thread_title_updated", state.Target{ThreadID: string(req.ThreadID)},
+		state.MeshThreadTitleUpdatedPayload{Title: title, ExpectedTitleSeq: req.ExpectedTitleSeq})
+	if err != nil {
+		return UpdateThreadTitleReceipt{}, err
+	}
+	op := state.Operation{ID: req.OperationID, Kind: "mesh_update_thread_title", Actor: req.Actor, Effects: []state.Effect{eff},
+		Expect: state.Preconditions{Check: func(rs *state.RunState) error {
+			if _, ok := rs.Assistants.Mesh.Threads[req.ThreadID]; !ok {
+				return &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown thread %s", req.ThreadID)}
+			}
+			if got := rs.Assistants.Mesh.ThreadTitles[req.ThreadID].Seq; got != req.ExpectedTitleSeq {
+				return &state.OperationRejectedError{Code: assistants.CodeStaleRevision, Reason: fmt.Sprintf("thread %s title changed (expected %d, got %d)", req.ThreadID, req.ExpectedTitleSeq, got)}
+			}
+			return nil
+		}},
+	}
+	res, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.publishNotice(bus.Event{Type: bus.EventMeshThread, Data: map[string]any{"thread_id": string(req.ThreadID), "action": "title_updated", "title": title}})
+	})
+	if err != nil {
+		return UpdateThreadTitleReceipt{}, err
+	}
+	return UpdateThreadTitleReceipt{Title: title, TitleSeq: res.Seq}, nil
 }
 
 // CloseThread implements Service.CloseThread. Every still-pending wait whose condition names this thread (an
@@ -395,7 +448,7 @@ func (o *Orchestrator) ReadThread(ctx context.Context, req ReadThreadRequest) (M
 // dependency note).
 func (o *Orchestrator) ListThreads(ctx context.Context, req ListThreadsRequest) (ThreadPage, error) {
 	rs := o.opts.Store.Snapshot()
-	var page ThreadPage
+	page := ThreadPage{Threads: []agentcomm.Thread{}, Summaries: map[agentcomm.ThreadID]ThreadSummary{}}
 	sees := req.Participant == meshUserParticipantID || req.Participant == ""
 	for _, id := range rs.Assistants.Mesh.ThreadOrder {
 		th := rs.Assistants.Mesh.Threads[id]
@@ -405,9 +458,46 @@ func (o *Orchestrator) ListThreads(ctx context.Context, req ListThreadsRequest) 
 		if !sees && !threadHasMember(th, req.Participant) {
 			continue
 		}
-		page.Threads = append(page.Threads, *th)
+		view, _ := rs.Assistants.Mesh.ThreadView(id)
+		page.Threads = append(page.Threads, view)
+		page.Summaries[id] = summarizeThreadMessages(rs.Assistants.Mesh, id)
 	}
 	return page, nil
+}
+
+// summarizeThreadMessages reads only this thread's bounded commit-order index. Looking backward finds the
+// latest message and the latest message from somebody other than the human owner without a per-row store read or receipt change.
+func summarizeThreadMessages(mesh state.MeshState, id agentcomm.ThreadID) ThreadSummary {
+	summary := ThreadSummary{TitleSeq: mesh.ThreadTitles[id].Seq}
+	ids := mesh.MessagesByThread[id]
+	for i := len(ids) - 1; i >= 0; i-- {
+		message := mesh.Messages[ids[i]]
+		if message == nil {
+			continue
+		}
+		if summary.LastMessage == nil {
+			summary.LastMessage = &ThreadSummaryMessage{
+				ID: message.ID, Seq: message.Seq, CreatedAt: message.CreatedAt,
+				SenderID: message.Sender, Preview: threadMessagePreview(message.Body),
+			}
+		}
+		if summary.LastOtherMessageSeq == 0 && message.Sender != meshUserParticipantID {
+			summary.LastOtherMessageSeq = message.Seq
+		}
+		if summary.LastMessage != nil && summary.LastOtherMessageSeq != 0 {
+			break
+		}
+	}
+	return summary
+}
+
+func threadMessagePreview(body string) string {
+	plain := strings.Join(strings.Fields(body), " ")
+	runes := []rune(plain)
+	if len(runes) > 160 {
+		return string(runes[:160])
+	}
+	return plain
 }
 
 // ReadInbox implements Service.ReadInbox: every message ever addressed to Participant (or, with OnlyNew, only

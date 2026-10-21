@@ -7,10 +7,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // errUnknownThreadForTest stands in for the bare error ReadThread returns for an unknown/foreign thread id
@@ -27,8 +32,10 @@ type fakeMeshActions struct {
 
 	participants []agentcomm.Participant
 
-	threads    []agentcomm.Thread
-	threadsErr error
+	threads     []agentcomm.Thread
+	summaries   map[agentcomm.ThreadID]orchestrator.ThreadSummary
+	threadsErr  error
+	threadLists int
 
 	openByReq map[string]agentcomm.Thread
 	openCalls int
@@ -36,6 +43,12 @@ type fakeMeshActions struct {
 
 	closedThreads []string
 	closeCalls    int
+	topicCalls    int
+	lastTopicID   string
+	lastTopicReq  string
+	lastTopic     MeshTopicRequest
+	topicReceipt  orchestrator.UpdateThreadTitleReceipt
+	topicErr      error
 
 	sentByReq  map[string]MeshSendReceipt
 	sendCalls  int
@@ -76,11 +89,12 @@ func (f *fakeMeshActions) ListParticipants(ctx context.Context) ([]agentcomm.Par
 	return f.participants, nil
 }
 
-func (f *fakeMeshActions) Threads(ctx context.Context) ([]agentcomm.Thread, error) {
+func (f *fakeMeshActions) Threads(ctx context.Context) (orchestrator.ThreadPage, error) {
+	f.threadLists++
 	if f.threadsErr != nil {
-		return nil, f.threadsErr
+		return orchestrator.ThreadPage{}, f.threadsErr
 	}
-	return f.threads, nil
+	return orchestrator.ThreadPage{Threads: f.threads, Summaries: f.summaries}, nil
 }
 
 func (f *fakeMeshActions) OpenThread(ctx context.Context, requestID string, req MeshOpenThreadRequest) (agentcomm.Thread, error) {
@@ -109,6 +123,12 @@ func (f *fakeMeshActions) CloseThread(ctx context.Context, requestID, threadID s
 	f.closeCalls++
 	f.closedThreads = append(f.closedThreads, threadID)
 	return nil
+}
+
+func (f *fakeMeshActions) UpdateThreadTitle(ctx context.Context, requestID, threadID string, req MeshTopicRequest) (orchestrator.UpdateThreadTitleReceipt, error) {
+	f.topicCalls++
+	f.lastTopicID, f.lastTopicReq, f.lastTopic = threadID, requestID, req
+	return f.topicReceipt, f.topicErr
 }
 
 func (f *fakeMeshActions) Send(ctx context.Context, requestID string, req MeshUserSendRequest) (MeshSendReceipt, error) {
@@ -226,6 +246,7 @@ func TestMesh_404WhenCapabilityOff(t *testing.T) {
 		{http.MethodPost, "/api/mesh/threads/mt-1/messages"},
 		{http.MethodPost, "/api/mesh/messages"},
 		{http.MethodPost, "/api/mesh/threads/mt-1/close"},
+		{http.MethodPost, "/api/mesh/threads/mt-1/topic"},
 		{http.MethodPost, "/api/mesh/attach-and-send"},
 	}
 	for _, c := range paths {
@@ -272,6 +293,50 @@ func TestMesh_Threads(t *testing.T) {
 	}
 }
 
+func TestMesh_ThreadsSummariesFromOneRead(t *testing.T) {
+	fake := newFakeMeshActions()
+	when := time.Date(2026, time.October, 21, 10, 0, 0, 0, time.UTC)
+	fake.threads = []agentcomm.Thread{{ID: "mt-1", Title: "chat", Scope: agentcomm.ScopeRun, Members: []agentcomm.ParticipantID{"user", "stage:impl"}, Status: agentcomm.ThreadOpen}}
+	fake.summaries = map[agentcomm.ThreadID]orchestrator.ThreadSummary{
+		"mt-1": {
+			LastMessage:         &orchestrator.ThreadSummaryMessage{ID: "mm-1", Seq: 42, CreatedAt: when, SenderID: "stage:impl", Preview: "hello there"},
+			LastOtherMessageSeq: 42,
+			TitleSeq:            0,
+		},
+	}
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/threads", nil, false)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.threadLists != 1 {
+		t.Fatalf("Threads calls = %d, want 1", fake.threadLists)
+	}
+	threads, _ := resp["threads"].([]any)
+	if len(threads) != 1 || threads[0].(map[string]any)["id"] != "mt-1" {
+		t.Fatalf("threads = %v, want the original list", resp["threads"])
+	}
+	want := map[string]any{"mt-1": map[string]any{
+		"last_message":           map[string]any{"id": "mm-1", "seq": float64(42), "created_at": when.Format(time.RFC3339Nano), "sender_id": "stage:impl", "preview": "hello there"},
+		"last_other_message_seq": float64(42), "title_seq": float64(0),
+	}}
+	if !reflect.DeepEqual(resp["summaries"], want) {
+		t.Fatalf("summaries = %#v, want %#v", resp["summaries"], want)
+	}
+}
+
+func TestMesh_ThreadsEmptyResponseUsesListAndMap(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/threads", nil, false)
+	if w.Code != http.StatusOK || fake.threadLists != 1 {
+		t.Fatalf("HTTP %d, list calls %d; want 200 and one call", w.Code, fake.threadLists)
+	}
+	if !reflect.DeepEqual(resp["threads"], []any{}) || !reflect.DeepEqual(resp["summaries"], map[string]any{}) {
+		t.Fatalf("empty response = %s, want empty map and list", w.Body.String())
+	}
+}
+
 func TestMesh_Threads_ErrorSurfacesThroughWriteAssistantError(t *testing.T) {
 	fake := newFakeMeshActions()
 	fake.threadsErr = errUnknownThreadForTest
@@ -313,6 +378,66 @@ func TestMesh_OpenThread_RequiresOriginAndRequestID(t *testing.T) {
 
 	if fake.openCalls != 0 {
 		t.Fatalf("a rejected request must never reach the Service: openCalls=%d", fake.openCalls)
+	}
+}
+
+func TestMesh_UpdateThreadTitle_ValidationAndReceipt(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.topicReceipt = orchestrator.UpdateThreadTitleReceipt{Title: "New topic", TitleSeq: 17}
+	srv := newTestServer(t, Config{Mesh: fake})
+	path := "/api/mesh/threads/mt-1/topic"
+	body := map[string]any{"request_id": "req-topic", "title": "New topic", "expected_title_seq": 9, "actor": map[string]any{"kind": "stage_agent"}}
+
+	for _, tc := range []struct {
+		name   string
+		path   string
+		body   any
+		origin bool
+		status int
+	}{
+		{"missing origin", path, body, false, http.StatusForbidden},
+		{"invalid id", "/api/mesh/threads/bad%20id/topic", body, true, http.StatusBadRequest},
+		{"missing request id", path, map[string]any{"title": "New topic", "expected_title_seq": 0}, true, http.StatusBadRequest},
+		{"missing title", path, map[string]any{"request_id": "req-topic", "expected_title_seq": 0}, true, http.StatusBadRequest},
+		{"missing revision", path, map[string]any{"request_id": "req-topic", "title": "New topic"}, true, http.StatusBadRequest},
+		{"malformed body", path, nil, true, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, _ := doMeshJSON(t, srv, http.MethodPost, tc.path, tc.body, tc.origin)
+			if w.Code != tc.status {
+				t.Fatalf("HTTP %d, want %d (body=%s)", w.Code, tc.status, w.Body.String())
+			}
+		})
+	}
+	if fake.topicCalls != 0 {
+		t.Fatalf("invalid requests called service %d times", fake.topicCalls)
+	}
+	foreign := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{"request_id":"req-topic","title":"New topic","expected_title_seq":9}`)))
+	foreign.Header.Set("Origin", "http://elsewhere.example")
+	foreignResponse := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(foreignResponse, foreign)
+	if foreignResponse.Code != http.StatusForbidden || fake.topicCalls != 0 {
+		t.Fatalf("foreign origin: HTTP %d, service calls %d; want 403 and no call", foreignResponse.Code, fake.topicCalls)
+	}
+
+	w, resp := doMeshJSON(t, srv, http.MethodPost, path, body, true)
+	if w.Code != http.StatusOK || resp["title"] != "New topic" || resp["title_seq"] != float64(17) {
+		t.Fatalf("HTTP %d, response %v, want title and seq", w.Code, resp)
+	}
+	if fake.topicCalls != 1 || fake.lastTopicID != "mt-1" || fake.lastTopicReq != "req-topic" || fake.lastTopic.Title != "New topic" || fake.lastTopic.ExpectedTitleSeq != 9 {
+		t.Fatalf("service called %d times with %q %q %+v", fake.topicCalls, fake.lastTopicID, fake.lastTopicReq, fake.lastTopic)
+	}
+}
+
+func TestMesh_UpdateThreadTitle_StaleRevisionIsConflict(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.topicErr = &state.OperationRejectedError{Code: assistants.CodeStaleRevision}
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/threads/mt-1/topic", map[string]any{
+		"request_id": "req-topic", "title": "New topic", "expected_title_seq": 0,
+	}, true)
+	if w.Code != http.StatusConflict || resp["error"] != "stale_revision" {
+		t.Fatalf("HTTP %d, response %v, want stale_revision conflict", w.Code, resp)
 	}
 }
 

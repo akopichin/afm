@@ -52,7 +52,7 @@ COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:$PATH"
 
 # Claude CLI version is pinned; bump only after testing with the afm release.
-ARG CLAUDE_CODE_VERSION=2.1.212
+ARG CLAUDE_CODE_VERSION=2.1.304
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # codex CLI. Версию фиксируем: 0.156.1 падает с SIGSEGV на Linux arm64 даже на --version.

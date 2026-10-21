@@ -65,6 +65,131 @@ func TestSendFromAgent_WithoutThreadStartsAConversation(t *testing.T) {
 	}
 }
 
+func TestSendFromAgent_ThreadlessDirectUsesNewestUntitledDM(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	members := []agentcomm.ParticipantID{meshUserParticipantID, "stage:docs"}
+	titled, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "direct-titled", Title: "Task discussion", Scope: agentcomm.ScopeRun,
+		Members: members, Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := agentSend(o, "direct-first", "stage:docs", []string{"user"}, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ThreadID == titled.ID || store.Snapshot().Assistants.Mesh.Threads[first.ThreadID].Title != "" {
+		t.Fatalf("threadless direct send used titled discussion: %+v", first)
+	}
+	newerOpen, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "direct-second", Scope: agentcomm.ScopeRun, Members: members,
+		Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "direct-recent", ThreadID: first.ThreadID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{"stage:docs"}, Kind: agentcomm.MessageKindMessage,
+		Body: "recent", Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := agentSend(o, "direct-again", "stage:docs", []string{"user"}, "reply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ThreadID != first.ThreadID {
+		t.Fatalf("threadless direct send used %s, want most recently messaged DM %s (newer opened %s)", again.ThreadID, first.ThreadID, newerOpen.ID)
+	}
+	explicit, err := o.SendFromAgent(ctx, SendRequest{
+		OperationID: "direct-explicit", ThreadID: titled.ID, Sender: "stage:docs",
+		Recipients: []agentcomm.ParticipantID{meshUserParticipantID}, Kind: agentcomm.MessageKindMessage,
+		Body: "task update", Actor: state.Actor{Kind: "agent", ID: "stage:docs"},
+	})
+	if err != nil || explicit.ThreadID != titled.ID {
+		t.Fatalf("explicit titled thread = %+v, %v", explicit, err)
+	}
+	if _, err := o.UpdateThreadTitle(ctx, UpdateThreadTitleRequest{
+		OperationID: "direct-clear-title", ThreadID: titled.ID, Title: "", ExpectedTitleSeq: 0,
+		Actor: state.Actor{Kind: "user"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterClear, err := agentSend(o, "direct-after-clear", "stage:docs", []string{"user"}, "now a DM")
+	if err != nil || afterClear.ThreadID != titled.ID {
+		t.Fatalf("direct send after clear = %+v, %v; want cleared and recently messaged thread %s", afterClear, err, titled.ID)
+	}
+}
+
+func TestSendFromAgent_UserThreadlessDirectUsesUntitledDM(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	members := []agentcomm.ParticipantID{meshUserParticipantID, "stage:docs"}
+	titled, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "user-direct-titled", Title: "Task discussion", Scope: agentcomm.ScopeRun,
+		Members: members, OriginStage: "docs", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "user-direct-untitled", Scope: agentcomm.ScopeRun,
+		Members: members, OriginStage: "docs", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sent, err := userSend(o, "user-direct-send", "docs", []string{"docs"}, "hello")
+	if err != nil || sent.ThreadID != direct.ID {
+		t.Fatalf("threadless send = %+v, %v; want untitled DM %s, not task thread %s", sent, err, direct.ID, titled.ID)
+	}
+	retry, err := userSend(o, "user-direct-send", "docs", []string{"docs"}, "hello")
+	if err != nil || retry != sent {
+		t.Fatalf("retry = %+v, %v; want original receipt %+v", retry, err, sent)
+	}
+
+	explicit, err := o.SendFromAgent(ctx, SendRequest{
+		OperationID: "user-direct-explicit", ThreadID: titled.ID, Sender: meshUserParticipantID,
+		Recipients: []agentcomm.ParticipantID{"stage:docs"}, OriginStage: "docs",
+		Kind: agentcomm.MessageKindMessage, Body: "task update", Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil || explicit.ThreadID != titled.ID {
+		t.Fatalf("explicit send = %+v, %v; want task thread %s", explicit, err, titled.ID)
+	}
+	replyTo := explicit.MessageID
+	reply, err := o.SendFromAgent(ctx, SendRequest{
+		OperationID: "user-direct-reply", Sender: "stage:docs", InReplyTo: &replyTo,
+		Kind: agentcomm.MessageKindReply, Body: "done", Actor: state.Actor{Kind: "agent", ID: "stage:docs"},
+	})
+	if err != nil || reply.ThreadID != titled.ID {
+		t.Fatalf("reply = %+v, %v; want task thread %s", reply, err, titled.ID)
+	}
+	if got := len(store.Snapshot().Assistants.Mesh.Messages); got != 3 {
+		t.Fatalf("messages = %d, want three committed messages without a duplicate retry", got)
+	}
+}
+
+func TestSendFromAgent_ThreadlessGroupKeepsExistingSelection(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	ctx := context.Background()
+	members := []agentcomm.ParticipantID{meshUserParticipantID, "stage:docs", meshStageParticipantID(assistantsTestStageID)}
+	first, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "group-first", Title: "Group work", Scope: agentcomm.ScopeRun, Members: members})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "group-second", Scope: agentcomm.ScopeRun, Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := agentSend(o, "group-send", "stage:docs", []string{assistantsTestStageID}, "for the group")
+	if err != nil || receipt.ThreadID != first.ID {
+		t.Fatalf("group send = %+v, %v; want existing group %s", receipt, err, first.ID)
+	}
+}
+
 func TestSendFromAgent_RetryOfTheSameRequestIsIdempotent(t *testing.T) {
 	o, store := newTwoStageMeshOrchestrator(t)
 	impl := string(meshStageParticipantID(assistantsTestStageID))

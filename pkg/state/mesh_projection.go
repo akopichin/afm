@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
@@ -21,9 +24,13 @@ type MeshState struct {
 
 	Threads     map[agentcomm.ThreadID]*agentcomm.Thread `json:"threads,omitempty"`
 	ThreadOrder []agentcomm.ThreadID                     `json:"thread_order,omitempty"`
-	// ThreadChangedSeq is the seq of the record that last changed each thread (opened or closed it), so a
+	// ThreadChangedSeq is the seq of the record that last changed each thread's metadata (open,
+	// close, or title edit), so a
 	// poller can ask for the threads changed after its cursor instead of re-reading every thread.
 	ThreadChangedSeq map[agentcomm.ThreadID]uint64 `json:"thread_changed_seq,omitempty"`
+	// ThreadTitles replaces the display title without changing the opening descriptor in Threads.
+	// An entry with an empty Title records a clear and still carries its revision.
+	ThreadTitles map[agentcomm.ThreadID]MeshThreadTitle `json:"thread_titles,omitempty"`
 
 	Messages map[agentcomm.MessageID]*agentcomm.Message `json:"messages,omitempty"`
 	// MessagesByThread preserves each thread's commit order — the same role Discussions.ByStage plays for
@@ -47,6 +54,7 @@ func newMeshState() MeshState {
 		Participants:     map[agentcomm.ParticipantID]*agentcomm.Participant{},
 		Threads:          map[agentcomm.ThreadID]*agentcomm.Thread{},
 		ThreadChangedSeq: map[agentcomm.ThreadID]uint64{},
+		ThreadTitles:     map[agentcomm.ThreadID]MeshThreadTitle{},
 		Messages:         map[agentcomm.MessageID]*agentcomm.Message{},
 		MessagesByThread: map[agentcomm.ThreadID][]agentcomm.MessageID{},
 		Inbox:            map[agentcomm.ParticipantID][]agentcomm.MessageID{},
@@ -73,6 +81,9 @@ func (ms MeshState) clone() MeshState {
 	for id, seq := range ms.ThreadChangedSeq {
 		out.ThreadChangedSeq[id] = seq
 	}
+	for id, title := range ms.ThreadTitles {
+		out.ThreadTitles[id] = title
+	}
 	for id, m := range ms.Messages {
 		out.Messages[id] = m
 	}
@@ -93,6 +104,26 @@ func (ms MeshState) clone() MeshState {
 		out.Board[key] = e
 	}
 	return out
+}
+
+// MeshThreadTitle is the latest replace-whole display title and its committed record sequence.
+type MeshThreadTitle struct {
+	Title string `json:"title"`
+	Seq   uint64 `json:"seq"`
+}
+
+// ThreadView returns a copied read view; callers never mutate the immutable opening title.
+func (ms MeshState) ThreadView(id agentcomm.ThreadID) (agentcomm.Thread, bool) {
+	th := ms.Threads[id]
+	if th == nil {
+		return agentcomm.Thread{}, false
+	}
+	view := *th
+	view.Members = slices.Clone(th.Members)
+	if title, ok := ms.ThreadTitles[id]; ok {
+		view.Title = title.Title
+	}
+	return view, true
 }
 
 // deepClone returns a FULL copy of ms, used only by applyOperationCommitted's transactional batch apply (see
@@ -353,6 +384,42 @@ func applyMeshThreadOpened(as *AssistantsState, c *Control, dryRun bool) error {
 	}
 	as.Mesh.Threads[id] = &thread
 	as.Mesh.ThreadOrder = append(as.Mesh.ThreadOrder, id)
+	as.Mesh.ThreadChangedSeq[id] = c.Seq
+	return nil
+}
+
+// MeshThreadTitleUpdatedPayload is a compare-and-set edit of the display title. ExpectedTitleSeq
+// is journaled so replay checks the same transition that admission checked under the Store lock.
+type MeshThreadTitleUpdatedPayload struct {
+	Title            string `json:"title"`
+	ExpectedTitleSeq uint64 `json:"expected_title_seq"`
+}
+
+func applyMeshThreadTitleUpdated(as *AssistantsState, c *Control, dryRun bool) error {
+	id := agentcomm.ThreadID(c.Target.ThreadID)
+	if id == "" {
+		return meshRejected(assistants.CodeInvalidRequest, "thread id is required")
+	}
+	if _, ok := as.Mesh.Threads[id]; !ok {
+		return meshRejected(assistants.CodeNotFound, "unknown thread %s", id)
+	}
+	if c.Actor.Kind != "user" {
+		return meshRejected(assistants.CodeActorNotAllowed, "only the run owner may edit a thread title")
+	}
+	var p MeshThreadTitleUpdatedPayload
+	if err := decodePayload(c.Payload, &p); err != nil {
+		return fmt.Errorf("decode mesh_thread_title_updated payload: %w", err)
+	}
+	if p.Title != strings.TrimSpace(p.Title) || !utf8.ValidString(p.Title) || utf8.RuneCountInString(p.Title) > 200 || strings.IndexFunc(p.Title, unicode.IsControl) >= 0 {
+		return meshRejected(assistants.CodeInvalidRequest, "thread title must be trimmed, valid plain text of at most 200 characters")
+	}
+	if current := as.Mesh.ThreadTitles[id].Seq; current != p.ExpectedTitleSeq {
+		return meshRejected(assistants.CodeStaleRevision, "thread %s title changed (expected %d, got %d)", id, p.ExpectedTitleSeq, current)
+	}
+	if dryRun {
+		return nil
+	}
+	as.Mesh.ThreadTitles[id] = MeshThreadTitle{Title: p.Title, Seq: c.Seq}
 	as.Mesh.ThreadChangedSeq[id] = c.Seq
 	return nil
 }

@@ -131,6 +131,7 @@ const (
 	// an operation_committed Effect.
 	kindMeshParticipantAdded     = "mesh_participant_added"
 	kindMeshThreadOpened         = "mesh_thread_opened"
+	kindMeshThreadTitleUpdated   = "mesh_thread_title_updated"
 	kindMeshThreadClosed         = "mesh_thread_closed"
 	kindMeshMessageSent          = "mesh_message_sent"
 	kindMeshMessageDelivered     = "mesh_message_delivered"
@@ -165,6 +166,7 @@ var controlKinds = map[string]bool{
 	kindStageGraphAdded:          true,
 	kindMeshParticipantAdded:     true,
 	kindMeshThreadOpened:         true,
+	kindMeshThreadTitleUpdated:   true,
 	kindMeshThreadClosed:         true,
 	kindMeshMessageSent:          true,
 	kindMeshMessageDelivered:     true,
