@@ -9,7 +9,7 @@ import (
 )
 
 // fakeClock is a manually-advanced Clock — the injectable time seam Collector needs for
-// TestCollector_DeterministicWithFakeClock (mirrors pkg/orchestrator's fingerprintFn/fingerprintDir
+// TestCollector_DeterministicWithFakeClock (mirrors pkg/orchestrator's fingerprintFn/projectDir
 // convention: inject the thing that would otherwise make behavior depend on wall-clock timing).
 type fakeClock struct {
 	mu  sync.Mutex
