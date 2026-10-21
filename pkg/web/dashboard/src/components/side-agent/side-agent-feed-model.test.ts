@@ -13,6 +13,47 @@ const ev = (over: Partial<SideAgentEvent> & Pick<SideAgentEvent, 'type' | 'data'
   }) as SideAgentEvent
 
 describe('toSideAgentFeedItems', () => {
+  it('keeps epoch times and elapsed gaps for the shared history renderer', () => {
+    const items = toSideAgentFeedItems([
+      ev({ type: 'turn_accepted', seq: 1, timestamp: '2026-10-21T05:31:09Z', data: { message: 'q', clientMessageId: 'm1' } }),
+      ev({ type: 'assistant_text', seq: 2, timestamp: '2026-10-21T05:31:16Z', data: { text: 'a' } }),
+      ev({ type: 'assistant_text', seq: 3, timestamp: '2026-10-21T05:33:16Z', data: { text: 'b' } }),
+    ])
+    expect(items.map((item) => item.ts)).toEqual([
+      Date.parse('2026-10-21T05:31:09Z'),
+      Date.parse('2026-10-21T05:31:16Z'),
+      Date.parse('2026-10-21T05:33:16Z'),
+    ])
+    expect(items.map((item) => item.gap)).toEqual(['0s', '7s', '2m'])
+    expect(items.map((item) => item.firstEvent)).toEqual([true, false, false])
+  })
+
+  it('marks the first displayed event as first when a hidden event precedes it', () => {
+    const items = toSideAgentFeedItems([
+      ev({ type: 'turn_started', seq: 1, timestamp: '2026-10-21T05:31:09Z', data: { command: 'codex', contextFormatVersion: 'v1' } }),
+      ev({ type: 'turn_accepted', seq: 2, timestamp: '2026-10-21T05:31:16Z', data: { message: 'q', clientMessageId: 'm1' } }),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ gap: '0s', firstEvent: true })
+  })
+
+  it('measures the gap between displayed events across a hidden event', () => {
+    const items = toSideAgentFeedItems([
+      ev({ type: 'turn_accepted', seq: 1, timestamp: '2026-10-21T05:31:09Z', data: { message: 'q', clientMessageId: 'm1' } }),
+      ev({ type: 'turn_completed', seq: 2, timestamp: '2026-10-21T05:32:09Z', data: {} }),
+      ev({ type: 'assistant_text', seq: 3, timestamp: '2026-10-21T05:33:09Z', data: { text: 'a' } }),
+    ])
+    expect(items.map((item) => [item.gap, item.firstEvent])).toEqual([['0s', true], ['2m', false]])
+  })
+
+  it('does not mark a later same-second side-agent event as the first', () => {
+    const items = toSideAgentFeedItems([
+      ev({ type: 'turn_accepted', seq: 1, data: { message: 'q', clientMessageId: 'm1' } }),
+      ev({ type: 'assistant_text', seq: 2, data: { text: 'a' } }),
+    ])
+    expect(items.map((item) => [item.gap, item.firstEvent])).toEqual([['0s', true], ['0s', false]])
+  })
+
   it('maps turn_accepted to a right-side user message (plain, not markdown)', () => {
     const items = toSideAgentFeedItems([
       ev({ type: 'turn_accepted', seq: 1, data: { message: '**hi**', clientMessageId: 'm1' } }),

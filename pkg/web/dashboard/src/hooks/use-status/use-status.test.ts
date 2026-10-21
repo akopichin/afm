@@ -696,6 +696,28 @@ describe('useStatus', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], version: 42 }).version).toBe('')
   })
 
+  test('normalizeStatus maps host time zone and utc offset; older server yields "" and null', () => {
+    const tokyo = normalizeStatus({ flow_name: 'f', stages: [], time_zone: 'Asia/Tokyo', utc_offset_minutes: 540 })
+    expect(tokyo.timeZone).toBe('Asia/Tokyo')
+    expect(tokyo.utcOffsetMinutes).toBe(540)
+
+    // Новый бэкенд с неопознанной зоной: имя пустое, но подписанный offset сохраняется (включая 0 и отрицательные).
+    const offsetOnly = normalizeStatus({ flow_name: 'f', stages: [], time_zone: '', utc_offset_minutes: -210 })
+    expect(offsetOnly.timeZone).toBe('')
+    expect(offsetOnly.utcOffsetMinutes).toBe(-210)
+    expect(normalizeStatus({ flow_name: 'f', stages: [], time_zone: '', utc_offset_minutes: 0 }).utcOffsetMinutes).toBe(0)
+
+    // Старый бэкенд без обоих полей → '' и null (сигнал для browser-local fallback в провайдере).
+    const older = normalizeStatus({ flow_name: 'f', stages: [] })
+    expect(older.timeZone).toBe('')
+    expect(older.utcOffsetMinutes).toBeNull()
+
+    // Неверные типы трактуются как отсутствие.
+    const bad = normalizeStatus({ flow_name: 'f', stages: [], time_zone: 42, utc_offset_minutes: 'x' })
+    expect(bad.timeZone).toBe('')
+    expect(bad.utcOffsetMinutes).toBeNull()
+  })
+
   test('normalizeStatus: accounting.show_money=true maps to showMoney:true', () => {
     const raw = {
       flow_name: 'f',

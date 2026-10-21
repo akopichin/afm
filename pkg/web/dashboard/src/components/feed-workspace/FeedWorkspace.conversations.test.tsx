@@ -7,6 +7,7 @@ import * as meshClient from '../../api/mesh-client'
 import * as runClient from '../../api/run-client'
 import type { DiscussionMessageWire } from '../../api/run-client'
 import type { MeshMessage, MeshParticipant, MeshThread } from '../../api/mesh-client'
+import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
 
 const at = (s: number) => `2026-10-19T10:00:${String(s).padStart(2, '0')}Z`
 const ev = (type: string, payload: unknown, s: number): AfmEvent => ({ type, payload, stageId: 'impl', timestamp: at(s) }) as AfmEvent
@@ -104,6 +105,31 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     const reply = row('m2')
     expect(within(reply).getByText('claude')).toBeInTheDocument()
     expect(within(reply).getByText('Replying to QA reviewer')).toBeInTheDocument()
+  })
+
+  it('uses host time and the previous displayed message in each stage conversation block', async () => {
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
+      messages: [msg('m1', 2), msg('m2', 9), msg('m3', 16)], threads: [withUser], next_cursor: 16, has_more: false,
+    })
+    render(
+      <MessageTimeZoneProvider timeZone="Asia/Tokyo" utcOffsetMinutes={540}>
+        <FeedWorkspace events={[events[0] as AfmEvent, ev('agent_action', { tool: 'text', detail: 'Between messages' }, 5)]} stageId="impl" mesh={meshProps()} />
+      </MessageTimeZoneProvider>,
+    )
+    await waitFor(() => expect(row('m3')).not.toBeNull())
+
+    const time = (id: string) => row(id).querySelector('.team-conversation-message-header > time') as HTMLElement
+    expect(time('m1').querySelector('.message-time-clock')).toHaveTextContent('19:00')
+    expect(time('m1').querySelector('.message-time-gap')).toHaveTextContent('+0s')
+    expect(time('m2').querySelector('.message-time-gap')).toHaveTextContent('+0s')
+    expect(time('m3').querySelector('.message-time-gap')).toHaveTextContent('+7s')
+    expect(time('m2')).toHaveAttribute('title', expect.stringMatching(/Oct 19, 2026, 19:00:09 \(host time\).*first event \(\+0s\)/))
+    expect(time('m3')).toHaveAttribute('tabindex', '0')
+    expect(document.querySelectorAll('.feed-conversation')).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Conversations/ }))
+    expect(document.querySelectorAll('.feed-conversation')).toHaveLength(1)
+    expect(time('m2').querySelector('.message-time-gap')).toHaveTextContent('+7s')
   })
 
   it('filters: Conversations hides the author\'s work, Author\'s work keeps only what is addressed to you', async () => {

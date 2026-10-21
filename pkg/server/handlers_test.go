@@ -224,6 +224,91 @@ func TestHandleStatus_IncludesFlowName(t *testing.T) {
 	}
 }
 
+// hostTimeZoneResponse декодирует только wire-поля зоны, фиксируя их имена в JSON.
+type hostTimeZoneResponse struct {
+	TimeZone         string `json:"time_zone"`
+	UTCOffsetMinutes int    `json:"utc_offset_minutes"`
+}
+
+func TestHandleStatus_HostTimeZoneNativeWinsOverTransport(t *testing.T) {
+	// Нативный хост: transport-env мог остаться в окружении, но без re-exec
+	// в контейнер он игнорируется — побеждает собственная зона хоста.
+	t.Setenv("AFM_IN_DOCKER", "")
+	t.Setenv("TZ", "Asia/Tokyo")
+	t.Setenv("AFM_HOST_TIME_ZONE", "Europe/Berlin")
+	t.Setenv("AFM_HOST_UTC_OFFSET_MINUTES", "120")
+	srv, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var resp hostTimeZoneResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TimeZone != "Asia/Tokyo" {
+		t.Errorf("time_zone = %q, want %q", resp.TimeZone, "Asia/Tokyo")
+	}
+	if resp.UTCOffsetMinutes != 540 {
+		t.Errorf("utc_offset_minutes = %d, want 540", resp.UTCOffsetMinutes)
+	}
+}
+
+func TestHandleStatus_HostTimeZoneFromTransportInContainer(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "1")
+	t.Setenv("TZ", "Asia/Tokyo") // зона контейнера не должна подменять зону хоста
+	t.Setenv("AFM_HOST_TIME_ZONE", "Europe/Berlin")
+	t.Setenv("AFM_HOST_UTC_OFFSET_MINUTES", "120")
+	srv, _ := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var resp hostTimeZoneResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TimeZone != "Europe/Berlin" {
+		t.Errorf("time_zone = %q, want %q", resp.TimeZone, "Europe/Berlin")
+	}
+	if resp.UTCOffsetMinutes != 120 {
+		t.Errorf("utc_offset_minutes = %d, want 120", resp.UTCOffsetMinutes)
+	}
+}
+
+func TestHandleStatus_MissingHostTimeZoneTransportUsesLocalHost(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "1")
+	t.Setenv("TZ", "Asia/Tokyo")
+	for _, key := range []string{"AFM_HOST_TIME_ZONE", "AFM_HOST_UTC_OFFSET_MINUTES"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv, _ := setupTestServer(t)
+
+	w := httptest.NewRecorder()
+	srv.handleStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var resp hostTimeZoneResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.TimeZone != "Asia/Tokyo" || resp.UTCOffsetMinutes != 540 {
+		t.Errorf("host time zone = %+v, want Asia/Tokyo +540", resp)
+	}
+}
+
 func TestHandleStatus_IncludesFlowPauseState(t *testing.T) {
 	srv := newTestServer(t, Config{
 		ReviewState: func() (string, []string) { return "paused", []string{"s1"} },

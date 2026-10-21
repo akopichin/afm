@@ -8,9 +8,7 @@
    DELIBERATELY NOT redefined here — AddRunAgentDialog reuses agent-note-modal.css's/plan-panel.css's own
    rules, the same way AttachHelperDialog does, rather than a second modal/button stylesheet.
 
-   No new CSS animation is introduced here — a static roster/panel/dialog needs none (T7.3's own "don't
-   invent motion that isn't required"), so there is nothing to add to skins-contract.test.ts's animation
-   registry. */
+   The shared message timestamp below crossfades its labels; reduced-motion users get an instant switch. */
 
 .team-view {
   --team-roster-width: 260px;
@@ -724,6 +722,52 @@
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-muted);
+}
+
+/* Shared by the feed and mesh conversations. Both labels occupy one grid cell, so the wider one
+   reserves the width even while hidden. Negative margins keep the 8px/10px hover target out of layout. */
+.message-time {
+  flex: none;
+  display: inline-grid;
+  justify-items: end;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  cursor: default;
+  padding: 8px 10px;
+  margin: -8px -10px;
+}
+.message-time > span {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out);
+}
+.message-time-gap {
+  opacity: 0;
+  transform: translateY(5px);
+  color: var(--text-secondary);
+}
+.message-time:hover .message-time-clock,
+.message-time:focus-visible .message-time-clock,
+.feed-item-navigable:focus-visible .message-time .message-time-clock,
+.feed-thought-row:focus-within .message-time .message-time-clock {
+  opacity: 0;
+  transform: translateY(-5px);
+}
+.message-time:hover .message-time-gap,
+.message-time:focus-visible .message-time-gap,
+.feed-item-navigable:focus-visible .message-time .message-time-gap,
+.feed-thought-row:focus-within .message-time .message-time-gap {
+  opacity: 1;
+  transform: none;
+}
+.message-time:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+  border-radius: var(--radius-sm);
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-time > span { transition: none; }
 }
 .team-conversation-message-body {
   padding: 10px 14px;

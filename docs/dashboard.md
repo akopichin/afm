@@ -89,6 +89,27 @@ from the list and use **Back** from the conversation; on wide screens, drag or
 keyboard-resize the divider. See [Team conversations](collaboration.md#team-conversations)
 for messaging and participant details.
 
+## Message times
+
+Event rows in the stage **Feed**, **Full feed**, and Side agent history, and message
+bubbles in **Team** and stage Feed conversations, show the message time as `HH:MM`
+in the host's 24-hour clock. Hover over the time, or focus its label or enclosing
+interactive row with a keyboard, to see the elapsed gap (`+7s`, `+2m`, etc.). The
+first item in a feed or displayed conversation block shows `+0s`. The time label
+has a larger hover area, and switching labels does not move the row. Its native
+tooltip and accessible name include the full host-local date and time, down to
+seconds, and the gap. With touch alone, `HH:MM` remains visible; the gap needs a
+pointer or keyboard focus, and the native tooltip depends on browser hover/focus
+support.
+
+The clock uses the time zone of the OS running afm, including its `TZ` override,
+even when the browser is in another zone. In automatic Docker mode, afm passes
+the launching host's zone to the container. When an IANA zone name is available,
+historical daylight saving time follows that zone. If the name is unavailable or
+the browser cannot use it, the display falls back to the host's signed UTC offset
+reported by `/api/status`; this fixed offset cannot reconstruct historical
+daylight saving changes.
+
 ## Side agent — a free-form chat alongside the run
 
 Open the **Side agent** — a large centered modal over the dashboard — to talk

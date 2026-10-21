@@ -1,6 +1,7 @@
 package docker_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -353,6 +354,123 @@ func TestReExec_BuildsDockerArgs(t *testing.T) {
 	for _, check := range checks {
 		if !strings.Contains(argsStr, check) {
 			t.Errorf("args missing %q\nfull args: %s", check, argsStr)
+		}
+	}
+}
+
+func TestReExec_PassesHostTimeZone(t *testing.T) {
+	t.Setenv("TZ", "Asia/Tokyo")
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	dockerBin := filepath.Join(dir, "docker")
+	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:      "akopichin/afm:latest",
+		ProjectDir: "/tmp/proj",
+		ExtraArgs:  []string{"run", "flow.yaml"},
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+
+	argsStr := strings.Join(capturedArgs, " ")
+	// Зона и смещение хоста едут в контейнер значением (не секрет, не bare -e).
+	for _, check := range []string{
+		"-e AFM_HOST_TIME_ZONE=Asia/Tokyo",
+		"-e AFM_HOST_UTC_OFFSET_MINUTES=540",
+	} {
+		if !strings.Contains(argsStr, check) {
+			t.Errorf("args missing %q\nfull args: %s", check, argsStr)
+		}
+	}
+}
+
+func TestReExec_MountsUnnamedHostZoneFile(t *testing.T) {
+	data, err := os.ReadFile("/usr/share/zoneinfo/America/New_York")
+	if err != nil {
+		t.Skipf("zone file unavailable: %v", err)
+	}
+	zoneFile := filepath.Join(t.TempDir(), "custom-zone")
+	if err := os.WriteFile(zoneFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TZ", zoneFile)
+
+	var capturedArgs []string
+	docker.SetExecFunc(func(_ string, argv []string, _ []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	if err := docker.ReExec(docker.ReExecConfig{Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj"}); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(capturedArgs, " ")
+	if strings.Contains(args, "-v "+zoneFile+":") {
+		t.Errorf("original TZ file exposed in Docker mount: %s", args)
+	}
+	const suffix = ":/tmp/afm-host-zoneinfo:ro"
+	var copiedPath string
+	for i := 0; i+1 < len(capturedArgs); i++ {
+		if capturedArgs[i] == "-v" && strings.HasSuffix(capturedArgs[i+1], suffix) {
+			copiedPath = strings.TrimSuffix(capturedArgs[i+1], suffix)
+		}
+	}
+	if copiedPath == "" {
+		t.Fatalf("validated TZif copy not mounted: %s", args)
+	}
+	copiedData, err := os.ReadFile(copiedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(copiedData, data) {
+		t.Error("mounted zone copy differs from validated TZif")
+	}
+	if !strings.Contains(args, "-e AFM_HOST_ZONE_FILE=/tmp/afm-host-zoneinfo") {
+		t.Errorf("zone file transport missing: %s", args)
+	}
+}
+
+func TestReExec_InvalidTZFileIsNotMounted(t *testing.T) {
+	privateFile := filepath.Join(t.TempDir(), "private")
+	if err := os.WriteFile(privateFile, []byte("private non-zone data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TZ", privateFile)
+	var capturedArgs []string
+	docker.SetExecFunc(func(_ string, argv []string, _ []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	if err := docker.ReExec(docker.ReExecConfig{Image: "akopichin/afm:latest", ProjectDir: "/tmp/proj"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range capturedArgs {
+		if strings.Contains(arg, "afm-host-zoneinfo") || strings.Contains(arg, privateFile) {
+			t.Errorf("invalid TZ file mounted or transported: %v", capturedArgs)
 		}
 	}
 }

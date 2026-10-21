@@ -16,6 +16,7 @@ import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
 import { sideAgentOutcome } from './mesh-receipt'
+import { MessageTime } from '../message-time/MessageTime'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -184,10 +185,11 @@ export function FeedWorkspace({
           timeline.map((entry) =>
             entry.kind === 'conversation' ? (
               <ul key={entry.key} className="team-conversation-message-list feed-conversation" aria-label="Conversation messages">
-                {entry.messages.map((m) => (
+                {entry.messages.map((m, index) => (
                   <ConversationMessage
                     key={m.id}
                     message={m}
+                    previousCreatedAt={entry.messages[index - 1]?.created_at}
                     participants={participants}
                     answered={m.in_reply_to !== undefined ? messageById.get(m.in_reply_to) : undefined}
                     onJumpToQuote={jumpTo}
@@ -361,6 +363,8 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
       <div className="feed-bubble">
         {group.items.map((item) => {
           const isMd = item.markdown === true
+          const isThought = item.kind === 'message' && isMd
+          const isInteractiveRow = (item.navigable === true && onOpenDialog !== undefined) || (isThought && onReplyToThought !== undefined)
           // Самая свежая строка играет анимацию появления один раз: класс feed-item--enter + одноразовый
           // обработчик animationend.
           const isEntering = item.key === enteringKey
@@ -398,7 +402,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
               ) : (
                 <span className="feed-item-text">{item.text}</span>
               )}
-              {item.gap !== '—' && <span className="feed-item-gap">{item.gap}</span>}
+              <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable={!isInteractiveRow} />
             </>
           )
           if (item.navigable === true && onOpenDialog) {
@@ -417,7 +421,6 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
           }
           // Мысль агента — репляибл ТОЛЬКО когда есть onReplyToThought. Отдельная реальная кнопка ↩ даёт
           // клавиатурную активацию/фокус-ринг бесплатно (без ручного keydown).
-          const isThought = item.kind === 'message' && item.markdown === true
           if (onReplyToThought !== undefined && isThought) {
             const selected = item.key === activeReplyKey
             return (

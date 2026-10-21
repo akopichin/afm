@@ -173,7 +173,7 @@ const AfmDir = ".afm"
 
 type AgentRecipe struct {
 	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "openai-agent" = OpenAI-compatible + real tool-loop; "cursor" = Cursor Cloud Agents API
-	Model        string     `yaml:"model"`         // required → ANTHROPIC_DEFAULT_*_MODEL (claude) / OPENAI_MODEL (openai, openai-agent) / CURSOR_MODEL (cursor)
+	Model        string     `yaml:"model"`         // claude: --model + DEFAULT_* aliases; openai/openai-agent: OPENAI_MODEL; cursor: CURSOR_MODEL; codex: CODEX_MODEL
 	URL          string     `yaml:"url"`           // optional (claude); required (openai, openai-agent, cursor) — agent gateway
 	SystemPrompt string     `yaml:"system_prompt"` // optional; "file:<path>" → --append-system-prompt-file content
 	Auth         RecipeAuth `yaml:"auth"`          // required

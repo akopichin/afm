@@ -111,13 +111,7 @@
   gap: 8px;
 }
 .feed-right .feed-item-segments { align-items: flex-end; }
-.feed-item-gap {
-  flex: none;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
+.feed-right .feed-item .message-time { justify-items: start; }
 .feed-right .feed-item { flex-direction: row-reverse; text-align: right; }
 
 /* mono — компактная подчинённая строка. Команды намеренно бледнее «голоса» агента (нарратива ниже):
@@ -152,8 +146,8 @@
 .feed-item-markdown .md pre { display: block; max-width: 100%; overflow-x: auto; }
 .feed-item-markdown .md :where(h1, h2, h3) { margin: 8px 0 4px; line-height: 1.25; }
 .feed-item-markdown .md code { font-family: var(--font-mono); font-size: 12.5px; }
-/* gap-метка выравнивается по первой строке нарратива, а не по его центру. */
-.feed-item-markdown .feed-item-gap { align-self: flex-start; }
+/* Time is aligned with the first line of markdown, not the middle of a long narrative. */
+.feed-item-markdown .message-time { align-self: flex-start; }
 
 /* Семантические тона: тонкая цветная метка слева + тинт текста.
    Нейтральный тон метки не рисует. */
@@ -200,7 +194,11 @@
 
 /* --- Репляибл-мысль агента --- Строка мысли остаётся <div>, выбор — по клику/по кнопке ↩. */
 .feed-thought-row { position: relative; }
-.feed-item-thought { cursor: pointer; }
+.feed-item-thought {
+  cursor: pointer;
+  /* Leave room for the reply button and the timestamp's padded hover area. */
+  padding-right: 40px;
+}
 .feed-item-thought:hover { background: var(--surface-hover); }
 /* Выбранная мысль — акцентная плашка (subtle tint + левый акцент). */
 .feed-item-thought.is-reply-target {

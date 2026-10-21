@@ -19,6 +19,7 @@ export type FeedItem = {
   text: string
   gap: string // статичная длительность: разница с предыдущим событием ленты
   ts: number // время события (ms; NaN — нет валидного timestamp), для слияния с беседами стадии
+  firstEvent?: boolean // только первая отображаемая запись ленты; 0s бывает и у последующих событий
   mono: boolean // tool/script/auto-answer — компактная mono-строка dialog_question/dialog_answer: координаты вопроса
   // диалога для последующего перехода к нему.
   phase?: string
@@ -441,9 +442,10 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry
 }
 
 // Статичная длительность строки: разница между этим событием и предыдущим в ленте по порядку отображения.
-// Нет предыдущего или невалидный timestamp — em dash.
+// Нет предыдущего — 0s; невалидный timestamp текущего события — em dash.
 export function formatEventGap(tsMs: number, prevTsMs: number): string {
-  if (Number.isNaN(tsMs) || Number.isNaN(prevTsMs)) return '—'
+  if (!Number.isFinite(tsMs)) return '—'
+  if (!Number.isFinite(prevTsMs)) return '0s'
   const diffSec = Math.max(0, Math.floor((tsMs - prevTsMs) / 1000))
   if (diffSec < 60) return `${diffSec}s`
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`
@@ -456,7 +458,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
   const counts = new Map<string, number>()
   const items: FeedItem[] = []
 
-  events.forEach((event, index) => {
+  events.forEach((event) => {
     const m = mapEvent(event)
     if (m === null) return // ask_user/user_answered — не рендерим (см. mapEvent)
 
@@ -466,7 +468,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
     const key = n === 0 ? base : `${base}#${n}`
 
     const ts = Date.parse(event.timestamp)
-    const prevTs = index > 0 ? Date.parse(events[index - 1]?.timestamp ?? '') : NaN
+    const prevTs = items[items.length - 1]?.ts ?? NaN
     items.push({
       key,
       stageId: event.stageId,
@@ -477,6 +479,7 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       text: m.text,
       gap: formatEventGap(ts, prevTs),
       ts,
+      firstEvent: items.length === 0,
       mono: m.mono,
       phase: m.phase,
       id: m.id,

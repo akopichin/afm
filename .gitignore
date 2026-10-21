@@ -39,3 +39,8 @@ sync-upstream.sh
 tech-task.md
 prototypes/
 .memory
+
+dev-pipeline-codex-recov-2.yaml
+dev-pipeline-codex-recov.yaml
+dev-pipeline-legacy.yaml
+docs/superpowers/mockups/

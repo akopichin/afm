@@ -19,6 +19,28 @@ including on a closed conversation; the change survives replay without changing
 message order. See [Team conversations](docs/collaboration.md#team-conversations)
 and [Collaboration journal compatibility](docs/collaboration-journal.md#conversation-topic-edits).
 
+### Fix: Claude Opus 5.5 in the runtime image
+
+Bump the pinned Claude Code CLI from 2.1.212 to 2.1.304 (the npm `stable` tag). The old CLI failed
+with an API error on `claude-opus-5-5`; 2.1.304 passed a live ARM64 container
+smoke check with a tool call at `xhigh` effort.
+
+### Improvement: show host-local message times in conversations and feeds
+
+The stage Feed, Full feed, Side agent history, and Team and stage conversations
+now show `HH:MM` in the afm host's time zone. Hover or keyboard focus reveals the
+elapsed gap, with a full date, time, and gap in the timestamp's tooltip and
+accessible label. Automatic Docker mode carries the launching host's zone into
+the dashboard; a signed UTC offset is used when its IANA name is unavailable.
+See [Dashboard message times](docs/dashboard.md#message-times).
+
+### Fix: honor the configured model in Claude Docker recipes
+
+Claude recipe wrappers now pass their configured model explicitly on every
+invocation, including resumed sessions. A model selected in Claude Code settings,
+the inherited environment, or client arguments no longer overrides the recipe.
+See [Docker mode](docs/docker.md#non-claude-agents-in-docker-autoshim).
+
 ## 2026-10-20
 
 ### Improvement: address the Side agent through Agent Mesh

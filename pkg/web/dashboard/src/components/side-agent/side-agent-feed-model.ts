@@ -44,11 +44,11 @@ function mapSideAgentEvent(event: SideAgentEvent): Mapped | null {
 // (formatEventGap).
 export function toSideAgentFeedItems(events: SideAgentEvent[]): FeedItem[] {
   const items: FeedItem[] = []
-  events.forEach((event, index) => {
+  events.forEach((event) => {
     const m = mapSideAgentEvent(event)
     if (m === null) return
     const ts = Date.parse(event.timestamp)
-    const prevTs = index > 0 ? Date.parse(events[index - 1]?.timestamp ?? '') : NaN
+    const prevTs = items[items.length - 1]?.ts ?? NaN
     items.push({
       key: `seq:${event.seq}`,
       stageId: '',
@@ -60,6 +60,7 @@ export function toSideAgentFeedItems(events: SideAgentEvent[]): FeedItem[] {
       text: m.text,
       gap: formatEventGap(ts, prevTs),
       ts,
+      firstEvent: items.length === 0,
       mono: m.mono,
       markdown: m.markdown,
     })
