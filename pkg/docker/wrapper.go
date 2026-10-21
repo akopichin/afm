@@ -213,6 +213,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	fmt.Fprintf(&b, "export ANTHROPIC_DEFAULT_HAIKU_MODEL=%q\n", s.Model)
 	fmt.Fprintf(&b, "export ANTHROPIC_DEFAULT_SONNET_MODEL=%q\n", s.Model)
 	fmt.Fprintf(&b, "export ANTHROPIC_DEFAULT_OPUS_MODEL=%q\n", s.Model)
+	// DEFAULT_* only remap aliases; an explicit settings/session model bypasses them.
+	// Pin the recipe after caller args so settings, inherited env and --resume cannot select another model.
+	fmt.Fprintf(&b, "set -- \"$@\" --model %s\n", shellSingleQuote(s.Model))
 	if s.HasSysPrompt {
 		fmt.Fprintf(&b, "if [ -n \"$AFM_SYSPROMPT_%s\" ]; then\n", name)
 		fmt.Fprintf(&b, "  _sp=$(mktemp); printf '%%s' \"$AFM_SYSPROMPT_%s\" > \"$_sp\"; chmod 600 \"$_sp\"; unset AFM_SYSPROMPT_%s\n", name, name)

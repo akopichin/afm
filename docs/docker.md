@@ -116,6 +116,13 @@ Supported recipe `type`s:
 | `cursor` | Cursor Cloud Agents API |
 | `codex` | OpenAI Codex CLI — auth via a mounted `~/.codex` OAuth state, no secret in config |
 
+For a `claude` recipe, its explicit `model` is passed as `--model` on every
+invocation, including resumed sessions. It takes precedence over Claude Code's
+`model` setting, an inherited `ANTHROPIC_MODEL`, and `--model` in
+`client.extra_args`. The wrapper also maps the Haiku, Sonnet and Opus aliases to
+the recipe's model. A Claude proxy wrapper without a model keeps Claude Code's
+normal model selection. These overrides apply to generated Docker wrappers.
+
 Each recipe can also set a per-recipe **`reasoning`** level (`minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`):
 

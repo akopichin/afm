@@ -14,6 +14,13 @@ accessible label. Automatic Docker mode carries the launching host's zone into
 the dashboard; a signed UTC offset is used when its IANA name is unavailable.
 See [Dashboard message times](docs/dashboard.md#message-times).
 
+### Fix: honor the configured model in Claude Docker recipes
+
+Claude recipe wrappers now pass their configured model explicitly on every
+invocation, including resumed sessions. A model selected in Claude Code settings,
+the inherited environment, or client arguments no longer overrides the recipe.
+See [Docker mode](docs/docker.md#non-claude-agents-in-docker-autoshim).
+
 ## 2026-10-20
 
 ### Improvement: address the Side agent through Agent Mesh
