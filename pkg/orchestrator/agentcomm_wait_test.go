@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -314,6 +315,87 @@ func TestMesh_WaitCycleCheckAnyGroupMemberMayAnswer(t *testing.T) {
 	if !errors.As(err, &rej) || rej.Code != agentcomm.CodeWaitCycle {
 		t.Fatalf("every other member waits on a: err = %v, want wait_cycle", err)
 	}
+}
+
+// replyWait is a pending reply_to wait of waiter on message msgID.
+func replyWait(waiter agentcomm.ParticipantID, msgID agentcomm.MessageID) *state.MeshWait {
+	return &state.MeshWait{Wait: agentcomm.Wait{
+		Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: msgID},
+	}}
+}
+
+// taskResultWait is a pending task_result wait of waiter on the task taskID.
+func taskResultWait(waiter agentcomm.ParticipantID, taskID assistants.TaskID) *state.MeshWait {
+	return &state.MeshWait{Wait: agentcomm.Wait{
+		Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: string(taskID)},
+	}}
+}
+
+// meshAllWaitsState is a run where each message in recipients (id -> addressees) exists and every task in
+// runningTasks is a running stage helper, plus the given pending waits.
+func meshAllWaitsState(recipients map[agentcomm.MessageID][]agentcomm.ParticipantID, runningTasks []assistants.TaskID, waits ...*state.MeshWait) state.RunState {
+	rs := meshWaitCycleState(1, waits...)
+	rs.Assistants.Mesh.Messages = map[agentcomm.MessageID]*agentcomm.Message{}
+	for id, to := range recipients {
+		rs.Assistants.Mesh.Messages[id] = &agentcomm.Message{ID: id, ThreadID: "mt-all", Recipients: to}
+	}
+	rs.Assistants.Tasks = map[assistants.TaskID]*state.TaskState{}
+	for _, id := range runningTasks {
+		rs.Assistants.Tasks[id] = &state.TaskState{Task: assistants.Task{ID: id, Status: assistants.StatusRunning}}
+	}
+	return rs
+}
+
+// TestMesh_WaitCycleTaskRequiresAllPendingWaits: a helper or run agent resumes only once ALL its pending waits
+// are cleared (resumeTaskIfWaitCleared), so with two waits A->B and A->C a new wait B->A is a deadlock even
+// though C is free — C answering still leaves A waiting on B. A stage or side participant resumes on its first
+// cleared wait and keeps any-of. Several recipients of ONE message stay any-of for everyone.
+func TestMesh_WaitCycleTaskRequiresAllPendingWaits(t *testing.T) {
+	const (
+		b agentcomm.ParticipantID = "helper:b"
+		c agentcomm.ParticipantID = "helper:c"
+	)
+	for _, tc := range []struct {
+		name      string
+		a         agentcomm.ParticipantID
+		waitsOfA  func(a agentcomm.ParticipantID) []*state.MeshWait
+		wantCycle bool
+	}{
+		{"helper with two waits", "helper:a", twoReplyWaits, true},
+		{"run agent with two waits", "run:t-a", twoReplyWaits, true},
+		{"legacy run:<profileID> with two waits", "run:qa", twoReplyWaits, true},
+		{"one wait on the free participant", "helper:a", func(a agentcomm.ParticipantID) []*state.MeshWait {
+			return []*state.MeshWait{replyWait(a, "m-ac")}
+		}, false},
+		{"one group message wait, other member free", "helper:a", func(a agentcomm.ParticipantID) []*state.MeshWait {
+			return []*state.MeshWait{replyWait(a, "m-group")}
+		}, false},
+		{"stage with two waits stays any-of", "stage:a", twoReplyWaits, false},
+		{"side agent with two waits stays any-of", "side:a", twoReplyWaits, false},
+		{"reply_to plus task_result", "helper:a", func(a agentcomm.ParticipantID) []*state.MeshWait {
+			return []*state.MeshWait{replyWait(a, "m-ab"), taskResultWait(a, "c")}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recipients := map[agentcomm.MessageID][]agentcomm.ParticipantID{
+				"m-ab": {b}, "m-ac": {c}, "m-group": {b, c}, "m-ba": {tc.a},
+			}
+			rs := meshAllWaitsState(recipients, []assistants.TaskID{"c"}, tc.waitsOfA(tc.a)...)
+
+			err := validateWaitAdmission(rs, WaitRequest{Waiter: b, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m-ba"}})
+
+			var rej *state.OperationRejectedError
+			isCycle := errors.As(err, &rej) && rej.Code == agentcomm.CodeWaitCycle
+			if tc.wantCycle != isCycle || (!tc.wantCycle && err != nil) {
+				t.Fatalf("B waits on A: err = %v, want wait_cycle = %v", err, tc.wantCycle)
+			}
+		})
+	}
+}
+
+// twoReplyWaits: a waits on b's message m-ab and on c's message m-ac.
+func twoReplyWaits(a agentcomm.ParticipantID) []*state.MeshWait {
+	return []*state.MeshWait{replyWait(a, "m-ab"), replyWait(a, "m-ac")}
 }
 
 // testFarDeadline is a deadline that never fires in a test — for a wait whose thread is not open yet, which

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -152,6 +153,35 @@ func TestRunParticipant_LegacyProfileKeyedIdentity(t *testing.T) {
 	}
 	if owner, ok := runTaskForParticipant(rs, meshRunParticipantID(newTask)); !ok || owner != newTask {
 		t.Fatalf("run:<new task> -> %s,%v", owner, ok)
+	}
+}
+
+// A waiting_children run agent from a journal written before run agents were keyed by task is blocked as its
+// legacy "run:<profileID>" participant: its child's task_result wait on it closes a cycle through that id.
+func TestMesh_LegacyRunParentChildWaitCycleRejected(t *testing.T) {
+	legacy := agentcomm.ParticipantID("run:qa")
+	parentID, childID := assistants.TaskID("t-parent"), assistants.TaskID("t-child")
+	rs := state.RunState{Assistants: state.AssistantsState{
+		Tasks: map[assistants.TaskID]*state.TaskState{
+			parentID: {Task: assistants.Task{ID: parentID, Scope: assistants.ScopeRun, ProfileID: "qa", Status: assistants.StatusWaitingChildren}},
+			childID:  {Task: assistants.Task{ID: childID, Scope: assistants.ScopeStage, ProfileID: "reviewer", Status: assistants.StatusRunning, ParentTaskID: &parentID}},
+		},
+		ByParent: map[assistants.TaskID][]assistants.TaskID{parentID: {childID}},
+		Mesh: state.MeshState{Participants: map[agentcomm.ParticipantID]*agentcomm.Participant{
+			legacy: {ID: legacy, Kind: agentcomm.KindRunAgent, Scope: agentcomm.ScopeRun, Reachable: true},
+		}},
+	}}
+	if got := meshParticipantForTask(rs, rs.Assistants.Tasks[parentID].Task); got != legacy {
+		t.Fatalf("parent identity = %s, want the legacy %s", got, legacy)
+	}
+
+	err := validateWaitAdmission(rs, WaitRequest{
+		Waiter:    meshHelperParticipantID(childID),
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: string(parentID)},
+	})
+	var rejected *state.OperationRejectedError
+	if !errors.As(err, &rejected) || rejected.Code != agentcomm.CodeWaitCycle {
+		t.Fatalf("child waiting on its waiting_children legacy run parent: err = %v, want a wait_cycle rejection", err)
 	}
 }
 

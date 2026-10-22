@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Fix: reject Agent Mesh waits that would deadlock
+
+The `wait_cycle` check now accounts for every pending wait of a helper or run
+agent, and for a run agent waiting for delegated children. It rejects a new
+wait that would leave those agents waiting on each other, even when another
+pending wait has an independent responder. See [Agent Mesh waits](docs/collaboration.md#team-conversations).
+
 ### Fix: worktree runs from a project opened through a symlink
 
 A second `afm run` with worktrees enabled no longer fails with "branch is already
