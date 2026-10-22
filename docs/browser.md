@@ -74,9 +74,10 @@ skill automates this flow (build from source → wait for health → walk the sc
 The first release targets **macOS + Docker Desktop + Chrome**, and native macOS
 runs. Linux-Docker and Windows need their own verification and are not claimed yet.
 
-For a native run, the pinned `chrome-devtools-mcp` must already be installed on
-`PATH` (the Docker image ships it). The version must match exactly — afm never runs
-`@latest` and never installs it for you.
+For a native run, the pinned `chrome-devtools-mcp` (currently 1.12.0) must already
+be installed on `PATH`, e.g. `npm install -g chrome-devtools-mcp@1.12.0` (the Docker
+image ships it). The version must match exactly — afm never runs `@latest` and
+never installs it for you.
 
 ## Isolation and limits
 

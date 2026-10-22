@@ -61,10 +61,19 @@ export function useModalDialog(
       const first = items[0]
       const last = items[items.length - 1]
       if (first === undefined || last === undefined) return
-      if (e.shiftKey && document.activeElement === first) {
+      const active = document.activeElement
+      // Some callers park initial/fallback focus on a non-tabbable element inside the modal (e.g. a
+      // heading announcing an empty state) — it is in `root` but not in `items`, so neither branch below
+      // would catch it and Tab would fall through to the browser's default, escaping the trap.
+      if (active instanceof HTMLElement && root.contains(active) && !items.includes(active)) {
+        e.preventDefault()
+        ;(e.shiftKey ? last : first).focus()
+        return
+      }
+      if (e.shiftKey && active === first) {
         e.preventDefault()
         last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
+      } else if (!e.shiftKey && active === last) {
         e.preventDefault()
         first.focus()
       }

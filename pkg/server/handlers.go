@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -65,6 +66,9 @@ type statusResponse struct {
 	BackoffAccumulatedMs int64           `json:"backoff_accumulated_ms"`
 	BackoffOpenSince     []time.Time     `json:"backoff_open_since,omitempty"`
 	Capabilities         capabilities    `json:"capabilities"`
+	// CollaborationMode — режим представления collaboration ("team"|"assistants"). Всегда присутствует и не
+	// зависит от capabilities.collaboration: это только подсказка dashboard, какие разделы показывать.
+	CollaborationMode assistants.CollaborationMode `json:"collaboration_mode"`
 	// GraphRevision (Этап 9) — the runtime stage registry's current revision; omitted when the add-stage
 	// capability is off. The dashboard compares this against a previously-fetched preview's graph_revision to
 	// detect staleness without a dedicated endpoint.
@@ -125,6 +129,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		IdleSince:            rs.IdleSince(),
 		BackoffAccumulatedMs: rs.BackoffAccumulatedMs,
 		BackoffOpenSince:     rs.BackoffOpenSince(),
+		CollaborationMode:    s.collaborationMode,
 	}
 	if s.accounting != nil {
 		bundle := s.accounting.CostSnapshot()

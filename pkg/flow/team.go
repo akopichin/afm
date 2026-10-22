@@ -12,6 +12,7 @@ const (
 	keyProfile     = "profile"
 	keyTitle       = "title"
 	keyInstruction = "instruction"
+	keyMode        = "mode"
 )
 
 // TeamMember declares one run agent the flow adds before its stages start — the same agent the dashboard's

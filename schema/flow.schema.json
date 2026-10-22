@@ -47,12 +47,17 @@
     "collaboration": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Per-flow override of the helper-agent delegation depth only. There is deliberately no per-flow \"enabled\" — turn the feature on/off via config.yaml's collaboration.enabled or AFM_COLLABORATION.",
+      "description": "Per-flow override of the helper-agent delegation depth and the dashboard collaboration mode. There is deliberately no per-flow \"enabled\" — turn the feature on/off via config.yaml's collaboration.enabled or AFM_COLLABORATION.",
       "properties": {
         "max_depth": {
           "type": "integer",
           "minimum": 0,
           "description": "Maximum helper delegation depth for this flow. Explicit 0 means no helpers at all. Highest-precedence layer, but cannot re-enable a feature disabled by config/env."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["team", "assistants"],
+          "description": "Dashboard collaboration mode for this flow. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Highest-precedence layer; affects the UI only, not whether collaboration is enabled."
         }
       }
     },

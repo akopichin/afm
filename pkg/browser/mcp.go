@@ -15,7 +15,7 @@ const mcpExecutable = "chrome-devtools-mcp"
 
 // PinnedChromeDevtoolsMCPVersion is the exact Chrome DevTools MCP version afm supports. Never @latest,
 // never a runtime install.
-const PinnedChromeDevtoolsMCPVersion = "1.10.1"
+const PinnedChromeDevtoolsMCPVersion = "1.12.0"
 
 // InvocationDescriptor is the per-invocation 0600 file the executor writes and `afm browser mcp
 // --descriptor <path>` reads.

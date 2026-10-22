@@ -27,6 +27,9 @@
 - Компоненты используют semantic tokens из `skins/base/tokens.css`. При смене
   дефолтной темы синхронно меняются HTML default, Go config и server replace-anchor.
 - Capability гейтит UI и запросы: выключенный file browser не делает `/api/files/*`.
-  Mesh-UI ленты стадии (People, беседы и их опрос, режим Message) требует mesh И
-  collaboration; Team гейтится только mesh-пробой.
+  Mesh-UI ленты стадии (беседы и их опрос, режим Message) требует mesh И
+  collaboration; People требует также `collaboration_mode: team`. Team и Board
+  требуют успешной mesh-пробы, run id и режима `team`; Board не опрашивается в
+  `assistants`. Run conversations требует mesh-пробу, run id и режима `assistants`.
+  Краткий сбой `/api/status` сохраняет последний режим и не размонтирует Team.
   План/диалог сверяются с серверными ShowPlan/ShowDialog, включая paused auto-стадии.

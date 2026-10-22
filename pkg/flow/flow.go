@@ -335,12 +335,14 @@ type Flow struct {
 	Stages []Stage `yaml:"stages"`
 }
 
-// FlowCollaboration is the per-flow override of collaboration.max_depth only.
+// FlowCollaboration is the per-flow override of collaboration.max_depth and collaboration.mode only.
 type FlowCollaboration struct {
 	MaxDepth *int
+	// Mode is nil when the flow does not set collaboration.mode (defer to config).
+	Mode *assistants.CollaborationMode
 }
 
-// UnmarshalYAML accepts only the max_depth key, rejecting "enabled" (and anything else) with a message
+// UnmarshalYAML accepts only the max_depth and mode keys, rejecting "enabled" (and anything else) with a message
 // pointing at where to actually enable the feature — mirrors verify.go's explicit-key-switch pattern
 // (verifyStepFromMapping) rather than relying on yaml.v3's lenient default (which would otherwise silently
 // ignore collaboration.enabled in a flow.yaml instead of rejecting it).
@@ -361,6 +363,12 @@ func (c *FlowCollaboration) UnmarshalYAML(value *yaml.Node) error {
 				return fmt.Errorf("collaboration.max_depth: must not be negative, got %d", v)
 			}
 			c.MaxDepth = &v
+		case keyMode:
+			mode, err := assistants.ParseCollaborationModeNode(val)
+			if err != nil {
+				return err
+			}
+			c.Mode = &mode
 		case "enabled":
 			return errors.New(`collaboration: unknown field "enabled" — there is no per-flow enable; turn the feature on/off via config.yaml's collaboration.enabled or AFM_COLLABORATION`)
 		default:

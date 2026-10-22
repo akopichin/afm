@@ -23,6 +23,35 @@ convention when resumed. See [Typed tasks](docs/collaboration.md#typed-tasks).
 Reopening a run now restores the journal's last position, so `afm run` on an
 interrupted run fires `flow_resumed` instead of `flow_started`. See
 [Lifecycle hooks](docs/lifecycle-hooks.md#event-catalog).
+### Improvement: emulate reduced motion, contrast and forced colors in the managed browser
+
+The pinned Chrome DevTools MCP is now 1.12.0. Its `emulate` tool adds
+`prefersReducedMotion`, `prefersContrast` and `forcedColors`, so a live run can
+check these media features in the real browser. Native runs need the new version
+on `PATH`: `npm install -g chrome-devtools-mcp@1.12.0`. See
+[Managed browser](docs/browser.md#supported-hosts).
+
+### Fix: link answers to agent requests in the Team tab
+
+In Team conversations, the latest unanswered agent request is now preselected
+as the reply target, and **Reply** is offered on each request, as in Run
+conversations. Before, an answer typed in Team was sent as a plain message, so
+the agent's `reply_to` wait never resolved and a run agent kept the run open
+after every stage had finished. See [Team workspace](docs/dashboard.md#team-workspace).
+
+### Improvement: choose Team or Assistants dashboard mode
+
+Set `collaboration.mode` to `team` (the default) or `assistants` in global or
+project config, or override it in `flow.yaml`. The flow takes precedence over
+project and global config. Assistants mode hides Team, Board, and People while
+keeping stage helpers, the Feed's Message/Revise and conversations, and agent
+messaging and board work available. Run-wide conversations with you appear in a
+closed-by-default, resizable right panel (a drawer on narrow screens). Explicit
+agent messages to you raise a persistent new-message signal until viewed, and
+answers to agent requests are linked to the request. Human Add run agent and
+board task controls remain in Team mode. See
+[Collaboration modes](docs/collaboration.md#collaboration-modes) and
+[Run conversations](docs/dashboard.md#run-conversations).
 
 ### Fix: reject Agent Mesh waits that would deadlock
 

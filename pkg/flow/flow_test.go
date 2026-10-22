@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
 )
 
@@ -1470,5 +1471,90 @@ func TestParseFile_RejectsUnknownCollaborationField_Other(t *testing.T) {
 	_, err := flow.ParseFile(writeTemp(t, "collaboration:\n  bogus: 1\n"+collabFlowBase))
 	if err == nil {
 		t.Fatal("expected ParseFile to reject an unknown collaboration field")
+	}
+}
+
+func TestParseFile_CollaborationMode(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want assistants.CollaborationMode
+	}{
+		{"team", "collaboration:\n  mode: team\n", assistants.CollaborationModeTeam},
+		{"assistants", "collaboration:\n  mode: assistants\n", assistants.CollaborationModeAssistants},
+		{"with max_depth", "collaboration:\n  max_depth: 2\n  mode: assistants\n", assistants.CollaborationModeAssistants},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := flow.ParseFile(writeTemp(t, tt.yaml+collabFlowBase))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if f.Collaboration == nil || f.Collaboration.Mode == nil || *f.Collaboration.Mode != tt.want {
+				t.Fatalf("Collaboration = %+v, want Mode pointing to %q", f.Collaboration, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFile_CollaborationModeKeepsMaxDepth(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, "collaboration:\n  max_depth: 2\n  mode: assistants\n"+collabFlowBase))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Collaboration.MaxDepth == nil || *f.Collaboration.MaxDepth != 2 {
+		t.Errorf("MaxDepth = %v, want 2 next to mode", f.Collaboration.MaxDepth)
+	}
+}
+
+func TestParseFile_CollaborationModeAbsent(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, "collaboration:\n  max_depth: 1\n"+collabFlowBase))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Collaboration.Mode != nil {
+		t.Errorf("Mode = %q, want nil when the key is absent", *f.Collaboration.Mode)
+	}
+}
+
+func TestParseFile_RejectsInvalidCollaborationMode(t *testing.T) {
+	for name, value := range map[string]string{
+		"empty string": `""`,
+		"null":         "null",
+		"bare key":     "",
+		"number":       "1",
+		"bool":         "true",
+		"list":         "[team]",
+		"object":       "{a: b}",
+		"unknown":      "solo",
+		"wrong case":   "Team",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := flow.ParseFile(writeTemp(t, "collaboration:\n  mode: "+value+"\n"+collabFlowBase))
+			if err == nil {
+				t.Fatalf("expected ParseFile to reject collaboration.mode: %s", value)
+			}
+			if !strings.Contains(err.Error(), "collaboration.mode") {
+				t.Errorf("error = %q, want it to name collaboration.mode", err.Error())
+			}
+		})
+	}
+}
+
+func TestParseFile_RejectsEnabledNextToCollaborationMode(t *testing.T) {
+	_, err := flow.ParseFile(writeTemp(t, "collaboration:\n  mode: team\n  enabled: true\n"+collabFlowBase))
+	if err == nil || !strings.Contains(err.Error(), "enabled") {
+		t.Fatalf("error = %v, want collaboration.enabled still rejected at the flow level", err)
+	}
+}
+
+// TestParseFile_CollaborationModeAlias: алиас на корректную строку принимается так же, как сама строка.
+func TestParseFile_CollaborationModeAlias(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, "x-mode: &m assistants\ncollaboration:\n  mode: *m\n"+collabFlowBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Collaboration == nil || f.Collaboration.Mode == nil || *f.Collaboration.Mode != assistants.CollaborationModeAssistants {
+		t.Fatalf("Collaboration = %+v, want Mode pointing to assistants", f.Collaboration)
 	}
 }

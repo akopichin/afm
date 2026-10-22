@@ -69,6 +69,7 @@ describe('mesh-client', () => {
           'mt-1': {
             last_message: { id: 'm-7', seq: 7, created_at: '2026-10-21T10:00:00Z', sender_id: 'run:qa', preview: 'Saved message' },
             last_other_message_seq: 7,
+            last_agent_to_user_message_seq: 5,
           },
           'mt-2': { last_other_message_seq: 0, title_seq: 4 },
         },
@@ -81,9 +82,10 @@ describe('mesh-client', () => {
         'mt-1': {
           last_message: { id: 'm-7', seq: 7, created_at: '2026-10-21T10:00:00Z', sender_id: 'run:qa', preview: 'Saved message' },
           last_other_message_seq: 7,
+          last_agent_to_user_message_seq: 5,
           title_seq: 0,
         },
-        'mt-2': { last_other_message_seq: 0, title_seq: 4 },
+        'mt-2': { last_other_message_seq: 0, last_agent_to_user_message_seq: 0, title_seq: 4 },
       },
     })
     expect(fetchSpy).toHaveBeenCalledTimes(1)

@@ -50,6 +50,12 @@ client:
 
 # Dashboard side agent — the free-form chat alongside the run. ON by default.
 
+# Collaboration dashboard mode: "team" (default) shows Team, Board and People;
+# "assistants" hides those views and shows run-wide conversations in a right panel.
+# Set collaboration.mode in this file or flow.yaml (flow overrides project, then global config).
+# collaboration:
+#   mode: assistants
+
 # Per-flow git worktrees — run each flow on its own branch/worktree under .worktrees/<flow>. OFF by
 # default; opt in here with worktrees.enabled: true, or set AFM_WORKTREES=1.
 # worktrees:

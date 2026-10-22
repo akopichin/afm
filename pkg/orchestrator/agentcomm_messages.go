@@ -483,7 +483,8 @@ func (o *Orchestrator) ListThreads(ctx context.Context, req ListThreadsRequest) 
 }
 
 // summarizeThreadMessages reads only this thread's bounded commit-order index. Looking backward finds the
-// latest message and the latest message from somebody other than the human owner without a per-row store read or receipt change.
+// latest message, the latest message from somebody other than the human owner and the latest message an
+// agent explicitly addressed to the human, without a per-row store read or receipt change.
 func summarizeThreadMessages(mesh state.MeshState, id agentcomm.ThreadID) ThreadSummary {
 	summary := ThreadSummary{TitleSeq: mesh.ThreadTitles[id].Seq}
 	ids := mesh.MessagesByThread[id]
@@ -501,11 +502,22 @@ func summarizeThreadMessages(mesh state.MeshState, id agentcomm.ThreadID) Thread
 		if summary.LastOtherMessageSeq == 0 && message.Sender != meshUserParticipantID {
 			summary.LastOtherMessageSeq = message.Seq
 		}
-		if summary.LastMessage != nil && summary.LastOtherMessageSeq != 0 {
+		if summary.LastAgentToUserMessageSeq == 0 && isAgentMessageToUser(message) {
+			summary.LastAgentToUserMessageSeq = message.Seq
+		}
+		// An agent→user message is also "other", so once it is found all three fields are set.
+		if summary.LastAgentToUserMessageSeq != 0 {
 			break
 		}
 	}
 	return summary
+}
+
+// isAgentMessageToUser reports whether somebody other than the human explicitly wrote to the human. A passive
+// AutoResult turn result does not count even though the human is among its recipients.
+func isAgentMessageToUser(message *agentcomm.Message) bool {
+	return message.Sender != meshUserParticipantID && !message.AutoResult &&
+		slices.Contains(message.Recipients, meshUserParticipantID)
 }
 
 func threadMessagePreview(body string) string {

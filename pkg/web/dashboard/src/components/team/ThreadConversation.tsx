@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
 import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshSendReceipt, type MeshThread, type MeshThreadSummaries } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
@@ -8,6 +8,8 @@ import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryab
 import { MentionMenu } from '../assistants/AssistantMentionMenu'
 import { draftMentions, filterMentionProfiles } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
+import { canReplyInConversation, isAgentMessageToUser, latestUnansweredRequest } from '../../lib/mesh-reply'
+import { messageText } from '../../lib/agent-result'
 import { directPeer, findExistingDirectThread, mentionHandles, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
 import { ConversationMessage } from './ConversationMessage'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
@@ -19,6 +21,21 @@ import { sideAgentOutcome } from '../feed-workspace/mesh-receipt'
 export type ThreadConversationTarget =
   | { kind: 'thread'; thread: MeshThread }
   | { kind: 'direct'; participant: MeshParticipant }
+
+// RunConversationMode — what the Run conversations panel adds to a conversation: seen tracking, and ownership of
+// the reply target (as it owns the draft), so both outlive a trip Back to the list. Without it (Team) the
+// conversation keeps its own reply target: it is remounted per conversation anyway.
+export type RunConversationMode = {
+  // seenSeq — the stored cursor: agent messages to the human up to it have been seen.
+  seenSeq: number
+  onSeen: (threadId: string, seq: number) => void
+  // tracking — the panel is open and this history is on screen; only then do messages count as seen or animate.
+  tracking: boolean
+  // replyTargetId — a message id (answers it), null (the human cancelled it) or undefined (not chosen yet: the
+  // newest unanswered request is preselected while the draft is empty).
+  replyTargetId: string | null | undefined
+  onReplyTargetChange: (id: string | null | undefined) => void
+}
 
 export type ThreadConversationProps = {
   target: ThreadConversationTarget | null
@@ -49,6 +66,7 @@ export type ThreadConversationProps = {
   sideFailures?: ReadonlySet<string>
   readEnabled?: boolean
   onMessagesRead?: (threadId: string, lastRenderedOtherSeq: number) => void
+  run?: RunConversationMode
 }
 
 // targetKey — a stable identity string for a target, meant as the `key` prop on <ThreadConversation>. The
@@ -62,6 +80,13 @@ export function targetKey(target: ThreadConversationTarget | null): string {
 }
 
 const MAX_INPUT_HEIGHT = 200
+// ACCENT_MS — how long a just-arrived agent message stays bright. A fixed timer: under reduced motion no
+// animation runs, so `animationend` would never clear it.
+const ACCENT_MS = 2400
+// Many thresholds, so the observer reports every step of a bubble scrolling in and the half-visible rule is
+// checked often enough.
+const VISIBILITY_THRESHOLDS = Array.from({ length: 21 }, (_, i) => i / 20)
+const NO_IDS: ReadonlySet<string> = new Set()
 
 // conversationTitle — the conversation's name: the person for a direct target, else the thread's title or,
 // for an untitled thread, its other members' names.
@@ -142,16 +167,22 @@ function routeAll(target: ThreadConversationTarget, label: string, participants:
 }
 
 export function ThreadConversation(props: ThreadConversationProps): ReactElement {
-  const { target, onThreadOpened, onDirectThreadResolved, getDirectOpenRequestId, getSendRequestId, onSendSucceeded, onMessageSent, participants = [], threads = [], summaries = {}, sideFailures = new Set<string>(), readEnabled = false, onMessagesRead } = props
+  const { target, onThreadOpened, onDirectThreadResolved, getDirectOpenRequestId, getSendRequestId, onSendSucceeded, onMessageSent, participants = [], threads = [], summaries = {}, sideFailures = new Set<string>(), readEnabled = false, onMessagesRead, run } = props
   const [openedThread, setOpenedThread] = useState<MeshThread | null>(target?.kind === 'thread' ? target.thread : null)
   const [ownDraft, setOwnDraft] = useState('')
   const draft = props.draft ?? ownDraft
   const setDraft = props.onDraftChange ?? setOwnDraft
   // submitter — sends with a request id that a retry of the SAME message reuses; this component remounts per
   // conversation (see targetKey), so a late response is fenced out by unmount alone.
-  const submitter = useRetryableSubmit<{ recipientIds: string[]; body: string }>('mesh-send')
+  const submitter = useRetryableSubmit<{ recipientIds: string[]; body: string; inReplyTo?: string }>('mesh-send')
   // log — opens at the latest message and follows new ones, unless the reader scrolled up.
   const log = useStickToBottom<HTMLDivElement>()
+  // logNodeRef — the log element itself: the root the seen-tracking observer watches bubbles in.
+  const logNodeRef = useRef<HTMLDivElement | null>(null)
+  const setLogNode = useCallback((node: HTMLDivElement | null) => {
+    logNodeRef.current = node
+    log.ref(node)
+  }, [log.ref])
   // notifiedRef — whether the parent has already been told about openedThread. A 'thread' target starts
   // already known to the parent (it IS activeConversation), so it starts true. A 'direct' target starts
   // false: once its first message opens a real thread, the parent must hear about it exactly once — even if
@@ -202,6 +233,90 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
     if (!closed) composerWasFocusedRef.current = false
   }, [closed])
 
+  // ---- Linked replies; seen tracking only in Run conversations mode ----
+  const incoming = useMemo(() => messages.filter(isAgentMessageToUser), [messages])
+  const unseen = useMemo(() => (run === undefined ? [] : incoming.filter((m) => m.seq > run.seenSeq)), [incoming, run?.seenSeq])
+  const unseenKey = unseen.map((m) => m.id).join(',')
+  const tracking = run?.tracking === true
+  const onSeenRef = useRef(run?.onSeen)
+  onSeenRef.current = run?.onSeen
+
+  // justAnswered — requests answered a moment ago that the polled list does not show yet: without it the answered
+  // question would be preselected again right after the send.
+  const [justAnswered, setJustAnswered] = useState<ReadonlySet<string>>(NO_IDS)
+  const replyThread = liveThread ?? undefined
+  const preselected = latestUnansweredRequest(messages, replyThread, participants, justAnswered)
+  const draftEmpty = draft.trim() === ''
+  const [ownReplyTargetId, setOwnReplyTargetId] = useState<string | null | undefined>(undefined)
+  const replyTargetId = run === undefined ? ownReplyTargetId : run.replyTargetId
+  const onReplyTargetChange = run === undefined ? setOwnReplyTargetId : run.onReplyTargetChange
+  // The live choice, for a send that resolves later: by then the human may have pointed at another question.
+  const replyTargetRef = useRef(replyTargetId)
+  replyTargetRef.current = replyTargetId
+  // The newest unanswered request is the default target while nothing is typed; from then on it is held, so a
+  // newer request never silently takes over an answer in progress.
+  useEffect(() => {
+    if (preselected !== undefined && replyTargetId === undefined && draftEmpty) onReplyTargetChange(preselected.id)
+  }, [preselected?.id, replyTargetId, draftEmpty, onReplyTargetChange])
+  useEffect(() => {
+    if (closed && replyTargetId !== undefined) onReplyTargetChange(undefined)
+  }, [closed, replyTargetId, onReplyTargetChange])
+  const replyTo = typeof replyTargetId === 'string' ? messages.find((m) => m.id === replyTargetId && canReplyInConversation(m, replyThread, participants)) ?? null : null
+
+  // Seen: a message counts once at least half of the smaller of its own and the log's height is on screen, while
+  // the tab is visible. The cursor moves only through a run of seen messages, so a visible later one never marks
+  // an unseen earlier one. The first time a bubble counts it also turns bright for a moment (`accented`, state of
+  // its own, so the cursor moving on in that same render cannot take the accent away; one timer ends it).
+  const seenIdsRef = useRef(new Set<string>())
+  const [accented, setAccented] = useState<ReadonlySet<string>>(NO_IDS)
+  useEffect(() => {
+    const root = logNodeRef.current
+    if (!tracking || root === null || threadId === null || unseen.length === 0 || typeof IntersectionObserver === 'undefined') return
+    const ids = new Set(unseen.map((m) => m.id))
+    const report = () => {
+      let upTo = 0
+      for (const m of unseen) {
+        if (!seenIdsRef.current.has(m.id)) break
+        upTo = m.seq
+      }
+      if (upTo > 0) onSeenRef.current?.(threadId, upTo)
+    }
+    const observer = new IntersectionObserver((entries) => {
+      // A layout change in a hidden tab (a new message scrolling the log) is not the human looking.
+      if (document.hidden) return
+      const newlySeen: string[] = []
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.messageId
+        if (id === undefined || seenIdsRef.current.has(id)) continue
+        const needed = Math.min(entry.boundingClientRect.height, entry.rootBounds?.height ?? Infinity) / 2
+        if (entry.isIntersecting && entry.intersectionRect.height >= needed) {
+          seenIdsRef.current.add(id)
+          newlySeen.push(id)
+        }
+      }
+      if (newlySeen.length > 0) setAccented((prev) => new Set([...prev, ...newlySeen]))
+      report()
+    }, { root, threshold: VISIBILITY_THRESHOLDS })
+    const bubbles = [...root.querySelectorAll<HTMLElement>('[data-message-id]')].filter((el) => ids.has(el.dataset.messageId ?? ''))
+    bubbles.forEach((el) => observer.observe(el))
+    // Whatever the tab showed while hidden was ignored: on return look at every bubble again (observing anew
+    // makes the observer report each one's current state).
+    const lookAgain = () => {
+      if (document.hidden) return
+      bubbles.forEach((el) => { observer.unobserve(el); observer.observe(el) })
+    }
+    document.addEventListener('visibilitychange', lookAgain)
+    return () => {
+      observer.disconnect()
+      document.removeEventListener('visibilitychange', lookAgain)
+    }
+  }, [tracking, threadId, unseenKey])
+  useEffect(() => {
+    if (accented.size === 0) return
+    const timer = window.setTimeout(() => setAccented(NO_IDS), ACCENT_MS)
+    return () => window.clearTimeout(timer)
+  }, [accented])
+
   useEffect(() => {
     if (!readEnabled || threadId === null || onMessagesRead === undefined || messages.length === 0) return
     // useMeshThread commits only complete pages. This effect runs after the log has rendered those messages.
@@ -222,7 +337,9 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   const label = conversationTitle(target, participants)
   const reachability = splitByReachability(otherMemberIds(target, openedThread), participants)
   const notice = unreachableNotice(reachability)
-  const recipientIds = mentioned.length > 0 ? mentioned : reachability.reachable
+  const addressed = mentioned.length > 0 ? mentioned : reachability.reachable
+  // A reply always reaches the author of the question, whoever else is @mentioned.
+  const recipientIds = replyTo !== null && !addressed.includes(replyTo.sender_id) ? [replyTo.sender_id, ...addressed] : addressed
   const canSend = draft.trim() !== '' && recipientIds.length > 0 && !closed
   // readOnly — a conversation agents started between themselves: you can read along, but only members may
   // write into it (the server refuses anyone else).
@@ -251,13 +368,24 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
     if (!canSend || target === null) return
     const submitted = draft
     const current = target
+    const targetAtSend = replyTargetId
     submitter.submit(
-      { recipientIds, body: submitted.trim() },
+      { recipientIds, body: submitted.trim(), ...(replyTo === null ? {} : { inReplyTo: replyTo.id }) },
       async (p, requestId) => {
         const thread = await ensureThread(current)
         setOpenedThread(thread)
         const sendRequestId = getSendRequestId?.(thread.id, p.recipientIds, p.body, requestId) ?? requestId
-        const receipt = await sendMeshMessage(thread.id, { requestId: sendRequestId, recipientIds: [...p.recipientIds], body: p.body })
+        const receipt = await sendMeshMessage(thread.id, {
+          requestId: sendRequestId,
+          recipientIds: [...p.recipientIds],
+          body: p.body,
+          ...(p.inReplyTo === undefined ? {} : { kind: 'reply', inReplyTo: p.inReplyTo }),
+        })
+        const answeredId = p.inReplyTo
+        if (answeredId !== undefined) setJustAnswered((prev) => new Set(prev).add(answeredId))
+        // Any sent message ends the choice it was sent with (also a cancelled one): the next question is
+        // preselected afresh. A choice made while this was in flight is the human's next one: keep it.
+        if (replyTargetRef.current === targetAtSend) onReplyTargetChange(undefined)
         // Here rather than in onSuccess: a draft kept by the parent outlives this conversation view, and a
         // message that was sent must not wait there to be sent again after the user switched away and back.
         if (onSendSucceeded) onSendSucceeded(current, thread, submitted, sendRequestId)
@@ -281,21 +409,39 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
     )
   }
 
+  function toggleReplyTarget(id: string): void {
+    onReplyTargetChange(replyTo?.id === id ? null : id)
+    if (replyTo?.id !== id) caretNodeRef.current?.focus()
+  }
+
   return (
     <div className="team-conversation">
       {/* One messages area in both states: the empty hint takes the same flex slot the list does, so the
           composer stays pinned to the bottom instead of jumping down after the first message. */}
-      <div className="team-conversation-messages" role="log" aria-label="Messages" ref={log.ref}>
+      <div className="team-conversation-messages" role="log" aria-label="Messages" ref={setLogNode}>
         {messages.length === 0 ? (
           <p className="team-conversation-empty-messages empty-hint">No messages yet</p>
         ) : (
           <ul className="team-conversation-message-list">
             {messages.map((m, index) => (
-              <ConversationMessage key={m.id} message={m} previousCreatedAt={messages[index - 1]?.created_at} participants={participants} answered={messages.find((x) => x.id === m.in_reply_to)} sideOutcome={sideAgentOutcome(m, messages, sideFailures)} />
+              <ConversationMessage
+                key={m.id}
+                message={m}
+                previousCreatedAt={messages[index - 1]?.created_at}
+                participants={participants}
+                answered={messages.find((x) => x.id === m.in_reply_to)}
+                sideOutcome={sideAgentOutcome(m, messages, sideFailures)}
+                isNew={accented.has(m.id)}
+                replyActive={replyTo?.id === m.id}
+                onReply={canReplyInConversation(m, replyThread, participants) ? () => toggleReplyTarget(m.id) : undefined}
+              />
             ))}
           </ul>
         )}
       </div>
+      {tracking && unseen.length > 0 && !log.stick && (
+        <button type="button" className="team-conversation-new-below" onClick={log.jumpToBottom}>New message below</button>
+      )}
       {readOnly ? (
         <p className="team-conversation-notice readonly" role="status">
           The agents are talking between themselves — you can read along. To weigh in, message them directly or
@@ -305,9 +451,18 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         <>
         {closed ? <p ref={closedNoticeRef} className="team-conversation-notice" role="status" tabIndex={-1}>This conversation is closed. Messages are read-only.</p>
           : notice !== null && <p className="team-conversation-notice" role="status">{notice}</p>}
+        {replyTo !== null && (
+          <div className="feed-reply-chip feed-reply-chip--conversation">
+            <span className="feed-reply-chip-label">↩ Reply in conversation</span>
+            <span className="feed-reply-chip-src">{messageText(replyTo.body, true).slice(0, 120)}</span>
+            <button type="button" className="feed-reply-chip-cancel" aria-label="Cancel reply in conversation" onClick={() => onReplyTargetChange(null)}>
+              ✕
+            </button>
+          </div>
+        )}
         <div className="team-conversation-route">
           <span>From you →</span>
-          <strong>{mentioned.length > 0 ? mentioned.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label, participants)}</strong>
+          <strong>{mentioned.length > 0 ? recipientIds.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label, participants)}</strong>
           {mentioned.length === 0 && notice === null && reachability.finished.length > 0 && (
             <span className="team-conversation-route-skipped">{skippedNote(reachability.finished)}</span>
           )}

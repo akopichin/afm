@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/server/workspace"
@@ -85,28 +86,29 @@ type Server struct {
 	stages            RuntimeStageProvider
 	store             *state.Store
 	uiBus             *bus.UIBus
-	accounting        accounting.CostProvider   // nil = accounting unsupported (server built without it); see handleStatus
-	showMoney         bool                      // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
-	actions           StageActions              // never nil in practice — see StageActions doc
-	secondary         SecondaryActions          // may be nil — see SecondaryActions doc
-	flowActions       FlowActions               // review-pause commands; nil = respond 404 (see routeFlow)
-	reviewState       func() (string, []string) // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
-	workspace         workspace.FS              // Docker project file browser backend; nil = capability off
-	sideAgent         SideAgentService          // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
-	assistantProfiles AssistantProfilesService  // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
-	assistantActions  AssistantActions          // write-команды задач помощников; nil = capability off (POST/pause/continue/cancel 404)
-	assistantsReader  AssistantsReader          // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
-	discussionService DiscussionService         // обсуждение стадии (T6.7); nil = capability off (GET|POST .../discussion 404)
-	proposalActions   ProposalActions           // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
-	graphActions      GraphActions              // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
-	agentMesh         AgentMeshActions          // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
-	mesh              MeshActions               // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
-	redact            func(string) string       // removes the run's secret values from logged text; nil = environment secrets only
-	theme             string                    // "goga" или "" (default graphite)
-	version           string                    // версия afm-бинарника, отдаётся в /api/status для футера дашборда
-	indexBytes        []byte                    // предподготовленный index.html (с заменами скина/favicon)
-	fileServer        http.Handler              // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer  http.Handler              // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	accounting        accounting.CostProvider      // nil = accounting unsupported (server built without it); see handleStatus
+	showMoney         bool                         // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
+	actions           StageActions                 // never nil in practice — see StageActions doc
+	secondary         SecondaryActions             // may be nil — see SecondaryActions doc
+	flowActions       FlowActions                  // review-pause commands; nil = respond 404 (see routeFlow)
+	reviewState       func() (string, []string)    // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
+	workspace         workspace.FS                 // Docker project file browser backend; nil = capability off
+	sideAgent         SideAgentService             // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
+	assistantProfiles AssistantProfilesService     // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
+	collaborationMode assistants.CollaborationMode // режим представления collaboration в dashboard; никогда не пустой (New подставляет "team")
+	assistantActions  AssistantActions             // write-команды задач помощников; nil = capability off (POST/pause/continue/cancel 404)
+	assistantsReader  AssistantsReader             // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
+	discussionService DiscussionService            // обсуждение стадии (T6.7); nil = capability off (GET|POST .../discussion 404)
+	proposalActions   ProposalActions              // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
+	graphActions      GraphActions                 // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
+	agentMesh         AgentMeshActions             // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
+	mesh              MeshActions                  // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
+	redact            func(string) string          // removes the run's secret values from logged text; nil = environment secrets only
+	theme             string                       // "goga" или "" (default graphite)
+	version           string                       // версия afm-бинарника, отдаётся в /api/status для футера дашборда
+	indexBytes        []byte                       // предподготовленный index.html (с заменами скина/favicon)
+	fileServer        http.Handler                 // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer  http.Handler                 // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
 	httpSrv           *http.Server
 	// Keepalive-таймауты вебсокета.
 	wsPongWait   time.Duration
@@ -199,6 +201,9 @@ type Config struct {
 	SideAgent   SideAgentService // «боковой» разговор; nil = capability off
 	// AssistantProfiles — реестр помощников (collaboration); nil = capability off.
 	AssistantProfiles AssistantProfilesService
+	// CollaborationMode — режим представления collaboration в dashboard; нулевое значение нормализуется в
+	// "team" в New. Не зависит от AssistantProfiles (capability).
+	CollaborationMode assistants.CollaborationMode
 	// AssistantActions/AssistantsReader — write/read стороны задач помощников; nil = capability off.
 	AssistantActions AssistantActions
 	AssistantsReader AssistantsReader
@@ -239,6 +244,11 @@ func New(cfg Config) *Server {
 		writeWait = defaultWSWriteWait
 	}
 
+	collaborationMode := cfg.CollaborationMode
+	if collaborationMode == "" {
+		collaborationMode = assistants.CollaborationModeTeam
+	}
+
 	s := &Server{
 		runDir:            cfg.RunDir,
 		Description:       cfg.Description,
@@ -254,6 +264,7 @@ func New(cfg Config) *Server {
 		workspace:         cfg.Workspace,
 		sideAgent:         cfg.SideAgent,
 		assistantProfiles: cfg.AssistantProfiles,
+		collaborationMode: collaborationMode,
 		assistantActions:  cfg.AssistantActions,
 		assistantsReader:  cfg.AssistantsReader,
 		discussionService: cfg.DiscussionService,

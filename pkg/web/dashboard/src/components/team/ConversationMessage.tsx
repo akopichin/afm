@@ -27,6 +27,8 @@ export type ConversationMessageProps = {
   role?: string
   evidence?: string[]
   sideOutcome?: 'answered' | 'could_not_answer' | null
+  // isNew — an agent message to the human that has just arrived: the bubble is briefly bright.
+  isNew?: boolean
 }
 
 // roleLabel — a log post author's role in words; wire values (main_agent, assistant, a mesh kind) are not for people.
@@ -44,7 +46,7 @@ function roleLabel(role: string): string {
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null, isNew = false }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
@@ -59,7 +61,7 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
     )
   return (
     <li
-      className={`team-conversation-message${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}`}
+      className={`team-conversation-message${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}${isNew ? ' is-new-agent-message' : ''}`}
       data-sender={message.sender_id}
       data-message-id={message.id}
     >

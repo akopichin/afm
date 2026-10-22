@@ -29,7 +29,9 @@ import { useStageAssistants } from '../hooks/use-stage-assistants'
 import { useMeshBoard, useMeshRoster } from '../hooks/use-mesh'
 import { mergeById } from '../lib/mesh-roster'
 import { baselineTeamUnread } from '../lib/team-unread'
-import type { MeshParticipant } from '../api/mesh-client'
+import type { MeshParticipant, MeshThread, MeshThreadSummaries } from '../api/mesh-client'
+import { RUN_CONVERSATIONS_ID, RunConversationsPanel, runConversationThreads } from '../components/run-conversations/RunConversationsPanel'
+import { useRunConversationsSeen } from '../components/run-conversations/run-conversations-seen'
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
@@ -71,13 +73,16 @@ const REVISE_STATUSES: ReadonlySet<string> = new Set(['running', 'awaiting_appro
 const NO_DELIVERIES: ReadonlySet<string> = new Set()
 // NO_PARTICIPANTS — no locally added run agents in the current run.
 const NO_PARTICIPANTS: MeshParticipant[] = []
+// NO_SUMMARIES — no thread summaries (the roster has not reported any).
+const NO_SUMMARIES: MeshThreadSummaries = {}
+const NO_THREADS: MeshThread[] = []
 
 // Корневая композиция: шапка, список стадий, панель деталей, лента событий, футер.
 export function App(): ReactElement {
   const {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
-    backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, runCost,
+    backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, collaborationMode, runCost,
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh, runStatus,
     timeZone, utcOffsetMinutes,
   } = useStatus()
@@ -181,9 +186,18 @@ export function App(): ReactElement {
       baselineTeamUnread(runId, meshRoster.summaries ?? {})
     }
   }, [runId, meshRoster])
+  // teamViewsAvailable — Team/Board data is wanted only with a successful mesh probe, a known run and the `team`
+  // collaboration mode. collaborationMode stays at its last resolved value through a status outage (unlike
+  // statusAvailable), so a temporary /api/status failure does not stop the board poll.
+  const teamViewsAvailable = meshRoster.enabled && runId !== '' && collaborationMode === 'team'
   // meshBoard — the ONE useMeshBoard poll: Team's Board tab and the run-wide Board tab read the same value, so
-  // switching between them never refetches. It starts only once the mesh probe succeeded.
-  const meshBoard = useMeshBoard(meshRoster.enabled, runId)
+  // switching between them never refetches. It starts only once teamViewsAvailable.
+  const meshBoard = useMeshBoard(teamViewsAvailable, runId)
+  // runConversationsAvailable — the right-hand Run conversations panel replaces Team in `assistants` mode: the
+  // same mesh probe and run id, the other mode. Its open state lives here because the opener sits in the tab strip.
+  const runConversationsAvailable = meshRoster.enabled && runId !== '' && collaborationMode === 'assistants'
+  const [runConversationsOpen, setRunConversationsOpen] = useState(false)
+  const closeRunConversations = useCallback(() => setRunConversationsOpen(false), [])
   // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
   // composer (seq makes a second click on the same person a new pick).
   const [peopleOpen, setPeopleOpen] = useState(false)
@@ -196,6 +210,14 @@ export function App(): ReactElement {
   const addedParticipants = added.runId === runId ? added.participants : NO_PARTICIPANTS
   const meshParticipants = useMemo(() => mergeById(meshRoster.participants, addedParticipants), [meshRoster.participants, addedParticipants])
   const mergedRoster = useMemo(() => ({ ...meshRoster, participants: meshParticipants }), [meshRoster, meshParticipants])
+  // runSeen — which run conversations hold an agent message to the human that was not seen yet. App owns it
+  // because the opener (tab strip) and the panel show the same state; the cursor survives a reload.
+  const runConversations = useMemo(
+    () => (runConversationsAvailable ? runConversationThreads(meshRoster.threads, meshParticipants) : NO_THREADS),
+    [runConversationsAvailable, meshRoster.threads, meshParticipants],
+  )
+  const runSeen = useRunConversationsSeen(runId, runConversations, meshRoster.summaries ?? NO_SUMMARIES)
+  const runUnreadCount = runSeen.unreadThreadIds.size
   const addParticipant = useCallback(
     (p: MeshParticipant) => setAdded((prev) => ({ runId, participants: prev.runId === runId ? [...prev.participants, p] : [p] })),
     [runId],
@@ -243,6 +265,23 @@ export function App(): ReactElement {
   useEffect(() => {
     if (meshRoster.probed && !meshRoster.enabled && (wsState.view === 'team' || wsState.view === 'board')) openFeed()
   }, [meshRoster.probed, meshRoster.enabled, wsState.view])
+
+  // Тот же уход в Feed, когда режим сменился на `assistants`: Team/Board там не существуют. Условие на mode, а не
+  // `!teamViewsAvailable` — перепроба мэша временно сбрасывает meshRoster.enabled и не должна выкидывать из Team.
+  useEffect(() => {
+    if (collaborationMode === 'assistants' && (wsState.view === 'team' || wsState.view === 'board')) openFeed()
+  }, [collaborationMode, wsState.view])
+
+  // Фокус стоял на Team/Board/People-контроле, который пропал при смене режима на `assistants`, — браузер уронил
+  // его на body: возвращаем на вкладку Feed. teamUiShown помнит, что эти контролы действительно были на экране, чтобы
+  // не отбирать фокус на первом же статусе.
+  const teamUiShown = useRef(false)
+  useEffect(() => {
+    if (collaborationMode === 'assistants' && teamUiShown.current && document.activeElement === document.body) {
+      document.querySelector<HTMLElement>('.workspace-tabs [data-tab-id="feed"]')?.focus()
+    }
+    teamUiShown.current = teamViewsAvailable
+  }, [collaborationMode, teamViewsAvailable])
 
   // Клик по строке помощника в рейле: выбираем задачу и открываем её ленту.
   function handleSelectAssistantTask(stageId: string, taskId: string): void {
@@ -372,7 +411,7 @@ export function App(): ReactElement {
       : null
     : legacyNoteTarget
   // showPeople — the stage Feed shows who this stage can talk to.
-  const showPeople = stageMesh && workspaceStage !== null && wsState.view === 'feed'
+  const showPeople = stageMesh && collaborationMode === 'team' && workspaceStage !== null && wsState.view === 'feed'
 
   const statusLive = statusAvailable
   const elapsedMs = useElapsed(startedAt, endedAt, statusLive, elapsedAccumulatedMs, elapsedSince)
@@ -475,7 +514,7 @@ export function App(): ReactElement {
   // status.capabilities).
   // Team and Board also wait for the run id: it keys their state, so a first status arriving after the mesh
   // probe must not recreate an already opened Team.
-  if (meshRoster.enabled && runId !== '') {
+  if (teamViewsAvailable) {
     tabs.push({ id: 'team', label: 'Team' }, { id: 'board', label: 'Board' })
   }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.
@@ -599,9 +638,37 @@ export function App(): ReactElement {
                 onAddStage={() => setAddStageOpen(true)}
               />
             }
-            tabs={<WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />}
-            workspace={
+            tabs={
               <>
+                <WorkspaceTabs tabs={tabs} activeId={activeTabId} onSelect={onSelectTab} />
+                {runConversationsAvailable && (
+                  <>
+                  <button
+                    type="button"
+                    className={`run-conversations-toggle${runUnreadCount > 0 ? ' has-unread' : ''}${runUnreadCount > 0 && !runConversationsOpen ? ' is-pulsing' : ''}`}
+                    aria-label={runUnreadCount > 0 ? `Run conversations, ${runUnreadCount} with new messages` : 'Run conversations'}
+                    aria-controls={RUN_CONVERSATIONS_ID}
+                    aria-expanded={runConversationsOpen}
+                    onClick={() => setRunConversationsOpen((open) => !open)}
+                  >
+                    <span aria-hidden="true">💬</span>
+                    <span className="run-conversations-toggle-label" aria-hidden="true">Conversations</span>
+                    {runUnreadCount > 0 && <span className="run-conversations-toggle-count" aria-hidden="true">{runUnreadCount}</span>}
+                  </button>
+                  {/* The button's name is not announced when it changes; this live region announces a new message. */}
+                  <span className="run-conversations-announce" role="status">
+                    {runUnreadCount > 0 ? `${runUnreadCount} ${runUnreadCount === 1 ? 'conversation' : 'conversations'} with new messages` : ''}
+                  </span>
+                  </>
+                )}
+              </>
+            }
+            workspace={
+              // The split and its primary column only lay out in `assistants` (Run conversations beside the
+              // views); elsewhere both are `display: contents`, so Team and the views keep their layout. They
+              // are always rendered, so toggling the mode never remounts the views.
+              <div className={`workspace-split${runConversationsAvailable ? ' with-run-conversations' : ''}`}>
+              <div className="workspace-primary">
                 {/* Контекст стадии воркспейса (имя + статус) — общая шапка и для
                     Feed, и для деталей (мокап показывает контекст стадии над
                     лентой). Cost/Team — глобальные виды, не привязанные к стадии:
@@ -656,13 +723,13 @@ export function App(): ReactElement {
                   // dependency at all (a never-selected stage must still show Team, not Feed).
                   // Rendered below, outside this chain: Team stays mounted once opened (see teamOpenedRun).
                   null
-                ) : wsState.view === 'board' ? (
+                ) : wsState.view === 'board' && teamViewsAvailable ? (
                   // Board — global like Team, fed by the same meshBoard; BoardLoadState separates loading, unavailable
                   // and stale data from "no tasks".
                   <BoardLoadState board={meshBoard}>
                     <BoardView key={runId} board={meshBoard} participants={meshParticipants} stages={teamStagesOf(stages)} />
                   </BoardLoadState>
-                ) : wsState.view === 'feed' || workspaceStage === null ? (
+                ) : wsState.view === 'feed' || wsState.view === 'board' || workspaceStage === null ? (
                   <div className="stage-feed-layout">
                     <FeedWorkspace
                       events={stageEvents}
@@ -756,12 +823,28 @@ export function App(): ReactElement {
                 )}
                 {/* Team stays mounted after it is first opened and is only hidden on other views: its drafts,
                     in-flight sends (with their idempotency keys), selection and reading position live in it. */}
-                {teamOpenedRun === runId && meshRoster.enabled && (
+                {teamOpenedRun === runId && teamViewsAvailable && (
                   <div style={{ display: wsState.view === 'team' ? 'contents' : 'none' }}>
                     <TeamView key={runId} runId={runId} active={wsState.view === 'team'} roster={mergedRoster} onParticipantAdded={addParticipant} board={meshBoard} stages={stages} events={events} profiles={assistantProfiles} />
                   </div>
                 )}
-              </>
+              </div>
+              {/* Stays mounted while closed (slid out and inert): its conversation and draft survive view and
+                  stage changes, and usePanelResize keeps measuring a stable parent. */}
+              {runConversationsAvailable && (
+                <RunConversationsPanel
+                  key={runId}
+                  open={runConversationsOpen}
+                  onClose={closeRunConversations}
+                  participants={meshParticipants}
+                  threads={meshRoster.threads}
+                  summaries={meshRoster.summaries ?? NO_SUMMARIES}
+                  unreadThreadIds={runSeen.unreadThreadIds}
+                  seenSeqs={runSeen.seenSeqs}
+                  onSeen={runSeen.markSeen}
+                />
+              )}
+              </div>
             }
           />
         </MaximizeProvider>

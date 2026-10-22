@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -1549,5 +1550,57 @@ func TestHandleStatus_IncludesBackoffOpenSinceWhenRetrying(t *testing.T) {
 	}
 	if len(resp.BackoffOpenSince) != 1 {
 		t.Fatalf("backoff_open_since len = %d, want 1", len(resp.BackoffOpenSince))
+	}
+}
+
+// TestHandleStatus_CollaborationMode: collaboration_mode — независимое top-level поле статуса. Оно всегда есть
+// в JSON (без omitempty), нулевой Config даёт "team", а значение не зависит от capabilities.collaboration.
+func TestHandleStatus_CollaborationMode(t *testing.T) {
+	cases := []struct {
+		name       string
+		cfg        Config
+		wantMode   string
+		wantCollab bool
+	}{
+		{"zero config defaults to team", Config{}, "team", false},
+		{"explicit team", Config{CollaborationMode: assistants.CollaborationModeTeam}, "team", false},
+		{"assistants without collaboration capability", Config{CollaborationMode: assistants.CollaborationModeAssistants}, "assistants", false},
+		{"assistants with collaboration capability", Config{
+			CollaborationMode: assistants.CollaborationModeAssistants,
+			AssistantProfiles: fakeAssistantProfiles{maxDepthSource: "default"},
+		}, "assistants", true},
+		{"team with collaboration capability", Config{
+			AssistantProfiles: fakeAssistantProfiles{maxDepthSource: "default"},
+		}, "team", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(t, tc.cfg)
+			w := httptest.NewRecorder()
+			srv.handleStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status: got %d, want 200", w.Code)
+			}
+
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			rawMode, ok := raw["collaboration_mode"]
+			if !ok {
+				t.Fatalf("collaboration_mode key missing from JSON: %s", w.Body.String())
+			}
+			if string(rawMode) != `"`+tc.wantMode+`"` {
+				t.Errorf("collaboration_mode = %s, want %q", rawMode, tc.wantMode)
+			}
+
+			var resp statusResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Capabilities.Collaboration != tc.wantCollab {
+				t.Errorf("capabilities.collaboration = %v, want %v", resp.Capabilities.Collaboration, tc.wantCollab)
+			}
+		})
 	}
 }

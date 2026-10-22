@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 import { isTeamUnread } from '../lib/team-unread'
@@ -2633,6 +2633,563 @@ describe('App', () => {
     fireEvent.click(document.querySelectorAll<HTMLElement>('.stage-row')[1]!)
     expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
     expect(document.querySelector('.workspace-header')).toBeNull()
+  })
+
+  // mockMeshBoardRunWithStatus — mockMeshBoardRun with a custom /api/status responder, to vary
+  // collaboration_mode, delay the first status, or fail later polls.
+  function mockMeshBoardRunWithStatus(requests: string[], status: () => Response | Promise<Response>) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      requests.push(url)
+      if (url.includes('/api/status')) return status()
+      if (url.includes('/api/mesh/participants')) {
+        return { ok: true, json: async () => ({ participants: [{ id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) return boardOk(['task/a'])
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+  const statusOk = (extra: Record<string, unknown>) => ({
+    ok: true,
+    json: async () => ({ flow_name: 'demo', run_id: 'app-board-run', stages: [stageView('s1', 'Propose', 'running')], ...extra }),
+  }) as Response
+
+  test('Board poll: collaboration_mode "assistants" never requests the board, before or after the first status', async () => {
+    const requests: string[] = []
+    let releaseStatus: () => void = () => {}
+    const statusGate = new Promise<void>((resolve) => { releaseStatus = resolve })
+    mockMeshBoardRunWithStatus(requests, async () => {
+      await statusGate
+      return statusOk({ collaboration_mode: 'assistants' })
+    })
+    render(<App />)
+
+    // Before the first status: the roster probe already succeeds, the board must stay untouched.
+    await waitFor(() => expect(requests.some((r) => r.includes('/api/mesh/participants'))).toBe(true))
+    expect(boardRequests(requests)).toHaveLength(0)
+
+    await act(async () => { releaseStatus() })
+    await waitFor(() => expect(screen.getByText('demo')).toBeInTheDocument())
+    // Let the status-driven re-render and any board effect run before asserting the absence of a request.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    expect(boardRequests(requests)).toHaveLength(0)
+  })
+
+  test('Board poll: collaboration_mode "team" waits for the first status, then polls the board once', async () => {
+    const requests: string[] = []
+    let releaseStatus: () => void = () => {}
+    const statusGate = new Promise<void>((resolve) => { releaseStatus = resolve })
+    mockMeshBoardRunWithStatus(requests, async () => {
+      await statusGate
+      return statusOk({ collaboration_mode: 'team' })
+    })
+    render(<App />)
+
+    await waitFor(() => expect(requests.some((r) => r.includes('/api/mesh/participants'))).toBe(true))
+    expect(boardRequests(requests)).toHaveLength(0)
+
+    await act(async () => { releaseStatus() })
+    await waitFor(() => expect(boardRequests(requests)).toHaveLength(1))
+  })
+
+  test('Board poll: an old backend without collaboration_mode keeps the Team behavior', async () => {
+    const requests: string[] = []
+    mockMeshBoardRunWithStatus(requests, () => statusOk({}))
+    render(<App />)
+
+    await screen.findByRole('tab', { name: 'Team' })
+    await waitFor(() => expect(boardRequests(requests)).toHaveLength(1))
+  })
+
+  test('Board poll: a transient status outage does not tear down an open Team', async () => {
+    const requests: string[] = []
+    let statusFails = false
+    mockMeshBoardRunWithStatus(requests, () => {
+      if (statusFails) throw new TypeError('network down')
+      return statusOk({ collaboration_mode: 'team' })
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    await waitFor(() => expect(boardRequests(requests)).toHaveLength(1))
+    expect(screen.getByRole('tablist', { name: 'Team' })).toBeInTheDocument()
+
+    // The next status poll (3s) fails: statusAvailable drops, the resolved mode must not.
+    const statusCallsBefore = requests.filter((r) => r.includes('/api/status')).length
+    statusFails = true
+    await waitFor(() => expect(requests.filter((r) => r.includes('/api/status')).length).toBeGreaterThan(statusCallsBefore), { timeout: 5000 })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+
+    expect(screen.getByRole('tab', { name: 'Team' })).toBeInTheDocument()
+    expect(screen.getByRole('tablist', { name: 'Team' })).toBeInTheDocument()
+    expect(boardRequests(requests).length).toBeGreaterThanOrEqual(1)
+  })
+
+  // mockModeRun — a mesh-on run with collaboration enabled whose collaboration_mode can change between status polls:
+  // stage s1 (running) with a stage conversation, a run agent and a counted board.
+  function mockModeRun(requests: string[], mode: () => string) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      requests.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo', run_id: 'app-mode-run', collaboration_mode: mode(),
+            stages: [stageView('s1', 'Propose', 'running')],
+            capabilities: { collaboration: true },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+              { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/stages/s1/messages')) {
+        return {
+          ok: true,
+          json: async () => ({
+            messages: [{ id: 'm1', thread_id: 'mt-1', sender_id: 'run:t-1', recipient_ids: ['stage:s1'], kind: 'message', body: 'Found a bug in parse()', seq: 4, created_at: '2026-10-19T10:00:00Z' }],
+            threads: [{ id: 'mt-1', scope: 'run', members: ['user', 'stage:s1', 'run:t-1'], status: 'open' }],
+            next_cursor: 4,
+            has_more: false,
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) return boardOk(['task/a'])
+      if (url.includes('/revise')) return { ok: true, json: async () => ({ applied: true, seq: 1 }) } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+
+  test('assistants mode: Team, Board and the People UI are absent, Feed communication stays', async () => {
+    const requests: string[] = []
+    mockModeRun(requests, () => 'assistants')
+    render(<App />)
+
+    // The stage conversation still renders in the Feed, with the Message/Revise composer.
+    expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
+    expect(screen.getByRole('tablist', { name: 'Composer mode' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /message the mesh/i })).toBeInTheDocument()
+    expect(requests.some((r) => r.includes('/api/mesh/stages/s1/messages'))).toBe(true)
+
+    const workspaceTabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
+    expect(workspaceTabs.queryByRole('tab', { name: 'Team' })).toBeNull()
+    expect(workspaceTabs.queryByRole('tab', { name: 'Board' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'People' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Show people' })).toBeNull()
+    expect(document.querySelector('.stage-people')).toBeNull()
+    expect(document.querySelector('.stage-people-scrim')).toBeNull()
+    expect(document.querySelector('.stage-people-resizer')).toBeNull()
+    expect(document.querySelector('.stage-people-toggle')).toBeNull()
+    expect(requests.filter((r) => r.includes('/api/mesh/board'))).toHaveLength(0)
+  })
+
+  test('assistants mode: the stage menu still offers Attach helper…', async () => {
+    mockModeRun([], () => 'assistants')
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach helper…' }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  test('assistants mode: the Feed composer keeps Message and Revise for a running stage', async () => {
+    mockModeRun([], () => 'assistants')
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    expect(screen.getAllByRole('tab', { name: /^(Message|Revise)$/ }).map((t) => t.textContent)).toEqual(['Message', 'Revise'])
+    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  test('assistants arriving while Team is open: Feed shown, stage kept, Team unmounted, board polling stopped', async () => {
+    const requests: string[] = []
+    let mode = 'team'
+    mockModeRun(requests, () => mode)
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Team' }))
+    expect(await screen.findByRole('tablist', { name: 'Team' })).toBeInTheDocument()
+    await waitFor(() => expect(requests.filter((r) => r.includes('/api/mesh/board')).length).toBeGreaterThanOrEqual(1))
+
+    mode = 'assistants'
+    // The next status poll (3s) delivers the new mode.
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull(), { timeout: 5000 })
+
+    expect(screen.queryByRole('tablist', { name: 'Team' })).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
+    // The previously selected stage stays selected (the Feed header shows it).
+    expect(document.querySelector('.workspace-header')).toHaveTextContent('Propose')
+    const boardCallsAfterSwitch = requests.filter((r) => r.includes('/api/mesh/board')).length
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
+    expect(requests.filter((r) => r.includes('/api/mesh/board'))).toHaveLength(boardCallsAfterSwitch)
+  }, 15000)
+
+  test('assistants arriving while Board is open: Feed shown and Board gone', async () => {
+    let mode = 'team'
+    mockModeRun([], () => mode)
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Board' }))
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true')
+
+    mode = 'assistants'
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Board' })).toBeNull(), { timeout: 5000 })
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
+  }, 15000)
+
+  test('assistants arriving while a Team control has focus: focus moves to the Feed tab, not body', async () => {
+    let mode = 'team'
+    mockModeRun([], () => mode)
+    render(<App />)
+
+    const teamTab = await screen.findByRole('tab', { name: 'Team' })
+    fireEvent.click(teamTab)
+    teamTab.focus()
+    expect(document.activeElement).toBe(teamTab)
+
+    mode = 'assistants'
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull(), { timeout: 5000 })
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: 'Feed' }))
+  }, 15000)
+
+  test('team mode: Team, Board and the People UI are all still there', async () => {
+    mockModeRun([], () => 'team')
+    render(<App />)
+
+    expect(await screen.findByRole('navigation', { name: 'People' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show people' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Team' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Board' })).toBeInTheDocument()
+  })
+
+  // mockRunConversationsRun — a mesh-on run whose threads cover every kind the Run conversations panel must
+  // tell apart: a run agent's own thread, a stage-origin thread and a stage agent's thread.
+  // agentToUserSeq — the seq of the run agent's newest explicit message to the human in `mt-run` (0: none), which
+  // the thread's summary reports as last_agent_to_user_message_seq and its history serves as a `request`.
+  function mockRunConversationsRun(mode: () => string, stageStatus: () => string = () => 'running', agentToUserSeq: () => number = () => 0) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo', run_id: 'app-run-conv', collaboration_mode: mode(),
+            stages: [stageView('s1', 'Propose', stageStatus()), stageView('s2', 'Review', stageStatus())],
+            capabilities: { collaboration: true },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return {
+          ok: true,
+          json: async () => ({
+            participants: [
+              { id: 'user', kind: 'user', scope: 'run', reachable: true },
+              { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true },
+              { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
+            ],
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/stages/')) return { ok: true, json: async () => ({ messages: [], threads: [], next_cursor: 0, has_more: false }) } as Response
+      if (/\/api\/mesh\/threads\/mt-run/.test(url)) {
+        const seq = agentToUserSeq()
+        const messages = seq === 0 ? [] : [{ id: 'mq1', thread_id: 'mt-run', sender_id: 'run:t-1', recipient_ids: ['user'], kind: 'request', body: 'Which database?', seq, created_at: '2026-10-22T10:00:00Z' }]
+        return { ok: true, json: async () => ({ messages, next_cursor: seq }) } as Response
+      }
+      if (/\/api\/mesh\/threads\/[^/?]+/.test(url)) return { ok: true, json: async () => ({ messages: [], next_cursor: 0 }) } as Response
+      if (url.includes('/api/mesh/threads')) {
+        const last = (seq: number, preview: string) => ({ last_message: { id: `m${seq}`, seq, created_at: '2026-10-22T10:00:00Z', sender_id: 'run:t-1', preview }, last_other_message_seq: seq, title_seq: 0 })
+        return {
+          ok: true,
+          json: async () => ({
+            threads: [
+              { id: 'mt-run', title: 'Run question', scope: 'run', members: ['user', 'run:t-1'], status: 'open' },
+              { id: 'mt-stage', title: 'Stage talk', scope: 'run', members: ['user', 'run:t-1'], status: 'open', origin_stage: 's1' },
+              { id: 'mt-stage-agent', title: 'Stage agent talk', scope: 'run', members: ['user', 'stage:s1'], status: 'open' },
+            ],
+            summaries: { 'mt-run': { ...last(5, 'need your call'), last_agent_to_user_message_seq: agentToUserSeq() }, 'mt-stage': last(6, 'in stage'), 'mt-stage-agent': last(7, 'stage agent') },
+          }),
+        } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+
+  const runConversationsOpener = () => screen.getByRole('button', { name: 'Run conversations' })
+  const runConversationsPanel = () => document.getElementById('run-conversations') as HTMLElement
+
+  test('Run conversations: assistants + mesh shows the opener and a closed panel; team and mesh-off show none', async () => {
+    mockRunConversationsRun(() => 'assistants')
+    const view = render(<App />)
+
+    const opener = await screen.findByRole('button', { name: 'Run conversations' })
+    expect(opener).toHaveAttribute('aria-expanded', 'false')
+    expect(opener).toHaveAttribute('aria-controls', 'run-conversations')
+    // Outside the tablist, which only holds tabs.
+    expect(within(screen.getByRole('tablist', { name: 'Workspace' })).queryByRole('button', { name: 'Run conversations' })).toBeNull()
+    expect(runConversationsPanel().inert).toBe(true)
+    expect(runConversationsPanel()).not.toHaveClass('open')
+    view.unmount()
+
+    vi.restoreAllMocks()
+    mockRunConversationsRun(() => 'team')
+    render(<App />)
+    await screen.findByRole('tab', { name: 'Team' })
+    expect(screen.queryByRole('button', { name: 'Run conversations' })).toBeNull()
+    expect(runConversationsPanel()).toBeNull()
+  })
+
+  test('Run conversations: mesh off (even in assistants) shows no opener', async () => {
+    mockModeRunMeshOff()
+    render(<App />)
+    await screen.findByText('demo')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    expect(screen.queryByRole('button', { name: 'Run conversations' })).toBeNull()
+    expect(runConversationsPanel()).toBeNull()
+  })
+
+  function mockModeRunMeshOff() {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) return { ok: true, json: async () => ({ flow_name: 'demo', run_id: 'r', collaboration_mode: 'assistants', stages: [stageView('s1', 'Propose', 'running')] }) } as Response
+      if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+  }
+
+  test('Run conversations: the list holds only run conversations, and opening it keeps the current view', async () => {
+    mockRunConversationsRun(() => 'assistants')
+    render(<App />)
+    await screen.findByRole('button', { name: 'Run conversations' })
+    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+
+    fireEvent.click(runConversationsOpener())
+    expect(runConversationsOpener()).toHaveAttribute('aria-expanded', 'true')
+    expect(runConversationsPanel().inert).toBe(false)
+    expect(screen.getByRole('tab', { name: 'Full feed' })).toHaveAttribute('aria-selected', 'true')
+    const panel = within(runConversationsPanel())
+    expect(await panel.findByText('Run question')).toBeInTheDocument()
+    expect(panel.queryByText('Stage talk')).toBeNull()
+    expect(panel.queryByText('Stage agent talk')).toBeNull()
+
+    fireEvent.click(runConversationsOpener())
+    expect(runConversationsOpener()).toHaveAttribute('aria-expanded', 'false')
+    expect(runConversationsPanel().inert).toBe(true)
+  })
+
+  test('Run conversations: the opener works on Plan, Cost, Full feed and Assistant too', async () => {
+    mockRunConversationsRun(() => 'assistants', () => 'done')
+    render(<App />)
+    await screen.findByRole('button', { name: 'Run conversations' })
+    fireEvent.click(document.querySelector('.stage-row') as HTMLElement)
+    const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
+    for (const name of ['Propose', 'Cost', 'Full feed']) {
+      fireEvent.click(await tabs.findByRole('tab', { name }))
+      fireEvent.click(runConversationsOpener())
+      expect(runConversationsPanel()).toHaveClass('open')
+      expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true')
+      fireEvent.click(runConversationsOpener())
+      expect(runConversationsPanel()).not.toHaveClass('open')
+    }
+  })
+
+  test('Run conversations: an open panel, its conversation, draft and reply target survive Feed -> Plan -> Feed and a stage change', async () => {
+    mockRunConversationsRun(() => 'assistants', () => 'done', () => 5)
+    render(<App />)
+    const opener = await screen.findByRole('button', { name: /^Run conversations/ })
+    fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
+    fireEvent.click(opener)
+    fireEvent.click(await within(runConversationsPanel()).findByText('Run question'))
+    const composer = await within(runConversationsPanel()).findByPlaceholderText(/^Message /)
+    fireEvent.change(composer, { target: { value: 'my answer' } })
+    const replyChip = () => runConversationsPanel().querySelector('.feed-reply-chip--conversation')
+    await waitFor(() => expect(replyChip()).toHaveTextContent('Which database?'))
+
+    const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(await tabs.findByRole('tab', { name: 'Propose' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+    fireEvent.click(await tabs.findByRole('tab', { name: 'Full feed' }))
+
+    expect(runConversationsPanel()).toHaveClass('open')
+    expect(within(runConversationsPanel()).getByPlaceholderText(/^Message /)).toHaveValue('my answer')
+
+    // Another stage: the panel belongs to the run, not to the selected stage.
+    fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s2"]')).toHaveClass('active'))
+    expect(runConversationsPanel()).toHaveClass('open')
+    expect(within(runConversationsPanel()).getByPlaceholderText(/^Message /)).toHaveValue('my answer')
+    expect(replyChip()).toHaveTextContent('Which database?')
+  })
+
+  test('Run conversations: Escape in the Feed leaves the desktop panel open; Escape inside it closes it', async () => {
+    mockRunConversationsRun(() => 'assistants')
+    render(<App />)
+    await screen.findByRole('button', { name: 'Run conversations' })
+    fireEvent.click(runConversationsOpener())
+    await within(runConversationsPanel()).findByText('Run question')
+
+    fireEvent.keyDown(screen.getByPlaceholderText(/note to agent|message the mesh/i), { key: 'Escape' })
+    expect(runConversationsPanel()).toHaveClass('open')
+
+    fireEvent.keyDown(within(runConversationsPanel()).getByText('Run question'), { key: 'Escape' })
+    expect(runConversationsPanel()).not.toHaveClass('open')
+    expect(document.activeElement).toBe(runConversationsOpener())
+  })
+
+  test('Run conversations: an attention item arriving while the drawer is open takes neither focus nor the view', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }))
+    let status = 'running'
+    mockRunConversationsRun(() => 'assistants', () => status)
+    render(<App />)
+    await screen.findByRole('button', { name: 'Run conversations' })
+    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+    fireEvent.click(runConversationsOpener())
+    expect(runConversationsPanel()).toHaveAttribute('role', 'dialog')
+    const focused = document.activeElement
+
+    status = 'awaiting_approval'
+    emitStageStatus('s1', 'awaiting_approval')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+
+    expect(screen.getByRole('tab', { name: 'Full feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(runConversationsPanel()).toHaveClass('open')
+    expect(runConversationsPanel().contains(document.activeElement)).toBe(true)
+    expect(document.activeElement).toBe(focused)
+  })
+
+  describe('Run conversations: new agent message signal', () => {
+    const SEEN_KEY = 'afm.runConversationsSeen'
+    const opener = () => screen.getByRole('button', { name: /^Run conversations/ })
+
+    afterEach(() => {
+      localStorage.clear()
+      vi.unstubAllGlobals()
+    })
+
+    test('an unread question pulses the closed opener with a count and a label, without opening, on every view', async () => {
+      mockRunConversationsRun(() => 'assistants', () => 'done', () => 5)
+      render(<App />)
+      const button = await screen.findByRole('button', { name: 'Run conversations, 1 with new messages' })
+      expect(button).toHaveClass('is-pulsing')
+      expect(button).toHaveTextContent('1')
+      expect(button).toHaveAttribute('aria-expanded', 'false')
+      expect(button).toHaveAttribute('aria-controls', 'run-conversations')
+      expect(runConversationsPanel()).not.toHaveClass('open')
+      expect(screen.getByRole('status')).toHaveTextContent('1 conversation with new messages')
+
+      fireEvent.click(document.querySelector('.stage-row') as HTMLElement)
+      fireEvent.click(await within(screen.getByRole('tablist', { name: 'Workspace' })).findByRole('tab', { name: 'Propose' }))
+      expect(opener()).toHaveClass('is-pulsing')
+      expect(runConversationsPanel()).not.toHaveClass('open')
+    })
+
+    test('no pulse when nothing explicit was addressed to the human (chatter or a result moves only last_other_message_seq)', async () => {
+      mockRunConversationsRun(() => 'assistants')
+      render(<App />)
+      await screen.findByRole('button', { name: 'Run conversations' })
+      expect(opener()).not.toHaveClass('is-pulsing')
+      expect(opener()).not.toHaveClass('has-unread')
+    })
+
+    test('still pulses after a reload before the question was read, and not once its cursor is stored', async () => {
+      mockRunConversationsRun(() => 'assistants', () => 'running', () => 5)
+      const first = render(<App />)
+      await screen.findByRole('button', { name: 'Run conversations, 1 with new messages' })
+      first.unmount()
+      render(<App />)
+      await screen.findByRole('button', { name: 'Run conversations, 1 with new messages' })
+      cleanup()
+
+      localStorage.setItem(SEEN_KEY, JSON.stringify({ 'app-run-conv': { 'mt-run': 5 } }))
+      render(<App />)
+      await screen.findByRole('button', { name: 'Run conversations' })
+      expect(opener()).not.toHaveClass('is-pulsing')
+    })
+
+    test('opening the panel does not clear the signal; the question scrolling into view does, and the cursor is stored', async () => {
+      const observers: { callback: IntersectionObserverCallback; elements: Element[]; disconnected: boolean }[] = []
+      vi.stubGlobal('IntersectionObserver', class {
+        record = { callback: undefined as unknown as IntersectionObserverCallback, elements: [] as Element[], disconnected: false }
+        constructor(callback: IntersectionObserverCallback) {
+          this.record.callback = callback
+          observers.push(this.record)
+        }
+        observe(el: Element) { this.record.elements.push(el) }
+        unobserve() {}
+        disconnect() { this.record.disconnected = true }
+        takeRecords() { return [] }
+      })
+      mockRunConversationsRun(() => 'assistants', () => 'running', () => 5)
+      render(<App />)
+      await screen.findByRole('button', { name: 'Run conversations, 1 with new messages' })
+      fireEvent.click(opener())
+      const panel = within(runConversationsPanel())
+      expect(opener()).toHaveAccessibleName('Run conversations, 1 with new messages')
+      expect(opener()).not.toHaveClass('is-pulsing')
+      fireEvent.click(await panel.findByText('Run question'))
+      await panel.findByText('Which database?')
+
+      const bubble = document.querySelector('[data-message-id="mq1"]') as HTMLElement
+      const entry = { target: bubble, isIntersecting: true, intersectionRatio: 1, intersectionRect: { height: 80 }, boundingClientRect: { height: 80 }, rootBounds: { height: 300 } } as unknown as IntersectionObserverEntry
+      act(() => observers.filter((o) => !o.disconnected && o.elements.includes(bubble)).forEach((o) => o.callback([entry], {} as IntersectionObserver)))
+
+      expect(opener()).toHaveAccessibleName('Run conversations')
+      expect(JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}')).toEqual({ 'app-run-conv': { 'mt-run': 5 } })
+    })
+
+    test('an answer typed with no Reply click is linked to the question, and Feed -> Plan -> Feed keeps the draft and the target', async () => {
+      const sent: unknown[] = []
+      const realFetch = mockRunConversationsRun(() => 'assistants', () => 'done', () => 5)
+      const base = realFetch.getMockImplementation()!
+      realFetch.mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        if (init?.method === 'POST' && url.includes('/api/mesh/threads/mt-run/messages')) {
+          sent.push(JSON.parse(String(init.body)))
+          return { ok: true, json: async () => ({ message_id: 'mm-9', thread_id: 'mt-run', seq: 6 }) } as Response
+        }
+        return base(input, init)
+      })
+      render(<App />)
+      await screen.findByRole('button', { name: /^Run conversations/ })
+      fireEvent.click(document.querySelector('.stage-row') as HTMLElement)
+      fireEvent.click(opener())
+      const panel = () => within(runConversationsPanel())
+      fireEvent.click(await panel().findByText('Run question'))
+      await waitFor(() => expect(runConversationsPanel().querySelector('.feed-reply-chip--conversation')).toHaveTextContent('Which database?'))
+      fireEvent.change(panel().getByPlaceholderText(/^Message /), { target: { value: 'Postgres' } })
+
+      const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
+      fireEvent.click(await tabs.findByRole('tab', { name: 'Propose' }))
+      fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+      expect(panel().getByPlaceholderText(/^Message /)).toHaveValue('Postgres')
+      expect(runConversationsPanel().querySelector('.feed-reply-chip--conversation')).toHaveTextContent('Which database?')
+
+      fireEvent.click(panel().getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(sent).toHaveLength(1))
+      expect(sent[0]).toMatchObject({ kind: 'reply', in_reply_to: 'mq1', body: 'Postgres', recipient_ids: ['run:t-1'] })
+    })
   })
 
   test('Board tab: with the mesh off there is no Board tab and no board request', async () => {

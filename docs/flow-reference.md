@@ -135,10 +135,12 @@ directory; see below),
 this flow, taking precedence over `AFM_SIDEAGENT` and `config.yaml`. Omit it to defer
 to those (default ON).
 
-`collaboration: { max_depth: N }` overrides the helper delegation depth for this
-flow. It has no `enabled` field; use `collaboration.enabled` in `config.yaml` or
-`AFM_COLLABORATION` to switch helpers on or off. See
-[Helpers and collaboration](collaboration.md).
+`collaboration: { max_depth: N, mode: assistants }` can override the helper
+delegation depth and dashboard mode for this flow. `mode` is `team` (the default)
+or `assistants`; resolution is flow > project config > global config > `team`.
+Neither setting enables collaboration. There is no flow-level `enabled` field;
+use `collaboration.enabled` in `config.yaml` or `AFM_COLLABORATION` to switch
+collaboration on or off. See [Collaboration modes](collaboration.md#collaboration-modes).
 
 ### `team` — run agents of the flow
 
@@ -163,7 +165,7 @@ registered dashboard Assistant reserves `@assistant`, so a team title of
 or a run agent title that asks for `@assistant`. The reservation persists on
 resume if the Assistant is unavailable; a run without that stored alias has no
 reservation. A later dynamic stage can move an existing participant to another
-free suffix. Check **Team → People** for current handles. With
+free suffix. In `team` mode, check **Team → People** for current handles. With
 collaboration enabled, an unknown profile stops `afm run` at preflight and fails
 `afm validate`, which checks the flow as a fresh run; with collaboration
 disabled, both only warn. Team agents get no
