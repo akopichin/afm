@@ -38,9 +38,9 @@ func newAgentTaskCmd() *cobra.Command {
 			c.Flags().StringVar(&req.Text, "summary", "", "the result (required)")
 			c.Flags().StringVar(artifacts, "artifacts", "", "comma-separated artifact refs")
 		}),
-		newAgentTaskChangeCmd(orchestrator.BoardTaskRelease, "Give up an assignment", func(c *cobra.Command, req *server.MeshBoardTaskRequest, artifacts *string) {
+		newAgentTaskChangeCmd(orchestrator.BoardTaskRelease, "Take an assignment back from its executor (coordinator or user only)", func(c *cobra.Command, req *server.MeshBoardTaskRequest, artifacts *string) {
 			assignmentFlag(c, req, artifacts)
-			c.Flags().StringVar(&req.Text, "reason", "", "why the assignment is given up")
+			c.Flags().StringVar(&req.Text, "reason", "", "why the assignment is taken back")
 		}),
 		newAgentTaskChangeCmd(orchestrator.BoardTaskReopen, "Reopen the task, ending its assignments", func(c *cobra.Command, req *server.MeshBoardTaskRequest, _ *string) {
 			c.Flags().StringVar(&req.Text, "reason", "", "why the task is reopened")

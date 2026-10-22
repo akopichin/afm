@@ -347,6 +347,30 @@ func TestAgentComm_TypedBoardTasksReplaceFreeTextProtocol(t *testing.T) {
 	}
 }
 
+// The typed instructions follow the projection's rights: only a coordinator releases an assignment, and a
+// claim already starts the task.
+func TestAgentComm_TypedBoardTasksMatchRights(t *testing.T) {
+	block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, TypedBoardTasks: true})
+	var coordinator, executor string
+	for line := range strings.Lines(block) {
+		switch {
+		case strings.Contains(line, "Coordinator:"):
+			coordinator = line
+		case strings.Contains(line, "Executor:"):
+			executor = line
+		}
+	}
+	if !strings.Contains(coordinator, "afm agent task release") {
+		t.Errorf("coordinator bullet does not release assignments:\n%s", coordinator)
+	}
+	if strings.Contains(executor, "task release") {
+		t.Errorf("executor bullet offers release, which the projection forbids it:\n%s", executor)
+	}
+	if !strings.Contains(executor, "already started") || !strings.Contains(executor, "message your coordinator") {
+		t.Errorf("executor bullet does not say a claim already starts or whom to ask when stuck:\n%s", executor)
+	}
+}
+
 func TestAgentCommBoardTasksBlock_Empty(t *testing.T) {
 	if got := AgentCommBoardTasksBlock(nil, 0); got != "" {
 		t.Errorf("no tasks rendered %q, want nothing", got)
