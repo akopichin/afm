@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/clock"
 )
 
 var protocolActor = Actor{Kind: "system", ID: "afm"}
@@ -111,5 +113,47 @@ func TestRecordBoardTaskProtocolIdempotent(t *testing.T) {
 	}
 	if got := store.Snapshot().LastSeq; got != 1 {
 		t.Fatalf("LastSeq = %d, want 1 (second call must not write)", got)
+	}
+}
+
+// The protocol marker is a fresh run's first journal record, so the run starts when it was written: live,
+// after a reopen and in a read-only load alike.
+func TestRunStartedAtIsTheProtocolMarkerTime(t *testing.T) {
+	opened := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	fc := clock.NewFake(opened)
+	withFakeClock(t, fc)
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	fc.Advance(time.Second)
+	marked := fc.Now()
+	if err := store.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, protocolActor); err != nil {
+		t.Fatalf("RecordBoardTaskProtocol: %v", err)
+	}
+	fc.Advance(time.Second)
+	if err := store.BeginRun(); err != nil {
+		t.Fatalf("BeginRun: %v", err)
+	}
+	if got := store.Snapshot().StartedAt; !got.Equal(marked) {
+		t.Errorf("live StartedAt = %v, want the marker's %v", got, marked)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	loaded, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	if !loaded.StartedAt.Equal(marked) {
+		t.Errorf("LoadRunState StartedAt = %v, want the marker's %v", loaded.StartedAt, marked)
+	}
+
+	fc.Advance(time.Hour)
+	reopened := openProtocolStore(t, dir)
+	if got := reopened.Snapshot().StartedAt; !got.Equal(marked) {
+		t.Errorf("StartedAt after reopen = %v, want the marker's %v", got, marked)
 	}
 }

@@ -463,9 +463,7 @@ func (s *Store) appendRunEvent(event string) error {
 		return fmt.Errorf("fsync run event: %w", err)
 	}
 	s.writeOffset += int64(len(line))
-	if s.lastSeq == 0 && event == runEventStarted {
-		s.snapshot.StartedAt = t.Time
-	}
+	s.snapshot.noteJournalRecord(s.lastSeq, t.Time)
 	s.lastSeq = t.Seq
 	applyRunEvent(s.snapshot, event, t.Time)
 	s.snapshot.LastSeq = t.Seq
@@ -548,6 +546,7 @@ func (s *Store) Apply(t *Transition) error {
 
 	// SetStageStatusAt, не SetStageStatus: t.Time уже зафиксирован выше и это именно то время, которое
 	// попадёт в events.jsonl.
+	s.snapshot.noteJournalRecord(t.Seq-1, t.Time)
 	s.snapshot.applyTransition(t)
 	s.snapshot.LastSeq = s.lastSeq
 
@@ -652,6 +651,7 @@ func (s *Store) appendControlLocked(c *Control) error {
 		// (the live cache and the authoritative log have diverged), not a benign rejection.
 		return &StorageError{Inner: fmt.Errorf("apply control to projection after a successful write (should be unreachable): %w", perr)}
 	}
+	s.snapshot.noteJournalRecord(s.lastSeq, c.Time)
 	s.lastSeq = nextSeq
 	s.snapshot.LastSeq = s.lastSeq
 

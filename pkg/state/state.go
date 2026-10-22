@@ -158,6 +158,15 @@ type RunState struct {
 	DynamicStages []DynamicStageAdded `json:"dynamic_stages,omitempty"`
 }
 
+// noteJournalRecord makes the time of the journal's first record — control or transition alike — the run's
+// start; lastSeq is the seq before the record. Store writes and replay share it, so a reopened run and a
+// read-only load report the start the live run did. Until the first record, StartedAt is the Open time.
+func (rs *RunState) noteJournalRecord(lastSeq uint64, t time.Time) {
+	if lastSeq == 0 && !t.IsZero() {
+		rs.StartedAt = t
+	}
+}
+
 // NewRunState creates an initial RunState with all stages pending.
 func NewRunState(stageIDs []string) *RunState {
 	rs := &RunState{
@@ -466,6 +475,7 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 		}
 		if dl.control != nil {
 			c := dl.control
+			rs.noteJournalRecord(res.lastSeq, c.Time)
 			if perr := applyControlToRunState(rs, c); perr != nil {
 				// The record itself decoded fine, but what it asserts is impossible (cycle/missing parent
 				// — T2.3): treat as log corruption, not as ErrUnsupportedRecord.
@@ -483,11 +493,7 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 			continue
 		}
 		t := *dl.transition
-		// Восстанавливаем реальное начало рана из первого события лога. На свежем ране лог при Open пуст, сюда
-		// не заходим, и StartedAt остаётся временем Open ≈ реальному старту.
-		if res.lastSeq == 0 && !t.Time.IsZero() {
-			rs.StartedAt = t.Time
-		}
+		rs.noteJournalRecord(res.lastSeq, t.Time)
 		if t.StageID == "" && isRunEvent(t.Event) {
 			applyRunEvent(rs, t.Event, t.Time)
 			res.lastSeq = t.Seq
