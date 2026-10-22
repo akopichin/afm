@@ -124,10 +124,10 @@ describe('StagePeoplePanel', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  test('the reachable side agent stays selectable in People', () => {
-    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+  test('the reachable Assistant stays selectable in People', () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
     const { onPick } = renderPanel({ participants: [...participants, side] })
-    fireEvent.click(screen.getByText('Side agent', { selector: '.team-person-name' }))
+    fireEvent.click(screen.getByText('claude', { selector: '.team-person-name' }))
     expect(onPick).toHaveBeenCalledWith(side)
   })
 

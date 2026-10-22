@@ -39,7 +39,11 @@ func TestStageDir_AlreadyAbsoluteIsUnchanged(t *testing.T) {
 }
 
 func TestStageDir_SpacesInPathPreserved(t *testing.T) {
-	base := t.TempDir()
+	// Реальный путь: после Chdir filepath.Abs опирается на os.Getwd (на macOS /var -> /private/var).
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

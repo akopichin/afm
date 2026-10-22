@@ -972,41 +972,41 @@ describe('TeamView', () => {
 
   test('keeps side in the run roster and shows its durable terminal failure beside the original message', async () => {
     mockThreadAndBoardFetches()
-    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
     const thread: meshClient.MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'open' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
       { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'help', seq: 1, created_at: '' },
     ], next_cursor: 1 })
     renderTeamView([makeStage()], [{ type: 'side_agent_mesh_failure', payload: { source_message_id: 'm1' }, stageId: '', timestamp: '' }],
       enabledRoster({ participants: [...participants, side], threads: [thread] }))
-    expect(within(peopleRegion('This run')).getAllByText('Side agent').length).toBeGreaterThan(0)
+    expect(within(peopleRegion('This run')).getAllByText('claude').length).toBeGreaterThan(0)
     showConversations()
-    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /claude/ }))
     await waitFor(() => expect(screen.getByText('Could not answer')).toBeInTheDocument())
   })
 
   test('recovers an old side failure from the thread on reconnect after event replay drops its notice', async () => {
     mockThreadAndBoardFetches()
-    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
     const thread: meshClient.MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'closed' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
       { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'message', body: 'help', side_agent_failed: true, seq: 1, created_at: '' },
     ], next_cursor: 1 })
     renderTeamView([makeStage()], [], enabledRoster({ participants: [...participants, side], threads: [thread] }))
-    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /claude/ }))
     await waitFor(() => expect(document.querySelector('[data-message-id="m1"]')).toHaveTextContent('Could not answer'))
   })
 
   test('does not show a failure on a passive side result whose orphan receipt was released', async () => {
     mockThreadAndBoardFetches()
-    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
     const thread: meshClient.MeshThread = { id: 'mt-side', scope: 'run', members: ['user', 'side:r1'], status: 'open' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [
       { id: 'm1', thread_id: 'mt-side', sender_id: 'user', recipient_ids: ['side:r1'], kind: 'result', auto_result: true, body: 'passive', side_agent_failed: true, seq: 1, created_at: '' },
     ], next_cursor: 1 })
     const receipt = { type: 'mesh_receipt', payload: { message_id: 'm1', participant_id: 'side:r1', status: 'undeliverable' }, stageId: '', timestamp: '' }
     renderTeamView([makeStage()], [receipt], enabledRoster({ participants: [...participants, side], threads: [thread] }))
-    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Side agent/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /claude/ }))
     await waitFor(() => expect(document.querySelector('[data-message-id="m1"]')).toHaveTextContent('passive'))
     expect(document.querySelector('[data-message-id="m1"]')).not.toHaveTextContent('Could not answer')
   })
@@ -1277,6 +1277,28 @@ describe('TeamView', () => {
     clickCreateConversation()
     await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Hand-off', scope: 'run', memberIds: ['run:qa'] })))
     await waitFor(() => expect(screen.getByPlaceholderText('Message Hand-off…')).toBeInTheDocument())
+  })
+
+  test('People names the bound run row Assistant @assistant beside a stage on @assistant-2, and the create list calls a helper Helper', () => {
+    mockThreadAndBoardFetches()
+    const side: meshClient.MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
+    const stage: meshClient.MeshParticipant = { id: 'stage:assistant', kind: 'stage_agent', scope: 'stage', stage_id: 'assistant', alias: 'assistant-2', display_name: 'Smoke', reachable: true }
+    const helper: meshClient.MeshParticipant = { id: 'helper:t1', kind: 'helper', scope: 'stage', stage_id: 'assistant', alias: 'reviewer', display_name: 'Reviewer', reachable: true }
+    renderTeamView([makeStage({ id: 'assistant', name: 'Smoke' })], [], enabledRoster({ participants: [...participants, side, stage, helper] }))
+    const run = within(peopleRegion('This run'))
+    const sideRow = run.getByText('claude').closest('button') as HTMLElement
+    expect(within(sideRow).getByText('@assistant')).toBeInTheDocument()
+    expect(within(sideRow).getByText('Assistant')).toBeInTheDocument()
+    const stageRow = within(screen.getByRole('region', { name: 'Stages' })).getByText('Smoke').closest('button') as HTMLElement
+    expect(within(stageRow).getByText('@assistant-2')).toBeInTheDocument()
+    expect(screen.queryByText(/Side agent/)).toBeNull()
+
+    showConversations()
+    clickCreateConversation()
+    const form = document.querySelector('.team-create-conversation-participants') as HTMLElement
+    const helperRow = within(form).getByText('Reviewer').closest('label') as HTMLElement
+    expect(within(helperRow).getByText('Helper')).toBeInTheDocument()
+    expect(within(within(form).getByText('claude').closest('label') as HTMLElement).getByText('Assistant')).toBeInTheDocument()
   })
 
   test('a new conversation cannot include a participant that can no longer answer (a finished stage)', () => {

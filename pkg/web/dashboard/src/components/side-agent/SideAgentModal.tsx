@@ -131,7 +131,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
       >
         <header className="side-agent-header">
           <div className="side-agent-title-wrap">
-            <h2 id="side-agent-title" className="side-agent-title">Side agent</h2>
+            <h2 id="side-agent-title" className="side-agent-title">Assistant</h2>
             {command !== '' && <span className="side-agent-command" title="The configured agent command">{command}</span>}
           </div>
           <div className="side-agent-header-actions">
@@ -148,7 +148,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
                 {attentionShortcut.label}
               </button>
             )}
-            <button type="button" className="icon-btn side-agent-close" aria-label="Hide side agent" onClick={close}>
+            <button type="button" className="icon-btn side-agent-close" aria-label="Hide assistant" onClick={close}>
               ✕
             </button>
           </div>

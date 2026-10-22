@@ -224,7 +224,7 @@ func (b *sideAgentMeshBridge) reconcile() bool {
 				return false
 			}
 			if msg.AutoResult {
-				if err := b.orch.SideAgentMeshResponseFailed(msg.ID, "Could not process side message"); err != nil && !errors.Is(err, orchestrator.ErrSideAgentExplicitReply) {
+				if err := b.orch.SideAgentMeshResponseFailed(msg.ID, "Could not process assistant message"); err != nil && !errors.Is(err, orchestrator.ErrSideAgentExplicitReply) {
 					return false
 				}
 				b.noticed[msg.ID] = true
@@ -287,7 +287,7 @@ func (b *sideAgentMeshBridge) reconcileUnavailable() bool {
 				}
 				continue
 			}
-			if !b.publishFailure(msg, "Could not answer: side agent unavailable") {
+			if !b.publishFailure(msg, "Could not answer: Assistant unavailable") {
 				return false
 			}
 			if b.orch.SideAgentMeshSourceAccepted(msg.ID) {

@@ -1,4 +1,5 @@
 ---
+name: afm-retry
 description: Retry a failed stage in the current afm run
 allowed-tools: [Bash]
 ---

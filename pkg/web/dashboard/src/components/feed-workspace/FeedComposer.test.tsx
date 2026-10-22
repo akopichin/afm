@@ -649,23 +649,44 @@ describe('FeedComposer', () => {
     })
 
     it('shows a terminal side failure from the run notice even before the thread reply is in the stage poll', async () => {
-      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
       vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm-side' } as Awaited<ReturnType<typeof meshClient.sendMeshMessageTo>>)
       const mesh = meshProps({ roster: roster({ participants: [...roster().participants, side] }), sideFailures: new Set(['m-side']) })
       renderComposer(mesh)
-      type('@side help')
+      type('@assistant help')
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Side agent · Could not answer'))
+      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('claude · Could not answer'))
+    })
+
+    it('sends to the bound @assistant from a stage whose own handle is @assistant-2, keeping the side:r1 recipient', async () => {
+      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
+      const assistantStage: MeshParticipant = { id: 'stage:assistant', kind: 'stage_agent', scope: 'stage', stage_id: 'assistant', alias: 'assistant-2', display_name: 'Smoke', reachable: true }
+      const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm-side' } as Awaited<ReturnType<typeof meshClient.sendMeshMessageTo>>)
+      const post = vi.spyOn(runClient, 'postStageDiscussionMessage')
+      const mesh = meshProps({ roster: roster({ participants: [side, assistantStage] }), stages: [makeStage({ id: 'assistant' })] })
+      render(<FeedComposer stageId="assistant" onSend={vi.fn()} mesh={mesh} />)
+      expect(within(recipients()).getByText('@assistant-2')).toBeInTheDocument()
+
+      type('@ass')
+      fireEvent.click(screen.getByText('@assistant'))
+      expect(within(recipients()).getByText('@assistant')).toBeInTheDocument()
+      expect(within(recipients()).queryByText('@assistant-2')).toBeNull()
+      type(`${input().value}help`)
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+      await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['side:r1'] })))
+      expect(post).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('claude · Accepted · waiting for an inbox check'))
     })
 
     it('shows an undeliverable side receipt before thread refresh without changing another recipient', async () => {
-      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
       vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm-side' } as Awaited<ReturnType<typeof meshClient.sendMeshMessageTo>>)
       const mesh = meshProps({ roster: roster({ participants: [...roster().participants, side] }) })
       const { rerender } = renderComposer(mesh)
-      type('@side @qa help')
+      type('@assistant @qa help')
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Side agent · Accepted · waiting for an inbox check'))
+      await waitFor(() => expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('claude · Accepted · waiting for an inbox check'))
 
       const events = [
         { type: 'mesh_receipt', payload: { message_id: 'm-side', participant_id: 'side:r1', status: 'undeliverable' }, stageId: '', timestamp: '' },
@@ -675,7 +696,7 @@ describe('FeedComposer', () => {
         ...mesh, deliveries: meshDeliveries(events), sideFailures: sideAgentFailures(events),
       }} conversationMessages={[]} />)
       const delivery = screen.getByRole('status', { name: 'Delivery' })
-      expect(delivery).toHaveTextContent('Side agent · Could not answer')
+      expect(delivery).toHaveTextContent('claude · Could not answer')
       expect(delivery).toHaveTextContent('QA reviewer · Delivered')
     })
 
@@ -727,7 +748,7 @@ describe('FeedComposer', () => {
         const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
         const sendSpy = vi.spyOn(meshClient, 'sendMeshMessageTo')
         openPreview()
-        const dialog = screen.getByRole('dialog', { name: /attach assistant/i })
+        const dialog = screen.getByRole('dialog', { name: /attach helper/i })
         expect(within(dialog).getByText('please take a look')).toBeInTheDocument()
         expect(within(dialog).getByText('Configured executor')).toBeInTheDocument()
         expect(within(dialog).getByText('claude')).toBeInTheDocument()
@@ -745,7 +766,7 @@ describe('FeedComposer', () => {
         expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({
           profileId: 'frontendDeveloper', scope: 'stage', stageId: 's1', instruction: 'please take a look', firstMessage: 'please take a look',
         }))
-        await waitFor(() => expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull())
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: /attach helper/i })).toBeNull())
         expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Accepted · waiting for an inbox check')
         expect(within(recipients()).queryByText(/Attach helper/)).toBeNull()
         expect(input().value).toBe('')
@@ -755,7 +776,7 @@ describe('FeedComposer', () => {
         const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
         openPreview()
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-        expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull()
+        expect(screen.queryByRole('dialog', { name: /attach helper/i })).toBeNull()
         expect(attachSpy).not.toHaveBeenCalled()
         expect(input().value).toBe('please take a look')
       })
@@ -766,7 +787,7 @@ describe('FeedComposer', () => {
         type('@qa please')
         fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
         expect(screen.getByRole('alert')).toHaveTextContent('An attached helper gets the text alone')
-        expect(screen.queryByRole('dialog', { name: /attach assistant/i })).toBeNull()
+        expect(screen.queryByRole('dialog', { name: /attach helper/i })).toBeNull()
       })
 
       it('a re-submit after a failed attach reuses the same request_id', async () => {

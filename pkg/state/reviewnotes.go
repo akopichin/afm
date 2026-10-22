@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/akopichin/afm/pkg/fsutil"
 )
 
 const reviewNotesFile = "review-notes.json"
@@ -42,7 +44,7 @@ func SaveReviewNotes(runDir string, n ReviewNotes) error {
 	if err != nil {
 		return fmt.Errorf("marshal review notes: %w", err)
 	}
-	return atomicWriteFile(reviewNotesPath(runDir), data, 0644)
+	return fsutil.AtomicWriteFile(reviewNotesPath(runDir), data, 0644)
 }
 
 func LoadReviewNotes(runDir string) (ReviewNotes, error) {
@@ -125,7 +127,7 @@ func WriteNotesPauseMarker(runDir string, m PauseMarker) error {
 	if err != nil {
 		return fmt.Errorf("marshal pause marker: %w", err)
 	}
-	return atomicWriteFile(notesPauseMarkerPath(runDir), data, 0644)
+	return fsutil.AtomicWriteFile(notesPauseMarkerPath(runDir), data, 0644)
 }
 
 func ReadNotesPauseMarker(runDir string) (PauseMarker, bool, error) {
@@ -166,7 +168,7 @@ func notesPausePoisonPath(runDir string) string {
 // WritePoisonMarker durably records that a review-pause resume transaction was found un-recoverable.
 // `detail` is a human-readable note for whoever inspects it.
 func WritePoisonMarker(runDir, detail string) error {
-	return atomicWriteFile(notesPausePoisonPath(runDir), []byte(detail+"\n"), 0644)
+	return fsutil.AtomicWriteFile(notesPausePoisonPath(runDir), []byte(detail+"\n"), 0644)
 }
 
 // HasPoisonMarker reports whether a durable poison breadcrumb is present.
@@ -184,7 +186,7 @@ func ClearPoisonMarker(runDir string) error {
 	return fsyncDir(runDir)
 }
 
-// fsyncDir flushes a directory entry change to disk, the same durability step atomicWriteFile already does
+// fsyncDir flushes a directory entry change to disk, the same durability step fsutil.AtomicWriteFile already does
 // after a rename.
 func fsyncDir(dir string) error {
 	d, err := os.Open(dir)

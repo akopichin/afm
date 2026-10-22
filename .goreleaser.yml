@@ -42,7 +42,7 @@ homebrew_casks:
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
     caveats: |
-      Claude-скиллы (/afm, /afm-check и др.) не устанавливаются автоматически.
+      Claude-скиллы (/afm-run, /afm-check и др.) не устанавливаются автоматически.
       Установить: afm{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }} install-skills
     directory: Casks
     repository:

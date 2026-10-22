@@ -107,7 +107,7 @@ func TestEnsure_CreatesWorktreeAndBranch(t *testing.T) {
 	entries := ParseList(list)
 	var found *Entry
 	for i := range entries {
-		if filepath.Clean(entries[i].Path) == filepath.Clean(p.Path) {
+		if canonicalPath(entries[i].Path) == canonicalPath(p.Path) {
 			found = &entries[i]
 		}
 	}
@@ -124,6 +124,30 @@ func TestEnsure_CreatesWorktreeAndBranch(t *testing.T) {
 
 	if !strings.Contains(readExclude(t, base), ".worktrees/") {
 		t.Fatal("info/exclude does not contain .worktrees/")
+	}
+}
+
+// Проект открыт через симлинк: git хранит worktree по реальному пути, а Plan строится от пути через
+// симлинк. Повторный Ensure обязан узнать свой worktree, а не отказать «branch already checked out».
+// Явный симлинк воспроизводит то же, что /var -> /private/var на macOS, и на Linux CI.
+func TestEnsure_ReusesWorktreeThroughSymlinkedBase(t *testing.T) {
+	repo := newRepo(t)
+	link := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	p, err := PlanFor(link, "myflow")
+	if err != nil {
+		t.Fatalf("PlanFor: %v", err)
+	}
+	if err := Ensure(context.Background(), p, ClearNone); err != nil {
+		t.Fatalf("Ensure (1st): %v", err)
+	}
+	if err := Ensure(context.Background(), p, ClearNone); err != nil {
+		t.Fatalf("Ensure (2nd) through the symlinked base: %v", err)
+	}
+	if err := Ensure(context.Background(), p, ClearWorktree); err != nil {
+		t.Fatalf("Ensure (ClearWorktree) through the symlinked base: %v", err)
 	}
 }
 
@@ -353,7 +377,7 @@ func TestEnsure_ClearWorktree_KeepsCommits(t *testing.T) {
 	entries := ParseList(worktreeList(t, base))
 	var found *Entry
 	for i := range entries {
-		if filepath.Clean(entries[i].Path) == filepath.Clean(p.Path) {
+		if canonicalPath(entries[i].Path) == canonicalPath(p.Path) {
 			found = &entries[i]
 		}
 	}
@@ -396,7 +420,7 @@ func TestEnsure_ClearAll_DropsCommits(t *testing.T) {
 	entries := ParseList(worktreeList(t, base))
 	var found *Entry
 	for i := range entries {
-		if filepath.Clean(entries[i].Path) == filepath.Clean(p.Path) {
+		if canonicalPath(entries[i].Path) == canonicalPath(p.Path) {
 			found = &entries[i]
 		}
 	}

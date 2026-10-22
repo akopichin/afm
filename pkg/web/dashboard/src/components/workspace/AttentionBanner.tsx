@@ -14,7 +14,7 @@ const COPY: Record<AttentionKind, { title: string; subtitle: string; glyph: stri
   hook_failed: { title: 'Hook failed', subtitle: 'A stage hook failed. Retry it or skip to continue.', glyph: '!' },
   assistants: {
     title: 'A helper task needs your decision',
-    subtitle: 'A required assistant did not pass cleanly — review it, then revise, retry, or waive.',
+    subtitle: 'A required helper did not pass cleanly — review it, then revise, retry, or waive.',
     glyph: '!',
   },
 }

@@ -57,6 +57,17 @@ func waitForStageStatus(ctx context.Context, t *testing.T, run *Run, stageID str
 	}
 }
 
+// isolateHome points HOME (USERPROFILE on Windows) at a temp dir and clears CODEX_HOME, so neither the developer's global afm/Docker
+// config nor their real skill directories (afm run syncs skills into ~/.afm, ~/.claude and $CODEX_HOME)
+// are touched.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", "")
+}
+
 func TestIntegration_HappyPath(t *testing.T) {
 	bin := resolveAfmBinary(t)
 	c, err := New(Config{Binary: bin})
@@ -72,8 +83,7 @@ stages:
     script: "echo done-output"
 `)
 
-	// Isolate HOME so the developer's global Docker config cannot redirect this script-only integration run.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -112,7 +122,7 @@ stages:
     name: Notify
     script: "echo done-output"
 `)
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -190,8 +200,7 @@ stages:
     command: %s
 `, agentPath))
 
-	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -230,8 +239,7 @@ stages:
     script: "test -f %s && echo done-output || exit 1"
 `, gateFile))
 
-	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -275,8 +283,7 @@ stages:
     command: %s
 `, agentPath))
 
-	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -340,8 +347,7 @@ stages:
 		return
 	}
 
-	// Isolate HOME to prevent the developer's global Docker config from affecting the run.
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -402,7 +408,7 @@ stages:
     name: Notify
     script: "sleep 2 && echo done-output"
 `)
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

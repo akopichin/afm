@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/akopichin/afm/pkg/fsutil"
 	"github.com/akopichin/afm/pkg/progress"
 )
 
@@ -18,8 +19,10 @@ func MemoryLockPath(memoryDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	abs = filepath.Clean(abs)
-	canon := canonicalizeExistingAncestor(abs)
+	canon, err := fsutil.CanonicalPath(abs)
+	if err != nil {
+		canon = abs
+	}
 
 	sum := sha256.Sum256([]byte(canon))
 

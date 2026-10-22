@@ -1,4 +1,5 @@
 ---
+name: afm-review
 description: Review a stage plan and provide feedback or approve
 allowed-tools: [Bash, Read, AskUserQuestion]
 ---

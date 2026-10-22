@@ -109,7 +109,7 @@ cards stay visible with an out-of-date warning.
 
 ## Message times
 
-Event rows in the stage **Feed**, **Full feed**, and Side agent history, and message
+Event rows in the stage **Feed**, **Full feed**, and Assistant history, and message
 bubbles in **Team** and stage Feed conversations, show the message time as `HH:MM`
 in the host's 24-hour clock. Hover over the time, or focus its label or enclosing
 interactive row with a keyboard, to see the elapsed gap (`+7s`, `+2m`, etc.). The
@@ -128,30 +128,31 @@ the browser cannot use it, the display falls back to the host's signed UTC offse
 reported by `/api/status`; this fixed offset cannot reconstruct historical
 daylight saving changes.
 
-## Side agent — a free-form chat alongside the run
+## Assistant — a free-form chat alongside the run
 
-Open the **Side agent** — a large centered modal over the dashboard — to talk
+Open the **Assistant** — a large centered modal over the dashboard — to talk
 directly to the same agent your flow uses (`client.command`), in the same working
 directory and environment as the flow's stages. Use it to ask questions, probe the
 project, or run a quick command-style exchange *without* touching the run.
 
-- **Open it** with the **Side agent** button in the header, or press **Cmd/Ctrl+`**
+- **Open it** with the **Assistant** button in the header, or press **Cmd/Ctrl+`**
   (the backquote key, recognised physically so keyboard layout doesn't matter).
   Focus moves to the message field when it opens. Opening the window by itself
   does not call the model; **Escape** closes it. The header button carries a
   small indicator — it lights while a reply is in flight and
   flags an unseen result once one arrives while the window is closed.
 - **One conversation per run, one request at a time.** The chat keeps a single
-  conversation tied to the run. Messages sent to `@side` through Agent Mesh join
+  conversation tied to the run. Messages sent to `@assistant` through Agent Mesh join
   this history too. Only one turn runs at a time, so you can send a new modal
   message after the current turn ends. Mesh messages wait for their turn.
-- **Independent execution.** The side chat has its own journal and its own
+- **Independent execution.** The Assistant chat has its own journal and its own
   cost accounting; it is *not* part of any stage. Its turns do not change stage
   status or trigger stage timers or lifecycle hooks, and an error in a turn cannot
-  fail a stage. Mesh messages to and from the Side agent appear in their original
-  Team or stage Feed conversations. When Agent Mesh is available, the Side agent
-  appears in Team as `@side`.
-- **Messages from colleagues appear here too.** A message addressed to `@side`
+  fail a stage. Mesh messages to and from the Assistant appear in their original
+  Team or stage Feed conversations. When Agent Mesh is available, the Assistant
+  appears in Team as `@assistant` in newly registered runs. Older runs keep their
+  saved `@side` handle.
+- **Messages from colleagues appear here too.** A message addressed to `@assistant`
   from Team, a stage Feed, or an agent starts a turn in this conversation. The
   incoming message is labelled **From <sender>**; while it runs, the header says
   **Replying to <sender>…**. The agent receives the sender and original Mesh
@@ -174,7 +175,7 @@ project, or run a quick command-style exchange *without* touching the run.
   `context_limit` error (your history and draft are preserved), never a silent drop of
   older turns.
 - **File comments can be attached from the Docker file browser.** Choose
-  **Without pause** while commenting on a file, then **Send to side agent** to open
+  **Without pause** while commenting on a file, then **Send to assistant** to open
   this chat with the comments attached. Write a message and send it to deliver both
   the comments and your request. See [File comments without pausing](#file-comments-without-pausing-docker-mode).
 - **Mention a helper role.** When collaboration is available, type `@` in the
@@ -182,14 +183,14 @@ project, or run a quick command-style exchange *without* touching the run.
   message; it does not attach a helper by itself. See
   [Helpers and collaboration](collaboration.md).
 
-The side agent is on by default whenever the dashboard is up. Disable it with a
+The Assistant is on by default whenever the dashboard is up. Disable it with a
 toggle resolved **flow `side_agent` > env `AFM_SIDEAGENT` > config
 `side_agent.enabled` > default ON**:
 
 ```yaml
 # .afm/config.yaml
 side_agent:
-  enabled: false        # turn the side agent off for this project
+  enabled: false        # turn the Assistant off for this project
 ```
 
 ```yaml
@@ -200,14 +201,14 @@ side_agent: true
 `AFM_SIDEAGENT=0` disables it for a single run (and `=1` re-enables), overriding the
 config but not an explicit `side_agent` in `flow.yaml`. When it is off the manager is
 never created: the `/api/side-agent*` routes are not registered, the `side_agent`
-capability reports `false`, and the header **Side agent** button is hidden.
+capability reports `false`, and the header **Assistant** button is hidden.
 
 Because it runs an arbitrary agent command with full project access, its endpoints
 require a trusted local client. This loopback boundary does **not** depend on the
 toggle: on a native host afm **always** binds the dashboard to `127.0.0.1`, and in
 Docker mode the port is **always** published loopback-only (see [Docker](docker.md)) —
 the dashboard also exposes unauthenticated mutating stage/flow APIs, so the bind is
-unconditional regardless of whether the side agent or file browser is enabled.
+unconditional regardless of whether the Assistant or file browser is enabled.
 Remote/authenticated access is not supported in this version.
 
 ## Themes
@@ -377,7 +378,7 @@ the helper's assignment (it must be the only recipient). See
 
 With Agent Mesh and collaboration on, the stage **Feed** has a **People** panel on the right:
 everyone this stage can talk to, in three groups — **This stage** (the stage's
-agent and its helpers), **Run agents** (run agents and the Side agent) and
+agent and its helpers), **Run agents** (run agents and the Assistant) and
 **Other stages** (in flow order, each with its helpers). It is the Team roster
 with the selected stage on top; conversations stay in the **Team** tab.
 
@@ -551,11 +552,11 @@ that has one.
 
 ## File comments without pausing (Docker mode)
 
-When the Side agent is enabled, clicking a file line while the flow is running
+When the Assistant is enabled, clicking a file line while the flow is running
 offers **Without pause** alongside **Pause** and **Cancel**. Choose it to open the
 line comment editor while the flow keeps running. Save comments on multiple lines
 or files; the bar at the bottom of the file browser shows the draft count. Use
-**Clear** to discard all drafts, or **Send to side agent** to open the Side agent
+**Clear** to discard all drafts, or **Send to assistant** to open the Assistant
 with the comments attached above its message field. The handoff clears the file
 browser drafts. Type a message and press **Send** to deliver the comments with your
 request; an attachment alone cannot be sent. You can remove the attachment with
@@ -564,7 +565,7 @@ its ✕ button before sending.
 These drafts live only in the browser: closing and reopening the file browser
 keeps them for the same run, but reloading the page or switching runs clears them.
 They are not saved as review notes or delivered to a flow stage. **Without pause**
-is hidden when the Side agent is disabled.
+is hidden when the Assistant is disabled.
 
 ## Review notes — pause the whole flow and comment on files (Docker mode)
 

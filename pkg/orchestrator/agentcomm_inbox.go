@@ -114,7 +114,7 @@ type sentRequest struct {
 // its open wait or the wait that ended without an answer. Requests still waiting come first, then the newest
 // others, within maxListedRequests and requestsBlockBudget; an entry keeps its newest answers that fit. The block
 // says how many requests and answers it left out.
-func agentCommRequestsBlock(mesh state.MeshState, participant agentcomm.ParticipantID) string {
+func agentCommRequestsBlock(mesh state.MeshState, roster []agentcomm.Participant, participant agentcomm.ParticipantID) string {
 	requests := sentRequests(mesh, participant)
 	// Priority: open requests newest first, then the others newest first.
 	order := slices.Clone(requests)
@@ -132,7 +132,7 @@ func agentCommRequestsBlock(mesh state.MeshState, participant agentcomm.Particip
 	pickedSeq := map[string]uint64{}
 	omittedRequests, omittedAnswers := 0, 0
 	for _, r := range order {
-		entry := requestView(mesh, r)
+		entry := requestView(roster, r)
 		cost := requestViewCost(entry)
 		if len(picked) >= maxListedRequests || (len(picked) > 0 && cost > budget) {
 			omittedRequests++
@@ -207,10 +207,10 @@ func sentRequests(mesh state.MeshState, participant agentcomm.ParticipantID) []*
 }
 
 // requestView is r without its answers, as the block shows it.
-func requestView(mesh state.MeshState, r *sentRequest) prompts.AgentCommRequest {
+func requestView(roster []agentcomm.Participant, r *sentRequest) prompts.AgentCommRequest {
 	v := prompts.AgentCommRequest{MessageID: string(r.msg.ID), Body: prompts.TruncateUTF8(r.msg.Body, requestExcerptBytes, "…"), Waiting: r.waiting}
 	for _, to := range r.msg.Recipients {
-		v.To = append(v.To, participantLabel(mesh, to))
+		v.To = append(v.To, participantLabel(roster, to))
 	}
 	if r.ended != nil && !r.waiting && len(r.answers) == 0 {
 		v.WaitEnded = string(r.ended.Status)
@@ -227,10 +227,11 @@ func requestViewCost(v prompts.AgentCommRequest) int {
 	return len(v.Body) + len(v.WaitEnded) + requestEntryOverhead
 }
 
-// participantLabel names id the way `afm agent send --to` takes it: its alias, or the id when it has none.
-func participantLabel(mesh state.MeshState, id agentcomm.ParticipantID) string {
-	if p := mesh.Participants[id]; p != nil && p.Alias != "" {
-		return p.Alias
+// participantLabel names id the way `afm agent send --to` takes it: the @name it answers to in roster now, or
+// the id when it has none.
+func participantLabel(roster []agentcomm.Participant, id agentcomm.ParticipantID) string {
+	if i := slices.IndexFunc(roster, func(p agentcomm.Participant) bool { return p.ID == id }); i >= 0 && roster[i].Alias != "" {
+		return roster[i].Alias
 	}
 	return string(id)
 }

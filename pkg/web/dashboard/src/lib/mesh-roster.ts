@@ -127,9 +127,9 @@ export function participantRole(kind: string): string {
     case 'stage_agent':
       return 'Stage executor'
     case 'helper':
-      return 'Assistant'
+      return 'Helper'
     case 'side_agent':
-      return 'Side agent'
+      return 'Assistant'
     default:
       return kind
   }

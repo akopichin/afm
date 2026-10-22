@@ -1,4 +1,5 @@
 ---
+name: afm-run
 description: Run a afm flow with stage plan approval
 allowed-tools: [Bash, Read, AskUserQuestion]
 ---

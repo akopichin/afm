@@ -33,12 +33,11 @@ is active, it holds an exclusive lock on the run directory (`.lock`) — a concu
 
 ```bash
 brew install --cask akopichin/afm/afm
-afm install-skills   # optional: /afm, /afm-check, etc. in Claude Code
+afm install-skills   # optional: /afm-run, /afm-check, etc. in Claude Code and Codex
 ```
 
-The binary is updated via `brew upgrade --cask afm`; skills don't need to be
-reinstalled on update, but you can re-run `afm install-skills` if new ones have
-appeared.
+The binary is updated via `brew upgrade --cask afm`; `afm run` refreshes the skills
+on its own, see [Skills for Claude Code and Codex](#skills-for-claude-code-and-codex).
 
 Alpha and beta channels are available as separate casks after their first
 release: `brew install --cask akopichin/afm/afm-alpha` or
@@ -66,9 +65,10 @@ make build        # build into bin/afm
 make install      # install via `go install` (into your Go bin)
 ```
 
-To also install the Claude Code skills, run `./install.sh` after `make build` — it
-copies the freshly built `bin/afm` into `$HOME/homebrew/bin` and installs the skills
-(`/afm`, `/afm-check`, `/afm-init`, `/afm-retry`, `/afm-review`).
+To also install the skills, run `./install.sh` after `make build` — it copies the
+freshly built `bin/afm` into `$HOME/homebrew/bin` and runs `afm install-skills --force`
+(see [Skills for Claude Code and Codex](#skills-for-claude-code-and-codex)).
+`make install-skills` installs the skills straight from the source tree.
 
 To run afm without a local install, see [Docker mode](docker.md).
 
@@ -163,12 +163,49 @@ Once a run has recorded token usage, `afm check` also shows a per-stage token/co
 summary and `afm report` renders a full markdown cost breakdown — see
 [Cost accounting](accounting.md) (and how to turn the display off).
 
-## Usage in Claude Code
+## Skills for Claude Code and Codex
 
-After `./install.sh` (or `afm install-skills`) the following skills are available:
+afm ships its skills inside the binary. `afm install-skills` writes them to
+`~/.afm/skills` and links each one into the agents' skill folders:
 
-- `/afm` — runs a flow, monitors it, and requests plan approvals right in the chat
+- Claude Code: `~/.claude/skills/<name>`
+- Codex: `$CODEX_HOME/skills/<name>`, or `~/.codex/skills/<name>` when `CODEX_HOME`
+  is not set (it must be an absolute path)
+
+The links are relative (`../../.afm/skills/<name>`). With the standard layout
+(`~/.claude/skills` and `~/.codex/skills`, no custom `CODEX_HOME`) they also resolve
+inside afm's Docker container, where `~/.claude` and `~/.afm` are mounted and `~/.codex` is copied
+under `/home/afm`; a custom `CODEX_HOME` works on the host only. `afm run` repeats the
+same sync on the host before every run, so the skills follow the installed afm; inside
+a container it does nothing. A failed sync never stops the run — it prints a
+one-line warning, and `afm install-skills` shows the details.
+`~/.afm/skills` belongs to afm — don't put your own skills there.
+
+There is one store per machine: if you keep several afm builds (for example stable
+and alpha), the one that synced last decides which skill versions all agents see.
+
+afm never touches entries it did not create: your own skills, symlinks that point
+elsewhere (for example goga's), files, and skills under the old names (`afm`,
+`live-run`, `mesh-driven-development`). A real folder with an afm skill name — a
+copy installed by an older afm, or one you edited — is also left alone with a
+warning; `afm install-skills --force` replaces it with a link and moves the folder to
+a `.afm-skills-backup-*` directory next to the skills folder (the path is printed).
+Run it once after upgrading from a version that copied the skills.
+
+On Windows, creating symlinks needs Developer Mode (or administrator rights);
+without it `afm install-skills` reports an error instead of copying the files. The
+skill folders must also be on the same volume as `~/.afm` (a relative link cannot
+cross volumes), so keep a custom `CODEX_HOME` on the same drive.
+
+### Usage in Claude Code
+
+After `./install.sh` (or `afm install-skills`) the following skills are available
+in Claude Code and Codex:
+
+- `/afm-run` — runs a flow, monitors it, and requests plan approvals right in the chat
 - `/afm-check` — shows the status of the current run
 - `/afm-init` — creates flow.yaml interactively
 - `/afm-retry` — retries a failed stage
 - `/afm-review` — view a stage plan with feedback/approval
+- `/afm-live-run` — exercise a change in the real running app via the managed Chrome browser
+- `/afm-mesh-driven-development` — execute a plan inside an afm run by delegating tasks to named team/mesh agents

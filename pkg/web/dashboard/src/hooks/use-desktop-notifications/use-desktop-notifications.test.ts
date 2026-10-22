@@ -61,6 +61,15 @@ describe('useDesktopNotifications', () => {
     expect(MockNotification.instances).toHaveLength(1)
   })
 
+  it('a blocked required helper gate notifies "Helper needs a decision"', () => {
+    const blocked: Stage = { ...stage('awaiting_assistants'), awaitingAssistantsBlocked: true }
+    const { rerender } = renderHook(({ stages }) => useDesktopNotifications(stages, vi.fn()), {
+      initialProps: { stages: [stage('running')] },
+    })
+    rerender({ stages: [blocked] })
+    expect(MockNotification.instances.map((n) => n.title)).toEqual(['Helper needs a decision'])
+  })
+
   it('не уведомляет, пока вкладка видима — но уведомляет при уходе со вкладки, если стадия всё ещё ждёt', () => {
     Object.defineProperty(document, 'hidden', { value: false, configurable: true })
     const onFocusStage = vi.fn()

@@ -134,14 +134,18 @@ type UpdateThreadTitleReceipt struct {
 // HTTP/CLI layer resolves it from the per-invocation bearer token (agent) or the human session, never from
 // an attacker-controlled request body field — mirroring discussion.go's PostMessageRequest.AuthorID.
 type SendRequest struct {
-	OperationID  string
-	ThreadID     agentcomm.ThreadID
-	Sender       agentcomm.ParticipantID
-	Recipients   []agentcomm.ParticipantID
-	Kind         agentcomm.MessageKind
-	InReplyTo    *agentcomm.MessageID
-	Body         string
-	ArtifactRefs []string
+	OperationID string
+	ThreadID    agentcomm.ThreadID
+	Sender      agentcomm.ParticipantID
+	Recipients  []agentcomm.ParticipantID
+	// RequestedRecipients — the recipient names exactly as the caller wrote them, before SendFromAgent resolved
+	// them (SendFromAgent fills it). Journaled with the message so a retry under the same request id is compared
+	// by what was asked, not by whom the names resolve to after aliases changed hands.
+	RequestedRecipients []agentcomm.ParticipantID
+	Kind                agentcomm.MessageKind
+	InReplyTo           *agentcomm.MessageID
+	Body                string
+	ArtifactRefs        []string
 	// AutoResult marks the message as a passive turn result afm posts on the sender's behalf
 	// (agentcomm.Message.AutoResult). Never set from an HTTP or CLI request: only afm itself posts one.
 	AutoResult bool
@@ -274,7 +278,7 @@ func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 	}
 	if o.opts.Store != nil {
 		rs := o.opts.Store.Snapshot()
-		block += agentCommRequestsBlock(rs.Assistants.Mesh, participant)
+		block += agentCommRequestsBlock(rs.Assistants.Mesh, o.liveRoster(rs), participant)
 		block += boardTasksBlockFor(rs, participant)
 	}
 	return block

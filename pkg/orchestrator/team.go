@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -110,13 +111,16 @@ func (o *Orchestrator) initTeam(ctx context.Context) error {
 		case saved:
 			o.warnIfTeamMemberChanged(op, m)
 		default:
-			if err := o.addTeamAgent(ctx, m); err != nil {
+			id, err := o.addTeamAgent(ctx, m)
+			if err != nil {
 				var se *state.StorageError
 				if errors.As(err, &se) || errors.Is(err, errTeamAliasContention) {
 					return fmt.Errorf("team member %q: %w", m.ID, err)
 				}
 				o.teamWarning(m.ID, fmt.Sprintf("agent not added: %v", err))
+				continue
 			}
+			o.warnIfTeamMemberLostAssistant(m, id)
 		}
 	}
 	return nil
@@ -125,9 +129,10 @@ func (o *Orchestrator) initTeam(ctx context.Context) error {
 // addTeamAgent creates a member's agent. The dashboard is already up, so an "Add run agent" can take the
 // member's @name between its read of the roster and its commit; that rejection is retried with a fresh
 // roster, which gives the member the next free name. Losing every attempt is errTeamAliasContention.
-func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) error {
+// It returns the member's participant id.
+func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) (agentcomm.ParticipantID, error) {
 	for range teamAliasAttempts {
-		_, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+		res, err := o.AddRunAgent(ctx, AddRunAgentRequest{
 			OperationID: teamOperationID(m.ID),
 			ProfileID:   assistants.ProfileID(m.Profile),
 			Title:       m.Title,
@@ -136,10 +141,27 @@ func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) erro
 		})
 		var rejected *state.OperationRejectedError
 		if !errors.As(err, &rejected) || rejected.Code != assistants.CodeStaleRevision {
-			return err
+			return res.ParticipantID, err
 		}
 	}
-	return fmt.Errorf("%w (%d attempts)", errTeamAliasContention, teamAliasAttempts)
+	return "", fmt.Errorf("%w (%d attempts)", errTeamAliasContention, teamAliasAttempts)
+}
+
+// warnIfTeamMemberLostAssistant tells the CLI that a member just added to the run asked for @assistant but
+// the bound Assistant, saved under that name, already owns it — so the member got the next free @assistant-N.
+// Only a fresh add is reported; a resumed run neither warns again nor renames the member it saved.
+func (o *Orchestrator) warnIfTeamMemberLostAssistant(m flow.TeamMember, id agentcomm.ParticipantID) {
+	rs := o.opts.Store.Snapshot()
+	if side := rs.Assistants.Mesh.Participants[o.SideAgentParticipantID()]; side == nil || !strings.EqualFold(side.Alias, sideAgentParticipantAlias) {
+		return
+	}
+	asked := runAgentAlias(m.Title, assistants.ProfileID(m.Profile))
+	if !strings.EqualFold(asked, sideAgentParticipantAlias) {
+		return
+	}
+	if now := effectiveAlias(rs, id); now != asked {
+		o.writeAssistantAliasWarning(teamMemberHolder(m.ID, id), now)
+	}
 }
 
 // warnIfTeamMemberChanged compares a saved team agent with its declaration in the current flow.yaml. A

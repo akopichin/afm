@@ -5,6 +5,53 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Fix: reject Agent Mesh waits that would deadlock
+
+The `wait_cycle` check now accounts for every pending wait of a helper or run
+agent, and for a run agent waiting for delegated children. It rejects a new
+wait that would leave those agents waiting on each other, even when another
+pending wait has an independent responder. See [Agent Mesh waits](docs/collaboration.md#team-conversations).
+
+### Fix: worktree runs from a project opened through a symlink
+
+A second `afm run` with worktrees enabled no longer fails with "branch is already
+checked out" when the project path goes through a symlink (for example `/var` →
+`/private/var` on macOS): afm now compares worktree paths after resolving symlinks,
+the way git reports them. See [Worktrees](docs/config-reference.md).
+
+### Improvement: afm skills for Claude Code and Codex, kept in sync with afm
+
+afm's skills now live in one place, `~/.afm/skills`, and `afm install-skills` links them
+into both `~/.claude/skills` and `$CODEX_HOME/skills` (default `~/.codex/skills`) with
+relative symlinks that, with the standard layout, also resolve inside afm's Docker
+container. `afm run` refreshes them on the host before every run (a failed refresh
+only prints a warning), so the skills follow the installed afm.
+
+- All afm skills are now named `afm-*`: `/afm` became `/afm-run`, `live-run` became
+  `/afm-live-run`, and the new `/afm-mesh-driven-development` (executing a plan
+  through named team/mesh agents) ships with afm. Skills under the old names are
+  never touched; delete old copies yourself if you no longer need them.
+- One-time migration: folders installed by an older `afm install-skills` are real
+  directories and are left alone (each run prints a one-line hint). Run
+  `afm install-skills --force` once to replace them with links; the old folders are
+  moved to a `.afm-skills-backup-*` directory next to the skills folder.
+- The `--skills-dir` flag is removed.
+- The Docker image now pins Codex CLI 0.163.0.
+
+See [Skills for Claude Code and Codex](docs/getting-started.md#skills-for-claude-code-and-codex).
+
+### Improvement: rename the dashboard Side agent to Assistant
+
+The dashboard now calls the run's built-in chat **Assistant** in its button,
+modal, Team roster and related actions. Newly registered runs address it as
+`@assistant` in Agent Mesh and the Feed; saved runs with `@side` keep their
+existing handle. If a flow already uses `assistant` as a stage ID or as a team
+or run agent title, that participant gets the first free `@assistant-N` handle
+instead. The CLI warns when startup registration reassigns a handle; Team shows
+the current handle. Independent helper tasks are labelled **Helper**.
+See [Assistant](docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run)
+and [Team conversations](docs/collaboration.md#team-conversations).
+
 ### Fix: Team unread markers and drafts
 
 **New to you** and the per-conversation **New messages** markers now work when the
@@ -85,7 +132,7 @@ in the modal. A successful final answer returns to the source conversation
 unless the agent already answered there with `afm agent reply`. Failed turns and
 unavailable reply destinations settle as **Could not answer** or undeliverable
 instead of leaving the sender waiting. Automatic turn results do not cause a
-reflex reply. See [Dashboard](docs/dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+reflex reply. See [Dashboard](docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run)
 and [Team conversations](docs/collaboration.md#team-conversations).
 
 ### Fix: show explicit Side agent replies in its modal
@@ -977,7 +1024,7 @@ palette; the status→color rule is shared, so the four skins can no longer drif
 
 ### Improvement: disable the dashboard side agent with a toggle
 
-The dashboard [side agent](https://github.com/akopichin/afm/blob/main/docs/dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+The dashboard [side agent](https://github.com/akopichin/afm/blob/main/docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run)
 can now be turned off. It stays ON by default; disable it with `side_agent.enabled: false`
 in `config.yaml`, `AFM_SIDEAGENT=0` for a single run, or `side_agent: false` at the top
 of `flow.yaml`. Precedence is **flow `side_agent` > env `AFM_SIDEAGENT` > config

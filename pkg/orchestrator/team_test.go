@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -357,5 +358,55 @@ func TestInitTeam_ForeignOperationUnderTheTeamIDIsNotTheMember(t *testing.T) {
 	notices, err := os.ReadFile(filepath.Join(o.opts.RunDir, "notices.jsonl"))
 	if err != nil || !strings.Contains(string(notices), `"member_id":"arch"`) || !strings.Contains(string(notices), "not this flow's team") {
 		t.Fatalf("notices = %s (%v), want a team_warning that the id is taken", notices, err)
+	}
+}
+
+// A team member titled "Assistant" cannot have @assistant once the bound Assistant owns it: it is added as
+// @assistant-2 and the CLI is told once. A resumed run keeps the saved member and says nothing.
+func TestInitTeam_MemberNamedAssistantMakesRoom(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	side := registerTestSideAgent(t, o).ID
+	var warnings bytes.Buffer
+	o.opts.AliasWarning = &warnings
+	o.opts.Team = flow.Team{{ID: "arch", Profile: "reviewer", Title: "Assistant"}}
+
+	mustInitTeam(t, o)
+
+	_, p := teamAgent(t, store.Snapshot(), "arch")
+	if got := liveAliases(o); p.Alias != "assistant-2" || got[side] != "assistant" || got[p.ID] != "assistant-2" {
+		t.Fatalf("aliases = member %q, bound %q, want assistant-2 and assistant", got[p.ID], got[side])
+	}
+	want := fmt.Sprintf(`warning: @assistant is reserved for the dashboard Assistant; team member "arch" (%s) now answers to @assistant-2`+"\n", p.ID)
+	if warnings.String() != want {
+		t.Fatalf("warning = %q, want %q", warnings.String(), want)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resumed, _ := reopenAssistantsTestOrchestrator(t, o)
+	warnings.Reset()
+	resumed.opts.AliasWarning = &warnings
+	mustInitTeam(t, resumed)
+	if warnings.Len() != 0 {
+		t.Fatalf("a resume warned: %q", warnings.String())
+	}
+}
+
+// Without a bound Assistant nothing is reserved: a stage "assistant" simply holds the name, the member behind
+// it takes @assistant-2, and no reservation warning is printed.
+func TestInitTeam_MemberNamedAssistantNoWarningWithoutBoundAgent(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true, flow.Stage{ID: "assistant", Command: "claude"})
+	var warnings bytes.Buffer
+	o.opts.AliasWarning = &warnings
+	o.opts.Team = flow.Team{{ID: "arch", Profile: "reviewer", Title: "Assistant"}}
+
+	mustInitTeam(t, o)
+
+	if _, p := teamAgent(t, store.Snapshot(), "arch"); p.Alias != "assistant-2" {
+		t.Fatalf("member alias = %q, want assistant-2", p.Alias)
+	}
+	if warnings.Len() != 0 {
+		t.Fatalf("unexpected warning: %q", warnings.String())
 	}
 }

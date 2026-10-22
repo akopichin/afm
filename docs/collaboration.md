@@ -3,7 +3,7 @@
 Helpers are agent tasks attached to a stage. They have their own status, result,
 and cost records. A helper can give advice, or it can be **required** to pass
 before its stage finishes. Attach helpers from the dashboard or declare them in
-`flow.yaml` to attach automatically when a stage starts execution. The Side agent
+`flow.yaml` to attach automatically when a stage starts execution. The Assistant
 can record mentions of configured roles, but a mention alone does not create a
 task.
 
@@ -211,7 +211,7 @@ to it appear under their own names. Other agents that have finished cannot be
 sent to. The stage's own agent, once the stage has finished, can still be named
 on purpose: the post is recorded in its conversation and reaches the others
 named, but the stage's agent does not read it. The dashboard has no separate Discussion tab and no proposal cards; agent
-proposals are still recorded by the run. In the Side agent, type `@` to choose a
+proposals are still recorded by the run. In the Assistant, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
@@ -221,9 +221,9 @@ The run-wide **Team** tab appears after the Agent Mesh probe succeeds, even if
 stage collaboration is disabled. A first probe that returns 404 hides Team;
 the stage Feed's People panel has its own collaboration gate. Team opens on
 **Messages → Conversations**. Switch the list to **People** to find run agents
-and the Side agent under **This run**, or stage agents in flow order under the
+and the Assistant under **This run**, or stage agents in flow order under the
 collapsible **Stages** group, with helpers beneath their stage agent. Working
-run and Side agents appear first; the remaining run agents keep their roster
+run agents and the Assistant appear first; the remaining run agents keep their roster
 order. People rows show each `@name`, status, and presence dot. Search filters
 the current list by conversation topic, member, handle, or message preview, or
 by name and handle in People. The list switch also works with the arrow keys.
@@ -237,19 +237,32 @@ it arrives. Incoming messages reorder rows without changing the selected
 conversation. **Board** and **Activity** are run-wide tabs above the conversation
 header, so neither depends on the selected conversation.
 
-To ask the Side agent about the run, select it under **This run** and send a
-message such as `Summarize the latest test failure`. Its handle is `@side`; a
-stage agent or helper can address the same participant with
-`afm agent send --to side --kind request --body "Summarize the latest test failure"`.
-You can also include the Side agent in a stage Feed message by selecting it in
+To ask the Assistant about the run, select it under **This run** and send a
+message such as `Summarize the latest test failure`. Its handle in a newly
+registered run is `@assistant`. A stage agent or helper can address it with
+`afm agent send --to assistant --kind request --body "Summarize the latest test failure"`.
+You can also include the Assistant in a stage Feed message by selecting it in
 the **People** panel. Each message it receives joins its single conversation,
 one turn at a time. The answer appears as a linked reply in the original Team
-or Feed conversation. While it works, the Side agent modal names the sender;
+or Feed conversation. While it works, the Assistant modal names the sender;
 **Stop** there applies only to messages started from that modal. A failed turn
 shows **Could not answer** in the source conversation; if that conversation
 cannot accept a reply, its delivery is marked undeliverable. See
-[Side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) for
+[Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run) for
 its conversation and availability settings.
+
+A newly registered Assistant reserves `@assistant`. If a stage ID, team title or
+run agent title also asks for that handle, its effective handle becomes the first
+free `@assistant-N` (starting with `@assistant-2`). Check **Team → People** for
+current handles; a stage added later can make an existing participant move to
+another free suffix. The CLI warns when startup registration displaces an
+existing participant or a newly added team member needs a suffix. Saved
+participants do not trigger the warning again on resume. The Assistant keeps
+its stored alias on resume, even when its dashboard or `side_agent` capability
+is disabled. It then appears as
+unreachable, and a send to `@assistant` fails instead of reaching another agent.
+Without a registered Assistant using that alias, no handle is reserved. Older
+runs saved with `@side` keep that handle without migration.
 
 Drag the divider at the roster's right edge to make more room for the roster or
 conversation. You can also focus the divider and use **Left** or **Right** to
@@ -426,9 +439,18 @@ on an unknown message, task or stage, on a closed thread, on a stage that alread
 finished in another status, one only the waiter itself could satisfy, one for an
 answer nobody can send any more (every recipient of the message, or every other
 member of the thread, has finished or gave the message up as undeliverable), or
-one that would close a cycle of agents waiting on each other is refused. A wait
-registered while someone could still answer ends the same way once they can no
-longer do so: when every recipient of the message (or every other member of the
+one that would close a cycle of agents waiting on each other is refused.
+
+A wait that would create such a cycle reports `wait_cycle`. The check treats a
+helper or run agent's pending waits together: that agent resumes only after all
+of them end, so a new wait can be refused even if one of its other waits has an
+independent responder. Within one message wait, any eligible recipient can
+answer; a stage agent with several waits can resume when one ends. The check
+also includes a run agent waiting for its delegated children, and refuses a
+child's wait on that parent when it would close a cycle.
+
+A wait registered while someone could still answer is cancelled if no one can
+answer later: when every recipient of the message (or every other member of the
 thread) has finished — a helper or run agent failed or was cancelled, a stage
 finished without answering — the wait is cancelled with a reason naming them,
 and the waiter continues; a stage parked in `awaiting_peer` gets its next turn
@@ -464,7 +486,7 @@ garble ordinary text.
 A stage's [Feed composer](dashboard.md#writing-to-a-stage-from-its-feed) sends a
 **Message** — one message to one or several participants, the stage's agent by
 default — or attaches a configured helper through a preview. Its **Revise** mode
-continues to send stage feedback through the existing revision path. In the Side agent, an `@` mention records a role with
+continues to send stage feedback through the existing revision path. In the Assistant, an `@` mention records a role with
 the chat message; it still does not attach a helper by itself.
 
 ## Helper answers and protocol errors
@@ -479,7 +501,7 @@ object, such as extracting an answer from a markdown fence or surrounding prose.
 The repaired object still has to pass the same schema and verdict checks; repair
 cannot change its verdict. An accepted result shows a **repaired** badge in the
 helper view and a warning in the stage feed. If the answer still fails, the
-helper gets a `protocol_error`. Open **Show the assistant's raw answer** in the
+helper gets a `protocol_error`. Open **Show the helper's raw answer** in the
 helper view to inspect its final text, when available. The free-text fields
 `summary`, `evidence`, `suggested_change` and `limitations` may be either a
 string or an array of strings; anything else in them is still a protocol error.

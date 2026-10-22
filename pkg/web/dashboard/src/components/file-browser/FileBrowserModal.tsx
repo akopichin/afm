@@ -708,7 +708,7 @@ export function FileBrowserModal({
               Clear
             </button>
             <button type="button" className="btn btn-approve" onClick={noPauseNotes.send}>
-              Send to side agent
+              Send to assistant
             </button>
           </div>
         )}

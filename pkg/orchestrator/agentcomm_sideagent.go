@@ -12,6 +12,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
@@ -19,10 +21,11 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// sideAgentParticipantAlias is the short @-mention name the bound Side agent answers to. Fixed (not derived
-// from anything per-run) because, unlike a run agent — one per attached profile — a run has at most one Side
-// agent, so there is nothing to disambiguate.
-const sideAgentParticipantAlias = "side"
+// sideAgentParticipantAlias is the short @-mention name a newly registered bound Side agent (shown to people
+// as the Assistant) answers to. Fixed (not derived from anything per-run) because a run has at most one, and
+// it keeps the name even when another participant asked for it first (reserveAssistantAlias). Runs registered
+// before the rename saved the alias "side" and keep it: their descriptor is never rewritten.
+const sideAgentParticipantAlias = "assistant"
 
 // SideAgentParticipantID returns the canonical, run-scoped mesh identity for the bound Side agent —
 // "side:<runID>" — computed from the orchestrator's own run id so no caller hardcodes the prefix.
@@ -49,7 +52,7 @@ func (o *Orchestrator) SetSideAgentDrain(drain func(context.Context) bool) {
 func (o *Orchestrator) sideParticipantAvailable(p agentcomm.Participant) agentcomm.Participant {
 	if p.Kind == agentcomm.KindSideAgent && !o.sideAgentReachable.Load() {
 		p.Reachable = false
-		p.UnreachableReason = "side agent is unavailable"
+		p.UnreachableReason = "Assistant is unavailable"
 	}
 	return p
 }
@@ -106,7 +109,13 @@ type RegisterSideAgentRequest struct {
 // from the way stageParticipant/helperParticipant do.
 func (o *Orchestrator) RegisterSideAgent(ctx context.Context, req RegisterSideAgentRequest) (agentcomm.Participant, error) {
 	if o.opts.RunID == "" {
-		return agentcomm.Participant{}, errors.New("agentcomm: run id is required to register the side agent")
+		return agentcomm.Participant{}, errors.New("agentcomm: run id is required to register the Assistant")
+	}
+	// A resumed run keeps the descriptor it saved — alias and display name included. Submitting it again with
+	// another configured command would be the same operation id with different effects.
+	rs := o.opts.Store.Snapshot()
+	if saved, ok := rs.Assistants.Mesh.Participants[o.SideAgentParticipantID()]; ok {
+		return *saved, nil
 	}
 	p := agentcomm.Participant{
 		ID: o.SideAgentParticipantID(), Kind: agentcomm.KindSideAgent, Scope: agentcomm.ScopeRun,
@@ -120,11 +129,56 @@ func (o *Orchestrator) RegisterSideAgent(ctx context.Context, req RegisterSideAg
 		ID: sideAgentRegisterOperationID(o.opts.RunID), Kind: "mesh_register_side_agent", Actor: req.Actor,
 		Effects: []state.Effect{eff},
 	}
+	before := o.liveRoster(rs)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventMeshParticipant, Data: map[string]any{"participant_id": string(p.ID)}})
 	})
 	if err != nil {
 		return agentcomm.Participant{}, err
 	}
+	o.warnReassignedAliases(before, o.liveRoster(o.opts.Store.Snapshot()))
 	return p, nil
+}
+
+// warnReassignedAliases tells the CLI about every participant that answered to a different @name before the
+// bound Assistant registered: the user chose to be warned once, when the name is taken away.
+func (o *Orchestrator) warnReassignedAliases(before, after []agentcomm.Participant) {
+	for _, now := range after {
+		i := slices.IndexFunc(before, func(p agentcomm.Participant) bool { return p.ID == now.ID })
+		if i >= 0 && before[i].Alias != now.Alias {
+			o.writeAssistantAliasWarning(o.aliasHolderLabel(now), now.Alias)
+		}
+	}
+}
+
+// aliasHolderLabel names a participant that lost @assistant the way the user declared it: a team member by its
+// team: id, a run agent by its title, a stage by its id.
+func (o *Orchestrator) aliasHolderLabel(p agentcomm.Participant) string {
+	switch p.Kind {
+	case agentcomm.KindStageAgent:
+		return fmt.Sprintf("stage %q (%s)", p.StageID, p.ID)
+	case agentcomm.KindRunAgent:
+		for _, m := range o.opts.Team {
+			if meshRunParticipantID(deriveTaskID(teamOperationID(m.ID))) == p.ID {
+				return teamMemberHolder(m.ID, p.ID)
+			}
+		}
+		return fmt.Sprintf("run agent %q (%s)", p.DisplayName, p.ID)
+	default:
+		return fmt.Sprintf("participant %q (%s)", p.DisplayName, p.ID)
+	}
+}
+
+func teamMemberHolder(memberID string, id agentcomm.ParticipantID) string {
+	return fmt.Sprintf("team member %q (%s)", memberID, id)
+}
+
+// writeAssistantAliasWarning is the one formatter of the "@assistant is taken" line, for every path that can
+// move a participant off the name. Without a writer (no CLI) it prints nothing.
+func (o *Orchestrator) writeAssistantAliasWarning(holder, newAlias string) {
+	if o.opts.AliasWarning == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(o.opts.AliasWarning, "warning: @%s is reserved for the dashboard Assistant; %s now answers to @%s\n",
+		sideAgentParticipantAlias, holder, newAlias)
 }

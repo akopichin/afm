@@ -11,6 +11,7 @@ docker run --rm -it --init \
   -v $(pwd):/project \
   -v ~/.claude:/home/afm/.claude \
   -v ~/.afm:/home/afm/.afm \
+  -v ~/.codex:/tmp/host-codex:ro \
   -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
   -e AFM_IN_DOCKER=1 \
   -e ANTHROPIC_API_KEY \
@@ -19,6 +20,22 @@ docker run --rm -it --init \
 ```
 
 Notes on the flags:
+
+- Install the skills before the first manual `docker run`, and again after switching
+  to a new image: afm syncs its skills automatically only on the host, and the
+  container sees them through the mounted `~/.claude` and `~/.afm` (see
+  [Skills for Claude Code and Codex](getting-started.md#skills-for-claude-code-and-codex)).
+  Run `afm install-skills` on the host, or, without a local afm, let the image do it:
+
+  ```bash
+  docker run --rm \
+    -v ~/.claude:/home/afm/.claude -v ~/.afm:/home/afm/.afm -v ~/.codex:/home/afm/.codex \
+    -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
+    akopichin/afm:latest install-skills
+  ```
+- `-v ~/.codex:/tmp/host-codex:ro` is needed only for Codex stages: the entrypoint
+  copies the Codex login and skill links from there into the container. Skip it if
+  you don't use Codex.
 
 - `--init` runs Docker's init as the container's PID 1. It reaps the background
   processes an agent leaves behind once afm stops them at the end of a turn;
@@ -181,8 +198,8 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 - **Review notes.** Clicking a file line while a flow is running lets you pause the
   whole flow and attach line-anchored comments — see
   [Dashboard → Review notes](dashboard.md#review-notes-pause-the-whole-flow-and-comment-on-files-docker-mode).
-- **Comments without pausing.** With the Side agent enabled, choose **Without pause**
-  at the file-line prompt to collect draft comments and attach them to a Side agent
+- **Comments without pausing.** With the Assistant enabled, choose **Without pause**
+  at the file-line prompt to collect draft comments and attach them to an Assistant
   message while the flow keeps running — see
   [Dashboard → File comments without pausing](dashboard.md#file-comments-without-pausing-docker-mode).
 - **Strictly read-only.** `.git` and `.afm` are always hidden. No create/edit/rename/
@@ -212,6 +229,6 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 - **Security: loopback-only port.** The dashboard port is **always** published as
   `-p 127.0.0.1:<port>:<port>`, not reachable from other hosts on your LAN. The
   dashboard exposes unauthenticated mutating stage/flow APIs (plus, optionally, the
-  project file browser and the [side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run)),
+  project file browser and the [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run)),
   so this boundary is unconditional — it does not depend on whether those features are
   enabled. Use an SSH tunnel for remote access rather than widening the publish.

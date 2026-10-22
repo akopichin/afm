@@ -693,7 +693,7 @@ describe('FileBrowserModal', () => {
   })
 
   describe('no-pause notes bar', () => {
-    test('noPauseNotes undefined: no drafts bar (host-run / side agent disabled regression)', async () => {
+    test('noPauseNotes undefined: no drafts bar (host-run / assistant disabled regression)', async () => {
       const api = new FilesApiMock()
       api.setRoots([{ id: 'project', label: 'afm' }])
       api.install()
@@ -760,7 +760,7 @@ describe('FileBrowserModal', () => {
       expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 1 file')
     })
 
-    test('Send to side agent calls send; Clear calls clear', async () => {
+    test('Send to assistant calls send; Clear calls clear', async () => {
       const api = new FilesApiMock()
       api.setRoots([{ id: 'project', label: 'afm' }])
       api.install()
@@ -770,7 +770,7 @@ describe('FileBrowserModal', () => {
       renderModal({ noPauseNotes: makeNoPauseNotes({ comments: [makeDraft()], send, clear }) })
       await screen.findByRole('button', { name: 'afm' })
 
-      fireEvent.click(screen.getByRole('button', { name: 'Send to side agent' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send to assistant' }))
       expect(send).toHaveBeenCalledTimes(1)
 
       fireEvent.click(screen.getByRole('button', { name: 'Clear' }))

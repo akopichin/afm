@@ -112,6 +112,9 @@ func newRunCmd() *cobra.Command {
 				fmt.Printf("afm: worktree %s (branch %s)\n", wtDir, runNameFor(worktreeName, f.Name))
 			}
 
+			// Skills are synced only on the host (see syncSkillsForRun), so this must run before the Docker re-exec.
+			syncSkillsForRun(home, os.Stderr)
+
 			if cfg.Docker.IsDockerEnabled() {
 				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir)
 			}
@@ -254,6 +257,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	ws := openRunWorkspace(cfg.Server.GetPort() > 0)
 	orchOpts := orchestrator.Options{
 		RunDir:             runDir,
+		AliasWarning:       os.Stderr,
 		Stages:             stages,
 		Store:              store,
 		Config:             cfg,
@@ -299,7 +303,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	if cfg.Server.GetPort() > 0 && sideAgentEnabled(cfg, f) {
 		side, err = startSideAgent(runID, cfg, env, collab.registry, orch)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: side agent disabled: %v\n", err)
+			fmt.Fprintf(os.Stderr, "warning: Assistant disabled: %v\n", err)
 		}
 	}
 	// Журнал/учёт закрываются ПОСЛЕ остановки сервера и только если агент дренирован. Регистрируем ДО defer

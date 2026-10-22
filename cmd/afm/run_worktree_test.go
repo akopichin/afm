@@ -80,7 +80,11 @@ func TestWorktreeBase_UsesRootDirWhenSet(t *testing.T) {
 // TestWorktreeBase_FallsBackToAfmRoot proves the deliberate difference from absoluteAgentRoot: an empty
 // root_dir anchors to afm-root (the parent of .afm/, per AGENTS.md), never to the process CWD.
 func TestWorktreeBase_FallsBackToAfmRoot(t *testing.T) {
-	tmp := t.TempDir()
+	// Реальный путь: после Chdir filepath.Abs опирается на os.Getwd (на macOS /var -> /private/var).
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	orig, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

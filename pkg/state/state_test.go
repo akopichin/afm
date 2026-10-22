@@ -488,25 +488,6 @@ func TestFileContentSHA_Stable(t *testing.T) {
 	}
 }
 
-func TestAtomicWriteFile_ReplacesAndPersists(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "f.json")
-	if err := atomicWriteFile(p, []byte("v1"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := atomicWriteFile(p, []byte("v2"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := os.ReadFile(p)
-	if string(got) != "v2" {
-		t.Fatalf("got %q", got)
-	}
-	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp-*"))
-	if len(leftovers) != 0 {
-		t.Fatal("temp file left behind")
-	}
-}
-
 func TestSaveFeedbackOnce_ExactlyOnce(t *testing.T) {
 	dir := t.TempDir()
 	wrote, err := SaveFeedbackOnce(dir, "op-A", "please fix line 42")

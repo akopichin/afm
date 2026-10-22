@@ -885,7 +885,7 @@ func TestFinalize_SymlinkedTargetParentRejected(t *testing.T) {
 	}
 }
 
-// --- validateTargetUnderMemoryDir / canonicalizeExistingAncestor -----------
+// --- validateTargetUnderMemoryDir ------------------------------------------
 
 func TestValidateTargetUnderMemoryDir_SymlinkedFinalFile(t *testing.T) {
 	mem := t.TempDir()
@@ -924,17 +924,6 @@ func TestValidateTargetUnderMemoryDir_OK(t *testing.T) {
 	}
 	if err := validateTargetUnderMemoryDir(mem, filepath.Join(mem, "sub", "f.md")); err != nil {
 		t.Errorf("valid target rejected: %v", err)
-	}
-}
-
-func TestCanonicalizeExistingAncestor_RejoinsMissingComponents(t *testing.T) {
-	base := t.TempDir()
-	got := canonicalizeExistingAncestor(filepath.Join(base, "a", "b", "c.md"))
-	// base is real; a/b/c.md do not exist yet — resolved base + rejoined tail.
-	realBase, _ := filepath.EvalSymlinks(base)
-	want := filepath.Join(realBase, "a", "b", "c.md")
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
 	}
 }
 

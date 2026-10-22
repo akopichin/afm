@@ -1,12 +1,21 @@
 import { describe, expect, test } from 'vitest'
 import type { MeshParticipant, MeshThread } from '../api/mesh-client'
-import { boardNotifyCandidates, findExistingDirectThread, mentionHandle, mentionHandles, participantInitials, participantLabel, senderLabel, threadLabel } from './mesh-roster'
+import { boardNotifyCandidates, findExistingDirectThread, mentionHandle, mentionHandles, participantInitials, participantLabel, participantRole, senderLabel, threadLabel } from './mesh-roster'
 
-const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'claude', reachable: true }
+const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
 const commit: MeshParticipant = { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', alias: 'commit', display_name: 'Commit & cleanup', stage_id: 'commit', reachable: true }
 const bare: MeshParticipant = { id: 'stage:x', kind: 'stage_agent', scope: 'stage', reachable: true }
 
 describe('mesh-roster', () => {
+  test('participantRole names the dashboard Assistant only for side_agent and independent helpers Helper', () => {
+    const helper: MeshParticipant = { id: 'helper:t1', kind: 'helper', scope: 'stage', alias: 'reviewer', display_name: 'Reviewer', stage_id: 'commit', reachable: true }
+    const sibling: MeshParticipant = { id: 'stage:assistant', kind: 'stage_agent', scope: 'stage', alias: 'assistant-2', display_name: 'Assistant stage', stage_id: 'assistant', reachable: true }
+    const roster = [side, helper, sibling]
+    const roles = Object.fromEntries(roster.map((p) => [p.id, participantRole(p.kind)]))
+    expect(roles).toEqual({ [side.id]: 'Assistant', 'helper:t1': 'Helper', 'stage:assistant': 'Stage executor' })
+    expect(participantRole('run_agent')).toBe('Run agent')
+  })
+
   test('initials are two letters: capitals, word starts, or the start of a single word', () => {
     expect(participantInitials('QA Engineer')).toBe('QA')
     expect(participantInitials('API reviewer')).toBe('AP')
@@ -17,12 +26,12 @@ describe('mesh-roster', () => {
 
   test('participantLabel prefers display_name, then alias, then id', () => {
     expect(participantLabel(side)).toBe('claude')
-    expect(participantLabel({ ...side, display_name: '' })).toBe('side')
+    expect(participantLabel({ ...side, display_name: '' })).toBe('assistant')
     expect(participantLabel(bare)).toBe('stage:x')
   })
 
   test('mentionHandle uses the short server alias instead of the run-scoped id', () => {
-    expect(mentionHandle(side)).toBe('side')
+    expect(mentionHandle(side)).toBe('assistant')
     expect(mentionHandle(bare)).toBe('stage:x')
   })
 
@@ -32,7 +41,7 @@ describe('mesh-roster', () => {
     const handles = mentionHandles([qa1, qa2, side])
     expect(handles.get('run:t-1')).toBe('run:t-1')
     expect(handles.get('run:t-2')).toBe('run:t-2')
-    expect(handles.get(side.id)).toBe('side')
+    expect(handles.get(side.id)).toBe('assistant')
   })
 
   test('senderLabel names the operator "You" and known participants by name', () => {
