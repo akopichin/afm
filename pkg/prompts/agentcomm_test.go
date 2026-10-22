@@ -426,3 +426,25 @@ func TestAgentComm_TypedInstructionsSayRepliesNeverCompleteTasks(t *testing.T) {
 		t.Errorf("typed block lacks the completion rule:\n%s", block)
 	}
 }
+
+func TestTruncateText(t *testing.T) {
+	for _, tc := range []struct {
+		s    string
+		max  int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"abcdefghij", 10, "abcdefghij"},
+		{"abcdefghijk", 10, "abcdefg…"},
+		{"яяяяя", 8, "яя…"}, // never splits a two-byte letter
+		{"abcdef", 2, "…"},  // no room for text: only the mark
+	} {
+		got := TruncateText(tc.s, tc.max)
+		if got != tc.want {
+			t.Errorf("TruncateText(%q, %d) = %q, want %q", tc.s, tc.max, got, tc.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("TruncateText(%q, %d) = %q is not valid UTF-8", tc.s, tc.max, got)
+		}
+	}
+}

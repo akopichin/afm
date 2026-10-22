@@ -29,11 +29,10 @@ var (
 type MeshBoardTaskMeta struct {
 	// ExpectedVersion is the task version the change is based on; 0 for a create.
 	ExpectedVersion int `json:"expected_version"`
-	// Status, if set, is the task's aggregate status after this change, as planned by the orchestrator.
-	// Apply rejects the change when the projection computes a different one.
-	Status agentcomm.BoardTaskStatus `json:"status,omitempty"`
-	// NoticeSkipped is kept for the orchestrator to rebuild a retry's receipt; the projection ignores it.
-	NoticeSkipped string `json:"notice_skipped,omitempty"`
+	// Status and NoticeSkipped are kept for the orchestrator to rebuild a retry's receipt: the task's status
+	// after the operation and why its coordinator notice was skipped. The projection ignores both.
+	Status        agentcomm.BoardTaskStatus `json:"status,omitempty"`
+	NoticeSkipped string                    `json:"notice_skipped,omitempty"`
 }
 
 func (m MeshBoardTaskMeta) boardTaskMeta() MeshBoardTaskMeta { return m }
@@ -124,9 +123,7 @@ func applyBoardTaskEffect[P boardTaskPayload](
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode %s payload: %w", c.Kind, err)
 	}
-	meta := p.boardTaskMeta()
-
-	task, err := boardTaskToChange(as.Mesh, c.Kind, key, meta.ExpectedVersion)
+	task, err := boardTaskToChange(as.Mesh, c.Kind, key, p.boardTaskMeta().ExpectedVersion)
 	if err != nil {
 		return err
 	}
@@ -135,9 +132,6 @@ func applyBoardTaskEffect[P boardTaskPayload](
 	}
 	task.Version++
 	task.UpdatedSeq, task.UpdatedAt = c.Seq, c.Time
-	if meta.Status != "" && task.Status() != meta.Status {
-		return boardTaskInvalid("task %s would be %s after %s, not %s", key, task.Status(), c.Kind, meta.Status)
-	}
 
 	if dryRun {
 		return nil

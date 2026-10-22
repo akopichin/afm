@@ -6,11 +6,11 @@ import (
 	"log"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -213,7 +213,7 @@ func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) s
 	if summary == "" {
 		summary = "(no summary)"
 	}
-	return truncateText(summary, agentcomm.MaxBodyBytes-len(footer)) + footer
+	return prompts.TruncateText(summary, agentcomm.MaxBodyBytes-len(footer)) + footer
 }
 
 // turnFailureBody is the text of the reply that ends a run agent's turn whose answer could not be accepted:
@@ -221,7 +221,7 @@ func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) s
 func turnFailureBody(taskID assistants.TaskID, turn uint64, agent, reason string) string {
 	footer := fmt.Sprintf("\n\n— turn failed; write again to retry; task %s, turn %d", taskID, turn)
 	text := fmt.Sprintf("%s could not produce a valid result: %s", agent, describeTaskFailure(reason))
-	return truncateText(text, agentcomm.MaxBodyBytes-len(footer)) + footer
+	return prompts.TruncateText(text, agentcomm.MaxBodyBytes-len(footer)) + footer
 }
 
 // protocolErrorPrefix starts the status reason of a turn whose answer broke the result protocol.
@@ -236,19 +236,6 @@ func describeTaskFailure(reason string) string {
 		return "no reason recorded"
 	}
 	return reason
-}
-
-// truncateText cuts s to at most maxBytes bytes on a character boundary, marking the cut with an ellipsis.
-func truncateText(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	const ellipsis = "…"
-	cut := maxBytes - len(ellipsis)
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + ellipsis
 }
 
 // noticeResultNotDelivered tells the feed that taskID's result was committed without the message that should

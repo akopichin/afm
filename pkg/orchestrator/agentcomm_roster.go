@@ -23,7 +23,7 @@ import (
 // MeshState itself, since nothing else knows about them.
 
 const (
-	meshUserParticipantID = agentcomm.ParticipantID("user")
+	meshUserParticipantID = agentcomm.UserParticipantID
 	meshStagePrefix       = "stage:"
 	meshHelperPrefix      = "helper:"
 	// meshRunPrefix is meshRunParticipantID's own prefix (agentcomm_attach.go) — named here, next to its

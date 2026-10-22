@@ -345,18 +345,17 @@ func TestBoardTaskStaleVersion(t *testing.T) {
 	wantRejected(t, err, assistants.CodeStaleRevision, ErrBoardTaskStaleVersion)
 }
 
-func TestBoardTaskStatusMismatchRejected(t *testing.T) {
+// Status and NoticeSkipped are receipt annotations: the projection ignores them, so a journal whose stored
+// status no longer matches Status() (after its aggregation changes) still replays.
+func TestBoardTaskStatusIsOnlyAnAnnotation(t *testing.T) {
 	store := openTypedStore(t, t.TempDir())
 	mustApplyTask(t, store, "user", createTask(t, ""))
 	payload := MeshBoardTaskAssignedPayload{
 		AssignmentID: "a1", ParticipantID: "a",
 		MeshBoardTaskMeta: MeshBoardTaskMeta{ExpectedVersion: 1, Status: agentcomm.BoardTaskInProgress, NoticeSkipped: "a"},
 	}
-	err := applyTaskEffects(t, store, "user", taskEffect(t, kindMeshBoardTaskAssigned, payload))
-	wantRejected(t, err, assistants.CodeInvalidStatus, ErrBoardTaskInvalidTransition)
-
-	payload.Status = agentcomm.BoardTaskTodo
 	mustApplyTask(t, store, "user", taskEffect(t, kindMeshBoardTaskAssigned, payload))
+	wantStatus(t, store, agentcomm.BoardTaskTodo)
 }
 
 func TestBoardTaskRejectedBatchDoesNotLeak(t *testing.T) {

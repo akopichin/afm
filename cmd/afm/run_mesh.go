@@ -30,7 +30,7 @@ func meshServerActions(orch *orchestrator.Orchestrator) server.MeshActions {
 // comment above.
 var meshUIActor = state.Actor{Kind: "user"}
 
-const meshUIParticipant = agentcomm.ParticipantID("user")
+const meshUIParticipant = agentcomm.UserParticipantID
 
 func (a meshActions) ListParticipants(ctx context.Context) ([]agentcomm.Participant, error) {
 	page, err := a.orch.ListParticipants(ctx, orchestrator.ListParticipantsRequest{Actor: meshUIActor})

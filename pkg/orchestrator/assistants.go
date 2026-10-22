@@ -24,6 +24,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -336,7 +337,7 @@ const maxTaskReasonBytes = 2048
 // sanitizeTaskReason is reason as it may be recorded and shown: secrets masked first, then cut to
 // maxTaskReasonBytes — in this order, so a cut never leaves part of a secret the redaction cannot recognise.
 func (o *Orchestrator) sanitizeTaskReason(reason string) string {
-	return truncateText(o.RedactSecrets(reason), maxTaskReasonBytes)
+	return prompts.TruncateText(o.RedactSecrets(reason), maxTaskReasonBytes)
 }
 
 // runAgentIdleAfterFailure is the status reason of a run agent idle again after a turn that failed for reason.

@@ -296,7 +296,7 @@ const (
 // singleLine makes another participant's text safe for one list row: line breaks become spaces, tags are
 // escaped and the text is cut to limit bytes.
 func singleLine(s string, limit int) string {
-	return escapeTags(cutBytes(strings.Join(strings.Fields(s), " "), limit))
+	return escapeTags(TruncateText(strings.Join(strings.Fields(s), " "), limit))
 }
 
 // AgentCommBoardTasksBlock renders the <your_board_tasks> block: the active typed board task assignments of the
@@ -312,7 +312,7 @@ func AgentCommBoardTasksBlock(tasks []AssignedBoardTask, omitted int) string {
 	for _, t := range tasks {
 		fmt.Fprintf(&sb, "- %s \"%s\": assignment %s, %s, version %d", singleLine(t.Key, maxBoardTaskKeyBytes), singleLine(t.Title, maxBoardTaskTitleBytes), t.AssignmentID, t.State, t.Version)
 		if t.Progress != "" {
-			fmt.Fprintf(&sb, ", progress: %s", indentLines(escapeTags(cutBytes(t.Progress, maxBoardTaskProgressBytes)), "  "))
+			fmt.Fprintf(&sb, ", progress: %s", indentLines(escapeTags(TruncateText(t.Progress, maxBoardTaskProgressBytes)), "  "))
 		}
 		sb.WriteString("\n")
 	}
@@ -323,14 +323,16 @@ func AgentCommBoardTasksBlock(tasks []AssignedBoardTask, omitted int) string {
 	return sb.String()
 }
 
-// cutBytes shortens s to at most limit bytes without splitting a UTF-8 character, marking the cut with "…".
-func cutBytes(s string, limit int) string {
-	if len(s) <= limit {
+// TruncateText shortens s to at most maxBytes bytes without splitting a UTF-8 character, marking the cut with
+// "…" (which alone is all that remains when maxBytes leaves no room for text).
+func TruncateText(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	cut := limit - len("…")
+	const ellipsis = "…"
+	cut := max(maxBytes-len(ellipsis), 0)
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
-	return s[:cut] + "…"
+	return s[:cut] + ellipsis
 }

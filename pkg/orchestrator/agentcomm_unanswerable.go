@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -107,7 +108,7 @@ func unanswerableWait(rs state.RunState, waitID agentcomm.WaitID) (string, bool)
 		return "", false
 	}
 	// The reasons come from recorded (already sanitised) task status reasons; the joined text is bounded too.
-	return truncateText("nobody left can answer: "+strings.Join(gone, "; "), maxTaskReasonBytes), true
+	return prompts.TruncateText("nobody left can answer: "+strings.Join(gone, "; "), maxTaskReasonBytes), true
 }
 
 // whyCannotAnswer names p and why it can no longer answer.

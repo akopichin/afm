@@ -12,13 +12,14 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
 // Typed board tasks (agentcomm.BoardTask). Every rule of a change — who may make it, in which state, on which
 // version — lives in the projection (pkg/state/mesh_board_tasks.go). BoardTask only turns a request into the
-// change's effects, plans the task status each effect leads to by running that same projection on a copy, and
-// lets ApplyRunOperation decide.
+// change's effects, plans the task the change leads to by running that same projection on a copy, and lets
+// ApplyRunOperation decide.
 
 // BoardTaskAction names the change BoardTask makes to a task.
 type BoardTaskAction string
@@ -141,8 +142,8 @@ type boardTaskPlan struct {
 	msgs    []plannedMessage // the one message the change sends, if any
 }
 
-// planBoardTask plans req against rs: the task's effects with their planned statuses — refused here when the
-// projection refuses them — and the message the change sends.
+// planBoardTask plans req against rs: the task's effects — refused here when the projection refuses them, the
+// last one annotated with the task's status after them — and the message the change sends.
 func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (boardTaskPlan, error) {
 	resolve := func(name string) (agentcomm.ParticipantID, error) { return o.boardTaskParticipant(rs, name) }
 	changes, err := o.planBoardTaskChanges(req, resolve)
@@ -150,10 +151,12 @@ func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (b
 		return boardTaskPlan{}, err
 	}
 	target := state.Target{BoardKey: req.Key, ParticipantID: string(req.Actor)}
-	if err := planBoardTaskStatuses(rs, target, changes); err != nil {
+	after, err := projectBoardTask(rs, target, changes)
+	if err != nil {
 		return boardTaskPlan{}, err
 	}
-	msgs, err := o.planBoardTaskMessage(rs, req, changes)
+	changes[len(changes)-1].meta.Status = after.Status()
+	msgs, err := o.planBoardTaskMessage(rs, req, changes[len(changes)-1], after.Version)
 	if err != nil {
 		return boardTaskPlan{}, err
 	}
@@ -172,15 +175,14 @@ func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (b
 
 // planBoardTaskMessage plans the message a change sends: to the new assignee when the actor assigns someone
 // else (a claim or a self-assign sends nothing), or to the coordinator on a done, release or reopen by anyone
-// else. A skipped coordinator notice is recorded in the change's NoticeSkipped.
-func (o *Orchestrator) planBoardTaskMessage(rs state.RunState, req BoardTaskRequest, changes []boardTaskChange) ([]plannedMessage, error) {
-	last := changes[len(changes)-1]
+// else. last is the change's last effect and version the task's version after the change. A skipped
+// coordinator notice is recorded in last's NoticeSkipped.
+func (o *Orchestrator) planBoardTaskMessage(rs state.RunState, req BoardTaskRequest, last boardTaskChange, version int) ([]plannedMessage, error) {
 	switch p := last.payload.(type) {
 	case *state.MeshBoardTaskAssignedPayload:
 		if p.ParticipantID == req.Actor {
 			return nil, nil
 		}
-		version := req.ExpectedVersion + len(changes)
 		return o.planAssignmentMessage(rs, req, *p, version)
 	case *state.MeshBoardTaskCompletedPayload, *state.MeshBoardTaskReleasedPayload, *state.MeshBoardTaskReopenedPayload:
 		return o.planCoordinatorNotice(rs, req, last.meta)
@@ -199,9 +201,9 @@ func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskReq
 	if task := rs.Assistants.Mesh.BoardTasks[req.Key]; task != nil {
 		title = task.Title
 	}
-	body := clipMessageBody(fmt.Sprintf("Board task %s assigned to you (assignment %s): %s. "+
+	body := prompts.TruncateText(fmt.Sprintf("Board task %s assigned to you (assignment %s): %s. "+
 		"Run `afm agent task start --key %s --assignment-id %s --expected-version %d` when you begin, `done` when finished.",
-		req.Key, a.AssignmentID, title, req.Key, a.AssignmentID, version))
+		req.Key, a.AssignmentID, title, req.Key, a.AssignmentID, version), agentcomm.MaxBodyBytes)
 	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, a.ParticipantID, body, boardTaskActor(req.Actor))
 	if err != nil {
 		return nil, err
@@ -270,12 +272,7 @@ func coordinatorNoticeBody(task agentcomm.BoardTask, req BoardTaskRequest) strin
 	if req.Text != "" {
 		body += ": " + req.Text
 	}
-	return clipMessageBody(body)
-}
-
-// clipMessageBody cuts body to fit agentcomm.MaxBodyBytes together with clipForNotice's "…" mark.
-func clipMessageBody(body string) string {
-	return clipForNotice(body, agentcomm.MaxBodyBytes-len("…"))
+	return prompts.TruncateText(body, agentcomm.MaxBodyBytes)
 }
 
 // assignableParticipant checks that id can take a new assignment now: a known agent that can receive
@@ -310,7 +307,7 @@ func boardTaskActor(p agentcomm.ParticipantID) state.Actor {
 }
 
 // boardTaskChange is one board task effect being planned: its kind and a pointer to its payload, with the
-// payload's embedded meta, where the expected version and the planned status are filled in.
+// payload's embedded meta, where the expected version (and, on the last change, the planned status) is filled in.
 type boardTaskChange struct {
 	kind    string
 	payload any
@@ -435,22 +432,18 @@ func boardTaskEffects(target state.Target, changes []boardTaskChange) ([]state.E
 	return effects, nil
 }
 
-// planBoardTaskStatuses fills in each change's status: the task's status after it, computed by the
-// projection on a copy of rs. A change the projection refuses is refused here, with the same rejection the
-// commit would give.
-func planBoardTaskStatuses(rs state.RunState, target state.Target, changes []boardTaskChange) error {
-	for i := range changes {
-		effects, err := boardTaskEffects(target, changes[:i+1])
-		if err != nil {
-			return err
-		}
-		after, err := rs.ProjectEffects(effects)
-		if err != nil {
-			return err
-		}
-		changes[i].meta.Status = after.Assistants.Mesh.BoardTasks[target.BoardKey].Status()
+// projectBoardTask returns the task as it would be after changes, computed by the projection on a copy of rs.
+// A change the projection refuses is refused here, with the same rejection the commit would give.
+func projectBoardTask(rs state.RunState, target state.Target, changes []boardTaskChange) (agentcomm.BoardTask, error) {
+	effects, err := boardTaskEffects(target, changes)
+	if err != nil {
+		return agentcomm.BoardTask{}, err
 	}
-	return nil
+	after, err := rs.ProjectEffects(effects)
+	if err != nil {
+		return agentcomm.BoardTask{}, err
+	}
+	return *after.Assistants.Mesh.BoardTasks[target.BoardKey], nil
 }
 
 // boardTaskReceipt describes the task after the last board task effect of an operation committed at seq, and
