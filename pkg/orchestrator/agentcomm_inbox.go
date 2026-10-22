@@ -276,7 +276,41 @@ func (o *Orchestrator) markInboxDelivered(participant agentcomm.ParticipantID, i
 // agentCommInboxForTask is renderInbox's helper-task-scoped wrapper, used by buildTaskContext (T4.3): the
 // task's unfinished turn input (if any) is rendered again together with its pending messages.
 func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
-	return o.renderInbox(o.taskMeshParticipant(taskID), o.unfinishedTurnInput(taskID))
+	participant := o.taskMeshParticipant(taskID)
+	block, rendered, markDelivered = o.renderInbox(participant, o.unfinishedTurnInput(taskID))
+	return block + boardTasksBlockFor(o.opts.Store.Snapshot(), participant), rendered, markDelivered
+}
+
+// maxListedBoardTasks bounds the <your_board_tasks> block, which repeats on every turn.
+const maxListedBoardTasks = 20
+
+// boardTasksBlockFor renders participant's <your_board_tasks> block: its active assignments on typed board
+// tasks, oldest assignment first, at most maxListedBoardTasks. A run without the typed protocol has no such
+// tasks and gets nothing.
+func boardTasksBlockFor(rs state.RunState, participant agentcomm.ParticipantID) string {
+	if !boardTasksEnabled(rs) {
+		return ""
+	}
+	type assigned struct {
+		seq  uint64
+		task prompts.AssignedBoardTask
+	}
+	var mine []assigned
+	for _, t := range rs.Assistants.Mesh.BoardTasks {
+		if a, ok := t.ActiveFor(participant); ok {
+			mine = append(mine, assigned{a.AssignedSeq, prompts.AssignedBoardTask{
+				Key: t.Key, Title: t.Title, AssignmentID: a.ID, State: string(a.State), Progress: a.Progress, Version: t.Version,
+			}})
+		}
+	}
+	slices.SortFunc(mine, func(a, b assigned) int { return cmp.Compare(a.seq, b.seq) })
+	omitted := max(0, len(mine)-maxListedBoardTasks)
+	mine = mine[:len(mine)-omitted]
+	tasks := make([]prompts.AssignedBoardTask, len(mine))
+	for i, m := range mine {
+		tasks[i] = m.task
+	}
+	return prompts.AgentCommBoardTasksBlock(tasks, omitted)
 }
 
 // unfinishedTurnInput returns the messages handed to taskID's latest turn while that turn has not finished: the

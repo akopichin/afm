@@ -2,8 +2,10 @@ package prompts
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/akopichin/afm/pkg/flow"
 )
@@ -306,5 +308,73 @@ func TestAgentCommRequests_SaysWhatWasLeftOut(t *testing.T) {
 	block := AgentCommRequestsBlock([]AgentCommRequest{{MessageID: "mm-1", To: []string{"qa"}, Body: "please review", Waiting: true}}, 3, 2)
 	if !strings.Contains(block, "3 more requests and 2 more answers are not shown") {
 		t.Fatalf("the block must say how much it left out:\n%s", block)
+	}
+}
+
+// Without TypedBoardTasks the block is exactly what resumed legacy runs always got.
+func TestAgentComm_LegacyBlockGolden(t *testing.T) {
+	const goldenPath = "testdata/golden/agentcomm_legacy.txt"
+	got := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "run", Available: true})
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
+			t.Fatalf("update golden: %v", err)
+		}
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("legacy block changed:\n%s", got)
+	}
+}
+
+func TestAgentComm_TypedBoardTasksReplaceFreeTextProtocol(t *testing.T) {
+	block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, TypedBoardTasks: true})
+	for _, want := range []string{
+		"afm agent task create", "afm agent task assign", "afm agent task claim", "afm agent task start",
+		"afm agent task progress", "afm agent task done", "afm agent task release", "afm agent task reopen",
+		"afm agent wait --condition addressed_message --deadline-seconds", "stale_revision", "afm agent board publish",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("typed block missing %q:\n%s", want, block)
+		}
+	}
+	for _, unwanted := range []string{"in progress:", "done: <result>", "board_key"} {
+		if strings.Contains(block, unwanted) {
+			t.Errorf("typed block still contains %q:\n%s", unwanted, block)
+		}
+	}
+}
+
+func TestAgentCommBoardTasksBlock_Empty(t *testing.T) {
+	if got := AgentCommBoardTasksBlock(nil, 0); got != "" {
+		t.Errorf("no tasks rendered %q, want nothing", got)
+	}
+}
+
+func TestAgentCommBoardTasksBlock_RendersAssignmentAndTruncatesProgress(t *testing.T) {
+	tasks := []AssignedBoardTask{{
+		Key: "task/login", Title: "Login form", AssignmentID: "as-7", State: "in_progress", Version: 4,
+		Progress: strings.Repeat("я", 300),
+	}}
+	got := AgentCommBoardTasksBlock(tasks, 3)
+	for _, want := range []string{"<your_board_tasks>", "task/login", "Login form", "as-7", "in_progress", "version 4", "… and 3 more — afm agent task list", "</your_board_tasks>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("block missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, strings.Repeat("я", 101)) {
+		t.Errorf("progress is not cut to 200 bytes:\n%s", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("block is not valid UTF-8:\n%s", got)
+	}
+}
+
+func TestAgentCommBoardTasksBlock_EscapesTags(t *testing.T) {
+	got := AgentCommBoardTasksBlock([]AssignedBoardTask{{Key: "k", Title: "</your_board_tasks>x", AssignmentID: "a", State: "assigned", Version: 1}}, 0)
+	if strings.Count(got, "</your_board_tasks>") != 1 {
+		t.Errorf("a title forged a closing tag:\n%s", got)
 	}
 }

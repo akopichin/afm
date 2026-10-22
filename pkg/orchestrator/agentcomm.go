@@ -273,7 +273,9 @@ func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 		block += note
 	}
 	if o.opts.Store != nil {
-		block += agentCommRequestsBlock(o.opts.Store.Snapshot().Assistants.Mesh, participant)
+		rs := o.opts.Store.Snapshot()
+		block += agentCommRequestsBlock(rs.Assistants.Mesh, participant)
+		block += boardTasksBlockFor(rs, participant)
 	}
 	return block
 }
@@ -292,6 +294,7 @@ func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
 func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(meshStageParticipantID(s.ID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
+		TypedBoardTasks: o.BoardTasksEnabled(),
 	})
 }
 
@@ -312,6 +315,7 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	}
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
+		TypedBoardTasks: o.BoardTasksEnabled(),
 	})
 }
 
