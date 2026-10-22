@@ -612,16 +612,17 @@ describe('ThreadConversation in Run conversations mode', () => {
       expect(chip()).toBeNull()
     })
 
-    test('outside Run mode there is no reply link, no chip and a request is answered as a plain message', async () => {
+    test('outside Run mode (Team) the open request is preselected too and the answer is linked to it', async () => {
       useServer([agentMsg('q1', 1)])
       const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
       render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, dev]} />)
       await loaded('Question q1')
-      expect(chip()).toBeNull()
-      expect(screen.queryByRole('button', { name: /Reply in conversation/ })).toBeNull()
-      fireEvent.change(composer(), { target: { value: 'plain' } })
+      await waitFor(() => expect(chip()).toHaveTextContent('Question q1'))
+      expect(screen.getAllByRole('button', { name: /Reply in conversation/ }).some((b) => b.classList.contains('conversation-reply-link'))).toBe(true)
+      fireEvent.change(composer(), { target: { value: 'CORAL' } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-      await waitFor(() => expect(send).toHaveBeenCalledWith('mt-1', expect.not.objectContaining({ inReplyTo: expect.anything() })))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('mt-1', expect.objectContaining({ kind: 'reply', inReplyTo: 'q1', body: 'CORAL' })))
+      await waitFor(() => expect(chip()).toBeNull())
     })
 
     test('a request B arriving while an answer to A is typed does not retarget', async () => {

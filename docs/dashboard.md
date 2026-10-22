@@ -92,6 +92,12 @@ from the list and use **Back** from the conversation; on wide screens, drag or
 keyboard-resize the divider. See [Team conversations](collaboration.md#team-conversations)
 for messaging and participant details.
 
+Answers to agent requests are linked the same way as in
+[Run conversations](#run-conversations): the latest unanswered request in the
+selected conversation is preselected as the reply target, so the agent's
+`reply_to` wait resumes. Cancel the target to send a plain message, or choose
+**Reply** on another message.
+
 ## Run conversations
 
 In `assistants` mode, the **Run conversations** button in the workspace tabs

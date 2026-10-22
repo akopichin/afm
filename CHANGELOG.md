@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Fix: link answers to agent requests in the Team tab
+
+In Team conversations, the latest unanswered agent request is now preselected
+as the reply target, and **Reply** is offered on each request, as in Run
+conversations. Before, an answer typed in Team was sent as a plain message, so
+the agent's `reply_to` wait never resolved and a run agent kept the run open
+after every stage had finished. See [Team workspace](docs/dashboard.md#team-workspace).
+
 ### Improvement: choose Team or Assistants dashboard mode
 
 Set `collaboration.mode` to `team` (the default) or `assistants` in global or

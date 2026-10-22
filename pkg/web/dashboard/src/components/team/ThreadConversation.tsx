@@ -22,8 +22,9 @@ export type ThreadConversationTarget =
   | { kind: 'thread'; thread: MeshThread }
   | { kind: 'direct'; participant: MeshParticipant }
 
-// RunConversationMode — what the Run conversations panel adds to a conversation. The panel owns the reply target
-// (as it owns the draft), so both outlive a trip Back to the list.
+// RunConversationMode — what the Run conversations panel adds to a conversation: seen tracking, and ownership of
+// the reply target (as it owns the draft), so both outlive a trip Back to the list. Without it (Team) the
+// conversation keeps its own reply target: it is remounted per conversation anyway.
 export type RunConversationMode = {
   // seenSeq — the stored cursor: agent messages to the human up to it have been seen.
   seenSeq: number
@@ -232,7 +233,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
     if (!closed) composerWasFocusedRef.current = false
   }, [closed])
 
-  // ---- Run conversations mode: linked replies and seen tracking ----
+  // ---- Linked replies; seen tracking only in Run conversations mode ----
   const incoming = useMemo(() => messages.filter(isAgentMessageToUser), [messages])
   const unseen = useMemo(() => (run === undefined ? [] : incoming.filter((m) => m.seq > run.seenSeq)), [incoming, run?.seenSeq])
   const unseenKey = unseen.map((m) => m.id).join(',')
@@ -244,20 +245,21 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   // question would be preselected again right after the send.
   const [justAnswered, setJustAnswered] = useState<ReadonlySet<string>>(NO_IDS)
   const replyThread = liveThread ?? undefined
-  const preselected = run === undefined ? undefined : latestUnansweredRequest(messages, replyThread, participants, justAnswered)
+  const preselected = latestUnansweredRequest(messages, replyThread, participants, justAnswered)
   const draftEmpty = draft.trim() === ''
-  const replyTargetId = run?.replyTargetId
-  const onReplyTargetChange = run?.onReplyTargetChange
+  const [ownReplyTargetId, setOwnReplyTargetId] = useState<string | null | undefined>(undefined)
+  const replyTargetId = run === undefined ? ownReplyTargetId : run.replyTargetId
+  const onReplyTargetChange = run === undefined ? setOwnReplyTargetId : run.onReplyTargetChange
   // The live choice, for a send that resolves later: by then the human may have pointed at another question.
   const replyTargetRef = useRef(replyTargetId)
   replyTargetRef.current = replyTargetId
   // The newest unanswered request is the default target while nothing is typed; from then on it is held, so a
   // newer request never silently takes over an answer in progress.
   useEffect(() => {
-    if (preselected !== undefined && replyTargetId === undefined && draftEmpty) onReplyTargetChange?.(preselected.id)
+    if (preselected !== undefined && replyTargetId === undefined && draftEmpty) onReplyTargetChange(preselected.id)
   }, [preselected?.id, replyTargetId, draftEmpty, onReplyTargetChange])
   useEffect(() => {
-    if (closed && replyTargetId !== undefined) onReplyTargetChange?.(undefined)
+    if (closed && replyTargetId !== undefined) onReplyTargetChange(undefined)
   }, [closed, replyTargetId, onReplyTargetChange])
   const replyTo = typeof replyTargetId === 'string' ? messages.find((m) => m.id === replyTargetId && canReplyInConversation(m, replyThread, participants)) ?? null : null
 
@@ -383,7 +385,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
         if (answeredId !== undefined) setJustAnswered((prev) => new Set(prev).add(answeredId))
         // Any sent message ends the choice it was sent with (also a cancelled one): the next question is
         // preselected afresh. A choice made while this was in flight is the human's next one: keep it.
-        if (replyTargetRef.current === targetAtSend) onReplyTargetChange?.(undefined)
+        if (replyTargetRef.current === targetAtSend) onReplyTargetChange(undefined)
         // Here rather than in onSuccess: a draft kept by the parent outlives this conversation view, and a
         // message that was sent must not wait there to be sent again after the user switched away and back.
         if (onSendSucceeded) onSendSucceeded(current, thread, submitted, sendRequestId)
@@ -408,7 +410,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   }
 
   function toggleReplyTarget(id: string): void {
-    onReplyTargetChange?.(replyTo?.id === id ? null : id)
+    onReplyTargetChange(replyTo?.id === id ? null : id)
     if (replyTo?.id !== id) caretNodeRef.current?.focus()
   }
 
@@ -431,7 +433,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
                 sideOutcome={sideAgentOutcome(m, messages, sideFailures)}
                 isNew={accented.has(m.id)}
                 replyActive={replyTo?.id === m.id}
-                onReply={run !== undefined && canReplyInConversation(m, replyThread, participants) ? () => toggleReplyTarget(m.id) : undefined}
+                onReply={canReplyInConversation(m, replyThread, participants) ? () => toggleReplyTarget(m.id) : undefined}
               />
             ))}
           </ul>
@@ -453,7 +455,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
           <div className="feed-reply-chip feed-reply-chip--conversation">
             <span className="feed-reply-chip-label">↩ Reply in conversation</span>
             <span className="feed-reply-chip-src">{messageText(replyTo.body, true).slice(0, 120)}</span>
-            <button type="button" className="feed-reply-chip-cancel" aria-label="Cancel reply in conversation" onClick={() => onReplyTargetChange?.(null)}>
+            <button type="button" className="feed-reply-chip-cancel" aria-label="Cancel reply in conversation" onClick={() => onReplyTargetChange(null)}>
               ✕
             </button>
           </div>
