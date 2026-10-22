@@ -92,7 +92,7 @@ describe('AssistantTaskView', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
     expect(mockGetRaw).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    fireEvent.click(screen.getByText(/show the helper's raw answer/i))
     await waitFor(() => expect(mockGetRaw).toHaveBeenCalledTimes(1))
     expect(mockGetRaw).toHaveBeenCalledWith('t1')
     await waitFor(() => expect(screen.getByText(/Проверил\. Всё плохо/)).toBeInTheDocument())
@@ -106,7 +106,7 @@ describe('AssistantTaskView', () => {
     )
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
-    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    fireEvent.click(screen.getByText(/show the helper's raw answer/i))
     await waitFor(() => expect(screen.getByText('RAW-FOR-t1')).toBeInTheDocument())
 
     rerender(
@@ -115,7 +115,7 @@ describe('AssistantTaskView', () => {
 
     await waitFor(() => expect(screen.queryByText('RAW-FOR-t1')).not.toBeInTheDocument())
     expect(screen.queryByText('RAW-FOR-t2')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    fireEvent.click(screen.getByText(/show the helper's raw answer/i))
     await waitFor(() => expect(mockGetRaw).toHaveBeenLastCalledWith('t2'))
     await waitFor(() => expect(screen.getByText('RAW-FOR-t2')).toBeInTheDocument())
   })
@@ -126,7 +126,7 @@ describe('AssistantTaskView', () => {
     render(<AssistantTaskView task={makeTask({ status: 'failed', statusReason: 'protocol_error: invalid JSON' })} />)
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
-    fireEvent.click(screen.getByText(/show the assistant's raw answer/i))
+    fireEvent.click(screen.getByText(/show the helper's raw answer/i))
     await waitFor(() => expect(mockGetRaw).toHaveBeenCalledTimes(1))
     // No crash, and the plain error text is still there.
     expect(screen.getByRole('alert')).toHaveTextContent('protocol_error: invalid JSON')

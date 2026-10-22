@@ -181,8 +181,8 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 - **Review notes.** Clicking a file line while a flow is running lets you pause the
   whole flow and attach line-anchored comments — see
   [Dashboard → Review notes](dashboard.md#review-notes-pause-the-whole-flow-and-comment-on-files-docker-mode).
-- **Comments without pausing.** With the Side agent enabled, choose **Without pause**
-  at the file-line prompt to collect draft comments and attach them to a Side agent
+- **Comments without pausing.** With the Assistant enabled, choose **Without pause**
+  at the file-line prompt to collect draft comments and attach them to an Assistant
   message while the flow keeps running — see
   [Dashboard → File comments without pausing](dashboard.md#file-comments-without-pausing-docker-mode).
 - **Strictly read-only.** `.git` and `.afm` are always hidden. No create/edit/rename/
@@ -212,6 +212,6 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
 - **Security: loopback-only port.** The dashboard port is **always** published as
   `-p 127.0.0.1:<port>:<port>`, not reachable from other hosts on your LAN. The
   dashboard exposes unauthenticated mutating stage/flow APIs (plus, optionally, the
-  project file browser and the [side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run)),
+  project file browser and the [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run)),
   so this boundary is unconditional — it does not depend on whether those features are
   enabled. Use an SSH tunnel for remote access rather than widening the publish.

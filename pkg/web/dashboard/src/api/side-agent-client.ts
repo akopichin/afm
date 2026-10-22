@@ -7,7 +7,7 @@ export class SideAgentApiError extends Error {
   status: number
 
   constructor(status: number, code: string | undefined) {
-    super(`side-agent request failed: ${status}${code ? ` (${code})` : ''}`)
+    super(`assistant request failed: ${status}${code ? ` (${code})` : ''}`)
     this.name = 'SideAgentApiError'
     this.status = status
     this.code = code

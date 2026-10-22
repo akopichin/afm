@@ -74,7 +74,7 @@ export function AttachAssistantDialog({
   }
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Attach assistant">
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Attach helper">
       <div className="modal-content attach-assistant-dialog" ref={modalRef}>
         <ActionCard
           roleTitle={roleTitle}

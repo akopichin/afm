@@ -35,7 +35,7 @@ server:
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
 # side_agent:
-#   enabled: false          # dashboard side agent; ON by default. env AFM_SIDEAGENT overrides,
+#   enabled: false          # dashboard Assistant; ON by default. env AFM_SIDEAGENT overrides,
 #                           # and flow.yaml side_agent overrides both. See dashboard.md
 
 # collaboration:
@@ -89,7 +89,7 @@ docker:
 
 `client.reasoning` sets the reasoning (thinking) effort for the default claude
 client. afm maps the level to claude's `--effort` flag for the author (stage) agents,
-the dashboard side agent, the interactive JSON-repair helper, and `afm memory
+the dashboard Assistant, the interactive JSON-repair helper, and `afm memory
 rebuild`. The independent AI `verify:` reviewer does **not** receive it — verifier
 agents run without the effort flag. It works both on the host and in Docker (the
 default claude is exec'd directly in both).

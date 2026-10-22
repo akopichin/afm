@@ -5,6 +5,18 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Improvement: rename the dashboard Side agent to Assistant
+
+The dashboard now calls the run's built-in chat **Assistant** in its button,
+modal, Team roster and related actions. Newly registered runs address it as
+`@assistant` in Agent Mesh and the Feed; saved runs with `@side` keep their
+existing handle. If a flow already uses `assistant` as a stage ID or as a team
+or run agent title, that participant gets the first free `@assistant-N` handle
+instead. The CLI warns when startup registration reassigns a handle; Team shows
+the current handle. Independent helper tasks are labelled **Helper**.
+See [Assistant](docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run)
+and [Team conversations](docs/collaboration.md#team-conversations).
+
 ### Fix: Team unread markers and drafts
 
 **New to you** and the per-conversation **New messages** markers now work when the
@@ -85,7 +97,7 @@ in the modal. A successful final answer returns to the source conversation
 unless the agent already answered there with `afm agent reply`. Failed turns and
 unavailable reply destinations settle as **Could not answer** or undeliverable
 instead of leaving the sender waiting. Automatic turn results do not cause a
-reflex reply. See [Dashboard](docs/dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+reflex reply. See [Dashboard](docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run)
 and [Team conversations](docs/collaboration.md#team-conversations).
 
 ### Fix: show explicit Side agent replies in its modal
@@ -977,7 +989,7 @@ palette; the status→color rule is shared, so the four skins can no longer drif
 
 ### Improvement: disable the dashboard side agent with a toggle
 
-The dashboard [side agent](https://github.com/akopichin/afm/blob/main/docs/dashboard.md#side-agent-a-free-form-chat-alongside-the-run)
+The dashboard [side agent](https://github.com/akopichin/afm/blob/main/docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run)
 can now be turned off. It stays ON by default; disable it with `side_agent.enabled: false`
 in `config.yaml`, `AFM_SIDEAGENT=0` for a single run, or `side_agent: false` at the top
 of `flow.yaml`. Precedence is **flow `side_agent` > env `AFM_SIDEAGENT` > config

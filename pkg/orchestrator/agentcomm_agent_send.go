@@ -28,14 +28,14 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 	roster := o.liveRoster(rs)
 	// A retry of an already-committed request replays its outcome, whatever changed since (a new agent with
 	// the same alias, the conversation closed) — never re-resolving names or picking another thread.
-	if receipt, replayed, err := o.replayedSend(rs, roster, req); replayed {
+	if receipt, replayed, err := o.replayedSend(rs, req); replayed {
 		return receipt, err
 	}
 	recipients, err := resolveRecipients(roster, req.Recipients)
 	if err != nil {
 		return SendReceipt{}, err
 	}
-	req.Recipients = recipients
+	req.RequestedRecipients, req.Recipients = req.Recipients, recipients
 
 	if req.InReplyTo != nil {
 		answered, ok := rs.Assistants.Mesh.Messages[*req.InReplyTo]
@@ -83,7 +83,7 @@ func (o *Orchestrator) SendFromAgent(ctx context.Context, req SendRequest) (Send
 
 // replayedSend answers a send whose request id already committed, from the committed message: the same
 // message is its receipt, any other request under that id is a conflict. replayed=false: nothing committed.
-func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Participant, req SendRequest) (SendReceipt, bool, error) {
+func (o *Orchestrator) replayedSend(rs state.RunState, req SendRequest) (SendReceipt, bool, error) {
 	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshSend)
 	if err != nil || !committed {
 		return SendReceipt{}, err != nil, err // a storage error answers the request too
@@ -95,7 +95,7 @@ func (o *Orchestrator) replayedSend(rs state.RunState, roster []agentcomm.Partic
 	}
 	// A record without origin_stage (written before it was kept, or a send from no feed) keeps the legacy retry
 	// rule: the feed is not compared.
-	if !found || (p.OriginStage != "" && p.OriginStage != req.OriginStage) || !o.committedSendMatches(rs, roster, committedMessage(target, p.MeshMessageSentPayload), req) {
+	if !found || (p.OriginStage != "" && p.OriginStage != req.OriginStage) || !o.committedSendMatches(rs, committedMessage(target, p.MeshMessageSentPayload), toParticipantIDs(p.RequestedRecipients), req) {
 		return SendReceipt{}, true, state.OperationIDConflictError(req.OperationID)
 	}
 	return SendReceipt{MessageID: agentcomm.MessageID(target.MessageID), Seq: op.Result.Seq, ThreadID: agentcomm.ThreadID(target.ThreadID)}, true, nil
@@ -119,9 +119,9 @@ func committedMessage(target state.Target, p state.MeshMessageSentPayload) agent
 
 // committedSendMatches reports whether m — the message already committed under req's request id — is the
 // message req asks to send: same sender, kind, body, passive flag, reply target, artifacts, thread (when req
-// names one) and recipients. Recipient names are resolved against m's own recipients, so an alias that has since become
-// ambiguous (a new agent with the same alias) still names whom it named then.
-func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcomm.Participant, m agentcomm.Message, req SendRequest) bool {
+// names one) and recipients. requested — the recipient names the committed send was written with (empty for a
+// record that did not keep them) — are compared with req's as written (sameRequestedRecipients).
+func (o *Orchestrator) committedSendMatches(rs state.RunState, m agentcomm.Message, requested []agentcomm.ParticipantID, req SendRequest) bool {
 	if m.Sender != req.Sender || m.Kind != req.Kind || m.AutoResult != req.AutoResult || !o.sameRedactedText(m.Body, req.Body) ||
 		!o.sameRedactedList(m.ArtifactRefs, req.ArtifactRefs) || !sameMessageRef(m.InReplyTo, req.InReplyTo) {
 		return false
@@ -129,6 +129,35 @@ func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcom
 	if req.ThreadID != "" && req.ThreadID != m.ThreadID {
 		return false
 	}
+	if len(requested) > 0 {
+		retry := req.Recipients
+		if len(req.RequestedRecipients) > 0 { // Send after SendFromAgent already resolved the names
+			retry = req.RequestedRecipients
+		}
+		return sameRequestedRecipients(o.liveRoster(rs), requested, retry)
+	}
+	return sameLegacyRecipients(rs, m, req)
+}
+
+// sameRequestedRecipients compares a retry's recipient names with the ones the committed send was written with.
+// The names written are what identifies the request: an alias that has since changed hands (the Assistant took
+// @assistant) still means what it meant when written, so the same names are the same request and other names
+// are another one — they are not resolved against the current roster. The one exception: a send written with
+// participant ids is the same request when the retry names the same participants by alias that resolve to them
+// now.
+func sameRequestedRecipients(roster []agentcomm.Participant, requested, retry []agentcomm.ParticipantID) bool {
+	want := sortedMemberSet(requested)
+	if slices.Equal(want, sortedMemberSet(retry)) {
+		return true
+	}
+	resolved, err := resolveRecipients(roster, retry)
+	return err == nil && slices.Equal(want, sortedMemberSet(resolved))
+}
+
+// sameLegacyRecipients is the recipient check for a committed send without its written names (a reply that named
+// nobody, or a record from before they were kept): req's names are resolved against m's own recipients under the
+// aliases saved in the state — best effort, as the live aliases may have moved on since.
+func sameLegacyRecipients(rs state.RunState, m agentcomm.Message, req SendRequest) bool {
 	want := req.Recipients
 	if len(want) == 0 && req.InReplyTo != nil {
 		// A reply without recipients went back to the sender of the message it answers.
@@ -136,7 +165,7 @@ func (o *Orchestrator) committedSendMatches(rs state.RunState, roster []agentcom
 			want = []agentcomm.ParticipantID{answered.Sender}
 		}
 	}
-	committed := slices.DeleteFunc(slices.Clone(roster), func(p agentcomm.Participant) bool { return !slices.Contains(m.Recipients, p.ID) })
+	committed := slices.DeleteFunc(stateRoster(rs), func(p agentcomm.Participant) bool { return !slices.Contains(m.Recipients, p.ID) })
 	resolved, err := resolveRecipients(committed, want)
 	return err == nil && slices.Equal(sortedMemberSet(resolved), sortedMemberSet(m.Recipients))
 }

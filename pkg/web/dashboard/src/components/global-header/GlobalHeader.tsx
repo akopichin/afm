@@ -163,8 +163,8 @@ function SideAgentHeaderButton(): ReactElement | null {
     <button
       type="button"
       className="icon-btn gh-side-agent-btn"
-      aria-label="Open side agent"
-      title="Side agent (Cmd/Ctrl+`)"
+      aria-label="Open assistant"
+      title="Assistant (Cmd/Ctrl+`)"
       onClick={open}
     >
       <span className="gh-side-agent-icon" aria-hidden="true">
@@ -172,7 +172,7 @@ function SideAgentHeaderButton(): ReactElement | null {
           <path d="M4 5h16v11H8l-4 3Z" />
         </svg>
       </span>
-      <span className="gh-side-agent-label">Side agent</span>
+      <span className="gh-side-agent-label">Assistant</span>
       {dot !== '' && <span className={`gh-side-agent-dot${dot}`} aria-hidden="true" />}
     </button>
   )

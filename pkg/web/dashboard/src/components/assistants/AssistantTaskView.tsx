@@ -240,7 +240,7 @@ function RawAnswerExpander({ taskId }: { taskId: string }): ReactElement {
 
   return (
     <details className="assistant-task-raw-answer" onToggle={onToggle}>
-      <summary>Show the assistant&apos;s raw answer</summary>
+      <summary>Show the helper&apos;s raw answer</summary>
       {raw !== null && <pre className="assistant-task-raw-answer-text">{raw}</pre>}
     </details>
   )

@@ -147,7 +147,7 @@ export function AssistantMentionMenu({ profiles, highlightIndex, onHover, onSele
         const original = profiles.find((p) => p.id === item.id)
         if (original !== undefined) onSelect(original)
       }}
-      ariaLabel="Mention an assistant profile"
+      ariaLabel="Mention a role"
       id={id}
     />
   )

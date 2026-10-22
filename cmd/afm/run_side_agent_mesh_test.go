@@ -1225,3 +1225,112 @@ func TestSideAgentMesh_UnavailableStartupReleasesHistoricalInboxAndReplaysNotice
 		})
 	}
 }
+
+// A message the Assistant cannot take on is answered with a result that calls it the Assistant — the text a
+// person reads in the conversation — while the durable identity stays side:<runID>.
+func TestSideAgentMesh_UnavailableAnswerNamesAssistant(t *testing.T) {
+	orch, meshStore := newSideMeshOrchAt(t, t.TempDir())
+	orch.SetSideAgentAvailable(true)
+	ctx := context.Background()
+	thread, err := orch.OpenThread(ctx, orchestrator.OpenThreadRequest{
+		OperationID: "named-thread", Scope: agentcomm.ScopeRun,
+		Members: []agentcomm.ParticipantID{"stage:impl", orch.SideAgentParticipantID()}, Actor: state.Actor{Kind: "system"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := orch.Send(ctx, orchestrator.SendRequest{
+		OperationID: "named-source", ThreadID: thread.ID, Sender: "stage:impl",
+		Recipients: []agentcomm.ParticipantID{orch.SideAgentParticipantID()},
+		Kind:       agentcomm.MessageKindMessage, Body: "question", Actor: state.Actor{Kind: "agent", ID: "stage:impl"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := startHistoricalSideAgentMesh(ctx, orch)
+	if err != nil || bridge == nil {
+		t.Fatalf("historical side bridge = %v, %v", bridge, err)
+	}
+	defer bridge.Abort()
+	drainCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if !bridge.Drain(drainCtx) {
+		t.Fatal("unavailable bridge did not drain")
+	}
+	var answer *agentcomm.Message
+	for _, m := range meshStore.Snapshot().Assistants.Mesh.Messages {
+		if m.InReplyTo != nil && *m.InReplyTo == source.MessageID && m.AutoResult {
+			answer = m
+		}
+	}
+	if answer == nil {
+		t.Fatal("the unavailable Assistant left the message without an answer")
+	}
+	if answer.Sender != orch.SideAgentParticipantID() || answer.Body != "Could not answer: Assistant unavailable" {
+		t.Fatalf("answer = %s from %q, want %q from the bound participant", answer.Body, answer.Sender, "Could not answer: Assistant unavailable")
+	}
+}
+
+// A passive result the Assistant cannot take on (its conversation store is unusable) is released with a reason
+// that calls it the Assistant.
+func TestSideAgentMesh_UnprocessableResultReleasedByAssistant(t *testing.T) {
+	runDir := t.TempDir()
+	orch, _ := newSideMeshOrchAt(t, runDir)
+	orch.SetSideAgentAvailable(true)
+	ctx := context.Background()
+	thread, err := orch.OpenThread(ctx, orchestrator.OpenThreadRequest{
+		OperationID: "unprocessable-thread", Scope: agentcomm.ScopeRun,
+		Members: []agentcomm.ParticipantID{"stage:impl", orch.SideAgentParticipantID()}, Actor: state.Actor{Kind: "system"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := orch.Send(ctx, orchestrator.SendRequest{
+		OperationID: "unprocessable-source", ThreadID: thread.ID, Sender: "stage:impl",
+		Recipients: []agentcomm.ParticipantID{orch.SideAgentParticipantID()},
+		Kind:       agentcomm.MessageKindResult, Body: "done", AutoResult: true, Actor: state.Actor{Kind: "agent", ID: "stage:impl"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	s, err := sideagent.Open(root, "side-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(sideagent.EventTurnAccepted, "orphan", sideagent.TurnAcceptedData{Message: "x", ClientMessageID: "mesh:other"}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.Dir(), "chat.jsonl")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("{broken}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sideagent.Open(root, "side-test")
+	if err == nil || s == nil || !s.Unavailable() {
+		t.Fatalf("expected unavailable side store, got %v, %v", s, err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	bridge := startSideAgentMesh(orch, sideagent.New(sideagent.Config{Store: s, Command: "codex"}))
+	defer bridge.Abort()
+	drainCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if !bridge.Drain(drainCtx) {
+		t.Fatal("bridge did not drain")
+	}
+	raw, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
+	if err != nil || !strings.Contains(string(raw), string(source.MessageID)) || !strings.Contains(string(raw), `"reason":"Assistant did not start"`) {
+		t.Fatalf("events = %s, %v; want the release of %s to say Assistant did not start", raw, err, source.MessageID)
+	}
+}

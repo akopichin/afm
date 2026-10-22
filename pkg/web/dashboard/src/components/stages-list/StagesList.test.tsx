@@ -726,7 +726,7 @@ describe('StagesList', () => {
 
     test('TestStageRow_ShowsAwaitingAssistants', () => {
       const { container } = render(<StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-      expect(screen.getByRole('button', { name: /QA gate/i })).toHaveAttribute('title', 'Awaiting assistants')
+      expect(screen.getByRole('button', { name: /QA gate/i })).toHaveAttribute('title', 'Awaiting helpers')
       expect(container.querySelector('.status-dot[data-status="awaiting_assistants"]')).not.toBeNull()
     })
 

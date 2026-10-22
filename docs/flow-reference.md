@@ -131,7 +131,7 @@ directory; see below),
 `team` (see below), `worktrees`, `stages`.
 
 `side_agent: true|false` overrides the dashboard
-[side agent](dashboard.md#side-agent-a-free-form-chat-alongside-the-run) toggle for
+[Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run) toggle for
 this flow, taking precedence over `AFM_SIDEAGENT` and `config.yaml`. Omit it to defer
 to those (default ON).
 
@@ -157,7 +157,13 @@ team:
 
 `id`, `profile` and `title` are required; `instruction` is optional. `id` must
 be unique in the team and match `[A-Za-z0-9._-]`. The `@name` is made from
-`title`; when it is taken, the agent gets `-2`, `-3` and so on. With
+`title`; when it is taken, the agent gets `-2`, `-3` and so on. A newly
+registered dashboard Assistant reserves `@assistant`, so a team title of
+`Assistant` uses the first free `@assistant-N`. The same applies to a stage ID
+or a run agent title that asks for `@assistant`. The reservation persists on
+resume if the Assistant is unavailable; a run without that stored alias has no
+reservation. A later dynamic stage can move an existing participant to another
+free suffix. Check **Team → People** for current handles. With
 collaboration enabled, an unknown profile stops `afm run` at preflight and fails
 `afm validate`, which checks the flow as a fresh run; with collaboration
 disabled, both only warn. Team agents get no

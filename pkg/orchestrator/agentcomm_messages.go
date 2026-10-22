@@ -22,7 +22,7 @@ const defaultMeshPageLimit = 50
 
 // ErrSideAgentExplicitReply means the side process already answered its source
 // directly. Its automatic terminal response must be suppressed.
-var ErrSideAgentExplicitReply = errors.New("side agent explicitly replied to source")
+var ErrSideAgentExplicitReply = errors.New("the Assistant explicitly replied to source")
 
 // OpenThread implements Service.OpenThread. Members not yet known to the mesh (a stage agent or helper
 // addressed for the first time) are lazily registered in the SAME operation via ensureParticipantEffects —
@@ -266,7 +266,7 @@ func (o *Orchestrator) sendWithOpen(ctx context.Context, req SendRequest, openTh
 	}
 
 	rs := o.opts.Store.Snapshot()
-	if receipt, replayed, err := o.replayedSend(rs, o.liveRoster(rs), req); replayed {
+	if receipt, replayed, err := o.replayedSend(rs, req); replayed {
 		return receipt, err
 	}
 
@@ -368,10 +368,6 @@ func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []p
 // messageSentEffect builds the mesh_message_sent effect of req; req.Body and req.ArtifactRefs must already be
 // redacted.
 func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Effect, error) {
-	recipients := make([]string, len(req.Recipients))
-	for i, r := range req.Recipients {
-		recipients[i] = string(r)
-	}
 	var inReplyTo *string
 	if req.InReplyTo != nil {
 		s := string(*req.InReplyTo)
@@ -380,21 +376,42 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Ef
 	return marshalEffect("mesh_message_sent", state.Target{ThreadID: string(req.ThreadID), MessageID: string(messageID)},
 		meshMessageSentRecord{
 			MeshMessageSentPayload: state.MeshMessageSentPayload{
-				Sender: string(req.Sender), Recipients: recipients, Kind: string(req.Kind),
+				Sender: string(req.Sender), Recipients: participantStrings(req.Recipients), Kind: string(req.Kind),
 				InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs, AutoResult: req.AutoResult,
 			},
-			OriginStage: req.OriginStage,
+			OriginStage:         req.OriginStage,
+			RequestedRecipients: participantStrings(req.RequestedRecipients),
 		})
 }
 
 // meshMessageSentRecord is the mesh_message_sent payload as the orchestrator journals it: the projection's
 // payload plus the request's intent the projection does not need — OriginStage, the stage feed a send without a
 // thread was written from, so a retry under the same request id from another feed is a conflict, not a replay.
-// An additive omitempty field: older journals and readers are unaffected; a record without it is retried by the
-// legacy rule (the feed is not compared).
+// RequestedRecipients are the recipient names as the caller wrote them (SendRequest.RequestedRecipients), which a
+// retry is compared with: the resolved Recipients cannot tell the same request from another one after an alias
+// changed hands. Additive omitempty fields: older journals and readers are unaffected; a record without
+// origin_stage is retried by the legacy rule (the feed is not compared), one without requested_recipients
+// by its resolved recipients.
 type meshMessageSentRecord struct {
 	state.MeshMessageSentPayload
-	OriginStage string `json:"origin_stage,omitempty"`
+	OriginStage         string   `json:"origin_stage,omitempty"`
+	RequestedRecipients []string `json:"requested_recipients,omitempty"`
+}
+
+func participantStrings(ids []agentcomm.ParticipantID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	return out
+}
+
+func toParticipantIDs(names []string) []agentcomm.ParticipantID {
+	out := make([]agentcomm.ParticipantID, len(names))
+	for i, n := range names {
+		out[i] = agentcomm.ParticipantID(n)
+	}
+	return out
 }
 
 // announceMessage publishes the live notices of a committed message — and of its thread, when the same
@@ -664,7 +681,7 @@ func (o *Orchestrator) SideAgentMeshMarkUnprocessed(id agentcomm.MessageID) erro
 		if explicitSideReply(snap.Assistants.Mesh, recipient, id) {
 			return o.Acknowledge(context.Background(), AcknowledgeRequest{OperationID: "side-mesh-unprocessed:" + string(id), MessageID: id, Participant: recipient, Actor: state.Actor{Kind: "system"}})
 		}
-		op, _, err := unreadReleaseOp(snap, id, recipient, "side agent did not start")
+		op, _, err := unreadReleaseOp(snap, id, recipient, "Assistant did not start")
 		if err != nil || op == nil {
 			return err
 		}
@@ -681,7 +698,7 @@ func (o *Orchestrator) SideAgentMeshMarkUnprocessed(id agentcomm.MessageID) erro
 			o.publishNotice(bus.Event{Type: bus.EventMeshReceipt, Data: map[string]any{
 				"message_id": string(id), "participant_id": string(recipient), "status": string(agentcomm.DeliveryUndeliverable),
 			}})
-			o.announceAndWakeEnded(res.EndedWaits, func(agentcomm.WaitID) string { return "side agent did not start" })
+			o.announceAndWakeEnded(res.EndedWaits, func(agentcomm.WaitID) string { return "Assistant did not start" })
 		})
 		if errors.Is(err, errUnreadReleaseStale) {
 			continue

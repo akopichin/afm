@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -114,6 +115,9 @@ type Options struct {
 	// Team — the flow's team: declarations, run agents initTeam creates before the stages start. Read from
 	// the CURRENT flow.yaml on every start; on resume the agents the run already created are kept as saved.
 	Team flow.Team
+	// AliasWarning receives the one-line warnings about an @name reassigned to make room for the bound
+	// Assistant (assistantAliasWarning). cmd/afm sets it to stderr; nil (tests, library use) prints nothing.
+	AliasWarning io.Writer
 	// Clock — часы рана. Пусто (nil) означает clock.Real(): прод-код и большинство тестов, конструирующих
 	// Orchestrator через New, не задают его явно и получают реальное время без дополнительных действий.
 	// Fake-часы инжектируют только тесты, которым нужно проматывать паузы вручную.

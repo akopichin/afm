@@ -91,6 +91,7 @@ describe('side-agent-client', () => {
       name: 'SideAgentApiError',
       status: 503,
       code: 'storage_unavailable',
+      message: 'assistant request failed: 503 (storage_unavailable)',
     })
   })
 
