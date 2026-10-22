@@ -16,6 +16,7 @@ import (
 
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
@@ -211,6 +212,13 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	runID := filepath.Base(runDir)
 	runSnap := store.Snapshot()
 	resumed := runSnap.LastSeq > 0
+	// A fresh run is durably marked with the typed board task protocol before any agent starts; a resumed
+	// run without the marker stays legacy.
+	if !resumed {
+		if err := store.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, state.Actor{Kind: "system", ID: "afm"}); err != nil {
+			return fmt.Errorf("record board task protocol: %w", err)
+		}
+	}
 	// Этап 9, T9.5: fold every stage_graph_added record committed before this process started (or crashed)
 	// back on top of the frozen stage set — orchestrator.New must see a dynamically-added stage from its very
 	// first Stages() read, the same way it already sees every stage flow.yaml originally declared. The

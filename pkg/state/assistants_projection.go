@@ -588,6 +588,8 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyMeshWaitResolved(as, c, dryRun)
 	case kindMeshBoardPublished:
 		return applyMeshBoardPublished(as, c, dryRun)
+	case kindMeshBoardProtocolSet:
+		return applyMeshBoardProtocolSet(as, c, dryRun)
 	default:
 		// controlKinds already rejected anything not listed above during decodeLine — reaching here would
 		// be a registry/switch drift, not a journal problem.

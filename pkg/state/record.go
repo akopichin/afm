@@ -143,6 +143,7 @@ const (
 	kindMeshWaitRegistered       = "mesh_wait_registered"
 	kindMeshWaitResolved         = "mesh_wait_resolved"
 	kindMeshBoardPublished       = "mesh_board_published"
+	kindMeshBoardProtocolSet     = "mesh_board_protocol_set"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
@@ -178,6 +179,7 @@ var controlKinds = map[string]bool{
 	kindMeshWaitRegistered:       true,
 	kindMeshWaitResolved:         true,
 	kindMeshBoardPublished:       true,
+	kindMeshBoardProtocolSet:     true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

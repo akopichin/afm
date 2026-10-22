@@ -47,6 +47,10 @@ type MeshState struct {
 	WaitOrder []agentcomm.WaitID             `json:"wait_order,omitempty"`
 
 	Board map[string]*MeshBoardEntry `json:"board,omitempty"`
+
+	// BoardTaskProtocol is the run-level typed-board-task protocol recorded when the run was created.
+	// Empty means a legacy run (journal written before the marker existed): it is never migrated on resume.
+	BoardTaskProtocol agentcomm.BoardTaskProtocol `json:"board_task_protocol,omitempty"`
 }
 
 func newMeshState() MeshState {
@@ -70,6 +74,7 @@ func newMeshState() MeshState {
 // AssistantsState.Clone documents for Tasks/Holds, used for Store.Snapshot()'s external read-only copies.
 func (ms MeshState) clone() MeshState {
 	out := newMeshState()
+	out.BoardTaskProtocol = ms.BoardTaskProtocol
 	for id, p := range ms.Participants {
 		out.Participants[id] = p
 	}

@@ -420,6 +420,9 @@ func TestMesh_AllKindsRegisteredAndDispatchable(t *testing.T) {
 		kindMeshBoardPublished: func(t *testing.T, as *AssistantsState) *Control {
 			return meshBoardPublishedControl("reg-key", "reg-author", "draft", 0, nil)
 		},
+		kindMeshBoardProtocolSet: func(t *testing.T, as *AssistantsState) *Control {
+			return &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)}
+		},
 	}
 
 	for _, kind := range extractMeshKindConstants(t) {
