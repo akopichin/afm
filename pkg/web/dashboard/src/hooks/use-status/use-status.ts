@@ -39,6 +39,9 @@ export type FlowStatus = {
   // неизвестное значение даёт none.
   flowPauseState: 'none' | 'paused' | 'resuming'
   flowPausedStages: string[]
+  // collaborationMode: team — Team/Board/People видны, assistants — только Feed-общение. Отсутствующее или
+  // неизвестное значение (старый бэкенд) даёт team.
+  collaborationMode: 'team' | 'assistants'
   // runCost/runOverheadCost — сводки по затратам флоу (omitempty, если
   // бэкенд не отдаёт информацию о стоимости).
   runCost?: CostSummary
@@ -74,6 +77,7 @@ const EMPTY_STATUS: FlowStatus = {
   runId: '',
   flowPauseState: 'none',
   flowPausedStages: [],
+  collaborationMode: 'team',
   coverageIssues: [],
   accounting: { supported: false },
   timeZone: '',
@@ -205,6 +209,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
   const flowPausedStages = Array.isArray(obj.flow_paused_stages)
     ? obj.flow_paused_stages.filter((v): v is string => typeof v === 'string')
     : []
+  const collaborationMode: FlowStatus['collaborationMode'] = obj.collaboration_mode === 'assistants' ? 'assistants' : 'team'
 
   const runCostResult = isRecord(obj.run_cost) ? toCostSummary(obj.run_cost) : null
   const runCost = runCostResult === null ? undefined : runCostResult
@@ -244,6 +249,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     runId,
     flowPauseState,
     flowPausedStages,
+    collaborationMode,
     runCost,
     runOverheadCost,
     coverageIssues,

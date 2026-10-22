@@ -23,9 +23,9 @@ right (there is no three-column layout or bottom progress bar).
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
   *selected stage's own* event history, capped at its last 2,000 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
-  plan or Q&A history to reopen. When Agent Mesh is available, run-wide **Team** and
-  **Board** tabs appear beside each other. Team opens the participant roster and
-  conversations; Board groups tasks by status (see
+  plan or Q&A history to reopen. In `team` mode, when Agent Mesh is available,
+  run-wide **Team** and **Board** tabs appear beside each other. Team opens the
+  participant roster and conversations; Board groups tasks by status (see
   [Board tasks](collaboration.md#board-tasks)). The workspace also has a permanent
   **Full feed** tab pinned to the far right of the tab row, showing the whole
   flow's last 10,000 events across every stage. Feed always reflects whichever
@@ -68,9 +68,10 @@ right (there is no three-column layout or bottom progress bar).
 
 ## Team workspace
 
-Team appears when the dashboard's first Agent Mesh roster probe succeeds; a 404
-hides it. This gate is separate from stage collaboration. Under **Messages**, the
-left pane opens on **Conversations**; switch to **People** to find a participant.
+In `team` mode, Team appears when the dashboard's first Agent Mesh roster probe
+succeeds; a 404 hides it. This gate is separate from stage collaboration. Under
+**Messages**, the left pane opens on **Conversations**; switch to **People** to
+find a participant.
 Search applies to the visible list. The action above it is **New conversation**
 or **Add run agent**, respectively. Conversation rows show the latest saved
 message preview and relative time, and sort by message sequence rather than wall
@@ -91,10 +92,44 @@ from the list and use **Back** from the conversation; on wide screens, drag or
 keyboard-resize the divider. See [Team conversations](collaboration.md#team-conversations)
 for messaging and participant details.
 
+## Run conversations
+
+In `assistants` mode, the **Run conversations** button in the workspace tabs
+opens a right-hand panel for conversations that include you and have no stage
+origin or stage participant. This includes conversations started by run agents;
+conversations involving a stage agent or stage helper stay in the stage Feed.
+The panel starts closed and never opens itself. It is available across Feed,
+Plan, Cost, Full feed, and Assistant views when Agent Mesh is available; changing
+views keeps the selected conversation and draft. There are no People, agent
+creation, or board task controls in this panel.
+
+On wide screens the panel shares the workspace area; drag its left edge to
+resize it. On screens 1180 px wide or less, it opens over the workspace as a
+drawer. **Back** returns from a conversation to the list. Close the panel with
+its button or **Escape**; the narrow drawer also closes when you click outside
+it. Keyboard focus returns to the opener.
+
+Only an explicit message from an agent addressed to you raises the new-message
+signal. The closed opener pulses and shows a count; the conversation row and a
+newly viewed message briefly brighten. Your own sends, agent-to-agent messages,
+and passive turn results do not raise it. The signal survives a reload and
+clears only when the addressed message is visible in the selected conversation.
+If it is below the visible history, **New message below** jumps to it. With
+reduced motion, the accent remains briefly without animation.
+
+When an agent's latest unanswered request is selected, its reply target appears
+above the composer. Sending your answer links it to that request so the agent's
+`reply_to` wait can resume. You can cancel the target to send a plain message or
+choose **Reply** on another message. A newer request does not replace the target
+while you are typing.
+
+See [Collaboration modes](collaboration.md#collaboration-modes) for configuration
+and the controls available in each mode.
+
 ## Board tab
 
-The run-wide **Board** tab shows tasks in **Todo**, **In progress**, and **Done**
-columns. Task cards are gray, blue, and green, respectively. Search matches a
+In `team` mode, the run-wide **Board** tab shows tasks in **Todo**, **In progress**,
+and **Done** columns. Task cards are gray, blue, and green, respectively. Search matches a
 task's key and text; the assignee filter can show one agent's tasks or unassigned
 tasks. The header shows completed tasks out of all tasks. **New task** opens the
 posting form, and selecting a card opens its text, assignees, and current reports.
@@ -110,7 +145,7 @@ cards stay visible with an out-of-date warning.
 ## Message times
 
 Event rows in the stage **Feed**, **Full feed**, and Assistant history, and message
-bubbles in **Team** and stage Feed conversations, show the message time as `HH:MM`
+bubbles in **Team**, Run conversations, and stage Feed conversations, show the message time as `HH:MM`
 in the host's 24-hour clock. Hover over the time, or focus its label or enclosing
 interactive row with a keyboard, to see the elapsed gap (`+7s`, `+2m`, etc.). The
 first item in a feed or displayed conversation block shows `+0s`. The time label
@@ -376,7 +411,7 @@ the helper's assignment (it must be the only recipient). See
 
 ### People panel
 
-With Agent Mesh and collaboration on, the stage **Feed** has a **People** panel on the right:
+In `team` mode, with Agent Mesh and collaboration on, the stage **Feed** has a **People** panel on the right:
 everyone this stage can talk to, in three groups — **This stage** (the stage's
 agent and its helpers), **Run agents** (run agents and the Assistant) and
 **Other stages** (in flow order, each with its helpers). It is the Team roster

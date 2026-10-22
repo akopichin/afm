@@ -49,7 +49,7 @@ export function ThreadList({ threads, participants, summaries = {}, unreadThread
           <li key={t.id}>
             <button
               type="button"
-              className={`team-thread-item${t.id === selectedThreadId ? ' active' : ''}`}
+              className={`team-thread-item${t.id === selectedThreadId ? ' active' : ''}${unread ? ' unread' : ''}`}
               aria-pressed={t.id === selectedThreadId}
               onClick={() => onSelect(t)}
             >

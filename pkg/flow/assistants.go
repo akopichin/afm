@@ -104,7 +104,7 @@ func (a *StageAssistant) unmarshalMapping(value *yaml.Node) error {
 			if err := val.Decode(&a.Instruction); err != nil {
 				return fmt.Errorf("assistants: instruction: %w", err)
 			}
-		case "mode":
+		case keyMode:
 			var v string
 			if err := val.Decode(&v); err != nil {
 				return fmt.Errorf("assistants: mode: %w", err)

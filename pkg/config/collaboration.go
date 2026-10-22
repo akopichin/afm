@@ -1,6 +1,11 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/akopichin/afm/pkg/assistants"
+	"gopkg.in/yaml.v3"
+)
 
 // CollaborationConfig gates the helper-agent ("collaboration") feature: a tri-state enable switch plus the
 // locally configured assistant profiles and delegation limits. Shape mirrors SideAgentConfig
@@ -14,6 +19,10 @@ type CollaborationConfig struct {
 	// deliberately does NOT set this field; the numeric default lives only in assistants.ResolveDepth, the
 	// same way IsEnabled (not Default()) holds the default for the bool switch above.
 	MaxDepth *int `yaml:"max_depth,omitempty"`
+	// Mode — dashboard view mode (assistants.CollaborationMode). nil = not set by this layer; like MaxDepth,
+	// Default() deliberately does NOT set it: the "team" default lives only at mode resolution
+	// (cmd/afm/run_collaboration.go). The value is validated per layer by UnmarshalYAML.
+	Mode *assistants.CollaborationMode `yaml:"mode,omitempty"`
 	// Profiles — locally configured assistant roles, keyed by profile id. No marketplace, no install step:
 	// builtin + this (global/project config) are the only sources (§3.5 of dev-plan.md's grooming notes).
 	Profiles map[string]ProfileConfig `yaml:"profiles,omitempty"`
@@ -30,6 +39,72 @@ type CollaborationConfig struct {
 	// YAML shape; populated only by mergeFile.
 	maxDepthGlobal  *int
 	maxDepthProject *int
+}
+
+// UnmarshalYAML decodes the struct normally but first validates the raw `mode` node. A plain *string field
+// cannot tell an explicit `mode: null` (or bare `mode:`) from an absent key and would silently stringify a
+// number or bool, so the node is checked before it collapses into a pointer.
+func (c *CollaborationConfig) UnmarshalYAML(node *yaml.Node) error {
+	if modeNode := findMapValue(node, "mode"); modeNode != nil {
+		if _, err := assistants.ParseCollaborationModeNode(modeNode); err != nil {
+			return err
+		}
+	}
+	type plain CollaborationConfig // no methods: decoding it does not recurse into UnmarshalYAML
+	return node.Decode((*plain)(c))
+}
+
+// findMapValue returns the value node of key in a YAML mapping, or nil when the mapping does not set it.
+// Keys written directly win over keys that arrive through a merge key (`<<: *anchor`, or a sequence of
+// them, where earlier maps win) — the same precedence yaml.v3 applies while decoding. Merge expansion
+// happens only inside node.Decode, so without looking into `<<` here a value supplied through a shared
+// anchor would reach the config unvalidated. Keys that are aliases (`*k: value`) are compared by their
+// target. Mappings already seen are skipped, so a self-referential anchor (`c: &c {<<: *c}`) ends the
+// search instead of overflowing the stack; node.Decode then reports that cycle itself.
+func findMapValue(node *yaml.Node, key string) *yaml.Node {
+	return findMapValueSeen(node, key, map[*yaml.Node]bool{})
+}
+
+// yamlMergeTag is yaml.v3's tag for the special `<<` merge key.
+const yamlMergeTag = "!!merge"
+
+func findMapValueSeen(node *yaml.Node, key string, seen map[*yaml.Node]bool) *yaml.Node {
+	if node.Kind == yaml.AliasNode {
+		node = node.Alias
+	}
+	if node.Kind != yaml.MappingNode || seen[node] {
+		return nil
+	}
+	seen[node] = true
+	// Content holds key/value node pairs.
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k := node.Content[i]
+		if k.Kind == yaml.AliasNode {
+			k = k.Alias
+		}
+		if k.Kind == yaml.ScalarNode && k.Value == key && k.Tag != yamlMergeTag {
+			return node.Content[i+1]
+		}
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Tag != yamlMergeTag {
+			continue
+		}
+		merged := node.Content[i+1]
+		if merged.Kind == yaml.AliasNode {
+			merged = merged.Alias
+		}
+		sources := []*yaml.Node{merged}
+		if merged.Kind == yaml.SequenceNode {
+			sources = merged.Content
+		}
+		for _, src := range sources {
+			if v := findMapValueSeen(src, key, seen); v != nil {
+				return v
+			}
+		}
+	}
+	return nil
 }
 
 // MaxDepthLayers returns the raw collaboration.max_depth value read from each config layer, as populated by

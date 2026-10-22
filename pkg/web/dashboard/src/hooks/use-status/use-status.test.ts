@@ -475,6 +475,19 @@ describe('useStatus', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: {} }).capabilities.collaboration).toBe(false)
   })
 
+  test('normalizeStatus maps collaboration_mode "assistants" and "team"', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 'assistants' }).collaborationMode).toBe('assistants')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 'team' }).collaborationMode).toBe('team')
+  })
+
+  test('normalizeStatus falls back to collaborationMode "team" when collaboration_mode is absent (old backend) or unknown', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).collaborationMode).toBe('team')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 'garbage' }).collaborationMode).toBe('team')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 'Assistants' }).collaborationMode).toBe('team')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 7 }).collaborationMode).toBe('team')
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: null }).collaborationMode).toBe('team')
+  })
+
   test('normalizeStatus reads run_id and defaults to "" when absent/non-string', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], run_id: 'demo-123-ab12' }).runId).toBe('demo-123-ab12')
     expect(normalizeStatus({ flow_name: 'demo', stages: [] }).runId).toBe('')

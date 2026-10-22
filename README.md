@@ -24,7 +24,8 @@ same workflow.
 - **Agents that coordinate directly.** QA reports a bug, Architect checks
   the finding, Frontend fixes it, and DevOps picks up QA's passing tests — through
   conversations, a shared board and durable waits, not by you copying text between
-  sessions. You follow and steer it in the stage **Feed** and the **Team** tab.
+  sessions. You follow and steer it in the stage **Feed**, and in **Team** or
+  **Run conversations** according to the [collaboration mode](docs/collaboration.md#collaboration-modes).
 - **Tasks measured in hours, not minutes.** Every run is written to an append-only
   event log; if it's interrupted, `afm run` resumes from the same point — completed
   stages are skipped, interrupted ones retried, and agents' conversations and waits

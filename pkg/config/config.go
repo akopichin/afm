@@ -649,7 +649,7 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	var overlay Config
 	if err := yaml.Unmarshal(data, &overlay); err != nil {
-		return fmt.Errorf("parse config %s: %w", path, err)
+		return fmt.Errorf("parse %s config %s: %w", layer, path, err)
 	}
 	if overlay.Client.Command != "" {
 		dst.Client.Command = overlay.Client.Command
@@ -707,6 +707,9 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	if overlay.Collaboration.Enabled != nil {
 		dst.Collaboration.Enabled = overlay.Collaboration.Enabled
+	}
+	if overlay.Collaboration.Mode != nil {
+		dst.Collaboration.Mode = overlay.Collaboration.Mode
 	}
 	if overlay.Collaboration.MaxDepth != nil {
 		if err := validateCollaborationMaxDepth(layer, overlay.Collaboration.MaxDepth); err != nil {

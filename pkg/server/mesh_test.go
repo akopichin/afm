@@ -299,9 +299,10 @@ func TestMesh_ThreadsSummariesFromOneRead(t *testing.T) {
 	fake.threads = []agentcomm.Thread{{ID: "mt-1", Title: "chat", Scope: agentcomm.ScopeRun, Members: []agentcomm.ParticipantID{"user", "stage:impl"}, Status: agentcomm.ThreadOpen}}
 	fake.summaries = map[agentcomm.ThreadID]orchestrator.ThreadSummary{
 		"mt-1": {
-			LastMessage:         &orchestrator.ThreadSummaryMessage{ID: "mm-1", Seq: 42, CreatedAt: when, SenderID: "stage:impl", Preview: "hello there"},
-			LastOtherMessageSeq: 42,
-			TitleSeq:            0,
+			LastMessage:               &orchestrator.ThreadSummaryMessage{ID: "mm-1", Seq: 42, CreatedAt: when, SenderID: "stage:impl", Preview: "hello there"},
+			LastOtherMessageSeq:       42,
+			LastAgentToUserMessageSeq: 40,
+			TitleSeq:                  0,
 		},
 	}
 	srv := newTestServer(t, Config{Mesh: fake})
@@ -318,7 +319,7 @@ func TestMesh_ThreadsSummariesFromOneRead(t *testing.T) {
 	}
 	want := map[string]any{"mt-1": map[string]any{
 		"last_message":           map[string]any{"id": "mm-1", "seq": float64(42), "created_at": when.Format(time.RFC3339Nano), "sender_id": "stage:impl", "preview": "hello there"},
-		"last_other_message_seq": float64(42), "title_seq": float64(0),
+		"last_other_message_seq": float64(42), "last_agent_to_user_message_seq": float64(40), "title_seq": float64(0),
 	}}
 	if !reflect.DeepEqual(resp["summaries"], want) {
 		t.Fatalf("summaries = %#v, want %#v", resp["summaries"], want)

@@ -40,6 +40,7 @@ server:
 
 # collaboration:
 #   enabled: true           # stage helpers; ON by default. env AFM_COLLABORATION overrides
+#   mode: team              # dashboard: team (default) | assistants; flow.yaml may override
 #   max_depth: 3            # helper delegation depth; flow.yaml may override it
 #   limits: { max_tasks: 20 } # optional whole-run task limit
 #   profiles:               # locally configured roles; see collaboration.md
@@ -84,6 +85,12 @@ docker:
   #   glm51: { model: glm-5.1, url: https://api.z.ai/api/anthropic,
   #            auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" } }
 ```
+
+`collaboration.mode` selects the dashboard presentation: `team` (the default for
+existing configs) or `assistants`. The value in `flow.yaml` takes precedence over
+project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
+enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
+still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
 
 ## Reasoning effort
 

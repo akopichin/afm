@@ -78,10 +78,14 @@ type ThreadPage struct {
 
 // ThreadSummary is derived from the same mesh snapshot as the thread list. TitleSeq is zero until a
 // separate title override has been committed; it does not change the immutable opening descriptor.
+// LastAgentToUserMessageSeq is stricter than LastOtherMessageSeq: it moves only for a message somebody else
+// explicitly addressed to the human (human in Recipients, not a passive AutoResult), so agent-to-agent
+// chatter and turn results do not count. Zero means none.
 type ThreadSummary struct {
-	LastMessage         *ThreadSummaryMessage `json:"last_message,omitempty"`
-	LastOtherMessageSeq uint64                `json:"last_other_message_seq"`
-	TitleSeq            uint64                `json:"title_seq"`
+	LastMessage               *ThreadSummaryMessage `json:"last_message,omitempty"`
+	LastOtherMessageSeq       uint64                `json:"last_other_message_seq"`
+	LastAgentToUserMessageSeq uint64                `json:"last_agent_to_user_message_seq"`
+	TitleSeq                  uint64                `json:"title_seq"`
 }
 
 // ThreadSummaryMessage contains only the saved, redacted text needed for a conversation row.

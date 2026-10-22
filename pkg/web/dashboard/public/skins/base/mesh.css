@@ -1731,6 +1731,205 @@
   }
 }
 
+/* === Run conversations (RunConversationsPanel): in `assistants` mode the run's own conversations sit beside the
+   workspace views, replacing Team. The split and its primary column lay out only while the panel exists;
+   otherwise both are `display: contents`, so Team and the views keep the layout they always had. === */
+.workspace-split,
+.workspace-primary {
+  display: contents;
+}
+.workspace-split.with-run-conversations {
+  --run-conversations-width: 340px;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.with-run-conversations > .workspace-primary {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Closed: slid out to the right, out of the layout (the workspace body clips it) and out of the tab order.
+   The same recipe is the narrow-screen drawer, opened by `.open`. */
+.run-conversations {
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  bottom: -12px;
+  z-index: 30;
+  width: min(var(--run-conversations-width), 88%);
+  display: flex;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--separator-subtle);
+  box-shadow: var(--shadow-overlay);
+  transform: translateX(105%);
+  visibility: hidden;
+  /* Keep the closing slide visible, then hide it; opening must reveal it immediately so focus can enter. */
+  transition: transform var(--motion-fast, 120ms) ease, visibility 0s linear var(--motion-fast, 120ms);
+}
+.run-conversations.open {
+  transform: none;
+  visibility: visible;
+  transition: transform var(--motion-fast, 120ms) ease, visibility 0s;
+}
+.run-conversations-resizer { left: 0; }
+.run-conversations-scrim {
+  position: absolute;
+  inset: -12px;
+  z-index: 29;
+  border: 0;
+  padding: 0;
+  background: color-mix(in srgb, var(--surface-canvas) 60%, transparent);
+  cursor: pointer;
+}
+/* Wide screen: open, the panel takes its own width and the views give way to it. */
+@media (min-width: 1181px) {
+  .run-conversations {
+    width: var(--run-conversations-width);
+  }
+  .run-conversations.open {
+    position: relative;
+    inset: auto;
+    flex: 0 0 var(--run-conversations-width);
+    margin: -12px -12px -12px 12px;
+    z-index: auto;
+    box-shadow: none;
+  }
+}
+@media (max-width: 1180px) {
+  .run-conversations-resizer { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-conversations { transition: none; }
+}
+
+.run-conversations-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+.run-conversations-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-conversations-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.run-conversations-title:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.run-conversations-subtitle {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.run-conversations-empty {
+  margin: 0;
+  line-height: 1.5;
+}
+.run-conversations-body > .team-thread-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* === New agent message signal (Run conversations) ===
+   An explicit message from an agent to the human: the closed opener pulses and shows a count (the number carries
+   the signal, so it does not depend on colour or motion), the unread row is bright, and the arriving bubble is
+   briefly bright. Reduced motion keeps every highlight and only drops the movement. */
+.run-conversations-toggle-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent-primary);
+  color: var(--surface-canvas);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.run-conversations-toggle.has-unread {
+  color: var(--text-primary);
+}
+.run-conversations-toggle.is-pulsing {
+  animation: runConversationsPulse 1.8s ease-in-out infinite;
+}
+@keyframes runConversationsPulse {
+  0%, 100% { box-shadow: inset 0 -2px 0 rgba(var(--accent-primary-rgb), 0.35); }
+  50% { box-shadow: inset 0 -2px 0 var(--accent-primary), 0 0 12px 1px rgba(var(--accent-primary-rgb), 0.45); }
+}
+.run-conversations-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.team-thread-item.unread {
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  box-shadow: inset 3px 0 var(--accent-primary);
+}
+.team-thread-item.unread .team-thread-title {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.team-conversation-message.is-new-agent-message .team-conversation-message-body {
+  background: color-mix(in srgb, var(--accent-primary) 16%, var(--surface-agent-message));
+  border-color: rgba(var(--accent-primary-rgb), 0.5);
+  animation: newAgentMessage 1.8s ease-out;
+}
+@keyframes newAgentMessage {
+  0% { box-shadow: 0 0 0 4px rgba(var(--accent-primary-rgb), 0.55); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.team-conversation-new-below {
+  align-self: center;
+  flex: 0 0 auto;
+  padding: 4px 14px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.5);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.team-conversation-new-below:hover { background: var(--surface-hover); }
+.team-conversation-new-below:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-conversations-toggle.is-pulsing,
+  .team-conversation-message.is-new-agent-message .team-conversation-message-body {
+    animation: none;
+  }
+}
+
 /* === Board tab (BoardView): header, filters and three status lanes — Todo / In progress / Done ===
    The lanes take their accent from the same status tokens as the cards (see the data-status rules above). */
 .board-view {

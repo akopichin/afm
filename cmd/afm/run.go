@@ -317,6 +317,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		Accounting:        serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
 		SideAgent:         side.service(),
 		AssistantProfiles: collab.service(),
+		CollaborationMode: resolveCollaborationMode(cfg, f),
 		AssistantActions:  collab.actions(orch),
 		AssistantsReader:  collab.reader(orch),
 		DiscussionService: collab.discussionService(orch),

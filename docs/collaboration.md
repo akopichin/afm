@@ -14,6 +14,7 @@ Add roles to global `~/.afm/config.yaml` or project `.afm/config.yaml`:
 ```yaml
 collaboration:
   enabled: true                 # default; AFM_COLLABORATION=0 disables it
+  mode: team                    # dashboard: team (default) or assistants
   max_depth: 3                 # default; 0 prevents helper creation
   limits:
     max_tasks: 20              # optional lifetime limit for this run
@@ -35,18 +36,49 @@ each one is unavailable.
 
 `AFM_COLLABORATION` takes precedence over `collaboration.enabled`; collaboration
 is on by default. Delegation depth follows `flow.yaml` > project config > global
-config > default (3). A flow can override **only** the depth:
+config > default (3). A flow can also override the dashboard mode:
 
 ```yaml
 collaboration:
   max_depth: 2
+  mode: assistants
 ```
+
+The flow cannot set `collaboration.enabled`. Mode and depth do not change the
+enabled setting. See [Collaboration modes](#collaboration-modes) for what the
+mode changes in the dashboard.
 
 Depth 1 is a helper attached directly to a stage; deeper tasks are its children.
 `delegate: true` permits a role to create children, subject to the depth and
 whole-run `limits.max_tasks` limits. `max_tasks` counts every task of the run:
 helpers and run agents you attach as well as their children. A flow cannot re-enable collaboration when
 config or the environment disables it.
+
+## Collaboration modes
+
+`collaboration.mode` is `team` or `assistants`. An omitted value uses `team`,
+preserving the existing dashboard. Set it in global or project `config.yaml`, or
+at the top level of `flow.yaml`; precedence is flow > project > global > `team`.
+Invalid values, including an empty value or `null`, stop config loading even if a
+higher layer sets a valid mode. There is no mode environment variable or dashboard
+switch. On resume, the dashboard uses the current YAML setting; the mode does
+not rewrite `flow.yaml` or stored participants.
+
+In `team` mode, the dashboard shows **Team**, **Board**, and the stage Feed's
+**People** panel when their usual capabilities are available. In `assistants`
+mode, those views and People controls are hidden and the Feed uses their space.
+Stage helpers remain under their stages; **⋯ → Attach helper…**, the Assistant,
+stage Feed conversations, and **Message** / **Revise** remain available under
+their existing gates. Run agents declared in `team:` still start, and agents can
+still exchange messages and use the board. **Add run agent** and human **New
+task** / **Post task** controls are available in `team` mode only.
+
+With Agent Mesh available, `assistants` mode shows a closed **Run conversations**
+panel beside the workspace. It contains conversations that include you, have no
+stage origin, and contain no stage agent or stage helper. Agent-started run-wide
+conversations can therefore appear here; stage conversations stay in their Feed.
+See [Run conversations](dashboard.md#run-conversations) for reading, replies,
+resizing, and new-message signals.
 
 ## Where helpers work
 
@@ -217,10 +249,11 @@ existing task instances.
 
 ## Team conversations
 
-The run-wide **Team** tab appears after the Agent Mesh probe succeeds, even if
-stage collaboration is disabled. A first probe that returns 404 hides Team;
-the stage Feed's People panel has its own collaboration gate. Team opens on
-**Messages → Conversations**. Switch the list to **People** to find run agents
+In `team` mode, the run-wide **Team** tab appears after the Agent Mesh probe
+succeeds, even if stage collaboration is disabled. A first probe that returns
+404 hides Team; the stage Feed's People panel also requires collaboration to be
+enabled. Team opens on **Messages → Conversations**. Switch the list to
+**People** to find run agents
 and the Assistant under **This run**, or stage agents in flow order under the
 collapsible **Stages** group, with helpers beneath their stage agent. Working
 run agents and the Assistant appear first; the remaining run agents keep their roster
@@ -373,7 +406,8 @@ in, and your conversation with its agent. See [the stage feed](dashboard.md#conv
 
 ### Board tasks
 
-When Agent Mesh is available, **Board** appears beside **Team** as a run-wide tab.
+In `team` mode, when Agent Mesh is available, **Board** appears beside **Team**
+as a run-wide tab.
 It shows only task keys (`task/<slug>`), grouped into **Todo** (gray), **In
 progress** (blue), and **Done** (green) columns. Use **New task** to post from this
 tab, or **Post task** in Team's **Board** subtab. Both use the same form: choose

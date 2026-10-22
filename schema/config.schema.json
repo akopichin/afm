@@ -55,6 +55,11 @@
           "minimum": 0,
           "description": "Maximum helper delegation depth. Explicit 0 means no helpers at all. Unset falls back to the project/global layer, then a built-in default of 3 (see assistants.ResolveDepth) — a flow.yaml collaboration.max_depth can override this further."
         },
+        "mode": {
+          "type": "string",
+          "enum": ["team", "assistants"],
+          "description": "Dashboard collaboration mode. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Affects the UI only, not whether collaboration is enabled. Unset falls back to the other config layer, then team; a flow.yaml collaboration.mode can override this further."
+        },
         "profiles": {
           "type": "object",
           "description": "Locally configured assistant roles, keyed by profile id. No marketplace: builtin + global config + project config are the only sources.",

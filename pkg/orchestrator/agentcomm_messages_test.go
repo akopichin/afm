@@ -14,6 +14,7 @@ import (
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -1000,5 +1001,96 @@ func TestMesh_ThreadSummaryPreviewUsesRunesAndSavedPlainText(t *testing.T) {
 	}, "thread")
 	if got.LastMessage == nil || got.LastMessage.Preview != strings.Repeat("é", 159)+" " || len([]rune(got.LastMessage.Preview)) != 160 || got.LastOtherMessageSeq != 7 {
 		t.Fatalf("Unicode preview = %+v", got)
+	}
+}
+
+// Only a message an agent explicitly addressed to the human advances LastAgentToUserMessageSeq: not the human's
+// own messages, not agent-to-agent chatter and not a passive turn result, while LastOtherMessageSeq keeps
+// following any non-human sender.
+func TestMesh_ListThreadsLastAgentToUserMessageSeq(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true, flow.Stage{ID: "qa", Command: "claude"})
+	ctx := context.Background()
+	for _, id := range []string{assistantsTestStageID, "qa"} {
+		activateStage(t, o, id)
+	}
+	impl, qa := meshStageParticipantID(assistantsTestStageID), meshStageParticipantID("qa")
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "a2u-open", Scope: agentcomm.ScopeRun,
+		Members: []agentcomm.ParticipantID{meshUserParticipantID, impl, qa},
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	send := func(id string, sender agentcomm.ParticipantID, auto bool, recipients ...agentcomm.ParticipantID) SendReceipt {
+		t.Helper()
+		r, err := o.Send(ctx, SendRequest{
+			OperationID: id, ThreadID: thread.ID, Sender: sender, Recipients: recipients,
+			Kind: agentcomm.MessageKindMessage, Body: id, AutoResult: auto,
+		})
+		if err != nil {
+			t.Fatalf("Send(%s): %v", id, err)
+		}
+		return r
+	}
+	summary := func() ThreadSummary {
+		t.Helper()
+		page, err := o.ListThreads(ctx, ListThreadsRequest{Participant: meshUserParticipantID})
+		if err != nil {
+			t.Fatalf("ListThreads: %v", err)
+		}
+		return page.Summaries[thread.ID]
+	}
+	if got := summary().LastAgentToUserMessageSeq; got != 0 {
+		t.Fatalf("empty thread LastAgentToUserMessageSeq = %d, want 0", got)
+	}
+
+	toUser := send("a2u-explicit", impl, false, meshUserParticipantID)
+	if got := summary().LastAgentToUserMessageSeq; got != toUser.Seq {
+		t.Fatalf("after explicit agent→user: %d, want %d", got, toUser.Seq)
+	}
+	toBoth := send("a2u-multi", impl, false, meshUserParticipantID, qa)
+	if got := summary().LastAgentToUserMessageSeq; got != toBoth.Seq {
+		t.Fatalf("after agent→{user, agent}: %d, want %d", got, toBoth.Seq)
+	}
+
+	send("a2u-from-user", meshUserParticipantID, false, impl)
+	send("a2u-agent-chatter", qa, false, impl)
+	auto := send("a2u-auto-result", impl, true, meshUserParticipantID)
+	got := summary()
+	if got.LastAgentToUserMessageSeq != toBoth.Seq {
+		t.Fatalf("later non-explicit messages moved LastAgentToUserMessageSeq to %d, want %d", got.LastAgentToUserMessageSeq, toBoth.Seq)
+	}
+	if got.LastOtherMessageSeq != auto.Seq {
+		t.Fatalf("LastOtherMessageSeq = %d, want %d (any non-human sender)", got.LastOtherMessageSeq, auto.Seq)
+	}
+
+	if err := o.CloseThread(ctx, CloseThreadRequest{OperationID: "a2u-close", ThreadID: thread.ID}); err != nil {
+		t.Fatalf("CloseThread: %v", err)
+	}
+	if got := summary().LastAgentToUserMessageSeq; got != toBoth.Seq {
+		t.Fatalf("closing the thread changed LastAgentToUserMessageSeq to %d, want %d", got, toBoth.Seq)
+	}
+}
+
+// The newest explicit agent→user message can sit behind newer chatter: the backward scan must not stop at the
+// last message and the last other message.
+func TestMesh_ThreadSummaryScansPastNewerChatterForAgentToUser(t *testing.T) {
+	stamp := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
+	msgs := []*agentcomm.Message{
+		{ID: "m1", Seq: 1, Sender: "stage:a", Recipients: []agentcomm.ParticipantID{"user"}, CreatedAt: stamp},
+		{ID: "m2", Seq: 2, Sender: "stage:a", Recipients: []agentcomm.ParticipantID{"stage:b"}, CreatedAt: stamp},
+		{ID: "m3", Seq: 3, Sender: "user", Recipients: []agentcomm.ParticipantID{"stage:a"}, CreatedAt: stamp},
+	}
+	mesh := state.MeshState{
+		Messages:         map[agentcomm.MessageID]*agentcomm.Message{},
+		MessagesByThread: map[agentcomm.ThreadID][]agentcomm.MessageID{},
+	}
+	for _, m := range msgs {
+		mesh.Messages[m.ID] = m
+		mesh.MessagesByThread["thread"] = append(mesh.MessagesByThread["thread"], m.ID)
+	}
+	got := summarizeThreadMessages(mesh, "thread")
+	if got.LastOtherMessageSeq != 2 || got.LastAgentToUserMessageSeq != 1 {
+		t.Fatalf("summary = %+v, want other seq 2 and agent→user seq 1", got)
 	}
 }

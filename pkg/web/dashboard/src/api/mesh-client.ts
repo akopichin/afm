@@ -105,6 +105,10 @@ export type MeshThreadSummary = {
     preview: string
   }
   last_other_message_seq: number
+  // last_agent_to_user_message_seq — newest message an agent explicitly addressed to the human (no auto result,
+  // no agent-to-agent chatter): the cursor of the Run conversations signal. Optional only so older fixtures stay valid;
+  // listMeshThreads always fills it.
+  last_agent_to_user_message_seq?: number
   title_seq: number
 }
 
@@ -196,6 +200,7 @@ export async function listMeshThreads(): Promise<{ threads: MeshThread[]; summar
     Object.entries(body.summaries ?? {}).map(([id, summary]) => [id, {
       ...(summary.last_message === undefined ? {} : { last_message: summary.last_message }),
       last_other_message_seq: summary.last_other_message_seq ?? 0,
+      last_agent_to_user_message_seq: summary.last_agent_to_user_message_seq ?? 0,
       title_seq: summary.title_seq ?? 0,
     }]),
   )

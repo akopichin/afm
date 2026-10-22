@@ -51,6 +51,20 @@ func resolveCollaboration(cfg config.Config, f *flow.Flow) collaborationPolicy {
 	return collaborationPolicy{Enabled: enabled, Depth: depth}
 }
 
+// resolveCollaborationMode resolves the dashboard view mode: flow > config (global/project already merged,
+// project wins) > assistants.CollaborationModeTeam. It is a pure presentation value, deliberately separate
+// from resolveCollaboration: AFM_COLLABORATION, collaboration.enabled and max_depth do not affect it, and it
+// is not part of the durable policy record (state.Store.EnsurePolicyRecorded).
+func resolveCollaborationMode(cfg config.Config, f *flow.Flow) assistants.CollaborationMode {
+	if f != nil && f.Collaboration != nil && f.Collaboration.Mode != nil {
+		return *f.Collaboration.Mode
+	}
+	if cfg.Collaboration.Mode != nil {
+		return *cfg.Collaboration.Mode
+	}
+	return assistants.CollaborationModeTeam
+}
+
 // collaborationRuntime owns the resolved policy and, when enabled, the derived profile registry. Mirrors
 // sideAgentRuntime: a nil receiver / disabled policy / registry-build failure all collapse to "capability
 // off" rather than failing the run — collaboration is additive, not reliability-core (Инвариант 9: default

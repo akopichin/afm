@@ -5,6 +5,20 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Improvement: choose Team or Assistants dashboard mode
+
+Set `collaboration.mode` to `team` (the default) or `assistants` in global or
+project config, or override it in `flow.yaml`. The flow takes precedence over
+project and global config. Assistants mode hides Team, Board, and People while
+keeping stage helpers, the Feed's Message/Revise and conversations, and agent
+messaging and board work available. Run-wide conversations with you appear in a
+closed-by-default, resizable right panel (a drawer on narrow screens). Explicit
+agent messages to you raise a persistent new-message signal until viewed, and
+answers to agent requests are linked to the request. Human Add run agent and
+board task controls remain in Team mode. See
+[Collaboration modes](docs/collaboration.md#collaboration-modes) and
+[Run conversations](docs/dashboard.md#run-conversations).
+
 ### Improvement: afm skills for Claude Code and Codex, kept in sync with afm
 
 afm's skills now live in one place, `~/.afm/skills`, and `afm install-skills` links them

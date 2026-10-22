@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { conversationSubtitle, ThreadConversation } from './ThreadConversation'
+import { useState } from 'react'
+import { conversationSubtitle, ThreadConversation, type RunConversationMode } from './ThreadConversation'
 import * as meshClient from '../../api/mesh-client'
-import type { MeshMessage, MeshParticipant, MeshThread } from '../../api/mesh-client'
+import type { MeshMessage, MeshParticipant, MeshSendReceipt, MeshThread } from '../../api/mesh-client'
 
 const qa: MeshParticipant = { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true }
 const thread: MeshThread = { id: 'mt-1', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
@@ -522,5 +523,487 @@ describe('ThreadConversation', () => {
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa1, qa2]} />)
     fireEvent.change(screen.getByPlaceholderText('Message Review…'), { target: { value: '@qa hi' } })
     expect(screen.getByText('Everyone in this conversation · QA one, QA two')).toBeInTheDocument()
+  })
+})
+
+// Run conversations mode: the panel's conversation links an answer to the question it answers and reports which
+// agent messages the human has actually seen.
+describe('ThreadConversation in Run conversations mode', () => {
+  const dev: MeshParticipant = { id: 'run:dev', kind: 'run_agent', scope: 'run', alias: 'dev', display_name: 'Dev', reachable: true }
+  const group: MeshThread = { id: 'mt-1', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa', 'run:dev'], status: 'open' }
+  let server: MeshMessage[] = []
+
+  const agentMsg = (id: string, seq: number, extra: Partial<MeshMessage> = {}): MeshMessage =>
+    ({ id, thread_id: 'mt-1', sender_id: 'run:qa', recipient_ids: ['user'], kind: 'request', body: `Question ${id}`, seq, created_at: '2026-10-22T10:00:00Z', ...extra })
+  const humanMsg = (id: string, seq: number, extra: Partial<MeshMessage> = {}): MeshMessage =>
+    ({ id, thread_id: 'mt-1', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message', body: 'mine', seq, created_at: '2026-10-22T10:00:00Z', ...extra })
+
+  type HarnessProps = { thread?: MeshThread; tracking?: boolean; seenSeq?: number; onSeen?: RunConversationMode['onSeen']; initialTarget?: string | null | undefined }
+  function Harness({ thread: t = group, tracking = true, seenSeq = 0, onSeen = () => {}, initialTarget }: HarnessProps) {
+    const [replyTargetId, setReplyTargetId] = useState<string | null | undefined>(initialTarget)
+    const [draft, setDraft] = useState('')
+    return (
+      <ThreadConversation
+        key={t.id}
+        target={{ kind: 'thread', thread: t }}
+        participants={[qa, dev]}
+        threads={[t]}
+        draft={draft}
+        onDraftChange={setDraft}
+        run={{ seenSeq, onSeen, tracking, replyTargetId, onReplyTargetChange: setReplyTargetId }}
+      />
+    )
+  }
+
+  const composer = () => screen.getByPlaceholderText('Message Hand-off…') as HTMLTextAreaElement
+  const chip = () => document.querySelector('.feed-reply-chip--conversation')
+  async function loaded(text: string) {
+    await waitFor(() => expect(screen.getAllByText(text).length).toBeGreaterThan(0))
+  }
+  function type(text: string) {
+    fireEvent.change(composer(), { target: { value: text } })
+  }
+  async function pollOnce() {
+    await act(async () => { await vi.advanceTimersByTimeAsync(3100) })
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    server = []
+  })
+
+  function useServer(messages: MeshMessage[]) {
+    server = messages
+    vi.spyOn(meshClient, 'getMeshThread').mockImplementation(async () => ({ messages: server, next_cursor: server.at(-1)?.seq ?? 0 }))
+  }
+
+  describe('linking an answer to the question', () => {
+    test('answering the latest unanswered request without clicking Reply sends kind reply with in_reply_to', async () => {
+      useServer([agentMsg('q1', 1)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<Harness />)
+      await loaded('Question q1')
+      await waitFor(() => expect(chip()).not.toBeNull())
+      expect(chip()).toHaveTextContent('Question q1')
+      type('Use the blue one')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('mt-1', expect.objectContaining({ kind: 'reply', inReplyTo: 'q1', body: 'Use the blue one' })))
+    })
+
+    test('with no open question a typed message stays a plain message', async () => {
+      useServer([agentMsg('n1', 1, { kind: 'message' })])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<Harness />)
+      await loaded('Question n1')
+      expect(chip()).toBeNull()
+      type('hello')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalled())
+      const sent = send.mock.calls[0]![1]
+      expect(sent.kind).toBeUndefined()
+      expect(sent.inReplyTo).toBeUndefined()
+    })
+
+    test('a question that already has an answer is not preselected', async () => {
+      useServer([agentMsg('q1', 1), humanMsg('a1', 2, { kind: 'reply', in_reply_to: 'q1' })])
+      render(<Harness />)
+      await loaded('Question q1')
+      expect(chip()).toBeNull()
+    })
+
+    test('outside Run mode there is no reply link, no chip and a request is answered as a plain message', async () => {
+      useServer([agentMsg('q1', 1)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, dev]} />)
+      await loaded('Question q1')
+      expect(chip()).toBeNull()
+      expect(screen.queryByRole('button', { name: /Reply in conversation/ })).toBeNull()
+      fireEvent.change(composer(), { target: { value: 'plain' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('mt-1', expect.not.objectContaining({ inReplyTo: expect.anything() })))
+    })
+
+    test('a request B arriving while an answer to A is typed does not retarget', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      useServer([agentMsg('A', 1)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 3 })
+      render(<Harness />)
+      await loaded('Question A')
+      await waitFor(() => expect(chip()).toHaveTextContent('Question A'))
+      type('answer to a')
+      server = [agentMsg('A', 1), agentMsg('B', 2)]
+      await pollOnce()
+      await loaded('Question B')
+      expect(chip()).toHaveTextContent('Question A')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('mt-1', expect.objectContaining({ kind: 'reply', inReplyTo: 'A' })))
+    })
+
+    test('an @mention of another member still includes the reply target sender', async () => {
+      useServer([agentMsg('q1', 1)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<Harness />)
+      await loaded('Question q1')
+      await waitFor(() => expect(chip()).not.toBeNull())
+      type('@dev please look, answer is yes')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalled())
+      expect(send.mock.calls[0]![1]).toMatchObject({ kind: 'reply', inReplyTo: 'q1', recipientIds: ['run:qa', 'run:dev'] })
+    })
+
+    test("clicking another message's Reply link changes the target explicitly", async () => {
+      useServer([agentMsg('A', 1), agentMsg('B', 2)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 3 })
+      render(<Harness />)
+      await loaded('Question B')
+      await waitFor(() => expect(chip()).toHaveTextContent('Question B'))
+      const links = screen.getAllByRole('button', { name: /Reply in conversation/ }).filter((b) => b.classList.contains('conversation-reply-link'))
+      fireEvent.click(links[0]!)
+      expect(chip()).toHaveTextContent('Question A')
+      type('to a')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('mt-1', expect.objectContaining({ inReplyTo: 'A' })))
+    })
+
+    test('cancelling the chip sends a plain message and the target does not come back', async () => {
+      useServer([agentMsg('q1', 1)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<Harness />)
+      await loaded('Question q1')
+      await waitFor(() => expect(chip()).not.toBeNull())
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel reply in conversation' }))
+      expect(chip()).toBeNull()
+      type('just a note')
+      expect(chip()).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalled())
+      expect(send.mock.calls[0]![1].inReplyTo).toBeUndefined()
+    })
+
+    test('a plain message sent after cancelling hands the choice back: the still-open question is preselected again', async () => {
+      useServer([agentMsg('A', 1)])
+      vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<Harness />)
+      await loaded('Question A')
+      await waitFor(() => expect(chip()).not.toBeNull())
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel reply in conversation' }))
+      type('plain note')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(composer().value).toBe(''))
+      await waitFor(() => expect(chip()).toHaveTextContent('Question A'))
+    })
+
+    test('after a successful send the target is cleared and the answered question is not picked again before the next poll', async () => {
+      useServer([agentMsg('q1', 1)])
+      vi.spyOn(meshClient, 'sendMeshMessage').mockResolvedValue({ message_id: 'a1', seq: 2 })
+      render(<Harness />)
+      await loaded('Question q1')
+      await waitFor(() => expect(chip()).not.toBeNull())
+      type('done')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(composer().value).toBe(''))
+      expect(chip()).toBeNull()
+    })
+
+    test('a send that resolves after the human picked another question keeps that choice and links the next send to it', async () => {
+      // C is the newest, so it is what a cleared choice falls back to: B surviving proves it was kept, not re-derived.
+      useServer([agentMsg('A', 1), agentMsg('B', 2), agentMsg('C', 3)])
+      let finishA!: (receipt: MeshSendReceipt) => void
+      const send = vi.spyOn(meshClient, 'sendMeshMessage')
+        .mockImplementationOnce(() => new Promise<MeshSendReceipt>((resolve) => { finishA = resolve }))
+        .mockResolvedValue({ message_id: 'b1', seq: 5 })
+      render(<Harness />)
+      await loaded('Question C')
+      await waitFor(() => expect(chip()).toHaveTextContent('Question C'))
+      const links = () => screen.getAllByRole('button', { name: /Reply in conversation/ }).filter((b) => b.classList.contains('conversation-reply-link'))
+      fireEvent.click(links()[0]!)
+      type('to a')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+      expect(send.mock.calls[0]![1]).toMatchObject({ inReplyTo: 'A' })
+      // While A is still sending the human points at B.
+      fireEvent.click(links()[1]!)
+      expect(chip()).toHaveTextContent('Question B')
+      await act(async () => { finishA({ message_id: 'a1', seq: 3 }) })
+      await waitFor(() => expect(composer().value).toBe(''))
+      expect(chip()).toHaveTextContent('Question B')
+      type('to b')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+      expect(send.mock.calls[1]![1]).toMatchObject({ kind: 'reply', inReplyTo: 'B' })
+    })
+
+    test('a retry of a failed send reuses the request id, and a different target is a different request', async () => {
+      useServer([agentMsg('A', 1), agentMsg('B', 2)])
+      const send = vi.spyOn(meshClient, 'sendMeshMessage')
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValue({ message_id: 'a1', seq: 3 })
+      render(<Harness />)
+      await loaded('Question B')
+      await waitFor(() => expect(chip()).toHaveTextContent('Question B'))
+      type('same words')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('offline'))
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+      expect(send.mock.calls[1]![1].requestId).toBe(send.mock.calls[0]![1].requestId)
+      expect(send.mock.calls[1]![1].inReplyTo).toBe('B')
+      // The same text aimed at A is another intent: it must not reuse B's key.
+      const links = screen.getAllByRole('button', { name: /Reply in conversation/ }).filter((b) => b.classList.contains('conversation-reply-link'))
+      fireEvent.click(links[0]!)
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(3))
+      expect(send.mock.calls[2]![1].inReplyTo).toBe('A')
+      expect(send.mock.calls[2]![1].requestId).not.toBe(send.mock.calls[0]![1].requestId)
+    })
+
+    test('a thread that closes drops the target', async () => {
+      useServer([agentMsg('q1', 1)])
+      const view = render(<Harness />)
+      await loaded('Question q1')
+      await waitFor(() => expect(chip()).not.toBeNull())
+      view.rerender(<Harness thread={{ ...group, status: 'closed' }} />)
+      expect(chip()).toBeNull()
+      expect(screen.queryByRole('button', { name: /Reply in conversation/ })).toBeNull()
+    })
+  })
+
+  describe('seen tracking', () => {
+    type Observed = { root: Element | Document | null | undefined; thresholds: number[]; elements: Element[]; callback: IntersectionObserverCallback; disconnected: boolean }
+    let observers: Observed[] = []
+
+    function stubObserver() {
+      observers = []
+      vi.stubGlobal('IntersectionObserver', class {
+        record: Observed
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          const thresholds = options?.threshold === undefined ? [0] : [options.threshold].flat()
+          this.record = { root: options?.root, thresholds, elements: [], callback, disconnected: false }
+          observers.push(this.record)
+        }
+        observe(el: Element) { this.record.elements.push(el) }
+        unobserve() {}
+        disconnect() { this.record.disconnected = true }
+        takeRecords() { return [] }
+      })
+    }
+    const observedIds = () => [...new Set(observers.filter((o) => !o.disconnected).flatMap((o) => o.elements.map((e) => (e as HTMLElement).dataset.messageId)))].sort()
+    // see — report `visible` px of a `height` px bubble inside a `rootHeight` px log.
+    function see(id: string, visible: number, height = 100, rootHeight = 400) {
+      const el = document.querySelector(`[data-message-id="${id}"]`) as HTMLElement
+      const live = observers.filter((o) => !o.disconnected && o.elements.includes(el))
+      const entry = {
+        target: el, isIntersecting: visible > 0, intersectionRatio: visible / height,
+        intersectionRect: { height: visible }, boundingClientRect: { height }, rootBounds: { height: rootHeight },
+      } as unknown as IntersectionObserverEntry
+      act(() => live.forEach((o) => o.callback([entry], {} as IntersectionObserver)))
+    }
+
+    function stubLogScroll(scrollTop: number) {
+      const log = screen.getByRole('log', { name: 'Messages' })
+      Object.defineProperty(log, 'clientHeight', { value: 300, configurable: true })
+      Object.defineProperty(log, 'scrollHeight', { value: 1000, configurable: true })
+      log.scrollTop = scrollTop
+      fireEvent.scroll(log)
+      return log
+    }
+
+    test('observes only agent messages addressed to the human beyond the cursor, with the message log as the root', async () => {
+      stubObserver()
+      useServer([
+        agentMsg('seen', 1), agentMsg('new1', 2), humanMsg('mine', 3),
+        agentMsg('chatter', 4, { recipient_ids: ['run:dev'] }), agentMsg('auto', 5, { auto_result: true, kind: 'reply' }), agentMsg('new2', 6, { kind: 'message' }),
+      ])
+      render(<Harness seenSeq={1} />)
+      await loaded('Question new2')
+      expect(observedIds()).toEqual(['new1', 'new2'])
+      expect(observers.find((o) => !o.disconnected)?.root).toBe(screen.getByRole('log', { name: 'Messages' }))
+    })
+
+    test('observes nothing while the panel or history is not visible, and starts once it is', async () => {
+      stubObserver()
+      useServer([agentMsg('new1', 1)])
+      const view = render(<Harness tracking={false} />)
+      await loaded('Question new1')
+      expect(observedIds()).toEqual([])
+      view.rerender(<Harness tracking />)
+      expect(observedIds()).toEqual(['new1'])
+    })
+
+    test('a bubble at least half visible is seen and advances the cursor to its seq', async () => {
+      stubObserver()
+      useServer([agentMsg('q1', 3)])
+      const onSeen = vi.fn()
+      render(<Harness onSeen={onSeen} />)
+      await loaded('Question q1')
+      see('q1', 40)
+      expect(onSeen).not.toHaveBeenCalled()
+      see('q1', 50)
+      expect(onSeen).toHaveBeenCalledWith('mt-1', 3)
+    })
+
+    test('a bubble taller than the log counts as seen once half the log shows it', async () => {
+      stubObserver()
+      useServer([agentMsg('tall', 2)])
+      const onSeen = vi.fn()
+      render(<Harness onSeen={onSeen} />)
+      await loaded('Question tall')
+      see('tall', 149, 900, 300)
+      expect(onSeen).not.toHaveBeenCalled()
+      see('tall', 150, 900, 300)
+      expect(onSeen).toHaveBeenCalledWith('mt-1', 2)
+    })
+
+    test('the cursor only advances through messages actually seen: a later bubble does not skip an earlier unseen one', async () => {
+      stubObserver()
+      useServer([agentMsg('q1', 2), agentMsg('q2', 4)])
+      const onSeen = vi.fn()
+      render(<Harness onSeen={onSeen} />)
+      await loaded('Question q2')
+      see('q2', 100)
+      expect(onSeen).not.toHaveBeenCalled()
+      see('q1', 100)
+      expect(onSeen).toHaveBeenLastCalledWith('mt-1', 4)
+    })
+
+    test('nothing is marked seen while the page is hidden; looking again once the tab is shown counts', async () => {
+      stubObserver()
+      useServer([agentMsg('q1', 2)])
+      const onSeen = vi.fn()
+      const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+      render(<Harness onSeen={onSeen} />)
+      await loaded('Question q1')
+      see('q1', 100)
+      expect(onSeen).not.toHaveBeenCalled()
+      // A layout change while hidden must not stay remembered as "seen": returning to the tab observes again.
+      hidden.mockReturnValue(false)
+      act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(onSeen).not.toHaveBeenCalled()
+      see('q1', 100)
+      expect(onSeen).toHaveBeenCalledWith('mt-1', 2)
+    })
+
+    test('a bubble reported visible while hidden gets no accent either', async () => {
+      stubObserver()
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      useServer([agentMsg('q1', 2)])
+      const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+      render(<Harness />)
+      await loaded('Question q1')
+      see('q1', 100)
+      expect(document.querySelectorAll('.is-new-agent-message')).toHaveLength(0)
+      hidden.mockReturnValue(false)
+      see('q1', 100)
+      expect(document.querySelectorAll('.is-new-agent-message')).toHaveLength(1)
+    })
+
+    test('switching to another thread starts tracking afresh', async () => {
+      stubObserver()
+      useServer([agentMsg('q1', 2)])
+      const onSeen = vi.fn()
+      const view = render(<Harness onSeen={onSeen} />)
+      await loaded('Question q1')
+      view.rerender(<Harness thread={{ ...group, id: 'mt-2' }} onSeen={onSeen} />)
+      await waitFor(() => expect(observers.some((o) => o.disconnected)).toBe(true))
+      expect(onSeen).not.toHaveBeenCalled()
+    })
+
+    test('the unseen new message shows New message below when scrolled up, and it jumps to the bottom', async () => {
+      stubObserver()
+      useServer([agentMsg('q1', 2)])
+      render(<Harness />)
+      await loaded('Question q1')
+      expect(screen.queryByRole('button', { name: 'New message below' })).toBeNull()
+      const log = stubLogScroll(0)
+      const jump = await screen.findByRole('button', { name: 'New message below' })
+      fireEvent.click(jump)
+      expect(log.scrollTop).toBe(1000)
+    })
+
+    test('no New message below once the message is behind the cursor', async () => {
+      stubObserver()
+      useServer([agentMsg('q1', 2)])
+      render(<Harness seenSeq={2} />)
+      await loaded('Question q1')
+      stubLogScroll(0)
+      expect(screen.queryByRole('button', { name: 'New message below' })).toBeNull()
+    })
+
+    describe('the brief accent', () => {
+      const accented = () => [...document.querySelectorAll('.is-new-agent-message')].map((e) => (e as HTMLElement).dataset.messageId)
+
+      test('marks a bubble once it is seen; only unseen agent-to-user bubbles can be, and offscreen ones are not bright yet', async () => {
+        stubObserver()
+        useServer([agentMsg('old', 1), agentMsg('new1', 2), humanMsg('mine', 3), agentMsg('chatter', 4, { recipient_ids: ['run:dev'] }), agentMsg('auto', 5, { auto_result: true, kind: 'reply' })])
+        render(<Harness seenSeq={1} />)
+        await loaded('Question new1')
+        expect(observedIds()).toEqual(['new1'])
+        expect(accented()).toEqual([])
+        see('new1', 100)
+        expect(accented()).toEqual(['new1'])
+      })
+
+      test('a bubble that arrived offscreen is bright only from when it scrolls into view, then clears after its fixed timer', async () => {
+        stubObserver()
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        useServer([agentMsg('q1', 2)])
+        render(<Harness />)
+        await loaded('Question q1')
+        // Longer than the accent: an offscreen bubble must not have used it up.
+        await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+        see('q1', 10)
+        expect(accented()).toEqual([])
+        see('q1', 100)
+        expect(accented()).toEqual(['q1'])
+        await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+        expect(accented()).toEqual([])
+      })
+
+      test('stays on even when the cursor advances in the same render, then clears after its fixed timer without animationend', async () => {
+        stubObserver()
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        useServer([agentMsg('q1', 2)])
+        const view = render(<Harness seenSeq={0} />)
+        await loaded('Question q1')
+        see('q1', 100)
+        expect(accented()).toEqual(['q1'])
+        view.rerender(<Harness seenSeq={2} />)
+        expect(accented()).toEqual(['q1'])
+        await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+        expect(accented()).toEqual([])
+      })
+
+      test('does not accent while the panel is hidden, and accents once it opens and the bubble is seen', async () => {
+        stubObserver()
+        useServer([agentMsg('q1', 2)])
+        const view = render(<Harness tracking={false} />)
+        await loaded('Question q1')
+        expect(accented()).toEqual([])
+        view.rerender(<Harness tracking />)
+        see('q1', 100)
+        expect(accented()).toEqual(['q1'])
+      })
+
+      test('a message arriving later is accented once, not again after the poll repeats it', async () => {
+        stubObserver()
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        useServer([agentMsg('q1', 1)])
+        render(<Harness seenSeq={1} />)
+        await loaded('Question q1')
+        expect(accented()).toEqual([])
+        server = [agentMsg('q1', 1), agentMsg('q2', 2)]
+        await pollOnce()
+        await waitFor(() => expect(observedIds()).toEqual(['q2']))
+        see('q2', 100)
+        expect(accented()).toEqual(['q2'])
+        await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+        expect(accented()).toEqual([])
+        await pollOnce()
+        see('q2', 100)
+        expect(accented()).toEqual([])
+      })
+    })
   })
 })

@@ -8,13 +8,14 @@ import { FeedComposer, type ComposerDraft, type FeedComposerMeshProps, type Mesh
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
-import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
+import type { MeshParticipant } from '../../api/mesh-client'
 import { useStageConversation, type StageConversation } from '../../hooks/use-mesh'
 import { useStageDiscussion } from '../../hooks/use-stage-discussion'
 import { withStageDiscussion } from './stage-discussion-feed'
 import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
+import { canReplyInConversation } from '../../lib/mesh-reply'
 import { sideAgentOutcome } from './mesh-receipt'
 import { MessageTime } from '../message-time/MessageTime'
 
@@ -200,7 +201,7 @@ export function FeedWorkspace({
                     role={legacy.get(m.id)?.role}
                     evidence={legacy.get(m.id)?.evidence}
                     onReply={
-                      canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation, participants)
+                      canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation.threads[m.thread_id], participants)
                         ? () =>
                             setMeshReplyTo({
                               stageId: noteTarget,
@@ -280,16 +281,6 @@ export function FeedWorkspace({
 }
 
 const EMPTY_PARTICIPANTS: MeshParticipant[] = []
-
-// canReplyInConversation — the human may answer a message in its thread: someone else wrote it, the thread is
-// still open and the human is a member of it (older threads agents opened among themselves are read-only), and
-// the author can still read it.
-function canReplyInConversation(m: MeshMessage, conversation: StageConversation, participants: MeshParticipant[]): boolean {
-  if (m.sender_id === 'user') return false
-  const thread = conversation.threads[m.thread_id]
-  if (thread === undefined || thread.status === 'closed' || !thread.members.includes('user')) return false
-  return participants.find((p) => p.id === m.sender_id)?.reachable === true
-}
 
 const FILTER_LABEL: Record<FeedFilter, string> = { all: 'All', conversations: 'Conversations', author: "Author's work" }
 

@@ -100,6 +100,49 @@ func TestResolveCollaboration_DepthSourceReported(t *testing.T) {
 	})
 }
 
+// TestResolveCollaborationMode — mode precedence is flow > config (already merged: project over global) >
+// default team, and it is a pure dashboard value: neither AFM_COLLABORATION=0 nor collaboration.enabled:false
+// nor max_depth may change it.
+func TestResolveCollaborationMode(t *testing.T) {
+	team, assist := assistants.CollaborationModeTeam, assistants.CollaborationModeAssistants
+	off, depth := false, 0
+	flowMode := func(m *assistants.CollaborationMode) *flow.Flow {
+		return &flow.Flow{Collaboration: &flow.FlowCollaboration{Mode: m}}
+	}
+	cases := []struct {
+		name   string
+		cfg    config.Config
+		flow   *flow.Flow
+		envOff bool
+		want   assistants.CollaborationMode
+	}{
+		{"default without config and flow", config.Config{}, nil, false, team},
+		{"flow without collaboration section", config.Config{}, &flow.Flow{}, false, team},
+		{"flow collaboration without mode", config.Config{}, flowMode(nil), false, team},
+		{"config assistants", config.Config{Collaboration: config.CollaborationConfig{Mode: &assist}}, nil, false, assist},
+		{"config team", config.Config{Collaboration: config.CollaborationConfig{Mode: &team}}, nil, false, team},
+		{"flow team beats config assistants", config.Config{Collaboration: config.CollaborationConfig{Mode: &assist}}, flowMode(&team), false, team},
+		{"flow assistants beats config team", config.Config{Collaboration: config.CollaborationConfig{Mode: &team}}, flowMode(&assist), false, assist},
+		{"flow assistants without config", config.Config{}, flowMode(&assist), false, assist},
+		{"env AFM_COLLABORATION=0 keeps default", config.Config{}, nil, true, team},
+		{"env AFM_COLLABORATION=0 keeps config mode", config.Config{Collaboration: config.CollaborationConfig{Mode: &assist}}, nil, true, assist},
+		{"env AFM_COLLABORATION=0 keeps flow mode", config.Config{}, flowMode(&assist), true, assist},
+		{"enabled false keeps config mode", config.Config{Collaboration: config.CollaborationConfig{Enabled: &off, Mode: &assist}}, nil, false, assist},
+		{"enabled false keeps default", config.Config{Collaboration: config.CollaborationConfig{Enabled: &off}}, nil, false, team},
+		{"max_depth 0 keeps mode", config.Config{Collaboration: config.CollaborationConfig{MaxDepth: &depth, Mode: &assist}}, nil, false, assist},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envOff {
+				t.Setenv("AFM_COLLABORATION", "0")
+			}
+			if got := resolveCollaborationMode(tc.cfg, tc.flow); got != tc.want {
+				t.Errorf("resolveCollaborationMode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestResolveCollaboration_IndependentFromSideAgent — collaboration and side_agent are independent
 // switches; resolving one must not be influenced by the other (§3.3 table).
 func TestResolveCollaboration_IndependentFromSideAgent(t *testing.T) {
