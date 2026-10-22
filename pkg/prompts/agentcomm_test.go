@@ -358,6 +358,7 @@ func TestAgentComm_TypedBoardTasksMatchRights(t *testing.T) {
 			coordinator = line
 		case strings.Contains(line, "Executor:"):
 			executor = line
+		default:
 		}
 	}
 	if !strings.Contains(coordinator, "afm agent task release") {

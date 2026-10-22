@@ -397,25 +397,25 @@ func TestPublishAllowsTaskNamespaceInLegacyRun(t *testing.T) {
 // is cut to the message limit: the text is redacted first and only then cut.
 func TestBoardTaskRedactsSecrets(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
-	const secret = "ghp_s3cr3tTOKENvalue1234"
-	o.opts.SecretValues = []string{secret}
+	const planted = "s3cr3t-board-value-1234" // a registered secret value
+	o.opts.SecretValues = []string{planted}
 	const key = "task/secret"
 	// straddling is filler that puts the secret across the cut of a message body that starts with prefix.
 	straddling := func(prefix string) string {
-		return strings.Repeat("x", agentcomm.MaxBodyBytes-len("…")-len(prefix)-10) + secret + " tail"
+		return strings.Repeat("x", agentcomm.MaxBodyBytes-len("…")-len(prefix)-10) + planted + " tail"
 	}
 
 	assignmentID := deriveMeshID("board-assignment", "create")
 	createReq := BoardTaskRequest{
 		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, To: string(boardTaskB),
 		Title:       straddling(fmt.Sprintf("Board task %s assigned to you (assignment %s): ", key, assignmentID)),
-		Description: "uses " + secret,
+		Description: "uses " + planted,
 	}
 	created := mustBoardTask(t, o, createReq)
 	mustBoardTask(t, o, BoardTaskRequest{OperationID: "start", Action: BoardTaskStart, Actor: boardTaskB, Key: key, ExpectedVersion: 2, AssignmentID: assignmentID})
 	mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "progress", Action: BoardTaskProgress, Actor: boardTaskB, Key: key, ExpectedVersion: 3, AssignmentID: assignmentID,
-		Text: "half, token " + secret, ArtifactRefs: []string{"artifacts/" + secret + ".md"},
+		Text: "half, token " + planted, ArtifactRefs: []string{"artifacts/" + planted + ".md"},
 	})
 	doneReq := BoardTaskRequest{
 		OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 4, AssignmentID: assignmentID,
@@ -423,7 +423,7 @@ func TestBoardTaskRedactsSecrets(t *testing.T) {
 	}
 	done := mustBoardTask(t, o, doneReq)
 
-	partial := secret[:8] // what a cut inside the secret would leave behind
+	partial := planted[:8] // what a cut inside the secret would leave behind
 	rs := store.Snapshot()
 	task := rs.Assistants.Mesh.BoardTasks[key]
 	a, _ := task.Assignment(assignmentID)
@@ -442,7 +442,7 @@ func TestBoardTaskRedactsSecrets(t *testing.T) {
 		t.Fatalf("read journal: %v", err)
 	}
 	if strings.Contains(string(journal), partial) {
-		t.Errorf("events.jsonl holds the secret")
+		t.Error("events.jsonl holds the secret")
 	}
 
 	for _, r := range []struct {
