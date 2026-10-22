@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/akopichin/afm/pkg/fsutil"
 	"github.com/akopichin/afm/pkg/gitcmd"
 )
 
@@ -62,12 +63,12 @@ func Ensure(ctx context.Context, p Plan, mode ClearMode) error {
 		return fmt.Errorf("worktree: failed to check branch %q in %s", p.Branch, p.Base)
 	}
 
-	cleanPath := filepath.Clean(p.Path)
+	cleanPath := canonicalPath(p.Path)
 
 	// Step 4: classify p.Path, and independently guard any other entry that
 	// already owns p.Branch — in every mode, before any mutation.
 	for _, e := range entries {
-		if filepath.Clean(e.Path) == cleanPath {
+		if canonicalPath(e.Path) == cleanPath {
 			continue
 		}
 		if e.Branch == p.Branch {
@@ -112,13 +113,23 @@ func Ensure(ctx context.Context, p Plan, mode ClearMode) error {
 	}
 }
 
+// canonicalPath приводит путь к виду, в котором его отдаёт `git worktree list`: git раскрывает симлинки
+// (на macOS /var -> /private/var), а путь рана может прийти через симлинк. Сравнивать строки без этого —
+// не узнать собственный worktree и отказать «branch already checked out». Ошибка — очищенный исходный путь.
+func canonicalPath(p string) string {
+	if c, err := fsutil.CanonicalPath(p); err == nil {
+		return c
+	}
+	return filepath.Clean(p)
+}
+
 // classify reduces cleanPath to one of the three states from step 4, using
 // entries already read from `git worktree list --porcelain` plus a disk stat
 // for the "stray directory" case. It never mutates anything.
 func classify(entries []Entry, cleanPath, branch string) (state pathState, conflictDetail string) {
 	for i := range entries {
 		e := &entries[i]
-		if filepath.Clean(e.Path) != cleanPath {
+		if canonicalPath(e.Path) != cleanPath {
 			continue
 		}
 		if e.Detached {

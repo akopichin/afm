@@ -173,7 +173,7 @@ func TestSideAgentMesh_FreshCapabilityOffDoesNotStartBridge(t *testing.T) {
 
 func waitSideMesh(t *testing.T, check func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second) // запас на полный прогон с -race: тесты с реальным подпроцессом
 	for time.Now().Before(deadline) {
 		if check() {
 			return
@@ -529,8 +529,12 @@ func TestSideAgentMesh_HistoricalModalIDClaimCannotStrandSource(t *testing.T) {
 		bridge.CloseInput()
 		_ = bridge.Drain(drainCtx)
 	})
+	// Ждём и ответ, и снятие receipt: мост пишет их двумя отдельными записями журнала (сначала ответ,
+	// затем undeliverable), и между ними на macOS успевает пройти fsync (F_FULLFSYNC, миллисекунды).
 	waitSideMesh(t, func() bool {
-		return sideReplyCount(store.Snapshot(), source.MessageID) == 1
+		rs := store.Snapshot()
+		return sideReplyCount(rs, source.MessageID) == 1 &&
+			rs.Assistants.Mesh.Receipts[source.MessageID][orch.SideAgentParticipantID()] == agentcomm.DeliveryUndeliverable
 	})
 	rs := store.Snapshot()
 	if got := rs.Assistants.Mesh.Waits[wait.WaitID].Status; got != agentcomm.WaitReady {

@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Fix: worktree runs from a project opened through a symlink
+
+A second `afm run` with worktrees enabled no longer fails with "branch is already
+checked out" when the project path goes through a symlink (for example `/var` →
+`/private/var` on macOS): afm now compares worktree paths after resolving symlinks,
+the way git reports them. See [Worktrees](docs/config-reference.md).
+
 ### Improvement: afm skills for Claude Code and Codex, kept in sync with afm
 
 afm's skills now live in one place, `~/.afm/skills`, and `afm install-skills` links them
