@@ -117,14 +117,13 @@ type TaskChange = {
   text?: string
 }
 
-// sendTaskChange — posts the change; a stale version becomes TASK_CHANGED, so the form can tell it apart.
-async function sendTaskChange(change: Readonly<TaskChange>, requestId: string) {
-  try {
-    return await postMeshTask({ requestId, ...change })
-  } catch (err) {
-    if (err instanceof MeshApiError && err.code === 'stale_revision') throw new Error(TASK_CHANGED)
-    throw err
-  }
+function isStaleRevision(err: unknown): boolean {
+  return err instanceof MeshApiError && err.code === 'stale_revision'
+}
+
+// assignmentText — what the assignee last reported: its result once done, else its progress.
+function assignmentText(a: MeshBoardTaskAssignment): string | undefined {
+  return a.result || a.progress || undefined
 }
 
 function endedLabel(a: MeshBoardTaskAssignment, participants: MeshParticipant[]): string {
@@ -149,17 +148,30 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
   const assignedIds = new Set(assignments.map((a) => a.participant_id))
   const candidates = boardNotifyCandidates(participants, stages).filter((p) => !assignedIds.has(p.id))
   const canReopen = assignments.length > 0 || history.length > 0
+  // A done task is never assigned again (the server refuses it): it is reopened first.
+  const canAssign = task.status !== 'done'
 
   function change(intent: Omit<TaskChange, 'key' | 'expectedVersion'>): void {
     const submittedReason = intent.text ?? ''
-    submitter.submit({ ...intent, key: task.key, expectedVersion: task.version }, sendTaskChange, {
+    // stale — this attempt hit a newer version of the task: the board is reloaded to show it.
+    let stale = false
+    const send = async (payload: Readonly<TaskChange>, requestId: string) => {
+      try {
+        return await postMeshTask({ requestId, ...payload })
+      } catch (err) {
+        if (!isStaleRevision(err)) throw err
+        stale = true
+        throw new Error(TASK_CHANGED)
+      }
+    }
+    submitter.submit({ ...intent, key: task.key, expectedVersion: task.version }, send, {
       onSuccess: () => {
         if (intent.action === 'assign') setAssignTo('')
         setReason(removeSubmittedText(reasonRef.current, submittedReason))
         onChanged()
       },
-      onFailure: (message) => {
-        if (message === TASK_CHANGED) onChanged()
+      onFailure: () => {
+        if (stale) onChanged()
       },
     })
   }
@@ -178,9 +190,13 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
         <ul className="board-task-details-assignees" aria-label="Assignees">
           {assignments.map((a) => {
             const name = senderLabel(a.participant_id, participants)
+            const text = assignmentText(a)
             return (
               <li key={a.id}>
-                <span className="board-task-details-assignee-name">{name}</span>
+                <span className="board-task-details-assignee-name">
+                  {name}
+                  {text !== undefined && <span className="board-task-details-assignee-text">{text}</span>}
+                </span>
                 <span className="board-task-details-assignee-actions">
                   <span className="board-task-details-assignee-state">{ASSIGNEE_STATE_LABEL[a.state]}</span>
                   {a.state !== 'done' && (
@@ -207,7 +223,10 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
           <ul className="board-task-details-assignees" aria-label="History">
             {history.map((a) => (
               <li key={a.id}>
-                <span className="board-task-details-assignee-name">{senderLabel(a.participant_id, participants)}</span>
+                <span className="board-task-details-assignee-name">
+                  {senderLabel(a.participant_id, participants)}
+                  {a.result && <span className="board-task-details-assignee-text">{a.result}</span>}
+                </span>
                 <span className="board-task-details-assignee-state">{endedLabel(a, participants)}</span>
               </li>
             ))}
@@ -215,25 +234,27 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
         </>
       )}
 
-      <form
-        className="board-task-details-assign"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (assignTo !== '') change({ action: 'assign', to: assignTo })
-        }}
-      >
-        <select aria-label="Assign to" value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
-          <option value="">Choose an agent</option>
-          {candidates.map((p) => (
-            <option key={p.id} value={p.id}>
-              {participantLabel(p)}
-            </option>
-          ))}
-        </select>
-        <button type="submit" className="btn btn-send" disabled={submitter.pending || assignTo === ''}>
-          Assign
-        </button>
-      </form>
+      {canAssign && (
+        <form
+          className="board-task-details-assign"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (assignTo !== '') change({ action: 'assign', to: assignTo })
+          }}
+        >
+          <select aria-label="Assign to" value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+            <option value="">Choose an agent</option>
+            {candidates.map((p) => (
+              <option key={p.id} value={p.id}>
+                {participantLabel(p)}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="btn btn-send" disabled={submitter.pending || assignTo === ''}>
+            Assign
+          </button>
+        </form>
+      )}
 
       <label className="team-board-field">
         <span>Reason</span>

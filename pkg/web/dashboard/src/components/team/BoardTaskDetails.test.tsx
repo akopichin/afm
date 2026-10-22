@@ -152,7 +152,7 @@ describe('BoardTaskDetails', () => {
       const { dialog } = renderTyped()
       expect(within(dialog).getByRole('heading', { name: 'CSV export' })).toBeInTheDocument()
       expect(within(dialog).getByText('Add GET /todos.csv')).toBeInTheDocument()
-      expect(within(dialog).getByText('wiring the handler')).toBeInTheDocument()
+      expect(within(dialog).getByText('wiring the handler', { selector: '.board-task-details-progress' })).toBeInTheDocument()
       expect(within(dialog).getByText('v4')).toBeInTheDocument()
       const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
       expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('In progress')
@@ -222,6 +222,42 @@ describe('BoardTaskDetails', () => {
       expect(within(dialog).queryByRole('button', { name: 'Reopen' })).toBeNull()
       expect(within(dialog).queryByRole('button', { name: /^Release/ })).toBeNull()
       expect(within(dialog).getByText('Unassigned')).toBeInTheDocument()
+    })
+
+    test('a done task offers no Assign — Reopen is the way forward', () => {
+      const done = taskFromView(
+        typedTaskView({ key: 'task/csv', title: 'CSV export', status: 'done', assignments: [typedAssignment({ id: 'a1', participant_id: 'stage:api', state: 'done', result: 'shipped' })] }),
+      )
+      const { dialog } = renderTyped(done)
+      expect(within(dialog).queryByRole('combobox', { name: 'Assign to' })).toBeNull()
+      expect(within(dialog).queryByRole('button', { name: 'Assign' })).toBeNull()
+      expect(within(dialog).getByRole('button', { name: 'Reopen' })).toBeInTheDocument()
+    })
+
+    test('a todo or in-progress task offers Assign', () => {
+      const { dialog } = renderTyped()
+      expect(within(dialog).getByRole('combobox', { name: 'Assign to' })).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Assign' })).toBeInTheDocument()
+    })
+
+    test("each assignment shows its own result or progress, not only the latest note", () => {
+      const { dialog } = renderTyped()
+      const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
+      expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('wiring the handler')
+      // run:gone's result is older than API's progress, so it is not the task's note — it still shows.
+      expect(within(assignees).getByText('gone').closest('li')).toHaveTextContent('reviewed')
+    })
+
+    test('History shows an ended assignment\'s result when it has one', () => {
+      const withResult = taskFromView(
+        typedTaskView({
+          key: 'task/csv',
+          title: 'CSV export',
+          history: [typedAssignment({ id: 'a0', participant_id: 'run:t-1', state: 'done', result: 'first draft', ended: 'reopened', ended_by: 'user' })],
+        }),
+      )
+      const { dialog } = renderTyped(withResult)
+      expect(within(dialog).getByRole('list', { name: 'History' })).toHaveTextContent('first draft')
     })
 
     test('focus starts on Close and Escape closes, as for a legacy task', () => {

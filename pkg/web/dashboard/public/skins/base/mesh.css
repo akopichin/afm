@@ -1375,6 +1375,13 @@
   padding-left: 8px;
   border-left: 2px solid var(--task-line);
 }
+.board-task-details-assignee-text {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .board-task-details-assignee-actions {
   display: inline-flex;
   align-items: center;
