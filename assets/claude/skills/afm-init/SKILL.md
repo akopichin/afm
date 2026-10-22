@@ -1,4 +1,5 @@
 ---
+name: afm-init
 description: Create a new flow.yaml interactively
 allowed-tools: [Bash, AskUserQuestion, Read]
 ---

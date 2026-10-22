@@ -11,6 +11,7 @@ docker run --rm -it --init \
   -v $(pwd):/project \
   -v ~/.claude:/home/afm/.claude \
   -v ~/.afm:/home/afm/.afm \
+  -v ~/.codex:/tmp/host-codex:ro \
   -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
   -e AFM_IN_DOCKER=1 \
   -e ANTHROPIC_API_KEY \
@@ -19,6 +20,22 @@ docker run --rm -it --init \
 ```
 
 Notes on the flags:
+
+- Install the skills before the first manual `docker run`, and again after switching
+  to a new image: afm syncs its skills automatically only on the host, and the
+  container sees them through the mounted `~/.claude` and `~/.afm` (see
+  [Skills for Claude Code and Codex](getting-started.md#skills-for-claude-code-and-codex)).
+  Run `afm install-skills` on the host, or, without a local afm, let the image do it:
+
+  ```bash
+  docker run --rm \
+    -v ~/.claude:/home/afm/.claude -v ~/.afm:/home/afm/.afm -v ~/.codex:/home/afm/.codex \
+    -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
+    akopichin/afm:latest install-skills
+  ```
+- `-v ~/.codex:/tmp/host-codex:ro` is needed only for Codex stages: the entrypoint
+  copies the Codex login and skill links from there into the container. Skip it if
+  you don't use Codex.
 
 - `--init` runs Docker's init as the container's PID 1. It reaps the background
   processes an agent leaves behind once afm stops them at the end of a turn;

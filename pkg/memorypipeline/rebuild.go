@@ -14,6 +14,7 @@ import (
 	"github.com/aymanbagabas/go-udiff"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/fsutil"
 	"github.com/akopichin/afm/pkg/memory"
 )
 
@@ -504,26 +505,17 @@ func datasetPathForStage(datasets []DatasetResult, stageID string) (string, bool
 // validateTargetUnderMemoryDir rejects a final target whose real location escapes memoryDir or whose
 // deepest-existing path component is a symlink.
 func validateTargetUnderMemoryDir(memoryDir, target string) error {
-	mdExisting, mdMissing := splitAtExisting(memoryDir)
-	md, err := filepath.EvalSymlinks(mdExisting)
+	md, err := fsutil.CanonicalPath(memoryDir)
 	if err != nil {
 		return fmt.Errorf("resolve memory dir: %w", err)
-	}
-	for i := len(mdMissing) - 1; i >= 0; i-- {
-		md = filepath.Join(md, mdMissing[i])
 	}
 	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("target %s is a symlink", target)
 	}
 
-	// Resolve the deepest EXISTING ancestor of the target's parent.
-	existing, missing := splitAtExisting(filepath.Dir(target))
-	resolved, err := filepath.EvalSymlinks(existing)
+	resolved, err := fsutil.CanonicalPath(filepath.Dir(target))
 	if err != nil {
-		return fmt.Errorf("target %s: ancestor %s is an unresolvable (dangling) symlink: %w", target, existing, err)
-	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		resolved = filepath.Join(resolved, missing[i])
+		return fmt.Errorf("target %s: ancestor is an unresolvable (dangling) symlink: %w", target, err)
 	}
 
 	rel, err := filepath.Rel(md, resolved)
@@ -531,37 +523,6 @@ func validateTargetUnderMemoryDir(memoryDir, target string) error {
 		return fmt.Errorf("target %s escapes memory dir %s", target, md)
 	}
 	return nil
-}
-
-// splitAtExisting walks up from abs until it hits a path that exists on disk, returning that
-// deepest-existing ancestor plus the trailing components that do NOT exist, in reverse order.
-func splitAtExisting(abs string) (existing string, missing []string) {
-	cur := abs
-	for {
-		if _, err := os.Lstat(cur); err == nil {
-			return cur, missing
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return cur, missing // reached the root
-		}
-		missing = append(missing, filepath.Base(cur))
-		cur = parent
-	}
-}
-
-// canonicalizeExistingAncestor walks up from abs until it hits an existing path, resolves that with
-// EvalSymlinks, then re-joins the missing trailing components.
-func canonicalizeExistingAncestor(abs string) string {
-	existing, missing := splitAtExisting(abs)
-	resolved, err := filepath.EvalSymlinks(existing)
-	if err != nil {
-		return abs
-	}
-	for i := len(missing) - 1; i >= 0; i-- {
-		resolved = filepath.Join(resolved, missing[i])
-	}
-	return resolved
 }
 
 // sha256Hex returns the hex-encoded SHA-256 of data.

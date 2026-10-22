@@ -55,8 +55,9 @@ ENV PATH="/usr/local/go/bin:$PATH"
 ARG CLAUDE_CODE_VERSION=2.1.304
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
-# codex CLI. Версию фиксируем: 0.156.1 падает с SIGSEGV на Linux arm64 даже на --version.
-ARG CODEX_VERSION=0.155.1
+# codex CLI. Версию фиксируем и меняем только после ручной проверки с afm
+# (0.156.1 падал с SIGSEGV на Linux arm64 даже на --version; 0.163.0 проверен).
+ARG CODEX_VERSION=0.163.0
 RUN npm install -g @openai/codex@${CODEX_VERSION}
 
 # Chrome DevTools MCP for the managed browser capability. Must match

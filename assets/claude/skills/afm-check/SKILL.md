@@ -1,4 +1,5 @@
 ---
+name: afm-check
 description: Show status of the current afm run
 allowed-tools: [Bash]
 ---

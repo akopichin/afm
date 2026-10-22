@@ -100,17 +100,10 @@ install: web
 		fi; \
 	done
 
-SKILLS_DIR=$(HOME)/.claude/skills
-SKILLS_SRC=$(CURDIR)/assets/claude/skills
-
+# Ставит актуальные embedded-скиллы из исходников (без сборки dashboard).
 .PHONY: install-skills
 install-skills:
-	@for skill in $(SKILLS_SRC)/*/; do \
-		name=$$(basename $$skill); \
-		mkdir -p $(SKILLS_DIR)/$$name; \
-		cp $$skill/SKILL.md $(SKILLS_DIR)/$$name/SKILL.md; \
-		echo "installed skill: $$name"; \
-	done
+	$(GOENV) go run ./cmd/afm install-skills
 
 DOCKER_IMAGE := akopichin/afm
 DOCKER_TAG   := latest
@@ -129,6 +122,7 @@ docker-run:
 	  -v $(PWD):/project \
 	  -v $(HOME)/.claude:/home/afm/.claude \
 	  -v $(HOME)/.afm:/home/afm/.afm \
+	  $(if $(wildcard $(HOME)/.codex),-v $(HOME)/.codex:/tmp/host-codex:ro) \
 	  -e AFM_HOST_UID=$(shell id -u) -e AFM_HOST_GID=$(shell id -g) \
 	  -e ANTHROPIC_API_KEY \
 	  $(DOCKER_IMAGE):$(DOCKER_TAG) $(ARGS)

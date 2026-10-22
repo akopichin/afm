@@ -111,6 +111,9 @@ func newRunCmd() *cobra.Command {
 				fmt.Printf("afm: worktree %s (branch %s)\n", wtDir, runNameFor(worktreeName, f.Name))
 			}
 
+			// Skills are synced only on the host (see syncSkillsForRun), so this must run before the Docker re-exec.
+			syncSkillsForRun(home, os.Stderr)
+
 			if cfg.Docker.IsDockerEnabled() {
 				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir)
 			}

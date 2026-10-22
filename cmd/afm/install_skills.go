@@ -2,83 +2,74 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
-	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/akopichin/afm/assets"
+	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/skills"
 )
 
 func newInstallSkillsCmd() *cobra.Command {
-	var skillsDir string
 	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "install-skills",
-		Short: "Установить AFM Claude-скиллы в ~/.claude/skills/",
+		Short: "Install afm skills for Claude Code and Codex",
+		Long: `Install afm skills into ~/.afm/skills and link them from ~/.claude/skills and
+$CODEX_HOME/skills (default ~/.codex/skills).`,
+		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir, err := resolveSkillsDir(skillsDir)
+			home, err := os.UserHomeDir()
 			if err != nil {
-				return err
+				return fmt.Errorf("home dir: %w", err)
 			}
-			return installSkills(dir, force)
+			report, err := skills.Sync(home, force)
+			printSkillsReport(cmd.OutOrStdout(), report)
+			if err == nil && len(report.Installed) == 0 && len(report.Warnings) == 0 {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "all skills up to date")
+			}
+			if err != nil {
+				// Ошибка — не неверный вызов: печатаем её без справки по команде, которую добавил бы runMain.
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
+				return &ExitError{Code: 1, Silent: true}
+			}
+			return nil
 		},
 	}
-	cmd.Flags().StringVar(&skillsDir, "skills-dir", "", "путь назначения (по умолчанию: ~/.claude/skills)")
-	cmd.Flags().BoolVar(&force, "force", false, "перезаписать существующие файлы")
+	cmd.Flags().BoolVar(&force, "force", false, "replace real skill directories with links (the directories are moved to a backup)")
 	return cmd
 }
 
-func resolveSkillsDir(override string) (string, error) {
-	if override != "" {
-		return override, nil
+func printSkillsReport(w io.Writer, report skills.Report) {
+	if report.Store != "" {
+		_, _ = fmt.Fprintf(w, "afm skills: %s -> %s\n", report.Store, strings.Join(report.AgentDirs, ", "))
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+	for _, line := range report.Installed {
+		_, _ = fmt.Fprintf(w, "  + %s\n", line)
 	}
-	return filepath.Join(home, ".claude", "skills"), nil
+	for _, line := range report.Warnings {
+		_, _ = fmt.Fprintf(w, "  ! %s\n", line)
+	}
+	for _, path := range report.Backups {
+		_, _ = fmt.Fprintf(w, "  backup: %s\n", path)
+	}
 }
 
-func installSkills(dest string, force bool) error {
-	fmt.Printf("Установка AFM-скиллов в %s/\n", dest)
-
-	return fs.WalkDir(assets.SkillsFS, "claude/skills", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		// p = "claude/skills/afm/SKILL.md" → rel = "afm/SKILL.md"
-		rel := strings.TrimPrefix(p, "claude/skills/")
-		skillName := path.Dir(rel) // "afm"
-
-		destPath := filepath.Join(dest, filepath.FromSlash(rel))
-
-		if !force {
-			if _, statErr := os.Stat(destPath); statErr == nil {
-				fmt.Printf("  - %s (пропущен, уже существует)\n", skillName)
-				return nil
-			}
-		}
-
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", filepath.Dir(destPath), err)
-		}
-
-		data, err := assets.SkillsFS.ReadFile(p)
-		if err != nil {
-			return fmt.Errorf("читаю embedded скилл %s: %w", p, err)
-		}
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
-			return fmt.Errorf("запись %s: %w", destPath, err)
-		}
-		fmt.Printf("  + %s\n", skillName)
-		return nil
-	})
+// syncSkillsForRun обновляет скиллы afm перед раном. Только на хосте: в контейнере store смонтирован
+// с хоста и принадлежит хостовой версии afm. Проблемы не прерывают ран: печатается не больше одной
+// строки-сводки предупреждений и строка ошибки.
+func syncSkillsForRun(home string, w io.Writer) {
+	if config.InContainer() {
+		return
+	}
+	report, err := skills.Sync(home, false)
+	if n := len(report.Warnings); n > 0 {
+		_, _ = fmt.Fprintf(w, "warning: afm skills: %d warning(s), run \"afm install-skills\" for details\n", n)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "warning: afm skills: %s\n", strings.ReplaceAll(err.Error(), "\n", "; "))
+	}
 }

@@ -65,7 +65,7 @@ In **Docker**, serve the app on `0.0.0.0:$AFM_BROWSER_APP_PORT` so the published
 host port can reach it; afm publishes that port and hands you the resulting URL. In
 a **native** run, bind `127.0.0.1:$AFM_BROWSER_APP_PORT` (the app and Chrome share
 the host — no need to expose the dev server on the LAN). Screenshots and other
-artifacts the MCP writes land under the stage directory. The bundled `live-run`
+artifacts the MCP writes land under the stage directory. The bundled `afm-live-run`
 skill automates this flow (build from source → wait for health → walk the scenario
 → capture evidence).
 

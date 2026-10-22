@@ -1,9 +1,10 @@
 ---
+name: afm-live-run
 description: Exercise a change in the real running app via the managed Chrome DevTools browser (afm_chrome MCP) — a live run, not unit tests.
 allowed-tools: [Bash, Read, Write, Edit]
 ---
 
-# live-run — Drive the real app in a managed browser
+# afm-live-run — Drive the real app in a managed browser
 
 **SCOPE**: Run the product for real and confirm a change works end-to-end, using
 the managed Chrome DevTools browser exposed as the MCP server `afm_chrome`. This is

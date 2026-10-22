@@ -28,21 +28,14 @@ else
     exit 1
 fi
 
-# --- Claude Skills ---
+# --- Skills (Claude Code, Codex) ---
 echo ""
-read -p "Установить Claude-скиллы (/afm, /afm-check и др.) в ~/.claude/skills/? [Y/n] " answer || answer=""
+read -p "Установить скиллы afm для Claude Code и Codex? Папки встроенных скиллов afm (afm-run, afm-check, …), если это обычные каталоги, будут перенесены в backup. [Y/n] " answer || answer=""
 case "$answer" in
   [nN]*)
     echo "Пропущено. Установи позже: afm install-skills"
     ;;
   *)
-    "$INSTALL_DIR/$BIN_NAME" install-skills
-    echo ""
-    echo "Готово! Доступные команды:"
-    echo "  /afm        — запустить flow"
-    echo "  /afm-check  — статус текущего flow"
-    echo "  /afm-init   — создать flow.yaml"
-    echo "  /afm-retry  — повторить упавшую стадию"
-    echo "  /afm-review — ревью плана стадии"
+    "$INSTALL_DIR/$BIN_NAME" install-skills --force
     ;;
 esac

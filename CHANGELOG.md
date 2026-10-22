@@ -5,6 +5,27 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Improvement: afm skills for Claude Code and Codex, kept in sync with afm
+
+afm's skills now live in one place, `~/.afm/skills`, and `afm install-skills` links them
+into both `~/.claude/skills` and `$CODEX_HOME/skills` (default `~/.codex/skills`) with
+relative symlinks that, with the standard layout, also resolve inside afm's Docker
+container. `afm run` refreshes them on the host before every run (a failed refresh
+only prints a warning), so the skills follow the installed afm.
+
+- All afm skills are now named `afm-*`: `/afm` became `/afm-run`, `live-run` became
+  `/afm-live-run`, and the new `/afm-mesh-driven-development` (executing a plan
+  through named team/mesh agents) ships with afm. Skills under the old names are
+  never touched; delete old copies yourself if you no longer need them.
+- One-time migration: folders installed by an older `afm install-skills` are real
+  directories and are left alone (each run prints a one-line hint). Run
+  `afm install-skills --force` once to replace them with links; the old folders are
+  moved to a `.afm-skills-backup-*` directory next to the skills folder.
+- The `--skills-dir` flag is removed.
+- The Docker image now pins Codex CLI 0.163.0.
+
+See [Skills for Claude Code and Codex](docs/getting-started.md#skills-for-claude-code-and-codex).
+
 ### Fix: Team unread markers and drafts
 
 **New to you** and the per-conversation **New messages** markers now work when the

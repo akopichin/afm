@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/fsutil"
 )
 
 // StageStatus represents the lifecycle state of a single stage.
@@ -688,7 +689,7 @@ func SaveFeedbackOnce(stageDir, opID, feedback string) (bool, error) {
 	n := strings.Count(string(existing), "--- revision ") + 1
 	fmt.Fprintf(&b, "\n--- revision %d | %s ---\n%s\n%s\n",
 		n, time.Now().Format("2006-01-02 15:04"), sentinel, feedback)
-	if err := atomicWriteFile(fbFile, []byte(b.String()), 0644); err != nil {
+	if err := fsutil.AtomicWriteFile(fbFile, []byte(b.String()), 0644); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -787,45 +788,4 @@ func LatestPlanVersion(stageDir string) (version int, content string, err error)
 func FileContentSHA(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-// atomicWriteFile fsyncs a same-directory temp file, renames it, then fsyncs the parent directory.
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	dirName := filepath.Dir(path)
-	if err := os.MkdirAll(dirName, 0755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dirName, err)
-	}
-	tmp, err := os.CreateTemp(dirName, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("fsync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename temp: %w", err)
-	}
-	dir, err := os.Open(dirName)
-	if err != nil {
-		return fmt.Errorf("open dir for fsync: %w", err)
-	}
-	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("fsync dir: %w", err)
-	}
-	return nil
 }
