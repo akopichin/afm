@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { splitTaskText, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
+import { splitTaskText, type BoardAssignee, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { senderLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 
@@ -8,6 +8,18 @@ export const BOARD_STATUS_LABEL: Record<BoardTaskStatus, string> = {
   todo: 'Todo',
   in_progress: 'In progress',
   done: 'Done',
+}
+
+// ASSIGNEE_STATE_LABEL — what one assignee is doing: a typed assignment can be merely assigned.
+export const ASSIGNEE_STATE_LABEL: Record<BoardAssignee['state'], string> = {
+  assigned: 'Assigned',
+  in_progress: 'In progress',
+  done: 'Done',
+}
+
+// isTypedTask — the task comes from the typed task protocol (it has assignments of its own, not reports).
+export function isTypedTask(task: BoardTask): boolean {
+  return task.assignments !== undefined
 }
 
 // StatusIcon — a different shape per status, so the status reads without relying on color.
@@ -46,9 +58,11 @@ export type BoardTaskCardProps = {
 }
 
 // BoardTaskCard — one task of the shared board in Team's mixed grid and the Board tab's columns. Read-only: the
-// status is whatever the agents' reports say (see lib/board-tasks), the card never changes it.
+// status is whatever the agents' reports (legacy) or assignments (typed) say, the card never changes it.
 export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps): ReactElement {
-  const { title, description } = splitTaskText(task.text)
+  const typed = isTypedTask(task)
+  // A typed task carries its own fields; a legacy one keeps them in its text.
+  const { title, description } = typed ? task : splitTaskText(task.text)
   const latest = task.reports.at(-1)
   const reportCount = task.reports.length
   return (
@@ -66,6 +80,7 @@ export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps
       </span>
       <span className="board-task-title">{title}</span>
       {description !== '' && <span className="board-task-description">{description}</span>}
+      {typed && task.note !== undefined && <span className="board-task-latest-report">{task.note}</span>}
       {latest !== undefined && (
         <span className="board-task-latest-report">
           <strong>{senderLabel(latest.entry.author_id, participants)}</strong> · {latest.entry.status}
@@ -81,6 +96,7 @@ export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps
               <span key={a.id} className="board-task-assignee">
                 <MeshAvatar name={name} kind={participants.find((p) => p.id === a.id)?.kind ?? 'run_agent'} size="small" />
                 <span className="board-task-assignee-name">{name}</span>
+                {typed && <span className="board-task-assignee-state">{ASSIGNEE_STATE_LABEL[a.state]}</span>}
               </span>
             )
           })

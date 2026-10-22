@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import type { MeshBoardEntry, MeshParticipant } from '../../api/mesh-client'
-import { boardTasks, type BoardTask } from '../../lib/board-tasks'
+import { boardTasks, taskFromView, type BoardTask } from '../../lib/board-tasks'
+import { typedAssignment, typedTaskView } from '../../test/board-tasks'
 import tokensCss from '../../../skins/base/tokens.css?raw'
 import meshCss from '../../../skins/base/mesh.css?raw'
 import { BoardTaskCard } from './BoardTaskCard'
@@ -155,3 +156,27 @@ describe('long participant names', () => {
   })
 })
 
+describe('typed task card', () => {
+  test('a typed task shows its own title, description, latest note and each assignee with the assignment state', () => {
+    const task = taskFromView(
+      typedTaskView({
+        key: 'task/csv',
+        title: 'CSV — export',
+        description: 'Add GET /todos.csv',
+        status: 'in_progress',
+        assignments: [
+          typedAssignment({ id: 'a1', participant_id: 'stage:api', state: 'in_progress', progress: 'wiring', assigned_seq: 2, started_seq: 3 }),
+          typedAssignment({ id: 'a2', participant_id: 'run:t-1' }),
+        ],
+      }),
+    )
+    render(<BoardTaskCard task={task} participants={participants} onOpen={() => {}} />)
+    const card = screen.getByRole('button', { name: 'CSV — export, In progress' })
+    expect(within(card).getByText('CSV — export')).toBeInTheDocument()
+    expect(within(card).getByText('Add GET /todos.csv')).toBeInTheDocument()
+    expect(within(card).getByText('wiring')).toBeInTheDocument()
+    expect(within(card).getByText('API', { selector: '.board-task-assignee-name' }).closest('.board-task-assignee')).toHaveTextContent('In progress')
+    expect(within(card).getByText('QA', { selector: '.board-task-assignee-name' }).closest('.board-task-assignee')).toHaveTextContent('Assigned')
+    expect(within(card).queryByText(/report/)).toBeNull()
+  })
+})

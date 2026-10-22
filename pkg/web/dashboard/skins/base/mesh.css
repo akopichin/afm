@@ -992,7 +992,9 @@
   color: var(--text-muted);
 }
 .team-board-field input,
-.team-board-field textarea {
+.team-board-field textarea,
+.team-board-field select,
+.board-task-details-assign select {
   font: inherit;
   font-size: 13px;
   padding: 6px 8px;
@@ -1362,6 +1364,40 @@
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--separator-subtle);
+}
+
+/* Typed tasks: an assignee's own state on the card, and the operator's actions in the details. */
+.board-task-assignee-state {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.board-task-details-progress {
+  padding-left: 8px;
+  border-left: 2px solid var(--task-line);
+}
+.board-task-details-assignee-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.board-task-details-action {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.board-task-details-assign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.board-task-details-assign select {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.board-task-details-reopen {
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* === Add run agent dialog === */

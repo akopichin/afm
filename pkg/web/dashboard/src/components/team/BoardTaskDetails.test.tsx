@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import * as meshClient from '../../api/mesh-client'
 import type { MeshBoardEntry, MeshParticipant } from '../../api/mesh-client'
-import { boardTasks, type BoardTask } from '../../lib/board-tasks'
+import { boardTasks, taskFromView, type BoardTask } from '../../lib/board-tasks'
+import { typedAssignment, typedTaskView } from '../../test/board-tasks'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { DialogOpenContext } from '../../lib/focus-trap'
 
@@ -117,5 +119,117 @@ describe('BoardTaskDetails', () => {
     expect(screen.getByText('No reports yet.')).toBeInTheDocument()
     rerender(<BoardTaskDetails task={twoClaimants} participants={participants} onClose={() => {}} />)
     expect(screen.getByText('done: endpoint added')).toBeInTheDocument()
+  })
+
+  describe('typed task', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    const stages = [{ id: 'api', title: 'API', status: 'running' }]
+    const typed = taskFromView(
+      typedTaskView({
+        key: 'task/csv',
+        title: 'CSV export',
+        description: 'Add GET /todos.csv',
+        version: 4,
+        status: 'in_progress',
+        assignments: [
+          typedAssignment({ id: 'a1', participant_id: 'stage:api', state: 'in_progress', progress: 'wiring the handler', assigned_seq: 3, started_seq: 4 }),
+          typedAssignment({ id: 'a2', participant_id: 'run:t-1', state: 'assigned', assigned_seq: 5 }),
+          typedAssignment({ id: 'a3', participant_id: 'run:gone', state: 'done', result: 'reviewed', assigned_seq: 2, completed_seq: 3 }),
+        ],
+        history: [typedAssignment({ id: 'a0', participant_id: 'run:t-1', ended: 'released', ended_by: 'user', end_reason: 'wrong agent' })],
+      }),
+    )
+
+    function renderTyped(task: BoardTask = typed, reload = vi.fn()) {
+      render(<BoardTaskDetails task={task} participants={participants} stages={stages} onChanged={reload} onClose={() => {}} />)
+      return { dialog: screen.getByRole('dialog', { name: 'Task details' }), reload }
+    }
+
+    test('shows title, description, the latest note and each assignment with its own state', () => {
+      const { dialog } = renderTyped()
+      expect(within(dialog).getByRole('heading', { name: 'CSV export' })).toBeInTheDocument()
+      expect(within(dialog).getByText('Add GET /todos.csv')).toBeInTheDocument()
+      expect(within(dialog).getByText('wiring the handler')).toBeInTheDocument()
+      expect(within(dialog).getByText('v4')).toBeInTheDocument()
+      const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
+      expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('In progress')
+      expect(within(assignees).getByText('QA').closest('li')).toHaveTextContent('Assigned')
+      expect(within(assignees).getByText('gone').closest('li')).toHaveTextContent('Done')
+    })
+
+    test('history lists ended assignments with who ended them and why', () => {
+      const { dialog } = renderTyped()
+      const history = within(dialog).getByRole('list', { name: 'History' })
+      expect(history).toHaveTextContent('QA')
+      expect(history).toHaveTextContent('Released by You')
+      expect(history).toHaveTextContent('wrong agent')
+    })
+
+    test('Release is offered only on active assignments that are not done', () => {
+      const { dialog } = renderTyped()
+      expect(within(dialog).getByRole('button', { name: 'Release API' })).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Release QA' })).toBeInTheDocument()
+      expect(within(dialog).queryByRole('button', { name: 'Release gone' })).toBeNull()
+    })
+
+    test('Release posts the assignment with the expected version and reloads the board', async () => {
+      const post = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv', version: 5, status: 'in_progress', seq: 9 })
+      const { dialog, reload } = renderTyped()
+      fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'blocked' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+      await waitFor(() => expect(reload).toHaveBeenCalled())
+      expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'release', key: 'task/csv', assignmentId: 'a1', expectedVersion: 4, text: 'blocked' })
+      expect(within(dialog).getByLabelText('Reason')).toHaveValue('')
+    })
+
+    test('a stale version says the task changed, reloads and keeps the typed reason', async () => {
+      vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new meshClient.MeshApiError('/api/mesh/tasks', 409, 'stale_revision', 'version mismatch'))
+      const { dialog, reload } = renderTyped()
+      fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'blocked' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+      await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Task changed, reloaded'))
+      expect(reload).toHaveBeenCalled()
+      expect(within(dialog).getByLabelText('Reason')).toHaveValue('blocked')
+    })
+
+    test('Assign hands the task to a picked agent', async () => {
+      const post = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv', version: 5, status: 'in_progress', seq: 9 })
+      const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
+      const { dialog, reload } = renderTyped(unassigned)
+      const select = within(dialog).getByRole('combobox', { name: 'Assign to' })
+      expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose an agent', 'API', 'QA'])
+      fireEvent.change(select, { target: { value: 'run:t-1' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Assign' }))
+      await waitFor(() => expect(reload).toHaveBeenCalled())
+      expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'assign', key: 'task/csv', to: 'run:t-1', expectedVersion: 2 })
+    })
+
+    test('Reopen is offered once the task had assignments and posts the reason', async () => {
+      const post = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv', version: 5, status: 'todo', seq: 9 })
+      const { dialog } = renderTyped()
+      fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'needs CSV headers' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+      await waitFor(() => expect(post).toHaveBeenCalled())
+      expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'reopen', key: 'task/csv', expectedVersion: 4, text: 'needs CSV headers' })
+      expect(post.mock.calls[0]?.[0].assignmentId).toBeUndefined()
+    })
+
+    test('a fresh task has no Reopen and no Release', () => {
+      const { dialog } = renderTyped(taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export' })))
+      expect(within(dialog).queryByRole('button', { name: 'Reopen' })).toBeNull()
+      expect(within(dialog).queryByRole('button', { name: /^Release/ })).toBeNull()
+      expect(within(dialog).getByText('Unassigned')).toBeInTheDocument()
+    })
+
+    test('focus starts on Close and Escape closes, as for a legacy task', () => {
+      const onClose = vi.fn()
+      render(<BoardTaskDetails task={typed} participants={participants} stages={stages} onChanged={() => {}} onClose={onClose} />)
+      expect(screen.getByRole('button', { name: 'Close task details' })).toHaveFocus()
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
   })
 })

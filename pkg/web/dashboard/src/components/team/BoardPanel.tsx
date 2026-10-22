@@ -1,7 +1,7 @@
 import { useState, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
-import { boardReportsOf, boardTasks, boardTopLevel, type BoardTaskStatus } from '../../lib/board-tasks'
+import { boardReportsOf, boardTasksOf, boardTopLevelOf, type BoardTaskStatus } from '../../lib/board-tasks'
 import { senderLabel } from '../../lib/mesh-roster'
 import { BOARD_STATUS_LABEL, BoardTaskCard, BoardTaskStatusBadge } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
@@ -27,18 +27,20 @@ export type BoardPanelProps = {
 // task's card and details and never become cards of their own.
 export function BoardPanel({ board, participants, stages, active = true }: BoardPanelProps): ReactElement {
   const { entries } = board
-  const tasks = boardTasks(entries, participants)
+  const tasks = boardTasksOf(board, participants)
   const taskByKey = new Map(tasks.map((t) => [t.key, t]))
   // Only the key is kept: the dialog reads the task from the latest poll, and closes if the task is gone.
   const [openKey, setOpenKey] = useState<string | null>(null)
   const openTask = openKey === null ? undefined : taskByKey.get(openKey)
-  const topLevel = boardTopLevel(entries)
+  // A legacy task is one of the top-level entries; typed tasks are kept apart and lead the grid.
+  const topLevel = boardTopLevelOf(board)
+  const typedTasks = board.typedTasks ? tasks : []
 
   return (
     <div className="team-board">
-      <BoardTaskForm participants={participants} stages={stages} onPosted={() => void board.reload()} />
+      <BoardTaskForm participants={participants} stages={stages} typed={board.typedTasks} onPosted={() => void board.reload()} />
 
-      {topLevel.length === 0 ? (
+      {topLevel.length === 0 && typedTasks.length === 0 ? (
         <div className="team-board-empty empty-hint">Nothing on the board yet — post a task for the agents.</div>
       ) : (
         <>
@@ -56,6 +58,11 @@ export function BoardPanel({ board, participants, stages, active = true }: Board
             </ul>
           )}
           <ul className="team-board-list">
+            {typedTasks.map((task) => (
+              <li key={task.key}>
+                <BoardTaskCard task={task} participants={participants} onOpen={(t) => setOpenKey(t.key)} />
+              </li>
+            ))}
             {topLevel.map((e) => {
               const task = taskByKey.get(e.key)
               if (task !== undefined) {
@@ -102,7 +109,16 @@ export function BoardPanel({ board, participants, stages, active = true }: Board
         </>
       )}
 
-      {openTask !== undefined && <BoardTaskDetails task={openTask} participants={participants} onClose={() => setOpenKey(null)} active={active} />}
+      {openTask !== undefined && (
+        <BoardTaskDetails
+          task={openTask}
+          participants={participants}
+          stages={stages}
+          onChanged={() => void board.reload()}
+          onClose={() => setOpenKey(null)}
+          active={active}
+        />
+      )}
     </div>
   )
 }

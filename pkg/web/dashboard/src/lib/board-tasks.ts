@@ -33,6 +33,8 @@ export type BoardTask = {
   assignees: BoardAssignee[]
   // reports — each agent's latest report under the task plus every non-agent entry, oldest first.
   reports: BoardReport[]
+  // author — who posted the task.
+  author: string
   // title / description — the task's own fields (a legacy task splits them out of its text).
   title: string
   description: string
@@ -137,6 +139,7 @@ export function boardTasks(entries: MeshBoardEntry[], participants: MeshParticip
         status: taskStatus(claimants),
         assignees: claimants.map((r) => ({ id: r.entry.author_id, state: r.marker === 'in_progress' ? 'in_progress' : 'done' })),
         reports,
+        author: entry.author_id,
         ...splitTaskText(entry.status),
         version: entry.version,
       }
@@ -171,6 +174,7 @@ export function taskFromView(view: MeshBoardTask): BoardTask {
     status: view.status,
     assignees: view.assignments.map((a) => ({ id: a.participant_id, state: a.state })),
     reports: [],
+    author: view.author_id,
     title: view.title,
     description,
     note: latestNote(view.assignments),

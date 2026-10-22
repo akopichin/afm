@@ -84,4 +84,49 @@ describe('BoardTaskForm', () => {
     expect(screen.getByText(/untick 2/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Post task' })).toBeDisabled()
   })
+
+  describe('typed tasks', () => {
+    test('has an optional Assignee select instead of notify checkboxes', () => {
+      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={() => {}} />)
+      expect(screen.queryByRole('group', { name: 'Notify' })).toBeNull()
+      expect(screen.queryByRole('checkbox')).toBeNull()
+      const assignee = screen.getByRole('combobox', { name: 'Assignee' })
+      expect(assignee).toHaveValue('')
+      expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'API'])
+    })
+
+    test('creates the task with title, description and the picked assignee', async () => {
+      const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
+      const publish = vi.spyOn(meshClient, 'publishMeshBoard')
+      const onPosted = vi.fn()
+      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={onPosted} />)
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+      fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(onPosted).toHaveBeenCalledWith(false))
+      expect(create.mock.calls[0]?.[0]).toMatchObject({ action: 'create', key: 'task/csv-export', title: 'CSV export', description: 'Add GET /todos.csv', to: 'stage:api' })
+      expect(publish).not.toHaveBeenCalled()
+      expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('')
+    })
+
+    test('without an assignee the create sends no "to"', async () => {
+      const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
+      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={() => {}} />)
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(create).toHaveBeenCalled())
+      expect(create.mock.calls[0]?.[0].to).toBeUndefined()
+      expect(create.mock.calls[0]?.[0].description).toBeUndefined()
+    })
+
+    test('a failed create keeps the draft and shows the error', async () => {
+      vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new Error('agent unreachable'))
+      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={() => {}} />)
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('agent unreachable'))
+      expect(screen.getByLabelText('Task')).toHaveValue('CSV export')
+    })
+  })
 })

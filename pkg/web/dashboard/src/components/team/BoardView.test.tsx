@@ -5,6 +5,7 @@ import type { MeshBoardEntry, MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
 import { BoardLoadState } from './BoardLoadState'
 import { BoardView } from './BoardView'
+import { typedAssignment, typedTaskView } from '../../test/board-tasks'
 
 const participants: MeshParticipant[] = [
   { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
@@ -325,5 +326,73 @@ describe('BoardView', () => {
 
     rerender(<BoardView board={boardOf([...entries, entry('user', 'task/new-thing', 'New thing', 10)], { reload })} participants={participants} stages={stages} />)
     expect(close).toHaveFocus()
+  })
+
+  describe('typed tasks', () => {
+    const typedTasks = [
+      typedTaskView({ key: 'task/csv', title: 'CSV export', description: 'Add GET /todos.csv', assignments: [typedAssignment({ id: 'a1', participant_id: 'run:t-1' })] }),
+      typedTaskView({ key: 'task/docs', title: 'Docs', status: 'done', assignments: [typedAssignment({ id: 'a2', participant_id: 'stage:api', state: 'done', result: 'written' })] }),
+      typedTaskView({ key: 'task/gone', title: 'Old agent work', status: 'in_progress', assignments: [typedAssignment({ id: 'a3', participant_id: 'run:gone', state: 'in_progress' })] }),
+    ]
+    const typedBoard = () => boardOf([], { tasks: typedTasks, typedTasks: true })
+
+    test('an assigned-only task stays in Todo with its assignee named, not Unassigned', () => {
+      renderView(typedBoard())
+      expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
+      const card = within(lane('Todo')).getByRole('button', { name: 'CSV export, Todo' })
+      expect(within(card).getByText('QA', { selector: '.board-task-assignee-name' })).toBeInTheDocument()
+      expect(within(card).getByText('Assigned')).toBeInTheDocument()
+      expect(within(card).queryByText('Unassigned')).toBeNull()
+    })
+
+    test('a done task is in Done and counts as completed', () => {
+      renderView(typedBoard())
+      expect(cardTitles('Done')).toEqual(['Docs, Done'])
+      expect(cardTitles('In progress')).toEqual(['Old agent work, In progress'])
+      expect(screen.getByText('1 of 3 completed')).toBeInTheDocument()
+    })
+
+    test('the assignee filter offers and matches a participant missing from the roster', () => {
+      renderView(typedBoard())
+      const filter = screen.getByRole('combobox', { name: 'Assignee' })
+      expect(within(filter).getAllByRole('option').map((o) => o.getAttribute('value'))).toContain('run:gone')
+      fireEvent.change(filter, { target: { value: 'run:gone' } })
+      expect(cardTitles('In progress')).toEqual(['Old agent work, In progress'])
+      expect(cardTitles('Todo')).toEqual([])
+    })
+
+    test('search matches the title and the description', () => {
+      renderView(typedBoard())
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'todos.csv' } })
+      expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
+      expect(cardTitles('Done')).toEqual([])
+    })
+
+    test('New task creates a typed task through /api/mesh/tasks, never the board publish', async () => {
+      const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/new-thing', version: 1, status: 'todo', seq: 9 })
+      const publish = vi.spyOn(meshClient, 'publishMeshBoard')
+      const reload = vi.fn(() => Promise.resolve())
+      renderView(boardOf([], { tasks: typedTasks, typedTasks: true, reload }))
+      fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(reload).toHaveBeenCalled())
+      expect(create.mock.calls[0]?.[0]).toMatchObject({ action: 'create', key: 'task/new-thing', title: 'New thing' })
+      expect(publish).not.toHaveBeenCalled()
+    })
+  })
+
+  test('legacy mode never calls /api/mesh/tasks', async () => {
+    const typed = vi.spyOn(meshClient, 'postMeshTask')
+    vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(entry('user', 'task/new-thing', 'New thing', 10))
+    const reload = vi.fn(() => Promise.resolve())
+    renderView(boardOf(entries, { reload }))
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'New thing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    await waitFor(() => expect(reload).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Release, In progress' }))
+    expect(within(screen.getByRole('dialog', { name: 'Task details' })).queryByRole('button', { name: /Release|Reopen|Assign/ })).toBeNull()
+    expect(typed).not.toHaveBeenCalled()
   })
 })

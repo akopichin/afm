@@ -1,10 +1,10 @@
 import { useRef, useState, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { MeshBoard } from '../../hooks/use-mesh'
-import { boardTasks, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
+import { boardTasksOf, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
-import { participantLabel } from '../../lib/mesh-roster'
-import { BOARD_STATUS_LABEL, BoardTaskCard } from './BoardTaskCard'
+import { participantLabel, senderLabel } from '../../lib/mesh-roster'
+import { BOARD_STATUS_LABEL, BoardTaskCard, isTypedTask } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { BoardTaskForm } from './BoardTaskForm'
 import type { RunTeamListStage } from './RunTeamList'
@@ -23,8 +23,14 @@ export type BoardViewProps = {
   stages: RunTeamListStage[]
 }
 
+// searchText — what a search looks in: the key and the task's text (a typed task's own fields and latest note).
+function searchText(task: BoardTask): string {
+  if (!isTypedTask(task)) return `${task.key}\n${task.text}`
+  return [task.key, task.title, task.description, task.note ?? ''].join('\n')
+}
+
 function matchesSearch(task: BoardTask, query: string): boolean {
-  return `${task.key}\n${task.text}`.toLowerCase().includes(query)
+  return searchText(task).toLowerCase().includes(query)
 }
 
 function matchesAssignee(task: BoardTask, assignee: string): boolean {
@@ -43,7 +49,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
 
-  const tasks = boardTasks(board.entries, participants)
+  const tasks = boardTasksOf(board, participants)
   const taskByKey = new Map(tasks.map((t) => [t.key, t]))
   const openTask = openKey === null ? undefined : taskByKey.get(openKey)
 
@@ -51,6 +57,8 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
   const filtering = query !== '' || assignee !== ALL_ASSIGNEES
   const shown = tasks.filter((t) => matchesSearch(t, query) && matchesAssignee(t, assignee))
   const doneCount = tasks.filter((t) => t.status === 'done').length
+  // An assignee that left the roster (or never was in it) can still be filtered by.
+  const outsideRoster = [...new Set(tasks.flatMap((t) => t.assignees.map((a) => a.id)))].filter((id) => !participants.some((p) => p.id === id))
 
   function openNewTask(): void {
     setAnnouncement('')
@@ -107,6 +115,11 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
               {participantLabel(p)}
             </option>
           ))}
+          {outsideRoster.map((id) => (
+            <option key={id} value={id}>
+              {senderLabel(id, participants)}
+            </option>
+          ))}
         </select>
       </div>
 
@@ -140,9 +153,11 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
       </div>
 
       {newTaskOpen && (
-        <NewTaskDialog participants={participants} stages={stages} onPosted={handlePosted} onClose={() => setNewTaskOpen(false)} />
+        <NewTaskDialog participants={participants} stages={stages} typed={board.typedTasks} onPosted={handlePosted} onClose={() => setNewTaskOpen(false)} />
       )}
-      {openTask !== undefined && <BoardTaskDetails task={openTask} participants={participants} onClose={() => setOpenKey(null)} />}
+      {openTask !== undefined && (
+        <BoardTaskDetails task={openTask} participants={participants} stages={stages} onChanged={() => void board.reload()} onClose={() => setOpenKey(null)} />
+      )}
     </div>
   )
 }
@@ -150,13 +165,14 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
 type NewTaskDialogProps = {
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
+  typed: boolean
   onPosted: (draftRemains: boolean) => void
   onClose: () => void
 }
 
 // NewTaskDialog — the task form in a modal: focus moves into it, Tab stays inside, Escape closes it and focus
 // goes back to the button that opened it (the shared useModalDialog, like BoardTaskDetails).
-function NewTaskDialog({ participants, stages, onPosted, onClose }: NewTaskDialogProps): ReactElement {
+function NewTaskDialog({ participants, stages, typed, onPosted, onClose }: NewTaskDialogProps): ReactElement {
   const modalRef = useRef<HTMLDivElement | null>(null)
   useModalDialog(modalRef, onClose)
 
@@ -164,7 +180,7 @@ function NewTaskDialog({ participants, stages, onPosted, onClose }: NewTaskDialo
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="New task">
       <div className="modal-content board-new-task" ref={modalRef}>
         <h2 className="board-new-task-title">New task</h2>
-        <BoardTaskForm participants={participants} stages={stages} onPosted={onPosted} />
+        <BoardTaskForm participants={participants} stages={stages} typed={typed} onPosted={onPosted} />
         <div className="modal-actions">
           <button type="button" className="btn btn-cancel" onClick={onClose}>
             Cancel

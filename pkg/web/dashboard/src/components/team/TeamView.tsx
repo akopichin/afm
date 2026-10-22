@@ -4,7 +4,7 @@ import type { AssistantProfile } from '../../types/assistant-profile'
 import { genMeshRequestId, getMeshThread, MeshApiError, openMeshThread, updateMeshThreadTitle, type MeshParticipant, type MeshSendReceipt, type MeshThread, type MeshThreadSummaries } from '../../api/mesh-client'
 import type { MeshBoard, MeshRoster } from '../../hooks/use-mesh'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
-import { boardTaskCount } from '../../lib/board-tasks'
+import { boardTaskCountOf } from '../../lib/board-tasks'
 import { directPeer, findExistingDirectThread, mergeById, participantLabel, participantRole } from '../../lib/mesh-roster'
 import { orderInboxThreads } from '../../lib/team-inbox'
 import { advanceTeamSeen, baselineTeamUnread, isTeamUnread } from '../../lib/team-unread'
@@ -517,7 +517,7 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
                   <>
                     Board
                     <span className="team-tab-count" aria-hidden="true">
-                      {boardTaskCount(board.entries)}
+                      {boardTaskCountOf(board)}
                     </span>
                   </>
                 ),

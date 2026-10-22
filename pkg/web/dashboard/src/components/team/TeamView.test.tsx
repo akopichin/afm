@@ -8,6 +8,7 @@ import { useMeshBoard, type MeshBoard, type MeshRoster } from '../../hooks/use-m
 import type { AfmEvent, Stage } from '../../types'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { isTeamUnread } from '../../lib/team-unread'
+import { typedTaskView } from '../../test/board-tasks'
 
 function makeStage(overrides: Partial<Stage> = {}): Stage {
   return {
@@ -1105,6 +1106,26 @@ describe('TeamView', () => {
     fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
     expect(await screen.findByRole('button', { name: 'Health endpoint, Todo' })).toBeInTheDocument()
     expect(poll).not.toHaveBeenCalled()
+  })
+
+  test('with typed tasks the Board tab counts the typed tasks, not the task/ storage entries', () => {
+    mockThreadAndBoardFetches()
+    const board: MeshBoard = {
+      tasks: [typedTaskView({ key: 'task/a', title: 'A' }), typedTaskView({ key: 'task/b', title: 'B' }), typedTaskView({ key: 'task/c', title: 'C' })],
+      typedTasks: true,
+      entries: [
+        { key: 'task/a', status: 'storage', author_id: 'user', version: 1, seq: 1, ts: '' },
+        { key: 'api/ready', status: 'yes', author_id: 'stage:implement', version: 1, seq: 2, ts: '' },
+      ],
+      status: 'ready',
+      reload: async () => {},
+    }
+    render(<TeamView runId="board-typed" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
+    expect(screen.getByRole('tab', { name: /^Board/ })).toHaveTextContent('Board3')
+    fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
+    expect(screen.getByRole('button', { name: 'A, Todo' })).toBeInTheDocument()
+    expect(screen.getByRole('article', { name: 'api/ready' })).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'task/a' })).toBeNull()
   })
 
   test('the Board tab says it is loading, not that the board is empty, before the first fetch lands', () => {
