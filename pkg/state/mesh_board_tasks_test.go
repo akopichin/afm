@@ -88,6 +88,13 @@ func reopenTask(t *testing.T, version int) Effect {
 	return taskEffect(t, kindMeshBoardTaskReopened, MeshBoardTaskReopenedPayload{Reason: "redo", MeshBoardTaskMeta: meta(version)})
 }
 
+// assignAndStart has manager assign who at version, then who starts it: the task ends at version+2.
+func assignAndStart(t *testing.T, store *Store, manager string, version int, id string, who agentcomm.ParticipantID) {
+	t.Helper()
+	mustApplyTask(t, store, manager, assignTask(t, version, id, who, false))
+	mustApplyTask(t, store, string(who), startTask(t, version+1, id))
+}
+
 func boardTask(t *testing.T, store *Store) agentcomm.BoardTask {
 	t.Helper()
 	task, ok := store.Snapshot().Assistants.Mesh.BoardTasks[testTaskKey]
@@ -157,12 +164,12 @@ func TestBoardTaskLifecycle(t *testing.T) {
 func TestBoardTaskMultiAssignee(t *testing.T) {
 	store := openTypedStore(t, t.TempDir())
 	mustApplyTask(t, store, "user", createTask(t, ""))
-	mustApplyTask(t, store, "user", assignTask(t, 1, "a1", "a", true))
-	mustApplyTask(t, store, "user", assignTask(t, 2, "b1", "b", true))
+	assignAndStart(t, store, "user", 1, "a1", "a")
+	assignAndStart(t, store, "user", 3, "b1", "b")
 
-	mustApplyTask(t, store, "a", completeTask(t, 3, "a1"))
+	mustApplyTask(t, store, "a", completeTask(t, 5, "a1"))
 	wantStatus(t, store, agentcomm.BoardTaskInProgress)
-	mustApplyTask(t, store, "b", completeTask(t, 4, "b1"))
+	mustApplyTask(t, store, "b", completeTask(t, 6, "b1"))
 	wantStatus(t, store, agentcomm.BoardTaskDone)
 }
 
@@ -188,10 +195,10 @@ func TestBoardTaskStaleDoneAfterReassign(t *testing.T) {
 func TestBoardTaskReopenArchivesAll(t *testing.T) {
 	store := openTypedStore(t, t.TempDir())
 	mustApplyTask(t, store, "user", createTask(t, ""))
-	mustApplyTask(t, store, "user", assignTask(t, 1, "a1", "a", true))
-	mustApplyTask(t, store, "user", assignTask(t, 2, "b1", "b", false))
+	assignAndStart(t, store, "user", 1, "a1", "a")
+	mustApplyTask(t, store, "user", assignTask(t, 3, "b1", "b", false))
 
-	mustApplyTask(t, store, "user", reopenTask(t, 3))
+	mustApplyTask(t, store, "user", reopenTask(t, 4))
 	task := boardTask(t, store)
 	if len(task.Assignments) != 0 || len(task.History) != 2 {
 		t.Fatalf("after reopen: assignments=%d history=%d", len(task.Assignments), len(task.History))
@@ -210,21 +217,21 @@ func TestBoardTaskReleaseDoneRejected(t *testing.T) {
 	t.Run("single", func(t *testing.T) {
 		store := openTypedStore(t, t.TempDir())
 		mustApplyTask(t, store, "user", createTask(t, ""))
-		mustApplyTask(t, store, "user", assignTask(t, 1, "a1", "a", true))
-		mustApplyTask(t, store, "a", completeTask(t, 2, "a1"))
+		assignAndStart(t, store, "user", 1, "a1", "a")
+		mustApplyTask(t, store, "a", completeTask(t, 3, "a1"))
 
-		err := applyTaskEffects(t, store, "user", releaseTask(t, 3, "a1"))
+		err := applyTaskEffects(t, store, "user", releaseTask(t, 4, "a1"))
 		wantRejected(t, err, assistants.CodeInvalidStatus, ErrBoardTaskInvalidTransition)
 		wantStatus(t, store, agentcomm.BoardTaskDone)
 	})
 	t.Run("double", func(t *testing.T) {
 		store := openTypedStore(t, t.TempDir())
 		mustApplyTask(t, store, "user", createTask(t, ""))
-		mustApplyTask(t, store, "user", assignTask(t, 1, "a1", "a", true))
-		mustApplyTask(t, store, "user", assignTask(t, 2, "b1", "b", true))
-		mustApplyTask(t, store, "a", completeTask(t, 3, "a1"))
+		assignAndStart(t, store, "user", 1, "a1", "a")
+		assignAndStart(t, store, "user", 3, "b1", "b")
+		mustApplyTask(t, store, "a", completeTask(t, 5, "a1"))
 
-		err := applyTaskEffects(t, store, "user", releaseTask(t, 4, "a1"))
+		err := applyTaskEffects(t, store, "user", releaseTask(t, 6, "a1"))
 		wantRejected(t, err, assistants.CodeInvalidStatus, ErrBoardTaskInvalidTransition)
 		if len(boardTask(t, store).Assignments) != 2 {
 			t.Fatal("a rejected release changed the assignments")
@@ -373,10 +380,10 @@ func TestBoardTaskReplayMatchesLive(t *testing.T) {
 	mustApplyTask(t, store, "x", createTask(t, ""))
 	mustApplyTask(t, store, "x", assignTask(t, 1, "a1", "a", false))
 	mustApplyTask(t, store, "a", startTask(t, 2, "a1"), progressTask(t, 3, "a1", "half"))
-	mustApplyTask(t, store, "x", assignTask(t, 4, "b1", "b", true))
-	mustApplyTask(t, store, "x", releaseTask(t, 5, "b1"))
-	mustApplyTask(t, store, "a", completeTask(t, 6, "a1"))
-	mustApplyTask(t, store, "user", reopenTask(t, 7))
+	assignAndStart(t, store, "x", 4, "b1", "b")
+	mustApplyTask(t, store, "x", releaseTask(t, 6, "b1"))
+	mustApplyTask(t, store, "a", completeTask(t, 7, "a1"))
+	mustApplyTask(t, store, "user", reopenTask(t, 8))
 	live := store.Snapshot().Assistants.Mesh.BoardTasks
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -405,13 +412,13 @@ func TestBoardTaskRequiresProtocol(t *testing.T) {
 func TestBoardTaskInputLimits(t *testing.T) {
 	store := openTypedStore(t, t.TempDir())
 	mustApplyTask(t, store, "user", createTask(t, ""))
-	mustApplyTask(t, store, "user", assignTask(t, 1, "a1", "a", true))
+	assignAndStart(t, store, "user", 1, "a1", "a")
 
 	long := make([]byte, agentcomm.MaxBodyBytes+1)
-	err := applyTaskEffects(t, store, "a", progressTask(t, 2, "a1", string(long)))
+	err := applyTaskEffects(t, store, "a", progressTask(t, 3, "a1", string(long)))
 	wantRejected(t, err, assistants.CodeInvalidRequest, nil)
 
-	refs := MeshBoardTaskCompletedPayload{AssignmentID: "a1", ArtifactRefs: []string{"/etc/passwd"}, MeshBoardTaskMeta: meta(2)}
+	refs := MeshBoardTaskCompletedPayload{AssignmentID: "a1", ArtifactRefs: []string{"/etc/passwd"}, MeshBoardTaskMeta: meta(3)}
 	err = applyTaskEffects(t, store, "a", taskEffect(t, kindMeshBoardTaskCompleted, refs))
 	wantRejected(t, err, assistants.CodeInvalidRequest, ErrBoardArtifactRefOutsideRun)
 }
@@ -435,5 +442,36 @@ func seedBoardTask(t *testing.T, as *AssistantsState, assigned bool) {
 		mustApply(t, as, boardTaskControl(t, kindMeshBoardTaskAssigned, "user", MeshBoardTaskAssignedPayload{
 			AssignmentID: "a1", ParticipantID: "a", MeshBoardTaskMeta: meta(1),
 		}))
+	}
+}
+
+func TestBoardTaskAssignOnDoneNeedsReopen(t *testing.T) {
+	store := openTypedStore(t, t.TempDir())
+	mustApplyTask(t, store, "user", createTask(t, ""))
+	assignAndStart(t, store, "user", 1, "b1", "b")
+	mustApplyTask(t, store, "b", completeTask(t, 3, "b1"))
+	before := boardTask(t, store)
+
+	err := applyTaskEffects(t, store, "user", assignTask(t, 4, "c1", "c", false))
+	wantRejected(t, err, assistants.CodeInvalidStatus, ErrBoardTaskInvalidTransition)
+	if after := boardTask(t, store); !reflect.DeepEqual(before, after) {
+		t.Fatalf("rejected assign on a done task changed it:\nbefore %+v\nafter  %+v", before, after)
+	}
+
+	mustApplyTask(t, store, "user", reopenTask(t, 4))
+	mustApplyTask(t, store, "user", assignTask(t, 5, "c1", "c", false))
+	wantStatus(t, store, agentcomm.BoardTaskTodo)
+}
+
+func TestBoardTaskManagerCannotStartForOthers(t *testing.T) {
+	store := openTypedStore(t, t.TempDir())
+	mustApplyTask(t, store, "x", createTask(t, ""))
+
+	for _, manager := range []string{"user", "x"} {
+		err := applyTaskEffects(t, store, manager, assignTask(t, 1, "b1", "b", true))
+		wantRejected(t, err, assistants.CodeActorNotAllowed, ErrBoardTaskNotAuthorized)
+	}
+	if task := boardTask(t, store); len(task.Assignments) != 0 || task.Version != 1 {
+		t.Fatalf("rejected assign-with-start changed the task: %+v", task)
 	}
 }

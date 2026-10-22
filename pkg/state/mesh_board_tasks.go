@@ -46,8 +46,8 @@ type MeshBoardTaskCreatedPayload struct {
 	MeshBoardTaskMeta
 }
 
-// MeshBoardTaskAssignedPayload is the payload of mesh_board_task_assigned. Start with ParticipantID equal to
-// the actor is a claim: the actor takes a free task and starts it at once.
+// MeshBoardTaskAssignedPayload is the payload of mesh_board_task_assigned. Start is a claim: the actor, who
+// must be ParticipantID itself, takes a free task and starts it at once.
 type MeshBoardTaskAssignedPayload struct {
 	AssignmentID  string                  `json:"assignment_id"`
 	ParticipantID agentcomm.ParticipantID `json:"participant_id"`
@@ -189,12 +189,19 @@ func assignBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c
 	if p.AssignmentID == "" || who == "" {
 		return boardTaskBadInput("assigning task %s needs an assignment id and a participant", task.Key)
 	}
-	claim := p.Start && who == actor
+	// Only the participant itself starts its work, so Start on an assign always means a claim.
+	if p.Start && who != actor {
+		return boardTaskForbidden("%s cannot start task %s for %s: only the assignee starts its work", actor, task.Key, who)
+	}
+	claim := p.Start
 	if claim && len(task.Assignments) > 0 {
 		return boardTaskInvalid("%s cannot claim task %s: it is already assigned", actor, task.Key)
 	}
 	if !claim && !mayManageBoardTask(*task, actor) {
 		return boardTaskForbidden("%s may not assign task %s: only the user or its coordinator can", actor, task.Key)
+	}
+	if task.Status() == agentcomm.BoardTaskDone {
+		return boardTaskInvalid("task %s is done — reopen it first", task.Key)
 	}
 	if who == agentcomm.UserParticipantID {
 		return boardTaskInvalid("task %s cannot be assigned to the user", task.Key)
@@ -202,10 +209,9 @@ func assignBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c
 	if _, busy := task.ActiveFor(who); busy {
 		return boardTaskInvalid("%s already has an active assignment on task %s", who, task.Key)
 	}
-	if _, used := task.Assignment(p.AssignmentID); used {
-		return boardTaskInvalid("assignment id %s is already used on task %s", p.AssignmentID, task.Key)
-	}
-	if _, used := task.EndedAssignment(p.AssignmentID); used {
+	_, active := task.Assignment(p.AssignmentID)
+	_, ended := task.EndedAssignment(p.AssignmentID)
+	if active || ended {
 		return boardTaskInvalid("assignment id %s is already used on task %s", p.AssignmentID, task.Key)
 	}
 
