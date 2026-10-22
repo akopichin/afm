@@ -42,12 +42,31 @@ describe('BoardPanel', () => {
     expect(within(fact).getByText('v2')).toBeInTheDocument()
   })
 
+  test('a task cannot be posted before the board has loaded: the run may keep typed tasks', async () => {
+    let answer: (snapshot: meshClient.MeshBoardSnapshot) => void = () => {}
+    vi.spyOn(meshClient, 'getMeshBoard').mockReturnValue(new Promise((resolve) => (answer = resolve)))
+    const publish = vi.spyOn(meshClient, 'publishMeshBoard')
+    const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
+    render(<BoardWithPoll participants={participants} stages={stages} />)
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+    expect(screen.getByRole('button', { name: 'Post task' })).toBeDisabled()
+    fireEvent.submit(screen.getByRole('button', { name: 'Post task' }))
+    expect(publish).not.toHaveBeenCalled()
+
+    act(() => answer({ tasks: [], typedTasks: true, entries: [] }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Post task' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+    await waitFor(() => expect(create).toHaveBeenCalled())
+    expect(publish).not.toHaveBeenCalled()
+  })
+
   test('posting a task publishes task/<slug> with the description', async () => {
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue({
       author_id: 'user', key: 'task/csv-export', version: 1, status: 'Add GET /todos.csv', seq: 1, ts: '2026-10-18T00:00:00Z',
     })
     render(<BoardWithPoll participants={participants} stages={stages} />)
+    await act(async () => {}) // the board has loaded: the form knows the task mode
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
@@ -209,6 +228,7 @@ describe('BoardPanel', () => {
       author_id: 'user', key: 'task/csv-export', version: 1, status: 'CSV export', seq: 1, ts: '2026-10-18T00:00:00Z',
     })
     render(<BoardWithPoll participants={participants} stages={stages} />)
+    await act(async () => {}) // the board has loaded: the form knows the task mode
     fireEvent.click(screen.getByRole('checkbox', { name: 'QA' }))
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
@@ -229,6 +249,7 @@ describe('BoardPanel', () => {
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockRejectedValue(new Error('network'))
     render(<BoardWithPoll participants={participants} stages={stages} />)
+    await act(async () => {}) // the board has loaded: the form knows the task mode
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
@@ -248,6 +269,7 @@ describe('BoardPanel', () => {
     let resolvePublish!: (v: meshClient.MeshBoardEntry) => void
     vi.spyOn(meshClient, 'publishMeshBoard').mockReturnValue(new Promise((res) => (resolvePublish = res)))
     render(<BoardWithPoll participants={participants} stages={stages} />)
+    await act(async () => {}) // the board has loaded: the form knows the task mode
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
     fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'next: PDF export' } })

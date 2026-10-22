@@ -23,7 +23,7 @@ describe('BoardTaskForm', () => {
     async function keyPostedFor(title: string): Promise<string> {
       const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/x', 'x'))
       const onPosted = vi.fn()
-      render(<BoardTaskForm participants={participants} stages={stages} onPosted={onPosted} />)
+      render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={onPosted} />)
       fireEvent.change(screen.getByLabelText('Task'), { target: { value: title } })
       fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
       await waitFor(() => expect(onPosted).toHaveBeenCalled())
@@ -51,7 +51,7 @@ describe('BoardTaskForm', () => {
   test('posting publishes task/<slug> with title and details, and reports that nothing is left', async () => {
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/csv-export', 'x'))
     const onPosted = vi.fn()
-    render(<BoardTaskForm participants={participants} stages={stages} onPosted={onPosted} />)
+    render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={onPosted} />)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
@@ -62,7 +62,7 @@ describe('BoardTaskForm', () => {
   })
 
   test('has no status control: the operator only names the task and picks who to notify', () => {
-    render(<BoardTaskForm participants={participants} stages={stages} onPosted={() => {}} />)
+    render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={() => {}} />)
     expect(screen.queryByRole('combobox')).toBeNull()
     expect(screen.queryByRole('radio')).toBeNull()
     expect(screen.queryByText(/in progress|done/i)).toBeNull()
@@ -70,7 +70,7 @@ describe('BoardTaskForm', () => {
 
   test('notifies the checked agents only; working agents all start checked', async () => {
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/csv-export', 'CSV export'))
-    render(<BoardTaskForm participants={participants} stages={stages} onPosted={() => {}} />)
+    render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={() => {}} />)
     const notify = screen.getByRole('group', { name: 'Notify' })
     expect(within(notify).getByRole('checkbox', { name: 'API' })).toBeChecked()
     fireEvent.click(within(notify).getByRole('checkbox', { name: 'QA' }))
@@ -83,7 +83,7 @@ describe('BoardTaskForm', () => {
   test('a failed post shows the error, keeps the draft and a retry reuses the request id', async () => {
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockRejectedValue(new Error('network'))
     const onPosted = vi.fn()
-    render(<BoardTaskForm participants={participants} stages={stages} onPosted={onPosted} />)
+    render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={onPosted} />)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network'))
@@ -97,7 +97,7 @@ describe('BoardTaskForm', () => {
   test('text typed while a task is being posted is kept after it succeeds', async () => {
     let resolvePublish!: (v: MeshBoardEntry) => void
     vi.spyOn(meshClient, 'publishMeshBoard').mockReturnValue(new Promise((res) => (resolvePublish = res)))
-    render(<BoardTaskForm participants={participants} stages={stages} onPosted={() => {}} />)
+    render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={() => {}} />)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
     fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'next: PDF export' } })
@@ -108,7 +108,7 @@ describe('BoardTaskForm', () => {
 
   test('more ticked agents than a task may notify blocks posting and says how many to untick', () => {
     const many = Array.from({ length: 18 }, (_, i) => ({ id: `run:a${i}`, kind: 'run_agent', scope: 'run', display_name: `Agent ${i}`, reachable: true }))
-    render(<BoardTaskForm participants={many} stages={[]} onPosted={() => {}} />)
+    render(<BoardTaskForm participants={many} stages={[]} mode="legacy" onPosted={() => {}} />)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Big task' } })
     expect(screen.getByText(/untick 2/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Post task' })).toBeDisabled()
@@ -116,7 +116,7 @@ describe('BoardTaskForm', () => {
 
   describe('typed tasks', () => {
     test('has an optional Assignee select instead of notify checkboxes', () => {
-      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={() => {}} />)
+      render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
       expect(screen.queryByRole('group', { name: 'Notify' })).toBeNull()
       expect(screen.queryByRole('checkbox')).toBeNull()
       const assignee = screen.getByRole('combobox', { name: 'Assignee' })
@@ -128,7 +128,7 @@ describe('BoardTaskForm', () => {
       const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
       const publish = vi.spyOn(meshClient, 'publishMeshBoard')
       const onPosted = vi.fn()
-      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={onPosted} />)
+      render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={onPosted} />)
       fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
       fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
       fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
@@ -141,7 +141,7 @@ describe('BoardTaskForm', () => {
 
     test('without an assignee the create sends no "to"', async () => {
       const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
-      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={() => {}} />)
+      render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
       fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
       fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
       await waitFor(() => expect(create).toHaveBeenCalled())
@@ -151,7 +151,7 @@ describe('BoardTaskForm', () => {
 
     test('a failed create keeps the draft and shows the error', async () => {
       vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new Error('agent unreachable'))
-      render(<BoardTaskForm participants={participants} stages={stages} typed onPosted={() => {}} />)
+      render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
       fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
       fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
       await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('agent unreachable'))

@@ -1,6 +1,8 @@
 // board-tasks — the one projection of the shared board into tasks, used by Team's mixed board and the Board tab.
-// A task is a direct "task/<slug>" key; agents report under "<task key>/<alias>". Only reports whose author is an
-// agent of the roster drive the task's status, so the operator cannot move a card by publishing a child key.
+// A run keeps its tasks in one of two ways. Typed tasks come from the server with their assignments and status
+// (taskFromView). A legacy task is a direct "task/<slug>" key; agents report under "<task key>/<alias>", and only
+// reports whose author is an agent of the roster drive its status, so the operator cannot move a card by
+// publishing a child key (boardTasks).
 
 import type { MeshBoardEntry, MeshBoardSnapshot, MeshBoardTask, MeshBoardTaskAssignment, MeshParticipant } from '../api/mesh-client'
 
@@ -150,12 +152,17 @@ function assignmentActivitySeq(a: MeshBoardTaskAssignment): number {
   return Math.max(a.assigned_seq, a.started_seq ?? 0, a.completed_seq ?? 0)
 }
 
+// assignmentText — what the assignee last reported: its result once done, else its progress.
+export function assignmentText(a: MeshBoardTaskAssignment): string | undefined {
+  return a.result || a.progress || undefined
+}
+
 // latestNote — the result or progress text of the most recently active assignment that has one.
 function latestNote(assignments: MeshBoardTaskAssignment[]): string | undefined {
   const byRecency = [...assignments].sort((a, b) => assignmentActivitySeq(b) - assignmentActivitySeq(a))
   for (const a of byRecency) {
-    const text = a.result || a.progress
-    if (text) return text
+    const text = assignmentText(a)
+    if (text !== undefined) return text
   }
   return undefined
 }

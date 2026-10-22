@@ -194,8 +194,8 @@ export type MeshBoardTask = {
   status: MeshBoardTaskStatus
 }
 
-// MeshBoardSnapshot — GET /api/mesh/board. typedTasks says whether the run keeps typed tasks; tasks is empty
-// otherwise (and the board's tasks are then the "task/<slug>" entries).
+// MeshBoardSnapshot — GET /api/mesh/board. typedTasks says whether the run keeps typed tasks; when it is false,
+// tasks is empty and the board's tasks are the legacy "task/<slug>" entries.
 export type MeshBoardSnapshot = { entries: MeshBoardEntry[]; tasks: MeshBoardTask[]; typedTasks: boolean }
 
 // BoardTaskReceipt mirrors orchestrator.BoardTaskReceipt — the result of POST /api/mesh/tasks.
@@ -207,7 +207,8 @@ export type BoardTaskReceipt = {
   seq: number
   message_id?: string
   thread_id?: string
-  // notice_skipped — why the assignee was not notified (the task itself was still created).
+  // notice_skipped — why the task's coordinator was not told about this done, release or reopen (the change
+  // itself committed). An assignee that cannot be told refuses the assign instead.
   notice_skipped?: string
 }
 
@@ -295,7 +296,8 @@ export async function getMeshBoard(key = ''): Promise<MeshBoardSnapshot> {
 }
 
 // postMeshTask changes a typed board task as the human operator — POST /api/mesh/tasks. Only the fields the
-// action uses are sent. action is the server's verb (create, update, assign, ...); requestId makes a retry idempotent.
+// action uses are sent. action is the server's verb: create, assign, claim, start, progress, done, release, reopen
+// or edit; requestId makes a retry idempotent.
 export type PostMeshTaskRequest = {
   requestId: string
   action: string

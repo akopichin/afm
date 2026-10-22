@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { MeshApiError, postMeshTask, type MeshBoardTaskAssignment, type MeshParticipant } from '../../api/mesh-client'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
-import type { BoardTask } from '../../lib/board-tasks'
+import { assignmentText, type BoardTask } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
 import { ASSIGNEE_STATE_LABEL, BoardTaskStatusBadge, findTaskCard, isTypedTask } from './BoardTaskCard'
@@ -119,11 +119,6 @@ type TaskChange = {
 
 function isStaleRevision(err: unknown): boolean {
   return err instanceof MeshApiError && err.code === 'stale_revision'
-}
-
-// assignmentText — what the assignee last reported: its result once done, else its progress.
-function assignmentText(a: MeshBoardTaskAssignment): string | undefined {
-  return a.result || a.progress || undefined
 }
 
 function endedLabel(a: MeshBoardTaskAssignment, participants: MeshParticipant[]): string {

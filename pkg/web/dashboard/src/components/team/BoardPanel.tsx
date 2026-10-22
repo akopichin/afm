@@ -5,7 +5,7 @@ import { boardReportsOf, boardTasksOf, boardTopLevelOf, type BoardTaskStatus } f
 import { senderLabel } from '../../lib/mesh-roster'
 import { BOARD_STATUS_LABEL, BoardTaskCard, BoardTaskStatusBadge } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
-import { BoardTaskForm } from './BoardTaskForm'
+import { BoardTaskForm, boardTaskModeOf } from './BoardTaskForm'
 import type { RunTeamListStage } from './RunTeamList'
 
 const STATUSES: BoardTaskStatus[] = ['todo', 'in_progress', 'done']
@@ -38,7 +38,7 @@ export function BoardPanel({ board, participants, stages, active = true }: Board
 
   return (
     <div className="team-board">
-      <BoardTaskForm participants={participants} stages={stages} typed={board.typedTasks} onPosted={() => void board.reload()} />
+      <BoardTaskForm participants={participants} stages={stages} mode={boardTaskModeOf(board)} onPosted={() => void board.reload()} />
 
       {topLevel.length === 0 && typedTasks.length === 0 ? (
         <div className="team-board-empty empty-hint">Nothing on the board yet — post a task for the agents.</div>

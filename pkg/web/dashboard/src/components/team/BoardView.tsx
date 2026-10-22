@@ -6,7 +6,7 @@ import { useModalDialog } from '../../lib/focus-trap'
 import { participantLabel, senderLabel } from '../../lib/mesh-roster'
 import { BOARD_STATUS_LABEL, BoardTaskCard } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
-import { BoardTaskForm } from './BoardTaskForm'
+import { BoardTaskForm, boardTaskModeOf, type BoardTaskMode } from './BoardTaskForm'
 import type { RunTeamListStage } from './RunTeamList'
 
 const LANES: BoardTaskStatus[] = ['todo', 'in_progress', 'done']
@@ -152,7 +152,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
       </div>
 
       {newTaskOpen && (
-        <NewTaskDialog participants={participants} stages={stages} typed={board.typedTasks} onPosted={handlePosted} onClose={() => setNewTaskOpen(false)} />
+        <NewTaskDialog participants={participants} stages={stages} mode={boardTaskModeOf(board)} onPosted={handlePosted} onClose={() => setNewTaskOpen(false)} />
       )}
       {openTask !== undefined && (
         <BoardTaskDetails task={openTask} participants={participants} stages={stages} onChanged={() => void board.reload()} onClose={() => setOpenKey(null)} />
@@ -164,14 +164,14 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
 type NewTaskDialogProps = {
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
-  typed: boolean
+  mode: BoardTaskMode
   onPosted: (draftRemains: boolean) => void
   onClose: () => void
 }
 
 // NewTaskDialog — the task form in a modal: focus moves into it, Tab stays inside, Escape closes it and focus
 // goes back to the button that opened it (the shared useModalDialog, like BoardTaskDetails).
-function NewTaskDialog({ participants, stages, typed, onPosted, onClose }: NewTaskDialogProps): ReactElement {
+function NewTaskDialog({ participants, stages, mode, onPosted, onClose }: NewTaskDialogProps): ReactElement {
   const modalRef = useRef<HTMLDivElement | null>(null)
   useModalDialog(modalRef, onClose)
 
@@ -179,7 +179,7 @@ function NewTaskDialog({ participants, stages, typed, onPosted, onClose }: NewTa
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="New task">
       <div className="modal-content board-new-task" ref={modalRef}>
         <h2 className="board-new-task-title">New task</h2>
-        <BoardTaskForm participants={participants} stages={stages} typed={typed} onPosted={onPosted} />
+        <BoardTaskForm participants={participants} stages={stages} mode={mode} onPosted={onPosted} />
         <div className="modal-actions">
           <button type="button" className="btn btn-cancel" onClick={onClose}>
             Cancel

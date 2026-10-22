@@ -1,19 +1,30 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { postMeshTask, publishMeshBoard, type MeshParticipant } from '../../api/mesh-client'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
+import type { MeshBoard } from '../../hooks/use-mesh'
 import { boardNotifyCandidates, participantLabel } from '../../lib/mesh-roster'
 import type { RunTeamListStage } from './RunTeamList'
 
 const TASK_PREFIX = 'task/'
 const MAX_BOARD_NOTIFY = 16
 
+// BoardTaskMode — how the run keeps its tasks: 'unknown' until the board's first load says it.
+export type BoardTaskMode = 'unknown' | 'legacy' | 'typed'
+
+// boardTaskModeOf — the task mode the board's last successful load reported.
+export function boardTaskModeOf(board: MeshBoard): BoardTaskMode {
+  if (board.status === 'loading' || board.status === 'error') return 'unknown'
+  return board.typedTasks ? 'typed' : 'legacy'
+}
+
 export type BoardTaskFormProps = {
   // participants / stages — who can be notified: reachable run agents and agents of working stages.
   participants: MeshParticipant[]
   stages: RunTeamListStage[]
-  // typed — the run keeps typed tasks: the task is created through /api/mesh/tasks and may be assigned to one
-  // agent at once, instead of being published with a list of agents to notify.
-  typed?: boolean
+  // mode — 'typed': the task is created through /api/mesh/tasks and may be assigned to one agent at once;
+  // 'legacy': it is published with a list of agents to notify; 'unknown': the form posts nothing, so a typed
+  // run never gets a legacy publish before its board has loaded.
+  mode: BoardTaskMode
   // onPosted — the task was published; the caller refreshes its board (and may close the dialog the form sits
   // in). draftRemains — text typed while the post was in flight is still in the form.
   onPosted: (draftRemains: boolean) => void
@@ -52,7 +63,8 @@ function taskKey(title: string): string {
 // BoardTaskForm — the one form that posts a task for the agents, used by Team's Board and the Board tab. The
 // operator only names the task and picks who to notify (legacy) or, optionally, who to assign it to (typed): a
 // new task is always Todo, agents own its status.
-export function BoardTaskForm({ participants, stages, typed = false, onPosted }: BoardTaskFormProps): ReactElement {
+export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTaskFormProps): ReactElement {
+  const typed = mode === 'typed'
   const [title, setTitle] = useState('')
   const [details, setDetails] = useState('')
   // assignTo — the typed task's assignee picked in the form; '' is nobody yet.
@@ -78,7 +90,7 @@ export function BoardTaskForm({ participants, stages, typed = false, onPosted }:
     const submittedTitle = title
     const submittedDetails = details
     const name = submittedTitle.trim()
-    if (name === '' || tooManyNotified) return
+    if (name === '' || tooManyNotified || mode === 'unknown') return
     const text = submittedDetails.trim()
     const key = taskKey(name)
     const onSuccess = (): void => {
@@ -166,7 +178,7 @@ export function BoardTaskForm({ participants, stages, typed = false, onPosted }:
         <span className="team-board-hint">
           {typed ? 'An assigned agent is told about the task at once.' : 'Agents check the board between steps and report under the task.'}
         </span>
-        <button type="submit" className="btn btn-send" disabled={pending || title.trim() === '' || tooManyNotified}>
+        <button type="submit" className="btn btn-send" disabled={pending || title.trim() === '' || tooManyNotified || mode === 'unknown'}>
           {pending ? 'Posting…' : 'Post task'}
         </button>
       </div>

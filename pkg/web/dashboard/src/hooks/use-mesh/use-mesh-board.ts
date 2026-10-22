@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getMeshBoard, type MeshBoardEntry, type MeshBoardTask } from '../../api/mesh-client'
+import { getMeshBoard, type MeshBoardSnapshot } from '../../api/mesh-client'
 import { startSerialPoll, type SerialPoll } from '../../lib/serial-poll'
 
 const POLL_INTERVAL_MS = 5000
@@ -11,18 +11,15 @@ const POLL_INTERVAL_MS = 5000
 //   stale   — a later fetch failed, entries are the last successful snapshot.
 export type MeshBoardStatus = 'loading' | 'ready' | 'error' | 'stale'
 
-export type MeshBoard = {
-  entries: MeshBoardEntry[]
-  // tasks — the typed board tasks; empty unless typedTasks (then the tasks are the "task/<slug>" entries).
-  tasks: MeshBoardTask[]
-  typedTasks: boolean
+// MeshBoard — the board's last snapshot (see MeshBoardSnapshot), what it can be trusted for and how to refresh it.
+export type MeshBoard = MeshBoardSnapshot & {
   status: MeshBoardStatus
   // reload — fetch now (after posting a task, or Retry after a failure), without waiting for the next poll.
   reload: () => Promise<void>
 }
 
 // BoardSnapshot — what the polls of one run learned; runId keeps one run's board out of another's.
-type BoardSnapshot = { runId: string; entries: MeshBoardEntry[]; tasks: MeshBoardTask[]; typedTasks: boolean; loaded: boolean; failed: boolean }
+type BoardSnapshot = MeshBoardSnapshot & { runId: string; loaded: boolean; failed: boolean }
 
 function initialSnapshot(runId: string): BoardSnapshot {
   return { runId, entries: [], tasks: [], typedTasks: false, loaded: false, failed: false }
@@ -50,7 +47,7 @@ export function useMeshBoard(enabled = true, runId = ''): MeshBoard {
       (isStopped) =>
         getMeshBoard().then(
           (res) => {
-            if (!isStopped()) setSnapshot({ runId, entries: res.entries, tasks: res.tasks, typedTasks: res.typedTasks, loaded: true, failed: false })
+            if (!isStopped()) setSnapshot({ ...res, runId, loaded: true, failed: false })
           },
           () => {
             // Keep the last snapshot; only flag that it may be out of date until a fetch succeeds again.

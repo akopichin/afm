@@ -158,6 +158,13 @@ describe('BoardView', () => {
     expect(within(screen.getByRole('dialog', { name: 'Task details' })).getByText('done: fixed')).toBeInTheDocument()
   })
 
+  test('the New task form does not post until the board has loaded', () => {
+    renderView(boardOf([], { status: 'loading', typedTasks: false }))
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+    expect(screen.getByRole('button', { name: 'Post task' })).toBeDisabled()
+  })
+
   test('New task opens a dialog with the task form; Escape closes it', () => {
     renderView(boardOf(entries))
     const opener = screen.getByRole('button', { name: 'New task' })
