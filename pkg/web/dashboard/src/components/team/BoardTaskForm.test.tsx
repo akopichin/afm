@@ -193,6 +193,74 @@ describe('BoardTaskForm', () => {
       expect(screen.getByLabelText('Task')).toHaveValue('')
     })
 
+    describe('a retried create removes only the text that was sent', () => {
+      const lost = new TypeError('network down')
+      const saved = { key: 'task/csv-export', version: 1, status: 'todo', seq: 3 } as const
+
+      function setup() {
+        const create = vi.spyOn(meshClient, 'postMeshTask').mockRejectedValueOnce(lost).mockResolvedValue(saved)
+        const onPosted = vi.fn()
+        render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={onPosted} />)
+        fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+        fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Add GET /todos.csv' } })
+        return { create, onPosted }
+      }
+      const post = (): boolean => fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+
+      test('Details edited after the lost response stay in the form', async () => {
+        const { create, onPosted } = setup()
+        post()
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'))
+        fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Something else entirely' } })
+        post()
+        await waitFor(() => expect(onPosted).toHaveBeenCalledWith(true))
+        expect(create.mock.calls[1]?.[0]).toEqual(create.mock.calls[0]?.[0])
+        expect(create.mock.calls[1]?.[0].description).toBe('Add GET /todos.csv')
+        expect(screen.getByLabelText('Details')).toHaveValue('Something else entirely')
+        expect(screen.getByLabelText('Task')).toHaveValue('')
+      })
+
+      test('a title edited to the same slug stays in the form', async () => {
+        const { create, onPosted } = setup()
+        post()
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'))
+        fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV Export' } })
+        post()
+        await waitFor(() => expect(onPosted).toHaveBeenCalledWith(true))
+        expect(create.mock.calls[1]?.[0]).toEqual(create.mock.calls[0]?.[0])
+        expect(create.mock.calls[1]?.[0].title).toBe('CSV export')
+        expect(screen.getByLabelText('Task')).toHaveValue('CSV Export')
+        expect(screen.getByLabelText('Details')).toHaveValue('')
+      })
+
+      test('Details edited while the first request was in flight stay in the form', async () => {
+        const { create, onPosted } = setup()
+        let fail: (err: unknown) => void = () => {}
+        create.mockReset()
+        create
+          .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+          .mockResolvedValue(saved)
+        post()
+        fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Something else entirely' } })
+        await act(async () => fail(lost))
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'))
+        post()
+        await waitFor(() => expect(onPosted).toHaveBeenCalledWith(true))
+        expect(create.mock.calls[1]?.[0].description).toBe('Add GET /todos.csv')
+        expect(screen.getByLabelText('Details')).toHaveValue('Something else entirely')
+      })
+
+      test('without edits the whole draft is cleared', async () => {
+        const { onPosted } = setup()
+        post()
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'))
+        post()
+        await waitFor(() => expect(onPosted).toHaveBeenCalledWith(false))
+        expect(screen.getByLabelText('Task')).toHaveValue('')
+        expect(screen.getByLabelText('Details')).toHaveValue('')
+      })
+    })
+
     test('a failed create keeps the draft and shows the error', async () => {
       vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new Error('agent unreachable'))
       render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)

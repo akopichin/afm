@@ -20,6 +20,10 @@ export function boardTaskModeOf(board: MeshBoard): BoardTaskMode {
 // TypedCreate — a typed task's create request as plain data (useRetryableSubmit compares intents by JSON).
 type TypedCreate = { key: string; title: string; description?: string; to?: string }
 
+// TypedAttempt — a create together with the form text it was built from: a resend keeps both, so a success removes
+// only the text that was really sent, never what was typed after it.
+type TypedAttempt = { create: TypedCreate; sentTitle: string; sentDetails: string }
+
 export type BoardTaskFormProps = {
   // participants / stages — who can be notified: reachable run agents and agents of working stages.
   participants: MeshParticipant[]
@@ -79,7 +83,7 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
   const typedSubmitter = useRetryableSubmit<TypedCreate>('mesh-task')
   // unsettledCreate — a create whose response was lost is resent as it was (assignee included) while the same task
   // is posted again, even if the assignee left the candidates meanwhile; a success or a refusal settles it.
-  const unsettledCreate = useUnsettledChange<TypedCreate>((a, b) => a.key === b.key)
+  const unsettledCreate = useUnsettledChange<TypedAttempt>((a, b) => a.create.key === b.create.key)
   // draftRef — the form's text as last rendered: a post that resolves later reads what was typed meanwhile.
   const draftRef = useRef({ title, details })
   draftRef.current = { title, details }
@@ -101,20 +105,25 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
     if (name === '' || tooManyNotified || mode === 'unknown') return
     const text = submittedDetails.trim()
     const key = taskKey(name)
-    const onSuccess = (): void => {
-      const restTitle = removeSubmittedText(draftRef.current.title, submittedTitle)
-      const restDetails = removeSubmittedText(draftRef.current.details, submittedDetails)
+    // clearSent — after a success: the draft without the sent text; text typed meanwhile stays.
+    const clearSent = (sentTitle: string, sentDetails: string): void => {
+      const restTitle = removeSubmittedText(draftRef.current.title, sentTitle)
+      const restDetails = removeSubmittedText(draftRef.current.details, sentDetails)
       setTitle(restTitle)
       setDetails(restDetails)
       setAssignTo('')
       onPosted(restTitle.trim() !== '' || restDetails.trim() !== '')
     }
     if (typed) {
-      const create = unsettledCreate.freeze({ key, title: name, description: text !== '' ? text : undefined, to: assignee !== '' ? assignee : undefined })
+      const { create, sentTitle, sentDetails } = unsettledCreate.freeze({
+        create: { key, title: name, description: text !== '' ? text : undefined, to: assignee !== '' ? assignee : undefined },
+        sentTitle: submittedTitle,
+        sentDetails: submittedDetails,
+      })
       typedSubmitter.submit(
         create,
         (p, requestId) => unsettledCreate.track(() => postMeshTask({ requestId, action: 'create', ...p })),
-        { onSuccess },
+        { onSuccess: () => clearSent(sentTitle, sentDetails) },
       )
       return
     }
@@ -125,7 +134,7 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
         notify: notifyIds,
       },
       (p, requestId) => publishMeshBoard({ requestId, key: p.key, status: p.status, notify: [...p.notify] }),
-      { onSuccess },
+      { onSuccess: () => clearSent(submittedTitle, submittedDetails) },
     )
   }
 
