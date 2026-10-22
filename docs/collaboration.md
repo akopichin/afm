@@ -419,13 +419,16 @@ by the user alone.
 | `create` | any agent, the user | the key is free |
 | `assign` | a manager | the task is not Done (reopen it first); the assignee has no active assignment on it |
 | `claim` | any agent, for itself | the task has no active assignment |
-| `start`, `progress`, `done` | the assignment's own participant | the assignment is not done yet |
+| `start` | the assignment's own participant | the assignment is `assigned` |
+| `progress`, `done` | the assignment's own participant | the assignment is not done yet |
 | `release` | a manager | the assignment is not done yet |
 | `reopen` | a manager | any time |
 | `edit` | a manager | any time |
 
-A claim assigns the task to the caller and starts it in one change. `done` may
-follow `assigned` directly. `reopen` ends every active assignment and puts the
+A claim assigns the task to the caller and starts it in one change. `progress`
+records a report without changing the assignment's state, so an `assigned`
+assignment stays `assigned` until `start`; `done` may follow `assigned`
+directly. `reopen` ends every active assignment and puts the
 task back to Todo. Any agent that can still receive messages can be assigned,
 except the [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run),
 a passive helper (watching, or waiting for its parent) and a stage that has
@@ -441,7 +444,22 @@ the task, the coordinator gets a notice in a new conversation of its own. A
 notice that cannot be delivered is skipped and the change still succeeds; the
 answer's `notice_skipped` says why. The user, as coordinator, gets no notice:
 the dashboard shows the task. A reply, an acknowledgement or a run agent's turn
-result never completes a task; only `afm agent task done` does.
+result never completes anything: only `afm agent task done` marks an
+*assignment* done. The task's status is recomputed after every change, so
+releasing the last unfinished assignment of a task whose other assignments are
+done makes the task Done.
+
+`release` and `reopen` only change the task. They do not stop the previous
+executor's process and do not message it; only the coordinator is notified.
+The executor learns of the change when it next reads the task (its next change
+is refused because its assignment is no longer active), so agree with it
+separately, for example with `afm agent send`, that it should stop before you
+reassign the work.
+
+Board tasks do not hold the run or a stage open. A stage or run agent can
+finish while its assignment is still `assigned` or `in_progress`; the
+assignment stays on the task until a manager releases it or reopens the task,
+and the run can finish with unfinished tasks on the board.
 
 Every agent's prompt carries a `<your_board_tasks>` block listing its active
 assignments (up to 20, oldest first) with the key, title, assignment id, state,
@@ -466,7 +484,13 @@ afm agent task edit     --key K [--title T] [--description D] [--coordinator P] 
 ```
 
 Participants are `@name` aliases or participant ids. `create --assign-to`
-creates and assigns the task in one change. Every change answers with a receipt:
+creates and assigns the task in one change. The assignment is made by the
+creator as a manager, so an agent cannot combine `--assign-to` with
+`--coordinator` naming someone else: the coordinator is set first, the
+assignment is then refused with `actor_not_allowed`, and nothing is created.
+Create the task with the assignment, then hand coordination over with
+`afm agent task edit --key K --coordinator <participant> --expected-version V`.
+The user may combine both flags in one request. Every change answers with a receipt:
 the task's `key`, new `version` and `status`, the `assignment_id` it created or
 acted on, its journal `seq`, and the `message_id`/`thread_id` of the message it
 sent, if any. `get` and `list` show each assignment's `reported_seq`, the journal
@@ -478,8 +502,9 @@ position of its latest progress or done report.
   `--artifacts` replaces the assignment's artifact references, `--artifacts ""`
   clears them, and leaving the flag out keeps them. References must point into
   the run's `artifacts/`.
-- **Retries.** Every mutating `afm agent` command (including `task`, `send` and
-  `board publish`) takes `--request-id`; it defaults to a fresh id. Repeating a
+- **Retries.** The `task` changes, `afm agent send` and `afm agent board publish`
+  take `--request-id`; it defaults to a fresh id (other commands such as `reply`,
+  `ack` and `wait` make their own id). Repeating a
   change with the same request id returns the original receipt, even if the task
   changed since; the same id with a different change is refused.
 
@@ -491,10 +516,15 @@ afm agent task create --key task/csv-export --title "CSV export" --assign-to @ba
 afm agent wait --condition addressed_message --deadline-seconds 1800
 ```
 
-When resumed, read `afm agent inbox` and `afm agent task get --key task/csv-export`:
-the notice says what happened, the task shows the current state. To hand the
-work to someone else, `release` the assignment and `assign` again; to send a
-finished task back, `reopen` it. An executor starts its assignment, reports
+Wait with `addressed_message` without `--thread-id`: the coordinator notice
+arrives in a new conversation and is not a reply to the assignment message, so
+a `reply_to` wait does not see it. `board_key` waits watch ordinary board keys
+and `task_result` waits watch helper and run-agent tasks; neither tracks typed
+Board tasks. When resumed, read `afm agent inbox` and
+`afm agent task get --key task/csv-export`: the notice says what happened, the
+task shows the current state. To hand the work to someone else, agree with the
+current executor that it stops, `release` its assignment and `assign` again; to
+send a finished task back, `reopen` it. An executor starts its assignment, reports
 `progress` while working and finishes with `done`; one that cannot finish
 should message its coordinator instead of dropping the task. On
 `stale_revision`, read the task again before deciding.

@@ -102,19 +102,29 @@ New tasks start in Todo.
 
 In a run with [typed tasks](collaboration.md#typed-tasks) (every run started by
 this afm version), the form's **Assignee** picker can assign the task to one
-working run or stage agent at once, or leave it with **Nobody yet**; the agent is
-told about it immediately. A card shows each assignee with its own state —
+agent at once, or leave it with **Nobody yet**; the agent is told about it
+immediately. The picker, like the **Assign to** list in task details, offers
+every reachable run agent, idle or paused ones included, and the agent of each
+reachable stage that is working (running, planning, revising or retrying) or
+waiting for a colleague (`awaiting_peer`). The Assistant and helpers are not
+offered. A card shows each assignee with its own state —
 **Assigned**, **In progress** or **Done** — so an assigned agent is visible
 before it starts, and search also matches the latest progress or result. Task
 details show the title, description and latest note, every active assignment
-with its progress, result and artifacts, and a **History** of released and
+with its result (or its progress when there is no result yet) and artifacts,
+and a **History** of released and
 reopened assignments. As the user you can **Assign** a task that is not Done,
 **Release** an active assignment that is not done, and **Reopen** the task,
 with an optional **Reason**; the column itself still follows the agents'
 assignments. If the task changed meanwhile, details reload it (**Task changed,
-reloaded**). A change or a new task whose answer was lost is resent unchanged
-when you click again, even if the form or the roster changed in between, and a
-successful post clears only the text that was actually sent.
+reloaded**). When the answer to a change was lost (a network error or a server
+error), clicking the same action again — the same action on the same task,
+assignment and recipient — resends the original change with its request id,
+even if the task changed in between; a different action or recipient is a new
+change. Likewise, posting a new task again resends the lost create, assignee
+included, as long as the title still gives the same task key; a title with a
+different key is a new task. A successful post clears only the text that was
+actually sent. Closing the form or the details forgets the pending retry.
 
 In a run started by an older afm, statuses come from agent reports, the form
 picks agents to **Notify**, and there is no control for a person to move a task
