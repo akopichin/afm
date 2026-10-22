@@ -940,18 +940,3 @@ func TestMesh_BoardTask_RequiresOriginAndRequestID(t *testing.T) {
 		t.Fatalf("response = %v, want the receipt", resp)
 	}
 }
-
-func TestStatus_BoardTasksCapability(t *testing.T) {
-	if decodeStatus(t, newTestServer(t, Config{})).Capabilities.BoardTasks {
-		t.Error("board_tasks must be false without Mesh")
-	}
-	legacy := newFakeMeshActions()
-	if decodeStatus(t, newTestServer(t, Config{Mesh: legacy})).Capabilities.BoardTasks {
-		t.Error("board_tasks must be false on a legacy run")
-	}
-	typed := newFakeMeshActions()
-	typed.boardTasksEnabled = true
-	if !decodeStatus(t, newTestServer(t, Config{Mesh: typed})).Capabilities.BoardTasks {
-		t.Error("board_tasks must be true on a typed run")
-	}
-}

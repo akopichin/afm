@@ -103,9 +103,6 @@ type capabilities struct {
 	Collaboration bool `json:"collaboration"`
 	// AddStage (Этап 9) — whether POST /api/run/graph/{preview|commit} is wired.
 	AddStage bool `json:"add_stage"`
-	// BoardTasks — whether the run keeps typed board tasks (GET /api/mesh/board carries tasks, POST
-	// /api/mesh/tasks changes them).
-	BoardTasks bool `json:"board_tasks"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -142,7 +139,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Capabilities.SideAgent = s.sideAgent != nil
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil
 	resp.Capabilities.AddStage = s.graphActions != nil
-	resp.Capabilities.BoardTasks = s.mesh != nil && s.mesh.BoardTasksEnabled()
 	if s.graphActions != nil {
 		resp.GraphRevision = s.graphActions.GraphRevision()
 	}
