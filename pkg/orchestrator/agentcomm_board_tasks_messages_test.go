@@ -626,3 +626,75 @@ func TestBoardTaskRejectsSideAgentAssignee(t *testing.T) {
 		t.Fatalf("journal grew to seq %d from %d on refused side-agent assignments", got, journaled)
 	}
 }
+
+// fillConversation opens a one-message conversation between sender and recipient and fills it, so a notice
+// that reused it would find it full.
+func fillConversation(t *testing.T, o *Orchestrator, sender, recipient agentcomm.ParticipantID) agentcomm.ThreadID {
+	t.Helper()
+	ctx := context.Background()
+	th, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-full-thread-" + string(sender), Scope: agentcomm.ScopeRun,
+		Members: []agentcomm.ParticipantID{sender, recipient}, MaxMessages: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "op-full-msg-" + string(sender), ThreadID: th.ID, Sender: sender,
+		Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindMessage, Body: "x",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if !o.opts.Store.Snapshot().Assistants.Mesh.ThreadFull(th.ID) {
+		t.Fatalf("conversation %s is not full", th.ID)
+	}
+	return th.ID
+}
+
+// A coordinator notice always opens its own conversation: the one the sender already shares with the
+// coordinator may be full, and the coordinator would wait for a notice that was skipped.
+func TestBoardTaskCoordinatorNoticeOpensOwnThreadWhenConversationFull(t *testing.T) {
+	cases := map[string]struct {
+		actor  agentcomm.ParticipantID
+		action BoardTaskAction
+	}{
+		"done":            {boardTaskB, BoardTaskDone},
+		"release by user": {agentcomm.UserParticipantID, BoardTaskRelease},
+		"reopen by user":  {agentcomm.UserParticipantID, BoardTaskReopen},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			o, store := newBoardTaskTestOrchestrator(t)
+			const key = "task/full"
+			assigned := mustBoardTask(t, o, BoardTaskRequest{
+				OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Full"),
+				CoordinatorID: new(string(boardTaskA)), To: string(boardTaskB),
+			})
+			full := fillConversation(t, o, tc.actor, boardTaskA)
+			before := len(boardTaskMessagesTo(store, boardTaskA))
+
+			req := BoardTaskRequest{OperationID: "change", Action: tc.action, Actor: tc.actor, Key: key, ExpectedVersion: 2, AssignmentID: assigned.AssignmentID, Text: "why"}
+			receipt := mustBoardTask(t, o, req)
+			if receipt.NoticeSkipped != "" || receipt.MessageID == "" {
+				t.Fatalf("receipt = %+v, want the notice sent", receipt)
+			}
+			notices := boardTaskMessagesTo(store, boardTaskA)
+			if len(notices) != before+1 {
+				t.Fatalf("notices to A = %d, want %d", len(notices), before+1)
+			}
+			last := notices[len(notices)-1]
+			if last.ThreadID == full {
+				t.Fatalf("notice went to the full conversation %s, want a new thread", full)
+			}
+			threads := len(store.Snapshot().Assistants.Mesh.Threads)
+
+			again := mustBoardTask(t, o, req)
+			if again != receipt {
+				t.Fatalf("retry receipt = %+v, want %+v", again, receipt)
+			}
+			if got := len(store.Snapshot().Assistants.Mesh.Threads); got != threads {
+				t.Fatalf("threads after retry = %d, want %d", got, threads)
+			}
+		})
+	}
+}

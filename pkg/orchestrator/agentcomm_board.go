@@ -204,7 +204,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			continue
 		}
 		seen[recipient] = true
-		n, skip, err := o.planNoticeTo(rs, req.OperationID, req.Author, recipient, body)
+		n, skip, err := o.planNoticeTo(rs, req.OperationID, req.Author, recipient, body, false)
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +220,9 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 // planNoticeTo plans one message from sender to recipient in a fresh/reused conversation thread.
 // skip != "" means it cannot be delivered now (unreachable, inbox full, thread full) — not an error.
 // The message id is derived from opID and the recipient, so a retry plans the same message.
-func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, recipient agentcomm.ParticipantID, body string) (msg plannedMessage, skip string, err error) {
+// ownThread opens a new thread named by opID instead of reusing the sender's conversation with recipient:
+// a notice that must not be lost to that conversation's full message budget asks for it.
+func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, recipient agentcomm.ParticipantID, body string, ownThread bool) (msg plannedMessage, skip string, err error) {
 	p, ok := o.liveParticipant(rs, recipient)
 	switch {
 	case !ok:
@@ -234,7 +236,12 @@ func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, reci
 	send := SendRequest{Sender: sender, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}
 	var open []state.Effect
 	members := conversationMembers(sender, []agentcomm.ParticipantID{recipient})
-	if th := openThreadWithMembers(rs, members, sender, ""); th != "" {
+	if ownThread {
+		send.ThreadID = deriveMeshThreadID(opID + ":notify-thread:" + string(recipient))
+		if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, sender)); err != nil {
+			return plannedMessage{}, "", err
+		}
+	} else if th := openThreadWithMembers(rs, members, sender, ""); th != "" {
 		if rs.Assistants.Mesh.ThreadFull(th) {
 			return plannedMessage{}, fmt.Sprintf("conversation %s is full", th), nil
 		}

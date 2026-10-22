@@ -250,7 +250,7 @@ func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskReq
 	body := o.messageBody(fmt.Sprintf("Board task %s assigned to you (assignment %s). "+
 		"Run `afm agent task start --key %s --assignment-id %s --expected-version %d` when you begin, `done` when finished.",
 		req.Key, a.AssignmentID, req.Key, a.AssignmentID, after.Version))
-	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, a.ParticipantID, body)
+	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, a.ParticipantID, body, false)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskReq
 
 // planCoordinatorNotice plans the notice of a done, release or reopen to the task's coordinator — none when
 // there is no coordinator or it made the change itself. A notice that cannot be delivered now is skipped:
-// meta.NoticeSkipped says why.
+// meta.NoticeSkipped says why. The notice opens its own thread, so a full conversation with the coordinator never skips it.
 func (o *Orchestrator) planCoordinatorNotice(rs state.RunState, req BoardTaskRequest, meta *state.MeshBoardTaskMeta) ([]plannedMessage, error) {
 	task := rs.Assistants.Mesh.BoardTasks[req.Key]
 	if task == nil {
@@ -273,7 +273,7 @@ func (o *Orchestrator) planCoordinatorNotice(rs state.RunState, req BoardTaskReq
 		return nil, nil
 	}
 	body := o.messageBody(coordinatorNoticeBody(*task, req))
-	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, coordinator, body)
+	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, coordinator, body, true)
 	if err != nil {
 		return nil, err
 	}
