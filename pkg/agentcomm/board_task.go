@@ -1,7 +1,7 @@
 package agentcomm
 
 import (
-	"strings"
+	"regexp"
 	"time"
 )
 
@@ -153,9 +153,12 @@ const BoardTaskKeyPrefix = "task/"
 
 const maxBoardTaskKeyLen = 200
 
-// ValidBoardTaskKey reports whether key is "task/<slug>" with a non-empty slug without
-// further slashes, at most 200 bytes long.
+// boardTaskKeyPattern allows a slug of letters (any script), digits and "._-": the key is quoted in
+// ready-to-run commands, so it must hold nothing a shell or a line break would act on.
+var boardTaskKeyPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(BoardTaskKeyPrefix) + `[\p{L}\p{N}._-]+$`)
+
+// ValidBoardTaskKey reports whether key is "task/<slug>" with a slug of letters, digits and "._-", at most
+// 200 bytes long.
 func ValidBoardTaskKey(key string) bool {
-	slug, ok := strings.CutPrefix(key, BoardTaskKeyPrefix)
-	return ok && slug != "" && !strings.Contains(slug, "/") && len(key) <= maxBoardTaskKeyLen
+	return len(key) <= maxBoardTaskKeyLen && boardTaskKeyPattern.MatchString(key)
 }

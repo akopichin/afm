@@ -156,7 +156,7 @@ func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (b
 		return boardTaskPlan{}, err
 	}
 	changes[len(changes)-1].meta.Status = after.Status()
-	msgs, err := o.planBoardTaskMessage(rs, req, changes[len(changes)-1], after.Version)
+	msgs, err := o.planBoardTaskMessage(rs, req, changes[len(changes)-1], after)
 	if err != nil {
 		return boardTaskPlan{}, err
 	}
@@ -175,15 +175,15 @@ func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (b
 
 // planBoardTaskMessage plans the message a change sends: to the new assignee when the actor assigns someone
 // else (a claim or a self-assign sends nothing), or to the coordinator on a done, release or reopen by anyone
-// else. last is the change's last effect and version the task's version after the change. A skipped
-// coordinator notice is recorded in last's NoticeSkipped.
-func (o *Orchestrator) planBoardTaskMessage(rs state.RunState, req BoardTaskRequest, last boardTaskChange, version int) ([]plannedMessage, error) {
+// else. last is the change's last effect and after the task after the change. A skipped coordinator notice is
+// recorded in last's NoticeSkipped.
+func (o *Orchestrator) planBoardTaskMessage(rs state.RunState, req BoardTaskRequest, last boardTaskChange, after agentcomm.BoardTask) ([]plannedMessage, error) {
 	switch p := last.payload.(type) {
 	case *state.MeshBoardTaskAssignedPayload:
 		if p.ParticipantID == req.Actor {
 			return nil, nil
 		}
-		return o.planAssignmentMessage(rs, req, *p, version)
+		return o.planAssignmentMessage(rs, req, *p, after)
 	case *state.MeshBoardTaskCompletedPayload, *state.MeshBoardTaskReleasedPayload, *state.MeshBoardTaskReopenedPayload:
 		return o.planCoordinatorNotice(rs, req, last.meta)
 	default:
@@ -193,17 +193,13 @@ func (o *Orchestrator) planBoardTaskMessage(rs state.RunState, req BoardTaskRequ
 
 // planAssignmentMessage plans the message that hands the task to its new assignee. An assignment nobody would
 // learn about is refused: the assignee must be able to take new work and receive the message now.
-func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskRequest, a state.MeshBoardTaskAssignedPayload, version int) ([]plannedMessage, error) {
+func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskRequest, a state.MeshBoardTaskAssignedPayload, after agentcomm.BoardTask) ([]plannedMessage, error) {
 	if err := assignableParticipant(rs, a.ParticipantID); err != nil {
 		return nil, err
 	}
-	title := req.Title // a create that assigns at once
-	if task := rs.Assistants.Mesh.BoardTasks[req.Key]; task != nil {
-		title = task.Title
-	}
-	body := prompts.TruncateText(fmt.Sprintf("Board task %s assigned to you (assignment %s): %s. "+
+	body := o.messageBody(fmt.Sprintf("Board task %s assigned to you (assignment %s): %s. "+
 		"Run `afm agent task start --key %s --assignment-id %s --expected-version %d` when you begin, `done` when finished.",
-		req.Key, a.AssignmentID, title, req.Key, a.AssignmentID, version), agentcomm.MaxBodyBytes)
+		req.Key, a.AssignmentID, after.Title, req.Key, a.AssignmentID, after.Version))
 	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, a.ParticipantID, body, boardTaskActor(req.Actor))
 	if err != nil {
 		return nil, err
@@ -226,7 +222,7 @@ func (o *Orchestrator) planCoordinatorNotice(rs state.RunState, req BoardTaskReq
 	if coordinator == "" || coordinator == req.Actor {
 		return nil, nil
 	}
-	body := coordinatorNoticeBody(*task, req)
+	body := o.messageBody(coordinatorNoticeBody(*task, req))
 	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, coordinator, body, boardTaskActor(req.Actor))
 	if err != nil {
 		return nil, err
@@ -272,7 +268,13 @@ func coordinatorNoticeBody(task agentcomm.BoardTask, req BoardTaskRequest) strin
 	if req.Text != "" {
 		body += ": " + req.Text
 	}
-	return prompts.TruncateText(body, agentcomm.MaxBodyBytes)
+	return body
+}
+
+// messageBody makes body fit a message: secrets are redacted before the cut to agentcomm.MaxBodyBytes, so a cut
+// never leaves part of a secret behind.
+func (o *Orchestrator) messageBody(body string) string {
+	return prompts.TruncateText(o.RedactSecrets(body), agentcomm.MaxBodyBytes)
 }
 
 // assignableParticipant checks that id can take a new assignment now: a known agent that can receive

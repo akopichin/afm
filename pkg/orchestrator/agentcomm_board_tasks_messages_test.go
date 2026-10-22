@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -388,5 +390,67 @@ func TestPublishAllowsTaskNamespaceInLegacyRun(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, true)
 	if _, err := publishAsUser(o, "op-task", "task/login", "Login form", 0); err != nil {
 		t.Fatalf("Publish task/ in a legacy run: %v", err)
+	}
+}
+
+// A registered secret never reaches the journal, the task or a message — not even in part where a long text
+// is cut to the message limit: the text is redacted first and only then cut.
+func TestBoardTaskRedactsSecrets(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	const secret = "ghp_s3cr3tTOKENvalue1234"
+	o.opts.SecretValues = []string{secret}
+	const key = "task/secret"
+	// straddling is filler that puts the secret across the cut of a message body that starts with prefix.
+	straddling := func(prefix string) string {
+		return strings.Repeat("x", agentcomm.MaxBodyBytes-len("…")-len(prefix)-10) + secret + " tail"
+	}
+
+	assignmentID := deriveMeshID("board-assignment", "create")
+	createReq := BoardTaskRequest{
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, To: string(boardTaskB),
+		Title:       straddling(fmt.Sprintf("Board task %s assigned to you (assignment %s): ", key, assignmentID)),
+		Description: "uses " + secret,
+	}
+	created := mustBoardTask(t, o, createReq)
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "start", Action: BoardTaskStart, Actor: boardTaskB, Key: key, ExpectedVersion: 2, AssignmentID: assignmentID})
+	mustBoardTask(t, o, BoardTaskRequest{
+		OperationID: "progress", Action: BoardTaskProgress, Actor: boardTaskB, Key: key, ExpectedVersion: 3, AssignmentID: assignmentID,
+		Text: "half, token " + secret, ArtifactRefs: []string{"artifacts/" + secret + ".md"},
+	})
+	doneReq := BoardTaskRequest{
+		OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 4, AssignmentID: assignmentID,
+		Text: straddling(fmt.Sprintf("Board task %s: assignment %s of %s is done: ", key, assignmentID, boardTaskB)),
+	}
+	done := mustBoardTask(t, o, doneReq)
+
+	partial := secret[:8] // what a cut inside the secret would leave behind
+	rs := store.Snapshot()
+	task := rs.Assistants.Mesh.BoardTasks[key]
+	a, _ := task.Assignment(assignmentID)
+	for name, text := range map[string]string{
+		"title": task.Title, "description": task.Description, "progress": a.Progress, "result": a.Result,
+		"artifact ref":       strings.Join(a.ArtifactRefs, ","),
+		"assignment message": rs.Assistants.Mesh.Messages[created.MessageID].Body,
+		"coordinator notice": rs.Assistants.Mesh.Messages[done.MessageID].Body,
+	} {
+		if strings.Contains(text, partial) {
+			t.Errorf("%s holds the secret: %q", name, text)
+		}
+	}
+	journal, err := os.ReadFile(filepath.Join(o.opts.RunDir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	if strings.Contains(string(journal), partial) {
+		t.Errorf("events.jsonl holds the secret")
+	}
+
+	for _, r := range []struct {
+		req  BoardTaskRequest
+		want BoardTaskReceipt
+	}{{createReq, created}, {doneReq, done}} {
+		if again := mustBoardTask(t, o, r.req); again != r.want {
+			t.Errorf("retry of %s = %+v, want the original %+v", r.req.OperationID, again, r.want)
+		}
 	}
 }
