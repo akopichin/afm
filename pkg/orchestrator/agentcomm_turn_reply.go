@@ -213,7 +213,7 @@ func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) s
 	if summary == "" {
 		summary = "(no summary)"
 	}
-	return prompts.TruncateText(summary, agentcomm.MaxBodyBytes-len(footer)) + footer
+	return prompts.TruncateUTF8(summary, agentcomm.MaxBodyBytes-len(footer), "…") + footer
 }
 
 // turnFailureBody is the text of the reply that ends a run agent's turn whose answer could not be accepted:
@@ -221,7 +221,7 @@ func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) s
 func turnFailureBody(taskID assistants.TaskID, turn uint64, agent, reason string) string {
 	footer := fmt.Sprintf("\n\n— turn failed; write again to retry; task %s, turn %d", taskID, turn)
 	text := fmt.Sprintf("%s could not produce a valid result: %s", agent, describeTaskFailure(reason))
-	return prompts.TruncateText(text, agentcomm.MaxBodyBytes-len(footer)) + footer
+	return prompts.TruncateUTF8(text, agentcomm.MaxBodyBytes-len(footer), "…") + footer
 }
 
 // protocolErrorPrefix starts the status reason of a turn whose answer broke the result protocol.

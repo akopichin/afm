@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/mcp"
-	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	"github.com/akopichin/afm/pkg/prompts"
 )
 
 // dialogDigestBudgetBytes — верхняя граница размера дайджеста Q&A, вклеиваемого в промпт агента,
@@ -63,7 +63,7 @@ func renderDialogPair(e mcp.Entry) string {
 
 // selectDialogPairs идёт от конца (самые свежие первыми), накапливая пары, пока суммарный размер
 // укладывается в budget байт, затем возвращает отобранные пары в хронологическом порядке. Если не влезает
-// даже единственная самая свежая пара — она обрезается TruncateUTF8 и возвращается одна.
+// даже единственная самая свежая пара — она обрезается prompts.TruncateUTF8 и возвращается одна.
 func selectDialogPairs(pairs []string) []string {
 	var kept []string
 	total := 0
@@ -81,7 +81,7 @@ func selectDialogPairs(pairs []string) []string {
 	}
 	if len(kept) == 0 {
 		freshest := pairs[len(pairs)-1]
-		return []string{stagefiles.TruncateUTF8(freshest, dialogDigestBudgetBytes, dialogDigestTruncationMarker)}
+		return []string{prompts.TruncateUTF8(freshest, dialogDigestBudgetBytes, dialogDigestTruncationMarker)}
 	}
 	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
 		kept[i], kept[j] = kept[j], kept[i]

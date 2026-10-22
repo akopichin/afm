@@ -280,7 +280,7 @@ func coordinatorNoticeBody(task agentcomm.BoardTask, req BoardTaskRequest) strin
 // messageBody makes body fit a message: secrets are redacted before the cut to agentcomm.MaxBodyBytes, so a cut
 // never leaves part of a secret behind.
 func (o *Orchestrator) messageBody(body string) string {
-	return prompts.TruncateText(o.RedactSecrets(body), agentcomm.MaxBodyBytes)
+	return prompts.TruncateUTF8(o.RedactSecrets(body), agentcomm.MaxBodyBytes, "…")
 }
 
 // assignableParticipant checks that id can take a new assignment now: a known agent that can receive

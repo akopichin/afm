@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
+	"github.com/akopichin/afm/pkg/prompts"
 )
 
 // verify/ хранит latest.json, feedback.md и per-pass manifest/report/step-артефакты; latest не разрешает
@@ -202,7 +202,7 @@ const feedbackProvenancePrefix = "<!-- afm-verify verification_id="
 // human-заметки <stageDir>/feedback.md.
 func WriteActiveFeedback(stageDir, verID string, r verify.ModelResult, alias string, stepIdx int) error {
 	content := renderActiveFeedback(stageDir, verID, r, alias, stepIdx)
-	content = TruncateUTF8(content, feedbackBudgetBytes, feedbackTruncationMarker)
+	content = prompts.TruncateUTF8(content, feedbackBudgetBytes, feedbackTruncationMarker)
 	path := filepath.Join(VerifyDir(stageDir), feedbackFileName)
 	return atomicWriteFile(path, []byte(content))
 }
@@ -235,27 +235,6 @@ func blockingFindings(fs []verify.Finding) []verify.Finding {
 		}
 	}
 	return out
-}
-
-// TruncateUTF8 обрезает s до limit байт, никогда не разрывая многобайтовую руну посередине. Если s уже
-// укладывается в limit — возвращает s без изменений (marker не добавляется). Экспортирована, чтобы другие
-// пакеты (например, дайджест Q&A при фрэш-коррекции) переиспользовали ровно эту логику, а не заводили
-// вторую копию.
-func TruncateUTF8(s string, limit int, marker string) string {
-	if len(s) <= limit {
-		return s
-	}
-	cut := limit - len(marker)
-	if cut < 0 {
-		cut = 0
-	}
-	if cut > len(s) {
-		cut = len(s)
-	}
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + marker
 }
 
 // LoadActiveFeedback читает verify/feedback.md. ok=false если файла нет (нет активной обратной связи от

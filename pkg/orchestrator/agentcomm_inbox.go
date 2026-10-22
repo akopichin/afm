@@ -142,7 +142,7 @@ func agentCommRequestsBlock(mesh state.MeshState, participant agentcomm.Particip
 		var kept []prompts.AgentCommInboxMessage
 		for i := len(r.answers) - 1; i >= 0; i-- {
 			view := inboxMessageView(r.answers[i])
-			view.Body = prompts.TruncateText(view.Body, answerExcerptBytes)
+			view.Body = prompts.TruncateUTF8(view.Body, answerExcerptBytes, "…")
 			if c := len(view.Body) + requestEntryOverhead; c <= budget {
 				budget -= c
 				kept = append(kept, view)
@@ -208,14 +208,14 @@ func sentRequests(mesh state.MeshState, participant agentcomm.ParticipantID) []*
 
 // requestView is r without its answers, as the block shows it.
 func requestView(mesh state.MeshState, r *sentRequest) prompts.AgentCommRequest {
-	v := prompts.AgentCommRequest{MessageID: string(r.msg.ID), Body: prompts.TruncateText(r.msg.Body, requestExcerptBytes), Waiting: r.waiting}
+	v := prompts.AgentCommRequest{MessageID: string(r.msg.ID), Body: prompts.TruncateUTF8(r.msg.Body, requestExcerptBytes, "…"), Waiting: r.waiting}
 	for _, to := range r.msg.Recipients {
 		v.To = append(v.To, participantLabel(mesh, to))
 	}
 	if r.ended != nil && !r.waiting && len(r.answers) == 0 {
 		v.WaitEnded = string(r.ended.Status)
 		if r.ended.Reason != "" {
-			v.WaitEnded += ": " + prompts.TruncateText(r.ended.Reason, waitReasonExcerptBytes)
+			v.WaitEnded += ": " + prompts.TruncateUTF8(r.ended.Reason, waitReasonExcerptBytes, "…")
 		}
 	}
 	return v
