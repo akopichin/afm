@@ -66,13 +66,7 @@ type BodyProps = { task: BoardTask; participants: MeshParticipant[] }
 function LegacyTaskBody({ task, participants }: BodyProps): ReactElement {
   return (
     <>
-      {task.entry?.artifact_refs && task.entry.artifact_refs.length > 0 && (
-        <ul className="team-board-entry-artifacts" aria-label="Artifacts">
-          {task.entry.artifact_refs.map((ref) => (
-            <li key={ref}>{ref}</li>
-          ))}
-        </ul>
-      )}
+      <ArtifactRefs refs={task.entry?.artifact_refs} label="Artifacts" />
 
       <h3 className="board-task-details-heading">Assignees</h3>
       {task.assignees.length === 0 ? (
@@ -107,6 +101,18 @@ function LegacyTaskBody({ task, participants }: BodyProps): ReactElement {
   )
 }
 
+// ArtifactRefs — the files an entry or an assignment points to; nothing when there are none.
+function ArtifactRefs({ refs, label }: { refs: string[] | undefined; label: string }): ReactElement | null {
+  if (refs === undefined || refs.length === 0) return null
+  return (
+    <ul className="team-board-entry-artifacts" aria-label={label}>
+      {refs.map((ref) => (
+        <li key={ref}>{ref}</li>
+      ))}
+    </ul>
+  )
+}
+
 // TaskChange — one operator change of a typed task, as plain data (useRetryableSubmit compares intents by JSON).
 type TaskChange = {
   action: 'assign' | 'release' | 'reopen'
@@ -119,6 +125,17 @@ type TaskChange = {
 
 function isStaleRevision(err: unknown): boolean {
   return err instanceof MeshApiError && err.code === 'stale_revision'
+}
+
+// isRejected — the server answered and refused the change (stale_revision among others): it was not applied,
+// so there is nothing left to retry. A network error or a 5xx leaves the outcome unknown.
+function isRejected(err: unknown): boolean {
+  return err instanceof MeshApiError && err.status >= 400 && err.status < 500
+}
+
+// sameTarget — two changes are the same operator action on the same thing (the reason may differ).
+function sameTarget(a: TaskChange, b: TaskChange): boolean {
+  return a.action === b.action && a.key === b.key && a.assignmentId === b.assignmentId && a.to === b.to
 }
 
 function endedLabel(a: MeshBoardTaskAssignment, participants: MeshParticipant[]): string {
@@ -139,6 +156,11 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
   const reasonRef = useRef(reason)
   reasonRef.current = reason
   const submitter = useRetryableSubmit<TaskChange>('mesh-task', task.key)
+  // unsettledRef — the change sent last whose outcome is unknown (e.g. its response was lost). Clicking the
+  // same action again resends it unchanged, so it keeps its request id and the server answers a committed one
+  // with its receipt; rebuilding it from the polled task would make it a new change against whatever the task
+  // became meanwhile (a Reopen would archive assignments made after it). A success or a refusal settles it.
+  const unsettledRef = useRef<TaskChange | null>(null)
 
   const assignedIds = new Set(assignments.map((a) => a.participant_id))
   const candidates = boardNotifyCandidates(participants, stages).filter((p) => !assignedIds.has(p.id))
@@ -147,21 +169,30 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
   const canAssign = task.status !== 'done'
 
   function change(intent: Omit<TaskChange, 'key' | 'expectedVersion'>): void {
-    const submittedReason = intent.text ?? ''
+    // A click while a change is in flight is ignored by the submitter; it must not replace the unsettled one.
+    if (submitter.pending) return
+    const fresh: TaskChange = { ...intent, key: task.key, expectedVersion: task.version }
+    const unsettled = unsettledRef.current
+    const payload = unsettled !== null && sameTarget(unsettled, fresh) ? unsettled : fresh
+    const submittedReason = payload.text ?? ''
     // stale — this attempt hit a newer version of the task: the board is reloaded to show it.
     let stale = false
-    const send = async (payload: Readonly<TaskChange>, requestId: string) => {
+    const send = async (p: Readonly<TaskChange>, requestId: string) => {
       try {
-        return await postMeshTask({ requestId, ...payload })
+        const receipt = await postMeshTask({ requestId, ...p })
+        unsettledRef.current = null
+        return receipt
       } catch (err) {
+        if (isRejected(err)) unsettledRef.current = null
         if (!isStaleRevision(err)) throw err
         stale = true
         throw new Error(TASK_CHANGED)
       }
     }
-    submitter.submit({ ...intent, key: task.key, expectedVersion: task.version }, send, {
+    unsettledRef.current = payload
+    submitter.submit(payload, send, {
       onSuccess: () => {
-        if (intent.action === 'assign') setAssignTo('')
+        if (payload.action === 'assign') setAssignTo('')
         setReason(removeSubmittedText(reasonRef.current, submittedReason))
         onChanged()
       },
@@ -188,10 +219,11 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
             const text = assignmentText(a)
             return (
               <li key={a.id}>
-                <span className="board-task-details-assignee-name">
+                <div className="board-task-details-assignee-name">
                   {name}
                   {text !== undefined && <span className="board-task-details-assignee-text">{text}</span>}
-                </span>
+                  <ArtifactRefs refs={a.artifact_refs} label={`${name} artifacts`} />
+                </div>
                 <span className="board-task-details-assignee-actions">
                   <span className="board-task-details-assignee-state">{ASSIGNEE_STATE_LABEL[a.state]}</span>
                   {a.state !== 'done' && (
@@ -216,15 +248,19 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
         <>
           <h3 className="board-task-details-heading">History</h3>
           <ul className="board-task-details-assignees" aria-label="History">
-            {history.map((a) => (
-              <li key={a.id}>
-                <span className="board-task-details-assignee-name">
-                  {senderLabel(a.participant_id, participants)}
-                  {a.result && <span className="board-task-details-assignee-text">{a.result}</span>}
-                </span>
-                <span className="board-task-details-assignee-state">{endedLabel(a, participants)}</span>
-              </li>
-            ))}
+            {history.map((a) => {
+              const name = senderLabel(a.participant_id, participants)
+              return (
+                <li key={a.id}>
+                  <div className="board-task-details-assignee-name">
+                    {name}
+                    {a.result && <span className="board-task-details-assignee-text">{a.result}</span>}
+                    <ArtifactRefs refs={a.artifact_refs} label={`${name} artifacts`} />
+                  </div>
+                  <span className="board-task-details-assignee-state">{endedLabel(a, participants)}</span>
+                </li>
+              )
+            })}
           </ul>
         </>
       )}

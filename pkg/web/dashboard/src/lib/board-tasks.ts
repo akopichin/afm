@@ -147,24 +147,19 @@ export function boardTasks(entries: MeshBoardEntry[], participants: MeshParticip
     })
 }
 
-// assignmentActivitySeq — the latest event of an assignment: assigned, started or completed.
-function assignmentActivitySeq(a: MeshBoardTaskAssignment): number {
-  return Math.max(a.assigned_seq, a.started_seq ?? 0, a.completed_seq ?? 0)
-}
-
 // assignmentText — what the assignee last reported: its result once done, else its progress.
 export function assignmentText(a: MeshBoardTaskAssignment): string | undefined {
   return a.result || a.progress || undefined
 }
 
-// latestNote — the result or progress text of the most recently active assignment that has one.
+// latestNote — the text of the latest report (progress or done) of any assignment, active or ended.
 function latestNote(assignments: MeshBoardTaskAssignment[]): string | undefined {
-  const byRecency = [...assignments].sort((a, b) => assignmentActivitySeq(b) - assignmentActivitySeq(a))
-  for (const a of byRecency) {
-    const text = assignmentText(a)
-    if (text !== undefined) return text
+  let latest: MeshBoardTaskAssignment | undefined
+  for (const a of assignments) {
+    if (assignmentText(a) === undefined) continue
+    if (latest === undefined || (a.reported_seq ?? 0) > (latest.reported_seq ?? 0)) latest = a
   }
-  return undefined
+  return latest === undefined ? undefined : assignmentText(latest)
 }
 
 // taskFromView — a typed task of the server as a BoardTask. Assignees are the active assignments (a participant
@@ -178,7 +173,7 @@ export function taskFromView(view: MeshBoardTask): BoardTask {
     author: view.author_id,
     title: view.title,
     description: view.description ?? '',
-    note: latestNote(view.assignments),
+    note: latestNote([...view.assignments, ...(view.history ?? [])]),
     version: view.version,
     assignments: view.assignments,
     history: view.history,

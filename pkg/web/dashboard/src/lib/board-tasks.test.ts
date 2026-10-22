@@ -223,11 +223,34 @@ describe('typed tasks', () => {
   })
 
   test('the note is the latest result or progress of the most recently active assignment', () => {
-    const older = { id: 'a1', participant_id: dev.id, state: 'done' as const, assigned_by: 'user', assigned_seq: 1, completed_seq: 3, result: 'shipped' }
-    const newer = { id: 'a2', participant_id: qa.id, state: 'in_progress' as const, assigned_by: 'user', assigned_seq: 2, started_seq: 6, progress: 'testing' }
+    const older = { id: 'a1', participant_id: dev.id, state: 'done' as const, assigned_by: 'user', assigned_seq: 1, completed_seq: 3, reported_seq: 3, result: 'shipped' }
+    const newer = { id: 'a2', participant_id: qa.id, state: 'in_progress' as const, assigned_by: 'user', assigned_seq: 2, started_seq: 6, reported_seq: 6, progress: 'testing' }
     expect(taskFromView(view({ assignments: [older, newer] })).note).toBe('testing')
     expect(taskFromView(view({ assignments: [older] })).note).toBe('shipped')
     expect(taskFromView(view()).note).toBeUndefined()
+  })
+
+  test('the note follows the latest report: a later progress beats an earlier result', () => {
+    // B finished at seq 6, then A (started long before) reported progress at seq 7.
+    const a = { id: 'a1', participant_id: dev.id, state: 'in_progress' as const, assigned_by: 'user', assigned_seq: 1, started_seq: 2, reported_seq: 7, progress: 'half way' }
+    const b = { id: 'a2', participant_id: qa.id, state: 'done' as const, assigned_by: 'user', assigned_seq: 3, started_seq: 4, completed_seq: 6, reported_seq: 6, result: 'tests pass' }
+    expect(taskFromView(view({ assignments: [a, b] })).note).toBe('half way')
+    expect(taskFromView(view({ assignments: [b, a] })).note).toBe('half way')
+  })
+
+  test('alternating progress and done of several assignees: the highest reported seq wins', () => {
+    const a = { id: 'a1', participant_id: dev.id, state: 'done' as const, assigned_by: 'user', assigned_seq: 1, started_seq: 2, completed_seq: 9, reported_seq: 9, result: 'api done' }
+    const b = { id: 'a2', participant_id: qa.id, state: 'in_progress' as const, assigned_by: 'user', assigned_seq: 1, started_seq: 3, reported_seq: 8, progress: 'testing api' }
+    expect(taskFromView(view({ assignments: [b, a] })).note).toBe('api done')
+    const bLater = { ...b, reported_seq: 10, progress: 'retesting after api' }
+    expect(taskFromView(view({ assignments: [a, bLater] })).note).toBe('retesting after api')
+  })
+
+  test('the note considers ended assignments too', () => {
+    const active = { id: 'a2', participant_id: qa.id, state: 'in_progress' as const, assigned_by: 'user', assigned_seq: 5, started_seq: 6, reported_seq: 6, progress: 'starting over' }
+    const ended = { id: 'a1', participant_id: dev.id, state: 'done' as const, assigned_by: 'user', assigned_seq: 1, completed_seq: 8, reported_seq: 8, result: 'first draft', ended: 'released' as const, ended_seq: 9 }
+    expect(taskFromView(view({ assignments: [active], history: [ended] })).note).toBe('first draft')
+    expect(taskFromView(view({ assignments: [{ ...active, reported_seq: 10 }], history: [ended] })).note).toBe('starting over')
   })
 
   test('boardTasksOf uses the typed tasks when the run keeps them, else the legacy entries', () => {

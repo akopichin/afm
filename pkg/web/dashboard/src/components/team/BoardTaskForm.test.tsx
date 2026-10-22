@@ -124,6 +124,17 @@ describe('BoardTaskForm', () => {
       expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'API'])
     })
 
+    test('the Assignee select never offers an Assistant (side agent) or a helper', () => {
+      const withAssistant: MeshParticipant[] = [
+        ...participants,
+        { id: 'side:assistant', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'Assistant', reachable: true },
+        { id: 'helper:api:rev', kind: 'helper', scope: 'stage', alias: 'rev', display_name: 'Reviewer', stage_id: 'api', reachable: true },
+      ]
+      render(<BoardTaskForm participants={withAssistant} stages={stages} mode="typed" onPosted={() => {}} />)
+      const assignee = screen.getByRole('combobox', { name: 'Assignee' })
+      expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'API'])
+    })
+
     test('creates the task with title, description and the picked assignee', async () => {
       const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
       const publish = vi.spyOn(meshClient, 'publishMeshBoard')

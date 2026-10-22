@@ -260,6 +260,160 @@ describe('BoardTaskDetails', () => {
       expect(within(dialog).getByRole('list', { name: 'History' })).toHaveTextContent('first draft')
     })
 
+    test('each assignment shows its artifact refs, active and in History', () => {
+      const withRefs = taskFromView(
+        typedTaskView({
+          key: 'task/csv',
+          title: 'CSV export',
+          assignments: [typedAssignment({ id: 'a1', participant_id: 'stage:api', state: 'done', result: 'shipped', artifact_refs: ['artifacts/report.md'] })],
+          history: [typedAssignment({ id: 'a0', participant_id: 'run:t-1', state: 'done', result: 'first draft', artifact_refs: ['artifacts/draft.md', 'plan.md'], ended: 'reopened', ended_by: 'user' })],
+        }),
+      )
+      const { dialog } = renderTyped(withRefs)
+      const active = within(within(dialog).getByRole('list', { name: 'Assignees' })).getByRole('list', { name: 'API artifacts' })
+      expect(within(active).getByText('artifacts/report.md')).toBeInTheDocument()
+      const archived = within(within(dialog).getByRole('list', { name: 'History' })).getByRole('list', { name: 'QA artifacts' })
+      expect(within(archived).getByText('artifacts/draft.md')).toBeInTheDocument()
+      expect(within(archived).getByText('plan.md')).toBeInTheDocument()
+    })
+
+    test('an assignment without artifact refs shows no artifacts list', () => {
+      const { dialog } = renderTyped()
+      expect(within(dialog).queryByRole('list', { name: /artifacts$/ })).toBeNull()
+    })
+
+    test('Assign never offers an Assistant (side agent) or a helper', () => {
+      const withAssistant: MeshParticipant[] = [
+        ...participants,
+        { id: 'side:assistant', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'Assistant', reachable: true },
+        { id: 'helper:api:rev', kind: 'helper', scope: 'stage', alias: 'rev', display_name: 'Reviewer', stage_id: 'api', reachable: true },
+      ]
+      const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
+      render(<BoardTaskDetails task={unassigned} participants={withAssistant} stages={stages} onClose={() => {}} />)
+      const select = screen.getByRole('combobox', { name: 'Assign to' })
+      expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose an agent', 'API', 'QA'])
+    })
+
+    test('Release without a reason puts only the fields it changes on the wire', async () => {
+      const receipt = { key: 'task/csv', version: 5, status: 'in_progress', seq: 9 }
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => receipt } as Response)
+      const { dialog, reload } = renderTyped()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+      await waitFor(() => expect(reload).toHaveBeenCalled())
+      const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string)
+      expect(Object.keys(body).sort()).toEqual(['action', 'assignment_id', 'expected_version', 'key', 'request_id'])
+    })
+
+    describe('retry after a lost response', () => {
+      // A newer poll of the same task: the lost change may have committed, and the task moved on.
+      const newer = taskFromView(
+        typedTaskView({
+          key: 'task/csv',
+          title: 'CSV export',
+          version: 7,
+          status: 'in_progress',
+          assignments: [
+            typedAssignment({ id: 'a1', participant_id: 'stage:api', state: 'in_progress', assigned_seq: 3, started_seq: 4 }),
+            typedAssignment({ id: 'a9', participant_id: 'run:t-1', state: 'assigned', assigned_seq: 12 }),
+          ],
+          history: [typedAssignment({ id: 'a2', participant_id: 'run:t-1', ended: 'reopened', ended_by: 'user' })],
+        }),
+      )
+
+      function renderLive(first: BoardTask) {
+        const reload = vi.fn()
+        const view = render(<BoardTaskDetails task={first} participants={participants} stages={stages} onChanged={reload} onClose={() => {}} />)
+        const poll = (next: BoardTask) => view.rerender(<BoardTaskDetails task={next} participants={participants} stages={stages} onChanged={reload} onClose={() => {}} />)
+        return { dialog: screen.getByRole('dialog', { name: 'Task details' }), reload, poll }
+      }
+
+      function lostThenOk() {
+        return vi
+          .spyOn(meshClient, 'postMeshTask')
+          .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+          .mockResolvedValue({ key: 'task/csv', version: 8, status: 'todo', seq: 20 })
+      }
+
+      test('Reopen resends the original payload with the same request id after the task moved on', async () => {
+        const post = lostThenOk()
+        const { dialog, reload, poll } = renderLive(typed)
+        fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'needs headers' } })
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Failed to fetch'))
+        poll(newer)
+        fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'needs headers and quoting' } })
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(reload).toHaveBeenCalled())
+        expect(post).toHaveBeenCalledTimes(2)
+        expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'reopen', expectedVersion: 4, text: 'needs headers' })
+        expect(post.mock.calls[1]?.[0]).toEqual(post.mock.calls[0]?.[0])
+      })
+
+      test('Release resends the original payload with the same request id after the task moved on', async () => {
+        const post = lostThenOk()
+        const { dialog, reload, poll } = renderLive(typed)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+        await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument())
+        poll(newer)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+        await waitFor(() => expect(reload).toHaveBeenCalled())
+        expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'release', assignmentId: 'a1', expectedVersion: 4 })
+        expect(post.mock.calls[1]?.[0]).toEqual(post.mock.calls[0]?.[0])
+      })
+
+      test('Assign resends the original payload with the same request id after the task moved on', async () => {
+        const post = lostThenOk()
+        const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
+        const { dialog, reload, poll } = renderLive(unassigned)
+        fireEvent.change(within(dialog).getByRole('combobox', { name: 'Assign to' }), { target: { value: 'stage:api' } })
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Assign' }))
+        await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument())
+        poll(taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 5 })))
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Assign' }))
+        await waitFor(() => expect(reload).toHaveBeenCalled())
+        expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'assign', to: 'stage:api', expectedVersion: 2 })
+        expect(post.mock.calls[1]?.[0]).toEqual(post.mock.calls[0]?.[0])
+      })
+
+      test('after stale_revision the next click is a new change built from the fresh task', async () => {
+        const post = vi
+          .spyOn(meshClient, 'postMeshTask')
+          .mockRejectedValueOnce(new meshClient.MeshApiError('/api/mesh/tasks', 409, 'stale_revision', 'version mismatch'))
+          .mockResolvedValue({ key: 'task/csv', version: 8, status: 'todo', seq: 20 })
+        const { dialog, poll } = renderLive(typed)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Task changed, reloaded'))
+        poll(newer)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+        expect(post.mock.calls[1]?.[0]).toMatchObject({ action: 'reopen', expectedVersion: 7 })
+        expect(post.mock.calls[1]?.[0].requestId).not.toBe(post.mock.calls[0]?.[0].requestId)
+      })
+
+      test('after a success the next click is a new change built from the fresh task', async () => {
+        const post = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv', version: 8, status: 'todo', seq: 20 })
+        const { dialog, reload, poll } = renderLive(typed)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
+        poll(newer)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(reload).toHaveBeenCalledTimes(2))
+        expect(post.mock.calls[1]?.[0]).toMatchObject({ action: 'reopen', expectedVersion: 7 })
+        expect(post.mock.calls[1]?.[0].requestId).not.toBe(post.mock.calls[0]?.[0].requestId)
+      })
+
+      test('a different action after a lost response is built from the fresh task', async () => {
+        const post = lostThenOk()
+        const { dialog, reload, poll } = renderLive(typed)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+        await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument())
+        poll(newer)
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))
+        await waitFor(() => expect(reload).toHaveBeenCalled())
+        expect(post.mock.calls[1]?.[0]).toMatchObject({ action: 'reopen', expectedVersion: 7 })
+      })
+    })
+
     test('focus starts on Close and Escape closes, as for a legacy task', () => {
       const onClose = vi.fn()
       render(<BoardTaskDetails task={typed} participants={participants} stages={stages} onChanged={() => {}} onClose={onClose} />)

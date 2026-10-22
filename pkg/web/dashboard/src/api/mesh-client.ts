@@ -169,6 +169,8 @@ export type MeshBoardTaskAssignment = {
   assigned_seq: number
   started_seq?: number
   completed_seq?: number
+  // reported_seq — the seq of the assignment's latest progress or done report.
+  reported_seq?: number
   ended?: 'released' | 'reopened'
   ended_by?: string
   end_reason?: string
