@@ -211,13 +211,9 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	}
 	runID := filepath.Base(runDir)
 	runSnap := store.Snapshot()
-	resumed := runSnap.LastSeq > 0
-	// A fresh run is durably marked with the typed board task protocol before any agent starts; a resumed
-	// run without the marker stays legacy.
-	if !resumed {
-		if err := store.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, state.Actor{Kind: "system", ID: "afm"}); err != nil {
-			return fmt.Errorf("record board task protocol: %w", err)
-		}
+	resumed, err := recordFreshRunProtocol(store)
+	if err != nil {
+		return err
 	}
 	// Этап 9, T9.5: fold every stage_graph_added record committed before this process started (or crashed)
 	// back on top of the frozen stage set — orchestrator.New must see a dynamically-added stage from its very
@@ -492,4 +488,17 @@ func loadPrompts(overrideDir string) (orchestrator.Prompts, error) {
 		HelperResult:   texts[10],
 		HelperDelegate: texts[11],
 	}, nil
+}
+
+// recordFreshRunProtocol durably marks a fresh run — one with nothing in its journal yet — with the typed
+// board task protocol, before any agent starts, and reports whether the run is resumed instead. A resumed run
+// without the marker stays legacy.
+func recordFreshRunProtocol(store *state.Store) (resumed bool, err error) {
+	if store.Snapshot().LastSeq > 0 {
+		return true, nil
+	}
+	if err := store.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, state.Actor{Kind: "system", ID: "afm"}); err != nil {
+		return false, fmt.Errorf("record board task protocol: %w", err)
+	}
+	return false, nil
 }

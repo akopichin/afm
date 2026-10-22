@@ -197,6 +197,9 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 			}
 		}
 	}
+	// Replay restores the stages, not LastSeq: mirror the journal's last seq (control records included, as
+	// LoadRunState does), or a reopened run would look fresh.
+	s.snapshot.LastSeq = s.lastSeq
 
 	locked = false
 	return s, nil

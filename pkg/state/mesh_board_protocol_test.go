@@ -60,6 +60,29 @@ func TestRecordBoardTaskProtocolRefusesOldRun(t *testing.T) {
 	}
 }
 
+// A legacy run is recognized after a restart too: Open restores LastSeq from the journal, so a reopened run
+// with records but no marker is still refused (and run.go sees it as resumed).
+func TestRecordBoardTaskProtocolRefusesReopenedOldRun(t *testing.T) {
+	dir := t.TempDir()
+	store := openProtocolStore(t, dir)
+	if _, err := store.EnsurePolicyRecorded(depthPolicy(3, "rev-1"), protocolActor); err != nil {
+		t.Fatalf("EnsurePolicyRecorded: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openProtocolStore(t, dir)
+	if got := reopened.Snapshot().LastSeq; got != 1 {
+		t.Fatalf("LastSeq after reopen = %d, want 1 from the journal", got)
+	}
+	err := reopened.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, protocolActor)
+	var rejected *OperationRejectedError
+	if !errors.As(err, &rejected) || rejected.Code != assistants.CodeInvalidStatus {
+		t.Fatalf("err = %v, want OperationRejectedError with CodeInvalidStatus", err)
+	}
+}
+
 func TestBoardTaskProtocolSurvivesMissingSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	store := openProtocolStore(t, dir)
