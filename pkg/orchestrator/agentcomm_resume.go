@@ -149,10 +149,15 @@ func stageIDFromMeshParticipant(p agentcomm.ParticipantID) (string, bool) {
 // taskIDFromMeshParticipant inverts meshHelperParticipantID and meshRunParticipantID (see
 // runTaskForParticipant for the legacy "run:<profileID>" form).
 func (o *Orchestrator) taskIDFromMeshParticipant(p agentcomm.ParticipantID) (assistants.TaskID, bool) {
+	return participantTask(o.opts.Store.Snapshot(), p)
+}
+
+// participantTask is the task behind a helper or run agent participant, by rs.
+func participantTask(rs state.RunState, p agentcomm.ParticipantID) (assistants.TaskID, bool) {
 	if id, ok := strings.CutPrefix(string(p), meshHelperPrefix); ok && id != "" {
 		return assistants.TaskID(id), true
 	}
-	return runTaskForParticipant(o.opts.Store.Snapshot(), p)
+	return runTaskForParticipant(rs, p)
 }
 
 // resumeAwaitingPeerStage drives stageID out of awaiting_peer via evType (EventPeerReplied or, T5.5,

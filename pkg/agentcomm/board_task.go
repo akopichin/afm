@@ -147,14 +147,15 @@ func ViewOf(t BoardTask) BoardTaskView {
 	return BoardTaskView{BoardTask: t, Status: t.Status()}
 }
 
-const (
-	boardTaskKeyPrefix = "task/"
-	maxBoardTaskKeyLen = 200
-)
+// BoardTaskKeyPrefix starts the key of every typed board task. In a run with the typed protocol the board
+// keys under it belong to typed tasks only.
+const BoardTaskKeyPrefix = "task/"
+
+const maxBoardTaskKeyLen = 200
 
 // ValidBoardTaskKey reports whether key is "task/<slug>" with a non-empty slug without
 // further slashes, at most 200 bytes long.
 func ValidBoardTaskKey(key string) bool {
-	slug, ok := strings.CutPrefix(key, boardTaskKeyPrefix)
+	slug, ok := strings.CutPrefix(key, BoardTaskKeyPrefix)
 	return ok && slug != "" && !strings.Contains(slug, "/") && len(key) <= maxBoardTaskKeyLen
 }

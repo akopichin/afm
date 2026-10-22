@@ -51,6 +51,9 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 	if req.Key == "" || req.Author == "" {
 		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board entry needs a key"}
 	}
+	if strings.HasPrefix(req.Key, agentcomm.BoardTaskKeyPrefix) && o.BoardTasksEnabled() {
+		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "board tasks use `afm agent task …` in this run"}
+	}
 	if len(req.Notify) > agentcomm.MaxBoardNotify {
 		return agentcomm.BoardEntry{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest,
 			Reason: fmt.Sprintf("a board publish may notify at most %d participants, got %d", agentcomm.MaxBoardNotify, len(req.Notify))}
@@ -96,27 +99,28 @@ func (o *Orchestrator) Publish(ctx context.Context, req PublishRequest) (agentco
 				Seq: res.Seq, Ts: res.Time,
 			}, nil
 		}
-		if attempt == maxAttempts || !o.worthAnotherPublishAttempt(req, status, notices, err) {
+		replan := func(rs state.RunState) ([]plannedMessage, error) { return o.planBoardNotices(rs, req, status) }
+		if attempt == maxAttempts || !o.worthAnotherAttempt(req.OperationID, err, notices, replan) {
 			return agentcomm.BoardEntry{}, err
 		}
 	}
 }
 
-// worthAnotherPublishAttempt reports whether a rejected publish is tried again: the same request id committed
-// meanwhile (a concurrent retry — the next attempt answers from that commit), or the notices planned from the
-// current state differ from the rejected ones (a recipient finished, a conversation filled or closed). A
-// rejection the notices did not cause is the publish's own answer.
-func (o *Orchestrator) worthAnotherPublishAttempt(req PublishRequest, status string, rejectedNotices []plannedMessage, err error) bool {
+// worthAnotherAttempt reports whether a rejected operation carrying messages is tried again: the same request
+// id committed meanwhile (a concurrent retry — the next attempt answers from that commit), or the messages
+// replan plans from the current state differ from the rejected ones (a recipient finished, a conversation
+// filled or closed). A rejection the messages did not cause is the operation's own answer.
+func (o *Orchestrator) worthAnotherAttempt(opID string, err error, rejectedMsgs []plannedMessage, replan func(state.RunState) ([]plannedMessage, error)) bool {
 	var rejected *state.OperationRejectedError
 	if !errors.As(err, &rejected) {
 		return false
 	}
 	rs := o.opts.Store.Snapshot()
-	if _, committed := rs.Assistants.OperationIndex[req.OperationID]; committed {
+	if _, committed := rs.Assistants.OperationIndex[opID]; committed {
 		return true
 	}
-	again, perr := o.planBoardNotices(rs, req, status)
-	return perr == nil && !reflect.DeepEqual(again, rejectedNotices)
+	again, perr := replan(rs)
+	return perr == nil && !reflect.DeepEqual(again, rejectedMsgs)
 }
 
 // replayedPublish answers a publish whose request id already committed with the revision that operation
@@ -200,35 +204,49 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			continue
 		}
 		seen[recipient] = true
-		if p, ok := o.liveParticipant(rs, recipient); !ok || !p.Reachable {
-			continue
-		}
-		if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {
-			log.Printf("WARN: mesh: board key %s: not notifying %s: %v", req.Key, recipient, err)
-			continue
-		}
-		send := SendRequest{Sender: req.Author, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}
-		var open []state.Effect
-		members := conversationMembers(req.Author, []agentcomm.ParticipantID{recipient})
-		if th := openThreadWithMembers(rs, members, req.Author, ""); th != "" {
-			if rs.Assistants.Mesh.ThreadFull(th) {
-				log.Printf("WARN: mesh: board key %s: not notifying %s: conversation %s is full", req.Key, recipient, th)
-				continue
-			}
-			send.ThreadID = th
-		} else {
-			send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members, ""))
-			if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, req.Author)); err != nil {
-				return nil, err
-			}
-		}
-		n, err := o.planMessage(rs, send, deriveMeshMessageID(req.OperationID+":notify:"+string(recipient)), open)
+		n, skip, err := o.planNoticeTo(rs, req.OperationID, req.Author, recipient, body, req.Actor)
 		if err != nil {
 			return nil, err
+		}
+		if skip != "" {
+			log.Printf("WARN: mesh: board key %s: not notifying %s: %s", req.Key, recipient, skip)
+			continue
 		}
 		notices = append(notices, n)
 	}
 	return notices, nil
+}
+
+// planNoticeTo plans one message from sender to recipient in a fresh/reused conversation thread.
+// skip != "" means it cannot be delivered now (unreachable, inbox full, thread full) — not an error.
+// The message id is derived from opID and the recipient, so a retry plans the same message.
+func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, recipient agentcomm.ParticipantID, body string, actor state.Actor) (msg plannedMessage, skip string, err error) {
+	p, ok := o.liveParticipant(rs, recipient)
+	switch {
+	case !ok:
+		return plannedMessage{}, fmt.Sprintf("%s is not in this run", recipient), nil
+	case !p.Reachable:
+		return plannedMessage{}, fmt.Sprintf("%s cannot receive messages (%s)", recipient, p.UnreachableReason), nil
+	}
+	if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {
+		return plannedMessage{}, err.Error(), nil
+	}
+	send := SendRequest{Sender: sender, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body, Actor: actor}
+	var open []state.Effect
+	members := conversationMembers(sender, []agentcomm.ParticipantID{recipient})
+	if th := openThreadWithMembers(rs, members, sender, ""); th != "" {
+		if rs.Assistants.Mesh.ThreadFull(th) {
+			return plannedMessage{}, fmt.Sprintf("conversation %s is full", th), nil
+		}
+		send.ThreadID = th
+	} else {
+		send.ThreadID = deriveMeshThreadID(conversationOpenID(rs, members, ""))
+		if open, err = threadOpenEffects(rs, send.ThreadID, "", agentcomm.ScopeRun, members, 0, participantStage(rs, sender)); err != nil {
+			return plannedMessage{}, "", err
+		}
+	}
+	msg, err = o.planMessage(rs, send, deriveMeshMessageID(opID+":notify:"+string(recipient)), open)
+	return msg, "", err
 }
 
 // ReadBoard implements Service.ReadBoard. An empty Key returns every entry, sorted for a deterministic
