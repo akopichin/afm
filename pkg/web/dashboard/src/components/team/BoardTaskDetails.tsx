@@ -252,11 +252,12 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
           <ul className="board-task-details-assignees" aria-label="History">
             {history.map((a) => {
               const name = senderLabel(a.participant_id, participants)
+              const text = assignmentText(a)
               return (
                 <li key={a.id}>
                   <div className="board-task-details-assignee-name">
                     {name}
-                    {a.result && <span className="board-task-details-assignee-text">{a.result}</span>}
+                    {text !== undefined && <span className="board-task-details-assignee-text">{text}</span>}
                     <ArtifactRefs refs={a.artifact_refs} label={`${name} artifacts`} />
                   </div>
                   <span className="board-task-details-assignee-state">{endedLabel(a, participants)}</span>

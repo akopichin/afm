@@ -260,6 +260,23 @@ describe('BoardTaskDetails', () => {
       expect(within(dialog).getByRole('list', { name: 'History' })).toHaveTextContent('first draft')
     })
 
+    test('History keeps the progress of an assignment released or reopened before it was done', () => {
+      const ended = taskFromView(
+        typedTaskView({
+          key: 'task/csv',
+          title: 'CSV export',
+          history: [
+            typedAssignment({ id: 'a0', participant_id: 'run:t-1', state: 'in_progress', progress: 'half the columns', ended: 'released', ended_by: 'user' }),
+            typedAssignment({ id: 'a1', participant_id: 'stage:api', state: 'in_progress', progress: 'parser drafted', ended: 'reopened', ended_by: 'user' }),
+          ],
+        }),
+      )
+      const { dialog } = renderTyped(ended)
+      const history = within(dialog).getByRole('list', { name: 'History' })
+      expect(within(history).getByText('QA').closest('li')).toHaveTextContent('half the columns')
+      expect(within(history).getByText('API').closest('li')).toHaveTextContent('parser drafted')
+    })
+
     test('an agent picked to assign that stops being a candidate is neither shown nor sent', () => {
       const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
       const { rerender } = render(<BoardTaskDetails task={unassigned} participants={participants} stages={stages} onClose={() => {}} />)
