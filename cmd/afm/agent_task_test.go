@@ -48,7 +48,7 @@ func TestAgentTaskCLI_DoneSendsResultAndRequestID(t *testing.T) {
 		"--expected-version", "3", "--summary", "shipped", "--artifacts", "a.md, b.md", "--request-id", "rq-1")
 
 	want := server.MeshBoardTaskRequest{
-		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", Text: "shipped", ArtifactRefs: []string{"a.md", "b.md"},
+		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", Text: "shipped", ArtifactRefs: &[]string{"a.md", "b.md"},
 	}
 	if fake.lastTaskReqID != "rq-1" || !reflect.DeepEqual(fake.lastTask, want) {
 		t.Fatalf("Service got %q %+v, want rq-1 %+v", fake.lastTaskReqID, fake.lastTask, want)
@@ -65,7 +65,7 @@ func TestAgentTaskCLI_MutationsMapFlags(t *testing.T) {
 		want server.MeshBoardTaskRequest
 	}{
 		{[]string{"create", "--key", "task/api", "--title", "API", "--description", "D", "--assign-to", "docs", "--coordinator", "user"},
-			server.MeshBoardTaskRequest{Action: "create", Key: "task/api", Title: "API", Description: "D", To: "docs", Coordinator: "user"}},
+			server.MeshBoardTaskRequest{Action: "create", Key: "task/api", Title: new("API"), Description: new("D"), To: "docs", Coordinator: new("user")}},
 		{[]string{"assign", "--key", "task/api", "--to", "docs", "--expected-version", "2"},
 			server.MeshBoardTaskRequest{Action: "assign", Key: "task/api", To: "docs", ExpectedVersion: 2}},
 		{[]string{"claim", "--key", "task/api", "--expected-version", "1"},
@@ -79,7 +79,12 @@ func TestAgentTaskCLI_MutationsMapFlags(t *testing.T) {
 		{[]string{"reopen", "--key", "task/api", "--expected-version", "4", "--reason", "regressed"},
 			server.MeshBoardTaskRequest{Action: "reopen", Key: "task/api", ExpectedVersion: 4, Text: "regressed"}},
 		{[]string{"edit", "--key", "task/api", "--expected-version", "5", "--title", "API v2"},
-			server.MeshBoardTaskRequest{Action: "edit", Key: "task/api", ExpectedVersion: 5, Title: "API v2"}},
+			server.MeshBoardTaskRequest{Action: "edit", Key: "task/api", ExpectedVersion: 5, Title: new("API v2")}},
+		// A flag given empty clears its field; a flag left out leaves it.
+		{[]string{"edit", "--key", "task/api", "--expected-version", "5", "--description", "", "--coordinator", ""},
+			server.MeshBoardTaskRequest{Action: "edit", Key: "task/api", ExpectedVersion: 5, Description: new(""), Coordinator: new("")}},
+		{[]string{"done", "--key", "task/api", "--assignment-id", "as-1", "--expected-version", "3", "--artifacts", ""},
+			server.MeshBoardTaskRequest{Action: "done", Key: "task/api", AssignmentID: "as-1", ExpectedVersion: 3, ArtifactRefs: &[]string{}}},
 	}
 	for _, c := range cases {
 		fake := &fakeCLIAgentMesh{token: "tok-X", participant: "run:t-1"}
@@ -141,12 +146,12 @@ func TestAgentCLI_SendAndPublishTakeRequestID(t *testing.T) {
 // Both HTTP adapters hand the Service every body field under its own name, with the actor they authenticated.
 func TestBoardTaskRequest_MapsEveryField(t *testing.T) {
 	got := boardTaskRequest("rq-1", "run:t-1", server.MeshBoardTaskRequest{
-		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", To: "docs", Title: "T",
-		Description: "D", Coordinator: "user", Text: "ok", ArtifactRefs: []string{"a.md"},
+		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", To: "docs", Title: new("T"),
+		Description: new("D"), Coordinator: new("user"), Text: "ok", ArtifactRefs: &[]string{"a.md"},
 	})
 	want := orchestrator.BoardTaskRequest{
 		OperationID: "rq-1", Action: orchestrator.BoardTaskDone, Actor: "run:t-1", Key: "task/api", ExpectedVersion: 3,
-		AssignmentID: "as-1", To: "docs", Title: "T", Description: "D", CoordinatorID: "user", Text: "ok", ArtifactRefs: []string{"a.md"},
+		AssignmentID: "as-1", To: "docs", Title: new("T"), Description: new("D"), CoordinatorID: new("user"), Text: "ok", ArtifactRefs: &[]string{"a.md"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)

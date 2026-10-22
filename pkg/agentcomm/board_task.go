@@ -53,7 +53,8 @@ type BoardTaskAssignment struct {
 	AssignedSeq   uint64          `json:"assigned_seq"`
 	StartedSeq    uint64          `json:"started_seq,omitempty"`
 	CompletedSeq  uint64          `json:"completed_seq,omitempty"`
-	Ended         AssignmentEnd   `json:"ended,omitempty"` // set only in History
+	ReportedSeq   uint64          `json:"reported_seq,omitempty"` // seq of the latest progress or done report
+	Ended         AssignmentEnd   `json:"ended,omitempty"`        // set only in History
 	EndedBy       ParticipantID   `json:"ended_by,omitempty"`
 	EndReason     string          `json:"end_reason,omitempty"`
 	EndedSeq      uint64          `json:"ended_seq,omitempty"`

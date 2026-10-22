@@ -76,7 +76,7 @@ func progressTask(t *testing.T, version int, id, text string) Effect {
 
 func completeTask(t *testing.T, version int, id string) Effect {
 	return taskEffect(t, kindMeshBoardTaskCompleted, MeshBoardTaskCompletedPayload{
-		AssignmentID: id, Result: "shipped", ArtifactRefs: []string{"artifacts/report.md"}, MeshBoardTaskMeta: meta(version),
+		AssignmentID: id, Result: "shipped", ArtifactRefs: &[]string{"artifacts/report.md"}, MeshBoardTaskMeta: meta(version),
 	})
 }
 
@@ -418,7 +418,7 @@ func TestBoardTaskInputLimits(t *testing.T) {
 	err := applyTaskEffects(t, store, "a", progressTask(t, 3, "a1", string(long)))
 	wantRejected(t, err, assistants.CodeInvalidRequest, nil)
 
-	refs := MeshBoardTaskCompletedPayload{AssignmentID: "a1", ArtifactRefs: []string{"/etc/passwd"}, MeshBoardTaskMeta: meta(3)}
+	refs := MeshBoardTaskCompletedPayload{AssignmentID: "a1", ArtifactRefs: &[]string{"/etc/passwd"}, MeshBoardTaskMeta: meta(3)}
 	err = applyTaskEffects(t, store, "a", taskEffect(t, kindMeshBoardTaskCompleted, refs))
 	wantRejected(t, err, assistants.CodeInvalidRequest, ErrBoardArtifactRefOutsideRun)
 }
@@ -519,7 +519,7 @@ func TestBoardTaskFormatRulesOnlyAdmitNewRecords(t *testing.T) {
 			AssignmentID: "a1", Text: long, MeshBoardTaskMeta: meta(2),
 		}),
 		"artifact ref": boardTaskControl(t, kindMeshBoardTaskProgressed, "a", MeshBoardTaskProgressedPayload{
-			AssignmentID: "a1", Text: "half", ArtifactRefs: []string{"/etc/passwd"}, MeshBoardTaskMeta: meta(2),
+			AssignmentID: "a1", Text: "half", ArtifactRefs: &[]string{"/etc/passwd"}, MeshBoardTaskMeta: meta(2),
 		}),
 	}
 	for name, c := range cases {
@@ -570,5 +570,75 @@ func TestBoardTaskKeyFormatOnlyAdmitsCreate(t *testing.T) {
 	mustApply(t, &fresh, &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)})
 	if err := dispatchControlKind(&fresh, created, true); err == nil {
 		t.Fatal("creating a task with an invalid key was admitted")
+	}
+}
+
+// ReportedSeq is the seq of an assignment's latest report — a progress or its done — so a reader can tell
+// whose note is the newest across assignees.
+func TestBoardTaskReportedSeq(t *testing.T) {
+	store := openTypedStore(t, t.TempDir())
+	mustApplyTask(t, store, "user", createTask(t, ""))
+	assignAndStart(t, store, "user", 1, "a1", "a")
+	assignAndStart(t, store, "user", 3, "b1", "b")
+	reported := func(id string) uint64 {
+		t.Helper()
+		a, _ := boardTask(t, store).Assignment(id)
+		return a.ReportedSeq
+	}
+	if got := reported("a1"); got != 0 {
+		t.Fatalf("reported seq before any report = %d, want 0", got)
+	}
+
+	mustApplyTask(t, store, "a", progressTask(t, 5, "a1", "half"))
+	if got, want := reported("a1"), store.Snapshot().LastSeq; got != want {
+		t.Fatalf("a1 reported seq after progress = %d, want %d", got, want)
+	}
+	mustApplyTask(t, store, "b", completeTask(t, 6, "b1"))
+	if got, want := reported("b1"), store.Snapshot().LastSeq; got != want {
+		t.Fatalf("b1 reported seq after done = %d, want %d", got, want)
+	}
+	mustApplyTask(t, store, "a", progressTask(t, 7, "a1", "almost"))
+	if a, b := reported("a1"), reported("b1"); a <= b {
+		t.Fatalf("a1 reported at %d, b1 at %d: a newer progress must be the latest report", a, b)
+	}
+}
+
+// A report's artifact refs replace the assignment's; an empty list clears them, an absent one leaves them —
+// live and on replay alike.
+func TestBoardTaskReportClearsArtifactRefs(t *testing.T) {
+	dir := t.TempDir()
+	store := openTypedStore(t, dir)
+	mustApplyTask(t, store, "user", createTask(t, ""))
+	assignAndStart(t, store, "user", 1, "a1", "a")
+	refs := func() []string {
+		t.Helper()
+		a, _ := boardTask(t, store).Assignment("a1")
+		return a.ArtifactRefs
+	}
+
+	mustApplyTask(t, store, "a", taskEffect(t, kindMeshBoardTaskProgressed, MeshBoardTaskProgressedPayload{
+		AssignmentID: "a1", Text: "draft", ArtifactRefs: &[]string{"artifacts/draft.md"}, MeshBoardTaskMeta: meta(3),
+	}))
+	mustApplyTask(t, store, "a", progressTask(t, 4, "a1", "still going"))
+	if got := refs(); len(got) != 1 {
+		t.Fatalf("refs after a progress without refs = %v, want the draft kept", got)
+	}
+	mustApplyTask(t, store, "a", taskEffect(t, kindMeshBoardTaskCompleted, MeshBoardTaskCompletedPayload{
+		AssignmentID: "a1", Result: "nothing to show", ArtifactRefs: &[]string{}, MeshBoardTaskMeta: meta(5),
+	}))
+	if got := refs(); got != nil {
+		t.Fatalf("refs after a done with an empty list = %v, want none", got)
+	}
+
+	live := store.Snapshot().Assistants.Mesh.BoardTasks
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "state.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove state.json: %v", err)
+	}
+	replayed := openProtocolStore(t, dir).Snapshot().Assistants.Mesh.BoardTasks
+	if !reflect.DeepEqual(live, replayed) {
+		t.Fatalf("replay differs from live:\nlive     %+v\nreplayed %+v", *live[testTaskKey], *replayed[testTaskKey])
 	}
 }

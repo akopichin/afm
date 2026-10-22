@@ -13,7 +13,7 @@ func TestBoardTaskPrompt_ParticipantSeesItsAssignmentID(t *testing.T) {
 	o, _ := newBoardTaskTestOrchestrator(t)
 	const key = "task/login"
 	mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-p", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Login form", To: boardTaskTestBackend,
+		OperationID: "create-p", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Login form"), To: boardTaskTestBackend,
 	})
 	assignmentID := o.opts.Store.Snapshot().Assistants.Mesh.BoardTasks[key].Assignments[0].ID
 
@@ -33,7 +33,7 @@ func TestBoardTaskPrompt_ListsAtMostTwentyTasks(t *testing.T) {
 	for i := range 23 {
 		mustBoardTask(t, o, BoardTaskRequest{
 			OperationID: fmt.Sprintf("create-%d", i), Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID,
-			Key: fmt.Sprintf("task/%02d", i), Title: "T", To: boardTaskTestBackend,
+			Key: fmt.Sprintf("task/%02d", i), Title: new("T"), To: boardTaskTestBackend,
 		})
 	}
 	block := o.agentCommInboxBlock(flow.Stage{ID: boardTaskTestBackend})

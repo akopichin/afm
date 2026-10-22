@@ -57,7 +57,7 @@ func TestBoardTaskServiceLifecycle(t *testing.T) {
 
 	created := mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "create-1", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key,
-		Title: "Login form", Description: "email + password",
+		Title: new("Login form"), Description: new("email + password"),
 	})
 	if created.Key != key || created.Version != 1 || created.Status != agentcomm.BoardTaskTodo || created.Seq == 0 {
 		t.Fatalf("create receipt = %+v, want %s at version 1, todo, with a seq", created, key)
@@ -78,7 +78,7 @@ func TestBoardTaskServiceLifecycle(t *testing.T) {
 
 	done := mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "done-1", Action: BoardTaskDone, Actor: backend, Key: key, ExpectedVersion: 3,
-		AssignmentID: claimed.AssignmentID, Text: "merged", ArtifactRefs: []string{"artifacts/login.md"},
+		AssignmentID: claimed.AssignmentID, Text: "merged", ArtifactRefs: &[]string{"artifacts/login.md"},
 	})
 	if done.Version != 4 || done.Status != agentcomm.BoardTaskDone {
 		t.Fatalf("done receipt = %+v, want version 4, done", done)
@@ -101,7 +101,7 @@ func TestBoardTaskRetryReturnsOriginalReceipt(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	backend := meshStageParticipantID(boardTaskTestBackend)
 	const key = "task/retry"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-r", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Retry"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-r", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Retry")})
 	claimed := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim-r", Action: BoardTaskClaim, Actor: backend, Key: key, ExpectedVersion: 1})
 
 	doneReq := BoardTaskRequest{
@@ -139,7 +139,7 @@ func TestBoardTaskDisabledForLegacyRun(t *testing.T) {
 	journaled := store.Snapshot().LastSeq
 
 	for _, req := range []BoardTaskRequest{
-		{OperationID: "legacy-create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/x", Title: "X"},
+		{OperationID: "legacy-create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/x", Title: new("X")},
 		{OperationID: "legacy-reopen", Action: BoardTaskReopen, Actor: agentcomm.UserParticipantID, Key: "task/x", ExpectedVersion: 1},
 	} {
 		_, err := o.BoardTask(context.Background(), req)
@@ -159,7 +159,7 @@ func TestBoardTaskActorFromRequestOnly(t *testing.T) {
 	backend := meshStageParticipantID(boardTaskTestBackend)
 	frontend := meshStageParticipantID(boardTaskTestFrontend)
 	const key = "task/owned"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-o", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Owned"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-o", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Owned")})
 	assigned := mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "assign-o", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1, To: string(frontend),
 	})
@@ -175,8 +175,8 @@ func TestBoardTaskAliasResolution(t *testing.T) {
 	backend := meshStageParticipantID(boardTaskTestBackend)
 	const key = "task/alias"
 	mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-a", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Alias",
-		CoordinatorID: boardTaskTestFrontend,
+		OperationID: "create-a", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Alias"),
+		CoordinatorID: new(boardTaskTestFrontend),
 	})
 
 	assigned := mustBoardTask(t, o, BoardTaskRequest{
@@ -199,7 +199,7 @@ func TestBoardTaskAliasResolution(t *testing.T) {
 	})
 	requireRejection(t, err, assistants.CodeNotFound)
 	_, err = o.BoardTask(context.Background(), BoardTaskRequest{
-		OperationID: "edit-unknown", Action: BoardTaskEdit, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 2, CoordinatorID: "nobody",
+		OperationID: "edit-unknown", Action: BoardTaskEdit, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 2, CoordinatorID: new("nobody"),
 	})
 	requireRejection(t, err, assistants.CodeNotFound)
 }
@@ -207,7 +207,7 @@ func TestBoardTaskAliasResolution(t *testing.T) {
 func TestBoardTaskCreateWithAssignee(t *testing.T) {
 	o, _ := newBoardTaskTestOrchestrator(t)
 	r := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-assign", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/both", Title: "Both",
+		OperationID: "create-assign", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/both", Title: new("Both"),
 		To: boardTaskTestBackend,
 	})
 	if r.Version != 2 || r.Status != agentcomm.BoardTaskTodo || r.AssignmentID == "" {
@@ -225,7 +225,7 @@ func TestBoardTaskCreateWithAssignee(t *testing.T) {
 func TestBoardTasksListsSortedAndUnknownKeyIsNotFound(t *testing.T) {
 	o, _ := newBoardTaskTestOrchestrator(t)
 	for _, key := range []string{"task/b", "task/a"} {
-		mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-" + key, Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: key})
+		mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-" + key, Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new(key)})
 	}
 	views, err := o.BoardTasks(context.Background(), "")
 	if err != nil {
@@ -241,7 +241,7 @@ func TestBoardTasksListsSortedAndUnknownKeyIsNotFound(t *testing.T) {
 func TestBoardTaskRequiresRequestID(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	journaled := store.Snapshot().LastSeq
-	if _, err := o.BoardTask(context.Background(), BoardTaskRequest{Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/x", Title: "X"}); err == nil {
+	if _, err := o.BoardTask(context.Background(), BoardTaskRequest{Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/x", Title: new("X")}); err == nil {
 		t.Fatal("BoardTask without a request id: want an error")
 	}
 	_, err := o.BoardTask(context.Background(), BoardTaskRequest{OperationID: "x", Action: "steal", Actor: agentcomm.UserParticipantID, Key: "task/x"})
@@ -256,7 +256,7 @@ func TestBoardTaskRequiresRequestID(t *testing.T) {
 func TestBoardTaskConcurrentClaimsOneWinner(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	const key = "task/race"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Race"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Race")})
 
 	claimants := []agentcomm.ParticipantID{
 		meshStageParticipantID(assistantsTestStageID), meshStageParticipantID(boardTaskTestBackend), meshStageParticipantID(boardTaskTestFrontend),
@@ -289,5 +289,82 @@ func TestBoardTaskConcurrentClaimsOneWinner(t *testing.T) {
 	task := store.Snapshot().Assistants.Mesh.BoardTasks[key]
 	if wins != 1 || len(task.Assignments) != 1 || task.Version != 2 {
 		t.Fatalf("wins = %d, task = %+v; want one winner and one active assignment at version 2", wins, task)
+	}
+}
+
+// An edit changes exactly the fields it carries: an empty description or coordinator clears it (the
+// coordinator then falls back to the author), an absent one stays.
+func TestBoardTaskEditClearsFields(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	const key = "task/clear"
+	mustBoardTask(t, o, BoardTaskRequest{
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key,
+		Title: new("Clear"), Description: new("old text"), CoordinatorID: new(boardTaskTestBackend),
+	})
+	editReq := BoardTaskRequest{
+		OperationID: "edit", Action: BoardTaskEdit, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1,
+		Description: new(""), CoordinatorID: new(""),
+	}
+	edited := mustBoardTask(t, o, editReq)
+	task := store.Snapshot().Assistants.Mesh.BoardTasks[key]
+	if task.Title != "Clear" || task.Description != "" || task.CoordinatorID != "" || task.Coordinator() != boardTaskA {
+		t.Fatalf("task after the edit = %+v, want the title kept, the description and coordinator cleared, %s coordinating", task, boardTaskA)
+	}
+
+	if again := mustBoardTask(t, o, editReq); again != edited {
+		t.Fatalf("retry receipt = %+v, want the original %+v", again, edited)
+	}
+	absent := editReq
+	absent.Description = nil
+	if _, err := o.BoardTask(context.Background(), absent); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("same request id without the description: error = %v, want a request id conflict", err)
+	}
+
+	_, err := o.BoardTask(context.Background(), BoardTaskRequest{
+		OperationID: "edit-title", Action: BoardTaskEdit, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 2, Title: new(""),
+	})
+	requireRejection(t, err, assistants.CodeInvalidRequest)
+	_, err = o.BoardTask(context.Background(), BoardTaskRequest{
+		OperationID: "edit-nothing", Action: BoardTaskEdit, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 2,
+	})
+	requireRejection(t, err, assistants.CodeInvalidRequest)
+}
+
+// A done with an empty artifact list clears the refs a progress reported; one without a list keeps them.
+func TestBoardTaskDoneClearsArtifactRefs(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	const key = "task/refs"
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Refs")})
+	claimed := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim", Action: BoardTaskClaim, Actor: boardTaskB, Key: key, ExpectedVersion: 1})
+	refs := func() []string {
+		a, _ := store.Snapshot().Assistants.Mesh.BoardTasks[key].Assignment(claimed.AssignmentID)
+		return a.ArtifactRefs
+	}
+	mustBoardTask(t, o, BoardTaskRequest{
+		OperationID: "progress", Action: BoardTaskProgress, Actor: boardTaskB, Key: key, ExpectedVersion: 2,
+		AssignmentID: claimed.AssignmentID, Text: "draft", ArtifactRefs: &[]string{"artifacts/draft.md"},
+	})
+	mustBoardTask(t, o, BoardTaskRequest{
+		OperationID: "progress-2", Action: BoardTaskProgress, Actor: boardTaskB, Key: key, ExpectedVersion: 3,
+		AssignmentID: claimed.AssignmentID, Text: "still going",
+	})
+	if got := refs(); len(got) != 1 {
+		t.Fatalf("refs after a progress without a list = %v, want the draft kept", got)
+	}
+	doneReq := BoardTaskRequest{
+		OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 4,
+		AssignmentID: claimed.AssignmentID, Text: "nothing to show", ArtifactRefs: &[]string{},
+	}
+	done := mustBoardTask(t, o, doneReq)
+	if got := refs(); got != nil {
+		t.Fatalf("refs after a done with an empty list = %v, want none", got)
+	}
+	if again := mustBoardTask(t, o, doneReq); again != done {
+		t.Fatalf("retry receipt = %+v, want the original %+v", again, done)
+	}
+	absent := doneReq
+	absent.ArtifactRefs = nil
+	if _, err := o.BoardTask(context.Background(), absent); !errors.Is(err, state.ErrOperationIDConflict) {
+		t.Fatalf("same request id without the list: error = %v, want a request id conflict", err)
 	}
 }

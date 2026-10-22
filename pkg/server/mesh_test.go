@@ -932,11 +932,40 @@ func TestMesh_BoardTask_RequiresOriginAndRequestID(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
 	}
-	want := MeshBoardTaskRequest{Action: "create", Key: "task/api", Title: "API", To: "docs"}
+	want := MeshBoardTaskRequest{Action: "create", Key: "task/api", Title: new("API"), To: "docs"}
 	if fake.lastTaskReqID != "req-t1" || !reflect.DeepEqual(fake.lastTask, want) {
 		t.Fatalf("Service got %q %+v, want req-t1 %+v", fake.lastTaskReqID, fake.lastTask, want)
 	}
 	if resp["key"] != "task/api" || resp["status"] != "todo" {
 		t.Fatalf("response = %v, want the receipt", resp)
+	}
+}
+
+// The body keeps whether it has a field: an empty description, coordinator or artifact list reaches the
+// Service as set and empty (it clears), a missing one as unset (it stays).
+func TestMeshBoardTask_KeepsFieldPresence(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+	cases := []struct {
+		body map[string]any
+		want MeshBoardTaskRequest
+	}{
+		{map[string]any{"request_id": "r1", "action": "edit", "key": "task/api", "expected_version": 2, "description": "", "coordinator": ""},
+			MeshBoardTaskRequest{Action: "edit", Key: "task/api", ExpectedVersion: 2, Description: new(""), Coordinator: new("")}},
+		{map[string]any{"request_id": "r2", "action": "edit", "key": "task/api", "expected_version": 2, "title": "API"},
+			MeshBoardTaskRequest{Action: "edit", Key: "task/api", ExpectedVersion: 2, Title: new("API")}},
+		{map[string]any{"request_id": "r3", "action": "done", "key": "task/api", "expected_version": 3, "assignment_id": "as-1", "artifact_refs": []string{}},
+			MeshBoardTaskRequest{Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", ArtifactRefs: &[]string{}}},
+		{map[string]any{"request_id": "r4", "action": "done", "key": "task/api", "expected_version": 3, "assignment_id": "as-1"},
+			MeshBoardTaskRequest{Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1"}},
+	}
+	for _, c := range cases {
+		w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/tasks", c.body, true)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%v: HTTP %d (body=%s)", c.body, w.Code, w.Body.String())
+		}
+		if !reflect.DeepEqual(fake.lastTask, c.want) {
+			t.Errorf("%v: Service got %+v, want %+v", c.body, fake.lastTask, c.want)
+		}
 	}
 }

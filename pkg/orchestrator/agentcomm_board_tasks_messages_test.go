@@ -61,7 +61,7 @@ func fillInbox(t *testing.T, o *Orchestrator, recipient agentcomm.ParticipantID)
 func TestBoardTaskAssignSendsMessageAtomically(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	const key = "task/api"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "API"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("API")})
 
 	r := mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "assign", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1, To: boardTaskTestBackend,
@@ -90,7 +90,7 @@ func TestBoardTaskAssignSendsMessageAtomically(t *testing.T) {
 
 	// A create that assigns at once sends the message too.
 	created := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-assign", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/ui", Title: "UI", To: boardTaskTestFrontend,
+		OperationID: "create-assign", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/ui", Title: new("UI"), To: boardTaskTestFrontend,
 	})
 	if created.MessageID == "" || len(boardTaskMessagesTo(store, boardTaskC)) != 1 {
 		t.Fatalf("create with an assignee: receipt = %+v, want one message to C", created)
@@ -128,7 +128,7 @@ func TestBoardTaskAssignRejectsUndeliverable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			o, store := newBoardTaskTestOrchestrator(t)
 			const key = "task/x"
-			mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "X"})
+			mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("X")})
 			to := setup(t, o)
 			messages := len(store.Snapshot().Assistants.Mesh.Messages)
 
@@ -150,9 +150,9 @@ func TestBoardTaskAssignRejectsUndeliverable(t *testing.T) {
 func TestBoardTaskSelfAssignAndClaimNoMessage(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	self := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-self", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/self", Title: "Self", To: string(boardTaskA),
+		OperationID: "create-self", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/self", Title: new("Self"), To: string(boardTaskA),
 	})
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-free", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/free", Title: "Free"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-free", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/free", Title: new("Free")})
 	claim := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim", Action: BoardTaskClaim, Actor: boardTaskB, Key: "task/free", ExpectedVersion: 1})
 
 	if self.MessageID != "" || claim.MessageID != "" {
@@ -168,7 +168,7 @@ func TestBoardTaskDoneNotifiesCoordinator(t *testing.T) {
 	ctx := context.Background()
 	const key = "task/report"
 	assigned := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Report", To: string(boardTaskB),
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: new("Report"), To: string(boardTaskB),
 	})
 	accepted := assigned.MessageID
 	if _, err := o.Send(ctx, SendRequest{
@@ -208,8 +208,8 @@ func TestBoardTaskNoticeGoesToCoordinatorNotAssigner(t *testing.T) {
 
 	// The user assigns, A coordinates: B's done goes to A.
 	byUser := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-1", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/one", Title: "One",
-		CoordinatorID: string(boardTaskA), To: string(boardTaskB),
+		OperationID: "create-1", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/one", Title: new("One"),
+		CoordinatorID: new(string(boardTaskA)), To: string(boardTaskB),
 	})
 	mustBoardTask(t, o, BoardTaskRequest{OperationID: "done-1", Action: BoardTaskDone, Actor: boardTaskB, Key: "task/one", ExpectedVersion: 2, AssignmentID: byUser.AssignmentID})
 	if got := boardTaskMessagesTo(store, boardTaskA); len(got) != 1 || !strings.HasSuffix(got[0].Body, "is done") {
@@ -217,7 +217,7 @@ func TestBoardTaskNoticeGoesToCoordinatorNotAssigner(t *testing.T) {
 	}
 
 	// B claims A's task: its done goes to A.
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-2", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/two", Title: "Two"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-2", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/two", Title: new("Two")})
 	claim := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim-2", Action: BoardTaskClaim, Actor: boardTaskB, Key: "task/two", ExpectedVersion: 1})
 	mustBoardTask(t, o, BoardTaskRequest{OperationID: "done-2", Action: BoardTaskDone, Actor: boardTaskB, Key: "task/two", ExpectedVersion: 2, AssignmentID: claim.AssignmentID})
 	if got := boardTaskMessagesTo(store, boardTaskA); len(got) != 2 || !strings.Contains(got[1].Body, "task/two") {
@@ -226,8 +226,8 @@ func TestBoardTaskNoticeGoesToCoordinatorNotAssigner(t *testing.T) {
 
 	// The user releases A's own assignment: A learns about it.
 	self := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-3", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/three", Title: "Three",
-		CoordinatorID: string(boardTaskA), To: string(boardTaskA),
+		OperationID: "create-3", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/three", Title: new("Three"),
+		CoordinatorID: new(string(boardTaskA)), To: string(boardTaskA),
 	})
 	mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "release-3", Action: BoardTaskRelease, Actor: agentcomm.UserParticipantID, Key: "task/three", ExpectedVersion: 2,
@@ -244,11 +244,11 @@ func TestBoardTaskNoNoticeForCoordinatorOrUser(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 
 	own := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create-own", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/own", Title: "Own", To: string(boardTaskA),
+		OperationID: "create-own", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/own", Title: new("Own"), To: string(boardTaskA),
 	})
 	mustBoardTask(t, o, BoardTaskRequest{OperationID: "done-own", Action: BoardTaskDone, Actor: boardTaskA, Key: "task/own", ExpectedVersion: 2, AssignmentID: own.AssignmentID})
 
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-user", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/user", Title: "User"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-user", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/user", Title: new("User")})
 	claim := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim-user", Action: BoardTaskClaim, Actor: boardTaskB, Key: "task/user", ExpectedVersion: 1})
 	done := mustBoardTask(t, o, BoardTaskRequest{OperationID: "done-user", Action: BoardTaskDone, Actor: boardTaskB, Key: "task/user", ExpectedVersion: 2, AssignmentID: claim.AssignmentID})
 
@@ -272,7 +272,7 @@ func TestBoardTaskNoticeSkippedStillCommits(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			o, store := newBoardTaskTestOrchestrator(t)
 			const key = "task/skip"
-			mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Skip"})
+			mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: new("Skip")})
 			claim := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim", Action: BoardTaskClaim, Actor: boardTaskB, Key: key, ExpectedVersion: 1})
 			setup(t, o)
 			messages := len(store.Snapshot().Assistants.Mesh.Messages)
@@ -296,8 +296,8 @@ func TestBoardTaskReopenOneNotice(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	const key = "task/pair"
 	first := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Pair",
-		CoordinatorID: string(boardTaskA), To: string(boardTaskB),
+		OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Pair"),
+		CoordinatorID: new(string(boardTaskA)), To: string(boardTaskB),
 	})
 	second := mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "assign-c", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 2, To: string(boardTaskC),
@@ -319,7 +319,7 @@ func TestBoardTaskReopenOneNotice(t *testing.T) {
 func TestBoardTaskReplayNoDuplicateNotice(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	const key = "task/replay"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Replay"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: new("Replay")})
 	claim := mustBoardTask(t, o, BoardTaskRequest{OperationID: "claim", Action: BoardTaskClaim, Actor: boardTaskB, Key: key, ExpectedVersion: 1})
 	doneReq := BoardTaskRequest{OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 2, AssignmentID: claim.AssignmentID}
 	done := mustBoardTask(t, o, doneReq)
@@ -343,7 +343,7 @@ func TestBoardTaskReplayNoDuplicateNotice(t *testing.T) {
 
 func TestBoardTaskRejectsEmptyActor(t *testing.T) {
 	o, _ := newBoardTaskTestOrchestrator(t)
-	_, err := o.BoardTask(context.Background(), BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Key: "task/x", Title: "X"})
+	_, err := o.BoardTask(context.Background(), BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Key: "task/x", Title: new("X")})
 	requireRejection(t, err, assistants.CodeInvalidRequest)
 }
 
@@ -353,7 +353,7 @@ func TestBoardTaskRetryAfterAliasBecameAmbiguous(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	stubPassingHelper(o)
 	const key = "task/alias-retry"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Alias"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Alias")})
 	agent := addTestRunAgent(t, o, "op-qa", nil)
 	alias := store.Snapshot().Assistants.Mesh.Participants[agent.ParticipantID].Alias
 	assignReq := BoardTaskRequest{OperationID: "assign", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1, To: alias}
@@ -409,14 +409,14 @@ func TestBoardTaskRedactsSecrets(t *testing.T) {
 	assignmentID := deriveMeshID("board-assignment", "create")
 	createReq := BoardTaskRequest{
 		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, To: string(boardTaskB),
-		Title:       "title " + planted,
-		Description: "uses " + planted,
+		Title:       new("title " + planted),
+		Description: new("uses " + planted),
 	}
 	created := mustBoardTask(t, o, createReq)
 	mustBoardTask(t, o, BoardTaskRequest{OperationID: "start", Action: BoardTaskStart, Actor: boardTaskB, Key: key, ExpectedVersion: 2, AssignmentID: assignmentID})
 	mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "progress", Action: BoardTaskProgress, Actor: boardTaskB, Key: key, ExpectedVersion: 3, AssignmentID: assignmentID,
-		Text: "half, token " + planted, ArtifactRefs: []string{"artifacts/" + planted + ".md"},
+		Text: "half, token " + planted, ArtifactRefs: &[]string{"artifacts/" + planted + ".md"},
 	})
 	doneReq := BoardTaskRequest{
 		OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 4, AssignmentID: assignmentID,
@@ -463,7 +463,7 @@ func TestBoardTaskRejectsKeyWithSecret(t *testing.T) {
 	o.opts.SecretValues = []string{planted}
 
 	_, err := o.BoardTask(context.Background(), BoardTaskRequest{
-		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/" + planted, Title: "Leak",
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/" + planted, Title: new("Leak"),
 	})
 	requireRejection(t, err, assistants.CodeInvalidRequest)
 	if len(store.Snapshot().Assistants.Mesh.BoardTasks) != 0 {
@@ -477,7 +477,7 @@ func TestBoardTaskAssignRetryThenWaitOnMessage(t *testing.T) {
 	o, store := newBoardTaskTestOrchestrator(t)
 	ctx := context.Background()
 	const key = "task/wait"
-	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Wait"})
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: new("Wait")})
 	assignReq := BoardTaskRequest{OperationID: "assign", Action: BoardTaskAssign, Actor: boardTaskA, Key: key, ExpectedVersion: 1, To: string(boardTaskB)}
 	mustBoardTask(t, o, assignReq) // its response is lost
 	messages := len(store.Snapshot().Assistants.Mesh.Messages)
@@ -512,7 +512,7 @@ func TestBoardTaskDoneBeforeCoordinatorWaits(t *testing.T) {
 	o, _ := newBoardTaskTestOrchestrator(t)
 	const key = "task/early"
 	assigned := mustBoardTask(t, o, BoardTaskRequest{
-		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Early", To: string(boardTaskB),
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: new("Early"), To: string(boardTaskB),
 	})
 	done := mustBoardTask(t, o, BoardTaskRequest{
 		OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 2, AssignmentID: assigned.AssignmentID, Text: "shipped",

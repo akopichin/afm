@@ -402,8 +402,8 @@ func TestAgentMesh_BoardTask_ActorFromTokenOnly(t *testing.T) {
 		t.Fatalf("actor = %q, want the token's helper:a", fake.lastTaskActor)
 	}
 	want := MeshBoardTaskRequest{
-		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", To: "docs", Title: "T",
-		Description: "D", Coordinator: "user", Text: "finished", ArtifactRefs: []string{"a.md"},
+		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", To: "docs", Title: new("T"),
+		Description: new("D"), Coordinator: new("user"), Text: "finished", ArtifactRefs: &[]string{"a.md"},
 	}
 	if fake.lastTaskReqID != "req-t1" || !reflect.DeepEqual(fake.lastTask, want) {
 		t.Fatalf("Service got %q %+v, want req-t1 %+v", fake.lastTaskReqID, fake.lastTask, want)

@@ -18,10 +18,10 @@ func newAgentTaskCmd() *cobra.Command {
 	cmd.AddCommand(
 		newAgentTaskListCmd(), newAgentTaskGetCmd(),
 		newAgentTaskChangeCmd(orchestrator.BoardTaskCreate, "Create a task, optionally assigning it at once", func(c *cobra.Command, req *server.MeshBoardTaskRequest) {
-			c.Flags().StringVar(&req.Title, "title", "", "task title (required)")
-			c.Flags().StringVar(&req.Description, "description", "", "task description")
+			c.Flags().String("title", "", "task title (required)")
+			c.Flags().String("description", "", "task description")
 			c.Flags().StringVar(&req.To, "assign-to", "", "participant (alias or id) to assign the task to at once")
-			c.Flags().StringVar(&req.Coordinator, "coordinator", "", "participant (alias or id) told when the task is done, released or reopened")
+			c.Flags().String("coordinator", "", "participant (alias or id) told when the task is done, released or reopened")
 		}),
 		newAgentTaskChangeCmd(orchestrator.BoardTaskAssign, "Assign the task to a participant", func(c *cobra.Command, req *server.MeshBoardTaskRequest) {
 			c.Flags().StringVar(&req.To, "to", "", "participant (alias or id) to assign the task to (required)")
@@ -44,9 +44,9 @@ func newAgentTaskCmd() *cobra.Command {
 			c.Flags().StringVar(&req.Text, "reason", "", "why the task is reopened")
 		}),
 		newAgentTaskChangeCmd(orchestrator.BoardTaskEdit, "Change the task's title, description or coordinator", func(c *cobra.Command, req *server.MeshBoardTaskRequest) {
-			c.Flags().StringVar(&req.Title, "title", "", "new title")
-			c.Flags().StringVar(&req.Description, "description", "", "new description")
-			c.Flags().StringVar(&req.Coordinator, "coordinator", "", "new coordinator (alias or id)")
+			c.Flags().String("title", "", "new title")
+			c.Flags().String("description", "", "new description (\"\" clears it)")
+			c.Flags().String("coordinator", "", "new coordinator, alias or id (\"\" clears it: the author coordinates)")
 		}),
 	)
 	return cmd
@@ -94,6 +94,16 @@ func assignmentFlag(c *cobra.Command, req *server.MeshBoardTaskRequest) {
 	c.Flags().StringVar(&req.AssignmentID, "assignment-id", "", "your assignment's id (required)")
 }
 
+// changedString is the value of the string flag name when it was given, nil when it was not (or the command
+// has no such flag): an edit sends only the fields it changes.
+func changedString(cmd *cobra.Command, name string) *string {
+	if !cmd.Flags().Changed(name) {
+		return nil
+	}
+	value, _ := cmd.Flags().GetString(name) // a given flag of this name is always a string flag
+	return &value
+}
+
 // newAgentTaskChangeCmd builds `afm agent task <action>`: --key, --request-id, --expected-version (every
 // action but create), --artifacts (progress and done) and the action's own flags, which addFlags binds into
 // the request.
@@ -108,7 +118,13 @@ func newAgentTaskChangeCmd(action orchestrator.BoardTaskAction, short string, ad
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				req.Action = string(action)
-				req.ArtifactRefs = splitCSV(artifacts)
+				req.Title = changedString(cmd, "title")
+				req.Description = changedString(cmd, "description")
+				req.Coordinator = changedString(cmd, "coordinator")
+				if cmd.Flags().Changed("artifacts") {
+					refs := append([]string{}, splitCSV(artifacts)...) // given empty, the list clears the refs
+					req.ArtifactRefs = &refs
+				}
 				body := struct {
 					RequestID string `json:"request_id"`
 					server.MeshBoardTaskRequest
@@ -126,7 +142,7 @@ func newAgentTaskChangeCmd(action orchestrator.BoardTaskAction, short string, ad
 		c.Flags().IntVar(&req.ExpectedVersion, "expected-version", 0, "the task's current version (required)")
 	}
 	if action == orchestrator.BoardTaskProgress || action == orchestrator.BoardTaskDone {
-		c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
+		c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs (\"\" clears them)")
 	}
 	if addFlags != nil {
 		addFlags(c, &req)

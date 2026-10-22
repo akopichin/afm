@@ -65,19 +65,20 @@ type MeshBoardTaskStartedPayload struct {
 	MeshBoardTaskMeta
 }
 
-// MeshBoardTaskProgressedPayload is the payload of mesh_board_task_progressed.
+// MeshBoardTaskProgressedPayload is the payload of mesh_board_task_progressed. ArtifactRefs, when set,
+// replace the assignment's refs (an empty list clears them); nil leaves them as they are.
 type MeshBoardTaskProgressedPayload struct {
-	AssignmentID string   `json:"assignment_id"`
-	Text         string   `json:"text"`
-	ArtifactRefs []string `json:"artifact_refs,omitempty"`
+	AssignmentID string    `json:"assignment_id"`
+	Text         string    `json:"text"`
+	ArtifactRefs *[]string `json:"artifact_refs,omitempty"`
 	MeshBoardTaskMeta
 }
 
-// MeshBoardTaskCompletedPayload is the payload of mesh_board_task_completed.
+// MeshBoardTaskCompletedPayload is the payload of mesh_board_task_completed; ArtifactRefs as in a progress.
 type MeshBoardTaskCompletedPayload struct {
-	AssignmentID string   `json:"assignment_id"`
-	Result       string   `json:"result,omitempty"`
-	ArtifactRefs []string `json:"artifact_refs,omitempty"`
+	AssignmentID string    `json:"assignment_id"`
+	Result       string    `json:"result,omitempty"`
+	ArtifactRefs *[]string `json:"artifact_refs,omitempty"`
 	MeshBoardTaskMeta
 }
 
@@ -277,7 +278,7 @@ func startBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c 
 	return nil
 }
 
-func progressBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, _ *Control, p MeshBoardTaskProgressedPayload) error {
+func progressBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c *Control, p MeshBoardTaskProgressedPayload) error {
 	a, err := ownActiveAssignment(task, actor, p.AssignmentID)
 	if err != nil {
 		return err
@@ -286,9 +287,7 @@ func progressBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID,
 		return err
 	}
 	a.Progress = p.Text
-	if p.ArtifactRefs != nil {
-		a.ArtifactRefs = p.ArtifactRefs
-	}
+	reportBoardTask(a, c.Seq, p.ArtifactRefs)
 	return nil
 }
 
@@ -302,10 +301,21 @@ func completeBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID,
 	}
 	a.State, a.CompletedSeq = agentcomm.AssignmentDone, c.Seq
 	a.Result = p.Result
-	if p.ArtifactRefs != nil {
-		a.ArtifactRefs = p.ArtifactRefs
-	}
+	reportBoardTask(a, c.Seq, p.ArtifactRefs)
 	return nil
+}
+
+// reportBoardTask records a progress or done report of a at seq: the report's refs, when it carries them,
+// replace a's — an empty list clears them.
+func reportBoardTask(a *agentcomm.BoardTaskAssignment, seq uint64, refs *[]string) {
+	a.ReportedSeq = seq
+	if refs == nil {
+		return
+	}
+	a.ArtifactRefs = nil
+	if len(*refs) > 0 {
+		a.ArtifactRefs = *refs
+	}
 }
 
 func releaseBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c *Control, p MeshBoardTaskReleasedPayload) error {
@@ -393,9 +403,13 @@ func checkBoardTaskText(key string, texts ...string) error {
 }
 
 // checkBoardTaskReport checks a progress or result report: its text and artifact references.
-func checkBoardTaskReport(key, text string, refs []string) error {
+func checkBoardTaskReport(key, text string, reportRefs *[]string) error {
 	if err := checkBoardTaskText(key, text); err != nil {
 		return err
+	}
+	var refs []string
+	if reportRefs != nil {
+		refs = *reportRefs
 	}
 	if len(refs) > agentcomm.MaxArtifactRefs {
 		return boardTaskBadInput("task %s report has %d artifact refs, more than %d", key, len(refs), agentcomm.MaxArtifactRefs)

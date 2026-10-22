@@ -86,18 +86,20 @@ type MeshPublishRequest struct {
 
 // MeshBoardTaskRequest is the body of a typed board task change on both surfaces — POST
 // /api/agent-mesh/task and POST /api/mesh/tasks. It has no actor field: the caller is the token's participant
-// or the human. Text is the progress text, the done result or the release/reopen reason.
+// or the human. Text is the progress text, the done result or the release/reopen reason. The pointer fields
+// keep whether the body has them: an edit changes only the fields it has ("" clears the description or the
+// coordinator), and a progress or done with "artifact_refs": [] clears the assignment's refs.
 type MeshBoardTaskRequest struct {
-	Action          string   `json:"action"`
-	Key             string   `json:"key"`
-	ExpectedVersion int      `json:"expected_version"`
-	AssignmentID    string   `json:"assignment_id,omitempty"`
-	To              string   `json:"to,omitempty"`
-	Title           string   `json:"title,omitempty"`
-	Description     string   `json:"description,omitempty"`
-	Coordinator     string   `json:"coordinator,omitempty"`
-	Text            string   `json:"text,omitempty"`
-	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
+	Action          string    `json:"action"`
+	Key             string    `json:"key"`
+	ExpectedVersion int       `json:"expected_version"`
+	AssignmentID    string    `json:"assignment_id,omitempty"`
+	To              string    `json:"to,omitempty"`
+	Title           *string   `json:"title,omitempty"`
+	Description     *string   `json:"description,omitempty"`
+	Coordinator     *string   `json:"coordinator,omitempty"`
+	Text            string    `json:"text,omitempty"`
+	ArtifactRefs    *[]string `json:"artifact_refs,omitempty"`
 }
 
 // decodeBoardTaskBody reads a board task change's body; it has answered the request itself when ok is false.

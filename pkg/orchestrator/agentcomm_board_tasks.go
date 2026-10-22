@@ -47,14 +47,16 @@ type BoardTaskRequest struct {
 	// AssignmentID names the assignment a start, progress, done or release acts on.
 	AssignmentID string
 	// To is the participant (id or alias) an assign — or a create that assigns at once — hands the task to.
-	To          string
-	Title       string
-	Description string
-	// CoordinatorID is the task's coordinator (id or alias) on a create or an edit.
-	CoordinatorID string
+	To string
+	// Title, Description and CoordinatorID (the coordinator's id or alias) describe the task on a create; an
+	// edit changes only the ones that are set, and an empty description or coordinator clears it.
+	Title         *string
+	Description   *string
+	CoordinatorID *string
 	// Text is the progress text, the done result or the release/reopen reason.
-	Text         string
-	ArtifactRefs []string
+	Text string
+	// ArtifactRefs of a progress or done replace the assignment's refs; an empty list clears them, nil keeps them.
+	ArtifactRefs *[]string
 }
 
 // BoardTaskReceipt describes the task right after the operation it answers — rebuilt from that operation's
@@ -328,16 +330,18 @@ type boardTaskChange struct {
 // new assignment's id is derived from the request id, so a retry plans the same one.
 func (o *Orchestrator) planBoardTaskChanges(req BoardTaskRequest, resolve func(name string) (agentcomm.ParticipantID, error)) ([]boardTaskChange, error) {
 	newAssignmentID := deriveMeshID("board-assignment", req.OperationID)
-	text, refs := o.RedactSecrets(req.Text), o.redactAll(req.ArtifactRefs)
+	text, refs := o.RedactSecrets(req.Text), o.redactRefs(req.ArtifactRefs)
 
 	var changes []boardTaskChange
 	switch req.Action {
 	case BoardTaskCreate:
-		coordinator, err := resolve(req.CoordinatorID)
+		coordinator, err := resolve(valueOf(req.CoordinatorID))
 		if err != nil {
 			return nil, err
 		}
-		p := &state.MeshBoardTaskCreatedPayload{Title: o.RedactSecrets(req.Title), Description: o.RedactSecrets(req.Description), CoordinatorID: coordinator}
+		p := &state.MeshBoardTaskCreatedPayload{
+			Title: o.RedactSecrets(valueOf(req.Title)), Description: o.RedactSecrets(valueOf(req.Description)), CoordinatorID: coordinator,
+		}
 		changes = append(changes, boardTaskChange{"mesh_board_task_created", p, &p.MeshBoardTaskMeta})
 		if req.To != "" {
 			assignee, err := resolve(req.To)
@@ -389,30 +393,48 @@ func (o *Orchestrator) planBoardTaskChanges(req BoardTaskRequest, resolve func(n
 	return changes, nil
 }
 
-// boardTaskEdit is the payload of an edit: the request's non-empty fields are the ones it changes.
+// boardTaskEdit is the payload of an edit: the request's set fields are the ones it changes.
 func (o *Orchestrator) boardTaskEdit(req BoardTaskRequest, resolve func(name string) (agentcomm.ParticipantID, error)) (*state.MeshBoardTaskEditedPayload, error) {
-	coordinator, err := resolve(req.CoordinatorID)
-	if err != nil {
-		return nil, err
-	}
-	p := &state.MeshBoardTaskEditedPayload{
-		Title:         nonEmpty(o.RedactSecrets(req.Title)),
-		Description:   nonEmpty(o.RedactSecrets(req.Description)),
-		CoordinatorID: nonEmpty(coordinator),
-	}
-	if p.Title == nil && p.Description == nil && p.CoordinatorID == nil {
+	if req.Title == nil && req.Description == nil && req.CoordinatorID == nil {
 		return nil, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf("an edit of task %s changes nothing", req.Key)}
+	}
+	p := &state.MeshBoardTaskEditedPayload{Title: o.redactSet(req.Title), Description: o.redactSet(req.Description)}
+	if req.CoordinatorID != nil {
+		coordinator, err := resolve(*req.CoordinatorID) // an empty name stays empty: the coordinator is cleared
+		if err != nil {
+			return nil, err
+		}
+		p.CoordinatorID = &coordinator
 	}
 	return p, nil
 }
 
-// nonEmpty is a pointer to v, or nil when v is the zero value.
-func nonEmpty[T comparable](v T) *T {
-	var zero T
-	if v == zero {
+// redactSet is the redacted text, or nil when it is not set.
+func (o *Orchestrator) redactSet(text *string) *string {
+	if text == nil {
 		return nil
 	}
-	return &v
+	return new(o.RedactSecrets(*text))
+}
+
+// redactRefs is the redacted artifact refs, or nil when they are not set; a set empty list stays an empty list.
+func (o *Orchestrator) redactRefs(refs *[]string) *[]string {
+	if refs == nil {
+		return nil
+	}
+	out := make([]string, len(*refs))
+	for i, ref := range *refs {
+		out[i] = o.RedactSecrets(ref)
+	}
+	return &out
+}
+
+// valueOf is *s, or "" when s is nil.
+func valueOf(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // boardTaskParticipant resolves a participant id or alias to the participant's id; an empty name stays
