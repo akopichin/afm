@@ -261,7 +261,7 @@ func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskReq
 }
 
 // planCoordinatorNotice plans the notice of a done, release or reopen to the task's coordinator — none when
-// there is no coordinator or it made the change itself. A notice that cannot be delivered now is skipped:
+// there is no coordinator, it made the change itself or it is the user (the operator sees the TaskView directly). A notice that cannot be delivered now is skipped:
 // meta.NoticeSkipped says why. The notice opens its own thread, so a full conversation with the coordinator never skips it.
 func (o *Orchestrator) planCoordinatorNotice(rs state.RunState, req BoardTaskRequest, meta *state.MeshBoardTaskMeta) ([]plannedMessage, error) {
 	task := rs.Assistants.Mesh.BoardTasks[req.Key]
@@ -269,7 +269,7 @@ func (o *Orchestrator) planCoordinatorNotice(rs state.RunState, req BoardTaskReq
 		return nil, nil
 	}
 	coordinator := task.Coordinator()
-	if coordinator == "" || coordinator == req.Actor {
+	if coordinator == "" || coordinator == req.Actor || coordinator == agentcomm.UserParticipantID {
 		return nil, nil
 	}
 	body := o.messageBody(coordinatorNoticeBody(*task, req))

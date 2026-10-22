@@ -698,3 +698,41 @@ func TestBoardTaskCoordinatorNoticeOpensOwnThreadWhenConversationFull(t *testing
 		})
 	}
 }
+
+func TestBoardTaskNoNoticeWhenCoordinatorIsUser(t *testing.T) {
+	user := string(agentcomm.UserParticipantID)
+	cases := map[string]func(t *testing.T, o *Orchestrator) (assignmentID string, version int){
+		"create with coordinator user": func(t *testing.T, o *Orchestrator) (string, int) {
+			r := mustBoardTask(t, o, BoardTaskRequest{
+				OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/u", Title: new("U"),
+				CoordinatorID: &user, To: string(boardTaskB),
+			})
+			return r.AssignmentID, 2
+		},
+		"edit sets coordinator user": func(t *testing.T, o *Orchestrator) (string, int) {
+			r := mustBoardTask(t, o, BoardTaskRequest{
+				OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/u", Title: new("U"), To: string(boardTaskB),
+			})
+			mustBoardTask(t, o, BoardTaskRequest{
+				OperationID: "edit", Action: BoardTaskEdit, Actor: boardTaskA, Key: "task/u", ExpectedVersion: 2, CoordinatorID: &user,
+			})
+			return r.AssignmentID, 3
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			o, store := newBoardTaskTestOrchestrator(t)
+			assignmentID, version := setup(t, o)
+			before := len(store.Snapshot().Assistants.Mesh.Messages)
+			done := mustBoardTask(t, o, BoardTaskRequest{
+				OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: "task/u", ExpectedVersion: version, AssignmentID: assignmentID,
+			})
+			if done.MessageID != "" || done.NoticeSkipped != "" {
+				t.Fatalf("done receipt = %+v, want no notice to the user", done)
+			}
+			if after := len(store.Snapshot().Assistants.Mesh.Messages); after != before {
+				t.Fatalf("messages = %d, want %d (no notice to the operator)", after, before)
+			}
+		})
+	}
+}
