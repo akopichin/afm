@@ -320,13 +320,12 @@ func TestReleaseDockerTags(t *testing.T) {
 	if script == "" {
 		t.Fatal("Docker build step missing")
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// A shell function, not a fake executable in PATH: a just-written file can briefly fail to exec (ETXTBSY
+	// while a parallel test forks), and sh then silently falls through to the real docker later in PATH.
+	fakeDocker := "docker() { printf '%s\\n' \"$@\"; }\n"
 	for _, tag := range []string{"v1.2.18", "v2.0.0-alpha.1", "v2.0.0-beta.1"} {
-		cmd := releaseCommand(dir, "sh", "-eu", "-c", script)
-		cmd.Env = append(cmd.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "RELEASE_TAG="+tag)
+		cmd := releaseCommand(t.TempDir(), "sh", "-eu", "-c", fakeDocker+script)
+		cmd.Env = append(cmd.Env, "RELEASE_TAG="+tag)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("Docker step: %v\n%s", err, out)
