@@ -608,7 +608,9 @@ func (s *Store) appendControlLocked(c *Control) error {
 
 	nextSeq := s.lastSeq + 1
 	c.Seq = nextSeq
-	c.Time = clk().Now().Round(0) // wall clock only, as on replay (see Apply)
+	// Wall clock only, in UTC — exactly what replay decodes from the journal: a Local time keeps time.Local as
+	// its location, a decoded "Z" time gets time.UTC, and projections stop being DeepEqual on a UTC host.
+	c.Time = commitTime(clk().Now())
 
 	// Validate BEFORE ever touching the journal: a record that fails projection must never be durably
 	// written, or every future replay of this run would fail the exact same way forever (unlike a torn tail
