@@ -48,6 +48,10 @@ type MeshState struct {
 
 	Board map[string]*MeshBoardEntry `json:"board,omitempty"`
 
+	// BoardTasks holds the typed board tasks by key (mesh_board_tasks.go). A task is replaced with a changed
+	// copy, never changed in place.
+	BoardTasks map[string]*agentcomm.BoardTask `json:"board_tasks,omitempty"`
+
 	// BoardTaskProtocol is the run-level typed-board-task protocol recorded when the run was created.
 	// Empty means a legacy run (journal written before the marker existed): it is never migrated on resume.
 	BoardTaskProtocol agentcomm.BoardTaskProtocol `json:"board_task_protocol,omitempty"`
@@ -65,6 +69,7 @@ func newMeshState() MeshState {
 		Receipts:         map[agentcomm.MessageID]map[agentcomm.ParticipantID]agentcomm.DeliveryStatus{},
 		Waits:            map[agentcomm.WaitID]*MeshWait{},
 		Board:            map[string]*MeshBoardEntry{},
+		BoardTasks:       map[string]*agentcomm.BoardTask{},
 	}
 }
 
@@ -107,6 +112,9 @@ func (ms MeshState) clone() MeshState {
 	out.WaitOrder = append([]agentcomm.WaitID(nil), ms.WaitOrder...)
 	for key, e := range ms.Board {
 		out.Board[key] = e
+	}
+	for key, task := range ms.BoardTasks {
+		out.BoardTasks[key] = task
 	}
 	return out
 }
@@ -154,6 +162,12 @@ func (ms MeshState) deepClone() MeshState {
 			ni[k] = v
 		}
 		out.Receipts[mid] = ni
+	}
+	// Board task handlers already replace a task with a changed copy; the full copy here keeps a batch safe
+	// even if a later handler changes one in place.
+	for key, task := range ms.BoardTasks {
+		nt := cloneBoardTask(*task)
+		out.BoardTasks[key] = &nt
 	}
 	return out
 }

@@ -144,6 +144,15 @@ const (
 	kindMeshWaitResolved         = "mesh_wait_resolved"
 	kindMeshBoardPublished       = "mesh_board_published"
 	kindMeshBoardProtocolSet     = "mesh_board_protocol_set"
+	// Typed board task effects (mesh_board_tasks.go).
+	kindMeshBoardTaskCreated    = "mesh_board_task_created"
+	kindMeshBoardTaskAssigned   = "mesh_board_task_assigned"
+	kindMeshBoardTaskStarted    = "mesh_board_task_started"
+	kindMeshBoardTaskProgressed = "mesh_board_task_progressed"
+	kindMeshBoardTaskCompleted  = "mesh_board_task_completed"
+	kindMeshBoardTaskReleased   = "mesh_board_task_released"
+	kindMeshBoardTaskReopened   = "mesh_board_task_reopened"
+	kindMeshBoardTaskEdited     = "mesh_board_task_edited"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
@@ -180,6 +189,14 @@ var controlKinds = map[string]bool{
 	kindMeshWaitResolved:         true,
 	kindMeshBoardPublished:       true,
 	kindMeshBoardProtocolSet:     true,
+	kindMeshBoardTaskCreated:     true,
+	kindMeshBoardTaskAssigned:    true,
+	kindMeshBoardTaskStarted:     true,
+	kindMeshBoardTaskProgressed:  true,
+	kindMeshBoardTaskCompleted:   true,
+	kindMeshBoardTaskReleased:    true,
+	kindMeshBoardTaskReopened:    true,
+	kindMeshBoardTaskEdited:      true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

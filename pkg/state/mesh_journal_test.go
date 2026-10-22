@@ -423,6 +423,39 @@ func TestMesh_AllKindsRegisteredAndDispatchable(t *testing.T) {
 		kindMeshBoardProtocolSet: func(t *testing.T, as *AssistantsState) *Control {
 			return &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)}
 		},
+		kindMeshBoardTaskCreated: func(t *testing.T, as *AssistantsState) *Control {
+			mustApply(t, as, &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)})
+			return boardTaskControl(t, kindMeshBoardTaskCreated, "user", MeshBoardTaskCreatedPayload{Title: "T"})
+		},
+		kindMeshBoardTaskAssigned: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, false)
+			return boardTaskControl(t, kindMeshBoardTaskAssigned, "user", MeshBoardTaskAssignedPayload{AssignmentID: "a1", ParticipantID: "a", MeshBoardTaskMeta: meta(1)})
+		},
+		kindMeshBoardTaskStarted: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, true)
+			return boardTaskControl(t, kindMeshBoardTaskStarted, "a", MeshBoardTaskStartedPayload{AssignmentID: "a1", MeshBoardTaskMeta: meta(2)})
+		},
+		kindMeshBoardTaskProgressed: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, true)
+			return boardTaskControl(t, kindMeshBoardTaskProgressed, "a", MeshBoardTaskProgressedPayload{AssignmentID: "a1", Text: "half", MeshBoardTaskMeta: meta(2)})
+		},
+		kindMeshBoardTaskCompleted: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, true)
+			return boardTaskControl(t, kindMeshBoardTaskCompleted, "a", MeshBoardTaskCompletedPayload{AssignmentID: "a1", Result: "ok", MeshBoardTaskMeta: meta(2)})
+		},
+		kindMeshBoardTaskReleased: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, true)
+			return boardTaskControl(t, kindMeshBoardTaskReleased, "user", MeshBoardTaskReleasedPayload{AssignmentID: "a1", MeshBoardTaskMeta: meta(2)})
+		},
+		kindMeshBoardTaskReopened: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, true)
+			return boardTaskControl(t, kindMeshBoardTaskReopened, "user", MeshBoardTaskReopenedPayload{MeshBoardTaskMeta: meta(2)})
+		},
+		kindMeshBoardTaskEdited: func(t *testing.T, as *AssistantsState) *Control {
+			seedBoardTask(t, as, false)
+			title := "New"
+			return boardTaskControl(t, kindMeshBoardTaskEdited, "user", MeshBoardTaskEditedPayload{Title: &title, MeshBoardTaskMeta: meta(1)})
+		},
 	}
 
 	for _, kind := range extractMeshKindConstants(t) {

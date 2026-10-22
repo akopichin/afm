@@ -590,6 +590,22 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyMeshBoardPublished(as, c, dryRun)
 	case kindMeshBoardProtocolSet:
 		return applyMeshBoardProtocolSet(as, c, dryRun)
+	case kindMeshBoardTaskCreated:
+		return applyBoardTaskEffect(as, c, dryRun, createBoardTask)
+	case kindMeshBoardTaskAssigned:
+		return applyBoardTaskEffect(as, c, dryRun, assignBoardTask)
+	case kindMeshBoardTaskStarted:
+		return applyBoardTaskEffect(as, c, dryRun, startBoardTask)
+	case kindMeshBoardTaskProgressed:
+		return applyBoardTaskEffect(as, c, dryRun, progressBoardTask)
+	case kindMeshBoardTaskCompleted:
+		return applyBoardTaskEffect(as, c, dryRun, completeBoardTask)
+	case kindMeshBoardTaskReleased:
+		return applyBoardTaskEffect(as, c, dryRun, releaseBoardTask)
+	case kindMeshBoardTaskReopened:
+		return applyBoardTaskEffect(as, c, dryRun, reopenBoardTask)
+	case kindMeshBoardTaskEdited:
+		return applyBoardTaskEffect(as, c, dryRun, editBoardTask)
 	default:
 		// controlKinds already rejected anything not listed above during decodeLine — reaching here would
 		// be a registry/switch drift, not a journal problem.

@@ -40,6 +40,16 @@ func boardRejected(code assistants.ErrorCode, sentinel error, format string, arg
 // (AGENTS.md's "[AFM image: <name>]").
 const boardArtifactRefPrefix = "artifacts/"
 
+// checkBoardArtifactRefs rejects an artifact ref that does not start with boardArtifactRefPrefix.
+func checkBoardArtifactRefs(key string, refs []string) error {
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref, boardArtifactRefPrefix) {
+			return boardRejected(assistants.CodeInvalidRequest, ErrBoardArtifactRefOutsideRun, "artifact ref %q of board key %s is outside this run's artifacts", ref, key)
+		}
+	}
+	return nil
+}
+
 // MeshBoardPublishedPayload is the mesh_board_published control record's payload — decoded here by
 // applyMeshBoardPublished. The key is Target.BoardKey; the publishing author is Target.ParticipantID (reusing
 // the field T1.1/T1.2 already use for "the participant this record is about").
@@ -79,10 +89,8 @@ func applyMeshBoardPublished(as *AssistantsState, c *Control, dryRun bool) error
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode mesh_board_published payload: %w", err)
 	}
-	for _, ref := range p.ArtifactRefs {
-		if !strings.HasPrefix(ref, boardArtifactRefPrefix) {
-			return boardRejected(assistants.CodeInvalidRequest, ErrBoardArtifactRefOutsideRun, "artifact ref %q of board key %s is outside this run's artifacts", ref, key)
-		}
+	if err := checkBoardArtifactRefs(key, p.ArtifactRefs); err != nil {
+		return err
 	}
 
 	existing, exists := as.Mesh.Board[key]
