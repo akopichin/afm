@@ -78,7 +78,8 @@ func TestBoardTaskAssignSendsMessageAtomically(t *testing.T) {
 	if !ok || a.AssignedSeq != r.Seq {
 		t.Fatalf("assignment = %+v, want it committed at seq %d with the message", a, r.Seq)
 	}
-	want := fmt.Sprintf("Board task %s assigned to you (assignment %s): API. Run `afm agent task start --key %s --assignment-id %s --expected-version 2` when you begin, `done` when finished.",
+	// The title is the author's text: it stays in <your_board_tasks>, never in a message that may come from the user.
+	want := fmt.Sprintf("Board task %s assigned to you (assignment %s). Run `afm agent task start --key %s --assignment-id %s --expected-version 2` when you begin, `done` when finished.",
 		key, r.AssignmentID, key, r.AssignmentID)
 	if m.Body != want {
 		t.Fatalf("body = %q, want %q", m.Body, want)
@@ -408,7 +409,7 @@ func TestBoardTaskRedactsSecrets(t *testing.T) {
 	assignmentID := deriveMeshID("board-assignment", "create")
 	createReq := BoardTaskRequest{
 		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, To: string(boardTaskB),
-		Title:       straddling(fmt.Sprintf("Board task %s assigned to you (assignment %s): ", key, assignmentID)),
+		Title:       "title " + planted,
 		Description: "uses " + planted,
 	}
 	created := mustBoardTask(t, o, createReq)
@@ -452,6 +453,21 @@ func TestBoardTaskRedactsSecrets(t *testing.T) {
 		if again := mustBoardTask(t, o, r.req); again != r.want {
 			t.Errorf("retry of %s = %+v, want the original %+v", r.req.OperationID, again, r.want)
 		}
+	}
+}
+
+// A key is never redacted (it names the task everywhere), so a key holding a registered secret is refused.
+func TestBoardTaskRejectsKeyWithSecret(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	const planted = "s3cr3t-board-value-1234"
+	o.opts.SecretValues = []string{planted}
+
+	_, err := o.BoardTask(context.Background(), BoardTaskRequest{
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: "task/" + planted, Title: "Leak",
+	})
+	requireRejection(t, err, assistants.CodeInvalidRequest)
+	if len(store.Snapshot().Assistants.Mesh.BoardTasks) != 0 {
+		t.Fatal("a task with a secret in its key was created")
 	}
 }
 

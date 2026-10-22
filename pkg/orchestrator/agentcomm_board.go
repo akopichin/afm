@@ -204,7 +204,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 			continue
 		}
 		seen[recipient] = true
-		n, skip, err := o.planNoticeTo(rs, req.OperationID, req.Author, recipient, body, req.Actor)
+		n, skip, err := o.planNoticeTo(rs, req.OperationID, req.Author, recipient, body)
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +220,7 @@ func (o *Orchestrator) planBoardNotices(rs state.RunState, req PublishRequest, s
 // planNoticeTo plans one message from sender to recipient in a fresh/reused conversation thread.
 // skip != "" means it cannot be delivered now (unreachable, inbox full, thread full) — not an error.
 // The message id is derived from opID and the recipient, so a retry plans the same message.
-func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, recipient agentcomm.ParticipantID, body string, actor state.Actor) (msg plannedMessage, skip string, err error) {
+func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, recipient agentcomm.ParticipantID, body string) (msg plannedMessage, skip string, err error) {
 	p, ok := o.liveParticipant(rs, recipient)
 	switch {
 	case !ok:
@@ -231,7 +231,7 @@ func (o *Orchestrator) planNoticeTo(rs state.RunState, opID string, sender, reci
 	if err := rs.Assistants.Mesh.CheckInboxCapacity([]agentcomm.ParticipantID{recipient}, false); err != nil {
 		return plannedMessage{}, err.Error(), nil
 	}
-	send := SendRequest{Sender: sender, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body, Actor: actor}
+	send := SendRequest{Sender: sender, Recipients: []agentcomm.ParticipantID{recipient}, Kind: agentcomm.MessageKindRequest, Body: body}
 	var open []state.Effect
 	members := conversationMembers(sender, []agentcomm.ParticipantID{recipient})
 	if th := openThreadWithMembers(rs, members, sender, ""); th != "" {

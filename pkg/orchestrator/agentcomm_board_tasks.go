@@ -106,6 +106,10 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 	if !boardTasksEnabled(o.opts.Store.Snapshot()) {
 		return BoardTaskReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: "board tasks are not enabled for this run"}
 	}
+	// The key names the task in the journal, prompts and messages and is never redacted, so it must hold no secret.
+	if o.RedactSecrets(req.Key) != req.Key {
+		return BoardTaskReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "the task key contains a secret value"}
+	}
 	runCtx := o.runContext(ctx) // a recipient's turn must not die with the HTTP request.
 
 	const maxAttempts = 3
@@ -197,10 +201,12 @@ func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskReq
 	if err := assignableParticipant(rs, a.ParticipantID); err != nil {
 		return nil, err
 	}
-	body := o.messageBody(fmt.Sprintf("Board task %s assigned to you (assignment %s): %s. "+
+	// The title is left out: it is the task author's text, and this message may come from the user. The
+	// assignee reads it in <your_board_tasks>, marked as data.
+	body := o.messageBody(fmt.Sprintf("Board task %s assigned to you (assignment %s). "+
 		"Run `afm agent task start --key %s --assignment-id %s --expected-version %d` when you begin, `done` when finished.",
-		req.Key, a.AssignmentID, after.Title, req.Key, a.AssignmentID, after.Version))
-	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, a.ParticipantID, body, boardTaskActor(req.Actor))
+		req.Key, a.AssignmentID, req.Key, a.AssignmentID, after.Version))
+	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, a.ParticipantID, body)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +229,7 @@ func (o *Orchestrator) planCoordinatorNotice(rs state.RunState, req BoardTaskReq
 		return nil, nil
 	}
 	body := o.messageBody(coordinatorNoticeBody(*task, req))
-	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, coordinator, body, boardTaskActor(req.Actor))
+	msg, skip, err := o.planNoticeTo(rs, req.OperationID, req.Actor, coordinator, body)
 	if err != nil {
 		return nil, err
 	}
