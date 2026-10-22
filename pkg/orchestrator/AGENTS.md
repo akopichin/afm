@@ -64,6 +64,9 @@
 Required-гейт использует durable verdict/waiver текущего поколения; advisory
 задачи не блокируют root. См. также [state/AGENTS.md](../state/AGENTS.md).
 
+- Состояние задач Board никогда не выводится из свободного текста; actor и
+  assignee — это durable ID участника, а не имя или текст сообщения.
+
 ## Memory and tests
 
 - Live reflection только собирает датасеты; финализация памяти выполняется в
