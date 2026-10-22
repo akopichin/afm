@@ -505,3 +505,33 @@ func TestProjectEffectsShowsStateAfterCommitWithoutChangingIt(t *testing.T) {
 		t.Fatalf("projecting a start of a missing assignment: error = %v, want an invalid_status rejection", err)
 	}
 }
+
+// Format rules (key, text sizes, artifact refs, required title and text) are checked only when a new record is
+// admitted: a journal written before a rule was tightened still replays.
+func TestBoardTaskFormatRulesOnlyAdmitNewRecords(t *testing.T) {
+	long := string(make([]byte, agentcomm.MaxBodyBytes+1))
+	badKey := boardTaskControl(t, kindMeshBoardTaskCreated, "user", MeshBoardTaskCreatedPayload{Title: "T"})
+	badKey.Target.BoardKey = "task/fix login"
+	cases := map[string]*Control{
+		"key":         badKey,
+		"empty title": boardTaskControl(t, kindMeshBoardTaskEdited, "user", MeshBoardTaskEditedPayload{Title: new(string), MeshBoardTaskMeta: meta(2)}),
+		"long text": boardTaskControl(t, kindMeshBoardTaskProgressed, "a", MeshBoardTaskProgressedPayload{
+			AssignmentID: "a1", Text: long, MeshBoardTaskMeta: meta(2),
+		}),
+		"artifact ref": boardTaskControl(t, kindMeshBoardTaskProgressed, "a", MeshBoardTaskProgressedPayload{
+			AssignmentID: "a1", Text: "half", ArtifactRefs: []string{"/etc/passwd"}, MeshBoardTaskMeta: meta(2),
+		}),
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			as := newAssistantsState()
+			seedBoardTask(t, &as, true)
+			if err := dispatchControlKind(&as, c, true); err == nil {
+				t.Fatal("a new record breaking the format rule was admitted")
+			}
+			if err := dispatchControlKind(&as, c, false); err != nil {
+				t.Fatalf("replay of a journaled record: %v", err)
+			}
+		})
+	}
+}

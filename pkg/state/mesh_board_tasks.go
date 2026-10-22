@@ -10,7 +10,9 @@ import (
 )
 
 // Typed board tasks (agentcomm.BoardTask) change only through the mesh_board_task_* effects below. Every rule
-// is checked here, in the projection, so a live commit and a journal replay decide exactly the same way.
+// is checked here, in the projection, so a live commit and a journal replay decide exactly the same way — except
+// the format rules (checkFormat: key, sizes, artifact refs, required texts), which only a new record must pass,
+// so a journal written before such a rule was tightened still replays.
 // Target.BoardKey names the task and Target.ParticipantID is the actor making the change.
 
 var (
@@ -36,6 +38,9 @@ type MeshBoardTaskMeta struct {
 }
 
 func (m MeshBoardTaskMeta) boardTaskMeta() MeshBoardTaskMeta { return m }
+
+// checkFormat is the format check of a payload without texts; the payloads with texts have their own.
+func (MeshBoardTaskMeta) checkFormat(string) error { return nil }
 
 // MeshBoardTaskCreatedPayload is the payload of mesh_board_task_created; the actor becomes the task author.
 type MeshBoardTaskCreatedPayload struct {
@@ -99,11 +104,54 @@ type MeshBoardTaskEditedPayload struct {
 
 type boardTaskPayload interface {
 	boardTaskMeta() MeshBoardTaskMeta
+	// checkFormat checks the payload's texts and artifact refs on task key: only a new record must pass it.
+	checkFormat(key string) error
 }
 
-// applyBoardTaskEffect is the part every board task effect shares: it checks the protocol, the key and the
-// expected version, lets change check and apply its own rule to a copy of the task, and stores the copy with
-// the next version. The stored task is never changed in place, so earlier snapshots keep their own view.
+func (p MeshBoardTaskCreatedPayload) checkFormat(key string) error {
+	if p.Title == "" {
+		return boardTaskBadInput("board task %s needs a title", key)
+	}
+	return checkBoardTaskText(key, p.Title, p.Description)
+}
+
+func (p MeshBoardTaskProgressedPayload) checkFormat(key string) error {
+	if p.Text == "" {
+		return boardTaskBadInput("progress on task %s needs a text", key)
+	}
+	return checkBoardTaskReport(key, p.Text, p.ArtifactRefs)
+}
+
+func (p MeshBoardTaskCompletedPayload) checkFormat(key string) error {
+	return checkBoardTaskReport(key, p.Result, p.ArtifactRefs)
+}
+
+func (p MeshBoardTaskReleasedPayload) checkFormat(key string) error {
+	return checkBoardTaskText(key, p.Reason)
+}
+
+func (p MeshBoardTaskReopenedPayload) checkFormat(key string) error {
+	return checkBoardTaskText(key, p.Reason)
+}
+
+func (p MeshBoardTaskEditedPayload) checkFormat(key string) error {
+	if p.Title != nil && *p.Title == "" {
+		return boardTaskBadInput("board task %s needs a title", key)
+	}
+	return checkBoardTaskText(key, deref(p.Title), deref(p.Description))
+}
+
+// deref is *s, or "" for nil.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// applyBoardTaskEffect is the part every board task effect shares: it checks the protocol, the format of a new
+// record and the expected version, lets change check and apply its own rule to a copy of the task, and stores
+// the copy with the next version. The stored task is never changed in place, so earlier snapshots keep their own view.
 func applyBoardTaskEffect[P boardTaskPayload](
 	as *AssistantsState, c *Control, dryRun bool,
 	change func(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c *Control, p P) error,
@@ -113,15 +161,20 @@ func applyBoardTaskEffect[P boardTaskPayload](
 	if as.Mesh.BoardTaskProtocol != agentcomm.BoardTaskProtocolTypedV1 {
 		return boardRejected(assistants.CodeInvalidStatus, ErrBoardTaskProtocol, "%s: this run does not use typed board tasks", c.Kind)
 	}
-	if !agentcomm.ValidBoardTaskKey(key) {
-		return boardTaskBadInput("%s: invalid task key %q", c.Kind, key)
-	}
 	if actor == "" {
 		return fmt.Errorf("%s: empty target participant_id", c.Kind)
 	}
 	var p P
 	if err := decodePayload(c.Payload, &p); err != nil {
 		return fmt.Errorf("decode %s payload: %w", c.Kind, err)
+	}
+	if as.admittingNewRecord(dryRun) {
+		if !agentcomm.ValidBoardTaskKey(key) {
+			return boardTaskBadInput("%s: invalid task key %q", c.Kind, key)
+		}
+		if err := p.checkFormat(key); err != nil {
+			return err
+		}
 	}
 	task, err := boardTaskToChange(as.Mesh, c.Kind, key, p.boardTaskMeta().ExpectedVersion)
 	if err != nil {
@@ -137,9 +190,6 @@ func applyBoardTaskEffect[P boardTaskPayload](
 		return nil
 	}
 	as.Mesh.BoardTasks[key] = &task
-	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
-		return as.meshWaitSatisfied(w)
-	})
 	return nil
 }
 
@@ -164,12 +214,6 @@ func boardTaskToChange(ms MeshState, kind, key string, expectedVersion int) (age
 }
 
 func createBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c *Control, p MeshBoardTaskCreatedPayload) error {
-	if p.Title == "" {
-		return boardTaskBadInput("board task %s needs a title", task.Key)
-	}
-	if err := checkBoardTaskText(task.Key, p.Title, p.Description); err != nil {
-		return err
-	}
 	task.AuthorID = actor
 	task.CoordinatorID = p.CoordinatorID
 	task.Title = p.Title
@@ -239,12 +283,6 @@ func progressBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID,
 	if err := requireUnfinished(task.Key, *a); err != nil {
 		return err
 	}
-	if p.Text == "" {
-		return boardTaskBadInput("progress on task %s needs a text", task.Key)
-	}
-	if err := checkBoardTaskReport(task.Key, p.Text, p.ArtifactRefs); err != nil {
-		return err
-	}
 	a.Progress = p.Text
 	if p.ArtifactRefs != nil {
 		a.ArtifactRefs = p.ArtifactRefs
@@ -260,9 +298,6 @@ func completeBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID,
 	if err := requireUnfinished(task.Key, *a); err != nil {
 		return err
 	}
-	if err := checkBoardTaskReport(task.Key, p.Result, p.ArtifactRefs); err != nil {
-		return err
-	}
 	a.State, a.CompletedSeq = agentcomm.AssignmentDone, c.Seq
 	a.Result = p.Result
 	if p.ArtifactRefs != nil {
@@ -274,9 +309,6 @@ func completeBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID,
 func releaseBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c *Control, p MeshBoardTaskReleasedPayload) error {
 	if !mayManageBoardTask(*task, actor) {
 		return boardTaskForbidden("%s may not release assignments of task %s: only the user or its coordinator can", actor, task.Key)
-	}
-	if err := checkBoardTaskText(task.Key, p.Reason); err != nil {
-		return err
 	}
 	i := slices.IndexFunc(task.Assignments, func(a agentcomm.BoardTaskAssignment) bool { return a.ID == p.AssignmentID })
 	if i < 0 {
@@ -294,9 +326,6 @@ func reopenBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, c
 	if !mayManageBoardTask(*task, actor) {
 		return boardTaskForbidden("%s may not reopen task %s: only the user or its coordinator can", actor, task.Key)
 	}
-	if err := checkBoardTaskText(task.Key, p.Reason); err != nil {
-		return err
-	}
 	for _, a := range task.Assignments {
 		task.History = append(task.History, endedAssignment(a, agentcomm.AssignmentReopened, actor, p.Reason, c.Seq))
 	}
@@ -310,18 +339,9 @@ func editBoardTask(task *agentcomm.BoardTask, actor agentcomm.ParticipantID, _ *
 		return boardTaskForbidden("%s may not edit task %s: only the user or its coordinator can", actor, task.Key)
 	}
 	if p.Title != nil {
-		if *p.Title == "" {
-			return boardTaskBadInput("board task %s needs a title", task.Key)
-		}
-		if err := checkBoardTaskText(task.Key, *p.Title); err != nil {
-			return err
-		}
 		task.Title = *p.Title
 	}
 	if p.Description != nil {
-		if err := checkBoardTaskText(task.Key, *p.Description); err != nil {
-			return err
-		}
 		task.Description = *p.Description
 	}
 	if p.CoordinatorID != nil {

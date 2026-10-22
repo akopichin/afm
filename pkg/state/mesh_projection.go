@@ -143,8 +143,8 @@ func (ms MeshState) ThreadView(id agentcomm.ThreadID) (agentcomm.Thread, bool) {
 // AssistantsState.deepClone's doc comment): every value this package's handlers mutate IN PLACE (as opposed to
 // replacing wholesale with a new pointer) gets its own independent copy, so a later effect in the same batch
 // can fail and leave the real state completely untouched. Threads (Status), Waits (Status) and each message's
-// Receipts sub-map are mutated in place; Participants/Messages/Board entries are always replaced wholesale by
-// their handlers, so clone()'s shared pointers already suffice for them.
+// Receipts sub-map are mutated in place; Participants/Messages/Board entries and BoardTasks are always replaced
+// wholesale by their handlers, so clone()'s shared pointers already suffice for them.
 func (ms MeshState) deepClone() MeshState {
 	out := ms.clone()
 	for id, th := range ms.Threads {
@@ -162,12 +162,6 @@ func (ms MeshState) deepClone() MeshState {
 			ni[k] = v
 		}
 		out.Receipts[mid] = ni
-	}
-	// Board task handlers already replace a task with a changed copy; the full copy here keeps a batch safe
-	// even if a later handler changes one in place.
-	for key, task := range ms.BoardTasks {
-		nt := cloneBoardTask(*task)
-		out.BoardTasks[key] = &nt
 	}
 	return out
 }
