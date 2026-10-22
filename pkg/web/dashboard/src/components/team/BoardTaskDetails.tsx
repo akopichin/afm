@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { MeshApiError, postMeshTask, type MeshBoardTaskAssignment, type MeshParticipant } from '../../api/mesh-client'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
-import { splitTaskText, type BoardTask } from '../../lib/board-tasks'
+import type { BoardTask } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
 import { ASSIGNEE_STATE_LABEL, BoardTaskStatusBadge, findTaskCard, isTypedTask } from './BoardTaskCard'
@@ -29,7 +29,7 @@ export type BoardTaskDetailsProps = {
 export function BoardTaskDetails({ task, participants, stages = [], onChanged = () => {}, onClose, active = true }: BoardTaskDetailsProps): ReactElement {
   const modalRef = useRef<HTMLDivElement | null>(null)
   const typed = isTypedTask(task)
-  const { title, description } = typed ? task : splitTaskText(task.text)
+  const { title, description } = task
 
   // Focus moves into the dialog and, on close, goes back to the task's card — the one the board shows now.
   useModalDialog(modalRef, onClose, () => findTaskCard(task.key), active)
@@ -66,7 +66,7 @@ type BodyProps = { task: BoardTask; participants: MeshParticipant[] }
 function LegacyTaskBody({ task, participants }: BodyProps): ReactElement {
   return (
     <>
-      {task.entry.artifact_refs && task.entry.artifact_refs.length > 0 && (
+      {task.entry?.artifact_refs && task.entry.artifact_refs.length > 0 && (
         <ul className="team-board-entry-artifacts" aria-label="Artifacts">
           {task.entry.artifact_refs.map((ref) => (
             <li key={ref}>{ref}</li>

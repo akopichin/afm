@@ -215,7 +215,9 @@ describe('typed tasks', () => {
     const t = taskFromView(view({ assignments: [assignment], description: 'dump rows' }))
     expect(t.status).toBe('todo')
     expect(t.assignees).toEqual([{ id: 'run:gone', state: 'assigned' }])
-    expect([t.title, t.description, t.version, t.text]).toEqual(['CSV export', 'dump rows', 3, 'CSV export — dump rows'])
+    expect([t.title, t.description, t.version]).toEqual(['CSV export', 'dump rows', 3])
+    // A typed task is not dressed up as a legacy one: no synthesized entry or text.
+    expect([t.entry, t.text]).toEqual([undefined, undefined])
     expect(t.assignments).toEqual([assignment])
     expect(t.reports).toEqual([])
   })

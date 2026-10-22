@@ -207,7 +207,8 @@ export type BoardTaskReceipt = {
   seq: number
   message_id?: string
   thread_id?: string
-  notice_skipped?: boolean
+  // notice_skipped — why the assignee was not notified (the task itself was still created).
+  notice_skipped?: string
 }
 
 // MeshSendReceipt mirrors server.MeshSendReceipt.

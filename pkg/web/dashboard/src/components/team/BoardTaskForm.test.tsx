@@ -19,6 +19,35 @@ describe('BoardTaskForm', () => {
     vi.restoreAllMocks()
   })
 
+  describe('task key', () => {
+    async function keyPostedFor(title: string): Promise<string> {
+      const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/x', 'x'))
+      const onPosted = vi.fn()
+      render(<BoardTaskForm participants={participants} stages={stages} onPosted={onPosted} />)
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: title } })
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(onPosted).toHaveBeenCalled())
+      return publish.mock.calls[0]?.[0].key ?? ''
+    }
+
+    test('a long Cyrillic title is cut by code point so the key stays within 200 bytes', async () => {
+      const key = await keyPostedFor('Экспорт данных в формат таблицы '.repeat(10))
+      expect(new TextEncoder().encode(key).length).toBeLessThanOrEqual(200)
+      expect(key).toMatch(/^task\/[\p{L}\p{N}._-]+$/u)
+      expect(key.endsWith('-')).toBe(false)
+      expect(key.startsWith('task/экспорт-данных-в-формат')).toBe(true)
+    })
+
+    test('punctuation and emoji become separators; the key only has letters, digits and . _ -', async () => {
+      const key = await keyPostedFor('Fix: v1.2_beta 🚀 (urgent)!')
+      expect(key).toBe('task/fix-v1.2_beta-urgent')
+    })
+
+    test('a title of only symbols falls back to task/untitled', async () => {
+      expect(await keyPostedFor('🚀🚀')).toBe('task/untitled')
+    })
+  })
+
   test('posting publishes task/<slug> with title and details, and reports that nothing is left', async () => {
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/csv-export', 'x'))
     const onPosted = vi.fn()

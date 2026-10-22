@@ -19,13 +19,33 @@ export type BoardTaskFormProps = {
   onPosted: (draftRemains: boolean) => void
 }
 
-// taskKey — "task/<slug>" for a task title ("CSV export" → "task/csv-export").
+// The server's whole key is at most 200 bytes (agentcomm.ValidBoardTaskKey).
+const MAX_KEY_BYTES = 200
+const utf8 = new TextEncoder()
+
+// truncateToBytes — the longest prefix of text that fits maxBytes of UTF-8, cut between code points.
+function truncateToBytes(text: string, maxBytes: number): string {
+  let bytes = 0
+  let out = ''
+  for (const char of text) {
+    bytes += utf8.encode(char).length
+    if (bytes > maxBytes) break
+    out += char
+  }
+  return out
+}
+
+// taskKey — "task/<slug>" for a task title ("CSV export" → "task/csv-export"). The slug has only the characters the
+// server accepts in a task key (letters, digits, "." "_" "-") and keeps the whole key within MAX_KEY_BYTES.
 function taskKey(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .trim()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
+  const slug = truncateToBytes(
+    title
+      .toLowerCase()
+      .trim()
+      .replace(/[^\p{L}\p{N}._-]+/gu, '-')
+      .replace(/^-+/, ''),
+    MAX_KEY_BYTES - TASK_PREFIX.length,
+  ).replace(/-+$/, '')
   return TASK_PREFIX + (slug !== '' ? slug : 'untitled')
 }
 

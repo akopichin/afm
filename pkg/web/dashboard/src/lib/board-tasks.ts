@@ -2,8 +2,7 @@
 // A task is a direct "task/<slug>" key; agents report under "<task key>/<alias>". Only reports whose author is an
 // agent of the roster drive the task's status, so the operator cannot move a card by publishing a child key.
 
-import type { MeshBoardEntry, MeshBoardTask, MeshBoardTaskAssignment, MeshParticipant } from '../api/mesh-client'
-import type { MeshBoard } from '../hooks/use-mesh'
+import type { MeshBoardEntry, MeshBoardSnapshot, MeshBoardTask, MeshBoardTaskAssignment, MeshParticipant } from '../api/mesh-client'
 
 export type BoardTaskStatus = 'todo' | 'in_progress' | 'done'
 
@@ -26,12 +25,12 @@ export type BoardAssignee = {
 
 export type BoardTask = {
   key: string
-  // entry — the task entry itself (author, version, artifacts); text — its original text.
-  entry: MeshBoardEntry
-  text: string
+  // entry / text — the task entry itself (author, version, artifacts) and its original text; a legacy task only.
+  entry?: MeshBoardEntry
+  text?: string
   status: BoardTaskStatus
   assignees: BoardAssignee[]
-  // reports — each agent's latest report under the task plus every non-agent entry, oldest first.
+  // reports — each agent's latest report under the task plus every non-agent entry, oldest first; empty on a typed task.
   reports: BoardReport[]
   // author — who posted the task.
   author: string
@@ -162,21 +161,16 @@ function latestNote(assignments: MeshBoardTaskAssignment[]): string | undefined 
 }
 
 // taskFromView — a typed task of the server as a BoardTask. Assignees are the active assignments (a participant
-// outside the roster stays; the views resolve names). The synthesized entry/text keep the legacy consumers working:
-// text is "<title> — <description>", and there are no reports.
+// outside the roster stays; the views resolve names). A typed task has no entry, text or reports of its own.
 export function taskFromView(view: MeshBoardTask): BoardTask {
-  const description = view.description ?? ''
-  const text = description === '' ? view.title : `${view.title}${TITLE_SEPARATOR}${description}`
   return {
     key: view.key,
-    entry: { author_id: view.author_id, key: view.key, version: view.version, status: text, seq: view.updated_seq, ts: view.updated_at },
-    text,
     status: view.status,
     assignees: view.assignments.map((a) => ({ id: a.participant_id, state: a.state })),
     reports: [],
     author: view.author_id,
     title: view.title,
-    description,
+    description: view.description ?? '',
     note: latestNote(view.assignments),
     version: view.version,
     assignments: view.assignments,
@@ -185,18 +179,18 @@ export function taskFromView(view: MeshBoardTask): BoardTask {
 }
 
 // boardTasksOf — the board's tasks: the typed ones when the run keeps them, else the legacy "task/<slug>" entries.
-export function boardTasksOf(board: Pick<MeshBoard, 'entries' | 'tasks' | 'typedTasks'>, participants: MeshParticipant[]): BoardTask[] {
+export function boardTasksOf(board: MeshBoardSnapshot, participants: MeshParticipant[]): BoardTask[] {
   return board.typedTasks ? board.tasks.map(taskFromView) : boardTasks(board.entries, participants)
 }
 
 // boardTaskCountOf — the Board tab's badge for either mode.
-export function boardTaskCountOf(board: Pick<MeshBoard, 'entries' | 'tasks' | 'typedTasks'>): number {
+export function boardTaskCountOf(board: MeshBoardSnapshot): number {
   return board.typedTasks ? board.tasks.length : boardTaskCount(board.entries)
 }
 
 // boardTopLevelOf — the entries Team shows on their own. With typed tasks, the "task/" keys are the tasks' storage
 // and are not entries to show, so only the facts remain.
-export function boardTopLevelOf(board: Pick<MeshBoard, 'entries' | 'typedTasks'>): MeshBoardEntry[] {
+export function boardTopLevelOf(board: Pick<MeshBoardSnapshot, 'entries' | 'typedTasks'>): MeshBoardEntry[] {
   const entries = board.typedTasks ? board.entries.filter((e) => !e.key.startsWith(TASK_PREFIX)) : board.entries
   return boardTopLevel(entries)
 }

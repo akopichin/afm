@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { splitTaskText, type BoardAssignee, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
+import { type BoardAssignee, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { senderLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 
@@ -61,8 +61,7 @@ export type BoardTaskCardProps = {
 // status is whatever the agents' reports (legacy) or assignments (typed) say, the card never changes it.
 export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps): ReactElement {
   const typed = isTypedTask(task)
-  // A typed task carries its own fields; a legacy one keeps them in its text.
-  const { title, description } = typed ? task : splitTaskText(task.text)
+  const { title, description } = task
   const latest = task.reports.at(-1)
   const reportCount = task.reports.length
   return (

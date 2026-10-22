@@ -4,7 +4,7 @@ import type { MeshBoard } from '../../hooks/use-mesh'
 import { boardTasksOf, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { participantLabel, senderLabel } from '../../lib/mesh-roster'
-import { BOARD_STATUS_LABEL, BoardTaskCard, isTypedTask } from './BoardTaskCard'
+import { BOARD_STATUS_LABEL, BoardTaskCard } from './BoardTaskCard'
 import { BoardTaskDetails } from './BoardTaskDetails'
 import { BoardTaskForm } from './BoardTaskForm'
 import type { RunTeamListStage } from './RunTeamList'
@@ -23,9 +23,8 @@ export type BoardViewProps = {
   stages: RunTeamListStage[]
 }
 
-// searchText — what a search looks in: the key and the task's text (a typed task's own fields and latest note).
+// searchText — what a search looks in: the key, the task's own fields and its latest note.
 function searchText(task: BoardTask): string {
-  if (!isTypedTask(task)) return `${task.key}\n${task.text}`
   return [task.key, task.title, task.description, task.note ?? ''].join('\n')
 }
 
