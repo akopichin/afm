@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Improvement: emulate reduced motion, contrast and forced colors in the managed browser
+
+The pinned Chrome DevTools MCP is now 1.12.0. Its `emulate` tool adds
+`prefersReducedMotion`, `prefersContrast` and `forcedColors`, so a live run can
+check these media features in the real browser. Native runs need the new version
+on `PATH`: `npm install -g chrome-devtools-mcp@1.12.0`. See
+[Managed browser](docs/browser.md#supported-hosts).
+
 ### Fix: link answers to agent requests in the Team tab
 
 In Team conversations, the latest unanswered agent request is now preselected

@@ -62,7 +62,7 @@ RUN npm install -g @openai/codex@${CODEX_VERSION}
 
 # Chrome DevTools MCP for the managed browser capability. Must match
 # browser.PinnedChromeDevtoolsMCPVersion.
-ARG CHROME_DEVTOOLS_MCP_VERSION=1.10.1
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.12.0
 RUN npm install -g chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}
 
 # afm binary
