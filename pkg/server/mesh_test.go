@@ -75,6 +75,11 @@ type fakeMeshActions struct {
 	attachCalls int
 	lastAttach  MeshAttachAndSendRequest
 	attachErr   error
+
+	boardTasksEnabled bool
+	tasks             []agentcomm.BoardTaskView
+	lastTaskReqID     string
+	lastTask          MeshBoardTaskRequest
 }
 
 func newFakeMeshActions() *fakeMeshActions {
@@ -184,6 +189,19 @@ func (f *fakeMeshActions) Board(ctx context.Context, key string) ([]agentcomm.Bo
 	return f.board, nil
 }
 
+func (f *fakeMeshActions) BoardTasksEnabled() bool { return f.boardTasksEnabled }
+
+func (f *fakeMeshActions) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	return f.tasks, nil
+}
+
+func (f *fakeMeshActions) BoardTask(ctx context.Context, requestID string, req MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastTaskReqID, f.lastTask = requestID, req
+	return orchestrator.BoardTaskReceipt{Key: req.Key, Version: 1, Status: agentcomm.BoardTaskTodo, Seq: 9}, nil
+}
+
 func (f *fakeMeshActions) AttachAndSend(ctx context.Context, requestID string, req MeshAttachAndSendRequest) (MeshAttachAndSendResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -248,6 +266,7 @@ func TestMesh_404WhenCapabilityOff(t *testing.T) {
 		{http.MethodPost, "/api/mesh/threads/mt-1/close"},
 		{http.MethodPost, "/api/mesh/threads/mt-1/topic"},
 		{http.MethodPost, "/api/mesh/attach-and-send"},
+		{http.MethodPost, "/api/mesh/tasks"},
 	}
 	for _, c := range paths {
 		req := httptest.NewRequest(c.method, c.path, nil)
@@ -837,5 +856,102 @@ func TestMesh_PublishBoard(t *testing.T) {
 	}
 	if got := fake.lastPublish.Notify; len(got) != 2 || got[0] != "run:t-1" || got[1] != "stage:api" {
 		t.Fatalf("Service got notify %v, want both participants", got)
+	}
+}
+
+func TestMesh_Board_LegacyRunHasNoTypedTasks(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/board", nil, false)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if typed, ok := resp["typed_tasks"].(bool); !ok || typed {
+		t.Fatalf("typed_tasks = %v, want false", resp["typed_tasks"])
+	}
+	if _, ok := resp["tasks"]; ok {
+		t.Fatalf("a legacy board must not carry tasks: %v", resp)
+	}
+}
+
+func TestMesh_Board_TypedRunCarriesTasks(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.boardTasksEnabled = true
+	fake.tasks = []agentcomm.BoardTaskView{{BoardTask: agentcomm.BoardTask{Key: "task/api", Title: "API", Version: 1}, Status: agentcomm.BoardTaskTodo}}
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/board", nil, false)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if typed, ok := resp["typed_tasks"].(bool); !ok || !typed {
+		t.Fatalf("typed_tasks = %v, want true", resp["typed_tasks"])
+	}
+	tasks, _ := resp["tasks"].([]any)
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %v, want 1", resp["tasks"])
+	}
+	task, _ := tasks[0].(map[string]any)
+	if task["status"] != "todo" || task["key"] != "task/api" {
+		t.Fatalf("task = %v, want task/api with status todo", task)
+	}
+	if assignments, ok := task["assignments"].([]any); !ok || len(assignments) != 0 {
+		t.Fatalf("assignments = %#v, want an empty array", task["assignments"])
+	}
+}
+
+// A typed run with no tasks yet shows an empty list, not null.
+func TestMesh_Board_TypedRunWithoutTasksShowsEmptyList(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.boardTasksEnabled = true
+	srv := newTestServer(t, Config{Mesh: fake})
+	w, _ := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/board", nil, false)
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"tasks":[]`)) {
+		t.Fatalf("body = %s, want tasks []", w.Body.String())
+	}
+}
+
+func TestMesh_BoardTask_RequiresOriginAndRequestID(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.boardTasksEnabled = true
+	srv := newTestServer(t, Config{Mesh: fake})
+
+	w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/tasks", map[string]any{"request_id": "req-t1", "action": "create", "key": "task/api", "title": "API"}, false)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("no Origin: HTTP %d, want 403", w.Code)
+	}
+	w, _ = doMeshJSON(t, srv, http.MethodPost, "/api/mesh/tasks", map[string]any{"action": "create", "key": "task/api", "title": "API"}, true)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("no request_id: HTTP %d, want 400", w.Code)
+	}
+	if fake.lastTask.Action != "" {
+		t.Fatalf("a rejected request must not reach the Service: %+v", fake.lastTask)
+	}
+	w, resp := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/tasks", map[string]any{
+		"request_id": "req-t1", "action": "create", "key": "task/api", "title": "API", "to": "docs", "actor": "helper:x",
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	want := MeshBoardTaskRequest{Action: "create", Key: "task/api", Title: "API", To: "docs"}
+	if fake.lastTaskReqID != "req-t1" || !reflect.DeepEqual(fake.lastTask, want) {
+		t.Fatalf("Service got %q %+v, want req-t1 %+v", fake.lastTaskReqID, fake.lastTask, want)
+	}
+	if resp["key"] != "task/api" || resp["status"] != "todo" {
+		t.Fatalf("response = %v, want the receipt", resp)
+	}
+}
+
+func TestStatus_BoardTasksCapability(t *testing.T) {
+	if decodeStatus(t, newTestServer(t, Config{})).Capabilities.BoardTasks {
+		t.Error("board_tasks must be false without Mesh")
+	}
+	legacy := newFakeMeshActions()
+	if decodeStatus(t, newTestServer(t, Config{Mesh: legacy})).Capabilities.BoardTasks {
+		t.Error("board_tasks must be false on a legacy run")
+	}
+	typed := newFakeMeshActions()
+	typed.boardTasksEnabled = true
+	if !decodeStatus(t, newTestServer(t, Config{Mesh: typed})).Capabilities.BoardTasks {
+		t.Error("board_tasks must be true on a typed run")
 	}
 }

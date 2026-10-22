@@ -149,3 +149,21 @@ func (a agentMeshActions) Board(ctx context.Context, key string) ([]agentcomm.Bo
 	}
 	return page.Entries, nil
 }
+
+func (a agentMeshActions) BoardTask(ctx context.Context, requestID, actor string, req server.MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error) {
+	return a.orch.BoardTask(ctx, boardTaskRequest(requestID, agentcomm.ParticipantID(actor), req))
+}
+
+func (a agentMeshActions) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	return a.orch.BoardTasks(ctx, key)
+}
+
+// boardTaskRequest is the Service's form of a board task change made by actor — the token's participant or
+// the human; the body never names the actor.
+func boardTaskRequest(requestID string, actor agentcomm.ParticipantID, req server.MeshBoardTaskRequest) orchestrator.BoardTaskRequest {
+	return orchestrator.BoardTaskRequest{
+		OperationID: requestID, Action: orchestrator.BoardTaskAction(req.Action), Actor: actor, Key: req.Key,
+		ExpectedVersion: req.ExpectedVersion, AssignmentID: req.AssignmentID, To: req.To, Title: req.Title,
+		Description: req.Description, CoordinatorID: req.Coordinator, Text: req.Text, ArtifactRefs: req.ArtifactRefs,
+	}
+}

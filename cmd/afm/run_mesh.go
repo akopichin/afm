@@ -175,6 +175,17 @@ func (a meshActions) PublishBoard(ctx context.Context, requestID string, req ser
 	})
 }
 
+func (a meshActions) BoardTasksEnabled() bool { return a.orch.BoardTasksEnabled() }
+
+func (a meshActions) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	return a.orch.BoardTasks(ctx, key)
+}
+
+// BoardTask makes a board task change as the human operator (meshUIParticipant).
+func (a meshActions) BoardTask(ctx context.Context, requestID string, req server.MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error) {
+	return a.orch.BoardTask(ctx, boardTaskRequest(requestID, meshUIParticipant, req))
+}
+
 func (a meshActions) AttachAndSend(ctx context.Context, requestID string, req server.MeshAttachAndSendRequest) (server.MeshAttachAndSendResult, error) {
 	result, err := a.orch.AttachAndSend(ctx, orchestrator.AttachAndSendRequest{
 		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Scope: assistants.Scope(req.Scope),

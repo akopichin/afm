@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 // fakeAgentMeshActions is an in-memory AgentMeshActions good enough to exercise the HTTP handlers without a
@@ -29,6 +30,12 @@ type fakeAgentMeshActions struct {
 	// T8.4 private-thread isolation test below; every other test leaves it nil (Thread always succeeds), the
 	// same zero-value-means-"not exercised" convention lastSender/lastSend already follow.
 	threadMembers map[string][]string
+
+	lastTaskReqID string
+	lastTaskActor string
+	lastTask      MeshBoardTaskRequest
+	lastTasksKey  string
+	tasks         []agentcomm.BoardTaskView
 }
 
 func newFakeAgentMeshActions() *fakeAgentMeshActions {
@@ -105,6 +112,20 @@ func (f *fakeAgentMeshActions) PublishBoard(ctx context.Context, requestID, acto
 
 func (f *fakeAgentMeshActions) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
 	return nil, nil
+}
+
+func (f *fakeAgentMeshActions) BoardTask(ctx context.Context, requestID, actor string, req MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastTaskReqID, f.lastTaskActor, f.lastTask = requestID, actor, req
+	return orchestrator.BoardTaskReceipt{Key: req.Key, Version: req.ExpectedVersion + 1, Status: agentcomm.BoardTaskTodo, Seq: 7}, nil
+}
+
+func (f *fakeAgentMeshActions) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastTasksKey = key
+	return f.tasks, nil
 }
 
 func TestAgentMesh_404WhenCapabilityOff(t *testing.T) {
@@ -355,5 +376,80 @@ func TestAgentMesh_NoAttachOrCapabilityWideningRouteExposedToAgents(t *testing.T
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("%s: HTTP %d, want 404 — the agent-facing surface must never expose a capability-widening route", action, w.Code)
 		}
+	}
+}
+
+// A board task change is made by the token's participant: an actor or participant_id in the body is ignored,
+// and every other body field reaches the Service as sent.
+func TestAgentMesh_BoardTask_ActorFromTokenOnly(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "helper:a"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	body, _ := json.Marshal(map[string]any{
+		"request_id": "req-t1", "action": "done", "key": "task/api", "expected_version": 3, "assignment_id": "as-1",
+		"to": "docs", "title": "T", "description": "D", "coordinator": "user", "text": "finished", "artifact_refs": []string{"a.md"},
+		"actor": "helper:b", "participant_id": "helper:b",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/agent-mesh/task", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok-A")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.lastTaskActor != "helper:a" {
+		t.Fatalf("actor = %q, want the token's helper:a", fake.lastTaskActor)
+	}
+	want := MeshBoardTaskRequest{
+		Action: "done", Key: "task/api", ExpectedVersion: 3, AssignmentID: "as-1", To: "docs", Title: "T",
+		Description: "D", Coordinator: "user", Text: "finished", ArtifactRefs: []string{"a.md"},
+	}
+	if fake.lastTaskReqID != "req-t1" || !reflect.DeepEqual(fake.lastTask, want) {
+		t.Fatalf("Service got %q %+v, want req-t1 %+v", fake.lastTaskReqID, fake.lastTask, want)
+	}
+	var receipt orchestrator.BoardTaskReceipt
+	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil || receipt.Key != "task/api" || receipt.Version != 4 || receipt.Seq != 7 {
+		t.Fatalf("receipt = %+v (%v), want the Service's receipt", receipt, err)
+	}
+}
+
+func TestAgentMesh_BoardTask_RequiresRequestID(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "helper:a"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	body, _ := json.Marshal(map[string]any{"action": "claim", "key": "task/api"})
+	req := httptest.NewRequest(http.MethodPost, "/api/agent-mesh/task", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer tok-A")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("HTTP %d, want 400 without request_id", w.Code)
+	}
+	if fake.lastTask.Action != "" {
+		t.Fatalf("a request without request_id must not reach the Service: %+v", fake.lastTask)
+	}
+}
+
+// GET tasks passes the decoded key through and shows a task without assignments with an empty array, never null.
+func TestAgentMesh_BoardTasks_KeyAndEmptyAssignments(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "helper:a"
+	fake.tasks = []agentcomm.BoardTaskView{{BoardTask: agentcomm.BoardTask{Key: "task/a b", Title: "T", Version: 1}, Status: agentcomm.BoardTaskTodo}}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent-mesh/tasks?key=task%2Fa+b", nil)
+	req.Header.Set("Authorization", "Bearer tok-A")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.lastTasksKey != "task/a b" {
+		t.Fatalf("key = %q, want task/a b", fake.lastTasksKey)
+	}
+	if !strings.Contains(w.Body.String(), `"assignments":[]`) || !strings.Contains(w.Body.String(), `"status":"todo"`) {
+		t.Fatalf("body = %s, want assignments [] and status todo", w.Body.String())
 	}
 }

@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // Agent Mesh Phase 3, T3.2: the afm agent CLI's HTTP client over /api/agent-mesh/*. Reads the 0600
@@ -75,6 +78,21 @@ func newAgentRequestID() string {
 	buf := make([]byte, 12)
 	_, _ = rand.Read(buf)
 	return "cli-" + hex.EncodeToString(buf)
+}
+
+// requestIDFlag registers --request-id on a mutating command: a fresh id unless the agent repeats the id of
+// an earlier call to retry that same change.
+func requestIDFlag(cmd *cobra.Command) *string {
+	return cmd.Flags().String("request-id", newAgentRequestID(), "idempotency key: repeat it to retry the same change safely")
+}
+
+// withKeyQuery adds ?key= to path, escaped so a key with '+', '&', '#' or spaces reaches the server as typed.
+// An empty key adds nothing.
+func withKeyQuery(path, key string) string {
+	if key == "" {
+		return path
+	}
+	return path + "?key=" + url.QueryEscape(key)
 }
 
 // do issues one agent-mesh HTTP call. body (if non-nil) is marshaled as the JSON request body; out (if

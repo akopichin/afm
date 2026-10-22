@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/orchestrator"
 )
 
 // Agent Mesh Phase 3, T3.1: /api/agent-mesh/* — the agent-facing adapter over the shared Service. The actor
@@ -34,6 +35,10 @@ type AgentMeshActions interface {
 	CancelWait(ctx context.Context, requestID, actor, waitID, reason string) error
 	PublishBoard(ctx context.Context, requestID, actor string, req MeshPublishRequest) (agentcomm.BoardEntry, error)
 	Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error)
+	// BoardTask makes one change to a typed board task as actor.
+	BoardTask(ctx context.Context, requestID, actor string, req MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error)
+	// BoardTasks returns every typed board task, or only the one under key.
+	BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error)
 }
 
 // MeshSendRequest is POST /api/agent-mesh/{send,reply}'s body. Kind is set by the handler for /reply
@@ -77,6 +82,51 @@ type MeshPublishRequest struct {
 	Status          string   `json:"status"`
 	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
 	ExpectedVersion int      `json:"expected_version"`
+}
+
+// MeshBoardTaskRequest is the body of a typed board task change on both surfaces — POST
+// /api/agent-mesh/task and POST /api/mesh/tasks. It has no actor field: the caller is the token's participant
+// or the human. Text is the progress text, the done result or the release/reopen reason.
+type MeshBoardTaskRequest struct {
+	Action          string   `json:"action"`
+	Key             string   `json:"key"`
+	ExpectedVersion int      `json:"expected_version"`
+	AssignmentID    string   `json:"assignment_id,omitempty"`
+	To              string   `json:"to,omitempty"`
+	Title           string   `json:"title,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	Coordinator     string   `json:"coordinator,omitempty"`
+	Text            string   `json:"text,omitempty"`
+	ArtifactRefs    []string `json:"artifact_refs,omitempty"`
+}
+
+// decodeBoardTaskBody reads a board task change's body; it has answered the request itself when ok is false.
+func decodeBoardTaskBody(w http.ResponseWriter, r *http.Request) (requestID string, req MeshBoardTaskRequest, ok bool) {
+	var body struct {
+		RequestID string `json:"request_id"`
+		MeshBoardTaskRequest
+	}
+	if !decodeAgentMeshBody(w, r, &body) {
+		return "", MeshBoardTaskRequest{}, false
+	}
+	if body.RequestID == "" {
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
+		return "", MeshBoardTaskRequest{}, false
+	}
+	return body.RequestID, body.MeshBoardTaskRequest, true
+}
+
+// boardTasksForClient shows a task without active assignments with an empty assignments array, never null,
+// and no tasks as an empty list.
+func boardTasksForClient(tasks []agentcomm.BoardTaskView) []agentcomm.BoardTaskView {
+	out := make([]agentcomm.BoardTaskView, len(tasks))
+	for i, t := range tasks {
+		if t.Assignments == nil {
+			t.Assignments = []agentcomm.BoardTaskAssignment{}
+		}
+		out[i] = t
+	}
+	return out
 }
 
 // authenticateAgentMesh resolves the bearer token from r's Authorization header. A missing, malformed or
@@ -132,6 +182,10 @@ func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentMeshThread(w, r, actor)
 	case action == "board" && r.Method == http.MethodGet:
 		s.handleAgentMeshBoard(w, r)
+	case action == "tasks" && r.Method == http.MethodGet:
+		s.handleAgentMeshBoardTasks(w, r)
+	case action == "task" && r.Method == http.MethodPost:
+		s.handleAgentMeshBoardTask(w, r, actor)
 	case action == "send" && r.Method == http.MethodPost:
 		s.handleAgentMeshSend(w, r, actor, "")
 	case action == agentMeshActionReply && r.Method == http.MethodPost:
@@ -210,6 +264,28 @@ func (s *Server) handleAgentMeshBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"entries": entries})
+}
+
+func (s *Server) handleAgentMeshBoardTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := s.agentMesh.BoardTasks(r.Context(), r.URL.Query().Get("key"))
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"tasks": boardTasksForClient(tasks)})
+}
+
+func (s *Server) handleAgentMeshBoardTask(w http.ResponseWriter, r *http.Request, actor string) {
+	requestID, req, ok := decodeBoardTaskBody(w, r)
+	if !ok {
+		return
+	}
+	receipt, err := s.agentMesh.BoardTask(r.Context(), requestID, actor, req)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, receipt)
 }
 
 func (s *Server) handleAgentMeshSend(w http.ResponseWriter, r *http.Request, actor, forcedKind string) {

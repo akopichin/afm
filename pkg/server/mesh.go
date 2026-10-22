@@ -44,6 +44,12 @@ type MeshActions interface {
 	// tells req.Notify about it with one message.
 	PublishBoard(ctx context.Context, requestID string, req MeshBoardPublishRequest) (agentcomm.BoardEntry, error)
 	AttachAndSend(ctx context.Context, requestID string, req MeshAttachAndSendRequest) (MeshAttachAndSendResult, error)
+	// BoardTasksEnabled reports whether the run keeps typed board tasks (created with the typed protocol).
+	BoardTasksEnabled() bool
+	// BoardTasks returns every typed board task, or only the one under key.
+	BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error)
+	// BoardTask makes one change to a typed board task as the human operator.
+	BoardTask(ctx context.Context, requestID string, req MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error)
 }
 
 // MeshOpenThreadRequest is POST /api/mesh/threads' body (opening a NEW thread — orchestrator.OpenThread).
@@ -129,6 +135,7 @@ type MeshAttachAndSendResult struct {
 const (
 	meshSegParticipants   = "participants"
 	meshSegBoard          = "board"
+	meshSegTasks          = "tasks"
 	meshSegInbox          = "inbox"
 	meshSegThreads        = "threads"
 	meshSegAttachAndSend  = "attach-and-send"
@@ -155,6 +162,8 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshBoard(w, r)
 	case path == meshSegBoard && r.Method == http.MethodPost:
 		s.handleMeshPublishBoard(w, r)
+	case path == meshSegTasks && r.Method == http.MethodPost:
+		s.handleMeshBoardTask(w, r)
 	case path == meshSegInbox && r.Method == http.MethodGet:
 		s.handleMeshInbox(w, r)
 	case path == meshSegThreads && r.Method == http.MethodGet:
@@ -208,13 +217,44 @@ func (s *Server) handleMeshThreads(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, page)
 }
 
+// handleMeshBoard is GET /api/mesh/board: the board's entries (all, or the one under ?key=) and typed_tasks —
+// whether the run keeps typed board tasks; when it does, tasks lists every one of them whatever the key.
 func (s *Server) handleMeshBoard(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.mesh.Board(r.Context(), r.URL.Query().Get("key"))
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"entries": entries})
+	resp := map[string]any{"entries": entries, "typed_tasks": false}
+	if s.mesh.BoardTasksEnabled() {
+		tasks, err := s.mesh.BoardTasks(r.Context(), "")
+		if err != nil {
+			s.writeAssistantError(w, err)
+			return
+		}
+		resp["typed_tasks"] = true
+		resp["tasks"] = boardTasksForClient(tasks)
+	}
+	writeJSON(w, resp)
+}
+
+// handleMeshBoardTask is POST /api/mesh/tasks: the human operator's change to a typed board task. Same-origin
+// and request_id rules as every other dashboard mutation.
+func (s *Server) handleMeshBoardTask(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOK(r) {
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	requestID, req, ok := decodeBoardTaskBody(w, r)
+	if !ok {
+		return
+	}
+	receipt, err := s.mesh.BoardTask(r.Context(), requestID, req)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, receipt)
 }
 
 func (s *Server) handleMeshInbox(w http.ResponseWriter, r *http.Request) {

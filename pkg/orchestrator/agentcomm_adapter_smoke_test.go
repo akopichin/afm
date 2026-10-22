@@ -224,6 +224,23 @@ func (a smokeMeshActions) Board(ctx context.Context, key string) ([]agentcomm.Bo
 	return page.Entries, nil
 }
 
+func (a smokeMeshActions) BoardTask(ctx context.Context, requestID, actor string, req server.MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error) {
+	return a.orch.BoardTask(ctx, smokeBoardTaskRequest(requestID, agentcomm.ParticipantID(actor), req))
+}
+
+func (a smokeMeshActions) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	return a.orch.BoardTasks(ctx, key)
+}
+
+// smokeBoardTaskRequest mirrors cmd/afm's boardTaskRequest for this package's test adapters.
+func smokeBoardTaskRequest(requestID string, actor agentcomm.ParticipantID, req server.MeshBoardTaskRequest) orchestrator.BoardTaskRequest {
+	return orchestrator.BoardTaskRequest{
+		OperationID: requestID, Action: orchestrator.BoardTaskAction(req.Action), Actor: actor, Key: req.Key,
+		ExpectedVersion: req.ExpectedVersion, AssignmentID: req.AssignmentID, To: req.To, Title: req.Title,
+		Description: req.Description, CoordinatorID: req.Coordinator, Text: req.Text, ArtifactRefs: req.ArtifactRefs,
+	}
+}
+
 var _ server.AgentMeshActions = smokeMeshActions{}
 
 // smokeReplyBody is the fixed, greppable marker the test's simulated peer reply carries — asserted against

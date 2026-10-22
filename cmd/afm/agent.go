@@ -32,7 +32,7 @@ func newAgentCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newAgentWhoamiCmd(), newAgentListCmd(), newAgentSendCmd(), newAgentReplyCmd(),
-		newAgentInboxCmd(), newAgentAckCmd(), newAgentWaitCmd(), newAgentBoardCmd(),
+		newAgentInboxCmd(), newAgentAckCmd(), newAgentWaitCmd(), newAgentBoardCmd(), newAgentTaskCmd(),
 	)
 	return cmd
 }
@@ -107,6 +107,7 @@ func splitCSV(s string) []string {
 
 func newAgentSendCmd() *cobra.Command {
 	var thread, to, kind, body, inReplyTo, artifacts string
+	var requestID *string
 	c := &cobra.Command{
 		Use:          "send",
 		Short:        "Send a message to one or more colleagues",
@@ -114,7 +115,7 @@ func newAgentSendCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				reqBody := map[string]any{
-					"request_id": newAgentRequestID(), "thread_id": thread, "recipient_ids": splitCSV(to),
+					"request_id": *requestID, "thread_id": thread, "recipient_ids": splitCSV(to),
 					"kind": kind, "body": body, "artifact_refs": splitCSV(artifacts),
 				}
 				if inReplyTo != "" {
@@ -134,6 +135,7 @@ func newAgentSendCmd() *cobra.Command {
 	c.Flags().StringVar(&body, "body", "", "message body (required)")
 	c.Flags().StringVar(&inReplyTo, "in-reply-to", "", "id of the message this one answers (required when kind=reply)")
 	c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
+	requestID = requestIDFlag(c)
 	return c
 }
 
@@ -282,12 +284,8 @@ func newAgentBoardGetCmd() *cobra.Command {
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
-				path := "board"
-				if key != "" {
-					path += "?key=" + key
-				}
 				var out map[string]any
-				if err := c2.do("GET", path, nil, &out); err != nil {
+				if err := c2.do("GET", withKeyQuery("board", key), nil, &out); err != nil {
 					return nil, err
 				}
 				return out, nil
@@ -301,6 +299,7 @@ func newAgentBoardGetCmd() *cobra.Command {
 func newAgentBoardPublishCmd() *cobra.Command {
 	var key, status, artifacts string
 	var expectedVersion int
+	var requestID *string
 	c := &cobra.Command{
 		Use:          "publish",
 		Short:        "Publish (or republish) one board entry",
@@ -308,7 +307,7 @@ func newAgentBoardPublishCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
 				reqBody := map[string]any{
-					"request_id": newAgentRequestID(), "key": key, "status": status,
+					"request_id": *requestID, "key": key, "status": status,
 					"artifact_refs": splitCSV(artifacts), "expected_version": expectedVersion,
 				}
 				var out agentcomm.BoardEntry
@@ -323,5 +322,6 @@ func newAgentBoardPublishCmd() *cobra.Command {
 	c.Flags().StringVar(&status, "status", "", "the published status value (required)")
 	c.Flags().StringVar(&artifacts, "artifacts", "", "comma-separated artifact refs")
 	c.Flags().IntVar(&expectedVersion, "expected-version", 0, "0 for a first publish; otherwise the key's current version")
+	requestID = requestIDFlag(c)
 	return c
 }

@@ -129,6 +129,16 @@ func (a meshServerActionsForTest) Board(ctx context.Context, key string) ([]agen
 	return page.Entries, nil
 }
 
+func (a meshServerActionsForTest) BoardTasksEnabled() bool { return a.orch.BoardTasksEnabled() }
+
+func (a meshServerActionsForTest) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {
+	return a.orch.BoardTasks(ctx, key)
+}
+
+func (a meshServerActionsForTest) BoardTask(ctx context.Context, requestID string, req server.MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error) {
+	return a.orch.BoardTask(ctx, smokeBoardTaskRequest(requestID, agentcomm.UserParticipantID, req))
+}
+
 func (a meshServerActionsForTest) AttachAndSend(ctx context.Context, requestID string, req server.MeshAttachAndSendRequest) (server.MeshAttachAndSendResult, error) {
 	recipients := make([]agentcomm.ParticipantID, len(req.Recipients))
 	for i, r := range req.Recipients {

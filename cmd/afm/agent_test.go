@@ -25,6 +25,13 @@ type fakeCLIAgentMesh struct {
 	lastSend    server.MeshSendRequest
 	sendErr     error
 	inboxAll    []bool
+
+	lastSendReqID    string
+	lastPublishReqID string
+	lastBoardKey     string
+	lastTaskReqID    string
+	lastTask         server.MeshBoardTaskRequest
+	lastTasksKey     string
 }
 
 func (f *fakeCLIAgentMesh) ResolveToken(token string) (string, bool) {
@@ -39,7 +46,7 @@ func (f *fakeCLIAgentMesh) ListParticipants(ctx context.Context, actor string) (
 }
 
 func (f *fakeCLIAgentMesh) Send(ctx context.Context, requestID, actor string, req server.MeshSendRequest) (server.MeshSendReceipt, error) {
-	f.lastSend = req
+	f.lastSend, f.lastSendReqID = req, requestID
 	if f.sendErr != nil {
 		return server.MeshSendReceipt{}, f.sendErr
 	}
@@ -68,10 +75,12 @@ func (f *fakeCLIAgentMesh) CancelWait(ctx context.Context, requestID, actor, wai
 }
 
 func (f *fakeCLIAgentMesh) PublishBoard(ctx context.Context, requestID, actor string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {
+	f.lastPublishReqID = requestID
 	return agentcomm.BoardEntry{AuthorID: agentcomm.ParticipantID(actor), Key: req.Key, Version: 1}, nil
 }
 
 func (f *fakeCLIAgentMesh) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
+	f.lastBoardKey = key
 	return nil, nil
 }
 
