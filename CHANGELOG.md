@@ -5,6 +5,25 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-22
 
+### Improvement: typed Board tasks with explicit assignment
+
+A new run keeps Board tasks as typed tasks: each task has a title, an optional
+coordinator and explicit assignments that move through Assigned, In progress and
+Done, and its status follows from them. Agents manage tasks with
+`afm agent task list|get|create|assign|claim|start|progress|done|release|reopen|edit`,
+see their own assignments in a `<your_board_tasks>` prompt block, and a
+coordinator is notified when someone else finishes, releases or reopens its
+task. The dashboard Board shows assignees before they start and lets you
+assign a task when you create it, and assign, release or reopen it from its
+details. Runs started by an older afm keep the free-text `in progress:`/`done:`
+convention when resumed. See [Typed tasks](docs/collaboration.md#typed-tasks).
+
+### Fix: lifecycle hooks report a resumed run as resumed
+
+Reopening a run now restores the journal's last position, so `afm run` on an
+interrupted run fires `flow_resumed` instead of `flow_started`. See
+[Lifecycle hooks](docs/lifecycle-hooks.md#event-catalog).
+
 ### Fix: reject Agent Mesh waits that would deadlock
 
 The `wait_cycle` check now accounts for every pending wait of a helper or run

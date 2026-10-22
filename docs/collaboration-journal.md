@@ -65,6 +65,35 @@ does not recognize `mesh_thread_title_updated` cannot replay a journal containin
 it: the unknown kind produces the incompatibility error described above. Use a
 binary that knows this kind to resume such a run.
 
+## Board task records
+
+A run started by an afm with [typed board tasks](collaboration.md#typed-tasks)
+begins its journal with `mesh_board_protocol_set` (`protocol: "typed_v1"`),
+written before any agent starts. It is recorded only for a fresh run: a resumed
+run whose journal has no such record stays a legacy run, and its `task/` board
+entries keep the free-text convention.
+
+Each typed task change commits one or more effects in an operation:
+`mesh_board_task_created`, `mesh_board_task_assigned` (a claim is an assignment
+with `start: true`), `mesh_board_task_started`, `mesh_board_task_progressed`,
+`mesh_board_task_completed`, `mesh_board_task_released`,
+`mesh_board_task_reopened` and `mesh_board_task_edited`. The target names the
+task key and the participant making the change; every payload carries the
+`expected_version` it was based on. An assignment to another participant
+commits in the same operation as the message that tells it; a coordinator notice
+does too, unless it was skipped. A retry under the same request id is answered
+from the committed operation, so it never applies twice.
+
+Replay applies the same rights and state rules as a live change, so it rebuilds
+exactly the tasks the run had. Format rules — the key's charset and length, text
+sizes, the number and location of artifact references, required texts — are
+checked only when a new record is admitted, never on replay: a journal written
+before such a rule was tightened still replays. The key format is checked only
+on create, so an existing task stays changeable.
+
+These are new control kinds: an older binary cannot replay a journal that
+contains them and reports the incompatibility described above.
+
 ## Additive fields
 
 Fields added to an existing record kind are optional: a journal written before a

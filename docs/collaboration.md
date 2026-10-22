@@ -376,9 +376,143 @@ in, and your conversation with its agent. See [the stage feed](dashboard.md#conv
 When Agent Mesh is available, **Board** appears beside **Team** as a run-wide tab.
 It shows only task keys (`task/<slug>`), grouped into **Todo** (gray), **In
 progress** (blue), and **Done** (green) columns. Use **New task** to post from this
-tab, or **Post task** in Team's **Board** subtab. Both use the same form: choose
-under **Notify** which agents get a message (all by default, at most 16): run agents
-and stage agents that are working or waiting for a colleague.
+tab, or **Post task** in Team's **Board** subtab. Both use the same form.
+
+A run started by this afm version keeps **typed tasks**: each task has explicit
+assignments, and agents change it with `afm agent task …`. A run started by an
+older afm keeps the **legacy** free-text convention after it is resumed; afm never
+migrates it. The run's mode is recorded in its journal before any agent starts
+(see [Board task records](collaboration-journal.md#board-task-records)).
+
+#### Typed tasks
+
+A typed task has a key, a title, an optional description, an author and an
+optional coordinator, and a list of active **assignments**. Each assignment
+belongs to one participant and is `assigned`, `in_progress` or `done`; it keeps
+that participant's latest progress text, result and artifact references. The
+task's status follows from its active assignments:
+
+- **Todo** — no assignment, or none has started yet;
+- **In progress** — at least one assignment has started and not all are done;
+- **Done** — every active assignment is done.
+
+A participant has at most one active assignment per task, so several agents can
+work on one task side by side. A released assignment, and every assignment a
+reopen ends, moves to the task's history with who ended it and why. Each change
+increases the task's `version`; every change except a create passes the version
+it was based on as `--expected-version`, and a change based on an older version
+is refused with `stale_revision`.
+
+Task keys are `task/` followed by letters (any script), digits, `.`, `_` and `-`,
+at most 200 bytes in all. Under `task/` the board holds typed tasks only:
+`afm agent board publish` with such a key is refused in a typed run, and
+`afm agent board get` does not list typed tasks. Other board keys keep working
+as shared facts.
+
+**Who may do what.** The *manager* of a task is the user, and the task's
+coordinator: the `--coordinator` given at creation or by an edit, otherwise the
+agent that created it. A task the user created without a coordinator is managed
+by the user alone.
+
+| Change | Who may make it | When |
+|---|---|---|
+| `create` | any agent, the user | the key is free |
+| `assign` | a manager | the task is not Done (reopen it first); the assignee has no active assignment on it |
+| `claim` | any agent, for itself | the task has no active assignment |
+| `start`, `progress`, `done` | the assignment's own participant | the assignment is not done yet |
+| `release` | a manager | the assignment is not done yet |
+| `reopen` | a manager | any time |
+| `edit` | a manager | any time |
+
+A claim assigns the task to the caller and starts it in one change. `done` may
+follow `assigned` directly. `reopen` ends every active assignment and puts the
+task back to Todo. Any agent that can still receive messages can be assigned,
+except the [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run),
+a passive helper (watching, or waiting for its parent) and a stage that has
+finished its own work and waits for its helpers. A task is never assigned to the
+user.
+
+**Messages.** Assigning a task to someone else sends that participant a message
+with the task key and its assignment id in the same commit; if the message
+cannot be delivered now (the recipient's inbox or conversation is full, or it
+has finished), the assignment is refused. A claim or a self-assignment sends
+nothing. When someone other than the coordinator finishes, releases or reopens
+the task, the coordinator gets a notice in a new conversation of its own. A
+notice that cannot be delivered is skipped and the change still succeeds; the
+answer's `notice_skipped` says why. The user, as coordinator, gets no notice:
+the dashboard shows the task. A reply, an acknowledgement or a run agent's turn
+result never completes a task; only `afm agent task done` does.
+
+Every agent's prompt carries a `<your_board_tasks>` block listing its active
+assignments (up to 20, oldest first) with the key, title, assignment id, state,
+the task's version and the latest progress. Task text in it is marked as data,
+not instructions.
+
+#### `afm agent task` commands
+
+```bash
+afm agent task list
+afm agent task get --key task/csv-export
+afm agent task create --key task/csv-export --title "CSV export" \
+  [--description "..."] [--assign-to <participant>] [--coordinator <participant>]
+afm agent task assign   --key K --to <participant> --expected-version V
+afm agent task claim    --key K --expected-version V
+afm agent task start    --key K --assignment-id A --expected-version V
+afm agent task progress --key K --assignment-id A --text "..." [--artifacts a,b] --expected-version V
+afm agent task done     --key K --assignment-id A --summary "..." [--artifacts a,b] --expected-version V
+afm agent task release  --key K --assignment-id A [--reason "..."] --expected-version V
+afm agent task reopen   --key K [--reason "..."] --expected-version V
+afm agent task edit     --key K [--title T] [--description D] [--coordinator P] --expected-version V
+```
+
+Participants are `@name` aliases or participant ids. `create --assign-to`
+creates and assigns the task in one change. Every change answers with a receipt:
+the task's `key`, new `version` and `status`, the `assignment_id` it created or
+acted on, its journal `seq`, and the `message_id`/`thread_id` of the message it
+sent, if any. `get` and `list` show each assignment's `reported_seq`, the journal
+position of its latest progress or done report.
+
+- **Clearing.** `edit` changes only the flags it is given: `--description ""`
+  clears the description and `--coordinator ""` clears the coordinator, so the
+  author coordinates again. A title cannot be empty. On `progress` and `done`,
+  `--artifacts` replaces the assignment's artifact references, `--artifacts ""`
+  clears them, and leaving the flag out keeps them. References must point into
+  the run's `artifacts/`.
+- **Retries.** Every mutating `afm agent` command (including `task`, `send` and
+  `board publish`) takes `--request-id`; it defaults to a fresh id. Repeating a
+  change with the same request id returns the original receipt, even if the task
+  changed since; the same id with a different change is refused.
+
+**Coordinator workflow.** Create the task (with `--assign-to`, or `assign`
+afterwards), then register a wait and end the turn:
+
+```bash
+afm agent task create --key task/csv-export --title "CSV export" --assign-to @backend
+afm agent wait --condition addressed_message --deadline-seconds 1800
+```
+
+When resumed, read `afm agent inbox` and `afm agent task get --key task/csv-export`:
+the notice says what happened, the task shows the current state. To hand the
+work to someone else, `release` the assignment and `assign` again; to send a
+finished task back, `reopen` it. An executor starts its assignment, reports
+`progress` while working and finishes with `done`; one that cannot finish
+should message its coordinator instead of dropping the task. On
+`stale_revision`, read the task again before deciding.
+
+**HTTP API.** Agents use `GET /api/agent-mesh/tasks[?key=K]` and
+`POST /api/agent-mesh/task` with their mesh token; the dashboard reads typed
+tasks from `GET /api/mesh/board` (`typed_tasks: true` and a `tasks` list) and
+changes them as the user with `POST /api/mesh/tasks`. Every POST needs a
+`request_id`. The dashboard's same-origin check is not an authentication
+boundary: an agent on the same host can send the same request with a forged
+`Origin`. The rights above are a convention for cooperating agents, not a
+security barrier.
+
+#### Legacy runs
+
+In a run started before typed tasks, the form chooses under **Notify** which
+agents get a message (all by default, at most 16): run agents and stage agents
+that are working or waiting for a colleague.
 Each recipient gets its own message, recorded with the task, so the run does not
 finish before agents read it. A finished recipient, or one whose inbox or
 conversation is full, is skipped; the task is posted either way.

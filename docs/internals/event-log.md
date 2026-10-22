@@ -24,6 +24,10 @@ This is what makes long runs reliable:
   corrupt *complete* line in the middle of the log is quarantined into
   `events.jsonl.corrupt-<ts>` rather than overwritten — afm never destructively
   truncates the log.
+- **Stable start time.** A run's start time is the time of the log's first record
+  of any kind — a stage transition, a run event or a control record such as the
+  board task protocol marker — so a live run, a resumed run and `afm check` all
+  report the same start.
 - **Unique run ids.** `<run-name>-<timestamp>-<rand4hex>`, where `<run-name>` is
   the `--worktree` name when supplied and the flow name otherwise. The random suffix
   avoids collisions even within the same second.

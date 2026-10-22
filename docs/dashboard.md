@@ -98,8 +98,27 @@ columns. Task cards are gray, blue, and green, respectively. Search matches a
 task's key and text; the assignee filter can show one agent's tasks or unassigned
 tasks. The header shows completed tasks out of all tasks. **New task** opens the
 posting form, and selecting a card opens its text, assignees, and current reports.
-New tasks start in Todo. Status changes come from agent reports; there is no
-control for a person to move a task between columns.
+New tasks start in Todo.
+
+In a run with [typed tasks](collaboration.md#typed-tasks) (every run started by
+this afm version), the form's **Assignee** picker can assign the task to one
+working run or stage agent at once, or leave it with **Nobody yet**; the agent is
+told about it immediately. A card shows each assignee with its own state —
+**Assigned**, **In progress** or **Done** — so an assigned agent is visible
+before it starts, and search also matches the latest progress or result. Task
+details show the title, description and latest note, every active assignment
+with its progress, result and artifacts, and a **History** of released and
+reopened assignments. As the user you can **Assign** a task that is not Done,
+**Release** an active assignment that is not done, and **Reopen** the task,
+with an optional **Reason**; the column itself still follows the agents'
+assignments. If the task changed meanwhile, details reload it (**Task changed,
+reloaded**). A change or a new task whose answer was lost is resent unchanged
+when you click again, even if the form or the roster changed in between, and a
+successful post clears only the text that was actually sent.
+
+In a run started by an older afm, statuses come from agent reports, the form
+picks agents to **Notify**, and there is no control for a person to move a task
+between columns.
 
 Team keeps its own **Board** subtab. It shows the same color-coded task cards in
 one mixed grid alongside non-task board entries, without status columns. Both
