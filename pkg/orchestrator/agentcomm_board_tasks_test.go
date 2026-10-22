@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -247,5 +248,46 @@ func TestBoardTaskRequiresRequestID(t *testing.T) {
 	requireRejection(t, err, assistants.CodeInvalidRequest)
 	if got := store.Snapshot().LastSeq; got != journaled {
 		t.Fatalf("journal grew on rejected requests: last seq %d, want %d", got, journaled)
+	}
+}
+
+// Concurrent claims of one free task: exactly one wins, every other gets a rejection, and the task ends with one
+// active assignment.
+func TestBoardTaskConcurrentClaimsOneWinner(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	const key = "task/race"
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: "Race"})
+
+	claimants := []agentcomm.ParticipantID{
+		meshStageParticipantID(assistantsTestStageID), meshStageParticipantID(boardTaskTestBackend), meshStageParticipantID(boardTaskTestFrontend),
+	}
+	errs := make([]error, len(claimants))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, who := range claimants {
+		wg.Go(func() {
+			<-start
+			_, errs[i] = o.BoardTask(context.Background(), BoardTaskRequest{
+				OperationID: "claim-" + string(who), Action: BoardTaskClaim, Actor: who, Key: key, ExpectedVersion: 1,
+			})
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	wins := 0
+	for i, err := range errs {
+		var rejected *state.OperationRejectedError
+		switch {
+		case err == nil:
+			wins++
+		case errors.As(err, &rejected) && (rejected.Code == assistants.CodeStaleRevision || rejected.Code == assistants.CodeInvalidStatus):
+		default:
+			t.Errorf("claim by %s: %v, want success or a stale_revision/invalid_status rejection", claimants[i], err)
+		}
+	}
+	task := store.Snapshot().Assistants.Mesh.BoardTasks[key]
+	if wins != 1 || len(task.Assignments) != 1 || task.Version != 2 {
+		t.Fatalf("wins = %d, task = %+v; want one winner and one active assignment at version 2", wins, task)
 	}
 }

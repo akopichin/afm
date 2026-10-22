@@ -454,3 +454,62 @@ func TestBoardTaskRedactsSecrets(t *testing.T) {
 		}
 	}
 }
+
+// The assign's message id answers the assigner even when the first response was lost: the retry under the same
+// request id returns it, and a reply_to wait on it resolves with the assignee's answer — no extra Send needed.
+func TestBoardTaskAssignRetryThenWaitOnMessage(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	ctx := context.Background()
+	const key = "task/wait"
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Wait"})
+	assignReq := BoardTaskRequest{OperationID: "assign", Action: BoardTaskAssign, Actor: boardTaskA, Key: key, ExpectedVersion: 1, To: string(boardTaskB)}
+	mustBoardTask(t, o, assignReq) // its response is lost
+	messages := len(store.Snapshot().Assistants.Mesh.Messages)
+
+	assigned := mustBoardTask(t, o, assignReq)
+	if assigned.MessageID == "" || len(store.Snapshot().Assistants.Mesh.Messages) != messages {
+		t.Fatalf("retry receipt = %+v, want the original message and no new one", assigned)
+	}
+	wait, err := o.Wait(ctx, WaitRequest{
+		OperationID: "wait", Waiter: boardTaskA, Deadline: testFarDeadline(),
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: assigned.MessageID},
+	})
+	if err != nil || wait.Status != agentcomm.WaitPending {
+		t.Fatalf("Wait = %+v, %v; want it pending on the assignment message", wait, err)
+	}
+
+	on := assigned.MessageID
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "accept", ThreadID: assigned.ThreadID, Sender: boardTaskB, Recipients: []agentcomm.ParticipantID{boardTaskA},
+		Kind: agentcomm.MessageKindReply, InReplyTo: &on, Body: "on it",
+	}); err != nil {
+		t.Fatalf("Send reply: %v", err)
+	}
+	if w := store.Snapshot().Assistants.Mesh.Waits[wait.WaitID]; w == nil || w.Status != agentcomm.WaitReady {
+		t.Fatalf("assigner's wait = %+v, want it ready after the reply", w)
+	}
+}
+
+// A done that lands before the coordinator registers its threadless addressed_message wait is not lost: the
+// unread notice resolves the wait at once.
+func TestBoardTaskDoneBeforeCoordinatorWaits(t *testing.T) {
+	o, _ := newBoardTaskTestOrchestrator(t)
+	const key = "task/early"
+	assigned := mustBoardTask(t, o, BoardTaskRequest{
+		OperationID: "create", Action: BoardTaskCreate, Actor: boardTaskA, Key: key, Title: "Early", To: string(boardTaskB),
+	})
+	done := mustBoardTask(t, o, BoardTaskRequest{
+		OperationID: "done", Action: BoardTaskDone, Actor: boardTaskB, Key: key, ExpectedVersion: 2, AssignmentID: assigned.AssignmentID, Text: "shipped",
+	})
+	if done.MessageID == "" {
+		t.Fatalf("done receipt = %+v, want the coordinator notice", done)
+	}
+
+	wait, err := o.Wait(context.Background(), WaitRequest{
+		OperationID: "wait", Waiter: boardTaskA, Deadline: testFarDeadline(),
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage},
+	})
+	if err != nil || wait.Status != agentcomm.WaitReady {
+		t.Fatalf("Wait = %+v, %v; want it ready at once on the unread notice", wait, err)
+	}
+}

@@ -361,15 +361,16 @@ func TestBoardTaskStatusIsOnlyAnAnnotation(t *testing.T) {
 func TestBoardTaskRejectedBatchDoesNotLeak(t *testing.T) {
 	store := openTypedStore(t, t.TempDir())
 	mustApplyTask(t, store, "user", createTask(t, ""))
-	mustApplyTask(t, store, "user", assignTask(t, 1, "a1", "a", false))
+	assignAndStart(t, store, "user", 1, "a1", "a")
+	mustApplyTask(t, store, "a", progressTask(t, 3, "a1", "first"))
+	before := mustMarshal(t, boardTask(t, store)) // a deep copy: nothing the live task shares
 
-	// Valid assign of b, then an invalid start of a1 (actor user is not its assignee).
-	err := applyTaskEffects(t, store, "user", assignTask(t, 2, "b1", "b", false), startTask(t, 3, "a1"))
-	wantRejected(t, err, assistants.CodeActorNotAllowed, ErrBoardTaskNotAuthorized)
+	// A valid progress of the existing assignment, then an invalid start of it (it has started already).
+	err := applyTaskEffects(t, store, "a", progressTask(t, 4, "a1", "second"), startTask(t, 5, "a1"))
+	wantRejected(t, err, assistants.CodeInvalidStatus, ErrBoardTaskInvalidTransition)
 
-	task := boardTask(t, store)
-	if len(task.Assignments) != 1 || task.Version != 2 {
-		t.Fatalf("rejected batch leaked into the projection: %+v", task)
+	if after := mustMarshal(t, boardTask(t, store)); string(after) != string(before) {
+		t.Fatalf("rejected batch leaked into the projection:\nbefore %s\nafter  %s", before, after)
 	}
 }
 
