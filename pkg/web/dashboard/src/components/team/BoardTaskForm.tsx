@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { postMeshTask, publishMeshBoard, type MeshParticipant } from '../../api/mesh-client'
-import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
+import { removeSubmittedText, useRetryableSubmit, useUnsettledChange } from '../../hooks/use-retryable-submit'
 import type { MeshBoard } from '../../hooks/use-mesh'
 import { boardNotifyCandidates, participantLabel } from '../../lib/mesh-roster'
 import type { RunTeamListStage } from './RunTeamList'
@@ -16,6 +16,9 @@ export function boardTaskModeOf(board: MeshBoard): BoardTaskMode {
   if (board.status === 'loading' || board.status === 'error') return 'unknown'
   return board.typedTasks ? 'typed' : 'legacy'
 }
+
+// TypedCreate — a typed task's create request as plain data (useRetryableSubmit compares intents by JSON).
+type TypedCreate = { key: string; title: string; description?: string; to?: string }
 
 export type BoardTaskFormProps = {
   // participants / stages — who can be notified: reachable run agents and agents of working stages.
@@ -73,7 +76,10 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
   const [uncheckedIds, setUncheckedIds] = useState<ReadonlySet<string>>(new Set())
   // submitter — a retry of the same task reuses its request id; an edited task is a new one.
   const submitter = useRetryableSubmit<{ key: string; status: string; notify: string[] }>('mesh-board')
-  const typedSubmitter = useRetryableSubmit<{ key: string; title: string; description?: string; to?: string }>('mesh-task')
+  const typedSubmitter = useRetryableSubmit<TypedCreate>('mesh-task')
+  // unsettledCreate — a create whose response was lost is resent as it was (assignee included) while the same task
+  // is posted again, even if the assignee left the candidates meanwhile; a success or a refusal settles it.
+  const unsettledCreate = useUnsettledChange<TypedCreate>((a, b) => a.key === b.key)
   // draftRef — the form's text as last rendered: a post that resolves later reads what was typed meanwhile.
   const draftRef = useRef({ title, details })
   draftRef.current = { title, details }
@@ -104,9 +110,10 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
       onPosted(restTitle.trim() !== '' || restDetails.trim() !== '')
     }
     if (typed) {
+      const create = unsettledCreate.freeze({ key, title: name, description: text !== '' ? text : undefined, to: assignee !== '' ? assignee : undefined })
       typedSubmitter.submit(
-        { key, title: name, description: text !== '' ? text : undefined, to: assignee !== '' ? assignee : undefined },
-        (p, requestId) => postMeshTask({ requestId, action: 'create', ...p }),
+        create,
+        (p, requestId) => unsettledCreate.track(() => postMeshTask({ requestId, action: 'create', ...p })),
         { onSuccess },
       )
       return

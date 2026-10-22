@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { MeshApiError, postMeshTask, type MeshBoardTaskAssignment, type MeshParticipant } from '../../api/mesh-client'
-import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
+import { removeSubmittedText, useRetryableSubmit, useUnsettledChange } from '../../hooks/use-retryable-submit'
 import { assignmentText, type BoardTask } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
@@ -127,12 +127,6 @@ function isStaleRevision(err: unknown): boolean {
   return err instanceof MeshApiError && err.code === 'stale_revision'
 }
 
-// isRejected — the server answered and refused the change (stale_revision among others): it was not applied,
-// so there is nothing left to retry. A network error or a 5xx leaves the outcome unknown.
-function isRejected(err: unknown): boolean {
-  return err instanceof MeshApiError && err.status >= 400 && err.status < 500
-}
-
 // sameTarget — two changes are the same operator action on the same thing (the reason may differ).
 function sameTarget(a: TaskChange, b: TaskChange): boolean {
   return a.action === b.action && a.key === b.key && a.assignmentId === b.assignmentId && a.to === b.to
@@ -156,11 +150,9 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
   const reasonRef = useRef(reason)
   reasonRef.current = reason
   const submitter = useRetryableSubmit<TaskChange>('mesh-task', task.key)
-  // unsettledRef — the change sent last whose outcome is unknown (e.g. its response was lost). Clicking the
-  // same action again resends it unchanged, so it keeps its request id and the server answers a committed one
-  // with its receipt; rebuilding it from the polled task would make it a new change against whatever the task
-  // became meanwhile (a Reopen would archive assignments made after it). A success or a refusal settles it.
-  const unsettledRef = useRef<TaskChange | null>(null)
+  // unsettled — the change sent last whose outcome is unknown: clicking the same action again resends it unchanged
+  // (a Reopen rebuilt from the polled task would archive assignments made after it).
+  const unsettled = useUnsettledChange<TaskChange>(sameTarget)
 
   const assignedIds = new Set(assignments.map((a) => a.participant_id))
   const candidates = boardNotifyCandidates(participants, stages).filter((p) => !assignedIds.has(p.id))
@@ -174,24 +166,19 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
     // A click while a change is in flight is ignored by the submitter; it must not replace the unsettled one.
     if (submitter.pending) return
     const fresh: TaskChange = { ...intent, key: task.key, expectedVersion: task.version }
-    const unsettled = unsettledRef.current
-    const payload = unsettled !== null && sameTarget(unsettled, fresh) ? unsettled : fresh
+    const payload = unsettled.freeze(fresh)
     const submittedReason = payload.text ?? ''
     // stale — this attempt hit a newer version of the task: the board is reloaded to show it.
     let stale = false
     const send = async (p: Readonly<TaskChange>, requestId: string) => {
       try {
-        const receipt = await postMeshTask({ requestId, ...p })
-        unsettledRef.current = null
-        return receipt
+        return await unsettled.track(() => postMeshTask({ requestId, ...p }))
       } catch (err) {
-        if (isRejected(err)) unsettledRef.current = null
         if (!isStaleRevision(err)) throw err
         stale = true
         throw new Error(TASK_CHANGED)
       }
     }
-    unsettledRef.current = payload
     submitter.submit(payload, send, {
       onSuccess: () => {
         if (payload.action === 'assign') setAssignTo('')

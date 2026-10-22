@@ -172,6 +172,27 @@ describe('BoardTaskForm', () => {
       expect(create.mock.calls[0]?.[0].to).toBeUndefined()
     })
 
+    test('a create whose response was lost is resent unchanged even after its assignee left the candidates', async () => {
+      const create = vi
+        .spyOn(meshClient, 'postMeshTask')
+        .mockRejectedValueOnce(new TypeError('network down'))
+        .mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
+      const onPosted = vi.fn()
+      const { rerender } = render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={onPosted} />)
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'))
+      rerender(<BoardTaskForm participants={participants} stages={[{ id: 'api', title: 'API', status: 'paused' }]} mode="typed" onPosted={onPosted} />)
+      expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('')
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(onPosted).toHaveBeenCalledWith(false))
+      expect(create).toHaveBeenCalledTimes(2)
+      expect(create.mock.calls[1]?.[0]).toEqual(create.mock.calls[0]?.[0])
+      expect(create.mock.calls[1]?.[0].to).toBe('stage:api')
+      expect(screen.getByLabelText('Task')).toHaveValue('')
+    })
+
     test('a failed create keeps the draft and shows the error', async () => {
       vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new Error('agent unreachable'))
       render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
