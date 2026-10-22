@@ -28,10 +28,16 @@ describe('participantLabel', () => {
 })
 
 describe('buildMeshMentionGroups', () => {
-  it('keeps the reachable side agent selectable in the run mention group', () => {
-    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
+  it('keeps the reachable Assistant selectable in the run mention group', () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
     const item = buildMeshMentionGroups([side], [], 's1')[0]?.items[0]
-    expect(item).toMatchObject({ id: 'side:r1', handle: 'side', unavailable: false, target: { kind: 'participant', id: 'side:r1' } })
+    expect(item).toMatchObject({ id: 'side:r1', handle: 'assistant', unavailable: false, target: { kind: 'participant', id: 'side:r1' } })
+  })
+  it('keeps the bound @assistant and a stage on @assistant-2 as two distinct mention targets', () => {
+    const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
+    const stage: MeshParticipant = { id: 'stage:assistant', kind: 'stage_agent', scope: 'stage', stage_id: 'assistant', alias: 'assistant-2', display_name: 'Smoke', reachable: true }
+    const groups = buildMeshMentionGroups([side, stage], [], 'assistant')
+    expect(groups.flatMap((g) => g.items.map((i) => [i.id, i.handle]))).toEqual([['side:r1', 'assistant'], ['stage:assistant', 'assistant-2']])
   })
   it('groups run-scoped participants under "This run", excluding the human', () => {
     const groups = buildMeshMentionGroups([user, runAgent, stageAgent], [], 's1')

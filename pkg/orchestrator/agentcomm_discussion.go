@@ -158,7 +158,7 @@ func discussionMeshEffects(rs state.RunState, stageID, messageID string, req Pos
 		}
 		if agentcomm.ParticipantID(r) != meshStageParticipantID(stageID) {
 			return nil, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf(
-				"@%s cannot read this post (%s) — remove the mention and send again", p.Alias, p.UnreachableReason)}
+				"@%s cannot read this post (%s) — remove the mention and send again", effectiveAlias(rs, p.ID), p.UnreachableReason)}
 		}
 		undeliverable, err := marshalEffect("mesh_message_undeliverable", state.Target{MessageID: messageID, ParticipantID: r},
 			state.MeshMessageReceiptPayload{Reason: p.UnreachableReason})

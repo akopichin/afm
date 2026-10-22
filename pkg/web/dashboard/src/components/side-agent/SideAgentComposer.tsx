@@ -108,8 +108,8 @@ export function SideAgentComposer({
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
-          placeholder="Message the agent…  (Cmd/Ctrl+Enter to send, @ to mention a role)"
-          aria-label="Message the agent"
+          placeholder="Message the assistant…  (Cmd/Ctrl+Enter to send, @ to mention a role)"
+          aria-label="Message the assistant"
           rows={1}
         />
         {mention.open && (

@@ -6,7 +6,7 @@ import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
 const participants: MeshParticipant[] = [
   { id: 'user', kind: 'user', scope: 'run', reachable: true },
   { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true },
-  { id: 'side:run-1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'claude', reachable: true },
+  { id: 'side:run-1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true },
   // Сервер отдаёт участников, отсортированных по id: commit < implement < plan.
   { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', stage_id: 'commit', display_name: 'Commit & cleanup', reachable: true },
   { id: 'stage:implement', kind: 'stage_agent', scope: 'stage', stage_id: 'implement', display_name: 'Implement feature', reachable: true },
@@ -91,7 +91,7 @@ describe('RunTeamList', () => {
     rerender(<RunTeamList {...common} unreadThreadIds={new Set()} />)
     expect(screen.getByRole('button', { name: /New to you.*0/ })).toHaveFocus()
   })
-  test('Team People stably puts only working run and Side agents first after a roster update', () => {
+  test('Team People stably puts only working run agents and the Assistant first after a roster update', () => {
     const people: MeshParticipant[] = [
       { id: 'run:waiting', kind: 'run_agent', scope: 'run', display_name: 'Waiting', reachable: true, activity: 'waiting' },
       { id: 'side:working', kind: 'side_agent', scope: 'run', display_name: 'Side working', reachable: true, activity: 'working' },
@@ -196,10 +196,12 @@ describe('RunTeamList', () => {
     expect(screen.queryByText('user')).toBeNull()
   })
 
-  test('run-scoped rows say what they are: the Side agent and run agents', () => {
+  test('run-scoped rows say what they are: the Assistant on @assistant and run agents', () => {
     renderList()
     const sideRow = screen.getByText('claude').closest('button') as HTMLElement
-    expect(within(sideRow).getByText('Side agent')).toBeInTheDocument()
+    expect(within(sideRow).getByText('Assistant')).toBeInTheDocument()
+    expect(within(sideRow).getByText('@assistant')).toBeInTheDocument()
+    expect(screen.queryByText(/Side agent/)).toBeNull()
     const qaRow = screen.getByText('QA reviewer').closest('button') as HTMLElement
     expect(within(qaRow).getByText('Run agent')).toBeInTheDocument()
   })

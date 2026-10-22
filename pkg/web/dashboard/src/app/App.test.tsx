@@ -1622,6 +1622,35 @@ describe('App', () => {
     expect(document.getElementById('dialog-section')).toBeNull()
   })
 
+  test('a blocked required helper gate says Helpers / Helper decision needed in the tab and the overlay shortcut', async () => {
+    let blocked = false
+    mockFetchForStatus(() => ({
+      flow_name: 'demo',
+      stages: [
+        stageView('s1', 'Alpha', 'running'),
+        {
+          ...stageView('s2', 'Beta', blocked ? 'awaiting_assistants' : 'running'),
+          awaiting_assistants_blocked: blocked,
+        },
+        stageView('s3', 'Gamma', 'pending', { showPlan: false, showDialog: false }),
+      ],
+    }))
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
+    const s3Kebab = within(document.querySelector('[data-stage-id="s3"]') as HTMLElement).getByRole('button', { name: /more actions/i })
+    fireEvent.click(s3Kebab)
+    fireEvent.click(screen.getByText('Add note (before start)'))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+
+    blocked = true
+    emitStageStatus('s2', 'awaiting_assistants')
+    await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Helpers/.test(t.textContent ?? ''))).toBe(true))
+    expect(screen.getByRole('button', { name: /Helper decision needed/ })).toBeInTheDocument()
+    expect(screen.queryByText(/Assistant decision needed/)).toBeNull()
+  })
+
   test('Overlay defers, close releases: question stays a beacon under a modal, auto-opens on close', async () => {
     let asking = false
     mockFetchForStatus(() => ({
@@ -1928,7 +1957,7 @@ describe('App', () => {
 
   // SideAgentProvider оборачивает FileBrowserProvider (не наоборот) — проверяем, что оба провайдера
   // смонтированы и видны их кнопки в шапке, когда обе capability включены.
-  test('renders both the Files and Side agent header buttons when both capabilities are on', async () => {
+  test('renders both the Files and Assistant header buttons when both capabilities are on', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'running')],
@@ -1940,7 +1969,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /open project files/i })).toBeInTheDocument()
     })
-    expect(screen.getByRole('button', { name: /open side agent/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open assistant/i })).toBeInTheDocument()
   })
 
   // Agent Mesh, T7.3 — there is no status.capabilities.mesh field (unlike file_browser/side_agent above):

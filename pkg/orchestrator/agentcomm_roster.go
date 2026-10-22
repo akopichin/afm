@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -173,6 +174,58 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 		out = append(out, p)
 	}
 
+	return reserveAssistantAlias(out)
+}
+
+// reserveAssistantAlias makes the bound Assistant the only participant answering to @assistant. The Assistant
+// owns the name only while its saved descriptor says so — a run saved with the older @side alias, or without a
+// bound agent, is left alone. Everybody else holding the name (names are case-insensitive) moves to the first
+// free @assistant-N, in roster order and against the roster as already changed, so every @name stays unique.
+// Only the roster's copy changes: the journal's descriptors, and so every replayed operation, stay as saved.
+func reserveAssistantAlias(roster []agentcomm.Participant) []agentcomm.Participant {
+	owner := slices.IndexFunc(roster, func(p agentcomm.Participant) bool {
+		return p.Kind == agentcomm.KindSideAgent && strings.EqualFold(p.Alias, sideAgentParticipantAlias)
+	})
+	if owner < 0 {
+		return roster
+	}
+	for i := range roster {
+		if i != owner && strings.EqualFold(roster[i].Alias, sideAgentParticipantAlias) {
+			roster[i].Alias = uniqueAlias(roster, sideAgentParticipantAlias)
+		}
+	}
+	return roster
+}
+
+// effectiveAlias is the @name id answers to in the live roster, derived from the run state alone — for the
+// callers that run inside a commit's check and have no registry at hand. It falls back to the saved alias of
+// an id the roster does not list.
+func effectiveAlias(rs state.RunState, id agentcomm.ParticipantID) string {
+	roster := reserveAssistantAlias(stateRoster(rs))
+	if i := slices.IndexFunc(roster, func(p agentcomm.Participant) bool { return p.ID == id }); i >= 0 {
+		return roster[i].Alias
+	}
+	p, _ := resolveParticipant(rs, id)
+	return p.Alias
+}
+
+// stateRoster lists liveRoster's participants in liveRoster's order, from the run state alone: enough to decide
+// who answers to which @name, without the registry-only details (command, read-only badge, availability).
+func stateRoster(rs state.RunState) []agentcomm.Participant {
+	out := []agentcomm.Participant{{ID: meshUserParticipantID, Alias: "user"}}
+	for _, id := range slices.Sorted(maps.Keys(rs.Stages)) {
+		out = append(out, stageParticipant(rs, id, rs.StageNames[id]))
+	}
+	for _, id := range slices.Sorted(maps.Keys(rs.Assistants.Tasks)) {
+		if t := rs.Assistants.Tasks[id]; t.Scope != assistants.ScopeRun {
+			out = append(out, helperParticipant(id, t))
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(rs.Assistants.Mesh.Participants)) {
+		if p := rs.Assistants.Mesh.Participants[id]; p.Scope == agentcomm.ScopeRun && p.Kind != agentcomm.KindUser {
+			out = append(out, liveRunParticipant(rs, *p))
+		}
+	}
 	return out
 }
 

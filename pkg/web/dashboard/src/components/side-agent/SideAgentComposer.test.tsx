@@ -125,6 +125,18 @@ describe('SideAgentComposer', () => {
     expect(screen.getByRole('button', { name: 'Send' })).not.toBeDisabled()
   })
 
+  it('names the textbox and placeholder after the assistant', () => {
+    render(<SideAgentComposer draft="" onDraftChange={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} running={false} />)
+    const ta = screen.getByRole('combobox', { name: 'Message the assistant' })
+    expect(ta).toHaveAttribute('placeholder', 'Message the assistant…  (Cmd/Ctrl+Enter to send, @ to mention a role)')
+  })
+
+  it('names the mention listbox "Mention a role"', () => {
+    render(<ControlledComposer onSend={vi.fn()} onStop={vi.fn()} running={false} assistantProfiles={PROFILES} />)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '@', selectionStart: 1 } })
+    expect(screen.getByRole('listbox', { name: 'Mention a role' })).toBeInTheDocument()
+  })
+
   // --- T4.2: @mention menu ---
 
   it('opens the mention menu on @ and filters as the query narrows', () => {

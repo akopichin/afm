@@ -50,7 +50,7 @@ describe('STAGE_STATUS_LABELS', () => {
       pending: 'Pending',
       planning: 'Planning',
       awaiting_approval: 'Awaiting approval',
-      awaiting_assistants: 'Awaiting assistants',
+      awaiting_assistants: 'Awaiting helpers',
       revising: 'Revising',
       ready: 'Ready',
       running: 'Running',

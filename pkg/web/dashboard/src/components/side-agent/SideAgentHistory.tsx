@@ -20,10 +20,10 @@ export function SideAgentHistory({ events, emptyHint }: SideAgentHistoryProps): 
   return (
     <div className="side-agent-history" ref={feed.ref}>
       {groups.length === 0 ? (
-        <div className="empty-hint side-agent-empty">{emptyHint ?? 'Ask the agent anything about this run.'}</div>
+        <div className="empty-hint side-agent-empty">{emptyHint ?? 'Ask the assistant anything about this run.'}</div>
       ) : (
         groups.map((g) => (
-          <FeedGroupView key={g.key} group={g} showStageBadges={false} systemAuthorLabel="Side agent" imagePolicy="none" />
+          <FeedGroupView key={g.key} group={g} showStageBadges={false} systemAuthorLabel="Assistant" imagePolicy="none" />
         ))
       )}
       {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}

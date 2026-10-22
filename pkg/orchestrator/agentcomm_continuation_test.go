@@ -144,6 +144,9 @@ func TestPeerContinuation_CrashBeforeTheAgentStartedKeepsTheContext(t *testing.T
 	}
 }
 
+// requestsRoster is the roster the requests of requestsMesh are labelled from.
+var requestsRoster = []agentcomm.Participant{{ID: "run:qa", Alias: "qa"}}
+
 // requestsMesh is a mesh in which the stage sent n review requests (seq 1..n, ids mm-1..mm-n) to qa.
 func requestsMesh(n int) state.MeshState {
 	mesh := state.MeshState{
@@ -183,7 +186,7 @@ func TestRequestsBlock_KeepsOpenRequestsFirst(t *testing.T) {
 	for i := 2; i <= maxListedRequests+6; i++ {
 		addReply(mesh, fmt.Sprintf("mm-r%d", i), agentcomm.MessageID(fmt.Sprintf("mm-%d", i)), uint64(100+i), "no findings")
 	}
-	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	block := agentCommRequestsBlock(mesh, requestsRoster, unreadTestStage)
 	if !strings.Contains(block, "[mm-1] to qa") || !strings.Contains(block, "still waiting") {
 		t.Fatalf("the open request was evicted:\n%s", block)
 	}
@@ -203,7 +206,7 @@ func TestRequestsBlock_StaysWithinItsBudget(t *testing.T) {
 			addReply(mesh, fmt.Sprintf("mm-r%d-%d", i, j), agentcomm.MessageID(fmt.Sprintf("mm-%d", i)), seq, long)
 		}
 	}
-	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	block := agentCommRequestsBlock(mesh, requestsRoster, unreadTestStage)
 	if len(block) > requestsBlockBudget+2048 {
 		t.Fatalf("block is %d bytes, budget %d", len(block), requestsBlockBudget)
 	}
@@ -216,7 +219,7 @@ func TestRequestsBlock_StaysWithinItsBudget(t *testing.T) {
 func TestRequestsBlock_ShowsAWaitThatEnded(t *testing.T) {
 	mesh := requestsMesh(1)
 	addWait(mesh, "mw-1", "mm-1", agentcomm.WaitCancelled, "no recipient of mm-1 can answer it")
-	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	block := agentCommRequestsBlock(mesh, requestsRoster, unreadTestStage)
 	if !strings.Contains(block, "cancelled: no recipient of mm-1 can answer it") || strings.Contains(block, "no wait registered") {
 		t.Fatalf("an ended wait must show its status and reason:\n%s", block)
 	}
@@ -231,7 +234,7 @@ func TestRequestsBlock_EndedWaitReasonIsBoundedAndCharged(t *testing.T) {
 	for i := 1; i <= requests; i++ {
 		addWait(mesh, fmt.Sprintf("mw-%d", i), agentcomm.MessageID(fmt.Sprintf("mm-%d", i)), agentcomm.WaitCancelled, long)
 	}
-	block := agentCommRequestsBlock(mesh, unreadTestStage)
+	block := agentCommRequestsBlock(mesh, requestsRoster, unreadTestStage)
 	if strings.Contains(block, strings.Repeat("r", waitReasonExcerptBytes+1)) {
 		t.Fatalf("an ended wait's reason must be cut to %d bytes:\n%.1000s", waitReasonExcerptBytes, block)
 	}
@@ -241,7 +244,7 @@ func TestRequestsBlock_EndedWaitReasonIsBoundedAndCharged(t *testing.T) {
 	if len(block) > requestsBlockBudget+2048 {
 		t.Fatalf("block is %d bytes, budget %d", len(block), requestsBlockBudget)
 	}
-	view := requestView(mesh, sentRequests(mesh, unreadTestStage)[0])
+	view := requestView(requestsRoster, sentRequests(mesh, unreadTestStage)[0])
 	if got, want := requestViewCost(view), len(view.Body)+len(view.WaitEnded)+requestEntryOverhead; got != want {
 		t.Fatalf("an entry's cost = %d, want its body, its ended-wait text and the overhead (%d)", got, want)
 	}

@@ -99,6 +99,11 @@ describe('AttachAssistantDialog', () => {
     expect(attachSpy).not.toHaveBeenCalled()
   })
 
+  test('the confirmation dialog is named Attach helper', () => {
+    renderDialog()
+    expect(screen.getByRole('dialog', { name: 'Attach helper' })).toBeInTheDocument()
+  })
+
   // TestCard_ThemesAndFocus — focus-trap (Tab wraps within the dialog), Escape closes (cancels), and the
   // initial focus lands on a visible, focusable element inside the dialog.
   test('TestCard_ThemesAndFocus', () => {

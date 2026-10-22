@@ -36,7 +36,7 @@ function Consumer(): React.ReactElement {
   )
 }
 
-// OpenWithConsumer — потребитель, зовущий openWith('Q') (как FileBrowserProvider's "Send to side agent").
+// OpenWithConsumer — потребитель, зовущий openWith('Q') (как FileBrowserProvider's "Send to assistant").
 function OpenWithConsumer(): React.ReactElement {
   const { openWith } = useSideAgentContext()
   return (
@@ -125,6 +125,17 @@ describe('SideAgentProvider (App-level wiring)', () => {
     expect(screen.getByRole('button', { name: 'side-agent' })).toHaveAttribute('data-enabled', 'false')
   })
 
+  it('the header button reads "Assistant" in its text, accessible name and title', () => {
+    render(
+      <SideAgentProvider runId="r1" enabled deps={fakeDeps()}>
+        <GlobalHeader {...headerProps} />
+      </SideAgentProvider>,
+    )
+    const btn = screen.getByRole('button', { name: 'Open assistant' })
+    expect(btn).toHaveTextContent('Assistant')
+    expect(btn).toHaveAttribute('title', 'Assistant (Cmd/Ctrl+`)')
+  })
+
   // T7.6: the plan's acceptance criterion names the REAL header trigger specifically ("closing
   // returns to it with focus back on the button") — SideAgentModal.test.tsx already proves the
   // underlying opener-ref mechanism works for an arbitrary focused element, but nothing exercised
@@ -135,15 +146,15 @@ describe('SideAgentProvider (App-level wiring)', () => {
         <GlobalHeader {...headerProps} />
       </SideAgentProvider>,
     )
-    const openBtn = screen.getByRole('button', { name: 'Open side agent' })
+    const openBtn = screen.getByRole('button', { name: 'Open assistant' })
     act(() => openBtn.focus())
 
     await act(async () => { fireEvent.click(openBtn) })
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
     expect(document.activeElement).not.toBe(openBtn) // focus moved into the dialog's composer
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /hide side agent/i })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /hide assistant/i })) })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open side agent' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open assistant' }))
   })
 })

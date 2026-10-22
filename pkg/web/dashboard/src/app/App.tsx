@@ -52,7 +52,7 @@ const ATTENTION_TAB_LABEL: Record<AttentionKind, string> = {
   failed: 'Failed',
   hook_failed: 'Hook failed',
   paused: 'Paused',
-  assistants: 'Assistants',
+  assistants: 'Helpers',
 }
 
 // Подпись ждущего действия в шапке файлового оверлея.
@@ -62,7 +62,7 @@ const ATTENTION_SHORTCUT_LABEL: Record<AttentionKind, string> = {
   failed: 'Stage failed',
   hook_failed: 'Hook failed',
   paused: 'Stage paused',
-  assistants: 'Assistant decision needed',
+  assistants: 'Helper decision needed',
 }
 
 // REVISE_STATUSES — the statuses POST /api/stages/{id}/revise accepts (pkg/server handleRevise).
@@ -535,7 +535,7 @@ export function App(): ReactElement {
     <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
     <DialogOpenContext.Provider value={reportDialogOpen}>
     {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
-        useSideAgentContext() (file-browser → side-agent, via its "Send to side agent" no-pause flow) and
+        useSideAgentContext() (file-browser → side-agent, via its "Send to assistant" no-pause flow) and
         needs a real provider above it in the tree. Reversing this order silently breaks that flow — no
         compile error, no runtime error, just a default/no-op context. */}
     <SideAgentProvider

@@ -43,7 +43,7 @@ describe('SideAgentModal', () => {
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     expect(dialog).toHaveAttribute('aria-labelledby', 'side-agent-title')
-    expect(document.getElementById('side-agent-title')?.textContent).toContain('Side agent')
+    expect(document.getElementById('side-agent-title')?.textContent).toContain('Assistant')
   })
 
   it('shows the configured command name', () => {
@@ -64,7 +64,7 @@ describe('SideAgentModal', () => {
   it('close button calls api.close (hide only, agent keeps running)', () => {
     const close = vi.fn()
     renderModal({ isOpen: true, close })
-    fireEvent.click(screen.getByRole('button', { name: /hide side agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: /hide assistant/i }))
     expect(close).toHaveBeenCalledTimes(1)
   })
 

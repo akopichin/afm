@@ -420,7 +420,7 @@ describe('FileBrowserProvider', () => {
     })
   })
 
-  describe('no-pause drafts → side agent', () => {
+  describe('no-pause drafts → assistant', () => {
     test('without any side-agent context (default disabled): no "Without pause" button — the feature is invisible', async () => {
       installOneFile()
       render(
@@ -494,7 +494,7 @@ describe('FileBrowserProvider', () => {
       await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files'))
     })
 
-    test('send(): renders the drafts to text, closes the modal, resets the session, and calls the side agent\'s openWith with that text', async () => {
+    test('send(): renders the drafts to text, closes the modal, resets the session, and calls the assistant\'s openWith with that text', async () => {
       installTwoFiles()
       const openWith = vi.fn()
       renderEnabled(openWith)
@@ -508,7 +508,7 @@ describe('FileBrowserProvider', () => {
       fireEvent.click(await screen.findByTestId('file-line-1'))
       await typeAndSave('second')
 
-      fireEvent.click(screen.getByRole('button', { name: 'Send to side agent' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send to assistant' }))
 
       const expectedDrafts: DraftComment[] = [
         { root: 'project', path: 'a.go', displayPath: 'afm/a.go', reference: '[AFM file: "project/a.go"]', line: 1, origLineText: 'alpha one', text: 'first' },

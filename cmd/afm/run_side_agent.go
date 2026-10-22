@@ -75,14 +75,14 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		DisplayName: cfg.Client.Command, Actor: state.Actor{Kind: "system"},
 	}); err != nil {
 		_ = store.Close()
-		return nil, fmt.Errorf("register side agent mesh identity: %w", err)
+		return nil, fmt.Errorf("register Assistant identity: %w", err)
 	}
 
 	// Учёт side-ходов пишется в usage.jsonl ТОГО ЖЕ namespace, что и журнал. Переиспользуем тот же
 	// accounting.Store, что и флоу, вместо отдельной машинерии.
 	acct, acctErr := accounting.Open(store.Dir(), accounting.NewResolver(cfg.Pricing))
 	if acctErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: side-agent accounting: %v\n", acctErr)
+		fmt.Fprintf(os.Stderr, "warning: Assistant accounting: %v\n", acctErr)
 	}
 	var onUsage func(accounting.Observation)
 	if acct != nil {

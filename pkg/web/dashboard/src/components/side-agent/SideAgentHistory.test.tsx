@@ -9,7 +9,7 @@ const ev = (seq: number, type: SideAgentEvent['type'], data: unknown): SideAgent
 describe('SideAgentHistory', () => {
   it('shows the empty hint when there are no renderable events', () => {
     render(<SideAgentHistory events={[]} />)
-    expect(screen.getByText(/ask the agent/i)).toBeInTheDocument()
+    expect(screen.getByText('Ask the assistant anything about this run.')).toBeInTheDocument()
   })
 
   it('renders user message on the right and agent markdown on the left', () => {
@@ -43,12 +43,12 @@ describe('SideAgentHistory', () => {
     expect(groups[1]).toHaveTextContent('<script>alert(1)</script>')
   })
 
-  it('labels the system author "Side agent", never "Flow"', () => {
+  it('labels the system author "Assistant", never "Flow"', () => {
     const { container } = render(
       <SideAgentHistory events={[ev(1, 'turn_failed', { code: 'agent_error', message: 'boom' })]} />,
     )
     const labels = Array.from(container.querySelectorAll('.feed-actor')).map((el) => el.textContent)
-    expect(labels).toContain('Side agent')
+    expect(labels).toContain('Assistant')
     expect(labels).not.toContain('Flow')
   })
 
