@@ -32,6 +32,13 @@ const assistantsTestStageID = "impl"
 // apply against.
 func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...flow.Stage) (*Orchestrator, *state.Store) {
 	t.Helper()
+	return newAssistantsTestOrchestratorWith(t, enabled, func(*state.Store) {}, extraStages...)
+}
+
+// newAssistantsTestOrchestratorWith is newAssistantsTestOrchestrator with beforeRecords run on the fresh store
+// before anything is journaled — for what a run records first, such as its board task protocol.
+func newAssistantsTestOrchestratorWith(t *testing.T, enabled bool, beforeRecords func(*state.Store), extraStages ...flow.Stage) (*Orchestrator, *state.Store) {
+	t.Helper()
 	dir := t.TempDir()
 	stages := append([]flow.Stage{{ID: assistantsTestStageID, Command: "claude"}}, extraStages...)
 	stageIDs := make([]string, len(stages))
@@ -43,6 +50,7 @@ func newAssistantsTestOrchestrator(t *testing.T, enabled bool, extraStages ...fl
 		t.Fatalf("state.Open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
+	beforeRecords(store)
 
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatalf("EnsurePolicyRecorded: %v", err)

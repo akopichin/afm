@@ -475,3 +475,33 @@ func TestBoardTaskManagerCannotStartForOthers(t *testing.T) {
 		t.Fatalf("rejected assign-with-start changed the task: %+v", task)
 	}
 }
+
+// TestProjectEffectsShowsStateAfterCommitWithoutChangingIt: the orchestrator plans a task's status after a
+// change from the projection itself, never from a second copy of the rules.
+func TestProjectEffectsShowsStateAfterCommitWithoutChangingIt(t *testing.T) {
+	store := openTypedStore(t, t.TempDir())
+	mustApplyTask(t, store, "user", createTask(t, ""))
+	rs := store.Snapshot()
+
+	effects := []Effect{assignTask(t, 1, "a1", "agent-a", true), progressTask(t, 2, "a1", "half way")}
+	for i := range effects {
+		effects[i].Target = Target{BoardKey: testTaskKey, ParticipantID: "agent-a"}
+	}
+	projected, err := rs.ProjectEffects(effects)
+	if err != nil {
+		t.Fatalf("ProjectEffects: %v", err)
+	}
+	task := projected.Assistants.Mesh.BoardTasks[testTaskKey]
+	if task.Version != 3 || task.Status() != agentcomm.BoardTaskInProgress || task.Assignments[0].Progress != "half way" {
+		t.Fatalf("projected task = %+v, want version 3, in progress with the progress text", task)
+	}
+	if got := rs.Assistants.Mesh.BoardTasks[testTaskKey]; got.Version != 1 || len(got.Assignments) != 0 {
+		t.Fatalf("ProjectEffects changed the state it projected from: %+v", got)
+	}
+
+	_, err = rs.ProjectEffects([]Effect{{Kind: kindMeshBoardTaskStarted, Target: effects[0].Target, Payload: mustMarshal(t, MeshBoardTaskStartedPayload{AssignmentID: "a1", MeshBoardTaskMeta: meta(1)})}})
+	var rejected *OperationRejectedError
+	if !errors.As(err, &rejected) || rejected.Code != assistants.CodeInvalidStatus {
+		t.Fatalf("projecting a start of a missing assignment: error = %v, want an invalid_status rejection", err)
+	}
+}

@@ -468,6 +468,26 @@ func (rs RunState) CheckEffects(effects []Effect) error {
 	return validateControlForRunState(&scratch, &Control{Kind: kindOperationCommitted, SchemaVersion: ControlSchemaVersion, Payload: payload})
 }
 
+// ProjectEffects returns rs as it would be after effects commit together as one operation: the same
+// projection handlers an ApplyRunOperation commit runs, applied to a copy, so a caller can plan what a change
+// leads to (a board task's status after it, ...) without a second copy of the rules. rs itself is not changed.
+// Preconditions and the checks made only when a record is admitted (inbox limits, ...) are not part of it:
+// the commit itself decides again under the store lock.
+func (rs RunState) ProjectEffects(effects []Effect) (RunState, error) {
+	payload, err := json.Marshal(operationCommittedPayload{OpKind: "project", Effects: effects})
+	if err != nil {
+		return RunState{}, fmt.Errorf("marshal operation effects: %w", err)
+	}
+	projected := rs
+	// applyOperationCommitted works on its own deep copy and replaces projected.Assistants with it only on
+	// success, so rs keeps every map it shares with projected untouched.
+	c := &Control{Kind: kindOperationCommitted, SchemaVersion: ControlSchemaVersion, Payload: payload}
+	if err := applyOperationCommitted(&projected.Assistants, c, false); err != nil {
+		return RunState{}, err
+	}
+	return projected, nil
+}
+
 // pendingWaitIDs is the set of waits still pending in as.
 func pendingWaitIDs(as AssistantsState) map[agentcomm.WaitID]bool {
 	out := map[agentcomm.WaitID]bool{}

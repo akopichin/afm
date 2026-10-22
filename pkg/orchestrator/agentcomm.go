@@ -39,6 +39,9 @@ type Service interface {
 	CancelWait(context.Context, CancelWaitRequest) error
 	Publish(context.Context, PublishRequest) (agentcomm.BoardEntry, error)
 	ReadBoard(context.Context, ReadBoardRequest) (BoardPage, error)
+	BoardTask(context.Context, BoardTaskRequest) (BoardTaskReceipt, error)
+	BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error)
+	BoardTasksEnabled() bool
 }
 
 var _ Service = (*Orchestrator)(nil)
@@ -370,6 +373,7 @@ const (
 	opKindMeshWait              = "mesh_wait"
 	opKindMeshSend              = "mesh_send"
 	opKindMeshPublish           = "mesh_publish"
+	opKindMeshBoardTask         = "mesh_board_task"
 	opKindMeshOpenThread        = "mesh_open_thread"
 	opKindPostDiscussionMessage = "post_discussion_message"
 )
