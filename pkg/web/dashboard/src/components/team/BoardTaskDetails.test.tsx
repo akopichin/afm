@@ -260,6 +260,16 @@ describe('BoardTaskDetails', () => {
       expect(within(dialog).getByRole('list', { name: 'History' })).toHaveTextContent('first draft')
     })
 
+    test('an agent picked to assign that stops being a candidate is neither shown nor sent', () => {
+      const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
+      const { rerender } = render(<BoardTaskDetails task={unassigned} participants={participants} stages={stages} onClose={() => {}} />)
+      fireEvent.change(screen.getByRole('combobox', { name: 'Assign to' }), { target: { value: 'run:t-1' } })
+      const gone = participants.map((p) => (p.id === 'run:t-1' ? { ...p, reachable: false } : p))
+      rerender(<BoardTaskDetails task={unassigned} participants={gone} stages={stages} onClose={() => {}} />)
+      expect(screen.getByRole('combobox', { name: 'Assign to' })).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Assign' })).toBeDisabled()
+    })
+
     test('each assignment shows its artifact refs, active and in History', () => {
       const withRefs = taskFromView(
         typedTaskView({

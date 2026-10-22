@@ -79,6 +79,8 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
   draftRef.current = { title, details }
 
   const candidates = boardNotifyCandidates(participants, stages)
+  // assignee — the picked agent while it is still a candidate; the select shows and the create sends only it.
+  const assignee = candidates.some((p) => p.id === assignTo) ? assignTo : ''
   const notifyIds = candidates.filter((p) => !uncheckedIds.has(p.id)).map((p) => p.id)
   // A task notifies at most MAX_BOARD_NOTIFY agents (the server's agentcomm.MaxBoardNotify); a typed task notifies
   // only its assignee.
@@ -103,7 +105,7 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
     }
     if (typed) {
       typedSubmitter.submit(
-        { key, title: name, description: text !== '' ? text : undefined, to: assignTo !== '' ? assignTo : undefined },
+        { key, title: name, description: text !== '' ? text : undefined, to: assignee !== '' ? assignee : undefined },
         (p, requestId) => postMeshTask({ requestId, action: 'create', ...p }),
         { onSuccess },
       )
@@ -148,7 +150,7 @@ export function BoardTaskForm({ participants, stages, mode, onPosted }: BoardTas
       {typed && (
         <label className="team-board-field">
           <span>Assignee</span>
-          <select aria-label="Assignee" value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+          <select aria-label="Assignee" value={assignee} onChange={(e) => setAssignTo(e.target.value)}>
             <option value="">Nobody yet</option>
             {candidates.map((p) => (
               <option key={p.id} value={p.id}>

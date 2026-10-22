@@ -102,4 +102,9 @@ describe('mesh-roster', () => {
     ]
     expect(boardNotifyCandidates([lead, asking], stages)).toEqual([lead])
   })
+
+  test('boardNotifyCandidates leaves out a running script stage: nobody reads its messages', () => {
+    const script: MeshParticipant = { ...commit, id: 'stage:lint', stage_id: 'lint', reachable: false, unreachable_reason: 'script stage: no agent reads messages' }
+    expect(boardNotifyCandidates([script, commit], [{ id: 'lint', status: 'running' }, { id: 'commit', status: 'running' }])).toEqual([commit])
+  })
 })

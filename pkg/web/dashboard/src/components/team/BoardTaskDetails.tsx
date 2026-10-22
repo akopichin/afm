@@ -164,6 +164,8 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
 
   const assignedIds = new Set(assignments.map((a) => a.participant_id))
   const candidates = boardNotifyCandidates(participants, stages).filter((p) => !assignedIds.has(p.id))
+  // assignee — the picked agent while it is still a candidate; the select shows and Assign sends only it.
+  const assignee = candidates.some((p) => p.id === assignTo) ? assignTo : ''
   const canReopen = assignments.length > 0 || history.length > 0
   // A done task is never assigned again (the server refuses it): it is reopened first.
   const canAssign = task.status !== 'done'
@@ -270,10 +272,10 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
           className="board-task-details-assign"
           onSubmit={(e) => {
             e.preventDefault()
-            if (assignTo !== '') change({ action: 'assign', to: assignTo })
+            if (assignee !== '') change({ action: 'assign', to: assignee })
           }}
         >
-          <select aria-label="Assign to" value={assignTo} onChange={(e) => setAssignTo(e.target.value)}>
+          <select aria-label="Assign to" value={assignee} onChange={(e) => setAssignTo(e.target.value)}>
             <option value="">Choose an agent</option>
             {candidates.map((p) => (
               <option key={p.id} value={p.id}>
@@ -281,7 +283,7 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
               </option>
             ))}
           </select>
-          <button type="submit" className="btn btn-send" disabled={submitter.pending || assignTo === ''}>
+          <button type="submit" className="btn btn-send" disabled={submitter.pending || assignee === ''}>
             Assign
           </button>
         </form>

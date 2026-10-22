@@ -160,6 +160,18 @@ describe('BoardTaskForm', () => {
       expect(create.mock.calls[0]?.[0].description).toBeUndefined()
     })
 
+    test('an assignee that stops being a candidate is neither shown nor sent', async () => {
+      const create = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv-export', version: 1, status: 'todo', seq: 3 })
+      const { rerender } = render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
+      fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
+      rerender(<BoardTaskForm participants={participants} stages={[{ id: 'api', title: 'API', status: 'paused' }]} mode="typed" onPosted={() => {}} />)
+      expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('')
+      fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
+      await waitFor(() => expect(create).toHaveBeenCalled())
+      expect(create.mock.calls[0]?.[0].to).toBeUndefined()
+    })
+
     test('a failed create keeps the draft and shows the error', async () => {
       vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new Error('agent unreachable'))
       render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
