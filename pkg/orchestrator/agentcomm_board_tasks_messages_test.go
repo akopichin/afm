@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -527,5 +528,101 @@ func TestBoardTaskDoneBeforeCoordinatorWaits(t *testing.T) {
 	})
 	if err != nil || wait.Status != agentcomm.WaitReady {
 		t.Fatalf("Wait = %+v, %v; want it ready at once on the unread notice", wait, err)
+	}
+}
+
+// planningSnapshotBefore returns rs as the planning of a change saw it before the participant moved into its
+// current state: the task or stage still running. Only the copy changes, never the store's state.
+func planningSnapshotBefore(rs state.RunState, taskID assistants.TaskID, stageID string) state.RunState {
+	if taskID != "" {
+		tasks := maps.Clone(rs.Assistants.Tasks)
+		running := *tasks[taskID]
+		running.Status = assistants.StatusRunning
+		tasks[taskID] = &running
+		rs.Assistants.Tasks = tasks
+	}
+	if stageID != "" {
+		stages := maps.Clone(rs.Stages)
+		st := stages[stageID]
+		st.Status = state.StatusRunning
+		stages[stageID] = st
+		rs.Stages = stages
+	}
+	return rs
+}
+
+// An assignee that stops taking new work after the change was planned — a helper resting as watching or
+// waiting_parent, a stage that finished its own work — is refused at commit, under the commit's lock: nothing
+// is written. An assign and a create that assigns at once alike.
+func TestBoardTaskAssignRecheckedAtCommit(t *testing.T) {
+	cases := map[string]func(t *testing.T, o *Orchestrator) (agentcomm.ParticipantID, assistants.TaskID, string){
+		"watching helper": func(t *testing.T, o *Orchestrator) (agentcomm.ParticipantID, assistants.TaskID, string) {
+			stubPassingHelper(o)
+			t.Cleanup(o.concurrency.WaitAgents)
+			activateStage(t, o, assistantsTestStageID)
+			taskID := attachWatcherTask(t, o, "op-watch", assistantsTestStageID, assistants.TriggerCheckpoints, assistants.ModeAdvisory)
+			waitForTaskStatus(t, o.opts.Store, taskID, assistants.StatusWatching, 2*time.Second)
+			return meshHelperParticipantID(taskID), taskID, ""
+		},
+		"helper waiting for its parent": func(t *testing.T, o *Orchestrator) (agentcomm.ParticipantID, assistants.TaskID, string) {
+			taskID := attachTestTask(context.Background(), t, o, "op-waiting")
+			waitForTaskStatus(t, o.opts.Store, taskID, assistants.StatusWaitingParent, 2*time.Second)
+			return meshHelperParticipantID(taskID), taskID, ""
+		},
+		"stage awaiting assistants": func(t *testing.T, o *Orchestrator) (agentcomm.ParticipantID, assistants.TaskID, string) {
+			activateStage(t, o, boardTaskTestBackend)
+			if _, ok := o.Trigger(boardTaskTestBackend, bus.EvAwaitAssistants, bus.GuardCtx{}, ""); !ok {
+				t.Fatal("EvAwaitAssistants failed")
+			}
+			return boardTaskB, "", boardTaskTestBackend
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			o, store := newBoardTaskTestOrchestrator(t)
+			const key = "task/x"
+			mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("X")})
+			to, taskID, stageID := setup(t, o)
+			for _, req := range []BoardTaskRequest{
+				{OperationID: "assign", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1, To: string(to)},
+				{OperationID: "create-assign", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/y", Title: new("Y"), To: string(to)},
+			} {
+				before := store.Snapshot()
+				plan, err := o.planBoardTask(planningSnapshotBefore(before, taskID, stageID), req)
+				if err != nil {
+					t.Fatalf("%s: planning against the state before the move: %v", req.OperationID, err)
+				}
+				_, err = o.commitBoardTask(context.Background(), req, plan)
+				requireRejection(t, err, assistants.CodeInvalidStatus)
+				if got := store.Snapshot().LastSeq; got != before.LastSeq {
+					t.Fatalf("%s: journal grew to seq %d from %d: a refused assignment writes nothing", req.OperationID, got, before.LastSeq)
+				}
+			}
+		})
+	}
+}
+
+// The Assistant (Side agent) has no board task protocol in its context: it is neither assigned a task nor
+// claims one.
+func TestBoardTaskRejectsSideAgentAssignee(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	side := registerTestSideAgent(t, o).ID
+	const key = "task/side"
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Side")})
+	journaled := store.Snapshot().LastSeq
+
+	for _, req := range []BoardTaskRequest{
+		{OperationID: "assign", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1, To: string(side)},
+		{OperationID: "create-assign", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/side-2", Title: new("Side 2"), To: string(side)},
+		{OperationID: "claim", Action: BoardTaskClaim, Actor: side, Key: key, ExpectedVersion: 1},
+	} {
+		_, err := o.BoardTask(context.Background(), req)
+		requireRejection(t, err, assistants.CodeInvalidStatus)
+		if !strings.Contains(err.Error(), "the Assistant does not take board tasks") {
+			t.Fatalf("%s: error = %v, want it to say the Assistant does not take board tasks", req.OperationID, err)
+		}
+	}
+	if got := store.Snapshot().LastSeq; got != journaled {
+		t.Fatalf("journal grew to seq %d from %d on refused side-agent assignments", got, journaled)
 	}
 }

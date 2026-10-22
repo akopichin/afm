@@ -124,12 +124,7 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 		if err != nil {
 			return BoardTaskReceipt{}, err
 		}
-		op := state.Operation{ID: req.OperationID, Kind: opKindMeshBoardTask, Actor: actor, Effects: plan.effects, Expect: state.Preconditions{
-			Check: o.recipientsReachable(plan.msgs),
-		}}
-		res, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
-			o.deliverCommittedMessages(runCtx, plan.msgs, res.ReadyWaits)
-		})
+		res, err := o.commitBoardTask(runCtx, req, plan)
 		if err == nil {
 			return boardTaskReceipt(plan.effects, res.Seq)
 		}
@@ -143,10 +138,32 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 	}
 }
 
+// commitBoardTask commits plan as req's operation. Under the commit's lock it checks again that the new
+// assignee, if any, can still take work and that the plan's messages can be delivered: either may have changed
+// since the plan was made.
+func (o *Orchestrator) commitBoardTask(runCtx context.Context, req BoardTaskRequest, plan boardTaskPlan) (state.OperationResult, error) {
+	reachable := o.recipientsReachable(plan.msgs)
+	check := func(rs *state.RunState) error {
+		if plan.assignee != "" {
+			if err := assignableParticipant(*rs, plan.assignee); err != nil {
+				return err
+			}
+		}
+		return reachable(rs)
+	}
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshBoardTask, Actor: boardTaskActor(req.Actor), Effects: plan.effects, Expect: state.Preconditions{
+		Check: check,
+	}}
+	return o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		o.deliverCommittedMessages(runCtx, plan.msgs, res.ReadyWaits)
+	})
+}
+
 // boardTaskPlan is what one attempt of a board task change commits.
 type boardTaskPlan struct {
-	effects []state.Effect   // the message's effects, then the task's
-	msgs    []plannedMessage // the one message the change sends, if any
+	effects  []state.Effect          // the message's effects, then the task's
+	msgs     []plannedMessage        // the one message the change sends, if any
+	assignee agentcomm.ParticipantID // the participant a new assignment goes to, if the change makes one
 }
 
 // planBoardTask plans req against rs: the task's effects — refused here when the projection refuses them, the
@@ -162,8 +179,16 @@ func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (b
 	if err != nil {
 		return boardTaskPlan{}, err
 	}
-	changes[len(changes)-1].meta.Status = after.Status()
-	msgs, err := o.planBoardTaskMessage(rs, req, changes[len(changes)-1], after)
+	last := changes[len(changes)-1]
+	last.meta.Status = after.Status()
+	var plan boardTaskPlan
+	if a, ok := last.payload.(*state.MeshBoardTaskAssignedPayload); ok {
+		if err := assignableParticipant(rs, a.ParticipantID); err != nil {
+			return boardTaskPlan{}, err
+		}
+		plan.assignee = a.ParticipantID
+	}
+	msgs, err := o.planBoardTaskMessage(rs, req, last, after)
 	if err != nil {
 		return boardTaskPlan{}, err
 	}
@@ -171,7 +196,6 @@ func (o *Orchestrator) planBoardTask(rs state.RunState, req BoardTaskRequest) (b
 	if err != nil {
 		return boardTaskPlan{}, err
 	}
-	var plan boardTaskPlan
 	for _, m := range msgs {
 		plan.effects = append(plan.effects, m.effects...)
 	}
@@ -199,11 +223,8 @@ func (o *Orchestrator) planBoardTaskMessage(rs state.RunState, req BoardTaskRequ
 }
 
 // planAssignmentMessage plans the message that hands the task to its new assignee. An assignment nobody would
-// learn about is refused: the assignee must be able to take new work and receive the message now.
+// learn about is refused: the assignee must be able to receive the message now.
 func (o *Orchestrator) planAssignmentMessage(rs state.RunState, req BoardTaskRequest, a state.MeshBoardTaskAssignedPayload, after agentcomm.BoardTask) ([]plannedMessage, error) {
-	if err := assignableParticipant(rs, a.ParticipantID); err != nil {
-		return nil, err
-	}
 	// The title is left out: it is the task author's text, and this message may come from the user. The
 	// assignee reads it in <your_board_tasks>, marked as data.
 	body := o.messageBody(fmt.Sprintf("Board task %s assigned to you (assignment %s). "+
@@ -287,7 +308,8 @@ func (o *Orchestrator) messageBody(body string) string {
 }
 
 // assignableParticipant checks that id can take a new assignment now: a known agent that can receive
-// messages and is not resting in a state no message wakes it from.
+// messages, is not resting in a state no message wakes it from and has the board task protocol in its context
+// (the Assistant has not).
 func assignableParticipant(rs state.RunState, id agentcomm.ParticipantID) error {
 	p, ok := resolveParticipant(rs, id)
 	switch {
@@ -295,6 +317,8 @@ func assignableParticipant(rs state.RunState, id agentcomm.ParticipantID) error 
 		return &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("%s is not in this run", id)}
 	case p.Kind == agentcomm.KindUser:
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a board task cannot be assigned to the user"}
+	case p.Kind == agentcomm.KindSideAgent:
+		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s: the Assistant does not take board tasks", id)}
 	case !p.Reachable:
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("%s cannot take work (%s)", id, p.UnreachableReason)}
 	}
