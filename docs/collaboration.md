@@ -473,9 +473,18 @@ on an unknown message, task or stage, on a closed thread, on a stage that alread
 finished in another status, one only the waiter itself could satisfy, one for an
 answer nobody can send any more (every recipient of the message, or every other
 member of the thread, has finished or gave the message up as undeliverable), or
-one that would close a cycle of agents waiting on each other is refused. A wait
-registered while someone could still answer ends the same way once they can no
-longer do so: when every recipient of the message (or every other member of the
+one that would close a cycle of agents waiting on each other is refused.
+
+A wait that would create such a cycle reports `wait_cycle`. The check treats a
+helper or run agent's pending waits together: that agent resumes only after all
+of them end, so a new wait can be refused even if one of its other waits has an
+independent responder. Within one message wait, any eligible recipient can
+answer; a stage agent with several waits can resume when one ends. The check
+also includes a run agent waiting for its delegated children, and refuses a
+child's wait on that parent when it would close a cycle.
+
+A wait registered while someone could still answer is cancelled if no one can
+answer later: when every recipient of the message (or every other member of the
 thread) has finished — a helper or run agent failed or was cancelled, a stage
 finished without answering — the wait is cancelled with a reason naming them,
 and the waiter continues; a stage parked in `awaiting_peer` gets its next turn

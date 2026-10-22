@@ -26,6 +26,10 @@ type agentRun struct {
 	stderr string
 }
 
+// childTurnLimit — предел хода для скриптов с фоновым `sleep 30`: заметно меньше 30 с, чтобы ход, ждущий
+// потомка, проваливал тест, но с запасом на полный `make test` с -race на macOS (там 5 с не хватало).
+const childTurnLimit = 20 * time.Second
+
 // runTurnScript runs body as the agent with prompt on stdin, handing each stdout line to onLine, and fails the
 // test unless the call returns within limit.
 func runTurnScript(t *testing.T, body, prompt string, onLine func(string), limit time.Duration) agentRun {
@@ -88,7 +92,7 @@ func requireGone(t *testing.T, pid int) {
 func TestRun_ChildHoldingStdinDoesNotBlockTheTurn(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	body := "sleep 30 <&0 >/dev/null 2>&1 &\necho $! > " + pidFile + "\necho done\n"
-	run := runTurnScript(t, body, strings.Repeat("x", 4<<20), nil, 5*time.Second)
+	run := runTurnScript(t, body, strings.Repeat("x", 4<<20), nil, childTurnLimit)
 	if run.err != nil {
 		t.Fatalf("run: %v", run.err)
 	}
@@ -119,7 +123,7 @@ func TestRun_SlowOutputCallbackKeepsBufferedFinalOutput(t *testing.T) {
 func TestRun_KillsDescendantThatClosedItsPipes(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	body := "sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > " + pidFile + "\necho done\n"
-	run := runTurnScript(t, body, "", nil, 5*time.Second)
+	run := runTurnScript(t, body, "", nil, childTurnLimit)
 	if run.err != nil {
 		t.Fatalf("run: %v", run.err)
 	}
@@ -376,7 +380,7 @@ func TestRun_AgentStartsWhenTheAnchorIsUnavailable(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	body := "sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > " + pidFile + "\necho done\n"
-	run := runTurnScript(t, body, "", nil, 5*time.Second)
+	run := runTurnScript(t, body, "", nil, childTurnLimit)
 	pidFrom(t, pidFile) // without an anchor afm cannot safely kill the descendant; the test does
 	if run.err != nil {
 		t.Fatalf("run: %v", run.err)

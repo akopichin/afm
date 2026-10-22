@@ -19,6 +19,20 @@ board task controls remain in Team mode. See
 [Collaboration modes](docs/collaboration.md#collaboration-modes) and
 [Run conversations](docs/dashboard.md#run-conversations).
 
+### Fix: reject Agent Mesh waits that would deadlock
+
+The `wait_cycle` check now accounts for every pending wait of a helper or run
+agent, and for a run agent waiting for delegated children. It rejects a new
+wait that would leave those agents waiting on each other, even when another
+pending wait has an independent responder. See [Agent Mesh waits](docs/collaboration.md#team-conversations).
+
+### Fix: worktree runs from a project opened through a symlink
+
+A second `afm run` with worktrees enabled no longer fails with "branch is already
+checked out" when the project path goes through a symlink (for example `/var` →
+`/private/var` on macOS): afm now compares worktree paths after resolving symlinks,
+the way git reports them. See [Worktrees](docs/config-reference.md).
+
 ### Improvement: afm skills for Claude Code and Codex, kept in sync with afm
 
 afm's skills now live in one place, `~/.afm/skills`, and `afm install-skills` links them

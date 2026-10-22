@@ -152,6 +152,15 @@ func TestWaiver_UnblocksStageThroughNormalCascade(t *testing.T) {
 		t.Fatalf("status after waiver = %v, want done", got)
 	}
 	// The waiver must have run the NORMAL completion cascade — downstream becomes ready, not left pending.
+	// "done" is committed before its cascade runs, and the cascade may be driven by the helper task's own
+	// post-commit hook on another goroutine (slow fsync on macOS makes that common) — wait for it.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := o.currentStatus("downstream"); got == state.StatusReady || got == state.StatusRunning {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if got := o.currentStatus("downstream"); got != state.StatusReady && got != state.StatusRunning {
 		t.Fatalf("downstream status = %v, want ready/running — waiver must drive the normal cascade", got)
 	}

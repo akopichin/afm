@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -510,19 +511,20 @@ func buildMeshWaitGraph(rs state.RunState) meshWaitGraph {
 		var children []agentcomm.ParticipantID
 		for _, cid := range currentChildren(rs, id, t.TaskGeneration) {
 			if c, ok := rs.Assistants.Tasks[cid]; ok && !c.Status.Terminal() {
-				children = append(children, meshHelperParticipantID(cid))
+				children = append(children, meshParticipantForTask(rs, c.Task))
 			}
 		}
 		if len(children) > 0 {
-			parent := meshHelperParticipantID(id)
+			parent := meshParticipantForTask(rs, t.Task)
 			g[parent] = append(g[parent], meshWaitEdge{targets: children, needsAll: true})
 		}
 	}
 	return g
 }
 
-// dependsOn reports whether node cannot act until waiter does: node is the waiter, or every edge that could
-// unblock node depends on the waiter. A participant with no edges is free to act. A chain longer than
+// dependsOn reports whether node cannot act until waiter does: node is the waiter, or its edges depend on the
+// waiter — one edge for a node that resumes only after all its waits clear (resumesAfterAllWaits), every edge
+// for the rest. A participant with no edges is free to act. A chain longer than
 // agentcomm.MaxCausalHops, or a loop that does not pass through the waiter, counts as dependent — the check
 // must never admit a cycle it could not see to the end. memo keeps the walk linear in the graph size.
 func (g meshWaitGraph) dependsOn(node, waiter agentcomm.ParticipantID, depth int, memo, path map[agentcomm.ParticipantID]bool) bool {
@@ -537,15 +539,22 @@ func (g meshWaitGraph) dependsOn(node, waiter agentcomm.ParticipantID, depth int
 	}
 	path[node] = true
 	defer delete(path, node)
-	result := len(g[node]) > 0
-	for _, e := range g[node] {
-		if !g.edgeDependsOn(e, waiter, depth+1, memo, path) {
-			result = false
-			break
-		}
+	edgeDepends := func(e meshWaitEdge) bool { return g.edgeDependsOn(e, waiter, depth+1, memo, path) }
+	var result bool
+	if resumesAfterAllWaits(node) {
+		result = slices.ContainsFunc(g[node], edgeDepends)
+	} else {
+		result = len(g[node]) > 0 && !slices.ContainsFunc(g[node], func(e meshWaitEdge) bool { return !edgeDepends(e) })
 	}
 	memo[node] = result
 	return result
+}
+
+// resumesAfterAllWaits reports whether id is a task (helper or run agent, including a legacy "run:<profileID>")
+// that continues only once ALL its pending waits are cleared (resumeTaskIfWaitCleared). A stage, the Side agent
+// and the human continue on the first one that clears, so their waits stay any-of.
+func resumesAfterAllWaits(id agentcomm.ParticipantID) bool {
+	return strings.HasPrefix(string(id), meshHelperPrefix) || strings.HasPrefix(string(id), meshRunPrefix)
 }
 
 // edgeDependsOn: an any-of edge depends on the waiter when every target does; an all-of edge when one does.

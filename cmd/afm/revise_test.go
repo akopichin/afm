@@ -25,7 +25,12 @@ func chdirTemp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
-	return dir
+	// После Chdir код видит каталог через os.Getwd — реальным путём (на macOS /var -> /private/var).
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return realDir
 }
 
 // makeRunState creates .afm/runs/{runName}/events.jsonl with a single transition into status for stageID.

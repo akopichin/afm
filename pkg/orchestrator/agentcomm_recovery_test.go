@@ -291,6 +291,128 @@ func TestMesh_ParentChildMeshWaitCycleRejected(t *testing.T) {
 	o.concurrency.WaitAgents()
 }
 
+// TestMesh_RunParentChildWaitCycleRejected: the delegation edge of a scope=run parent belongs to its real mesh
+// identity run:<taskID>, not to a helper:<taskID> nobody ever registered. Otherwise the waiting_children
+// parent looks free to act and its child's task_result wait on it is admitted — a deadlock.
+func TestMesh_RunParentChildWaitCycleRejected(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+
+	runID := deriveTaskID("op-run-cycle-parent")
+	childRelease := make(chan struct{})
+	var runTurns atomic.Int32
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if taskID == string(runID) {
+			if runTurns.Add(1) == 1 {
+				return delegateOutcome(childJSON(assistants.ModeAdvisory)), nil
+			}
+			return passResultOutcome(), nil // the continuation turn once the child completes
+		}
+		awaitRelease(t, childRelease) // the child's own turn: stays non-terminal until the test is done with it
+		return passResultOutcome(), nil
+	}
+
+	msg := "delegate this"
+	res, err := o.AddRunAgent(ctx, AddRunAgentRequest{
+		OperationID: "op-run-cycle-parent", ProfileID: "qa", Title: "QA", Instruction: "review", FirstMessage: &msg, Actor: state.Actor{Kind: "user"},
+	})
+	if err != nil {
+		t.Fatalf("AddRunAgent: %v", err)
+	}
+	if res.TaskID != runID {
+		t.Fatalf("run agent task id = %s, want deterministic %s", res.TaskID, runID)
+	}
+	waitForTaskStatus(t, store, runID, assistants.StatusWaitingChildren, 2*time.Second)
+	childID := store.Snapshot().Assistants.ByParent[runID][0]
+	waitForTaskStatus(t, store, childID, assistants.StatusRunning, 2*time.Second)
+
+	rs := store.Snapshot()
+	runParticipant := meshParticipantForTask(rs, rs.Assistants.Tasks[runID].Task)
+	childParticipant := meshParticipantForTask(rs, rs.Assistants.Tasks[childID].Task)
+	if runParticipant != meshRunParticipantID(runID) || childParticipant != meshHelperParticipantID(childID) {
+		t.Fatalf("participants = %s, %s, want run:<parent> and helper:<child>", runParticipant, childParticipant)
+	}
+
+	_, err = o.Wait(ctx, WaitRequest{
+		OperationID: "op-run-cycle-child-wait", Waiter: childParticipant,
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: string(runID)},
+	})
+	var rejected *state.OperationRejectedError
+	if !errors.As(err, &rejected) || rejected.Code != agentcomm.CodeWaitCycle {
+		t.Fatalf("child waiting on the result of its waiting_children run parent: err = %v, want a wait_cycle rejection", err)
+	}
+	for _, w := range store.Snapshot().Assistants.Mesh.Waits {
+		if w.Waiter == childParticipant {
+			t.Fatalf("a rejected wait left a record: %+v", w)
+		}
+	}
+
+	close(childRelease)
+	waitForTaskStatus(t, store, childID, assistants.StatusCompleted, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := runTurns.Load(); got != 2 {
+		t.Fatalf("run agent turns = %d, want the delegating turn and the continuation", got)
+	}
+	waitForRunAgentTurn(t, store, runID, 2*time.Second)
+}
+
+// TestMesh_WaitCycleAfterReplayUsesAllPendingWaits: the all-of rule for a helper's pending waits holds on a
+// projection rebuilt from events.jsonl (a restart), not only on the live one. A waits on B and on C (both
+// recorded through the real store); the replayed state must still reject B waiting on A.
+func TestMesh_WaitCycleAfterReplayUsesAllPendingWaits(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	ctx := context.Background()
+	activateStage(t, o, assistantsTestStageID)
+	a := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-replay-a"))
+	b := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-replay-b"))
+	c := meshHelperParticipantID(newRunningHelperForMesh(t, o, store, "op-replay-c"))
+
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-replay-open", Members: []agentcomm.ParticipantID{a, b, c}, Scope: agentcomm.ScopeStage})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	var waitIDs []agentcomm.WaitID
+	for _, peer := range []agentcomm.ParticipantID{b, c} {
+		send, err := o.Send(ctx, SendRequest{OperationID: "op-replay-send-" + string(peer), ThreadID: thread.ID, Sender: a, Recipients: []agentcomm.ParticipantID{peer}, Kind: agentcomm.MessageKindRequest, Body: "q"})
+		if err != nil {
+			t.Fatalf("Send to %s: %v", peer, err)
+		}
+		wait, err := o.Wait(ctx, WaitRequest{OperationID: "op-replay-wait-" + string(peer), Waiter: a, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: send.MessageID}})
+		if err != nil {
+			t.Fatalf("Wait of A on %s: %v", peer, err)
+		}
+		waitIDs = append(waitIDs, wait.WaitID)
+	}
+	// A's waits stay pending for the whole test; cancel them before the helpers' own cleanups, which expect
+	// every helper to finish (t.Cleanup is LIFO — this runs before theirs).
+	t.Cleanup(func() {
+		for _, id := range waitIDs {
+			if err := o.CancelWait(ctx, CancelWaitRequest{OperationID: "op-replay-cancel-" + string(id), WaitID: id, Actor: state.Actor{Kind: "agent", ID: string(a)}}); err != nil {
+				t.Errorf("CancelWait %s: %v", id, err)
+			}
+		}
+	})
+	toA, err := o.Send(ctx, SendRequest{OperationID: "op-replay-send-ba", ThreadID: thread.ID, Sender: b, Recipients: []agentcomm.ParticipantID{a}, Kind: agentcomm.MessageKindRequest, Body: "q"})
+	if err != nil {
+		t.Fatalf("Send B to A: %v", err)
+	}
+
+	replayed, err := state.LoadRunState(o.opts.RunDir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	for _, id := range waitIDs {
+		if w := replayed.Assistants.Mesh.Waits[id]; w == nil || w.Status != agentcomm.WaitPending || w.Waiter != a {
+			t.Fatalf("replayed wait %s = %+v, want pending wait of %s", id, w, a)
+		}
+	}
+	err = validateWaitAdmission(replayed, WaitRequest{Waiter: b, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: toA.MessageID}})
+	var rej *state.OperationRejectedError
+	if !errors.As(err, &rej) || rej.Code != agentcomm.CodeWaitCycle {
+		t.Fatalf("replayed state, B waits on A (A waits on B and C): err = %v, want wait_cycle", err)
+	}
+}
+
 // TestMesh_DeadlineEndsWaitOnUnreachableBoardProducerWithVisibleReason is T8.3's "a deadline ending a wait on
 // an unreachable recipient with a visible reason" clause for a board_key condition that has — and will ever
 // have — no producer at all (not merely "nobody replied yet on a real thread", which
