@@ -115,6 +115,9 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 		if receipt, replayed, err := o.replayedBoardTask(req); replayed {
 			return receipt, err
 		}
+		if o.testAfterBoardTaskLookup != nil {
+			o.testAfterBoardTaskLookup()
+		}
 		// Checked after the replay lookup: a retry of a committed request always gets its stored receipt.
 		// The key names the task in the journal, prompts and messages and is never redacted, so it must hold no secret.
 		if o.RedactSecrets(req.Key) != req.Key {
@@ -122,7 +125,7 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 		}
 		plan, err := o.planBoardTask(o.opts.Store.Snapshot(), req)
 		if err != nil {
-			return BoardTaskReceipt{}, err
+			return o.answerFailedBoardTask(req, err)
 		}
 		res, err := o.commitBoardTask(runCtx, req, plan)
 		if err == nil {
@@ -133,9 +136,20 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 			return again.msgs, err
 		}
 		if attempt == maxAttempts || !o.worthAnotherAttempt(req.OperationID, err, plan.msgs, replan) {
-			return BoardTaskReceipt{}, err
+			return o.answerFailedBoardTask(req, err)
 		}
 	}
+}
+
+// answerFailedBoardTask answers a request whose planning or commit failed with err. A duplicate of the request
+// under the same id may have committed after this one's lookup — its planning then met the state after that
+// commit — so the committed operation, when there is one, answers instead: with its receipt, or a request id
+// conflict.
+func (o *Orchestrator) answerFailedBoardTask(req BoardTaskRequest, err error) (BoardTaskReceipt, error) {
+	if receipt, replayed, lookupErr := o.replayedBoardTask(req); replayed {
+		return receipt, lookupErr
+	}
+	return BoardTaskReceipt{}, err
 }
 
 // commitBoardTask commits plan as req's operation. Under the commit's lock it checks again that the new
@@ -364,7 +378,8 @@ func (o *Orchestrator) planBoardTaskChanges(req BoardTaskRequest, resolve func(n
 			return nil, err
 		}
 		p := &state.MeshBoardTaskCreatedPayload{
-			Title: o.RedactSecrets(valueOf(req.Title)), Description: o.RedactSecrets(valueOf(req.Description)), CoordinatorID: coordinator,
+			Title: o.RedactSecrets(valueOf(req.Title)), Description: o.RedactSecrets(valueOf(req.Description)),
+			CoordinatorID: coordinator, RequestedCoordinator: valueOf(req.CoordinatorID),
 		}
 		changes = append(changes, boardTaskChange{"mesh_board_task_created", p, &p.MeshBoardTaskMeta})
 		if req.To != "" {
@@ -372,7 +387,7 @@ func (o *Orchestrator) planBoardTaskChanges(req BoardTaskRequest, resolve func(n
 			if err != nil {
 				return nil, err
 			}
-			a := &state.MeshBoardTaskAssignedPayload{AssignmentID: newAssignmentID, ParticipantID: assignee}
+			a := &state.MeshBoardTaskAssignedPayload{AssignmentID: newAssignmentID, ParticipantID: assignee, RequestedTo: req.To}
 			changes = append(changes, boardTaskChange{"mesh_board_task_assigned", a, &a.MeshBoardTaskMeta})
 		}
 	case BoardTaskAssign:
@@ -380,7 +395,7 @@ func (o *Orchestrator) planBoardTaskChanges(req BoardTaskRequest, resolve func(n
 		if err != nil {
 			return nil, err
 		}
-		p := &state.MeshBoardTaskAssignedPayload{AssignmentID: newAssignmentID, ParticipantID: assignee}
+		p := &state.MeshBoardTaskAssignedPayload{AssignmentID: newAssignmentID, ParticipantID: assignee, RequestedTo: req.To}
 		changes = append(changes, boardTaskChange{"mesh_board_task_assigned", p, &p.MeshBoardTaskMeta})
 	case BoardTaskClaim:
 		p := &state.MeshBoardTaskAssignedPayload{AssignmentID: newAssignmentID, ParticipantID: req.Actor, Start: true}
@@ -428,7 +443,7 @@ func (o *Orchestrator) boardTaskEdit(req BoardTaskRequest, resolve func(name str
 		if err != nil {
 			return nil, err
 		}
-		p.CoordinatorID = &coordinator
+		p.CoordinatorID, p.RequestedCoordinator = &coordinator, req.CoordinatorID
 	}
 	return p, nil
 }
@@ -542,23 +557,17 @@ func boardTaskEffectsOf(effects []state.Effect) []state.Effect {
 
 // replayedBoardTask answers a request whose id already committed with the receipt of that operation. The
 // request must plan the same board task effects as the committed ones — apart from the planned status and
-// notice, which depend on the state the original request met — or it is a request id conflict. A participant
-// the request names matches a committed one by id or alias before any alias is resolved against today's
-// roster, where it may have become ambiguous. replayed=false: nothing committed under the id.
+// notice, which depend on the state the original request met — or it is a request id conflict. The participants
+// it names are compared as written with the names the original request wrote (requested_to,
+// requested_coordinator), never resolved against today's roster, where a name may stand for someone else now.
+// replayed=false: nothing committed under the id.
 func (o *Orchestrator) replayedBoardTask(req BoardTaskRequest) (BoardTaskReceipt, bool, error) {
 	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshBoardTask)
 	if err != nil || !committed {
 		return BoardTaskReceipt{}, err != nil, err // a storage error answers the request too
 	}
-	committedEffects := boardTaskEffectsOf(op.Effects)
-	rs := o.opts.Store.Snapshot()
-	resolve := func(name string) (agentcomm.ParticipantID, error) {
-		if id, ok := committedParticipant(rs, committedEffects, name); ok {
-			return id, nil
-		}
-		return o.boardTaskParticipant(rs, name)
-	}
-	changes, err := o.planBoardTaskChanges(req, resolve)
+	asWritten := func(name string) (agentcomm.ParticipantID, error) { return agentcomm.ParticipantID(name), nil }
+	changes, err := o.planBoardTaskChanges(req, asWritten)
 	if err != nil {
 		return BoardTaskReceipt{}, true, err
 	}
@@ -566,7 +575,7 @@ func (o *Orchestrator) replayedBoardTask(req BoardTaskRequest) (BoardTaskReceipt
 	if err != nil {
 		return BoardTaskReceipt{}, true, err
 	}
-	same, err := o.sameBoardTaskEffects(committedEffects, planned)
+	same, err := o.sameBoardTaskEffects(boardTaskEffectsOf(op.Effects), planned)
 	if err != nil {
 		return BoardTaskReceipt{}, true, err
 	}
@@ -577,36 +586,9 @@ func (o *Orchestrator) replayedBoardTask(req BoardTaskRequest) (BoardTaskReceipt
 	return receipt, true, err
 }
 
-// committedParticipant finds the participant name stands for among those the committed board task effects
-// name (assignee and coordinator): by its id, or by its alias.
-func committedParticipant(rs state.RunState, effects []state.Effect, name string) (agentcomm.ParticipantID, bool) {
-	alias := strings.TrimPrefix(name, "@")
-	for _, e := range effects {
-		var p struct {
-			ParticipantID agentcomm.ParticipantID `json:"participant_id"`
-			CoordinatorID agentcomm.ParticipantID `json:"coordinator_id"`
-		}
-		if json.Unmarshal(e.Payload, &p) != nil {
-			continue // a payload that does not decode names nobody
-		}
-		for _, id := range []agentcomm.ParticipantID{p.ParticipantID, p.CoordinatorID} {
-			if id == "" {
-				continue
-			}
-			if string(id) == name {
-				return id, true
-			}
-			if known, ok := resolveParticipant(rs, id); ok && strings.EqualFold(known.Alias, alias) {
-				return id, true
-			}
-		}
-	}
-	return "", false
-}
-
 // sameBoardTaskEffects reports whether committed and planned board task effects are the same changes: the
-// same kinds and targets, and payloads equal once the planned status and notice are left out and the text in
-// them is redacted with the current secret set (see sameRedactedText).
+// same kinds and targets, and payloads equal once the planned status and notice and the resolved participants
+// are left out and the text in them is redacted with the current secret set (see sameRedactedText).
 func (o *Orchestrator) sameBoardTaskEffects(committed, planned []state.Effect) (bool, error) {
 	if len(committed) != len(planned) {
 		return false, nil
@@ -631,14 +613,15 @@ func (o *Orchestrator) sameBoardTaskEffects(committed, planned []state.Effect) (
 }
 
 // comparableBoardTaskPayload decodes a board task payload for sameBoardTaskEffects: without the planned
-// status and notice, with every text redacted.
+// status and notice and the resolved participant ids (the names as written stay), with every text redacted.
 func (o *Orchestrator) comparableBoardTaskPayload(raw json.RawMessage) (map[string]any, error) {
 	var fields map[string]any
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, fmt.Errorf("decode board task payload: %w", err)
 	}
-	delete(fields, "status")
-	delete(fields, "notice_skipped")
+	for _, planned := range []string{"status", "notice_skipped", "participant_id", "coordinator_id"} {
+		delete(fields, planned)
+	}
 	for name, v := range fields {
 		switch v := v.(type) {
 		case string:

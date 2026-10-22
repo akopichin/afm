@@ -43,19 +43,24 @@ func (m MeshBoardTaskMeta) boardTaskMeta() MeshBoardTaskMeta { return m }
 func (MeshBoardTaskMeta) checkFormat(string) error { return nil }
 
 // MeshBoardTaskCreatedPayload is the payload of mesh_board_task_created; the actor becomes the task author.
+// RequestedCoordinator is the coordinator's name as the request wrote it (an id or an alias), kept for the
+// orchestrator to compare a retry with; the projection ignores it.
 type MeshBoardTaskCreatedPayload struct {
-	Title         string                  `json:"title"`
-	Description   string                  `json:"description,omitempty"`
-	CoordinatorID agentcomm.ParticipantID `json:"coordinator_id,omitempty"`
+	Title                string                  `json:"title"`
+	Description          string                  `json:"description,omitempty"`
+	CoordinatorID        agentcomm.ParticipantID `json:"coordinator_id,omitempty"`
+	RequestedCoordinator string                  `json:"requested_coordinator,omitempty"`
 	MeshBoardTaskMeta
 }
 
 // MeshBoardTaskAssignedPayload is the payload of mesh_board_task_assigned. Start is a claim: the actor, who
-// must be ParticipantID itself, takes a free task and starts it at once.
+// must be ParticipantID itself, takes a free task and starts it at once. RequestedTo is the assignee's name as
+// the request wrote it, kept like RequestedCoordinator of a create; empty on a claim.
 type MeshBoardTaskAssignedPayload struct {
 	AssignmentID  string                  `json:"assignment_id"`
 	ParticipantID agentcomm.ParticipantID `json:"participant_id"`
 	Start         bool                    `json:"start,omitempty"`
+	RequestedTo   string                  `json:"requested_to,omitempty"`
 	MeshBoardTaskMeta
 }
 
@@ -95,11 +100,13 @@ type MeshBoardTaskReopenedPayload struct {
 	MeshBoardTaskMeta
 }
 
-// MeshBoardTaskEditedPayload is the payload of mesh_board_task_edited; only the non-nil fields change.
+// MeshBoardTaskEditedPayload is the payload of mesh_board_task_edited; only the non-nil fields change, and an
+// empty description or coordinator clears it. RequestedCoordinator is kept like that of a create.
 type MeshBoardTaskEditedPayload struct {
-	Title         *string                  `json:"title,omitempty"`
-	Description   *string                  `json:"description,omitempty"`
-	CoordinatorID *agentcomm.ParticipantID `json:"coordinator_id,omitempty"`
+	Title                *string                  `json:"title,omitempty"`
+	Description          *string                  `json:"description,omitempty"`
+	CoordinatorID        *agentcomm.ParticipantID `json:"coordinator_id,omitempty"`
+	RequestedCoordinator *string                  `json:"requested_coordinator,omitempty"`
 	MeshBoardTaskMeta
 }
 

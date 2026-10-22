@@ -3,7 +3,9 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -366,5 +368,81 @@ func TestBoardTaskDoneClearsArtifactRefs(t *testing.T) {
 	absent.ArtifactRefs = nil
 	if _, err := o.BoardTask(context.Background(), absent); !errors.Is(err, state.ErrOperationIDConflict) {
 		t.Fatalf("same request id without the list: error = %v, want a request id conflict", err)
+	}
+}
+
+// Two identical requests under one id race: the second passes the lookup of committed requests before the
+// first commits and plans against the state after it. Both get the one commit's receipt — never the
+// rejection the second's planning meets.
+func TestBoardTaskConcurrentDuplicateGetsTheReceipt(t *testing.T) {
+	cases := map[string]BoardTaskRequest{
+		"create": {OperationID: "create-dup", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/dup", Title: new("Dup")},
+		"assign": {OperationID: "assign-dup", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: "task/base", ExpectedVersion: 1, To: boardTaskTestBackend},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			o, store := newBoardTaskTestOrchestrator(t)
+			mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-base", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/base", Title: new("Base")})
+			journaled := store.Snapshot().LastSeq
+
+			var first BoardTaskReceipt
+			var firstErr error
+			var raced atomic.Bool
+			o.testAfterBoardTaskLookup = func() {
+				if !raced.CompareAndSwap(false, true) {
+					return // the duplicate itself runs on
+				}
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					first, firstErr = o.BoardTask(context.Background(), req)
+				}()
+				<-done
+			}
+			second, err := o.BoardTask(context.Background(), req)
+			if firstErr != nil || err != nil {
+				t.Fatalf("duplicate requests: errors %v and %v, want both answered", firstErr, err)
+			}
+			if second != first {
+				t.Fatalf("receipts %+v and %+v, want the one commit's receipt twice", first, second)
+			}
+			if got := store.Snapshot().LastSeq; got != journaled+1 {
+				t.Fatalf("journal grew from seq %d to %d, want one commit", journaled, got)
+			}
+		})
+	}
+}
+
+// A retry is compared with the participant names the original request wrote, never with how those names
+// resolve today: here a stage added on resume takes the alias the original assign used.
+func TestBoardTaskRetryAfterAliasMovedToAnotherParticipant(t *testing.T) {
+	recordProtocol := func(store *state.Store) {
+		if err := store.RecordBoardTaskProtocol(agentcomm.BoardTaskProtocolTypedV1, state.Actor{Kind: "system", ID: "afm"}); err != nil {
+			t.Fatalf("RecordBoardTaskProtocol: %v", err)
+		}
+	}
+	// The Assistant owns @assistant, so the stage named assistant answers to @assistant-2.
+	o, store := newAssistantsTestOrchestratorWith(t, true, recordProtocol, flow.Stage{ID: "assistant", Command: "claude"})
+	registerTestSideAgent(t, o)
+	const key = "task/moved"
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: key, Title: new("Moved")})
+	assignReq := BoardTaskRequest{OperationID: "assign", Action: BoardTaskAssign, Actor: agentcomm.UserParticipantID, Key: key, ExpectedVersion: 1, To: "assistant-2"}
+	first := mustBoardTask(t, o, assignReq)
+	if a, _ := store.Snapshot().Assistants.Mesh.BoardTasks[key].Assignment(first.AssignmentID); a.ParticipantID != meshStageParticipantID("assistant") {
+		t.Fatalf("test setup: @assistant-2 assigned %s, want the stage named assistant", a.ParticipantID)
+	}
+	o.concurrency.WaitAgents()
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	o.opts.Stages = append(slices.Clone(o.opts.Stages), flow.Stage{ID: "assistant-2", Command: "claude"})
+	resumed, _ := reopenAssistantsTestOrchestrator(t, o)
+	t.Cleanup(resumed.concurrency.WaitAgents)
+	if id, err := resumed.boardTaskParticipant(resumed.opts.Store.Snapshot(), "assistant-2"); err != nil || id != meshStageParticipantID("assistant-2") {
+		t.Fatalf("test setup: @assistant-2 resolves to %s (%v), want the new stage", id, err)
+	}
+	if again := mustBoardTask(t, resumed, assignReq); again != first {
+		t.Fatalf("retry receipt = %+v, want the original %+v", again, first)
 	}
 }

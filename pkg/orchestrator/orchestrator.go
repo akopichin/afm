@@ -381,6 +381,10 @@ type Orchestrator struct {
 	// can commit a competing attach in between (the alias race initTeam retries).
 	testAfterAttachSnapshot func()
 
+	// testAfterBoardTaskLookup runs in BoardTask right after its lookup of a committed request with the same id
+	// found none, so a test can commit a concurrent duplicate of the request in between.
+	testAfterBoardTaskLookup func()
+
 	// --- Этап 5: watcher helper tasks (checkpoints/on_completion-triggered observation of the main agent) ---
 
 	// watchMu guards watchByStage/watchByTask — rare, admission-time/poll-time mutation, not a hot path, so a
