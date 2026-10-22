@@ -446,3 +446,44 @@ func TestBoardTaskRetryAfterAliasMovedToAnotherParticipant(t *testing.T) {
 		t.Fatalf("retry receipt = %+v, want the original %+v", again, first)
 	}
 }
+
+// A board task change whose journal write fails is storage-fatal: the run ends, and the caller gets the
+// storage error, never an answer made up from another lookup.
+func TestBoardTaskJournalWriteFailureEndsRun(t *testing.T) {
+	o, store := newBoardTaskTestOrchestrator(t)
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-wf", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/wf", Title: new("Write failure")})
+
+	store.CloseEventsLogForTest()
+	_, err := o.BoardTask(context.Background(), BoardTaskRequest{
+		OperationID: "claim-wf", Action: BoardTaskClaim, Actor: meshStageParticipantID(boardTaskTestBackend), Key: "task/wf", ExpectedVersion: 1,
+	})
+
+	var se *state.StorageError
+	if !errors.As(err, &se) {
+		t.Fatalf("BoardTask error = %v, want the journal failure as a *state.StorageError", err)
+	}
+	if fatal := o.loadFatal(); !errors.As(fatal, &se) {
+		t.Fatalf("loadFatal() = %v, want the journal failure as a *state.StorageError", fatal)
+	}
+}
+
+// A retry whose committed operation cannot be read back from the journal is storage-fatal too.
+func TestBoardTaskReceiptReadFailureEndsRun(t *testing.T) {
+	state.SetOperationResultCacheCapacityForTest(1) // the retried operation is read from the journal, not the cache
+	defer state.SetOperationResultCacheCapacityForTest(0)
+	o, store := newBoardTaskTestOrchestrator(t)
+	create := BoardTaskRequest{OperationID: "create-rf", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/rf", Title: new("Read failure")}
+	mustBoardTask(t, o, create)
+	mustBoardTask(t, o, BoardTaskRequest{OperationID: "create-rf-2", Action: BoardTaskCreate, Actor: agentcomm.UserParticipantID, Key: "task/rf-2", Title: new("Evicts the first")})
+
+	store.CloseEventsLogForTest()
+	_, err := o.BoardTask(context.Background(), create)
+
+	var se *state.StorageError
+	if !errors.As(err, &se) {
+		t.Fatalf("BoardTask retry error = %v, want the journal read failure as a *state.StorageError", err)
+	}
+	if fatal := o.loadFatal(); !errors.As(fatal, &se) {
+		t.Fatalf("loadFatal() = %v, want the journal read failure as a *state.StorageError", fatal)
+	}
+}

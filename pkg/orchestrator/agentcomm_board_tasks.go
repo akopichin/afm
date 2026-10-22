@@ -131,6 +131,12 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 		if err == nil {
 			return boardTaskReceipt(plan.effects, res.Seq)
 		}
+		// A failed journal write ends the run (storage-fatal); no lookup of a duplicate answers instead.
+		var storageErr *state.StorageError
+		if errors.As(err, &storageErr) {
+			o.handleTaskOperationErr(err)
+			return BoardTaskReceipt{}, err
+		}
 		replan := func(rs state.RunState) ([]plannedMessage, error) {
 			again, err := o.planBoardTask(rs, req)
 			return again.msgs, err
@@ -564,6 +570,7 @@ func boardTaskEffectsOf(effects []state.Effect) []state.Effect {
 func (o *Orchestrator) replayedBoardTask(req BoardTaskRequest) (BoardTaskReceipt, bool, error) {
 	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshBoardTask)
 	if err != nil || !committed {
+		o.handleTaskOperationErr(err) // a journal that cannot be read back ends the run
 		return BoardTaskReceipt{}, err != nil, err // a storage error answers the request too
 	}
 	asWritten := func(name string) (agentcomm.ParticipantID, error) { return agentcomm.ParticipantID(name), nil }
