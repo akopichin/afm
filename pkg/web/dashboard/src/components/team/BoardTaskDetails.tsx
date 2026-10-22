@@ -1,9 +1,9 @@
 import { useRef, type ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
-import type { BoardTask } from '../../lib/board-tasks'
+import { splitTaskText, type BoardTask } from '../../lib/board-tasks'
 import { useModalDialog } from '../../lib/focus-trap'
 import { senderLabel } from '../../lib/mesh-roster'
-import { BoardTaskStatusBadge, findTaskCard, splitTaskText } from './BoardTaskCard'
+import { BoardTaskStatusBadge, findTaskCard } from './BoardTaskCard'
 
 export type BoardTaskDetailsProps = {
   // task — read from the live projection on every render, so a report that arrives while the dialog is open shows.
@@ -55,7 +55,7 @@ export function BoardTaskDetails({ task, participants, onClose, active = true }:
             {task.assignees.map((a) => (
               <li key={a.id}>
                 <span className="board-task-details-assignee-name">{senderLabel(a.id, participants)}</span>
-                <span className="board-task-details-assignee-state">{a.inProgress ? 'In progress' : 'Done'}</span>
+                <span className="board-task-details-assignee-state">{a.state === 'in_progress' ? 'In progress' : 'Done'}</span>
               </li>
             ))}
           </ul>

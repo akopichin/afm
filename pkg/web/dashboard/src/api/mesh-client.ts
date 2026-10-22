@@ -154,6 +154,62 @@ export type MeshBoardEntry = {
   ts: string
 }
 
+export type MeshBoardTaskStatus = 'todo' | 'in_progress' | 'done'
+export type MeshAssignmentState = 'assigned' | 'in_progress' | 'done'
+
+// MeshBoardTaskAssignment mirrors agentcomm.BoardTaskAssignment. ended is set only on history rows.
+export type MeshBoardTaskAssignment = {
+  id: string
+  participant_id: string
+  state: MeshAssignmentState
+  assigned_by: string
+  progress?: string
+  result?: string
+  artifact_refs?: string[]
+  assigned_seq: number
+  started_seq?: number
+  completed_seq?: number
+  ended?: 'released' | 'reopened'
+  ended_by?: string
+  end_reason?: string
+  ended_seq?: number
+}
+
+// MeshBoardTask mirrors the server's typed board task view (agentcomm.BoardTaskView). assignments are the
+// active ones; history holds released/reopened ones, oldest first.
+export type MeshBoardTask = {
+  key: string
+  author_id: string
+  coordinator_id?: string
+  title: string
+  description?: string
+  version: number
+  generation: number
+  assignments: MeshBoardTaskAssignment[]
+  history?: MeshBoardTaskAssignment[]
+  created_seq: number
+  updated_seq: number
+  created_at: string
+  updated_at: string
+  status: MeshBoardTaskStatus
+}
+
+// MeshBoardSnapshot — GET /api/mesh/board. typedTasks says whether the run keeps typed tasks; tasks is empty
+// otherwise (and the board's tasks are then the "task/<slug>" entries).
+export type MeshBoardSnapshot = { entries: MeshBoardEntry[]; tasks: MeshBoardTask[]; typedTasks: boolean }
+
+// BoardTaskReceipt mirrors orchestrator.BoardTaskReceipt — the result of POST /api/mesh/tasks.
+export type BoardTaskReceipt = {
+  key: string
+  version: number
+  status: MeshBoardTaskStatus
+  assignment_id?: string
+  seq: number
+  message_id?: string
+  thread_id?: string
+  notice_skipped?: boolean
+}
+
 // MeshSendReceipt mirrors server.MeshSendReceipt.
 export type MeshSendReceipt = {
   message_id: string
@@ -231,10 +287,39 @@ export async function publishMeshBoard(req: { requestId: string; key: string; st
 
 // getMeshBoard reads the shared board — GET /api/mesh/board. An empty/omitted key returns every entry
 // (orchestrator.ReadBoard's own "empty Key returns every entry" contract).
-export async function getMeshBoard(key = ''): Promise<{ entries: MeshBoardEntry[] }> {
+export async function getMeshBoard(key = ''): Promise<MeshBoardSnapshot> {
   const url = key === '' ? '/api/mesh/board' : `/api/mesh/board?key=${encodeURIComponent(key)}`
-  const body = await meshGet<{ entries?: MeshBoardEntry[] | null }>(url)
-  return { entries: body.entries ?? [] }
+  const body = await meshGet<{ entries?: MeshBoardEntry[] | null; typed_tasks?: boolean; tasks?: MeshBoardTask[] | null }>(url)
+  return { entries: body.entries ?? [], tasks: body.tasks ?? [], typedTasks: body.typed_tasks === true }
+}
+
+// postMeshTask changes a typed board task as the human operator — POST /api/mesh/tasks. Only the fields the
+// action uses are sent. action is the server's verb (create, update, assign, ...); requestId makes a retry idempotent.
+export type PostMeshTaskRequest = {
+  requestId: string
+  action: string
+  key: string
+  expectedVersion?: number
+  assignmentId?: string
+  to?: string
+  title?: string
+  description?: string
+  coordinator?: string
+  text?: string
+  artifactRefs?: string[]
+}
+
+export async function postMeshTask(req: PostMeshTaskRequest): Promise<BoardTaskReceipt> {
+  const body: Record<string, unknown> = { request_id: req.requestId, action: req.action, key: req.key }
+  if (req.expectedVersion !== undefined) body.expected_version = req.expectedVersion
+  if (req.assignmentId !== undefined) body.assignment_id = req.assignmentId
+  if (req.to !== undefined) body.to = req.to
+  if (req.title !== undefined) body.title = req.title
+  if (req.description !== undefined) body.description = req.description
+  if (req.coordinator !== undefined) body.coordinator = req.coordinator
+  if (req.text !== undefined) body.text = req.text
+  if (req.artifactRefs !== undefined) body.artifact_refs = req.artifactRefs
+  return meshPost<BoardTaskReceipt>('/api/mesh/tasks', body)
 }
 
 export type OpenMeshThreadRequest = {

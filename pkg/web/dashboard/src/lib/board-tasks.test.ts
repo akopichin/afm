@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
-import type { MeshBoardEntry, MeshParticipant } from '../api/mesh-client'
-import { boardReportsOf, boardTaskCount, boardTasks, boardTopLevel } from './board-tasks'
+import type { MeshBoardEntry, MeshBoardTask, MeshParticipant } from '../api/mesh-client'
+import { boardReportsOf, boardTaskCount, boardTaskCountOf, boardTasks, boardTasksOf, boardTopLevel, boardTopLevelOf, splitTaskText, taskFromView } from './board-tasks'
 
 const dev: MeshParticipant = { id: 'run:t-dev', kind: 'run_agent', scope: 'run', alias: 'dev', reachable: true }
 const qa: MeshParticipant = { id: 'stage:qa', kind: 'stage_agent', scope: 'stage', alias: 'qa', stage_id: 'qa', reachable: true }
@@ -33,12 +33,12 @@ describe('boardTasks', () => {
     const start = entry('task/csv/dev', 'In Progress: wiring the exporter', dev.id)
     const working = only(boardTasks([task(), start], roster))
     expect(working.status).toBe('in_progress')
-    expect(working.assignees).toEqual([{ id: dev.id, inProgress: true }])
+    expect(working.assignees).toEqual([{ id: dev.id, state: 'in_progress' }])
 
     const finish = { ...entry('task/csv/dev', 'done: exporter shipped', dev.id), version: 2 }
     const done = only(boardTasks([task(), finish], roster))
     expect(done.status).toBe('done')
-    expect(done.assignees).toEqual([{ id: dev.id, inProgress: false }])
+    expect(done.assignees).toEqual([{ id: dev.id, state: 'done' }])
     expect(done.reports.map((r) => r.entry.status)).toEqual(['done: exporter shipped'])
   })
 
@@ -71,7 +71,7 @@ describe('boardTasks', () => {
 
   test('the assignee is the entry author, not the key suffix', () => {
     const t = only(boardTasks([task(), entry('task/csv/qa', 'in progress: mine', dev.id)], roster))
-    expect(t.assignees).toEqual([{ id: dev.id, inProgress: true }])
+    expect(t.assignees).toEqual([{ id: dev.id, state: 'in_progress' }])
   })
 
   test.each([
@@ -86,8 +86,8 @@ describe('boardTasks', () => {
     const entries = order.map((text, i) => ({ ...entry(reports[text as keyof typeof reports].key, text, reports[text as keyof typeof reports].author), seq: 1000 + i }))
     const t = only(boardTasks([task(), ...entries], roster))
     expect(t.status).toBe('in_progress')
-    expect(t.assignees.map((a) => [a.id, a.inProgress])).toEqual(
-      order[0] === 'done: a' ? [[dev.id, false], [qa.id, true]] : [[qa.id, true], [dev.id, false]],
+    expect(t.assignees.map((a) => [a.id, a.state])).toEqual(
+      order[0] === 'done: a' ? [[dev.id, 'done'], [qa.id, 'in_progress']] : [[qa.id, 'in_progress'], [dev.id, 'done']],
     )
   })
 
@@ -109,7 +109,7 @@ describe('boardTasks', () => {
     const entries = [task(), entry('task/csv/dev', 'done: delivered', dev.id), entry('task/csv/dev/note', 'in progress: unrelated note', dev.id)]
     const t = only(boardTasks(entries, roster))
     expect(t.status).toBe('done')
-    expect(t.assignees).toEqual([{ id: dev.id, inProgress: false }])
+    expect(t.assignees).toEqual([{ id: dev.id, state: 'done' }])
     expect(t.reports.map((r) => r.entry.key)).toEqual(['task/csv/dev'])
   })
 
@@ -191,3 +191,56 @@ describe('boardTopLevel', () => {
   })
 })
 
+
+function view(overrides: Partial<MeshBoardTask> = {}): MeshBoardTask {
+  return {
+    key: 'task/csv', author_id: 'user', title: 'CSV export', version: 3, generation: 1, assignments: [],
+    created_seq: 1, updated_seq: 5, created_at: '2026-10-22T00:00:00Z', updated_at: '2026-10-22T01:00:00Z', status: 'todo', ...overrides,
+  }
+}
+
+describe('typed tasks', () => {
+  test('splitTaskText separates title and description', () => {
+    expect(splitTaskText('A — b')).toEqual({ title: 'A', description: 'b' })
+    expect(splitTaskText('Just a title')).toEqual({ title: 'Just a title', description: '' })
+  })
+
+  test('a legacy task carries its split title/description and version', () => {
+    const t = only(boardTasks([task()], roster))
+    expect([t.title, t.description, t.version]).toEqual(['CSV export', 'dump rows', 1])
+  })
+
+  test('an assigned-only task is Todo with an assignee in state assigned; a participant outside the roster stays', () => {
+    const assignment = { id: 'as-1', participant_id: 'run:gone', state: 'assigned' as const, assigned_by: 'user', assigned_seq: 4 }
+    const t = taskFromView(view({ assignments: [assignment], description: 'dump rows' }))
+    expect(t.status).toBe('todo')
+    expect(t.assignees).toEqual([{ id: 'run:gone', state: 'assigned' }])
+    expect([t.title, t.description, t.version, t.text]).toEqual(['CSV export', 'dump rows', 3, 'CSV export — dump rows'])
+    expect(t.assignments).toEqual([assignment])
+    expect(t.reports).toEqual([])
+  })
+
+  test('the note is the latest result or progress of the most recently active assignment', () => {
+    const older = { id: 'a1', participant_id: dev.id, state: 'done' as const, assigned_by: 'user', assigned_seq: 1, completed_seq: 3, result: 'shipped' }
+    const newer = { id: 'a2', participant_id: qa.id, state: 'in_progress' as const, assigned_by: 'user', assigned_seq: 2, started_seq: 6, progress: 'testing' }
+    expect(taskFromView(view({ assignments: [older, newer] })).note).toBe('testing')
+    expect(taskFromView(view({ assignments: [older] })).note).toBe('shipped')
+    expect(taskFromView(view()).note).toBeUndefined()
+  })
+
+  test('boardTasksOf uses the typed tasks when the run keeps them, else the legacy entries', () => {
+    const entries = [task()]
+    expect(boardTasksOf({ entries, tasks: [view({ key: 'task/typed' })], typedTasks: true }, roster).map((t) => t.key)).toEqual(['task/typed'])
+    expect(boardTasksOf({ entries, tasks: [], typedTasks: false }, roster).map((t) => t.key)).toEqual(['task/csv'])
+  })
+
+  test('boardTaskCountOf and boardTopLevelOf: typed mode counts tasks and shows only facts', () => {
+    const entries = [task(), entry('release-note', 'ship it', 'user')]
+    const typed = { entries, tasks: [view(), view({ key: 'task/b' })], typedTasks: true }
+    expect(boardTaskCountOf(typed)).toBe(2)
+    expect(boardTopLevelOf(typed).map((e) => e.key)).toEqual(['release-note'])
+    const legacy = { entries, tasks: [], typedTasks: false }
+    expect(boardTaskCountOf(legacy)).toBe(1)
+    expect(boardTopLevelOf(legacy).map((e) => e.key)).toEqual(['task/csv', 'release-note'])
+  })
+})

@@ -5,7 +5,7 @@ import { BoardLoadState } from './BoardLoadState'
 import type { MeshBoard } from '../../hooks/use-mesh'
 
 function board(status: MeshBoard['status'], reload: MeshBoard['reload'] = async () => {}): MeshBoard {
-  return { entries: [], status, reload }
+  return { entries: [], tasks: [], typedTasks: false, status, reload }
 }
 
 describe('BoardLoadState', () => {

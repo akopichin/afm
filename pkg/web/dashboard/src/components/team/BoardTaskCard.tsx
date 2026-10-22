@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshParticipant } from '../../api/mesh-client'
-import type { BoardTask, BoardTaskStatus } from '../../lib/board-tasks'
+import { splitTaskText, type BoardTask, type BoardTaskStatus } from '../../lib/board-tasks'
 import { senderLabel } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
 
@@ -8,16 +8,6 @@ export const BOARD_STATUS_LABEL: Record<BoardTaskStatus, string> = {
   todo: 'Todo',
   in_progress: 'In progress',
   done: 'Done',
-}
-
-// The task form publishes "<title> — <details>"; a task an agent published may have no details.
-const TITLE_SEPARATOR = ' — '
-
-// splitTaskText — the task's title and its description (empty when the text has no details).
-export function splitTaskText(text: string): { title: string; description: string } {
-  const at = text.indexOf(TITLE_SEPARATOR)
-  if (at < 0) return { title: text, description: '' }
-  return { title: text.slice(0, at), description: text.slice(at + TITLE_SEPARATOR.length) }
 }
 
 // StatusIcon — a different shape per status, so the status reads without relying on color.

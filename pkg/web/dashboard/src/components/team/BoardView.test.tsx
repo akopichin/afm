@@ -29,7 +29,7 @@ const entries: MeshBoardEntry[] = [
 ]
 
 function boardOf(list: MeshBoardEntry[], overrides: Partial<MeshBoard> = {}): MeshBoard {
-  return { entries: list, status: 'ready', reload: vi.fn(() => Promise.resolve()), ...overrides }
+  return { entries: list, tasks: [], typedTasks: false, status: 'ready', reload: vi.fn(() => Promise.resolve()), ...overrides }
 }
 
 function renderView(board: MeshBoard) {

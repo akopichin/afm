@@ -25,14 +25,14 @@ describe('BoardPanel', () => {
   })
 
   test('empty state invites posting a task', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     render(<BoardWithPoll participants={participants} stages={stages} />)
     await waitFor(() => expect(screen.getByText(/Nothing on the board yet/)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Post task' })).toBeInTheDocument()
   })
 
   test('an agent fact shows its key, status, author name and version', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [{ author_id: 'run:t-1', key: 'qa:report', version: 2, status: 'ready', seq: 5, ts: '2026-10-18T00:00:00Z' }],
     })
     render(<BoardWithPoll participants={participants} stages={stages} />)
@@ -43,7 +43,7 @@ describe('BoardPanel', () => {
   })
 
   test('posting a task publishes task/<slug> with the description', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue({
       author_id: 'user', key: 'task/csv-export', version: 1, status: 'Add GET /todos.csv', seq: 1, ts: '2026-10-18T00:00:00Z',
     })
@@ -57,7 +57,7 @@ describe('BoardPanel', () => {
 
   test('a posted task shows on the board after the reload', async () => {
     const posted = { author_id: 'user', key: 'task/csv-export', version: 1, status: 'CSV export', seq: 1, ts: '2026-10-18T00:00:00Z' }
-    const get = vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValueOnce({ entries: [] }).mockResolvedValue({ entries: [posted] })
+    const get = vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValueOnce({ tasks: [], typedTasks: false, entries: [] }).mockResolvedValue({ tasks: [], typedTasks: false, entries: [posted] })
     vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted)
     render(<BoardWithPoll participants={participants} stages={stages} />)
     await waitFor(() => expect(screen.getByText(/Nothing on the board yet/)).toBeInTheDocument())
@@ -68,7 +68,7 @@ describe('BoardPanel', () => {
   })
 
   test("agents' reports (<task key>/<alias>) stay nested in their task: the card shows the latest, details list them", async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [
         { author_id: 'user', key: 'task/csv-export', version: 1, status: 'CSV export — Add GET /todos.csv', seq: 1, ts: '2026-10-18T00:00:00Z' },
         { author_id: 'stage:api', key: 'task/csv-export/api', version: 1, status: 'done: GET /todos.csv added', seq: 2, ts: '2026-10-18T00:01:00Z' },
@@ -88,7 +88,7 @@ describe('BoardPanel', () => {
 
   test('tasks sit together in one ungrouped grid and each takes the colour of its status', async () => {
     const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [
         { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 },
         { ...at, author_id: 'user', key: 'task/b', status: 'Beta', seq: 2 },
@@ -109,7 +109,7 @@ describe('BoardPanel', () => {
 
   test('the legend names the three statuses with their task counts', async () => {
     const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [
         { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 },
         { ...at, author_id: 'user', key: 'task/b', status: 'Beta', seq: 2 },
@@ -129,8 +129,8 @@ describe('BoardPanel', () => {
       const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
       const task = { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 }
       vi.spyOn(meshClient, 'getMeshBoard')
-        .mockResolvedValueOnce({ entries: [task] })
-        .mockResolvedValue({ entries: [task, { ...at, author_id: 'stage:api', key: 'task/a/api', status: 'done: shipped', seq: 2 }] })
+        .mockResolvedValueOnce({ tasks: [], typedTasks: false, entries: [task] })
+        .mockResolvedValue({ tasks: [], typedTasks: false, entries: [task, { ...at, author_id: 'stage:api', key: 'task/a/api', status: 'done: shipped', seq: 2 }] })
       render(<BoardWithPoll participants={participants} stages={stages} />)
       await act(async () => {})
       expect(screen.getByRole('button', { name: 'Alpha, Todo' })).toHaveAttribute('data-status', 'todo')
@@ -144,7 +144,7 @@ describe('BoardPanel', () => {
   })
 
   test('facts keep their article next to the task cards, and facts are not cards', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [
         { author_id: 'user', key: 'task/a', version: 1, status: 'Alpha', seq: 1, ts: '2026-10-18T00:00:00Z' },
         { author_id: 'run:t-1', key: 'qa:report', version: 3, status: 'ready', seq: 2, ts: '2026-10-18T00:00:00Z', artifact_refs: ['qa/out.txt'] },
@@ -159,7 +159,7 @@ describe('BoardPanel', () => {
   })
 
   test('a card opens the task details and Close returns focus to the card', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [{ author_id: 'user', key: 'task/a', version: 1, status: 'Alpha — Do the thing', seq: 1, ts: '2026-10-18T00:00:00Z' }],
     })
     render(<BoardWithPoll participants={participants} stages={stages} />)
@@ -180,8 +180,8 @@ describe('BoardPanel', () => {
       const at = { version: 1, ts: '2026-10-18T00:00:00Z' }
       const task = { ...at, author_id: 'user', key: 'task/a', status: 'Alpha', seq: 1 }
       vi.spyOn(meshClient, 'getMeshBoard')
-        .mockResolvedValueOnce({ entries: [task] })
-        .mockResolvedValue({ entries: [task, { ...at, author_id: 'stage:api', key: 'task/a/api', status: 'done: shipped', seq: 2 }] })
+        .mockResolvedValueOnce({ tasks: [], typedTasks: false, entries: [task] })
+        .mockResolvedValue({ tasks: [], typedTasks: false, entries: [task, { ...at, author_id: 'stage:api', key: 'task/a/api', status: 'done: shipped', seq: 2 }] })
       render(<BoardWithPoll participants={participants} stages={stages} />)
       await act(async () => {})
       fireEvent.click(screen.getByRole('button', { name: 'Alpha, Todo' }))
@@ -196,7 +196,7 @@ describe('BoardPanel', () => {
   })
 
   test('working agents are listed under Notify and all start checked', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     render(<BoardWithPoll participants={participants} stages={stages} />)
     const notify = await screen.findByRole('group', { name: 'Notify' })
     expect(within(notify).getByRole('checkbox', { name: 'QA' })).toBeChecked()
@@ -204,7 +204,7 @@ describe('BoardPanel', () => {
   })
 
   test('posting notifies the checked agents only', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue({
       author_id: 'user', key: 'task/csv-export', version: 1, status: 'CSV export', seq: 1, ts: '2026-10-18T00:00:00Z',
     })
@@ -217,7 +217,7 @@ describe('BoardPanel', () => {
   })
 
   test('unreachable run agents and agents of idle stages are not offered', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const offline = participants.map((p) => (p.kind === 'run_agent' ? { ...p, reachable: false } : p))
     render(<BoardWithPoll participants={offline} stages={[{ id: 'api', title: 'API', status: 'done' }]} />)
     await waitFor(() => expect(screen.getByText(/Nothing on the board yet/)).toBeInTheDocument())
@@ -226,7 +226,7 @@ describe('BoardPanel', () => {
   })
 
   test('a retry of the same task after a lost response reuses its request id; an edited task gets a new one', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockRejectedValue(new Error('network'))
     render(<BoardWithPoll participants={participants} stages={stages} />)
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
@@ -244,7 +244,7 @@ describe('BoardPanel', () => {
   })
 
   test('details typed while a task is being posted are kept after it succeeds', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     let resolvePublish!: (v: meshClient.MeshBoardEntry) => void
     vi.spyOn(meshClient, 'publishMeshBoard').mockReturnValue(new Promise((res) => (resolvePublish = res)))
     render(<BoardWithPoll participants={participants} stages={stages} />)
@@ -270,7 +270,7 @@ describe('boardTaskCount', () => {
   })
 
   test('more ticked agents than a task may notify blocks posting and says how many to untick', async () => {
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const many = Array.from({ length: 18 }, (_, i) => ({ id: `run:a${i}`, kind: 'run_agent', scope: 'run', display_name: `Agent ${i}`, reachable: true, activity: 'idle' }))
     render(<BoardWithPoll participants={many} stages={[]} />)
     fireEvent.change(screen.getByPlaceholderText('e.g. CSV export'), { target: { value: 'Big task' } })

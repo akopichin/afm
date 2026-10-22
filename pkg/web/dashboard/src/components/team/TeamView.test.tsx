@@ -35,7 +35,7 @@ function enabledRoster(overrides: Partial<MeshRoster> = {}): MeshRoster {
 // (roster is now owned by App.tsx and passed down as a prop, see TeamViewProps's own comment).
 function mockThreadAndBoardFetches(): void {
   vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
-  vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+  vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
 }
 
 // TeamViewWithBoard — TeamView with the real board poll its parent (App) owns.
@@ -132,7 +132,7 @@ describe('TeamView', () => {
     const summary = (seq: number): meshClient.MeshThreadSummary => ({ last_other_message_seq: seq, title_seq: 0 })
     const message: meshClient.MeshMessage = { id: 'm2', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'new answer', seq: 2, created_at: '' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const initial = enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(1) } })
     const view = render(<TeamViewWithBoard runId="unread-board-people" roster={initial} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
@@ -152,7 +152,7 @@ describe('TeamView', () => {
     const summary = (seq: number): meshClient.MeshThreadSummary => ({ last_other_message_seq: seq, title_seq: 0 })
     const message = (seq: number): meshClient.MeshMessage => ({ id: `m${seq}`, thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: `ping ${seq}`, seq, created_at: '' })
     const getThread = vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message(5)], next_cursor: 5 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: summary(seq) } })
     const view = render(<TeamViewWithBoard runId="unread-scrolled-up" roster={roster(5)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     await waitFor(() => expect(screen.getByText('ping 5')).toBeInTheDocument())
@@ -176,7 +176,7 @@ describe('TeamView', () => {
     const thread: meshClient.MeshThread = { id: `mt-people-${narrow}`, title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const message: meshClient.MeshMessage = { id: 'incoming', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'ready', seq: 2, created_at: '' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
     const view = render(<TeamViewWithBoard runId={`people-read-${narrow}`} roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     showPeople()
@@ -192,7 +192,7 @@ describe('TeamView', () => {
     const thread: meshClient.MeshThread = { id: 'mt-covered', title: 'Review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const message: meshClient.MeshMessage = { id: 'incoming', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'covered message', seq: 2, created_at: '' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
     const view = render(<TeamViewWithBoard runId="covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     clickCreateConversation()
@@ -207,7 +207,7 @@ describe('TeamView', () => {
     const thread: meshClient.MeshThread = { id: 'mt-agent-covered', title: 'Review', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const message: meshClient.MeshMessage = { id: 'incoming', thread_id: thread.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'reply', body: 'arrived under dialog', seq: 2, created_at: '' }
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [message], next_cursor: 2 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [] })
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const roster = (seq: number) => enabledRoster({ threads: [thread], summaries: { [thread.id]: { last_other_message_seq: seq, title_seq: 0 } } })
     const view = render(<TeamViewWithBoard runId="agent-covered-read" roster={roster(1)} stages={[makeStage()]} events={[]} profiles={profiles} />)
     openAddRunAgent()
@@ -1055,7 +1055,7 @@ describe('TeamView', () => {
 
   test('the Board tab counts the tasks on the board, not the reports filed under them or facts', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [
         { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' },
         { key: 'task/health/qa', status: 'checked', author_id: 'run:qa', version: 1, seq: 2, ts: '' },
@@ -1071,7 +1071,7 @@ describe('TeamView', () => {
 
   test('the Board tab shows the tasks as coloured cards in one grid, next to the facts', async () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false,
       entries: [
         { key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' },
         { key: 'task/export', status: 'CSV export', author_id: 'user', version: 1, seq: 2, ts: '' },
@@ -1094,6 +1094,8 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const poll = vi.spyOn(meshClient, 'getMeshBoard')
     const board: MeshBoard = {
+      tasks: [],
+      typedTasks: false,
       entries: [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }],
       status: 'ready',
       reload: async () => {},
@@ -1107,7 +1109,7 @@ describe('TeamView', () => {
 
   test('the Board tab says it is loading, not that the board is empty, before the first fetch lands', () => {
     mockThreadAndBoardFetches()
-    const board: MeshBoard = { entries: [], status: 'loading', reload: async () => {} }
+    const board: MeshBoard = { entries: [], tasks: [], typedTasks: false, status: 'loading', reload: async () => {} }
     render(<TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
     expect(screen.getByRole('status')).toHaveTextContent('Loading board')
@@ -1117,7 +1119,7 @@ describe('TeamView', () => {
   test('a first-load failure shows an error with Retry instead of an empty board', () => {
     mockThreadAndBoardFetches()
     const reload = vi.fn(async () => {})
-    const board: MeshBoard = { entries: [], status: 'error', reload }
+    const board: MeshBoard = { entries: [], tasks: [], typedTasks: false, status: 'error', reload }
     render(<TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={board} stages={[makeStage()]} events={[]} profiles={profiles} />)
     fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
     expect(screen.getByRole('alert')).toHaveTextContent('Board unavailable')
@@ -1130,6 +1132,8 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const reload = vi.fn(async () => {})
     const board: MeshBoard = {
+      tasks: [],
+      typedTasks: false,
       entries: [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }],
       status: 'stale',
       reload,
@@ -1146,7 +1150,7 @@ describe('TeamView', () => {
     mockThreadAndBoardFetches()
     const entries = [{ key: 'task/health', status: 'Health endpoint', author_id: 'user', version: 1, seq: 1, ts: '' }]
     const view = (status: MeshBoard['status']) => (
-      <TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={{ entries, status, reload: async () => {} }} stages={[makeStage()]} events={[]} profiles={profiles} />
+      <TeamView runId="board-load" roster={enabledRoster()} onParticipantAdded={() => {}} board={{ entries, tasks: [], typedTasks: false, status, reload: async () => {} }} stages={[makeStage()]} events={[]} profiles={profiles} />
     )
     const { rerender } = render(view('ready'))
     fireEvent.click(screen.getByRole('tab', { name: /^Board/ }))
@@ -1813,7 +1817,7 @@ describe('TeamView', () => {
 
   test('run-wide tabs sit above the conversation, hide its heading, and restore its selection and draft', async () => {
     mockThreadAndBoardFetches()
-    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ entries: [
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [
       { author_id: 'user', key: 'task/release', version: 1, status: 'Release', seq: 1, ts: '' },
       { author_id: 'run:qa', key: 'task/release/run:qa', version: 1, status: 'Done', seq: 2, ts: '' },
       { author_id: 'user', key: 'fact/build', version: 1, status: 'Ready', seq: 3, ts: '' },

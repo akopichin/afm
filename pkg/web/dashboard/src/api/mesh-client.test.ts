@@ -9,6 +9,7 @@ import {
   listMeshParticipants,
   listMeshThreads,
   openMeshThread,
+  postMeshTask,
   sendMeshMessage,
   sendMeshMessageTo,
   updateMeshThreadTitle,
@@ -111,6 +112,33 @@ describe('mesh-client', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => ({ entries: [] }) } as Response)
     await getMeshBoard('qa:report')
     expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/board?key=qa%3Areport')
+  })
+
+  test('getMeshBoard maps typed_tasks and tasks; a legacy response has no typed tasks', async () => {
+    const view = { key: 'task/a', author_id: 'user', title: 'A', version: 2, generation: 1, assignments: [], created_seq: 1, updated_seq: 2, created_at: 't', updated_at: 't', status: 'todo' }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ entries: [], typed_tasks: true, tasks: [view] }) } as Response)
+    expect(await getMeshBoard()).toEqual({ entries: [], tasks: [view], typedTasks: true })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ entries: [] }) } as Response)
+    expect(await getMeshBoard()).toEqual({ entries: [], tasks: [], typedTasks: false })
+  })
+
+  test('postMeshTask posts snake_case fields to /api/mesh/tasks and omits unset ones', async () => {
+    const receipt = { key: 'task/a', version: 3, status: 'in_progress', seq: 9 }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => receipt } as Response)
+
+    const res = await postMeshTask({ requestId: 'r1', action: 'assign', key: 'task/a', expectedVersion: 2, assignmentId: 'as-1', to: 'run:qa', text: 'go' })
+
+    expect(res).toEqual(receipt)
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/mesh/tasks')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({ request_id: 'r1', action: 'assign', key: 'task/a', expected_version: 2, assignment_id: 'as-1', to: 'run:qa', text: 'go' })
+  })
+
+  test('postMeshTask surfaces a server error as MeshApiError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 409, json: async () => ({ error: 'version_conflict', message: 'stale' }) } as Response)
+    await expect(postMeshTask({ requestId: 'r', action: 'update', key: 'task/a' })).rejects.toMatchObject({ status: 409 })
   })
 
   test('openMeshThread posts request_id/title/scope/member_ids', async () => {
