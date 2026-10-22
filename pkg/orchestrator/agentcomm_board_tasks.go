@@ -106,16 +106,17 @@ func (o *Orchestrator) BoardTask(ctx context.Context, req BoardTaskRequest) (Boa
 	if !boardTasksEnabled(o.opts.Store.Snapshot()) {
 		return BoardTaskReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: "board tasks are not enabled for this run"}
 	}
-	// The key names the task in the journal, prompts and messages and is never redacted, so it must hold no secret.
-	if o.RedactSecrets(req.Key) != req.Key {
-		return BoardTaskReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "the task key contains a secret value"}
-	}
 	runCtx := o.runContext(ctx) // a recipient's turn must not die with the HTTP request.
 
 	const maxAttempts = 3
 	for attempt := 1; ; attempt++ {
 		if receipt, replayed, err := o.replayedBoardTask(req); replayed {
 			return receipt, err
+		}
+		// Checked after the replay lookup: a retry of a committed request always gets its stored receipt.
+		// The key names the task in the journal, prompts and messages and is never redacted, so it must hold no secret.
+		if o.RedactSecrets(req.Key) != req.Key {
+			return BoardTaskReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "the task key contains a secret value"}
 		}
 		plan, err := o.planBoardTask(o.opts.Store.Snapshot(), req)
 		if err != nil {

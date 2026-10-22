@@ -108,7 +108,12 @@ type boardTaskPayload interface {
 	checkFormat(key string) error
 }
 
+// checkFormat of a create also checks the task key: only a create names a task, every other change just
+// needs the task to exist, so a task whose key was valid under an older rule stays changeable.
 func (p MeshBoardTaskCreatedPayload) checkFormat(key string) error {
+	if !agentcomm.ValidBoardTaskKey(key) {
+		return boardTaskBadInput("%s: invalid task key %q", kindMeshBoardTaskCreated, key)
+	}
 	if p.Title == "" {
 		return boardTaskBadInput("board task %s needs a title", key)
 	}
@@ -169,9 +174,6 @@ func applyBoardTaskEffect[P boardTaskPayload](
 		return fmt.Errorf("decode %s payload: %w", c.Kind, err)
 	}
 	if as.admittingNewRecord(dryRun) {
-		if !agentcomm.ValidBoardTaskKey(key) {
-			return boardTaskBadInput("%s: invalid task key %q", c.Kind, key)
-		}
 		if err := p.checkFormat(key); err != nil {
 			return err
 		}

@@ -535,3 +535,40 @@ func TestBoardTaskFormatRulesOnlyAdmitNewRecords(t *testing.T) {
 		})
 	}
 }
+
+// The key format is checked only when a task is created: a task journaled under an older, looser key rule
+// replays, and every later change to it is still admitted — it only has to exist.
+func TestBoardTaskKeyFormatOnlyAdmitsCreate(t *testing.T) {
+	const oldKey = "task/fix login"
+	onOldKey := func(kind, actor string, payload any) *Control {
+		c := boardTaskControl(t, kind, actor, payload)
+		c.Target.BoardKey = oldKey
+		return c
+	}
+	as := newAssistantsState()
+	mustApply(t, &as, &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)})
+	mustApply(t, &as, onOldKey(kindMeshBoardTaskCreated, "user", MeshBoardTaskCreatedPayload{Title: "T"}))
+	mustApply(t, &as, onOldKey(kindMeshBoardTaskAssigned, "user", MeshBoardTaskAssignedPayload{
+		AssignmentID: "a1", ParticipantID: "a", MeshBoardTaskMeta: meta(1),
+	}))
+
+	newTitle := "T2"
+	changes := map[string]*Control{
+		"progress": onOldKey(kindMeshBoardTaskProgressed, "a", MeshBoardTaskProgressedPayload{AssignmentID: "a1", Text: "half", MeshBoardTaskMeta: meta(2)}),
+		"edit":     onOldKey(kindMeshBoardTaskEdited, "user", MeshBoardTaskEditedPayload{Title: &newTitle, MeshBoardTaskMeta: meta(2)}),
+	}
+	for name, c := range changes {
+		t.Run(name, func(t *testing.T) {
+			if err := dispatchControlKind(&as, c, true); err != nil {
+				t.Fatalf("admitting a change of a task with an older-format key: %v", err)
+			}
+		})
+	}
+
+	created := onOldKey(kindMeshBoardTaskCreated, "user", MeshBoardTaskCreatedPayload{Title: "T"})
+	fresh := newAssistantsState()
+	mustApply(t, &fresh, &Control{Kind: kindMeshBoardProtocolSet, SchemaVersion: ControlSchemaVersion, Payload: []byte(`{"protocol":"typed_v1"}`)})
+	if err := dispatchControlKind(&fresh, created, true); err == nil {
+		t.Fatal("creating a task with an invalid key was admitted")
+	}
+}
