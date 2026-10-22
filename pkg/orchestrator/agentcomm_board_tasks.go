@@ -570,8 +570,9 @@ func boardTaskEffectsOf(effects []state.Effect) []state.Effect {
 func (o *Orchestrator) replayedBoardTask(req BoardTaskRequest) (BoardTaskReceipt, bool, error) {
 	op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindMeshBoardTask)
 	if err != nil || !committed {
-		o.handleTaskOperationErr(err) // a journal that cannot be read back ends the run
-		return BoardTaskReceipt{}, err != nil, err // a storage error answers the request too
+		// A journal that cannot be read back ends the run; its storage error answers the request too.
+		o.handleTaskOperationErr(err)
+		return BoardTaskReceipt{}, err != nil, err
 	}
 	asWritten := func(name string) (agentcomm.ParticipantID, error) { return agentcomm.ParticipantID(name), nil }
 	changes, err := o.planBoardTaskChanges(req, asWritten)
