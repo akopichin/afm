@@ -3,6 +3,17 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-24
+
+### Improvement: escalate repeated mesh development failures
+
+The bundled mesh development skill now requires independent diagnosis after
+repeated unsuccessful repairs, explicit file ownership handoffs for specialist
+fixes, and evidence before dismissing flaky tests as environmental. It also
+reuses applicable check results while preserving required final gates. These are
+agent instructions; automatic engine monitoring is unchanged. See
+[Mesh development escalation](docs/collaboration.md#mesh-development-escalation).
+
 ## 2026-10-23
 
 ### Improvement: keep and send file comments from Files

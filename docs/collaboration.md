@@ -718,6 +718,22 @@ default — or attaches a configured helper through a preview. Its **Revise** mo
 continues to send stage feedback through the existing revision path. In the Assistant, an `@` mention records a role with
 the chat message; it still does not attach a helper by itself.
 
+## Mesh development escalation
+
+Flows using the bundled `afm-mesh-driven-development` skill ask their coordinator
+to obtain an independent diagnosis after two unsuccessful repairs of the same
+symptom or a second verify rejection of the same defect, unless the flow defines
+another repair budget. The attempt history survives agent resumes. A passing
+rerun alone does not establish that a flaky failure belongs to the environment.
+
+If a correction after consultation still leaves the defect, the skill calls for
+handing the fix to a capable writer or architect with write access. The previous
+owner must stop modifying the assigned files before the new owner starts. An
+unresolved specialist correction is reported through the flow's dialog protocol;
+independent review and final checks still apply. These are instructions followed
+by agents, not an automatic engine watchdog or model-switching policy. A suitable
+participant/profile must be available in the run.
+
 ## Temporary helpers from a stage agent
 
 A stage agent can start a one-shot advisory helper from an available configured
