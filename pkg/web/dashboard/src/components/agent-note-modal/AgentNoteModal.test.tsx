@@ -59,6 +59,17 @@ describe('AgentNoteModal', () => {
     expect(onSubmit).toHaveBeenCalledWith('please add tests')
   })
 
+  it('submits a note on Enter and keeps Shift+Enter for a newline', () => {
+    const onSubmit = vi.fn()
+    render(<AgentNoteModal stageId="s1" onSubmit={onSubmit} onCancel={vi.fn()} />)
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'please add tests' } })
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(onSubmit).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('please add tests')
+  })
+
   it('calls onCancel and does not submit when Cancel is clicked', () => {
     const onSubmit = vi.fn()
     const onCancel = vi.fn()

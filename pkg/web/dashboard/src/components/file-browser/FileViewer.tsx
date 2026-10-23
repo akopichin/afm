@@ -1,3 +1,4 @@
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { FlowApiError, type AddNoteRequest } from '../../api/run-client'
 import type { FileContent } from '../../api/files-client'
@@ -326,11 +327,7 @@ export function FileViewer({
               placeholder={`Comment on line ${lineNumber}...`}
               autoFocus
               onKeyDown={(event) => {
-                // Cmd/Ctrl+Enter сохраняет комментарий (как кнопка Save/Update).
-                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canSaveDraft) {
-                  event.preventDefault()
-                  void saveComment(lineNumber)
-                }
+                handleTextareaSubmit(event, () => { void saveComment(lineNumber) }, canSaveDraft)
               }}
             />
             {saveError !== null && (

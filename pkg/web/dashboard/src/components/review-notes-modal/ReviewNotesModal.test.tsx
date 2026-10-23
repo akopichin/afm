@@ -88,6 +88,23 @@ describe('ReviewNotesModal', () => {
     expect(await screen.findByText('new text')).toBeInTheDocument()
   })
 
+  it('saves an edited note on Enter and leaves Shift+Enter for a newline', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'old text' })] })
+    const update = vi.mocked(updateNote).mockResolvedValue({ rev: 2 })
+    render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+    await screen.findByText('old text')
+    fireEvent.click(screen.getByText('Edit'))
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'new text' } })
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true })
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() => expect(update).toHaveBeenCalledWith('n1', 'new text', 1))
+    expect(await screen.findByText('new text')).toBeInTheDocument()
+  })
+
   it('deletes a note and refreshes via listNotes to pick up the new rev', async () => {
     vi.mocked(listNotes)
       .mockResolvedValueOnce({ rev: 1, notes: [note({ id: 'n1', text: 'goner' })] })

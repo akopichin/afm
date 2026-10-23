@@ -65,13 +65,13 @@ describe('FeedComposer', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 
-  it('submits on Cmd/Ctrl+Enter', () => {
+  it('submits on Enter', () => {
     const onSend = vi.fn().mockResolvedValue(undefined)
     render(<FeedComposer stageId="s1" onSend={onSend} />)
 
     const textarea = screen.getByRole('textbox')
     fireEvent.change(textarea, { target: { value: 'via keyboard' } })
-    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
 
     expect(onSend).toHaveBeenCalledWith('via keyboard')
   })
@@ -137,7 +137,7 @@ describe('FeedComposer', () => {
       expect(onSent).not.toHaveBeenCalled()
     })
 
-    it('focuses the textarea when a reply target appears (Cmd+Enter works right after ↩)', () => {
+    it('focuses the textarea when a reply target appears (Enter works right after ↩)', () => {
       const onSend = vi.fn().mockResolvedValue(undefined)
       const { rerender } = render(<FeedComposer stageId="s1" onSend={onSend} />)
       const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
@@ -402,7 +402,7 @@ describe('FeedComposer', () => {
       expect(alert).toHaveTextContent("@s1 can't receive messages: stage s1 has reached a terminal status")
       expect(within(recipients()).queryByText('finished — post recorded, not read')).toBeNull()
       expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
-      fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+      fireEvent.keyDown(input(), { key: 'Enter' })
       expect(send).not.toHaveBeenCalled()
     })
 
@@ -420,17 +420,16 @@ describe('FeedComposer', () => {
       expect(screen.getByPlaceholderText('Note to agent…')).toHaveValue('tighten tests')
     })
 
-    it('Cmd/Ctrl+Enter sends to two picked people; a plain Enter does not, and the hint says how', async () => {
+    it('Enter sends to two picked people; Shift+Enter adds a line, as the hint says', async () => {
       const send = vi.spyOn(meshClient, 'sendMeshMessageTo').mockResolvedValue({ message_id: 'm1', seq: 1, thread_id: 'mt-1' })
       const { rerender } = renderComposer()
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 2 } })} />)
       type('please both review')
-      expect(screen.getByText('Cmd/Ctrl+Enter to send · Enter adds a line')).not.toHaveClass('is-nudged')
-      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(screen.getByText('Enter to send · Shift+Enter adds a line')).toBeInTheDocument()
+      expect(fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })).toBe(true)
       expect(send).not.toHaveBeenCalled()
-      expect(screen.getByText('Cmd/Ctrl+Enter to send · Enter adds a line')).toHaveClass('is-nudged')
-      fireEvent.keyDown(input(), { key: 'Enter', ctrlKey: true })
+      fireEvent.keyDown(input(), { key: 'Enter' })
       await waitFor(() => expect(send).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: ['run:t-1', 'run:t-2'], body: 'please both review' })))
     })
 
@@ -502,7 +501,7 @@ describe('FeedComposer', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('No one is called @nobody in this run')
       expect(screen.getByRole('alert')).toHaveTextContent("@old can't receive messages: task t-3 has reached a terminal status")
       expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
-      fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+      fireEvent.keyDown(input(), { key: 'Enter' })
       expect(send).not.toHaveBeenCalled()
     })
 
@@ -570,7 +569,7 @@ describe('FeedComposer', () => {
       expect(within(recipients()).queryByText('stage agent')).toBeNull()
       expect(screen.getByRole('alert')).toHaveTextContent('@run:t-2 is no longer available in this run')
       expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
-      fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+      fireEvent.keyDown(input(), { key: 'Enter' })
       expect(send).not.toHaveBeenCalled()
     })
 

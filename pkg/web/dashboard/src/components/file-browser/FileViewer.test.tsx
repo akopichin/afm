@@ -606,7 +606,7 @@ describe('FileViewer', () => {
         vi.unstubAllGlobals()
       })
 
-      test('sha === null does not block no-pause saving (button + Cmd+Enter)', async () => {
+      test('sha === null does not block no-pause saving (button + Enter)', async () => {
         vi.stubGlobal('crypto', { subtle: { digest: () => Promise.reject(new Error('no subtle')) } })
         const save = vi.fn()
         render(
@@ -628,10 +628,12 @@ describe('FileViewer', () => {
         fireEvent.click(screen.getByText('Save'))
         await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
 
-        // The editor closed after the save; reopen it to exercise the Cmd+Enter path too.
+        // The editor closed after the save; reopen it to exercise the Enter path too.
         fireEvent.click(screen.getByTestId('file-line-2'))
         fireEvent.change(screen.getByRole('textbox'), { target: { value: 'again' } })
-        fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true })
+        expect(fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', shiftKey: true })).toBe(true)
+        expect(save).toHaveBeenCalledTimes(1)
+        fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
         await waitFor(() => expect(save).toHaveBeenCalledTimes(2))
       })
 

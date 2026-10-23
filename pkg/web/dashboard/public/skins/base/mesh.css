@@ -827,10 +827,6 @@
   font-size: 11px;
   color: var(--text-muted);
 }
-.composer-send-hint.is-nudged {
-  color: var(--attention);
-  font-weight: 600;
-}
 .conversation-role-chip {
   flex: 0 0 auto;
   font-size: 10px;

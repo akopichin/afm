@@ -1,3 +1,4 @@
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { useEffect, useState, type ReactElement } from 'react'
 import { cancelNotes, deleteNote, injectNotes, listNotes, updateNote, FlowApiError } from '../../api/run-client'
 import type { ReviewNote } from '../../types'
@@ -171,11 +172,7 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
                             onChange={(e) => setEditDraft(e.target.value)}
                             autoFocus
                             onKeyDown={(e) => {
-                              // Cmd/Ctrl+Enter сохраняет правку (как кнопка Save).
-                              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editDraft.trim() !== '') {
-                                e.preventDefault()
-                                void saveEdit(note.id)
-                              }
+                              handleTextareaSubmit(e, () => { void saveEdit(note.id) }, editDraft.trim() !== '')
                             }}
                           />
                           <div className="review-note-actions">

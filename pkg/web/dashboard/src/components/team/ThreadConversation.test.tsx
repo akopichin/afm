@@ -196,6 +196,23 @@ describe('ThreadConversation', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  test('sends with Enter, leaves Shift+Enter alone, and blocks another send while pending', async () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    let finish!: (receipt: MeshSendReceipt) => void
+    const send = vi.spyOn(meshClient, 'sendMeshMessage').mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    render(<ThreadConversation target={{ kind: 'thread', thread }} participants={[qa]} />)
+    const textarea = screen.getByPlaceholderText('Message Hand-off…')
+    fireEvent.change(textarea, { target: { value: 'please review' } })
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })).toBe(true)
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true })
+    expect(send).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(send).toHaveBeenCalledTimes(1)
+    await act(async () => { finish({ message_id: 'm1', seq: 1, thread_id: thread.id }) })
+  })
+
   test('a closed thread keeps Send disabled for mouse and keyboard', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const send = vi.spyOn(meshClient, 'sendMeshMessage')
@@ -209,7 +226,7 @@ describe('ThreadConversation', () => {
     expect(screen.getByPlaceholderText('Message Hand-off…')).toBeDisabled()
     expect(screen.getByPlaceholderText('Message Hand-off…')).toHaveValue('late note')
     fireEvent.click(button)
-    fireEvent.keyDown(screen.getByPlaceholderText('Message Hand-off…'), { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(screen.getByPlaceholderText('Message Hand-off…'), { key: 'Enter' })
     expect(send).not.toHaveBeenCalled()
   })
 

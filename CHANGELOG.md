@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-23
 
+### Improvement: send messages and feedback with Enter
+
+Dashboard message and feedback fields now submit with **Enter** and add a line
+with **Shift+Enter**. The `@` menu keeps Enter for choosing a person or role;
+hints show the new shortcuts. Creation forms keep their existing behavior.
+See [Dashboard](docs/dashboard.md).
+
 ### Improvement: wait for provider usage limits without spending retries
 
 When a stage agent, verifier or helper hits a provider usage limit, afm records
