@@ -19,7 +19,10 @@ type topLevelTaskRequest struct {
 	Instruction string
 	Mode        assistants.Mode    // "" = advisory
 	Trigger     assistants.Trigger // "" = one_shot
-	Actor       state.Actor
+	// Origin is who initiated the task; "" = the actor's kind (a human or the side agent). A mesh agent's actor
+	// kind is just "agent", so a task one creates names its origin explicitly.
+	Origin assistants.Origin
+	Actor  state.Actor
 }
 
 // admittedTask is a top-level task that passed admission: the effects that create it, its initial status and
@@ -100,7 +103,7 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	payload := state.TaskCreatedPayload{
 		ProfileID: string(req.ProfileID), ProfileSnapshot: profile, Title: req.Title, Instruction: req.Instruction,
 		Mode: string(req.Mode), Trigger: string(req.Trigger), PolicyRev: rs.Assistants.Policy.Revision,
-		MaxDepthAtCreate: rs.Assistants.Policy.MaxDepth, CreatedBy: req.Actor.Kind,
+		MaxDepthAtCreate: rs.Assistants.Policy.MaxDepth, CreatedBy: string(req.createdBy()),
 		RootGenerationAtCreate: rs.Assistants.RootGenerations[req.StageID],
 	}
 	if scope == assistants.ScopeRun {
@@ -172,6 +175,14 @@ func (o *Orchestrator) replayedTopLevelTask(op state.CommittedOperation, req top
 		return "", state.OperationIDConflictError(req.OperationID)
 	}
 	return assistants.TaskID(target.TaskID), nil
+}
+
+// createdBy is the origin recorded on the task: the explicit one, else the actor's kind.
+func (req topLevelTaskRequest) createdBy() assistants.Origin {
+	if req.Origin != "" {
+		return req.Origin
+	}
+	return assistants.Origin(req.Actor.Kind)
 }
 
 func normalizeScope(s assistants.Scope) assistants.Scope {

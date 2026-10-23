@@ -357,6 +357,11 @@ type TaskEvent struct {
 func (s *Store) TaskEvents(taskID assistants.TaskID) []TaskEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.taskEventsLocked(taskID)
+}
+
+// taskEventsLocked is TaskEvents' body, callable by code that already holds s.mu.
+func (s *Store) taskEventsLocked(taskID assistants.TaskID) []TaskEvent {
 	var out []TaskEvent
 	for _, c := range s.controlHistory {
 		if c.Kind != kindOperationCommitted {
@@ -373,6 +378,20 @@ func (s *Store) TaskEvents(taskID assistants.TaskID) []TaskEvent {
 		}
 	}
 	return out
+}
+
+// TaskAndEvents returns taskID's current task state together with every event ever committed against it, read
+// under the SAME lock acquisition — a caller deriving both a status and a result (e.g. afm agent helper-result)
+// must never pair a pre-commit status with the post-commit result of a finish operation that lands between two
+// separate Snapshot()/TaskEvents() calls.
+func (s *Store) TaskAndEvents(taskID assistants.TaskID) (TaskState, []TaskEvent, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.snapshot.Assistants.Tasks[taskID]
+	if !ok {
+		return TaskState{}, nil, false
+	}
+	return *task, s.taskEventsLocked(taskID), true
 }
 
 // SetStageNames stores the display name for each stage. Empty values are stored as-is; the UI handles them

@@ -390,6 +390,13 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}
+	// A helper a stage agent spawned answers the request it was spawned for in the commit of its result: a
+	// passive reply, so the stage's reply_to wait on that request ends with the answer.
+	if task.CreatedBy == assistants.OriginStageAgent {
+		replies := o.planTurnReplies(taskID, consumed, turnReplyBody(taskID, consumed, result))
+		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", replies, resultEff)
+		return
+	}
 	o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
 }
 

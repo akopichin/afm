@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -221,4 +223,168 @@ func TestWait_ConcurrentCycleAdmitsOne(t *testing.T) {
 			}
 		}
 	}
+}
+
+// ---- Batch wait admission: the whole set is admitted or refused by one commit. ----
+
+// batchWait registers a batch wait of waiter on messageIDs.
+func batchWait(o *Orchestrator, opID string, waiter agentcomm.ParticipantID, messageIDs ...agentcomm.MessageID) (WaitReceipt, error) {
+	return o.Wait(context.Background(), WaitRequest{
+		OperationID: opID, Waiter: waiter, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo}, MessageIDs: messageIDs,
+	})
+}
+
+// requireBatchRefused checks that Wait refused the whole set with code, named the message at fault, and left
+// neither a wait nor a committed operation behind.
+func requireBatchRefused(t *testing.T, o *Orchestrator, store *state.Store, opID string, err error, code assistants.ErrorCode, culprit agentcomm.MessageID) {
+	t.Helper()
+	requireRejected(t, err, code)
+	if culprit != "" && !strings.Contains(err.Error(), string(culprit)) {
+		t.Fatalf("err = %v, want it to name %s", err, culprit)
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Waits); n != 0 {
+		t.Fatalf("waits = %d after a refused batch, want none (no partial write)", n)
+	}
+	if _, committed, err := o.opts.Store.CommittedOperation(opID, opKindMeshWait); err != nil || committed {
+		t.Fatalf("operation %s committed = %v (%v), want not committed", opID, committed, err)
+	}
+}
+
+func TestMeshBatchWait_ListShapeIsCheckedBeforeAnythingIsWritten(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	docs := meshStageParticipantID("docs")
+	impl := string(meshStageParticipantID(assistantsTestStageID))
+	var ids []agentcomm.MessageID
+	for i := range MaxBatchWaits + 1 {
+		sent, err := agentSend(o, fmt.Sprintf("op-ask-%d", i), string(docs), []string{impl}, "review this")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, sent.MessageID)
+	}
+
+	_, err := batchWait(o, "op-empty", docs)
+	requireBatchRefused(t, o, store, "op-empty", err, assistants.CodeInvalidRequest, "")
+	_, err = batchWait(o, "op-dup", docs, ids[0], ids[1], ids[0])
+	requireBatchRefused(t, o, store, "op-dup", err, assistants.CodeInvalidRequest, ids[0])
+	_, err = batchWait(o, "op-17", docs, ids...)
+	requireBatchRefused(t, o, store, "op-17", err, assistants.CodeInvalidRequest, "")
+	if !strings.Contains(err.Error(), fmt.Sprint(MaxBatchWaits)) {
+		t.Fatalf("err = %v, want it to state the limit %d", err, MaxBatchWaits)
+	}
+	_, err = o.Wait(context.Background(), WaitRequest{
+		OperationID: "op-both", Waiter: docs, MessageIDs: ids[:2],
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: ids[0]},
+	})
+	requireBatchRefused(t, o, store, "op-both", err, assistants.CodeInvalidRequest, "")
+	_, err = o.Wait(context.Background(), WaitRequest{
+		OperationID: "op-other-kind", Waiter: docs, MessageIDs: ids[:2], Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage},
+	})
+	requireBatchRefused(t, o, store, "op-other-kind", err, assistants.CodeInvalidRequest, "")
+
+	// The limit itself is allowed.
+	receipt, err := batchWait(o, "op-16", docs, ids[:MaxBatchWaits]...)
+	if err != nil || len(receipt.Items) != MaxBatchWaits {
+		t.Fatalf("16 requests: %+v, %v, want an admitted batch of %d", receipt, err, MaxBatchWaits)
+	}
+}
+
+func TestMeshBatchWait_UnknownOrForeignRequestRefusesTheWholeSet(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	docs := meshStageParticipantID("docs")
+	impl := meshStageParticipantID(assistantsTestStageID)
+	mine, err := agentSend(o, "op-mine", string(docs), []string{string(impl)}, "review this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := agentSend(o, "op-theirs", string(impl), []string{string(docs)}, "and this?")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = batchWait(o, "op-unknown", docs, mine.MessageID, "mm-does-not-exist")
+	requireBatchRefused(t, o, store, "op-unknown", err, assistants.CodeNotFound, "mm-does-not-exist")
+	_, err = batchWait(o, "op-foreign", docs, mine.MessageID, theirs.MessageID)
+	requireBatchRefused(t, o, store, "op-foreign", err, assistants.CodeActorNotAllowed, theirs.MessageID)
+}
+
+func TestMeshBatchWait_RequestNobodyCanAnswerRefusesTheWholeSet(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	docs := meshStageParticipantID("docs")
+	impl := meshStageParticipantID(assistantsTestStageID)
+	toImpl, err := agentSend(o, "op-to-impl", string(docs), []string{string(impl)}, "review this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	toHuman, err := agentSend(o, "op-to-human", string(docs), []string{string(meshUserParticipantID)}, "is this ok?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishStage(t, o, assistantsTestStageID)
+
+	_, err = batchWait(o, "op-gone", docs, toHuman.MessageID, toImpl.MessageID)
+	requireBatchRefused(t, o, store, "op-gone", err, assistants.CodeInvalidStatus, toImpl.MessageID)
+}
+
+// A batch that would close a cycle is refused as a whole even when its other requests are fine, and the cycle
+// check treats the batch's pending items as one all-of wait once it is admitted.
+func TestMeshBatchWait_CycleRefusesTheWholeSet(t *testing.T) {
+	o, store := newTwoStageMeshOrchestrator(t)
+	docs := meshStageParticipantID("docs")
+	impl := meshStageParticipantID(assistantsTestStageID)
+	implAsk, err := agentSend(o, "op-impl-ask", string(impl), []string{string(docs)}, "can you check?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Wait(context.Background(), WaitRequest{
+		OperationID: "op-impl-wait", Waiter: impl, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: implAsk.MessageID},
+	}); err != nil {
+		t.Fatalf("impl wait: %v", err)
+	}
+	toImpl, err := agentSend(o, "op-to-impl", string(docs), []string{string(impl)}, "review this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	toHuman, err := agentSend(o, "op-to-human", string(docs), []string{string(meshUserParticipantID)}, "is this ok?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitsBefore := len(store.Snapshot().Assistants.Mesh.Waits)
+
+	_, err = batchWait(o, "op-cycle", docs, toHuman.MessageID, toImpl.MessageID)
+	requireRejected(t, err, agentcomm.CodeWaitCycle)
+	if !strings.Contains(err.Error(), string(toImpl.MessageID)) {
+		t.Fatalf("err = %v, want it to name %s", err, toImpl.MessageID)
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Waits); n != waitsBefore {
+		t.Fatalf("waits = %d, want the %d before the refused batch", n, waitsBefore)
+	}
+}
+
+// Another participant's wait on a batch owner closes a cycle through the batch when ANY of its items depends on
+// that participant: the batch is blocked until all of its items end.
+func TestMeshBatchWait_AdmittedBatchBlocksItsWaiterAsOneAllOfUnit(t *testing.T) {
+	o, _ := newTwoStageMeshOrchestrator(t)
+	docs := meshStageParticipantID("docs")
+	impl := meshStageParticipantID(assistantsTestStageID)
+	toImpl, err := agentSend(o, "op-to-impl", string(docs), []string{string(impl)}, "review this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	toHuman, err := agentSend(o, "op-to-human", string(docs), []string{string(meshUserParticipantID)}, "is this ok?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := batchWait(o, "op-docs-batch", docs, toImpl.MessageID, toHuman.MessageID); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	// impl asks docs: docs cannot answer while its batch is open, and impl is one of the batch's targets.
+	implAsk, err := agentSend(o, "op-impl-ask", string(impl), []string{string(docs)}, "can you check?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = o.Wait(context.Background(), WaitRequest{
+		OperationID: "op-impl-wait", Waiter: impl, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: implAsk.MessageID},
+	})
+	requireRejected(t, err, agentcomm.CodeWaitCycle)
 }

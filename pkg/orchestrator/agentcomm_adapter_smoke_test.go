@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
@@ -202,10 +203,37 @@ func (a smokeMeshActions) Wait(ctx context.Context, requestID, actor string, req
 	return server.MeshWaitReceipt{WaitID: string(receipt.WaitID), Status: string(receipt.Status)}, nil
 }
 
-func (a smokeMeshActions) CancelWait(ctx context.Context, requestID, actor, waitID, reason string) error {
+// WaitStatus reads batch waits, which this smoke scenario never registers.
+func (a smokeMeshActions) WaitStatus(context.Context, string, string) ([]server.MeshWaitReceipt, error) {
+	return nil, nil
+}
+
+func (a smokeMeshActions) CancelWait(ctx context.Context, requestID, actor string, req server.MeshCancelWaitRequest) error {
 	return a.orch.CancelWait(ctx, orchestrator.CancelWaitRequest{
-		OperationID: requestID, WaitID: agentcomm.WaitID(waitID), Reason: reason, Actor: smokeMeshActor(actor),
+		OperationID: requestID, WaitID: agentcomm.WaitID(req.WaitID), BatchID: req.BatchID, Reason: req.Reason, Actor: smokeMeshActor(actor),
 	})
+}
+
+// Spawn and HelperResult mirror cmd/afm/run_agent_mesh.go's agentMeshActions exactly — this smoke scenario
+// never spawns a helper, but the adapter still delegates to the real Service methods a live CLI would reach.
+func (a smokeMeshActions) Spawn(ctx context.Context, requestID, actor string, req server.MeshSpawnRequest) (server.MeshSpawnReceipt, error) {
+	res, err := a.orch.SpawnHelper(ctx, orchestrator.SpawnHelperRequest{
+		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Title: req.Title, Instruction: req.Instruction, Actor: smokeMeshActor(actor),
+	})
+	if err != nil {
+		return server.MeshSpawnReceipt{}, err
+	}
+	return server.MeshSpawnReceipt{TaskID: string(res.TaskID), ParticipantID: string(res.ParticipantID), MessageID: string(*res.MessageID)}, nil
+}
+
+func (a smokeMeshActions) HelperResult(_ context.Context, actor, taskID string) (server.MeshHelperResult, error) {
+	view, err := a.orch.HelperResult(smokeMeshActor(actor), assistants.TaskID(taskID))
+	if err != nil {
+		return server.MeshHelperResult{}, err
+	}
+	return server.MeshHelperResult{
+		TaskID: string(view.TaskID), Title: view.Title, Status: string(view.Status), StatusReason: view.StatusReason, Result: view.Result,
+	}, nil
 }
 
 func (a smokeMeshActions) PublishBoard(ctx context.Context, requestID, actor string, req server.MeshPublishRequest) (agentcomm.BoardEntry, error) {

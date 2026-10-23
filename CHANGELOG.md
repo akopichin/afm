@@ -3,6 +3,17 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-23
+
+### Improvement: collect replies and start temporary stage helpers
+
+Stage agents can use `afm agent wait --condition reply_to_all --message-ids ...`
+to collect up to 16 request outcomes under one durable batch and resume after
+they have all ended. `afm agent wait-status` reports each outcome and the reason
+for a missing reply. Stage agents can also start an advisory, one-shot helper
+with `afm agent spawn` and read its full committed result with
+`afm agent helper-result`. See [Helpers and collaboration](docs/collaboration.md).
+
 ## 2026-10-22
 
 ### Improvement: typed Board tasks with explicit assignment

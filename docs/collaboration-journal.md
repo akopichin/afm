@@ -131,9 +131,20 @@ value.
   `recipient_reply_only` and keeps its old rule, so any reply answers it, the
   human's included. Replay resolves its waits exactly as they were resolved
   when the journal was written.
+- `batch_id` on `mesh_wait_registered` (omitted for single waits) groups the
+  existing `reply_to` wait records of one `reply_to_all` call. One `mesh_wait`
+  operation commits one `mesh_wait_registered` effect per request, each with its
+  own wait ID and a shared batch ID and optional deadline. Each wait retains
+  its own projected status and reason; later resolutions use the existing wait
+  records. Replay restores the group and each item's outcome in registration
+  order; no separate aggregate wait record or cache is written. Older records
+  without `batch_id` remain single waits.
 - `peer_waits` on a stage transition into `awaiting_peer` (a list of wait ids,
   omitted when empty) names the waits the parked stage's continuation depends
-  on: the waits its last turn ended for. The stage continues when one of them is
-  answered or ends, or when a message that should wake it arrives. A park from
+  on: the waits its last turn ended for. Separate waits are alternatives: one
+  answered or ended wait can continue the stage. Waits with the same `batch_id`
+  form one unit, which continues the stage only after every item has answered,
+  expired, or been cancelled. A message that should wake the stage can also
+  continue it; replies to an unfinished batch do not wake it early. A park from
   an older journal, or one for unread messages, has no `peer_waits`; recovery
   then uses the earlier rule.

@@ -204,23 +204,44 @@ type AcknowledgeRequest struct {
 // for Actor, so a participant cannot register a wait as someone else today; any FUTURE direct caller of this
 // Service method must preserve that invariant itself — CancelWait's ownership check (agentcomm_wait.go)
 // relies on Waiter having been set honestly at registration time.
+//
+// A reply_to condition with no MessageID and a MessageIDs list is a batch: one reply_to wait per request, all
+// registered by this one operation, and the waiter continues only after every one of them has ended
+// (agentcomm_resume.go peerContinuation). The list holds 1..MaxBatchWaits distinct ids of requests the waiter
+// itself sent.
 type WaitRequest struct {
 	OperationID      string
 	Waiter           agentcomm.ParticipantID
 	Condition        agentcomm.WaitCondition
+	MessageIDs       []agentcomm.MessageID
 	Deadline         *time.Time
 	ContinuationNote string
 	Actor            state.Actor
 }
 
+// WaitReceipt answers a single wait with its WaitID and Status. A batch answers with BatchID and one Item per
+// requested message, in request order; Status is then pending while any item is, else ready if one item was
+// answered, else expired (batchStatus, agentcomm_wait.go).
 type WaitReceipt struct {
-	WaitID agentcomm.WaitID
-	Status agentcomm.WaitStatus
+	WaitID  agentcomm.WaitID
+	Status  agentcomm.WaitStatus
+	BatchID string
+	Items   []WaitItemReceipt
 }
 
+// WaitItemReceipt is the wait one message of a batch got, and how it stands.
+type WaitItemReceipt struct {
+	MessageID agentcomm.MessageID
+	WaitID    agentcomm.WaitID
+	Status    agentcomm.WaitStatus
+	Reason    string // why the wait ended without an answer (cancelled, expired); empty otherwise
+}
+
+// CancelWaitRequest cancels one wait (WaitID) or every still-pending wait of a batch (BatchID); set exactly one.
 type CancelWaitRequest struct {
 	OperationID string
 	WaitID      agentcomm.WaitID
+	BatchID     string
 	Reason      string
 	Actor       state.Actor
 }
@@ -268,6 +289,11 @@ func deriveMeshWaitID(operationID string) agentcomm.WaitID {
 	return agentcomm.WaitID("mw-" + deriveMeshID("mesh-wait", operationID))
 }
 
+// deriveMeshBatchID is the id shared by the waits of one batch registration.
+func deriveMeshBatchID(operationID string) string {
+	return "mb-" + deriveMeshID("mesh-wait-batch", operationID)
+}
+
 // agentCommInboxBlock renders stage s's <inbox> block (T4.4) — the prompt-text half of
 // agentCommInboxFor; runner_factory.go's agentCommOnDeliveredForStage wires the matching OnDelivered
 // callback into the SAME stage's executor.Config.
@@ -284,6 +310,7 @@ func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 		rs := o.opts.Store.Snapshot()
 		block += agentCommRequestsBlock(rs.Assistants.Mesh, o.liveRoster(rs), participant)
 		block += boardTasksBlockFor(rs, participant)
+		block += stageHelpersBlock(rs, s.ID)
 	}
 	return block
 }
@@ -302,7 +329,7 @@ func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
 func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(meshStageParticipantID(s.ID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
-		TypedBoardTasks: o.BoardTasksEnabled(),
+		TypedBoardTasks: o.BoardTasksEnabled(), CanSpawnHelpers: o.opts.AssistantsEnabled,
 	})
 }
 

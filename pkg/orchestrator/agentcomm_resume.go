@@ -193,7 +193,9 @@ func (o *Orchestrator) resumeAwaitingPeerStage(ctx context.Context, stageID stri
 // The stage continues when any of them is answered (EventPeerReplied), else when any of them ended without an
 // answer (EventPeerWaitEnded), else when a message that should wake it is waiting (EventPeerQuestion: a
 // counter-question while it still waits). Waits outside the episode — older, already handled ones — never
-// count.
+// count. The waits of one batch (MeshWait.BatchID) count as ONE: it has ended when none of its items is pending
+// any more — answered if one of them was — and the answers to its items are not a reason to wake the stage
+// before that.
 //
 // A park without recorded waits — one for unread messages (agentcomm_unread.go), or one journaled before
 // episodes existed — falls back to the earlier rules: a live caller's own reason (hint) decides; recovery
@@ -202,30 +204,94 @@ func (o *Orchestrator) resumeAwaitingPeerStage(ctx context.Context, stageID stri
 func peerContinuation(rs state.RunState, stageID string, hint bus.EventType) (bus.EventType, bool) {
 	waiter := meshStageParticipantID(stageID)
 	episode := rs.Stages[stageID].PeerWaits
-	waking := rs.Assistants.Mesh.HasWakingUnreadFor(waiter)
 	if len(episode) == 0 {
 		if hint != "" {
 			return hint, true
 		}
-		return legacyPeerContinuation(rs, waiter, waking)
+		return legacyPeerContinuation(rs, waiter, rs.Assistants.Mesh.HasWakingUnreadFor(waiter))
 	}
-	ready, ended := false, false
-	for _, id := range episode {
-		if w := rs.Assistants.Mesh.Waits[id]; w != nil {
-			ready = ready || w.Status == agentcomm.WaitReady
-			ended = ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
-		}
-	}
+	mesh := rs.Assistants.Mesh
+	ready, ended := episodeOutcome(mesh, episode)
 	switch {
 	case ready:
 		return bus.EventPeerReplied, true
 	case ended:
 		return bus.EventPeerWaitEnded, true
-	case waking:
+	case wakingExceptBatchAnswers(mesh, waiter):
 		return bus.EventPeerQuestion, true
 	default:
 		return "", false
 	}
+}
+
+// waitUnit is what an episode's waits are counted by: a single wait, or all the items of one batch.
+type waitUnit struct{ pending, ready, ended bool }
+
+// episodeUnits groups the episode's waits into units, keyed by batch id or, for a wait outside any batch, by its
+// own id.
+func episodeUnits(mesh state.MeshState, episode []agentcomm.WaitID) map[string]*waitUnit {
+	units := map[string]*waitUnit{}
+	for _, id := range episode {
+		w := mesh.Waits[id]
+		if w == nil {
+			continue
+		}
+		key := w.BatchID
+		if key == "" {
+			key = string(id)
+		}
+		if units[key] == nil {
+			units[key] = &waitUnit{}
+		}
+		u := units[key]
+		u.pending = u.pending || w.Status == agentcomm.WaitPending
+		u.ready = u.ready || w.Status == agentcomm.WaitReady
+		u.ended = u.ended || w.Status == agentcomm.WaitCancelled || w.Status == agentcomm.WaitExpired
+	}
+	return units
+}
+
+// episodeOutcome reports whether some unit of the episode has ended and was answered (ready), and whether some
+// ended with only cancelled or expired waits (ended). A unit with a pending wait has not ended.
+func episodeOutcome(mesh state.MeshState, episode []agentcomm.WaitID) (ready, ended bool) {
+	for _, u := range episodeUnits(mesh, episode) {
+		switch {
+		case u.pending:
+		case u.ready:
+			ready = true
+		case u.ended:
+			ended = true
+		default:
+		}
+	}
+	return ready, ended
+}
+
+// wakingExceptBatchAnswers is HasWakingUnreadFor without the recipients' answers to the requests of a batch that
+// is still open: those wait in the inbox for the turn that continues the stage once the batch has ended, and must not
+// start one earlier.
+func wakingExceptBatchAnswers(mesh state.MeshState, waiter agentcomm.ParticipantID) bool {
+	open := openBatches(mesh, waiter)
+	if len(open) == 0 {
+		return mesh.HasWakingUnreadFor(waiter)
+	}
+	requests := map[agentcomm.MessageID]bool{}
+	for _, w := range mesh.Waits {
+		if w.Waiter == waiter && open[w.BatchID] {
+			requests[w.Condition.MessageID] = true
+		}
+	}
+	filtered := mesh
+	filtered.Inbox = map[agentcomm.ParticipantID][]agentcomm.MessageID{waiter: slices.DeleteFunc(slices.Clone(mesh.Inbox[waiter]), func(id agentcomm.MessageID) bool {
+		m := mesh.Messages[id]
+		if m == nil || m.InReplyTo == nil || !requests[*m.InReplyTo] {
+			return false
+		}
+		// Only a recipient's reply answers the item (MessageAnsweredByRecipient); anyone else's stays waking.
+		request := mesh.Messages[*m.InReplyTo]
+		return request != nil && slices.Contains(request.Recipients, m.Sender)
+	})}
+	return filtered.HasWakingUnreadFor(waiter)
 }
 
 // legacyPeerContinuation is recovery's rule for a park without recorded waits. A wait still pending is the one
@@ -362,15 +428,25 @@ func (o *Orchestrator) resumeWaiterAfterTerminalWait(ctx context.Context, waiter
 	}
 }
 
-// resumeWaiterAfterTerminalWaitAtStartup is resumeWaiterAfterTerminalWait's RECOVERY twin, called from
-// recoverMeshWaitDeadlines before Run's event loop starts draining the critical bus — a stage branch must
-// dispatch onPeerWaitEnded DIRECTLY instead of publishing, for the exact same reason recoverMeshWaits' own doc
-// comment gives for onPeerReplied/onPeerQuestion. The task branch is identical to the live path:
+// resumeWaiterAfterTerminalWaitAtStartup is resumeWaiterAfterTerminalWait's RECOVERY twin, called from the
+// startup sweeps (recoverMeshWaitDeadlines, releaseUnanswerableWaits, releaseUnreadMessages) before Run's event
+// loop starts draining the critical bus — a stage branch must dispatch the continuation DIRECTLY instead of
+// publishing, for the exact same reason recoverMeshWaits' own doc comment gives. Like recoverMeshWaits it asks
+// peerContinuation first: a batch not ended as a whole yet is no reason to continue, and the event is the one
+// that fits the episode (answered or only ended). The task branch is identical to the live path:
 // resumeTaskViaCAS never goes through the critical bus either way.
 func (o *Orchestrator) resumeWaiterAfterTerminalWaitAtStartup(ctx context.Context, waiter agentcomm.ParticipantID) {
 	if stageID, ok := stageIDFromMeshParticipant(waiter); ok {
-		if err := o.onPeerWaitEnded(ctx, bus.Event{StageID: stageID}); err != nil {
-			log.Printf("WARN: mesh: recover peer-wait-ended for stage %q: %v", stageID, err)
+		rs := o.opts.Store.Snapshot()
+		if o.currentStatus(stageID) != state.StatusAwaitingPeer {
+			return
+		}
+		ev, ok := peerContinuation(rs, stageID, bus.EventPeerWaitEnded)
+		if !ok {
+			return
+		}
+		if err := o.dispatchPeerContinuation(ctx, stageID, ev, rs.Stages[stageID].Seq); err != nil {
+			log.Printf("WARN: mesh: recover peer continuation (%s) for stage %q: %v", ev, stageID, err)
 		}
 		return
 	}
@@ -488,14 +564,15 @@ func (o *Orchestrator) hasWakingUnread(participant agentcomm.ParticipantID) bool
 
 // maybeResumeAwaitingPeerQuestion resumes participant for a bounded T5.5 counter-question turn if, and only
 // if, it is CURRENTLY parked with its own wait still pending (hasOpenMeshWaitFor) AND has at least one
-// undelivered message (hasWakingUnread) — both conditions re-derived fresh from durable state, so this is
-// safe to call redundantly from anywhere: Send's own externalWork tail (the live path, right after the
+// undelivered message that is not the answer to an item of a batch still open (wakingExceptBatchAnswers: those
+// wait for the one turn after the whole batch has ended) — both conditions re-derived fresh from durable state,
+// so this is safe to call redundantly from anywhere: Send's own externalWork tail (the live path, right after the
 // message that might BE a counter-question commits) and recoverMeshWaits/recoverAssistants' waiting_peer
 // branch (startup recovery, T5.5's "crash in the middle of the clarification recovers to exactly one pending
 // turn" — the resume this triggers is CAS-protected exactly like T5.3's, so a redundant call here racing a
 // live trigger, or a second recovery pass, is always a silent no-op, never a second turn).
 func (o *Orchestrator) maybeResumeAwaitingPeerQuestion(ctx context.Context, participant agentcomm.ParticipantID) {
-	if !o.hasOpenMeshWaitFor(participant) || !o.hasWakingUnread(participant) {
+	if !o.hasOpenMeshWaitFor(participant) || !wakingExceptBatchAnswers(o.opts.Store.Snapshot().Assistants.Mesh, participant) {
 		return
 	}
 	if stageID, ok := stageIDFromMeshParticipant(participant); ok {
@@ -568,21 +645,35 @@ func (o *Orchestrator) meshWaitStatusesOf(waiter agentcomm.ParticipantID) map[ag
 // (an earlier yield, as in a counter-question turn), or was registered during the turn with `afm agent wait`
 // answering "yield" — whatever has become of it since. A wait ready at registration is not one (the agent read
 // its answer in the same turn), and neither is an older wait already resolved before the turn, nor one whose
-// answer the turn has already read (answerRead). Sorted.
+// answer the turn has already read (answerRead). A batch with an item still pending is in it whole: it is one
+// wait the stage continues on only when all of it has ended, answered items included. Sorted.
 func (o *Orchestrator) turnEpisode(waiter agentcomm.ParticipantID, before map[agentcomm.WaitID]agentcomm.WaitStatus) []agentcomm.WaitID {
 	mesh := o.opts.Store.Snapshot().Assistants.Mesh
+	open := openBatches(mesh, waiter)
 	var episode []agentcomm.WaitID
 	for id, w := range mesh.Waits {
 		if w.Waiter != waiter {
 			continue
 		}
 		prev, existed := before[id]
-		if w.Status == agentcomm.WaitPending || (prev == agentcomm.WaitPending || (!existed && w.Yielded)) && !answerRead(mesh, w) {
+		if w.Status == agentcomm.WaitPending || open[w.BatchID] || (prev == agentcomm.WaitPending || (!existed && w.Yielded)) && !answerRead(mesh, w) {
 			episode = append(episode, id)
 		}
 	}
 	slices.Sort(episode)
 	return episode
+}
+
+// openBatches is the set of batch ids of waiter's waits with an item still pending. The empty id — a wait outside
+// any batch — is never in it.
+func openBatches(mesh state.MeshState, waiter agentcomm.ParticipantID) map[string]bool {
+	open := map[string]bool{}
+	for _, w := range mesh.Waits {
+		if w.Waiter == waiter && w.BatchID != "" && w.Status == agentcomm.WaitPending {
+			open[w.BatchID] = true
+		}
+	}
+	return open
 }
 
 // answerRead reports whether w is a satisfied reply_to wait whose every answer its waiter has already been handed
@@ -612,9 +703,10 @@ func answerRead(mesh state.MeshState, w *state.MeshWait) bool {
 func interruptedTurnEpisode(rs state.RunState, stageID string) []agentcomm.WaitID {
 	waiter := meshStageParticipantID(stageID)
 	since := rs.Stages[stageID].Seq
+	open := openBatches(rs.Assistants.Mesh, waiter)
 	var episode []agentcomm.WaitID
 	for id, w := range rs.Assistants.Mesh.Waits {
-		if w.Waiter == waiter && (w.Status == agentcomm.WaitPending || (w.Yielded && w.RegisteredSeq > since)) {
+		if w.Waiter == waiter && (w.Status == agentcomm.WaitPending || open[w.BatchID] || (w.Yielded && w.RegisteredSeq > since)) {
 			episode = append(episode, id)
 		}
 	}

@@ -19,7 +19,8 @@ the stage.
 
 **You are the orchestrator.** You assign, verify and integrate; writers
 write. Never implement a task yourself while its assigned writer is active,
-and never use native/CLI subagents for work the mesh team owns.
+and never use native subagents for work the mesh team owns. Stage-started AFM
+helpers are available for bounded review and analysis (see below).
 
 ## Key differences from native subagents
 
@@ -42,7 +43,9 @@ and never use native/CLI subagents for work the mesh team owns.
    assignee, request/reply IDs with their purpose, task ACCEPTANCE separately
    from "reply received", and retry counts. Write via temp file + atomic
    rename. A missing or stale ledger is rebuilt from <your_requests>/inbox
-   before anything is dispatched.
+   before anything is dispatched. A registered batch and the replies already
+   collected for it survive a restart; check `afm agent wait-status` before
+   deciding whether a request still needs an answer.
 1. **Contracts come from the plan.** If parallel tasks share a contract, pin
    down the one the plan or the code already defines; delegate only missing
    contract work the plan requires, and accept it before dependent tasks
@@ -59,22 +62,27 @@ and never use native/CLI subagents for work the mesh team owns.
    Record the baseline (`git rev-parse HEAD` plus the dirty state) before
    dispatching — acceptance is read against it. Corrections are linked
    follow-up requests to the same writer, not replays of the original.
-3. **Record, then wait.** Record the returned message_id immediately (step 0
-   fields). Register a reply wait for every unanswered request
-   (`afm agent wait --condition reply_to`). `ready` → read the answer now;
-   `yield` → finish registering the remaining waits, save progress, and END
-   YOUR TURN. Never poll or sleep in a shell, and never write a final
-   summary while replies are pending — yielding is not completing.
-4. **Classify the reply by its request's purpose.** An implementation reply
+3. **Record, then wait.** Record every returned message_id immediately (step 0
+   fields). For independent requests whose outcomes belong in one round, register
+   ONE `afm agent wait --condition reply_to_all --message-ids <id1,id2,...>`
+   (optionally with `--deadline-seconds N`; at most 16 IDs). `ready` means all have ended;
+   `yield` means save the `batch_id` and END YOUR TURN. A separate incoming
+   question can wake you before the batch ends: answer it, check the batch,
+   then park again if it is still pending. Never poll or sleep in a shell, and
+   never write a final summary while requests are pending.
+4. **Classify every outcome by its request's purpose.** On continuation, read
+   `afm agent wait-status --wait-id <batch_id>` for each item's status and
+   reason, and `afm agent inbox --all` for its answer. An implementation reply
    must carry the completed scope and verification evidence; a review reply
    must cover the requested scope — an explicit "no findings" is a valid,
    complete review. An acknowledgement or partial status is NEITHER: do not
    re-wait the satisfied message id and do not redispatch the task — send
    one linked follow-up to the same agent asking for the final result. A
-   cancelled/expired/failed request proves nothing about the tree: confirm
-   the writer stopped editing and inspect the partial changes in its files
-   before retrying (at most one retry per request chain, counted in the
-   ledger) or reporting the concrete blocker.
+   cancelled or expired item is an outcome without an answer, even when the
+   batch status is `ready`: retain the other results and its reason. It proves
+   nothing about the tree: confirm the writer stopped editing and inspect the
+   partial changes in its files before retrying (at most one retry per request
+   chain, counted in the ledger) or reporting the concrete blocker.
 5. **Accept on evidence, not on words.** The writer's changes are ALREADY in
    the shared worktree — never apply a returned diff on top of them.
    Acceptance = inspect the staged, unstaged and new-file changes against
@@ -99,8 +107,28 @@ ownership — including the shared files from step 2 — otherwise sequence
 them. While implementation runs, the orchestrator never edits an active
 writer's files. While a REVIEW round is outstanding, freeze the worktree
 entirely — no orchestrator edits, no writer tasks, no file-rewriting
-commands — until every reviewer in the round has replied. Do not invent work
-for an irrelevant role just to parallelize.
+commands — until every reviewer in the batch has an outcome. The batch wait
+keeps the stage parked until then, unless a separate message wakes it. Do not
+invent work for an irrelevant role just to parallelize.
+
+## Temporary review helpers
+
+For a bounded review or analysis job, a stage agent may use
+`afm agent spawn --profile <profile> --title <title> --instruction <text>`.
+The returned `task_id` identifies the helper and `message_id` identifies the
+request it answers; record both in the ledger before waiting. Several helpers
+can use the same profile with different instructions. Collect their message
+IDs in one `reply_to_all` batch, then read each full committed result with
+`afm agent helper-result --task-id <task_id>`; the inbox reply contains only a
+summary. Check `<your_helpers>` on resume so an already started helper is not
+spawned again.
+
+The stage's configured profile supplies the helper's command and model. The
+helper is advisory and one-shot, under the existing quota and depth limits.
+Use named mesh writers for implementation work with file ownership. A helper's
+read-only prompt is not OS isolation: on the host the Codex adapter runs in a
+read-only sandbox; in a container a helper can write within that container's
+boundary. Keep these helpers scoped to review and analysis.
 
 ## Common rationalizations
 
@@ -111,7 +139,7 @@ for an irrelevant role just to parallelize.
 | "I'll re-send to be safe after the resume" | <your_requests>/inbox are the durable truth. Reconcile; a sent request is never resent. |
 | "`send` failed, so nothing was sent" | Delivery may be uncertain. Reconcile the durable records before retrying. |
 | "The request expired, so its files are free" | Request status alone does not prove the writer stopped editing. |
-| "One reviewer replied; I can fix that finding now" | Finish the review round before touching the reviewed tree. |
+| "One reviewer replied; I can fix that finding now" | The batch remains pending until every reviewer has an outcome; finish the round before touching the reviewed tree. |
 | "The tests are green now; that proves TDD" | A current green result does not establish a prior test-first red. |
 | "Both tasks touch that file only a little" | Shared file = shared state. Sequence them. |
 | "I'll poll in a loop until the reply lands" | Polling burns the turn. Register waits and yield; afm resumes you. |

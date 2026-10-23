@@ -32,7 +32,16 @@ type AgentMeshActions interface {
 	Thread(ctx context.Context, actor, threadID string, cursor uint64, limit int) (MeshMessagePage, error)
 	Ack(ctx context.Context, requestID, actor, messageID string) error
 	Wait(ctx context.Context, requestID, actor string, req MeshWaitRequest) (MeshWaitReceipt, error)
-	CancelWait(ctx context.Context, requestID, actor, waitID, reason string) error
+	// WaitStatus reads the waits actor registered: every batch with an empty id, else the batch or single wait of
+	// that id as a group. One of another participant is refused as unknown.
+	WaitStatus(ctx context.Context, actor, id string) ([]MeshWaitReceipt, error)
+	CancelWait(ctx context.Context, requestID, actor string, req MeshCancelWaitRequest) error
+	// Spawn starts a one-shot helper of actor's stage. Only a stage agent may; the helper's stage, scope, mode and
+	// executor all follow from the actor and the profile.
+	Spawn(ctx context.Context, requestID, actor string, req MeshSpawnRequest) (MeshSpawnReceipt, error)
+	// HelperResult reads the status and the last committed result of a helper actor's stage spawned. A task of
+	// another stage is refused as unknown.
+	HelperResult(ctx context.Context, actor, taskID string) (MeshHelperResult, error)
 	PublishBoard(ctx context.Context, requestID, actor string, req MeshPublishRequest) (agentcomm.BoardEntry, error)
 	Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error)
 	// BoardTask makes one change to a typed board task as actor.
@@ -66,15 +75,64 @@ type MeshMessagePage struct {
 	SideAgentFailedIDs map[agentcomm.MessageID]bool `json:"-"`
 }
 
+// MeshWaitRequest is POST /api/agent-mesh/wait's body. MessageIDs turns a reply_to condition into a batch: one
+// wait for the answer of every listed request, with one deadline for the whole set.
 type MeshWaitRequest struct {
 	Condition        agentcomm.WaitCondition `json:"condition"`
+	MessageIDs       []string                `json:"message_ids,omitempty"`
 	DeadlineUnix     *int64                  `json:"deadline_unix,omitempty"`
 	ContinuationNote string                  `json:"continuation_note,omitempty"`
 }
 
+// MeshWaitReceipt answers a single wait with WaitID, or a batch with BatchID and one Item per request. Status
+// is that of the wait, or of the batch as a whole.
 type MeshWaitReceipt struct {
-	WaitID string `json:"wait_id"`
-	Status string `json:"status"`
+	WaitID  string         `json:"wait_id,omitempty"`
+	Status  string         `json:"status"`
+	BatchID string         `json:"batch_id,omitempty"`
+	Items   []MeshWaitItem `json:"items,omitempty"`
+}
+
+// MeshWaitItem is the wait of one request of a batch. Reason says why a wait ended without an answer.
+type MeshWaitItem struct {
+	MessageID string `json:"message_id"`
+	WaitID    string `json:"wait_id"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// MeshCancelWaitRequest is POST /api/agent-mesh/cancel-wait's body: one wait, or every still-pending wait of a
+// batch.
+type MeshCancelWaitRequest struct {
+	WaitID  string `json:"wait_id,omitempty"`
+	BatchID string `json:"batch_id,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// MeshSpawnRequest is POST /api/agent-mesh/spawn's body: the helper's profile, its task's title and its
+// instruction — nothing else is the agent's to choose.
+type MeshSpawnRequest struct {
+	ProfileID   string `json:"profile_id"`
+	Title       string `json:"title"`
+	Instruction string `json:"instruction"`
+}
+
+// MeshSpawnReceipt names what a spawn created. MessageID is the request the helper answers: wait for it like for
+// any other request.
+type MeshSpawnReceipt struct {
+	TaskID        string `json:"task_id"`
+	ParticipantID string `json:"participant_id"`
+	MessageID     string `json:"message_id"`
+}
+
+// MeshHelperResult is GET /api/agent-mesh/helper's answer. Result is the helper's last committed result,
+// absent while it runs and when it ended without one (StatusReason then says why).
+type MeshHelperResult struct {
+	TaskID       string          `json:"task_id"`
+	Title        string          `json:"title"`
+	Status       string          `json:"status"`
+	StatusReason string          `json:"status_reason,omitempty"`
+	Result       json.RawMessage `json:"result,omitempty"`
 }
 
 type MeshPublishRequest struct {
@@ -184,6 +242,10 @@ func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentMeshThread(w, r, actor)
 	case action == "board" && r.Method == http.MethodGet:
 		s.handleAgentMeshBoard(w, r)
+	case action == "wait-status" && r.Method == http.MethodGet:
+		s.handleAgentMeshWaitStatus(w, r, actor)
+	case action == "helper" && r.Method == http.MethodGet:
+		s.handleAgentMeshHelperResult(w, r, actor)
 	case action == "tasks" && r.Method == http.MethodGet:
 		s.handleAgentMeshBoardTasks(w, r)
 	case action == "task" && r.Method == http.MethodPost:
@@ -196,6 +258,8 @@ func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentMeshAck(w, r, actor)
 	case action == "wait" && r.Method == http.MethodPost:
 		s.handleAgentMeshWait(w, r, actor)
+	case action == "spawn" && r.Method == http.MethodPost:
+		s.handleAgentMeshSpawn(w, r, actor)
 	case action == "cancel-wait" && r.Method == http.MethodPost:
 		s.handleAgentMeshCancelWait(w, r, actor)
 	case action == "publish" && r.Method == http.MethodPost:
@@ -352,20 +416,65 @@ func (s *Server) handleAgentMeshWait(w http.ResponseWriter, r *http.Request, act
 	writeJSON(w, receipt)
 }
 
-func (s *Server) handleAgentMeshCancelWait(w http.ResponseWriter, r *http.Request, actor string) {
+func (s *Server) handleAgentMeshWaitStatus(w http.ResponseWriter, r *http.Request, actor string) {
+	batches, err := s.agentMesh.WaitStatus(r.Context(), actor, r.URL.Query().Get("wait_id"))
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	if batches == nil {
+		batches = []MeshWaitReceipt{}
+	}
+	writeJSON(w, map[string]any{"batches": batches})
+}
+
+func (s *Server) handleAgentMeshSpawn(w http.ResponseWriter, r *http.Request, actor string) {
 	var body struct {
 		RequestID string `json:"request_id"`
-		WaitID    string `json:"wait_id"`
-		Reason    string `json:"reason,omitempty"`
+		MeshSpawnRequest
 	}
 	if !decodeAgentMeshBody(w, r, &body) {
 		return
 	}
-	if body.RequestID == "" || body.WaitID == "" {
-		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_and_wait_id_required")
+	if body.RequestID == "" || body.ProfileID == "" || body.Title == "" || body.Instruction == "" {
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_profile_id_title_and_instruction_required")
 		return
 	}
-	if err := s.agentMesh.CancelWait(r.Context(), body.RequestID, actor, body.WaitID, body.Reason); err != nil {
+	receipt, err := s.agentMesh.Spawn(r.Context(), body.RequestID, actor, body.MeshSpawnRequest)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, receipt)
+}
+
+func (s *Server) handleAgentMeshHelperResult(w http.ResponseWriter, r *http.Request, actor string) {
+	taskID := r.URL.Query().Get("task_id")
+	if taskID == "" {
+		writeAssistantErrCode(w, http.StatusBadRequest, "task_id_required")
+		return
+	}
+	result, err := s.agentMesh.HelperResult(r.Context(), actor, taskID)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentMeshCancelWait(w http.ResponseWriter, r *http.Request, actor string) {
+	var body struct {
+		RequestID string `json:"request_id"`
+		MeshCancelWaitRequest
+	}
+	if !decodeAgentMeshBody(w, r, &body) {
+		return
+	}
+	if body.RequestID == "" || (body.WaitID == "") == (body.BatchID == "") {
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_and_exactly_one_of_wait_id_or_batch_id_required")
+		return
+	}
+	if err := s.agentMesh.CancelWait(r.Context(), body.RequestID, actor, body.MeshCancelWaitRequest); err != nil {
 		s.writeAssistantError(w, err)
 		return
 	}

@@ -27,6 +27,9 @@ const (
 // pkg/state/mesh_waits.go) — a reply that arrived before Wait was called still resolves the wait on the
 // very first read after commit, with no separate catch-up pass.
 
+// MaxBatchWaits is the most requests one batch wait may name.
+const MaxBatchWaits = 16
+
 // ErrWaitRequiresDeadline is returned when a wait has no known producer yet — a board_key never published, or
 // a thread not opened yet — and the caller did not set a Deadline: an unreachable producer must not be allowed
 // to wait forever with no visible way out (tmp/agent-mesh.md §6.3).
@@ -89,6 +92,12 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if req.Waiter == "" {
 		return WaitReceipt{}, errors.New("agentcomm: waiter is required")
 	}
+	if len(req.MessageIDs) > 0 {
+		if req.Condition.Kind != agentcomm.WaitOnReplyTo || req.Condition.MessageID != "" {
+			return WaitReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "message ids go with a reply_to condition that has no message id"}
+		}
+		return o.waitBatch(req)
+	}
 	if !req.Condition.Valid() {
 		return WaitReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: waitConditionHint(req.Condition.Kind)}
 	}
@@ -105,31 +114,142 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if err != nil {
 		return WaitReceipt{}, err
 	}
-	op := state.Operation{ID: req.OperationID, Kind: opKindMeshWait, Actor: req.Actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{
-		// Decided under the commit's lock: two waits registered at the same time must not both pass the cycle
-		// check against a snapshot that has neither of them.
-		Check: func(rs *state.RunState) error { return validateWaitAdmission(*rs, req) },
-	}}
-	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": string(waitID), "waiter_id": string(req.Waiter)}})
-	}); err != nil {
+	stored, err := o.registerWaits(req, []state.Effect{eff}, func(rs *state.RunState) error { return validateWaitAdmission(*rs, req) })
+	if err != nil {
 		return WaitReceipt{}, err
 	}
+	return WaitReceipt{WaitID: waitID, Status: stored[0].Status}, nil
+}
 
-	after := o.opts.Store.Snapshot()
-	status := agentcomm.WaitPending
-	if w, ok := after.Assistants.Mesh.Waits[waitID]; ok {
-		status = w.Status
+// waitBatch registers one reply_to wait per request of req.MessageIDs in ONE operation, all under one batch id:
+// the whole set is admitted or refused together, and a retry of the same operation id replays it.
+func (o *Orchestrator) waitBatch(req WaitRequest) (WaitReceipt, error) {
+	if err := validateBatchShape(req.MessageIDs); err != nil {
+		return WaitReceipt{}, err
 	}
-	// T5.6: a still-PENDING wait with a deadline gets a live in-memory timer, riding o.clk() like every other
-	// backoff/retry wait in this package (hooks.go, retry.go, verify.go) — afm has no durable scheduled-timer
-	// facility (dev-plan.md's own Review decision), so a crash/restart before this fires is recovered purely
-	// from the durable Deadline by recoverMeshWaitDeadlines at startup, never from this goroutine surviving.
-	// Already-Ready (condition satisfied at registration) needs no timer: there is nothing left to time out.
-	if status == agentcomm.WaitPending && req.Deadline != nil {
-		o.armMeshWaitDeadline(waitID, *req.Deadline)
+	batchID := deriveMeshBatchID(req.OperationID)
+	effects := make([]state.Effect, len(req.MessageIDs))
+	for i, id := range req.MessageIDs {
+		eff, err := marshalEffect("mesh_wait_registered", state.Target{WaitID: string(deriveMeshWaitID(fmt.Sprintf("%s#%d", req.OperationID, i)))}, state.MeshWaitRegisteredPayload{
+			Waiter: string(req.Waiter), Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: id},
+			Deadline: req.Deadline, ContinuationNote: req.ContinuationNote, RecipientReplyOnly: true, BatchID: batchID,
+		})
+		if err != nil {
+			return WaitReceipt{}, err
+		}
+		effects[i] = eff
 	}
-	return WaitReceipt{WaitID: waitID, Status: status}, nil
+	stored, err := o.registerWaits(req, effects, func(rs *state.RunState) error { return validateBatchAdmission(*rs, req) })
+	if err != nil {
+		return WaitReceipt{}, err
+	}
+	items := make([]WaitItemReceipt, len(effects))
+	for i, eff := range effects {
+		items[i] = WaitItemReceipt{MessageID: req.MessageIDs[i], WaitID: agentcomm.WaitID(eff.Target.WaitID), Status: stored[i].Status, Reason: stored[i].Reason}
+	}
+	return WaitReceipt{BatchID: batchID, Status: batchStatus(items), Items: items}, nil
+}
+
+// batchStatus is the status of a batch as a whole: pending while an item is, else expired if the deadline ended
+// any item (even when others were answered, so a timeout is never taken for a complete success), else ready —
+// every item finished before the deadline, whether answered, cancelled, or a mix of both. The item's own status
+// and reason still tell cancelled from expired.
+func batchStatus(items []WaitItemReceipt) agentcomm.WaitStatus {
+	for _, item := range items {
+		if item.Status == agentcomm.WaitPending {
+			return agentcomm.WaitPending
+		}
+	}
+	for _, item := range items {
+		if item.Status == agentcomm.WaitExpired {
+			return agentcomm.WaitExpired
+		}
+	}
+	return agentcomm.WaitReady
+}
+
+// validateBatchShape rejects a request list a batch cannot be built from, before anything is written.
+func validateBatchShape(ids []agentcomm.MessageID) error {
+	reject := func(format string, args ...any) error {
+		return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: fmt.Sprintf(format, args...)}
+	}
+	if len(ids) > MaxBatchWaits {
+		return reject("a batch wait takes at most %d message ids, got %d", MaxBatchWaits, len(ids))
+	}
+	seen := make(map[agentcomm.MessageID]bool, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			return reject("a batch wait got an empty message id")
+		}
+		if seen[id] {
+			return reject("message %s is listed twice in a batch wait", id)
+		}
+		seen[id] = true
+	}
+	return nil
+}
+
+// registerWaits commits the waits of effects (one mesh_wait_registered each) in one operation, decided under the
+// commit's lock by check, then announces them and starts the deadline timer of each one still pending. It
+// returns every wait as it is stored now (its status and reason), in effect order.
+func (o *Orchestrator) registerWaits(req WaitRequest, effects []state.Effect, check func(*state.RunState) error) ([]state.MeshWait, error) {
+	op := state.Operation{ID: req.OperationID, Kind: opKindMeshWait, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
+		// Decided under the commit's lock: two waits registered at the same time must not both pass the cycle
+		// check against a snapshot that has neither of them.
+		Check: check,
+	}}
+	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		for _, eff := range effects {
+			o.publishNotice(bus.Event{Type: bus.EventMeshWait, Data: map[string]any{"wait_id": eff.Target.WaitID, "waiter_id": string(req.Waiter)}})
+		}
+	}); err != nil {
+		return nil, err
+	}
+
+	waits := o.opts.Store.Snapshot().Assistants.Mesh.Waits
+	stored := make([]state.MeshWait, len(effects))
+	for i, eff := range effects {
+		waitID := agentcomm.WaitID(eff.Target.WaitID)
+		stored[i].Status = agentcomm.WaitPending
+		if w, ok := waits[waitID]; ok {
+			stored[i] = *w
+		}
+		// T5.6: a still-PENDING wait with a deadline gets a live in-memory timer, riding o.clk() like every other
+		// backoff/retry wait in this package (hooks.go, retry.go, verify.go) — afm has no durable scheduled-timer
+		// facility (dev-plan.md's own Review decision), so a crash/restart before this fires is recovered purely
+		// from the durable Deadline by recoverMeshWaitDeadlines at startup, never from this goroutine surviving.
+		// Already-Ready (condition satisfied at registration) needs no timer: there is nothing left to time out.
+		if stored[i].Status == agentcomm.WaitPending && req.Deadline != nil {
+			o.armMeshWaitDeadline(waitID, *req.Deadline)
+		}
+	}
+	return stored, nil
+}
+
+// validateBatchAdmission admits a batch only if every one of its requests could be waited on alone by the
+// waiter, and it sent them all: one refused request refuses the set, and the error names it. A batch is blocked
+// until ALL its items end, so one item no one can answer — or one that closes a cycle — leaves the whole batch
+// unable to finish. Run under the commit's lock.
+func validateBatchAdmission(rs state.RunState, req WaitRequest) error {
+	for _, id := range req.MessageIDs {
+		if m, ok := rs.Assistants.Mesh.Messages[id]; ok && m.Sender != req.Waiter {
+			return &state.OperationRejectedError{
+				Code: assistants.CodeActorNotAllowed, Reason: fmt.Sprintf("request %s was not sent by %s — a batch waits only for the waiter's own requests", id, req.Waiter),
+			}
+		}
+		item := req
+		item.Condition = agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: id}
+		if err := validateWaitAdmission(rs, item); err != nil {
+			var rej *state.OperationRejectedError
+			if !errors.As(err, &rej) {
+				return err
+			}
+			named := *rej
+			named.Reason = fmt.Sprintf("request %s: %s", id, rej.Reason)
+			return &named
+		}
+	}
+	return nil
 }
 
 // validateWaitAdmission rejects a wait that could never end on its own: one on a message, task or stage that
@@ -284,17 +404,29 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 	if err := rejectReservedRequestID(req.OperationID, req.Actor); err != nil {
 		return err
 	}
+	waitIDs := []agentcomm.WaitID{req.WaitID}
+	if req.BatchID != "" {
+		if req.WaitID != "" {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "cancel a wait or a batch, not both"}
+		}
+		waitIDs = batchWaitIDs(o.opts.Store.Snapshot().Assistants.Mesh, req.BatchID)
+		if len(waitIDs) == 0 {
+			return &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown batch %s", req.BatchID)}
+		}
+	}
 	if req.Actor.Kind != actorKindUser {
 		rs := o.opts.Store.Snapshot()
-		if w, ok := rs.Assistants.Mesh.Waits[req.WaitID]; ok && string(w.Waiter) != req.Actor.ID {
-			return &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only the wait's own waiter or the human may cancel it"}
+		for _, id := range waitIDs {
+			if w, ok := rs.Assistants.Mesh.Waits[id]; ok && string(w.Waiter) != req.Actor.ID {
+				return &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only the wait's own waiter or the human may cancel it"}
+			}
 		}
 	}
 	reason := req.Reason
 	if reason == "" {
 		reason = "cancelled"
 	}
-	waiter, changed, err := o.resolveMeshWaitDurable(req.OperationID, req.WaitID, req.Actor, agentcomm.WaitCancelled, reason)
+	waiter, changed, err := o.resolveMeshWaitsChecked(req.OperationID, waitIDs, req.Actor, agentcomm.WaitCancelled, reason, nil)
 	if err != nil {
 		return err
 	}
@@ -302,6 +434,17 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 		o.resumeWaiterAfterTerminalWait(o.runContext(ctx), waiter) // must not die with the HTTP request
 	}
 	return nil
+}
+
+// batchWaitIDs lists the waits of batch batchID in registration order.
+func batchWaitIDs(mesh state.MeshState, batchID string) []agentcomm.WaitID {
+	var ids []agentcomm.WaitID
+	for _, id := range mesh.WaitOrder {
+		if w := mesh.Waits[id]; w != nil && w.BatchID == batchID {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // resolveMeshWaitDurable is the SINGLE commit path for every non-Ready wait resolution this package produces
@@ -323,24 +466,36 @@ func (o *Orchestrator) resolveMeshWaitDurable(opID string, waitID agentcomm.Wait
 
 // resolveMeshWaitChecked is resolveMeshWaitDurable with a commit-time check (nil: none).
 func (o *Orchestrator) resolveMeshWaitChecked(opID string, waitID agentcomm.WaitID, actor state.Actor, status agentcomm.WaitStatus, reason string, check func(*state.RunState) error) (agentcomm.ParticipantID, bool, error) {
-	eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(waitID)},
-		state.MeshWaitResolvedPayload{Status: string(status), Reason: reason})
-	if err != nil {
-		return "", false, err
+	return o.resolveMeshWaitsChecked(opID, []agentcomm.WaitID{waitID}, actor, status, reason, check)
+}
+
+// resolveMeshWaitsChecked resolves several waits of one waiter (a batch) in ONE operation — all of them or, on a
+// rejected check, none. changed reports whether this commit moved any of them out of pending; waiters woken for
+// it decide through peerContinuation whether the whole batch has ended.
+func (o *Orchestrator) resolveMeshWaitsChecked(opID string, waitIDs []agentcomm.WaitID, actor state.Actor, status agentcomm.WaitStatus, reason string, check func(*state.RunState) error) (agentcomm.ParticipantID, bool, error) {
+	effects := make([]state.Effect, len(waitIDs))
+	for i, id := range waitIDs {
+		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)}, state.MeshWaitResolvedPayload{Status: string(status), Reason: reason})
+		if err != nil {
+			return "", false, err
+		}
+		effects[i] = eff
 	}
-	op := state.Operation{ID: opID, Kind: "mesh_resolve_wait", Actor: actor, Effects: []state.Effect{eff}, Expect: state.Preconditions{Check: check}}
+	op := state.Operation{ID: opID, Kind: "mesh_resolve_wait", Actor: actor, Effects: effects, Expect: state.Preconditions{Check: check}}
 	var changed bool
-	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
-		changed = slices.Contains(res.EndedWaits, waitID)
-		if changed {
-			o.announceEndedWait(waitID, status, reason)
+	_, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		for _, id := range waitIDs {
+			if slices.Contains(res.EndedWaits, id) {
+				changed = true
+				o.announceEndedWait(id, status, reason)
+			}
 		}
 	})
 	if err != nil {
 		return "", false, err
 	}
 	var waiter agentcomm.ParticipantID
-	if w := o.opts.Store.Snapshot().Assistants.Mesh.Waits[waitID]; w != nil {
+	if w := o.opts.Store.Snapshot().Assistants.Mesh.Waits[waitIDs[0]]; w != nil {
 		waiter = w.Waiter
 	}
 	return waiter, changed, nil
@@ -480,9 +635,11 @@ func (o *Orchestrator) closeRemainingMeshWaits() {
 
 // meshWaitEdge is one way a participant can be unblocked: by ANY of targets (a mesh wait — any recipient of a
 // message, any other member of a thread may answer), or only by ALL of them (a task waiting for its children).
+// A batch of waits is one edge with every item in allOf: it unblocks only when all of them have.
 type meshWaitEdge struct {
 	targets  []agentcomm.ParticipantID
 	needsAll bool
+	allOf    []meshWaitEdge
 }
 
 // meshWaitGraph maps a blocked participant to the edges that can unblock it; any one edge resolving wakes it.
@@ -495,14 +652,26 @@ type meshWaitGraph map[agentcomm.ParticipantID][]meshWaitEdge
 // below can.
 func buildMeshWaitGraph(rs state.RunState) meshWaitGraph {
 	g := meshWaitGraph{}
+	batchItems := map[string][]meshWaitEdge{} // the pending items of each batch
+	batchWaiter := map[string]agentcomm.ParticipantID{}
 	for _, w := range rs.Assistants.Mesh.Waits {
 		if w.Status != agentcomm.WaitPending {
 			continue
 		}
 		targets := slices.DeleteFunc(meshWaitTargets(rs, w.Condition), func(p agentcomm.ParticipantID) bool { return p == w.Waiter })
-		if len(targets) > 0 {
-			g[w.Waiter] = append(g[w.Waiter], meshWaitEdge{targets: targets})
+		if len(targets) == 0 {
+			continue
 		}
+		edge := meshWaitEdge{targets: targets}
+		if w.BatchID == "" {
+			g[w.Waiter] = append(g[w.Waiter], edge)
+		} else {
+			batchItems[w.BatchID] = append(batchItems[w.BatchID], edge)
+			batchWaiter[w.BatchID] = w.Waiter
+		}
+	}
+	for batchID, items := range batchItems {
+		g[batchWaiter[batchID]] = append(g[batchWaiter[batchID]], meshWaitEdge{allOf: items})
 	}
 	for id, t := range rs.Assistants.Tasks {
 		if t.Status != assistants.StatusWaitingChildren {
@@ -557,8 +726,12 @@ func resumesAfterAllWaits(id agentcomm.ParticipantID) bool {
 	return strings.HasPrefix(string(id), meshHelperPrefix) || strings.HasPrefix(string(id), meshRunPrefix)
 }
 
-// edgeDependsOn: an any-of edge depends on the waiter when every target does; an all-of edge when one does.
+// edgeDependsOn: an any-of edge depends on the waiter when every target does; an all-of edge when one does; a
+// batch when any of its items does.
 func (g meshWaitGraph) edgeDependsOn(e meshWaitEdge, waiter agentcomm.ParticipantID, depth int, memo, path map[agentcomm.ParticipantID]bool) bool {
+	if len(e.allOf) > 0 {
+		return slices.ContainsFunc(e.allOf, func(item meshWaitEdge) bool { return g.edgeDependsOn(item, waiter, depth, memo, path) })
+	}
 	for _, t := range e.targets {
 		if g.dependsOn(t, waiter, depth, memo, path) == e.needsAll {
 			return e.needsAll

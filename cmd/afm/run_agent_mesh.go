@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
@@ -118,19 +119,69 @@ func (a agentMeshActions) Wait(ctx context.Context, requestID, actor string, req
 		t := time.Unix(*req.DeadlineUnix, 0).UTC()
 		deadline = &t
 	}
+	messageIDs := make([]agentcomm.MessageID, len(req.MessageIDs))
+	for i, id := range req.MessageIDs {
+		messageIDs[i] = agentcomm.MessageID(id)
+	}
 	receipt, err := a.orch.Wait(ctx, orchestrator.WaitRequest{
-		OperationID: requestID, Waiter: agentcomm.ParticipantID(actor), Condition: req.Condition,
+		OperationID: requestID, Waiter: agentcomm.ParticipantID(actor), Condition: req.Condition, MessageIDs: messageIDs,
 		Deadline: deadline, ContinuationNote: req.ContinuationNote, Actor: meshActor(actor),
 	})
 	if err != nil {
 		return server.MeshWaitReceipt{}, err
 	}
-	return server.MeshWaitReceipt{WaitID: string(receipt.WaitID), Status: string(receipt.Status)}, nil
+	return toMeshWaitReceipt(receipt), nil
 }
 
-func (a agentMeshActions) CancelWait(ctx context.Context, requestID, actor, waitID, reason string) error {
+// WaitStatus reads the waits of the token's participant; the id is the only thing the caller names.
+func (a agentMeshActions) WaitStatus(_ context.Context, actor, id string) ([]server.MeshWaitReceipt, error) {
+	batches, err := a.orch.WaitBatches(agentcomm.ParticipantID(actor), id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]server.MeshWaitReceipt, len(batches))
+	for i, batch := range batches {
+		out[i] = toMeshWaitReceipt(batch)
+	}
+	return out, nil
+}
+
+// toMeshWaitReceipt is the HTTP form of a wait receipt: a single wait has no batch id and no items.
+func toMeshWaitReceipt(r orchestrator.WaitReceipt) server.MeshWaitReceipt {
+	out := server.MeshWaitReceipt{WaitID: string(r.WaitID), Status: string(r.Status), BatchID: r.BatchID}
+	for _, item := range r.Items {
+		out.Items = append(out.Items, server.MeshWaitItem{
+			MessageID: string(item.MessageID), WaitID: string(item.WaitID), Status: string(item.Status), Reason: item.Reason,
+		})
+	}
+	return out
+}
+
+// Spawn starts a helper for the token's stage agent; the body names only the profile, the title and the instruction.
+func (a agentMeshActions) Spawn(ctx context.Context, requestID, actor string, req server.MeshSpawnRequest) (server.MeshSpawnReceipt, error) {
+	res, err := a.orch.SpawnHelper(ctx, orchestrator.SpawnHelperRequest{
+		OperationID: requestID, ProfileID: assistants.ProfileID(req.ProfileID), Title: req.Title, Instruction: req.Instruction, Actor: meshActor(actor),
+	})
+	if err != nil {
+		return server.MeshSpawnReceipt{}, err
+	}
+	return server.MeshSpawnReceipt{TaskID: string(res.TaskID), ParticipantID: string(res.ParticipantID), MessageID: string(*res.MessageID)}, nil
+}
+
+// HelperResult reads one helper of the token's stage.
+func (a agentMeshActions) HelperResult(_ context.Context, actor, taskID string) (server.MeshHelperResult, error) {
+	view, err := a.orch.HelperResult(meshActor(actor), assistants.TaskID(taskID))
+	if err != nil {
+		return server.MeshHelperResult{}, err
+	}
+	return server.MeshHelperResult{
+		TaskID: string(view.TaskID), Title: view.Title, Status: string(view.Status), StatusReason: view.StatusReason, Result: view.Result,
+	}, nil
+}
+
+func (a agentMeshActions) CancelWait(ctx context.Context, requestID, actor string, req server.MeshCancelWaitRequest) error {
 	return a.orch.CancelWait(ctx, orchestrator.CancelWaitRequest{
-		OperationID: requestID, WaitID: agentcomm.WaitID(waitID), Reason: reason, Actor: meshActor(actor),
+		OperationID: requestID, WaitID: agentcomm.WaitID(req.WaitID), BatchID: req.BatchID, Reason: req.Reason, Actor: meshActor(actor),
 	})
 }
 
