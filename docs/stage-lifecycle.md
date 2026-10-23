@@ -48,7 +48,7 @@ running → awaiting_peer → running
 
 ## Resume on restart
 
-On a repeated `afm run`, the tool automatically:
+When you invoke `afm run` again, the tool automatically:
 
 - Skips completed stages (`done`)
 - Preserves stages awaiting approval (`awaiting_approval`)
@@ -75,3 +75,18 @@ On a repeated `afm run`, the tool automatically:
 Approve/revise/retry are durably recorded in the log (fsync) before control
 returns — a crash right after approval doesn't lose the intent; recovery continues
 from the correct state. See [the event log](internals/event-log.md).
+
+## Repeating a flow
+
+With [flow-level `repeat`](flow-reference.md#repeat-run-successful-flows-again), a
+successful pass finishes its run, then afm starts the flow again in a new run
+directory. Stages begin from `pending` in the new run; their previous `done`
+states are not reset in place. A failed stage, interruption, or storage failure
+stops repetition. A finite `max_cycles` counts passes including the first;
+restarting the `afm run` process starts that count over.
+
+Between runs, the dashboard shows the completed run for about five seconds,
+then restarts on the same port without waiting for an open tab to disconnect.
+There is no configured pause between cycles. On final exit, the normal
+dashboard drain applies. An open tab follows the new run automatically; see
+[Web dashboard](dashboard.md#following-a-repeated-flow).

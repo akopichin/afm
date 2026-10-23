@@ -20,6 +20,9 @@ func TestValidateLayer(t *testing.T) {
 		{"dup id in layer", []Hook{valid, {ID: "n", Events: EventSelector{All: true}, Command: "true"}}, false, "duplicate"},
 		{"flow event in stage hook", []Hook{{ID: "x", Events: EventSelector{Events: []EventType{EventFlowFinished}}, Command: "true"}}, true, "flow-level"},
 		{"flow event ok in flow layer", []Hook{{ID: "x", Events: EventSelector{Events: []EventType{EventFlowFinished}}, Command: "true"}}, false, ""},
+		{"flow_repeated ok in flow layer", []Hook{{ID: "x", Events: EventSelector{Events: []EventType{EventFlowRepeated}}, Command: "true"}}, false, ""},
+		{"flow_repeated in stage hook", []Hook{{ID: "x", Events: EventSelector{Events: []EventType{EventFlowRepeated}}, Command: "true"}}, true, "flow-level"},
+		{"events all ok in flow layer", []Hook{{ID: "x", Events: EventSelector{All: true}, Command: "true"}}, false, ""},
 		{"negative retries", []Hook{{ID: "x", Events: EventSelector{All: true}, Command: "true", Retries: -1}}, false, "retries"},
 		{"negative timeout", []Hook{{ID: "x", Events: EventSelector{All: true}, Command: "true", Timeout: -1}}, false, "timeout"},
 		// id становится именем файла лога — path traversal запрещён (codex CRIT#1):

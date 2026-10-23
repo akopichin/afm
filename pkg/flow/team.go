@@ -46,15 +46,16 @@ func (t *Team) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// rejectNullTeam rejects "team:" with no value (or null) in the flow's top-level mapping, as the schema does:
-// yaml.v3 never calls Team.UnmarshalYAML for a null node, so the decoded Flow cannot tell it from an absent key.
-func rejectNullTeam(doc *yaml.Node) error {
+// rejectNullKey rejects "key:" with no value (or null) in the flow's top-level mapping, as the schema does:
+// yaml.v3 never calls a field's UnmarshalYAML for a null node, so the decoded Flow cannot tell it from an
+// absent key.
+func rejectNullKey(doc *yaml.Node, key string, err error) error {
 	if doc.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i+1 < len(doc.Content); i += 2 {
-		if doc.Content[i].Value == "team" && doc.Content[i+1].ShortTag() == "!!null" {
-			return errTeamNotList
+		if doc.Content[i].Value == key && doc.Content[i+1].ShortTag() == "!!null" {
+			return err
 		}
 	}
 	return nil

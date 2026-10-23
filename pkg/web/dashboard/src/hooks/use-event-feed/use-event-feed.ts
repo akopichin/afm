@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AfmEvent } from '../../types'
+import { useRunEpoch } from '../use-run-epoch'
 
 // Подписка на WebSocket /ws с автопереконнектом и keepalive. Heartbeat от сервера в ленту событий НЕ
 // попадает (liveness only).
@@ -13,9 +14,18 @@ const WATCHDOG_SILENCE_MS = 75000
 // исключены — легитимные одинаковые повторы не должны схлопываться.
 const CONTENT_DEDUPE_ON_INGEST = new Set(['agent_note', 'script_failed'])
 
-export function useEventFeed(url: string): { events: AfmEvent[]; connected: boolean } {
+// runId нужен, чтобы пережить авто-повтор флоу: при смене рана старый сокет закрывается, лента очищается и
+// история нового рана грузится заново (seq у каждого рана свой, поэтому смешивать нельзя).
+export function useEventFeed(url: string, runId: string): { events: AfmEvent[]; connected: boolean } {
   const [events, setEvents] = useState<AfmEvent[]>([])
   const [connected, setConnected] = useState(false)
+  const runEpoch = useRunEpoch(runId)
+  const [feedEpoch, setFeedEpoch] = useState(runEpoch)
+  if (feedEpoch !== runEpoch) {
+    setFeedEpoch(runEpoch)
+    setEvents([])
+    setConnected(false)
+  }
 
   useEffect(() => {
     let cancelledFetch = false
@@ -116,7 +126,7 @@ export function useEventFeed(url: string): { events: AfmEvent[]; connected: bool
       if (watchdogTimer !== undefined) clearInterval(watchdogTimer)
       socket?.close()
     }
-  }, [url])
+  }, [url, runEpoch])
 
   return { events, connected }
 }

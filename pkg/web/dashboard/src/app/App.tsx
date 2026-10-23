@@ -35,6 +35,7 @@ import { useRunConversationsSeen } from '../components/run-conversations/run-con
 import { useReviewNoteCount } from '../hooks/use-review-note-count'
 import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
+import { useRunEpoch } from '../hooks/use-run-epoch'
 import { useElapsed } from '../hooks/use-elapsed'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
@@ -140,7 +141,7 @@ export function App(): ReactElement {
   }
 
   const wsUrl = buildWebSocketUrl()
-  const { events, connected } = useEventFeed(wsUrl)
+  const { events, connected } = useEventFeed(wsUrl, runId)
 
   // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано справа от рейла: Feed,
   // контекстный attention или read-only просмотр истории плана/диалога.
@@ -313,7 +314,7 @@ export function App(): ReactElement {
 
   // stageEvents — лента вкладки Feed: только события ТЕКУЩЕЙ стадии воркспейса, а не весь событийный поток
   // флоу. Full feed (глобальный вид) продолжает читать сырые `events` напрямую.
-  const stageEvents = useStageEvents(workspaceStage?.id ?? null, events)
+  const stageEvents = useStageEvents(workspaceStage?.id ?? null, events, runId)
 
   // Клик по стадии в рейле: выбираем её и открываем подходящий вид — attention, если стадия ждёт действия;
   // иначе Feed для завершённых/ещё не начавшихся стадий; историю живой стадии — если есть.
@@ -395,7 +396,10 @@ export function App(): ReactElement {
   const stageMesh = meshRoster.enabled && capabilities.collaboration
   // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
   // composerDrafts — every stage's Feed composer draft for this page session (FeedWorkspace's composerDrafts).
-  const composerDrafts = useRef(new Map<string, ComposerDraft>())
+  // A new run starts without them: the same stage ID in the next run is another conversation.
+  const runEpoch = useRunEpoch(runId)
+  const [composerDrafts, setComposerDrafts] = useState({ runEpoch, drafts: new Map<string, ComposerDraft>() })
+  if (composerDrafts.runEpoch !== runEpoch) setComposerDrafts({ runEpoch, drafts: new Map() })
   const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   const meshSideFailures = useMemo(() => (stageMesh ? sideAgentFailures(events) : NO_DELIVERIES), [stageMesh, events])
   // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
@@ -710,6 +714,7 @@ export function App(): ReactElement {
                   />
                 ) : wsState.view === 'full-feed' ? (
                   <FeedWorkspace
+                    key={runId}
                     events={events}
                     stageId={null}
                     scopeToken="scope:full"
@@ -732,6 +737,7 @@ export function App(): ReactElement {
                 ) : wsState.view === 'feed' || wsState.view === 'board' || workspaceStage === null ? (
                   <div className="stage-feed-layout">
                     <FeedWorkspace
+                      key={runId}
                       events={stageEvents}
                       stageId={workspaceStage?.id ?? null}
                       // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно `scope:stage:<id>` / `scope:none`.
@@ -739,7 +745,7 @@ export function App(): ReactElement {
                       emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                       onOpenDialog={handleOpenDialogFromFeed}
                       noteTarget={noteTarget}
-                      composerDrafts={composerDrafts.current}
+                      composerDrafts={composerDrafts.drafts}
                       onSendNote={pauseOnFocus.handleSend}
                       pauseOnFocusEnabled={pauseOnFocus.enabled}
                       onTogglePauseOnFocus={pauseOnFocus.setEnabled}

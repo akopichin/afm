@@ -1558,3 +1558,80 @@ func TestParseFile_CollaborationModeAlias(t *testing.T) {
 		t.Fatalf("Collaboration = %+v, want Mode pointing to assistants", f.Collaboration)
 	}
 }
+
+// --- repeat: re-run the flow after each successful pass ---------------------------------------------------
+
+const repeatFlowBase = `
+name: f
+description: "repeat"
+stages:
+  - id: s
+    name: "S"
+    description: "d"
+    agents: [planning, implementation]
+`
+
+func TestParseFile_Repeat(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want flow.RepeatConfig
+	}{
+		{"missing key", "", flow.RepeatConfig{}},
+		{"false", "repeat: false\n", flow.RepeatConfig{}},
+		{"true", "repeat: true\n", flow.RepeatConfig{Enabled: true, MaxCycles: 0, KeepRuns: 2}},
+		{"mapping defaults", "repeat:\n  max_cycles: 3\n", flow.RepeatConfig{Enabled: true, MaxCycles: 3, KeepRuns: 2}},
+		{"empty mapping", "repeat: {}\n", flow.RepeatConfig{Enabled: true, MaxCycles: 0, KeepRuns: 2}},
+		{"explicit keep_runs zero", "repeat:\n  keep_runs: 0\n", flow.RepeatConfig{Enabled: true, MaxCycles: 0, KeepRuns: 0}},
+		{"explicit max_cycles zero", "repeat:\n  max_cycles: 0\n  keep_runs: 5\n", flow.RepeatConfig{Enabled: true, MaxCycles: 0, KeepRuns: 5}},
+		{"full mapping", "repeat:\n  max_cycles: 4\n  keep_runs: 1\n", flow.RepeatConfig{Enabled: true, MaxCycles: 4, KeepRuns: 1}},
+		{"integral float", "repeat:\n  max_cycles: 1.0\n", flow.RepeatConfig{Enabled: true, MaxCycles: 1, KeepRuns: 2}},
+		{"exponent float", "repeat:\n  max_cycles: 1e0\n", flow.RepeatConfig{Enabled: true, MaxCycles: 1, KeepRuns: 2}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := flow.ParseFile(writeTemp(t, tt.yaml+repeatFlowBase))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if f.Repeat != tt.want {
+				t.Errorf("Repeat = %+v, want %+v", f.Repeat, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFile_RepeatRejectsInvalid(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{"negative max_cycles", "repeat:\n  max_cycles: -1\n", "repeat.max_cycles"},
+		{"negative keep_runs", "repeat:\n  keep_runs: -1\n", "repeat.keep_runs"},
+		{"unknown key", "repeat:\n  max_cycle: 3\n", `unknown field "max_cycle"`},
+		{"string instead of bool", "repeat: \"true\"\n", "repeat"},
+		{"number", "repeat: 3\n", "repeat"},
+		{"yaml 1.1 bool yes", "repeat: yes\n", "repeat"},
+		{"yaml 1.1 bool on", "repeat: on\n", "repeat"},
+		{"quoted yaml 1.1 bool", "repeat: \"yes\"\n", "repeat"},
+		{"list", "repeat: [1]\n", "repeat"},
+		{"max_cycles not a number", "repeat:\n  max_cycles: many\n", "repeat.max_cycles"},
+		{"keep_runs not a number", "repeat:\n  keep_runs: 1.5\n", "repeat.keep_runs"},
+		{"fractional max_cycles", "repeat:\n  max_cycles: 1.5\n", "repeat.max_cycles"},
+		{"empty value", "repeat:\n", "repeat"},
+		{"null", "repeat: null\n", "repeat"},
+		{"tilde null", "repeat: ~\n", "repeat"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := flow.ParseFile(writeTemp(t, tt.yaml+repeatFlowBase))
+			if err == nil {
+				t.Fatal("expected ParseFile to reject the repeat setting")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}

@@ -64,8 +64,14 @@ loop wakeups).
 
 ### Event catalog
 
-**Flow:** `flow_started`, `flow_resumed`, `flow_finished`, `flow_failed`,
-`flow_interrupted`.
+**Flow:** `flow_started`, `flow_resumed`, `flow_repeated`, `flow_finished`,
+`flow_failed`, `flow_interrupted`.
+
+For a [repeating flow](flow-reference.md#repeat-run-successful-flows-again), the first
+run emits `flow_started`. Each later cycle emits `flow_repeated` instead of
+`flow_started`; a resumed run still emits `flow_resumed`. Successful cycles emit
+`flow_finished` before the next run starts. `events: all` includes
+`flow_repeated`.
 
 **Stage:** `stage_planning_started`, `stage_plan_ready`, `stage_approved`,
 `stage_revision_started`, `stage_execution_started`, `stage_question_asked`,
@@ -105,6 +111,12 @@ AFM_RUN_DIR         AFM_ROOT_DIR        AFM_STAGE_ID    AFM_STAGE_NAME
 AFM_STAGE_FROM      AFM_STAGE_TO
 ```
 
+In repeat mode, the `flow` object of every hook payload also has `cycle`
+(starting at 1) and `max_cycles` (`0` means unlimited). Cycles after the first
+also have `previous_run_id`. These fields are absent outside repeat mode.
+`AFM_FLOW_CYCLE` gives the same cycle number to hook commands in repeat mode;
+it is absent otherwise. Each cycle has its own `run_id` and `run_dir`.
+
 For flow-level events the stage variables are empty. Use `AFM_HOOK_EVENT_ID` as
 an idempotency key if your receiver needs one.
 
@@ -143,10 +155,13 @@ usual `KEY=VALUE` format. The reference source must be `env:` or `file:` —
 plain literals are rejected. Target names must match `[A-Za-z_][A-Za-z0-9_]*`
 and cannot start with the reserved `AFM_` prefix.
 
-References are resolved **once, before the flow starts**. A missing variable,
-missing file, or empty value is a config error (naming the hook and the
-variable, never the secret value) — the run fails fast rather than starting a
-hook whose secret can't be resolved.
+References are resolved before the first run starts, and again before each new
+run in native repeat mode. In Docker repeat mode, hook secrets are transported
+once for the process, so changing the identity, order, or `env` references of
+hooks with `env` requires restarting `afm run`.
+A missing variable, missing file, or empty value is a config error (naming the
+hook and the variable, never the secret value) — the run fails fast rather than
+starting a hook whose secret can't be resolved.
 
 ### The hook process environment
 
