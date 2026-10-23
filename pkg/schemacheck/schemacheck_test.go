@@ -129,6 +129,7 @@ var (
 	buttonsType       = reflect.TypeOf(flow.Buttons{})
 	eventSelectorType = reflect.TypeOf(lifecyclehooks.EventSelector{})
 	verifySpecType    = reflect.TypeOf(flow.VerifySpec{})
+	repeatConfigType  = reflect.TypeOf(flow.RepeatConfig{})
 )
 
 func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, typ reflect.Type, at string) {
@@ -154,6 +155,20 @@ func assertTypeCovered(t *testing.T, doc schemaDocument, node map[string]any, ty
 	// command-step object, array of step objects].
 	if typ == verifySpecType {
 		schemaForType(t, doc, node, "object", at)
+		return
+	}
+
+	// RepeatConfig is a boolean-or-object union with custom YAML parsing and no yaml tags on its fields,
+	// so the generic struct walk cannot see its keys: check them explicitly.
+	if typ == repeatConfigType {
+		schemaForType(t, doc, node, "boolean", at)
+		obj := schemaForType(t, doc, node, "object", at)
+		props, _ := obj["properties"].(map[string]any)
+		for _, name := range []string{"max_cycles", "keep_runs"} {
+			if _, ok := props[name]; !ok {
+				t.Errorf("%s: missing repeat field %q", at, name)
+			}
+		}
 		return
 	}
 
@@ -304,6 +319,30 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"team empty value", "name: f\nteam:\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"team empty list", "name: f\nteam: []\nstages:\n  - id: s\n    agents: [auto]\n", true},
 		{"team as object", "name: f\nteam:\n  id: qa\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat missing key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat false", "name: f\nrepeat: false\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat true", "name: f\nrepeat: true\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat mapping defaults", "name: f\nrepeat:\n  max_cycles: 3\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat empty mapping", "name: f\nrepeat: {}\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat explicit keep_runs zero", "name: f\nrepeat:\n  keep_runs: 0\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat explicit max_cycles zero", "name: f\nrepeat:\n  max_cycles: 0\n  keep_runs: 5\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat full mapping", "name: f\nrepeat:\n  max_cycles: 4\n  keep_runs: 1\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat negative max_cycles", "name: f\nrepeat:\n  max_cycles: -1\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat negative keep_runs", "name: f\nrepeat:\n  keep_runs: -1\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat unknown key", "name: f\nrepeat:\n  max_cycle: 3\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat string instead of bool", "name: f\nrepeat: \"true\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat number", "name: f\nrepeat: 3\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat list", "name: f\nrepeat: [1]\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat max_cycles not a number", "name: f\nrepeat:\n  max_cycles: many\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat fractional keep_runs", "name: f\nrepeat:\n  keep_runs: 1.5\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat yaml 1.1 bool yes", "name: f\nrepeat: yes\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat yaml 1.1 bool on", "name: f\nrepeat: on\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat quoted yaml 1.1 bool", "name: f\nrepeat: \"yes\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat integral float max_cycles", "name: f\nrepeat:\n  max_cycles: 1.0\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat exponent float max_cycles", "name: f\nrepeat:\n  max_cycles: 1e0\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"repeat fractional max_cycles", "name: f\nrepeat:\n  max_cycles: 1.5\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat null", "name: f\nrepeat: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"repeat bare key", "name: f\nrepeat:\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"assistants unknown object key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        triger: on_completion\n", false},
 	}
 

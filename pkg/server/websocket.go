@@ -62,7 +62,7 @@ func (s *Server) readPump(conn *websocket.Conn) {
 	}
 }
 
-// writePump — единственный писатель в conn. Select по событиям / тикеру / done.
+// writePump — единственный писатель в conn. Select по событиям / тикеру / done / shutdown сервера.
 func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan bus.Event, done <-chan struct{}) {
 	ticker := time.NewTicker(s.wsPingPeriod)
 	defer ticker.Stop()
@@ -73,6 +73,16 @@ func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan bus.Event,
 	for {
 		select {
 		case <-done:
+			return
+		case <-s.done:
+			// Shutdown: http.Server не трогает hijacked-соединения, закрываем сами.
+			// Close разблокирует readPump, после чего handleWebSocket снимает подписку.
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
+				time.Now().Add(s.wsWriteWait),
+			)
+			_ = conn.Close()
 			return
 		case ev, ok := <-ch:
 			if !ok {

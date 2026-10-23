@@ -207,3 +207,39 @@ func TestBuildEnv_InheritEnv_StripsBrowserTransport(t *testing.T) {
 		}
 	}
 }
+
+func TestAfmVars_FlowCycle(t *testing.T) {
+	build := func(cfg DispatcherConfig, ev EventType) []string {
+		return afmVars(cfg, BuildPayload(cfg, Event{Type: ev}, "id"))
+	}
+	if env := build(DispatcherConfig{RunID: "r1", Cycle: 1, MaxCycles: 0}, EventFlowStarted); !hasEnv(env, "AFM_FLOW_CYCLE", "1") {
+		t.Fatalf("cycle 1: %v", env)
+	}
+	if env := build(DispatcherConfig{RunID: "r2", Cycle: 2, PreviousRunID: "r1"}, EventFlowRepeated); !hasEnv(env, "AFM_FLOW_CYCLE", "2") {
+		t.Fatalf("cycle 2: %v", env)
+	}
+	if env := build(DispatcherConfig{RunID: "r1"}, EventFlowStarted); hasEnvKey(env, "AFM_FLOW_CYCLE") {
+		t.Fatalf("AFM_FLOW_CYCLE must be absent outside repeat: %v", env)
+	}
+}
+
+// Вложенный `afm run` из hook-а repeat-рана наследует чужой AFM_FLOW_CYCLE; hook не-repeat рана не должен его видеть
+// вовсе (переменная отсутствует, а не пустая: `${AFM_FLOW_CYCLE+x}` должен быть пуст).
+func TestBuildEnv_FlowCycle(t *testing.T) {
+	t.Setenv("AFM_FLOW_CYCLE", "99")
+	build := func(inherit bool, cycle int) []string {
+		cfg := DispatcherConfig{RunID: "r", Cycle: cycle}
+		p := BuildPayload(cfg, Event{Type: EventFlowStarted}, "id")
+		return buildEnv(Hook{ID: "h", InheritEnv: inherit}, cfg, p)
+	}
+	if env := build(false, 0); hasEnvKey(env, "AFM_FLOW_CYCLE") {
+		t.Fatalf("minimal env, no repeat: AFM_FLOW_CYCLE must be absent: %v", env)
+	}
+	if env := build(true, 0); hasEnvKey(env, "AFM_FLOW_CYCLE") {
+		t.Fatalf("inherited env, no repeat: AFM_FLOW_CYCLE must be absent: %v", env)
+	}
+	env := build(true, 2)
+	if !hasEnv(env, "AFM_FLOW_CYCLE", "2") || hasEnv(env, "AFM_FLOW_CYCLE", "99") {
+		t.Fatalf("inherited env, cycle 2: want only AFM_FLOW_CYCLE=2: %v", env)
+	}
+}

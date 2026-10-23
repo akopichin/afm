@@ -128,7 +128,7 @@ completion gates and behavior when collaboration is disabled.
 directory; see below),
 `memory` ([agent-memory config](agent-memory.md)), `hooks`
 ([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `collaboration`,
-`team` (see below), `worktrees`, `stages`.
+`team` (see below), `worktrees`, `repeat` (see below), `stages`.
 
 `side_agent: true|false` overrides the dashboard
 [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run) toggle for
@@ -141,6 +141,45 @@ or `assistants`; resolution is flow > project config > global config > `team`.
 Neither setting enables collaboration. There is no flow-level `enabled` field;
 use `collaboration.enabled` in `config.yaml` or `AFM_COLLABORATION` to switch
 collaboration on or off. See [Collaboration modes](collaboration.md#collaboration-modes).
+
+### `repeat` — run successful flows again
+
+Set `repeat: true` to start a fresh run after every successful pass (all stages
+`done`). The short form repeats indefinitely and keeps the two most recent
+successful runs created by this `afm run` process. Omit `repeat`, or set it to
+`false`, for one pass.
+
+```yaml
+name: nightly
+repeat:
+  max_cycles: 3  # total passes including the first; 0 (default) = unlimited
+  keep_runs: 2   # successful runs to retain; 0 = retain all (default: 2)
+stages:
+  - id: check
+    script: "make test"
+```
+
+Both numbers must be non-negative integers. The cycle count and retention list
+start over with each `afm run` process; an unfinished run can still be resumed
+on the first pass. Failed or interrupted runs do not trigger another cycle. A
+new run directory and event journal are created for each later pass.
+
+Before starting another pass, afm rereads the same `flow.yaml`. Changes to
+stages, hooks, and `repeat` take effect in that pass; disabling repeat or
+lowering `max_cycles` to the completed count ends the loop. An invalid file
+stops with an error before creating another run. Changes to the flow name or
+effective worktree setup require restarting `afm run`. In Docker, changes that
+need different mounts or agent commands also require a restart, as do changes
+to the identity, order, or `env` references of hooks that declare `env`. A
+changed `root_dir` can be applied if it leaves the worktree base and Docker
+mounts unchanged.
+
+After creating the next run directory, afm removes older successful runs from
+this process beyond the previous pass's `keep_runs` limit. It also cleans up
+after the final successful pass, including when a reloaded file disables
+repeat. Runs from other processes, resumed runs, failed runs, and interrupted
+runs are left in place. See [Stage lifecycle](stage-lifecycle.md#repeating-a-flow)
+and [Lifecycle hooks](lifecycle-hooks.md#event-catalog).
 
 ### `team` — run agents of the flow
 

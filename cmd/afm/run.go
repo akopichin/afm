@@ -34,6 +34,16 @@ type runOptions struct {
 	worktreeDir     string // "" = agents run in the main checkout
 	forceNewRun     bool   // set by the clear flags: never resume
 	runName         string // run directory prefix; f.Name when --worktree was not given
+	// cycle — номер прохода с 1; метаданные repeat публикуются только при f.Repeat.Enabled. previousRunID —
+	// ран предыдущего цикла. afterRun вызывается после успешного рана, до паузы dashboard, и оценивает, последует
+	// ли ещё цикл: тогда dashboard держится недолго. Оценка выбирает лишь паузу; цикл стартует по свежему чтению.
+	cycle         int
+	previousRunID string
+	afterRun      func() (moreCycles bool)
+	// onRunCreated вызывается сразу после создания (или открытия) run dir, до запуска стадий.
+	onRunCreated func(runID string)
+	// containerBrowser — дескриптор browser из transport, прочитанный один раз за процесс (только в контейнере).
+	containerBrowser *browser.Descriptor
 }
 
 func newRunCmd() *cobra.Command {
@@ -126,16 +136,19 @@ func newRunCmd() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 			}
 
-			// CLI > flow YAML > config.
-			if maxParallel == 0 && f.MaxParallel > 0 {
-				cfg.Executor.MaxParallel = f.MaxParallel
-			}
-			return executeFlow(f, cfg, hooks, runOptions{
-				requireApproval: requireApproval,
+			// Один signal-контекст на все циклы repeat и ожидание dashboard между ними.
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer stop()
+			_, err = cycleLoop{
+				flowPath:        flowPath,
+				cfg:             cfg,
+				cliMaxParallel:  maxParallel != 0,
+				worktreeName:    worktreeName,
 				worktreeDir:     wtDir,
+				requireApproval: requireApproval,
 				forceNewRun:     mode != worktree.ClearNone,
-				runName:         runNameFor(worktreeName, f.Name),
-			})
+			}.run(ctx, f, hooks)
+			return err
 		},
 	}
 	cmd.Flags().IntVar(&maxParallel, "max-parallel", 0, "max parallel stages (0=unlimited)")
@@ -148,17 +161,21 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-// executeFlow owns run resources. Each resource is released on every return path.
-func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, opts runOptions) error {
+// executeFlow runs one pass of the flow under the caller's signal context and owns the run resources. Each
+// resource is released on every return path.
+func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, opts runOptions) (cycleResult, error) {
 	prompts, err := loadPrompts(cfg.PromptsDir)
 	if err != nil {
-		return err
+		return cycleResult{}, err
 	}
 	runDir, store, err := resolveRun(f, opts.runName, opts.forceNewRun)
 	if err != nil {
-		return err
+		return cycleResult{}, err
 	}
 	defer store.Close()
+	if opts.onRunCreated != nil {
+		opts.onRunCreated(filepath.Base(runDir))
+	}
 
 	// Collection remains enabled even when cost display is disabled.
 	acct, acctErr := accounting.Open(runDir, accounting.NewResolver(cfg.Pricing))
@@ -182,22 +199,20 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 
 	env, err := prepareRunEnvironment(rootDir, f, cfg, opts.worktreeDir)
 	if err != nil {
-		return err
+		return cycleResult{}, err
 	}
 	defer env.Close()
 
-	// Managed browser capability. In the container the manager runs on the host — we only rebuild the
-	// descriptor from transport env; natively we own the manager here for the run's lifetime.
+	// Managed browser capability. In the container the manager runs on the host — the descriptor was rebuilt
+	// from transport env once per process (takeContainerTransport); natively we own the manager here for the
+	// run's lifetime.
 	var browserDesc *browser.Descriptor
 	if config.ReExecedIntoContainer() {
-		browserDesc = descriptorFromEnv(true)
-		// Strip consumed AFM_BROWSER_* transport from afm's env so even direct child processes cannot inherit
-		// the token.
-		browser.UnsetTransportVars()
+		browserDesc = opts.containerBrowser
 	} else {
 		_, desc, browserCleanup, berr := startBrowser(cfg, browser.BrowserModeNative)
 		if berr != nil {
-			return berr
+			return cycleResult{}, berr
 		}
 		defer browserCleanup()
 		browserDesc = desc
@@ -210,13 +225,13 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	// runs must never silently replace a resumed run's graph (graph.RestoreOrPersist's whole point).
 	stages, err = graph.RestoreOrPersist(runDir, stages)
 	if err != nil {
-		return fmt.Errorf("restore stage registry: %w", err)
+		return cycleResult{}, fmt.Errorf("restore stage registry: %w", err)
 	}
 	runID := filepath.Base(runDir)
 	runSnap := store.Snapshot()
 	resumed, err := recordFreshRunProtocol(store)
 	if err != nil {
-		return err
+		return cycleResult{}, err
 	}
 	// Этап 9, T9.5: fold every stage_graph_added record committed before this process started (or crashed)
 	// back on top of the frozen stage set — orchestrator.New must see a dynamically-added stage from its very
@@ -233,24 +248,33 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	// must not silently retake effect on resume without going through its own durable record (T2.6).
 	collab := startCollaboration(store, cfg, f)
 	if err := checkDeclaredAssistants(f, collab); err != nil {
-		return err
+		return cycleResult{}, err
 	}
 	if err := checkFlowTeam(store, f.Team, collab); err != nil {
-		return err
+		return cycleResult{}, err
+	}
+
+	// Метаданные цикла получает только repeat-режим; первый проход (opts.cycle == 0) — цикл 1.
+	cycle := 0
+	if f.Repeat.Enabled {
+		cycle = max(opts.cycle, 1)
 	}
 
 	var orch *orchestrator.Orchestrator
 	hooksDisp, err := prepareLifecycleDispatcher(absRootDir(), lifecyclehooks.DispatcherConfig{
-		FlowName: f.Name,
-		RunID:    runID,
-		RunDir:   runDir,
-		RootDir:  lifecycleRootDir(env.RootDir),
-		Resumed:  resumed,
+		FlowName:      f.Name,
+		RunID:         runID,
+		RunDir:        runDir,
+		RootDir:       lifecycleRootDir(env.RootDir),
+		Resumed:       resumed,
+		Cycle:         cycle,
+		MaxCycles:     f.Repeat.MaxCycles,
+		PreviousRunID: opts.previousRunID,
 	}, hooks, func(hookID, eventID string, err error) {
 		orch.PublishLifecycleHookFailure(hookID, eventID, err)
 	})
 	if err != nil {
-		return err
+		return cycleResult{}, err
 	}
 	defer stopLifecycleDispatcher(hooksDisp)
 
@@ -274,6 +298,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		FlowName:           f.Name,
 		RunID:              runID,
 		Resumed:            resumed,
+		Repeated:           cycle > 1,
 		Hooks:              hooksDisp,
 		BrowserDescriptor:  browserDesc,
 		AssistantsEnabled:  collab.policy.Enabled,
@@ -290,11 +315,6 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 	if hooksDisp != nil {
 		hooksDisp.Start()
 	}
-
-	// Создаём процессный ctx до бокового агента и дашборда: Ctrl+C отменяет флоу и ожидание завершения
-	// бокового хода.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 
 	// Боковой агент дашборда поднимается, когда поднят дашборд И не выключен переключателем. Жёсткий сбой
 	// открытия журнала не валит ран — просто отключает боковой агент.
@@ -326,10 +346,10 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		AssistantsReader:  collab.reader(orch),
 		DiscussionService: collab.discussionService(orch),
 		ProposalActions:   collab.proposalActions(orch),
-	}, orch)
+	}, orch, opts.cycle <= 1)
 	if err != nil {
 		sideDrained = side.shutdownEmergency(sideAgentEmergencyDrain)
-		return err
+		return cycleResult{}, err
 	}
 	var unavailableSideMesh *sideAgentMeshBridge
 	if side != nil {
@@ -344,7 +364,7 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		var listErr error
 		unavailableSideMesh, listErr = startHistoricalSideAgentMesh(ctx, orch)
 		if listErr != nil {
-			return listErr
+			return cycleResult{}, listErr
 		}
 		if unavailableSideMesh != nil {
 			orch.SetSideAgentDrain(func(ctx context.Context) bool {
@@ -370,16 +390,31 @@ func executeFlow(f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.Registe
 		// Аварийный выход (Ctrl+C / сбой): прерываем активный боковой ход и ждём
 		// его лишь ограниченное время; журнал закрываем только если дренирован.
 		sideDrained = side.shutdownEmergency(sideAgentEmergencyDrain)
-		return runExitError(ctx, runErr)
+		return cycleResult{}, runExitError(ctx, runErr)
 	}
-	fmt.Printf("afm: flow %q completed\n", f.Name)
+	// orch.Run()==nil и для рана с failed-стадией; успех — только персистентный finished при всех done.
+	snap := store.Snapshot()
+	res := cycleResult{RunID: runID, Resumed: resumed, Completed: snap.RunStatus == state.RunStatusFinished && snap.AllDone()}
+	if res.Completed || !f.Repeat.Enabled {
+		fmt.Printf("afm: flow %q completed\n", f.Name)
+	} else {
+		fmt.Printf("afm: flow %q: cycle %d did not complete successfully\n", f.Name, opts.cycle)
+	}
+	// Оценка следующего цикла нужна до паузы dashboard, чтобы выбрать её длину.
+	moreCycles := res.Completed && opts.afterRun != nil && opts.afterRun()
 	if srv != nil {
-		fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMinimum)
-		waitForDashboardDrain(ctx, srv.ConnectedClients)
+		if moreCycles {
+			// Следующий цикл поднимет dashboard на том же порту: вкладку не ждём.
+			fmt.Printf("  dashboard: holding %s for UI to render final state\n", interCycleDrainGrace)
+			waitForDashboardGrace(ctx, interCycleDrainGrace)
+		} else {
+			fmt.Printf("  dashboard: holding at least %s for UI to render final state\n", dashboardExitGraceMinimum)
+			drainDashboard(ctx, srv.ConnectedClients)
+		}
 	}
 	// Штатное завершение: ждём активный боковой ход без 2-минутного колпака.
 	sideDrained = side.shutdownAfterFlow(ctx, sideAgentEmergencyDrain)
-	return nil
+	return res, nil
 }
 
 func resolveFlowPath(args []string) (string, error) {

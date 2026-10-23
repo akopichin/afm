@@ -60,7 +60,7 @@ describe('useEventFeed', () => {
   })
 
   test('connects, reports connected and accumulates events', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     expect(FakeWebSocket.instances).toHaveLength(1)
     expect(result.current.connected).toBe(false)
@@ -81,7 +81,7 @@ describe('useEventFeed', () => {
   test('collapses consecutive duplicate status changes for the same stage', () => {
     // Регресс #2: лента засорялась потоком одинаковых «TASK-REVIEW → ready».
     // Бэкенд фиксирует переход один раз; подряд идущие повторы схлопываются.
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -109,7 +109,7 @@ describe('useEventFeed', () => {
 
   test('reconnects with exponential backoff', () => {
     vi.useFakeTimers()
-    renderHook(() => useEventFeed('/ws'))
+    renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitClose()
@@ -132,7 +132,7 @@ describe('useEventFeed', () => {
 
   test('resets backoff to 1000ms after a successful open', () => {
     vi.useFakeTimers()
-    renderHook(() => useEventFeed('/ws'))
+    renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitClose()
@@ -150,7 +150,7 @@ describe('useEventFeed', () => {
 
   test('closes the socket and stops reconnecting on unmount', () => {
     vi.useFakeTimers()
-    const { unmount } = renderHook(() => useEventFeed('/ws'))
+    const { unmount } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     unmount()
 
@@ -166,7 +166,7 @@ describe('useEventFeed', () => {
   })
 
   test('filters heartbeat out of the event feed', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -182,7 +182,7 @@ describe('useEventFeed', () => {
 
   test('watchdog closes the connection after prolonged silence', () => {
     vi.useFakeTimers()
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -198,7 +198,7 @@ describe('useEventFeed', () => {
   })
 
   test('ignores invalid JSON messages without throwing or changing events', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -214,7 +214,7 @@ describe('useEventFeed', () => {
   })
 
   test('caps the global feed at 10000 events', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -252,7 +252,7 @@ describe('useEventFeed', () => {
 
   test('backoff climbs to and stays at the 10000ms ceiling across repeated reconnects', () => {
     vi.useFakeTimers()
-    renderHook(() => useEventFeed('/ws'))
+    renderHook(() => useEventFeed('/ws', 'run-a'))
 
     // Задержки без успешного open между ними удваиваются: 1000 -> 2000 -> 4000 -> 8000 -> 10000 (потолок).
     const delays = [1000, 2000, 4000, 8000, 10000]
@@ -281,7 +281,7 @@ describe('useEventFeed', () => {
 
   test('activity within the silence window resets the watchdog and keeps the socket open', () => {
     vi.useFakeTimers()
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -317,7 +317,7 @@ describe('useEventFeed', () => {
       }),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     // Живое сообщение с тем же seq=2 приходит по WS ДО того, как REST-фетч резолвится.
     act(() => {
@@ -350,7 +350,7 @@ describe('useEventFeed', () => {
       }),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     // agent_action не производится от FSM-transition — ни история, ни live
     // не несут seq для него, дедуп падает на ключ по содержимому.
@@ -383,7 +383,7 @@ describe('useEventFeed', () => {
       vi.fn().mockReturnValue(fetchPromise),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -414,7 +414,7 @@ describe('useEventFeed', () => {
     })
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -453,7 +453,7 @@ describe('useEventFeed', () => {
       }),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     await waitFor(() => {
       expect(result.current.events.filter((e) => e.type === 'dialog_question')).toHaveLength(1)
@@ -480,7 +480,7 @@ describe('useEventFeed', () => {
     })
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -518,7 +518,7 @@ describe('useEventFeed', () => {
   // Trap #2 из брифа: контент-дедуп на входе не должен схлопывать легитимные
   // повторы agent_action/script_output — только dialog_question/dialog_answer.
   test('identical seq-less agent_action live messages are not content-deduped', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -534,7 +534,7 @@ describe('useEventFeed', () => {
   // делает контент-ключ надёжным: тот же note (live+replay) схлопывается в одну строку.
   test('the same agent_note arriving live and via history collapses to one row', () => {
     const notePayload = { id: 7, text: 'fix it' }
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -550,7 +550,7 @@ describe('useEventFeed', () => {
   // ...но две РАЗНЫЕ заметки с одинаковым текстом (разный id) — две строки:
   // именно для этого id и нужен, иначе контент-дедуп схлопнул бы их.
   test('two agent_notes with identical text but different id are not collapsed', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -593,7 +593,7 @@ describe('useEventFeed', () => {
       }),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     await waitFor(() => {
       expect(result.current.events.filter((e) => e.type === 'script_failed')).toHaveLength(1)
@@ -614,7 +614,7 @@ describe('useEventFeed', () => {
   // Regression for the dedup-collapses-distinct-failures bug: two genuinely DIFFERENT script_failed
   // occurrences for the same stage must NOT collapse into one row.
   test('two script_failed for the same stage with different seq are both kept (distinct occurrences)', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -644,7 +644,7 @@ describe('useEventFeed', () => {
     })
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(fetchPromise))
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -683,7 +683,7 @@ describe('useEventFeed', () => {
       }),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     await waitFor(() => {
       expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
@@ -715,7 +715,7 @@ describe('useEventFeed', () => {
       }),
     )
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
 
     await waitFor(() => {
       expect(result.current.events.filter((e) => e.type === 'auto_answered')).toHaveLength(1)
@@ -734,7 +734,7 @@ describe('useEventFeed', () => {
   // Два РАЗНЫХ авто-ответа на один и тот же вопрос (тот же id/phase, разный answer) — это две
   // самостоятельные записи и обе должны выжить: ключ включает answer.
   test('two navigable auto_answered with same id/phase but different answer are both kept', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -749,7 +749,7 @@ describe('useEventFeed', () => {
   // Legacy/repair авто-ответы (без dialog-флага) НЕ проходят dialog-дедуп: два
   // разных прогресс-сообщения ремонта с одинаковым id обязаны оба остаться.
   test('two different repair auto_answered (no dialog flag) are both kept', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -764,7 +764,7 @@ describe('useEventFeed', () => {
   // Тот же id/answer, но в РАЗНЫХ стадиях/фазах — разные записи (ключ включает
   // stageId и phase), обе выживают.
   test('navigable auto_answered with same id/answer but different stage or phase are both kept', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -780,7 +780,7 @@ describe('useEventFeed', () => {
   // Review HIGH #3: агент может переиспользовать отвеченный id для ДРУГОГО вопроса — dialog_question с тем
   // же id/phase, но разным title, это две записи.
   test('two dialog_question with same id/phase but different title are both kept', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -795,7 +795,7 @@ describe('useEventFeed', () => {
   // Review HIGH #2/#3: два навигируемых авто-ответа на переиспользованный id с ОДИНАКОВЫМ answer, но для
   // РАЗНЫХ вопросов — обе записи.
   test('two navigable auto_answered with same id/answer but different question_title are both kept', () => {
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     act(() => {
       FakeWebSocket.last().emitOpen()
     })
@@ -812,7 +812,7 @@ describe('useEventFeed', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })
     vi.stubGlobal('fetch', fetchMock)
 
-    renderHook(() => useEventFeed('/ws'))
+    renderHook(() => useEventFeed('/ws', 'run-a'))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     act(() => {
@@ -853,7 +853,7 @@ describe('useEventFeed', () => {
       .mockResolvedValue({ ok: true, json: () => Promise.resolve([missed]) }) // reconnect: the missed message is now durable
 
     vi.stubGlobal('fetch', fetchMock)
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) }) // flush the initial-mount fetch
 
     act(() => {
@@ -886,7 +886,7 @@ describe('useEventFeed', () => {
       .mockResolvedValue({ ok: true, json: () => Promise.resolve([{ ...msg, timestamp: '2026-10-16T10:00:00.000Z' }]) }) // reconnect: now durable
     vi.stubGlobal('fetch', fetchMock)
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -921,7 +921,7 @@ describe('useEventFeed', () => {
       .mockResolvedValue({ ok: true, json: () => Promise.resolve([{ ...msg, timestamp: '2026-10-18T10:00:00.000Z' }]) }) // reconnect: now durable
     vi.stubGlobal('fetch', fetchMock)
 
-    const { result } = renderHook(() => useEventFeed('/ws'))
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     act(() => {
       FakeWebSocket.last().emitOpen()
@@ -942,5 +942,67 @@ describe('useEventFeed', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(result.current.events.filter((e) => e.type === 'mesh_message')).toHaveLength(1)
+  })
+  describe('run change', () => {
+    const history = (stageId: string, seq: number) => ({ type: 'agent_action', stage_id: stageId, seq, timestamp: '2026-01-01T00:00:00.000Z' })
+
+    test('a new run drops the old events and subscription, and shows only its own feed even with the same stage and seq', async () => {
+      const histories: Record<string, unknown[]> = { 'run-a': [history('s1', 1)], 'run-b': [history('s1', 1)] }
+      let served = 'run-a'
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => histories[served] })))
+
+      const { result, rerender } = renderHook(({ runId }) => useEventFeed('/ws', runId), { initialProps: { runId: 'run-a' } })
+      await waitFor(() => expect(result.current.events).toHaveLength(1))
+      const first = FakeWebSocket.last()
+      act(() => first.emitOpen())
+      expect(result.current.connected).toBe(true)
+
+      served = 'run-b'
+      histories['run-b'] = [{ ...history('s1', 1), type: 'approved' }]
+      rerender({ runId: 'run-b' })
+
+      expect(first.closed).toBe(true)
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      expect(result.current.events).toEqual([]) // never a frame of run A's feed under run B
+      expect(result.current.connected).toBe(false)
+      await waitFor(() => expect(result.current.events).toHaveLength(1))
+      expect(result.current.events[0]?.type).toBe('approved')
+
+      // The old socket stays closed: a late frame from it never reaches run B's feed.
+      act(() => first.emitMessage({ type: 'agent_action', data: 'late A', stage_id: 's1', seq: 2 }))
+      expect(result.current.events).toHaveLength(1)
+    })
+
+    test('a late history response of the old run is ignored', async () => {
+      let resolveA: (v: unknown) => void = () => {}
+      const fetchMock = vi.fn()
+        .mockReturnValueOnce(new Promise((res) => { resolveA = res }))
+        .mockResolvedValue({ ok: true, json: async () => [history('s1', 7)] })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const { result, rerender } = renderHook(({ runId }) => useEventFeed('/ws', runId), { initialProps: { runId: 'run-a' } })
+      rerender({ runId: 'run-b' })
+      await waitFor(() => expect(result.current.events).toHaveLength(1))
+
+      await act(async () => {
+        resolveA({ ok: true, json: async () => [history('s1', 1), history('s1', 2)] })
+        await Promise.resolve()
+      })
+      expect(result.current.events.map((e) => e.seq)).toEqual([7])
+    })
+
+    test("the first run id ('' → run) keeps the events and the connection", async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [] })))
+      const { result, rerender } = renderHook(({ runId }) => useEventFeed('/ws', runId), { initialProps: { runId: '' } })
+      act(() => FakeWebSocket.last().emitOpen())
+      act(() => FakeWebSocket.last().emitMessage({ type: 'approved', data: 'ok', stage_id: 's1', seq: 1 }))
+      expect(result.current.events).toHaveLength(1)
+
+      rerender({ runId: 'run-a' })
+
+      expect(result.current.events).toHaveLength(1)
+      expect(result.current.connected).toBe(true)
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
   })
 })

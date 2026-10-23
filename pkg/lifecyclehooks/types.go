@@ -18,6 +18,7 @@ type EventType string
 const (
 	EventFlowStarted     EventType = "flow_started"
 	EventFlowResumed     EventType = "flow_resumed"
+	EventFlowRepeated    EventType = "flow_repeated" // начало цикла repeat со второго, вместо flow_started
 	EventFlowFinished    EventType = "flow_finished"
 	EventFlowFailed      EventType = "flow_failed"
 	EventFlowInterrupted EventType = "flow_interrupted"
@@ -54,7 +55,7 @@ const (
 )
 
 var flowEvents = map[EventType]bool{
-	EventFlowStarted: true, EventFlowResumed: true, EventFlowFinished: true,
+	EventFlowStarted: true, EventFlowResumed: true, EventFlowRepeated: true, EventFlowFinished: true,
 	EventFlowFailed: true, EventFlowInterrupted: true,
 }
 
@@ -64,7 +65,7 @@ func IsFlowEvent(ev EventType) bool { return flowEvents[ev] }
 // AllEvents возвращает весь публичный каталог (для `events: all` и валидации).
 func AllEvents() []EventType {
 	return []EventType{
-		EventFlowStarted, EventFlowResumed, EventFlowFinished, EventFlowFailed, EventFlowInterrupted,
+		EventFlowStarted, EventFlowResumed, EventFlowRepeated, EventFlowFinished, EventFlowFailed, EventFlowInterrupted,
 		EventStagePlanningStarted, EventStagePlanReady, EventStageApproved,
 		EventStageRevisionStarted, EventStageExecutionStarted,
 		EventStageQuestionAsked, EventStageQuestionAnswered,
@@ -154,6 +155,12 @@ type DispatcherConfig struct {
 	RunDir   string
 	RootDir  string
 	Resumed  bool
+	// Cycle — номер цикла repeat с 1; 0 — флоу вне repeat (cycle/max_cycles/previous_run_id не публикуются).
+	Cycle int
+	// MaxCycles — лимит циклов repeat (0 = бесконечно); значим только при Cycle > 0.
+	MaxCycles int
+	// PreviousRunID — ран предыдущего цикла; пуст у цикла 1.
+	PreviousRunID string
 }
 
 // FlowInfo — блок flow JSON-payload.
@@ -163,6 +170,11 @@ type FlowInfo struct {
 	Resumed bool   `json:"resumed"`
 	RunDir  string `json:"run_dir"`
 	RootDir string `json:"root_dir"`
+	// Поля repeat отсутствуют вне режима repeat. MaxCycles — указатель, чтобы явный 0 (бесконечно)
+	// сериализовался, а отсутствие — нет.
+	Cycle         int    `json:"cycle,omitempty"`
+	MaxCycles     *int   `json:"max_cycles,omitempty"`
+	PreviousRunID string `json:"previous_run_id,omitempty"`
 }
 
 // StageInfo — блок stage JSON-payload (nil для flow-событий).
@@ -198,6 +210,12 @@ func BuildPayload(cfg DispatcherConfig, ev Event, eventID string) Payload {
 			RunDir: cfg.RunDir, RootDir: cfg.RootDir,
 		},
 		Reason: ev.Reason,
+	}
+	if cfg.Cycle > 0 {
+		maxCycles := cfg.MaxCycles
+		p.Flow.Cycle = cfg.Cycle
+		p.Flow.MaxCycles = &maxCycles
+		p.Flow.PreviousRunID = cfg.PreviousRunID
 	}
 	if ev.StageID != "" {
 		p.Stage = &StageInfo{

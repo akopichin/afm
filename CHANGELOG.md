@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-23
+
+### Improvement: repeat successful flows in fresh runs
+
+Set `repeat: true` in `flow.yaml` to restart a successful flow in a new run, or
+set `max_cycles` and `keep_runs` to limit the passes and retain recent successful
+runs. afm reloads the flow between cycles, emits `flow_repeated` with cycle
+metadata for lifecycle hooks, and lets an open dashboard tab follow the new run.
+See [Repeat in flow.yaml](docs/flow-reference.md#repeat-run-successful-flows-again).
+
 ## 2026-10-22
 
 ### Improvement: typed Board tasks with explicit assignment

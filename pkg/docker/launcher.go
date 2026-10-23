@@ -3,10 +3,12 @@ package docker
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -184,20 +186,32 @@ func ScanCommands(f *flow.Flow, globalCmd string, generated map[string]bool) []C
 // command present in both a stage and extra is only mounted once (shared `seen` dedup).
 func ScanCommandsWithExtra(f *flow.Flow, globalCmd string, generated map[string]bool, extra []string) []CommandMount {
 	addCmd, mounts := newCommandMountCollector(generated)
+	for _, cmd := range CommandNames(f, globalCmd, extra) {
+		addCmd(cmd)
+	}
+	return mounts()
+}
 
-	addCmd(globalCmd)
+// CommandNames — единый перечень команд агентов, которые Docker-подготовка ищет на хосте: глобальная команда,
+// команды стадий и их verify-агентов, extra. Без пустых имён, встроенного claude и повторов; отсортирован,
+// поэтому порядок монтирований и сравнение проекций не зависят от порядка map. Сравнивать надо имена, а не
+// найденные mount'ы: в контейнере хостовых бинарников нет в PATH.
+func CommandNames(f *flow.Flow, globalCmd string, extra []string) []string {
+	names := map[string]bool{globalCmd: true}
 	if f != nil {
 		for _, s := range f.Stages {
-			addCmd(s.Command)
+			names[s.Command] = true
 			for _, cmd := range stageVerifyCommands(s) {
-				addCmd(cmd)
+				names[cmd] = true
 			}
 		}
 	}
 	for _, cmd := range extra {
-		addCmd(cmd)
+		names[cmd] = true
 	}
-	return mounts()
+	delete(names, "")
+	delete(names, config.ClaudeCommand)
+	return slices.Sorted(maps.Keys(names))
 }
 
 // newCommandMountCollector returns an addCmd closure (dedups against generated/claude-bare/already-seen, and

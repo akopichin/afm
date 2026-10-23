@@ -2103,6 +2103,48 @@ describe('App', () => {
     expect(container.querySelector('.team-view')).toBeNull()
   }, 15000)
 
+  // The repeating flow starts run B on the same port: the open tab follows it without a reload. B reuses the stage
+  // ID and restarts seq, so nothing of run A may leak into B — neither feed events, nor conversation messages
+  // (B's seq is below A's cursor), nor the draft written in A.
+  test('a new run replaces the feeds, conversations and drafts of the previous run', async () => {
+    let runId = 'app-feed-a'
+    // Distinct seq per run: equal (stage, seq) keys would let the merge hide a leaked event of run A.
+    const event = (type: string, seq: number, detail: string) => ({ type, stage_id: 's1', seq, timestamp: '2026-10-22T10:00:00Z', data: { tool: 'text', detail } })
+    const history = (): unknown[] => [runId === 'app-feed-a' ? event('agent_action', 2, 'feed of run A') : event('agent_action', 1, 'feed of run B')]
+    const message = (seq: number, body: string) => ({ id: `m-${body}`, thread_id: 'mt-1', sender_id: 'run:t-1', recipient_ids: ['stage:s1'], kind: 'message', body, seq, created_at: '2026-10-22T10:00:00Z' })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        return { ok: true, json: async () => ({ flow_name: 'demo', run_id: runId, stages: [stageView('s1', 'Propose', 'running')], capabilities: { collaboration: true }, accounting: { health: 'ok', has_data: false, show_money: true } }) } as Response
+      }
+      if (url.includes('/api/mesh/participants')) {
+        return { ok: true, json: async () => ({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }, { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true }, { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true }] }) } as Response
+      }
+      if (url.includes('/api/mesh/stages/s1/messages')) {
+        const cursor = Number(new URL(url, 'http://x').searchParams.get('cursor'))
+        const current = runId === 'app-feed-a' ? message(9, 'conversation of run A') : message(2, 'conversation of run B')
+        const messages = current.seq > cursor ? [current] : []
+        return { ok: true, json: async () => ({ messages, threads: [], next_cursor: messages.length > 0 ? current.seq : cursor, has_more: false }) } as Response
+      }
+      if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/events')) return { ok: true, json: async () => history() } as Response
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('feed of run A'))
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('conversation of run A'))
+    fireEvent.change(await screen.findByRole('combobox', { name: /message the mesh/i }), { target: { value: 'draft of run A' } })
+
+    runId = 'app-feed-b'
+    // The next status poll reports run B.
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('feed of run B'), { timeout: 5000 })
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('conversation of run B'), { timeout: 5000 })
+    expect(document.getElementById('feed-content')?.textContent).not.toContain('run A')
+    expect(screen.getByRole('combobox', { name: /message the mesh/i })).toHaveValue('')
+  }, 15000)
+
   test('a new run does not mount its Team until Team is opened in that run', async () => {
     let runId = 'app-run-a'
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

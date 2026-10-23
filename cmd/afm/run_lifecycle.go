@@ -40,6 +40,10 @@ func prepareLifecycleDispatcher(afmRoot string, meta lifecyclehooks.DispatcherCo
 func resolveLifecycleEnv(afmRoot string, hooks []lifecyclehooks.RegisteredHook) error {
 	if config.ReExecedIntoContainer() {
 		for i := range hooks {
+			// Уже разрешён (takeContainerTransport): transport удалён после первого чтения.
+			if hooks[i].Hook.ResolvedEnv != nil {
+				continue
+			}
 			resolved, err := lifecyclehooks.ResolveHookEnvFromTransport(i, hooks[i].Hook)
 			if err != nil {
 				return fmt.Errorf("lifecycle hooks: %w", err)

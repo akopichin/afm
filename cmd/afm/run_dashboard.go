@@ -50,8 +50,12 @@ func (p registryStageProvider) StageConfigs() map[string]server.StageConfig {
 	return dashboardStageConfig(p.orch.Stages())
 }
 
-// startDashboard transfers workspace ownership to the server, including on failure.
-func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orchestrator) (*server.Server, error) {
+// openBrowser — seam для тестов: вкладку открывает только первый цикл процесса.
+var openBrowser = openBrowserTab
+
+// startDashboard transfers workspace ownership to the server, including on failure. announce — вкладку открывают
+// и подсказку об URL печатают один раз за процесс (первый цикл); следующий цикл поднимает dashboard тихо.
+func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orchestrator, announce bool) (*server.Server, error) {
 	if cfg.Server.GetPort() <= 0 {
 		return nil, nil
 	}
@@ -78,10 +82,11 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
 	orch.SetDashboardURL(dashURL)
 	fmt.Printf("  dashboard: %s\n", dashURL)
+	if !announce {
+		return srv, nil
+	}
 	if cfg.Server.IsOpenBrowser() {
-		if !config.InContainer() {
-			openBrowser(dashURL)
-		}
+		openBrowser(dashURL)
 	} else {
 		fmt.Println("  → open this URL in your browser to follow the run")
 	}
@@ -101,9 +106,9 @@ func browserCmd() string {
 	}
 }
 
-func openBrowser(url string) {
+func openBrowserTab(url string) {
 	cmd := browserCmd()
-	if cmd == "" {
+	if cmd == "" || config.InContainer() {
 		return
 	}
 	//nolint:gosec // opening a local URL in the browser is safe
@@ -147,6 +152,17 @@ const dashboardDrainPoll = 2 * time.Second
 // прерывает ожидание.
 func waitForDashboardDrain(ctx context.Context, connectedClients func() int) {
 	waitForDashboardDrainWithTiming(ctx, connectedClients, dashboardExitGraceMinimum, dashboardExitGraceMaximum, dashboardDrainPoll)
+}
+
+// drainDashboard — seam для тестов: финальное ожидание dashboard после последнего цикла.
+var drainDashboard = waitForDashboardDrain
+
+// waitForDashboardGrace держит dashboard открытым ровно grace; Ctrl+C прерывает ожидание.
+func waitForDashboardGrace(ctx context.Context, grace time.Duration) {
+	select {
+	case <-time.After(grace):
+	case <-ctx.Done():
+	}
 }
 
 // waitForDashboardDrainWithTiming — тело waitForDashboardDrain с параметризованными длительностями (тесты

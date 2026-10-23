@@ -103,6 +103,9 @@ type Options struct {
 	FlowName string
 	RunID    string
 	Resumed  bool
+	// Repeated — ран создан циклом repeat со второго: стартовое событие flow_repeated вместо flow_started.
+	// Resumed приоритетнее: продолжение рана после краша по-прежнему эмитит flow_resumed.
+	Repeated bool
 	Hooks    *lifecyclehooks.Dispatcher
 	// BrowserDescriptor — managed Chrome DevTools capability for this run.
 	BrowserDescriptor *browser.Descriptor
@@ -697,6 +700,18 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 // SetDashboardURL sets the dashboard URL after the server starts listening.
 func (o *Orchestrator) SetDashboardURL(url string) { o.opts.DashboardURL = url }
 
+// flowStartEvent выбирает событие начала рана: продолжение, новый цикл repeat или обычный старт.
+func (o *Orchestrator) flowStartEvent() lifecyclehooks.EventType {
+	switch {
+	case o.opts.Resumed:
+		return lifecyclehooks.EventFlowResumed
+	case o.opts.Repeated:
+		return lifecyclehooks.EventFlowRepeated
+	default:
+		return lifecyclehooks.EventFlowStarted
+	}
+}
+
 // Run starts the event-driven orchestrator loop.
 func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -739,11 +754,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 		return fmt.Errorf("persist run start: %w", err)
 	}
 
-	if o.opts.Resumed {
-		o.emitLifecycle(lifecyclehooks.Event{Type: lifecyclehooks.EventFlowResumed})
-	} else {
-		o.emitLifecycle(lifecyclehooks.Event{Type: lifecyclehooks.EventFlowStarted})
-	}
+	o.emitLifecycle(lifecyclehooks.Event{Type: o.flowStartEvent()})
 
 	// Restore review-pause before scheduling. On a corrupt resuming marker, hold activation and keep the
 	// dashboard available for inspection.

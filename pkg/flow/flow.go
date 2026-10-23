@@ -3,6 +3,7 @@ package flow
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,9 +332,104 @@ type Flow struct {
 	// FlowCollaboration.UnmarshalYAML.
 	Collaboration *FlowCollaboration `yaml:"collaboration,omitempty"`
 	// Team declares run agents created before the stages start (see TeamMember). Needs collaboration.
-	Team   Team    `yaml:"team,omitempty"`
-	Stages []Stage `yaml:"stages"`
+	Team Team `yaml:"team,omitempty"`
+	// Repeat restarts the flow in a new run after every successful pass (see RepeatConfig).
+	Repeat RepeatConfig `yaml:"repeat,omitempty"`
+	Stages []Stage      `yaml:"stages"`
 }
+
+// defaultRepeatKeepRuns is how many successful runs a repeating flow keeps when keep_runs is not set.
+const defaultRepeatKeepRuns = 2
+
+// RepeatConfig is the flow's "repeat" setting. A missing key and "repeat: false" both leave the zero value
+// (Enabled false): the flow runs once. "repeat: true" and a mapping enable it with the defaults below.
+type RepeatConfig struct {
+	Enabled bool
+	// MaxCycles is the number of successful passes after which the loop stops; 0 means no limit.
+	MaxCycles int
+	// KeepRuns is how many successful runs of this process stay on disk; 0 keeps them all.
+	KeepRuns int
+}
+
+// UnmarshalYAML accepts a boolean or a mapping with max_cycles and keep_runs. keep_runs defaults to 2 only
+// when repeat is enabled, so an explicit "keep_runs: 0" needs no pointer. Mirrors FlowCollaboration's
+// explicit-key parsing because yaml.v3 would silently ignore unknown keys. A null value never reaches this
+// method — see rejectNullKey.
+func (c *RepeatConfig) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		// yaml.v3 also decodes "yes", "on" and "Y" (even quoted) into a bool; the schema only allows true/false.
+		var enabled bool
+		if value.ShortTag() != "!!bool" || value.Decode(&enabled) != nil {
+			return errRepeatInvalid
+		}
+		if enabled {
+			*c = RepeatConfig{Enabled: true, KeepRuns: defaultRepeatKeepRuns}
+		}
+		return nil
+	case yaml.MappingNode:
+		*c = RepeatConfig{Enabled: true, KeepRuns: defaultRepeatKeepRuns}
+		return c.unmarshalMapping(value)
+	default:
+		return errRepeatInvalid
+	}
+}
+
+func (c *RepeatConfig) unmarshalMapping(value *yaml.Node) error {
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		key := value.Content[i].Value
+		var dst *int
+		switch key {
+		case "max_cycles":
+			dst = &c.MaxCycles
+		case "keep_runs":
+			dst = &c.KeepRuns
+		default:
+			return fmt.Errorf("repeat: unknown field %q", key)
+		}
+		n, err := decodeInteger(value.Content[i+1])
+		if err != nil {
+			return fmt.Errorf("repeat.%s: %w", key, err)
+		}
+		*dst = n
+	}
+	return nil
+}
+
+// maxExactFloatInt is the largest magnitude below which every integer is exactly representable as a float64.
+const maxExactFloatInt = 1 << 53
+
+// decodeInteger reads an integer the way the JSON Schema "integer" type does: 3, 3.0 and 3e0 are accepted,
+// 1.5 is not. yaml.v3 would silently truncate 1.5 to 1 when decoding into an int, so the tag is checked.
+func decodeInteger(node *yaml.Node) (int, error) {
+	switch node.ShortTag() {
+	case "!!int":
+		var n int
+		if err := node.Decode(&n); err != nil {
+			return 0, err
+		}
+		return n, nil
+	case "!!float":
+		var f float64
+		if err := node.Decode(&f); err == nil && f == math.Trunc(f) && math.Abs(f) <= maxExactFloatInt {
+			return int(f), nil
+		}
+	default:
+	}
+	return 0, fmt.Errorf("expected an integer, got %q", node.Value)
+}
+
+func (c RepeatConfig) validate() error {
+	if c.MaxCycles < 0 {
+		return fmt.Errorf("repeat.max_cycles: must not be negative, got %d", c.MaxCycles)
+	}
+	if c.KeepRuns < 0 {
+		return fmt.Errorf("repeat.keep_runs: must not be negative, got %d", c.KeepRuns)
+	}
+	return nil
+}
+
+var errRepeatInvalid = errors.New("repeat must be true, false, or an object with max_cycles and keep_runs")
 
 // FlowCollaboration is the per-flow override of collaboration.max_depth and collaboration.mode only.
 type FlowCollaboration struct {
@@ -396,7 +492,10 @@ func ParseFile(path string) (*Flow, error) {
 		if err := root.Decode(&f); err != nil {
 			return nil, fmt.Errorf("parse yaml: %w", err)
 		}
-		if err := rejectNullTeam(root.Content[0]); err != nil {
+		if err := rejectNullKey(root.Content[0], "team", errTeamNotList); err != nil {
+			return nil, err
+		}
+		if err := rejectNullKey(root.Content[0], "repeat", errRepeatInvalid); err != nil {
 			return nil, err
 		}
 	}
@@ -554,6 +653,10 @@ func (f *Flow) validate() error {
 	}
 
 	if err := f.Team.validate(); err != nil {
+		return err
+	}
+
+	if err := f.Repeat.validate(); err != nil {
 		return err
 	}
 

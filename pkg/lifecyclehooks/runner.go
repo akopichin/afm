@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -54,6 +55,9 @@ func afmVars(cfg DispatcherConfig, p Payload) []string {
 	set("AFM_RUN_ID", p.Flow.RunID)
 	set("AFM_RUN_DIR", absEnvPath(p.Flow.RunDir))
 	set("AFM_ROOT_DIR", absEnvPath(p.Flow.RootDir))
+	if p.Flow.Cycle > 0 { // вне repeat переменной нет; унаследованную убирает stripTransportVars
+		set("AFM_FLOW_CYCLE", strconv.Itoa(p.Flow.Cycle))
+	}
 	if stage != nil {
 		set("AFM_STAGE_ID", stage.ID)
 		set("AFM_STAGE_NAME", stage.Name)
@@ -100,10 +104,11 @@ func minimalBaseEnv() []string {
 
 // stripTransportVars убирает внутренние transport-переменные из унаследованного
 // окружения (codex #2): секреты хуков/agent-shim не должны течь в hook-процесс.
+// AFM_FLOW_CYCLE тоже снимается: его задаёт только afmVars, чужой цикл (вложенный afm run) не должен просочиться.
 func stripTransportVars(env []string) []string {
 	out := env[:0]
 	for _, kv := range env {
-		if strings.HasPrefix(kv, HookSecretTransportPrefix) || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") || browser.IsTransportEnv(kv) {
+		if strings.HasPrefix(kv, HookSecretTransportPrefix) || strings.HasPrefix(kv, "AFM_SECRET_") || strings.HasPrefix(kv, "AFM_SYSPROMPT_") || strings.HasPrefix(kv, "AFM_FLOW_CYCLE=") || browser.IsTransportEnv(kv) {
 			continue
 		}
 		out = append(out, kv)

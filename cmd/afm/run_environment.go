@@ -56,12 +56,13 @@ func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, work
 	if !config.ReExecedIntoContainer() || !cfg.Docker.IsAutoShim() {
 		return env, nil
 	}
-	if err := cfg.Docker.ValidateAgents(); err != nil {
+	// Helper-profile commands count too: a recipe used only by a helper (reviewer → codex) still needs its
+	// wrapper here, matching the host side's projection in reexecFlow.
+	proj, err := projectDocker(f, cfg)
+	if err != nil {
 		return env, err
 	}
-	// Helper-profile commands count too: a recipe used only by a helper (reviewer → codex) still needs its
-	// wrapper here, matching the host side's UsedRecipes below.
-	env.GeneratedAgents = docker.UsedRecipeCommands(f, cfg.Client.Command, cfg.Docker.Agents, assistantProfileCommands(cfg, f)...)
+	env.GeneratedAgents = proj.Generated
 	specs := make([]docker.WrapperSpec, 0, len(env.GeneratedAgents))
 	for cmd := range env.GeneratedAgents {
 		specs = append(specs, buildWrapperSpec(cmd, cfg.Docker.Agents[cmd], cfg.Client.IsClaudeBare()))
@@ -97,18 +98,9 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 	if err := docker.CheckClaudeDockerAuth(cfg.Client.Command); err != nil {
 		return err
 	}
-	var recipes map[string]config.AgentRecipe
-	var generatedForMount map[string]bool
-	if cfg.Docker.IsAutoShim() {
-		if err := cfg.Docker.ValidateAgents(); err != nil {
-			return err
-		}
-		// Mount discovery and secret resolution use the same set of used recipes.
-		recipes = docker.UsedRecipes(f, cfg.Client.Command, cfg.Docker.Agents, assistantProfileCommands(cfg, f)...)
-		generatedForMount = make(map[string]bool, len(recipes))
-		for cmd := range recipes {
-			generatedForMount[cmd] = true
-		}
+	proj, err := projectDocker(f, cfg)
+	if err != nil {
+		return err
 	}
 	browserEnabled := cfg.Docker.FileBrowser.IsEnabled()
 	var fileRoots docker.FileRootManifest
@@ -137,16 +129,16 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 	rc := docker.ReExecConfig{
 		Image:         cfg.Docker.GetImage(),
 		ProjectDir:    absDir,
-		Commands:      docker.ScanCommandsWithExtra(f, cfg.Client.Command, generatedForMount, assistantProfileCommands(cfg, f)),
+		Commands:      docker.ScanCommandsWithExtra(f, cfg.Client.Command, proj.Generated, proj.Extra),
 		DashboardPort: port,
 		ExtraMounts:   cfg.Docker.ExtraMounts,
 		// The absolute, final --dir wins over a user's relative flag inside Docker.
 		ExtraArgs:          append(os.Args[1:], "--dir="+absDir),
 		ClientCommand:      cfg.Client.Command,
-		Recipes:            recipes,
+		Recipes:            proj.Recipes,
 		SecretsFile:        cfg.Docker.SecretsFile,
 		Hooks:              hooks,
-		MountCodexState:    docker.UsesCodex(f, cfg.Client.Command, recipes),
+		MountCodexState:    proj.MountCodexState,
 		FileBrowserEnabled: browserEnabled,
 		FileRoots:          fileRoots,
 		WorktreeDir:        worktreeDir,

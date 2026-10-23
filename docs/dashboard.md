@@ -3,6 +3,15 @@
 On startup (if `server.open_browser: true`) the dashboard opens; otherwise its URL
 is printed to the log.
 
+## Following a repeated flow
+
+When [repeat](flow-reference.md#repeat-run-successful-flows-again) starts the next
+cycle, the dashboard closes briefly and starts again on the same port. An open
+tab reconnects and switches to the new run automatically, without a manual
+reload. Its Feed and stage histories show the new run's events; conversations
+and unsent stage drafts from the previous run are cleared. With
+`server.open_browser: true`, afm opens a tab only for the first cycle.
+
 The layout is a **stage rail** on the left plus one **tabbed workspace** on the
 right (there is no three-column layout or bottom progress bar).
 

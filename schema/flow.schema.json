@@ -66,6 +66,28 @@
       "description": "Run agents created before the stages start, in this order — the same agents the dashboard's Add run agent creates. Needs collaboration: with it disabled, afm warns and runs without them. A resumed run keeps the agents it already created.",
       "items": { "$ref": "#/definitions/teamMember" }
     },
+    "repeat": {
+      "description": "Restart the flow in a new run after every successful pass. true repeats with the defaults (no cycle limit, keep the 2 most recent successful runs of this afm run invocation); false or a missing key runs the flow once; an object tunes the loop.",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_cycles": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of successful passes after which the loop stops. 0 or omitted = no limit."
+            },
+            "keep_runs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many successful runs created by this afm run invocation stay on disk (default 2); older runs of the flow are never touched. Explicit 0 keeps them all."
+            }
+          }
+        }
+      ]
+    },
     "stages": {
       "type": "array",
       "description": "The stages of the flow.",

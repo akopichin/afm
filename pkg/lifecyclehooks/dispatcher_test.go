@@ -103,6 +103,31 @@ func TestDispatcher_FlowEventID(t *testing.T) {
 	}
 }
 
+func TestDispatcher_FlowRepeatedSelector(t *testing.T) {
+	onlyRepeated := RegisteredHook{Hook: Hook{ID: "r", Events: EventSelector{Events: []EventType{EventFlowRepeated}}, Command: "true"}}
+	all := RegisteredHook{Hook: Hook{ID: "a", Events: EventSelector{All: true}, Command: "true"}}
+	d, rec := newRecordingDispatcher(t, []RegisteredHook{onlyRepeated, all})
+	d.Start()
+	defer d.Stop()
+	d.Emit(Event{Type: EventFlowStarted, Time: time.Now()})
+	d.Emit(Event{Type: EventFlowRepeated, Time: time.Now()})
+	waitFor(t, rec, 3)
+	dl, _ := rec.snapshot()
+	want := map[string]bool{
+		"r:flow_repeated:run-1:flow:flow_repeated": true,
+		"a:flow_started:run-1:flow:flow_started":   true,
+		"a:flow_repeated:run-1:flow:flow_repeated": true,
+	}
+	if len(dl) != len(want) {
+		t.Fatalf("deliveries: %+v", dl)
+	}
+	for _, got := range dl {
+		if !want[got] {
+			t.Fatalf("unexpected delivery %q in %+v", got, dl)
+		}
+	}
+}
+
 func TestDispatcher_NonFSMStageEventID(t *testing.T) {
 	d, rec := newRecordingDispatcher(t, []RegisteredHook{{Hook: Hook{ID: "g", Events: EventSelector{Events: []EventType{EventStageScriptStarted}}, Command: "true"}}})
 	d.Start()
