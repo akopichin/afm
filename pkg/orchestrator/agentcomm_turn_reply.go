@@ -68,11 +68,21 @@ func turnReplyTargets(rs state.RunState, t *state.TaskState, agent agentcomm.Par
 	}
 	var out []*agentcomm.Message
 	for _, id := range ids {
-		if m := rs.Assistants.Mesh.Messages[id]; m != nil && m.Sender != agent && !answeredBy(rs.Assistants.Mesh, agent, id) {
+		if m := rs.Assistants.Mesh.Messages[id]; m != nil && m.Sender != agent && !answeredBy(rs.Assistants.Mesh, agent, id) && !tickOfAGoneCreator(rs, m) {
 			out = append(out, m)
 		}
 	}
 	return out
+}
+
+// tickOfAGoneCreator suppresses automatic replies to a loop creator that cannot receive them.
+// The loop follows its target lifetime, so a finished creator must not break later ticks.
+func tickOfAGoneCreator(rs state.RunState, m *agentcomm.Message) bool {
+	if m.LoopKey == "" {
+		return false
+	}
+	creator, known := resolveParticipant(rs, m.Sender)
+	return !known || !creator.Reachable
 }
 
 // hasPendingReplyWait reports whether somebody still waits for a reply to messageID.

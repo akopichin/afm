@@ -40,7 +40,7 @@ func teamOperationID(memberID string) string {
 // side Mesh terminal operation namespaces shared by the run's operation index.
 func rejectReservedRequestID(opID string, actor state.Actor) error {
 	if actor.Kind != "system" {
-		for _, prefix := range []string{"side-mesh-reply:", "side-mesh-unprocessed:"} {
+		for _, prefix := range []string{"side-mesh-reply:", "side-mesh-unprocessed:", loopTickOperationPrefix} {
 			if strings.HasPrefix(opID, prefix) {
 				return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved", prefix)
 			}

@@ -80,6 +80,13 @@ type fakeMeshActions struct {
 	tasks             []agentcomm.BoardTaskView
 	lastTaskReqID     string
 	lastTask          MeshBoardTaskRequest
+
+	loops       []orchestrator.LoopView
+	loopsErr    error
+	loopByReq   map[string]orchestrator.LoopView
+	loopCalls   int
+	lastLoopReq string
+	lastLoop    MeshLoopCommand
 }
 
 func newFakeMeshActions() *fakeMeshActions {
@@ -87,7 +94,31 @@ func newFakeMeshActions() *fakeMeshActions {
 		openByReq:   map[string]agentcomm.Thread{},
 		sentByReq:   map[string]MeshSendReceipt{},
 		attachByReq: map[string]MeshAttachAndSendResult{},
+		loopByReq:   map[string]orchestrator.LoopView{},
 	}
+}
+
+func (f *fakeMeshActions) Loops(ctx context.Context) (orchestrator.LoopPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return orchestrator.LoopPage{Loops: f.loops}, f.loopsErr
+}
+
+// Loop answers a retry of the same request id with the first answer, like the real Service.
+func (f *fakeMeshActions) Loop(ctx context.Context, requestID string, cmd MeshLoopCommand) (orchestrator.LoopView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loopCalls++
+	f.lastLoopReq, f.lastLoop = requestID, cmd
+	if existing, ok := f.loopByReq[requestID]; ok {
+		return existing, nil
+	}
+	view := orchestrator.LoopView{
+		ID: "L1", CreatorID: agentcomm.UserParticipantID, TargetID: agentcomm.ParticipantID(cmd.Target),
+		Every: cmd.Every.String(), OriginStage: cmd.OriginStage, UntilStage: cmd.UntilStage, Status: orchestrator.LoopActive,
+	}
+	f.loopByReq[requestID] = view
+	return view, nil
 }
 
 func (f *fakeMeshActions) ListParticipants(ctx context.Context) ([]agentcomm.Participant, error) {
@@ -267,6 +298,8 @@ func TestMesh_404WhenCapabilityOff(t *testing.T) {
 		{http.MethodPost, "/api/mesh/threads/mt-1/topic"},
 		{http.MethodPost, "/api/mesh/attach-and-send"},
 		{http.MethodPost, "/api/mesh/tasks"},
+		{http.MethodGet, "/api/mesh/loops"},
+		{http.MethodPost, "/api/mesh/loop"},
 	}
 	for _, c := range paths {
 		req := httptest.NewRequest(c.method, c.path, nil)
@@ -968,5 +1001,141 @@ func TestMeshBoardTask_KeepsFieldPresence(t *testing.T) {
 		if !reflect.DeepEqual(fake.lastTask, c.want) {
 			t.Errorf("%v: Service got %+v, want %+v", c.body, fake.lastTask, c.want)
 		}
+	}
+}
+
+func TestMesh_Loops_ListsEveryLoopOfTheRun(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+
+	w, resp := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/loops", nil, false)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if loops, ok := resp["loops"].([]any); !ok || len(loops) != 0 {
+		t.Fatalf("empty list = %s, want {\"loops\":[]} (not null)", w.Body.String())
+	}
+
+	next := time.Date(2026, 10, 23, 8, 0, 0, 0, time.UTC)
+	fake.loops = []orchestrator.LoopView{
+		{ID: "L1", CreatorID: "user", TargetID: "run:qa", Every: "5m", OriginStage: "impl", UntilStage: "docs", Status: orchestrator.LoopActive, NextTickAt: &next},
+		{ID: "L2", CreatorID: "run:qa", TargetID: "run:qa", Every: "1m30s", Status: orchestrator.LoopStopped, EndReason: "stopped"},
+	}
+	w, resp = doMeshJSON(t, srv, http.MethodGet, "/api/mesh/loops", nil, false)
+	loops, _ := resp["loops"].([]any)
+	if len(loops) != 2 {
+		t.Fatalf("loops = %s, want both the human's and the agent's loop", w.Body.String())
+	}
+	first, _ := loops[0].(map[string]any)
+	want := map[string]any{
+		"id": "L1", "creator_id": "user", "target_id": "run:qa", "every": "5m", "origin_stage": "impl",
+		"until_stage": "docs", "status": "active", "next_tick_at": "2026-10-23T08:00:00Z",
+	}
+	if !reflect.DeepEqual(first, want) {
+		t.Fatalf("LoopView wire form = %v, want %v", first, want)
+	}
+}
+
+func TestMesh_Loop_AddPassesTheBodyAndFixesNothingElse(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+
+	w, resp := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/loop", map[string]any{
+		"request_id": "req-loop-1", "action": "add", "target": "@qa", "every": "5m", "prompt": "check the logs",
+		"until_stage": "docs", "origin_stage": "impl",
+		// Fields the body has no place for: the creator is the human, whatever the client claims.
+		"creator_id": "run:evil", "actor": map[string]any{"kind": "agent", "id": "run:evil"},
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	want := MeshLoopCommand{Action: MeshLoopAdd, Target: "@qa", Every: 5 * time.Minute, Prompt: "check the logs", UntilStage: "docs", OriginStage: "impl"}
+	if fake.lastLoopReq != "req-loop-1" || fake.lastLoop != want {
+		t.Fatalf("Service got (%q, %+v), want (req-loop-1, %+v)", fake.lastLoopReq, fake.lastLoop, want)
+	}
+	if resp["id"] != "L1" || resp["creator_id"] != "user" || resp["status"] != "active" {
+		t.Fatalf("response = %v, want the committed LoopView", resp)
+	}
+}
+
+func TestMesh_Loop_StopNamesTheLoopOnly(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+
+	w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/loop", map[string]any{
+		"request_id": "req-stop", "action": "stop", "loop_id": "L3",
+	}, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if want := (MeshLoopCommand{Action: MeshLoopStop, LoopID: "L3"}); fake.lastLoop != want {
+		t.Fatalf("Service got %+v, want %+v", fake.lastLoop, want)
+	}
+}
+
+func TestMesh_Loop_RejectsBeforeTheService(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+	add := map[string]any{"request_id": "r", "action": "add", "every": "5m", "prompt": "p"}
+	with := func(k string, v any) map[string]any {
+		body := map[string]any{}
+		for key, val := range add {
+			body[key] = val
+		}
+		if v == nil {
+			delete(body, k)
+		} else {
+			body[k] = v
+		}
+		return body
+	}
+	cases := []struct {
+		name       string
+		body       map[string]any
+		sameOrigin bool
+		want       int
+	}{
+		{"no Origin", add, false, http.StatusForbidden},
+		{"no request id", with("request_id", nil), true, http.StatusBadRequest},
+		{"no action", with("action", nil), true, http.StatusBadRequest},
+		{"unknown action", with("action", "pause"), true, http.StatusBadRequest},
+		{"no interval", with("every", nil), true, http.StatusBadRequest},
+		{"unparsable interval", with("every", "soon"), true, http.StatusBadRequest},
+		{"unsafe origin stage", with("origin_stage", "../x"), true, http.StatusBadRequest},
+		{"unsafe until stage", with("until_stage", "a/b"), true, http.StatusBadRequest},
+		{"stop without loop id", map[string]any{"request_id": "r", "action": "stop"}, true, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		w, _ := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/loop", c.body, c.sameOrigin)
+		if w.Code != c.want {
+			t.Errorf("%s: HTTP %d, want %d (body=%s)", c.name, w.Code, c.want, w.Body.String())
+		}
+	}
+	if fake.loopCalls != 0 {
+		t.Fatalf("a rejected request must never reach the Service: loopCalls=%d", fake.loopCalls)
+	}
+}
+
+func TestMesh_Loop_RetryWithTheSameRequestIDIsTheSameLoop(t *testing.T) {
+	fake := newFakeMeshActions()
+	srv := newTestServer(t, Config{Mesh: fake})
+	body := map[string]any{"request_id": "req-retry", "action": "add", "target": "qa", "every": "10m", "prompt": "p"}
+
+	_, first := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/loop", body, true)
+	_, second := doMeshJSON(t, srv, http.MethodPost, "/api/mesh/loop", body, true)
+
+	if !reflect.DeepEqual(first, second) || len(fake.loopByReq) != 1 {
+		t.Fatalf("retry answered %v then %v with %d loops, want one loop and the same answer", first, second, len(fake.loopByReq))
+	}
+}
+
+func TestMesh_Loop_ServiceRejectionKeepsItsStatus(t *testing.T) {
+	fake := newFakeMeshActions()
+	fake.loopsErr = &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "nope"}
+	srv := newTestServer(t, Config{Mesh: fake})
+
+	w, _ := doMeshJSON(t, srv, http.MethodGet, "/api/mesh/loops", nil, false)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("HTTP %d, want the rejection's 403", w.Code)
 	}
 }

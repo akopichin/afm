@@ -323,9 +323,14 @@ type plannedMessage struct {
 // discussion message. The operation commits them with recipientsReachable as its Preconditions.Check, and its
 // post-commit work calls deliverCommittedMessages.
 func (o *Orchestrator) planMessage(rs state.RunState, req SendRequest, messageID agentcomm.MessageID, openThread []state.Effect) (plannedMessage, error) {
+	return o.planMarkedMessage(rs, req, "", messageID, openThread)
+}
+
+// planMarkedMessage permits self-delivery only for a scheduler tick carrying its loop key.
+func (o *Orchestrator) planMarkedMessage(rs state.RunState, req SendRequest, loopKey string, messageID agentcomm.MessageID, openThread []state.Effect) (plannedMessage, error) {
 	req.Body = o.RedactSecrets(req.Body)
 	req.ArtifactRefs = o.redactAll(req.ArtifactRefs)
-	eff, err := messageSentEffect(req, messageID)
+	eff, err := messageSentEffectMarked(req, loopKey, messageID)
 	if err != nil {
 		return plannedMessage{}, err
 	}
@@ -368,6 +373,11 @@ func (o *Orchestrator) deliverCommittedMessages(runCtx context.Context, msgs []p
 // messageSentEffect builds the mesh_message_sent effect of req; req.Body and req.ArtifactRefs must already be
 // redacted.
 func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Effect, error) {
+	return messageSentEffectMarked(req, "", messageID)
+}
+
+// messageSentEffectMarked is messageSentEffect for a tick of the loop with loopKey ("": an ordinary message).
+func messageSentEffectMarked(req SendRequest, loopKey string, messageID agentcomm.MessageID) (state.Effect, error) {
 	var inReplyTo *string
 	if req.InReplyTo != nil {
 		s := string(*req.InReplyTo)
@@ -378,6 +388,7 @@ func messageSentEffect(req SendRequest, messageID agentcomm.MessageID) (state.Ef
 			MeshMessageSentPayload: state.MeshMessageSentPayload{
 				Sender: string(req.Sender), Recipients: participantStrings(req.Recipients), Kind: string(req.Kind),
 				InReplyTo: inReplyTo, Body: req.Body, ArtifactRefs: req.ArtifactRefs, AutoResult: req.AutoResult,
+				LoopKey: loopKey,
 			},
 			OriginStage:         req.OriginStage,
 			RequestedRecipients: participantStrings(req.RequestedRecipients),

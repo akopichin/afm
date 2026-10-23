@@ -181,6 +181,9 @@ repeat. Runs from other processes, resumed runs, failed runs, and interrupted
 runs are left in place. See [Stage lifecycle](stage-lifecycle.md#repeating-a-flow)
 and [Lifecycle hooks](lifecycle-hooks.md#event-catalog).
 
+Repeating a flow starts a new run: [prompt loops](loops.md) from the previous
+cycle do not carry over.
+
 ### `team` — run agents of the flow
 
 `team:` lists [run agents](collaboration.md#team-conversations) that afm adds

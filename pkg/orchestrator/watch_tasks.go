@@ -9,6 +9,7 @@ package orchestrator
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/akopichin/afm/pkg/assistants"
@@ -44,6 +45,10 @@ type watcherBinding struct {
 	task    assistants.Task
 	coll    *watch.Collector
 	store   *watch.CheckpointStore
+
+	// fireMu serializes fire debt with turn settlement so neither path can miss the owed retry.
+	fireMu      sync.Mutex
+	firePending bool
 }
 
 // watchDirFor returns the durable checkpoint/cursor directory for one watcher task — a subdirectory of its
@@ -120,10 +125,8 @@ func (o *Orchestrator) feedWatchCollectors(stageID string, obs executor.Observat
 	}
 }
 
-// settleWatcherBinding is called once, from runHelperTask's existing top-level defer, after EVERY exit path of
-// a watcher task's turn (success→watching, success→completed, failed, cancelled, or requeued). A terminal
-// outcome drops the binding entirely; a non-terminal one (watching, or requeued back to queued) simply clears
-// "busy" so the collector can fire again.
+// settleWatcherBinding releases the collector only when a turn has really ended.
+// A committed fire debt keeps Busy claimed until its retry starts.
 func (o *Orchestrator) settleWatcherBinding(taskID assistants.TaskID) {
 	o.watchMu.Lock()
 	b, ok := o.watchByTask[taskID]
@@ -133,6 +136,15 @@ func (o *Orchestrator) settleWatcherBinding(taskID assistants.TaskID) {
 	}
 	if o.taskTerminal(taskID) {
 		o.unbindWatcher(taskID)
+		return
+	}
+	b.fireMu.Lock()
+	defer b.fireMu.Unlock()
+	// Registering debt and settling a turn share fireMu so an owed checkpoint cannot be stranded.
+	if b.firePending {
+		if o.fireWatcherTask(context.Background(), taskID) {
+			b.firePending = false
+		}
 		return
 	}
 	b.coll.SetBusy(false)
@@ -185,10 +197,8 @@ func (o *Orchestrator) maybeFireWatcher(ctx context.Context, b *watcherBinding) 
 	o.commitAndFire(ctx, b, bundle)
 }
 
-// commitAndFire durably commits bundle to b.store and, only on success, fires the task. A storage failure
-// returns the bundle to the collector's pending queue (watch.Collector.Cancel) instead of losing it or
-// silently "spending" a pass — mirrors T5.2's TestCheckpoint_MissingLogMeansNotVerified posture: a checkpoint
-// that was never durably written is never treated as processed.
+// commitAndFire rolls back only a failed checkpoint write; committed cursors cannot be written twice.
+// A lost fire CAS registers debt before reading status, letting this path or turn settlement retry it.
 func (o *Orchestrator) commitAndFire(ctx context.Context, b *watcherBinding, bundle watch.Bundle) {
 	content := watch.RenderBundle(bundle)
 	if err := b.store.Commit(watch.Checkpoint{UpToSeq: bundle.UpToSeq, Content: content}); err != nil {
@@ -198,18 +208,41 @@ func (o *Orchestrator) commitAndFire(ctx context.Context, b *watcherBinding, bun
 	if bundle.Final {
 		o.taskFinalPass.Store(b.taskID, true)
 	}
-	o.fireWatcherTask(ctx, b.taskID)
+	if o.testAfterCheckpointCommit != nil {
+		o.testAfterCheckpointCommit()
+	}
+	if o.fireWatcherTask(ctx, b.taskID) {
+		return
+	}
+	if o.testAfterFireCASLost != nil {
+		o.testAfterFireCASLost()
+	}
+	b.fireMu.Lock()
+	b.firePending = true
+	b.coll.SetBusy(true)
+	b.fireMu.Unlock()
+	status := o.currentTaskStatus(b.taskID)
+	if o.testAfterLostFireStatusRead != nil {
+		o.testAfterLostFireStatusRead(status)
+	}
+	if status != assistants.StatusWatching {
+		return
+	}
+	b.fireMu.Lock()
+	defer b.fireMu.Unlock()
+	// Settlement may already have consumed this debt and started its retry while the status read was in
+	// flight. Only the holder of the still-pending debt may retry, so one checkpoint starts one turn.
+	if b.firePending && o.fireWatcherTask(ctx, b.taskID) {
+		b.firePending = false
+	}
 }
 
-// fireWatcherTask transitions a resting "watching" task back to "queued" — the SAME status maybeScheduleTask
-// already knows how to pick up and spawn (spawnTask/runHelperTask, unchanged). Guarded by the EXISTING
-// Preconditions CAS: only succeeds if the task is CURRENTLY "watching"; any race (a concurrent Cancel/Pause,
-// or a duplicate fire attempt — T5.5's dedup concern) makes this a safe, silent no-op, exactly like every
-// other task-lifecycle transition in this codebase.
-func (o *Orchestrator) fireWatcherTask(ctx context.Context, taskID assistants.TaskID) {
+// fireWatcherTask queues only a resting watcher; a competing restart makes the CAS a no-op.
+// Its result tells the caller whether this attempt discharged the checkpoint fire debt.
+func (o *Orchestrator) fireWatcherTask(ctx context.Context, taskID assistants.TaskID) bool {
 	eff, err := taskStatusEffect(taskID, assistants.StatusQueued, "checkpoint reached")
 	if err != nil {
-		return
+		return false
 	}
 	op := state.Operation{
 		ID:      "task-watch-fire:" + string(taskID) + ":" + randomOpSuffix(),
@@ -219,12 +252,18 @@ func (o *Orchestrator) fireWatcherTask(ctx context.Context, taskID assistants.Ta
 	}
 	runCtx := o.runContext(ctx)
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
-		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: o.taskRootStage(taskID), Data: map[string]any{
-			"task_id": string(taskID), "status": string(assistants.StatusQueued), "reason": "checkpoint reached",
-		}})
+		o.publishTaskQueued(taskID, "checkpoint reached")
 		o.maybeScheduleTask(runCtx, taskID)
 	})
 	o.handleTaskOperationErr(err)
+	return err == nil
+}
+
+// publishTaskQueued is the live notice of a resting task put back in the queue for another turn.
+func (o *Orchestrator) publishTaskQueued(taskID assistants.TaskID, reason string) {
+	o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: o.taskRootStage(taskID), Data: map[string]any{
+		"task_id": string(taskID), "status": string(assistants.StatusQueued), "reason": reason,
+	}})
 }
 
 // finalizeWatchersForStage is the single funnel (called from triggerWithSeq, orchestrator.go) for "this

@@ -453,6 +453,38 @@ adds an *Attach helper* chip, and Send opens the attach preview with your text a
 the helper's assignment (it must be the only recipient). See
 [Team conversations](collaboration.md#team-conversations).
 
+### Repeating a prompt with /loop
+
+In **Feed → Message**, type `/loop` to see syntax guidance and selectable
+**5m**, **15m** and **1h** intervals. For example:
+
+```text
+/loop 5m @watcher Check the latest logs
+/loop 5m --until-stage-end @watcher Check logs until this stage ends
+/loop list
+/loop stop L1
+```
+
+The `@` menu offers existing run agents and this stage's helpers. One explicit
+target is required; later mentions are part of the prompt. **Start loop** or
+**Cmd/Ctrl+Enter** creates the schedule. The receipt names its ID, next tick
+in host time with seconds, original Feed and stop command. If a stage has no
+display name, its ID identifies the Feed. The receipt stays until the next edit
+or Escape; `/loop list` retrieves saved schedules after a reload.
+
+A run-agent loop continues after stage auto-advance, with ticks and replies
+still shown in its original Feed. A helper loop ends with that helper's stage.
+List and stop work from other Feeds, including a completed stage while the run
+remains open, without a recipient or Interrupt switch. The list includes ended
+loops and their reasons. Stopping prevents future ticks; an agent already
+working can finish its current turn.
+
+Loop commands have their own route: ordinary **To** selections, reply recipients
+and helper-attachment chips do not receive their text. An invalid command keeps
+the draft and shows an error; **Revise** asks you to use Message. See
+[Repeating prompts with loops](loops.md) for fixed-slot timing, skipped ticks,
+agent commands, thread limits and recovery.
+
 ### People panel
 
 In `team` mode, with Agent Mesh and collaboration on, the stage **Feed** has a **People** panel on the right:

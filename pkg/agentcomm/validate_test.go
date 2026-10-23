@@ -190,3 +190,25 @@ func TestValidateMessage_EachRejectionIsDistinguishable(t *testing.T) {
 		}
 	}
 }
+
+// A loop tick is the one message that may be addressed to its own sender: the loop marker names the exception,
+// and only for a message whose single recipient is that sender.
+func TestValidateMessage_LoopTickMayBeSelfAddressed(t *testing.T) {
+	msg := baseMessage()
+	msg.Sender = "agent-1"
+	msg.Recipients = []ParticipantID{"agent-1"}
+	msg.LoopKey = "loop-1"
+	if err := ValidateMessage(msg, noThreadMembers, noKnownMessages); err != nil {
+		t.Fatalf("ValidateMessage(self-addressed loop tick) = %v, want nil", err)
+	}
+
+	msg.Recipients = []ParticipantID{"agent-1", "agent-2"}
+	if err := ValidateMessage(msg, noThreadMembers, noKnownMessages); !errors.Is(err, ErrSenderInRecipients) {
+		t.Fatalf("ValidateMessage(loop tick to itself and another) = %v, want ErrSenderInRecipients", err)
+	}
+
+	msg.Recipients, msg.LoopKey = []ParticipantID{"agent-1"}, ""
+	if err := ValidateMessage(msg, noThreadMembers, noKnownMessages); !errors.Is(err, ErrSenderInRecipients) {
+		t.Fatalf("ValidateMessage(self-send without a loop marker) = %v, want ErrSenderInRecipients", err)
+	}
+}

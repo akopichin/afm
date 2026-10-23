@@ -236,6 +236,27 @@ export type MeshAttachAndSendResult = {
   participant?: MeshParticipant
 }
 
+// MeshLoopStatus — where a loop stands: ticking, stopped by a person or agent, or over by itself.
+export type MeshLoopStatus = 'active' | 'stopped' | 'ended'
+
+// MeshLoop mirrors orchestrator.LoopView.
+export type MeshLoop = {
+  // id — the short id, L1, L2…, in creation order.
+  id: string
+  creator_id: string
+  target_id: string
+  // every — the interval as a short label, such as "5m".
+  every: string
+  // origin_stage — the Feed the loop was created in; absent for a loop an agent made for the run.
+  origin_stage?: string
+  until_stage?: string
+  status: MeshLoopStatus
+  // next_tick_at — the first slot still in the future; present only while the loop is active.
+  next_tick_at?: string
+  // end_reason — why a stopped or ended loop no longer ticks.
+  end_reason?: string
+}
+
 // genMeshRequestId is this module's one idempotency-key generator, same shape as run-client.ts's inline
 // `attach-${Date.now()}-${Math.random()...}` convention — named so a caller that must hold ONE id across
 // retries (AddRunAgentDialog's shared request_id) can generate it once and reuse it, instead of a fresh id
@@ -416,6 +437,44 @@ export async function sendMeshMessageTo(req: SendMeshMessageToRequest): Promise<
     body: req.body,
     ...(req.originStage !== undefined ? { origin_stage: req.originStage } : {}),
   })
+}
+
+export type AddMeshLoopRequest = {
+  requestId: string
+  // target — the participant id (or alias) that gets the prompt on every tick.
+  target: string
+  // every — a Go duration such as "5m".
+  every: string
+  prompt: string
+  // untilStage — the stage whose end ends the loop.
+  untilStage?: string
+  // originStage — the Feed the loop is created from; the loop stays shown there.
+  originStage?: string
+}
+
+// addMeshLoop schedules a loop — POST /api/mesh/loop (action add). The answer is the created loop, committed
+// durably; a retry under the same requestId returns the original loop.
+export async function addMeshLoop(req: AddMeshLoopRequest): Promise<MeshLoop> {
+  return meshPost<MeshLoop>('/api/mesh/loop', {
+    request_id: req.requestId,
+    action: 'add',
+    target: req.target,
+    every: req.every,
+    prompt: req.prompt,
+    ...(req.untilStage !== undefined ? { until_stage: req.untilStage } : {}),
+    ...(req.originStage !== undefined ? { origin_stage: req.originStage } : {}),
+  })
+}
+
+// stopMeshLoop stops the loop with the short id loopId (such as "L1") — POST /api/mesh/loop (action stop).
+export async function stopMeshLoop(req: { requestId: string; loopId: string }): Promise<MeshLoop> {
+  return meshPost<MeshLoop>('/api/mesh/loop', { request_id: req.requestId, action: 'stop', loop_id: req.loopId })
+}
+
+// listMeshLoops reads every loop of the run, active, stopped and ended, whoever created it — GET /api/mesh/loops.
+export async function listMeshLoops(): Promise<{ loops: MeshLoop[] }> {
+  const body = await meshGet<{ loops?: MeshLoop[] | null }>('/api/mesh/loops')
+  return { loops: body.loops ?? [] }
 }
 
 export type AttachAndSendMeshRequest = {

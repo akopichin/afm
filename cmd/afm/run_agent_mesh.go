@@ -167,3 +167,23 @@ func boardTaskRequest(requestID string, actor agentcomm.ParticipantID, req serve
 		Description: req.Description, CoordinatorID: req.Coordinator, Text: req.Text, ArtifactRefs: req.ArtifactRefs,
 	}
 }
+
+func (a agentMeshActions) Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error) {
+	return a.orch.ListLoops(ctx, orchestrator.ListLoopsRequest{Actor: meshActor(actor)})
+}
+
+func (a agentMeshActions) Loop(ctx context.Context, requestID, actor string, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
+	return applyLoopCommand(ctx, a.orch, requestID, meshActor(actor), cmd)
+}
+
+// applyLoopCommand adds or stops a loop as actor — the token's participant or the human; the body never names
+// the actor. The server has already checked the command's action, so anything but add is a stop.
+func applyLoopCommand(ctx context.Context, orch *orchestrator.Orchestrator, requestID string, actor state.Actor, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
+	if cmd.Action == server.MeshLoopAdd {
+		return orch.CreateLoop(ctx, orchestrator.CreateLoopRequest{
+			OperationID: requestID, Target: agentcomm.ParticipantID(cmd.Target), Interval: cmd.Every, Prompt: cmd.Prompt,
+			UntilStageID: cmd.UntilStage, OriginStage: cmd.OriginStage, Actor: actor,
+		})
+	}
+	return orch.StopLoop(ctx, orchestrator.StopLoopRequest{OperationID: requestID, LoopID: cmd.LoopID, Actor: actor})
+}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -36,6 +37,27 @@ type fakeAgentMeshActions struct {
 	lastTask      MeshBoardTaskRequest
 	lastTasksKey  string
 	tasks         []agentcomm.BoardTaskView
+
+	loops         []orchestrator.LoopView
+	loopCalls     int
+	lastLoopReq   string
+	lastLoopActor string
+	lastLoop      MeshLoopCommand
+}
+
+func (f *fakeAgentMeshActions) Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastLoopActor = actor
+	return orchestrator.LoopPage{Loops: f.loops}, nil
+}
+
+func (f *fakeAgentMeshActions) Loop(ctx context.Context, requestID, actor string, cmd MeshLoopCommand) (orchestrator.LoopView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loopCalls++
+	f.lastLoopReq, f.lastLoopActor, f.lastLoop = requestID, actor, cmd
+	return orchestrator.LoopView{ID: "L1", CreatorID: agentcomm.ParticipantID(actor), TargetID: agentcomm.ParticipantID(actor), Every: cmd.Every.String(), Status: orchestrator.LoopActive}, nil
 }
 
 func newFakeAgentMeshActions() *fakeAgentMeshActions {
@@ -451,5 +473,121 @@ func TestAgentMesh_BoardTasks_KeyAndEmptyAssignments(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"assignments":[]`) || !strings.Contains(w.Body.String(), `"status":"todo"`) {
 		t.Fatalf("body = %s, want assignments [] and status todo", w.Body.String())
+	}
+}
+
+func doAgentLoop(srv *Server, method, path, token string, body any) *httptest.ResponseRecorder {
+	var reader *bytes.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		reader = bytes.NewReader(raw)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	return w
+}
+
+func TestAgentMesh_Loop_UnauthenticatedChangesNothing(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	srv := newTestServer(t, Config{AgentMesh: fake})
+	body := map[string]any{"request_id": "r", "action": "add", "every": "5m", "prompt": "p"}
+
+	for _, token := range []string{"", "not-a-real-token"} {
+		if w := doAgentLoop(srv, http.MethodPost, "/api/agent-mesh/loop", token, body); w.Code != http.StatusUnauthorized {
+			t.Fatalf("POST loop with token %q: HTTP %d, want 401", token, w.Code)
+		}
+		if w := doAgentLoop(srv, http.MethodGet, "/api/agent-mesh/loops", token, nil); w.Code != http.StatusUnauthorized {
+			t.Fatalf("GET loops with token %q: HTTP %d, want 401", token, w.Code)
+		}
+	}
+	if fake.loopCalls != 0 || fake.lastLoopActor != "" {
+		t.Fatalf("an unauthenticated request reached the Service: calls=%d actor=%q", fake.loopCalls, fake.lastLoopActor)
+	}
+}
+
+func TestAgentMesh_Loop_404WhenCapabilityOff(t *testing.T) {
+	srv := newTestServer(t, Config{})
+	for _, c := range [][2]string{{http.MethodGet, "/api/agent-mesh/loops"}, {http.MethodPost, "/api/agent-mesh/loop"}} {
+		if w := doAgentLoop(srv, c[0], c[1], "tok", nil); w.Code != http.StatusNotFound {
+			t.Fatalf("%s %s: HTTP %d, want 404", c[0], c[1], w.Code)
+		}
+	}
+}
+
+// The creator is the token's participant and the origin is never read from the body: a model cannot make a
+// loop in someone else's name or Feed.
+func TestAgentMesh_Loop_ActorIsTheTokenAndOriginIsNotTheBodys(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "run:a"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := doAgentLoop(srv, http.MethodPost, "/api/agent-mesh/loop", "tok-A", map[string]any{
+		"request_id": "req-1", "action": "add", "every": "2m", "prompt": "again", "until_stage": "docs",
+		"origin_stage": "impl", "creator_id": "run:b", "actor": "run:b",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	want := MeshLoopCommand{Action: MeshLoopAdd, Every: 2 * time.Minute, Prompt: "again", UntilStage: "docs"}
+	if fake.lastLoopActor != "run:a" || fake.lastLoopReq != "req-1" || fake.lastLoop != want {
+		t.Fatalf("Service got (%q, %q, %+v), want (run:a, req-1, %+v): empty target is the creator itself, origin dropped",
+			fake.lastLoopActor, fake.lastLoopReq, fake.lastLoop, want)
+	}
+	var view orchestrator.LoopView
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil || view.CreatorID != "run:a" {
+		t.Fatalf("response %s (err %v), want the token's loop", w.Body.String(), err)
+	}
+}
+
+func TestAgentMesh_Loop_StopAndListUseTheToken(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "run:a"
+	fake.loops = []orchestrator.LoopView{{ID: "L2", CreatorID: "run:a", TargetID: "run:a", Every: "5m", Status: orchestrator.LoopActive}}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := doAgentLoop(srv, http.MethodGet, "/api/agent-mesh/loops", "tok-A", nil)
+	var page orchestrator.LoopPage
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Loops) != 1 || fake.lastLoopActor != "run:a" {
+		t.Fatalf("list: HTTP %d body=%s actor=%q, want the token's loops", w.Code, w.Body.String(), fake.lastLoopActor)
+	}
+
+	w = doAgentLoop(srv, http.MethodPost, "/api/agent-mesh/loop", "tok-A", map[string]any{"request_id": "req-stop", "action": "stop", "loop_id": "L2"})
+	if want := (MeshLoopCommand{Action: MeshLoopStop, LoopID: "L2"}); w.Code != http.StatusOK || fake.lastLoop != want || fake.lastLoopActor != "run:a" {
+		t.Fatalf("stop: HTTP %d got %+v as %q, want %+v as run:a", w.Code, fake.lastLoop, fake.lastLoopActor, want)
+	}
+
+	fake.loops = nil
+	w = doAgentLoop(srv, http.MethodGet, "/api/agent-mesh/loops", "tok-A", nil)
+	if !strings.Contains(w.Body.String(), `"loops":[]`) {
+		t.Fatalf("empty list = %s, want an empty array, not null", w.Body.String())
+	}
+}
+
+func TestAgentMesh_Loop_RejectsBeforeTheService(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "run:a"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+	cases := []map[string]any{
+		{"action": "add", "every": "5m", "prompt": "p"},                          // no request id
+		{"request_id": "r", "every": "5m", "prompt": "p"},                        // no action
+		{"request_id": "r", "action": "run", "every": "5m", "prompt": "p"},       // unknown action
+		{"request_id": "r", "action": "add", "every": "often", "prompt": "p"},    // unparsable interval
+		{"request_id": "r", "action": "add", "prompt": "p"},                      // no interval
+		{"request_id": "r", "action": "add", "every": "5m", "until_stage": ".."}, // unsafe stage id
+		{"request_id": "r", "action": "stop"},                                    // nothing to stop
+	}
+	for i, body := range cases {
+		if w := doAgentLoop(srv, http.MethodPost, "/api/agent-mesh/loop", "tok-A", body); w.Code != http.StatusBadRequest {
+			t.Errorf("case %d %v: HTTP %d, want 400", i, body, w.Code)
+		}
+	}
+	if fake.loopCalls != 0 {
+		t.Fatalf("a rejected request reached the Service: calls=%d", fake.loopCalls)
 	}
 }

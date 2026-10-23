@@ -3,6 +3,19 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-24
+
+### Improvement: repeat prompts to existing agents with /loop
+
+Schedule prompts from a stage's Feed with `/loop 5m @watcher Check the logs`,
+inspect them with `/loop list` and stop them from any Feed with `/loop stop L1`.
+Run-agent loops continue across stages, optionally bounded by
+`--until-stage-end`; stage-helper loops reuse the helper and end with its stage.
+Agents can create their own schedules through `afm agent loop add|list|stop`.
+Fixed slots skip busy, paused and unread recipients and resume without a
+catch-up burst. Schedules and delivered ticks survive restart, and list results
+explain why a loop ended. See [Repeating prompts](docs/loops.md).
+
 ## 2026-10-23
 
 ### Improvement: repeat successful flows in fresh runs

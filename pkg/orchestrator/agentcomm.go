@@ -42,6 +42,9 @@ type Service interface {
 	BoardTask(context.Context, BoardTaskRequest) (BoardTaskReceipt, error)
 	BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error)
 	BoardTasksEnabled() bool
+	CreateLoop(context.Context, CreateLoopRequest) (LoopView, error)
+	ListLoops(context.Context, ListLoopsRequest) (LoopPage, error)
+	StopLoop(context.Context, StopLoopRequest) (LoopView, error)
 }
 
 var _ Service = (*Orchestrator)(nil)
@@ -302,7 +305,7 @@ func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
 func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(meshStageParticipantID(s.ID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
-		TypedBoardTasks: o.BoardTasksEnabled(),
+		TypedBoardTasks: o.BoardTasksEnabled(), CanSelfLoop: false,
 	})
 }
 
@@ -323,7 +326,7 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	}
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
-		TypedBoardTasks: o.BoardTasksEnabled(),
+		TypedBoardTasks: o.BoardTasksEnabled(), CanSelfLoop: true,
 	})
 }
 
@@ -388,6 +391,8 @@ const (
 	opKindMeshBoardTask         = "mesh_board_task"
 	opKindMeshOpenThread        = "mesh_open_thread"
 	opKindPostDiscussionMessage = "post_discussion_message"
+	opKindLoopCreate            = "loop_create"
+	opKindLoopStop              = "loop_stop"
 )
 
 // marshalEffect builds one state.Effect from a kind, target and a JSON-serializable payload — the one place

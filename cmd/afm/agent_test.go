@@ -13,6 +13,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -32,6 +33,11 @@ type fakeCLIAgentMesh struct {
 	lastTaskReqID    string
 	lastTask         server.MeshBoardTaskRequest
 	lastTasksKey     string
+
+	loops        []orchestrator.LoopView
+	lastLoopReq  string
+	lastLoopCmd  server.MeshLoopCommand
+	lastLoopCall int
 }
 
 func (f *fakeCLIAgentMesh) ResolveToken(token string) (string, bool) {
@@ -82,6 +88,16 @@ func (f *fakeCLIAgentMesh) PublishBoard(ctx context.Context, requestID, actor st
 func (f *fakeCLIAgentMesh) Board(ctx context.Context, key string) ([]agentcomm.BoardEntry, error) {
 	f.lastBoardKey = key
 	return nil, nil
+}
+
+func (f *fakeCLIAgentMesh) Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error) {
+	return orchestrator.LoopPage{Loops: f.loops}, nil
+}
+
+func (f *fakeCLIAgentMesh) Loop(ctx context.Context, requestID, actor string, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
+	f.lastLoopReq, f.lastLoopCmd = requestID, cmd
+	f.lastLoopCall++
+	return orchestrator.LoopView{ID: "L1", CreatorID: agentcomm.ParticipantID(actor), TargetID: agentcomm.ParticipantID(actor), Every: cmd.Every.String(), Status: orchestrator.LoopActive}, nil
 }
 
 // writeTestMeshDescriptor writes a 0600 descriptor file pointing at the given httptest server and sets

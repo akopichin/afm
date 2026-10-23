@@ -487,6 +487,9 @@ type MeshMessageSentPayload struct {
 	// AutoResult — afm posted an agent's turn result as this reply (see agentcomm.Message.AutoResult). Absent in
 	// journals written before it existed.
 	AutoResult bool `json:"auto_result,omitempty"`
+	// LoopKey — the message is a tick of the loop with that key. Never accepted from a client: only the loop
+	// scheduler's own operation journals it, and applyMeshMessageSent checks it against the loop.
+	LoopKey string `json:"loop_key,omitempty"`
 }
 
 // meshRejected is a typed rejection for a mesh operation the caller can fix (unknown thread, bad recipients,
@@ -535,7 +538,10 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	msg := agentcomm.Message{
 		ID: id, ThreadID: threadID, Sender: agentcomm.ParticipantID(p.Sender), Recipients: recipients,
 		Kind: agentcomm.MessageKind(p.Kind), InReplyTo: inReplyTo, Body: p.Body, ArtifactRefs: p.ArtifactRefs,
-		AutoResult: p.AutoResult, Seq: c.Seq, CreatedAt: c.Time,
+		AutoResult: p.AutoResult, LoopKey: p.LoopKey, Seq: c.Seq, CreatedAt: c.Time,
+	}
+	if err := checkLoopTickMessage(as, msg); err != nil {
+		return err
 	}
 
 	known := make(map[agentcomm.MessageID]bool, len(as.Mesh.MessagesByThread[threadID]))
@@ -583,6 +589,22 @@ func applyMeshMessageSent(as *AssistantsState, c *Control, dryRun bool) error {
 	as.resolvePendingWaits(agentcomm.WaitReady, func(w *MeshWait) bool {
 		return as.meshWaitSatisfied(w)
 	})
+	return nil
+}
+
+// checkLoopTickMessage prevents client messages from impersonating scheduler self-ticks.
+// The creator, target and dedicated thread must match the durable loop.
+func checkLoopTickMessage(as *AssistantsState, msg agentcomm.Message) error {
+	if msg.LoopKey == "" {
+		return nil
+	}
+	l, ok := as.Loops[msg.LoopKey]
+	switch {
+	case !ok:
+		return meshRejected(assistants.CodeInvalidRequest, "message %s names loop %s, which does not exist", msg.ID, msg.LoopKey)
+	case msg.Sender != l.CreatorID || len(msg.Recipients) != 1 || msg.Recipients[0] != l.TargetID || msg.ThreadID != l.ThreadID:
+		return meshRejected(assistants.CodeInvalidRequest, "message %s is not loop %s's tick: a tick goes from the loop's creator to its target in its own thread", msg.ID, l.ShortID)
+	}
 	return nil
 }
 

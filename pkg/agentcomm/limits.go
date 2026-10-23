@@ -1,5 +1,7 @@
 package agentcomm
 
+import "time"
+
 // Limits bound every unbounded-looking dimension of the mesh, so a run can never grow a thread,
 // an inbox, or a wait graph without bound. Each is enforced explicitly where it applies — see
 // ValidateMessage for the message-level limits, and the pkg/state/pkg/orchestrator phases for the
@@ -35,4 +37,12 @@ const (
 	// MaxCausalHops bounds how many reply/wait links the cycle check (pkg/orchestrator) will walk
 	// before giving up, so a malformed or adversarial chain cannot hang admission.
 	MaxCausalHops = 12
+	// MaxActiveLoops is the most loops (recurring prompts) a run may have active at once.
+	MaxActiveLoops = 16
+	// MaxLoopPromptBytes is the largest prompt a loop may carry: a tick's message is that prompt behind a short
+	// header, and must fit MaxBodyBytes.
+	MaxLoopPromptBytes = MaxBodyBytes - 512
 )
+
+// MinLoopInterval is the shortest interval between two ticks of a loop.
+const MinLoopInterval = time.Second

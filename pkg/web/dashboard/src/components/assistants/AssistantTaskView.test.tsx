@@ -255,6 +255,7 @@ describe('AssistantTaskView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(mockPause).toHaveBeenCalledWith('t1'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('t1'))
   })

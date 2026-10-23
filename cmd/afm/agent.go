@@ -32,7 +32,7 @@ func newAgentCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newAgentWhoamiCmd(), newAgentListCmd(), newAgentSendCmd(), newAgentReplyCmd(),
-		newAgentInboxCmd(), newAgentAckCmd(), newAgentWaitCmd(), newAgentBoardCmd(), newAgentTaskCmd(),
+		newAgentInboxCmd(), newAgentAckCmd(), newAgentWaitCmd(), newAgentBoardCmd(), newAgentTaskCmd(), newAgentLoopCmd(),
 	)
 	return cmd
 }

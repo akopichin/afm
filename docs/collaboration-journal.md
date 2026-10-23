@@ -94,6 +94,29 @@ on create, so an existing task stays changeable.
 These are new control kinds: an older binary cannot replay a journal that
 contains them and reports the incompatibility described above.
 
+## Loop records
+
+[Repeating prompts](loops.md) add `loop_created`, `loop_ticked` and
+`loop_stopped` effects inside run operations. `target.loop_key` identifies the
+schedule. Creation records its creator, resolved participant, interval,
+redacted prompt, optional stage bound, origin Feed and dedicated thread ID.
+Replay allocates the same `L1`, `L2`, … IDs in creation order and uses the
+creation operation's commit time as the interval anchor.
+
+Each tick operation atomically commits the message, accepted delivery receipt,
+slot cursor and any helper restart; the first tick also opens its thread.
+Operation and message IDs derive from the loop key and slot. Explicit stop
+records its actor and time. Implicit ends are derived from stage, target, flow
+and thread state, and skipped slots are not journaled. Recovery preserves the
+schedule and delivered cursor but starts at the next future slot without
+replaying missed ticks.
+
+These are new required effect kinds. Older binaries that do not know them
+cannot resume such a journal; they must report incompatibility rather than
+discarding the schedules. `loop_key` on `mesh_message_sent` is optional metadata
+on an existing kind; it identifies a scheduler-created tick and permits that
+specific message to address its own sender. Ordinary self-sends remain invalid.
+
 ## Additive fields
 
 Fields added to an existing record kind are optional: a journal written before a

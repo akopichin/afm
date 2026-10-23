@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { composerRecipients, messageRoute, recipientFence, typedMentionHandles, withoutRecipient } from './composer-recipients'
+import { composerRecipients, messageRoute, recipientFence, recipientProblem, resolveTyped, typedMentionHandles, withoutRecipient } from './composer-recipients'
+import { mentionHandles } from '../../lib/mesh-roster'
 import type { MeshParticipant } from '../../api/mesh-client'
 
 const impl: MeshParticipant = { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', stage_id: 'impl', alias: 'impl', display_name: 'Backend', reachable: true }
@@ -16,6 +17,20 @@ describe('typedMentionHandles', () => {
   it('finds whole @handle tokens, without trailing punctuation, and ignores e-mail addresses', () => {
     expect(typedMentionHandles('@qa, and @run:t-9. mail me at a@b.c (@docs)')).toEqual(['qa', 'run:t-9'])
     expect(typedMentionHandles('@qa\n@docs!')).toEqual(['qa', 'docs'])
+  })
+})
+
+describe('resolveTyped / recipientProblem — shared with the /loop target', () => {
+  it('resolves an alias or id case-insensitively and reports a duplicated alias as ambiguous', () => {
+    const twin: MeshParticipant = { ...qa, id: 'run:t-7' }
+    expect(resolveTyped('QA', participants, mentionHandles(participants))).toBe(qa)
+    expect(resolveTyped('run:t-1', participants, mentionHandles(participants))).toBe(qa)
+    expect(resolveTyped('nobody', participants, mentionHandles(participants))).toBeNull()
+    expect(resolveTyped('qa', [qa, twin], mentionHandles([qa, twin]))).toBe('ambiguous')
+  })
+  it('explains why an unreachable person cannot be written to', () => {
+    expect(recipientProblem(qa, 'qa', [])).toBeNull()
+    expect(recipientProblem(done, 'old', [])).toBe("@old can't receive messages: task t-2 has reached a terminal status")
   })
 })
 

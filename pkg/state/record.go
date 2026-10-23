@@ -54,6 +54,8 @@ type Target struct {
 	// Target id fields this is not server-minted: the caller names an arbitrary, meaningful key (e.g.
 	// "design-doc"), so there is no derive-from-operation-id convention for it.
 	BoardKey string `json:"board_key,omitempty"`
+	// LoopKey ties loop effects to the stable key derived from their creation operation.
+	LoopKey string `json:"loop_key,omitempty"`
 }
 
 // Control — управляющая запись нового формата журнала (помощники/задачи/политика/квоты). Отличается от
@@ -153,6 +155,10 @@ const (
 	kindMeshBoardTaskReleased   = "mesh_board_task_released"
 	kindMeshBoardTaskReopened   = "mesh_board_task_reopened"
 	kindMeshBoardTaskEdited     = "mesh_board_task_edited"
+	// Loop effects (loop_projection.go): a schedule that sends one prompt to a run agent at fixed intervals.
+	kindLoopCreated = "loop_created"
+	kindLoopTicked  = "loop_ticked"
+	kindLoopStopped = "loop_stopped"
 )
 
 // controlKinds — множество control-kind'ов, которые понимает эта сборка. Расширяется по мере добавления
@@ -197,6 +203,9 @@ var controlKinds = map[string]bool{
 	kindMeshBoardTaskReleased:    true,
 	kindMeshBoardTaskReopened:    true,
 	kindMeshBoardTaskEdited:      true,
+	kindLoopCreated:              true,
+	kindLoopTicked:               true,
+	kindLoopStopped:              true,
 }
 
 // recordProbe — первый проход разбора одной непустой строки журнала: достаточно kind и schema_version,

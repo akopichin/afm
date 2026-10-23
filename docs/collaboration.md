@@ -247,6 +247,21 @@ proposals are still recorded by the run. In the Assistant, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
+## Repeating prompts
+
+Use `/loop 5m @watcher Check the latest logs` in a stage's **Feed → Message**
+to schedule a prompt for an existing run agent or a helper of that stage.
+`/loop list` shows the run's schedules; `/loop stop L1` stops one from any Feed.
+Run-agent loops continue across stages unless you add `--until-stage-end`;
+helper loops end with their stage. Busy or paused slots are skipped, without
+catch-up after a restart.
+
+Agents can schedule themselves with
+`afm agent loop add --every 5m --prompt "Check the latest logs"`, then end their
+turn and let a tick wake them. See [Repeating prompts with loops](loops.md) for
+CLI/API examples, timing, helper reactivation, permissions and limits. Whole-flow
+`repeat` starts a new run and does not carry loops into the next cycle.
+
 ## Team conversations
 
 In `team` mode, the run-wide **Team** tab appears after the Agent Mesh probe

@@ -129,6 +129,14 @@ func (a meshServerActionsForTest) Board(ctx context.Context, key string) ([]agen
 	return page.Entries, nil
 }
 
+func (a meshServerActionsForTest) Loops(ctx context.Context) (orchestrator.LoopPage, error) {
+	return orchestrator.LoopPage{}, errLoopsNotExercised
+}
+
+func (a meshServerActionsForTest) Loop(ctx context.Context, requestID string, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
+	return orchestrator.LoopView{}, errLoopsNotExercised
+}
+
 func (a meshServerActionsForTest) BoardTasksEnabled() bool { return a.orch.BoardTasksEnabled() }
 
 func (a meshServerActionsForTest) BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error) {

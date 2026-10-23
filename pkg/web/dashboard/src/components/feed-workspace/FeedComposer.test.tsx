@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
 import * as meshClient from '../../api/mesh-client'
@@ -8,6 +9,7 @@ import type { MeshRoster } from '../../hooks/use-mesh'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
 import { meshDeliveries, sideAgentFailures } from './mesh-receipt'
+import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
 
 describe('FeedComposer', () => {
   it('sends the trimmed text and clears on success', async () => {
@@ -271,9 +273,9 @@ describe('FeedComposer', () => {
     }
 
     type Extra = Partial<Parameters<typeof FeedComposer>[0]>
-    function renderComposer(mesh: FeedComposerMeshProps = meshProps(), extra: Extra = {}) {
+    function renderComposer(mesh: FeedComposerMeshProps = meshProps(), extra: Extra = {}, wrap: (children: ReactElement) => ReactElement = (children) => children) {
       const onSend = vi.fn().mockResolvedValue(undefined)
-      const utils = render(<FeedComposer stageId="s1" onSend={onSend} mesh={mesh} {...extra} />)
+      const utils = render(wrap(<FeedComposer stageId="s1" onSend={onSend} mesh={mesh} {...extra} />))
       return { ...utils, onSend }
     }
 
@@ -802,6 +804,423 @@ describe('FeedComposer', () => {
         fireEvent.click(confirmBtn)
         await waitFor(() => expect(attachSpy).toHaveBeenCalledTimes(2))
         expect(attachSpy.mock.calls[0]?.[0].requestId).toBe(attachSpy.mock.calls[1]?.[0].requestId)
+      })
+    })
+
+    // --- /loop: a slash command is an operation, never a message ---
+    describe('/loop command mode', () => {
+      const helper: MeshParticipant = { id: 'helper:t-5', kind: 'helper', scope: 'stage', stage_id: 's1', alias: 'rev', display_name: 'Reviewer', reachable: true }
+      const otherHelper: MeshParticipant = { id: 'helper:t-6', kind: 'helper', scope: 'stage', stage_id: 's2', alias: 'other', display_name: 'Other helper', reachable: true }
+      const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
+      const loopRoster = () => roster({ participants: [runAgent, docsAgent, stageAgent, helper, otherHelper, side, finished] })
+      const loopMesh = (overrides: Partial<FeedComposerMeshProps> = {}) => meshProps({ roster: loopRoster(), ...overrides })
+      const sendButton = (name: string) => screen.getByRole('button', { name })
+
+      function spyOnMessageRoutes() {
+        return [
+          vi.spyOn(meshClient, 'sendMeshMessageTo'),
+          vi.spyOn(runClient, 'postStageDiscussionMessage'),
+          vi.spyOn(meshClient, 'attachAndSendMesh'),
+        ]
+      }
+      const expectNothingSent = (spies: ReturnType<typeof spyOnMessageRoutes>) => spies.forEach((spy) => expect(spy).not.toHaveBeenCalled())
+
+      const created: meshClient.MeshLoop = {
+        id: 'L1', creator_id: 'user', target_id: 'run:t-1', every: '5m', origin_stage: 's1', status: 'active', next_tick_at: '2026-10-23T10:05:07Z',
+      }
+      const inTokyo = (children: ReactElement) => (
+        <MessageTimeZoneProvider timeZone="Asia/Tokyo" utcOffsetMinutes={540}>{children}</MessageTimeZoneProvider>
+      )
+      const run = () => fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+
+      it('a partial /loop shows the muted syntax linked to the textarea and selectable intervals, not the To row or Interrupt', () => {
+        renderComposer(loopMesh())
+        type('/loop')
+        expect(input()).toHaveAccessibleDescription(/\/loop <interval> \[--until-stage-end\] @agent <prompt> · \/loop list · \/loop stop <id>/)
+        const examples = screen.getByRole('group', { name: 'Interval examples' })
+        expect(within(examples).getAllByRole('button').map((b) => b.textContent)).toEqual(['5m', '15m', '1h'])
+        for (const b of within(examples).getAllByRole('button')) expect(b).toHaveAccessibleDescription(/\/loop <interval>/)
+        expect(screen.queryByRole('group', { name: 'Recipients' })).toBeNull()
+        expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
+        // Send stays clickable even here: clicking it on incomplete syntax must still show why (mouse users
+        // get no other way to see the parser's error).
+        expect(sendButton('Start loop')).toBeEnabled()
+      })
+
+      it('an ordinary draft, /loops and a mid-text /loop keep the ordinary composer', () => {
+        renderComposer(loopMesh())
+        for (const text of ['hello', '/loops 5m', 'please /loop 5m @qa x']) {
+          type(text)
+          expect(recipients()).toBeInTheDocument()
+          expect(screen.queryByRole('group', { name: 'Interval examples' })).toBeNull()
+          expect(input()).not.toHaveAccessibleDescription(/\/loop <interval>/)
+        }
+      })
+
+      it('/loops and a mid-text /loop actually reach the ordinary route, never the loop endpoints', async () => {
+        const post = vi.spyOn(runClient, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'dm-1' })
+        const add = vi.spyOn(meshClient, 'addMeshLoop')
+        const list = vi.spyOn(meshClient, 'listMeshLoops')
+        renderComposer(loopMesh())
+        type('/loops 5m')
+        run()
+        await waitFor(() => expect(post).toHaveBeenCalledWith('s1', expect.any(String), { body: '/loops 5m', mentions: [], interrupt: false }))
+        expect(add).not.toHaveBeenCalled()
+        expect(list).not.toHaveBeenCalled()
+      })
+
+      it('clicking 5m completes the interval, keeps the draft and returns the focus to the textarea', () => {
+        renderComposer(loopMesh())
+        type('/loop')
+        fireEvent.click(screen.getByRole('button', { name: '5m' }))
+        expect(input().value).toBe('/loop 5m ')
+        expect(input()).toHaveFocus()
+        expect(screen.queryByRole('group', { name: 'Interval examples' })).toBeNull()
+      })
+
+      it('the examples are native buttons in the tab order, and an example replaces the interval typed so far', () => {
+        renderComposer(loopMesh())
+        type('/loop 5')
+        const hour = screen.getByRole('button', { name: '1h' })
+        expect(hour.tagName).toBe('BUTTON')
+        expect(hour).toHaveAttribute('type', 'button')
+        expect(hour).not.toHaveAttribute('tabindex', '-1')
+        fireEvent.click(hour)
+        expect(input().value).toBe('/loop 1h ')
+      })
+
+      it('@ after the interval offers only run agents and this stage\'s helpers — no stage agent, Side agent, other stage helper or attach profile', () => {
+        renderComposer(loopMesh())
+        type('/loop 5m @')
+        const options = screen.getAllByRole('option').map((o) => o.textContent ?? '')
+        expect(options).toHaveLength(3)
+        expect(options.join('|')).toMatch(/QA reviewer/)
+        expect(options.join('|')).toMatch(/Docs writer/)
+        expect(options.join('|')).toMatch(/Reviewer/)
+        expect(options.join('|')).not.toMatch(/Backend agent|claude|Other helper|Frontend reviewer|Old/)
+      })
+
+      it('shows the resolved target in its own row and a valid command can be started', () => {
+        const spies = spyOnMessageRoutes()
+        renderComposer(loopMesh())
+        type('/loop 5m @qa проверь логи @docs')
+        const target = screen.getByRole('group', { name: 'Loop target' })
+        expect(within(target).getByText('@qa')).toBeInTheDocument()
+        expect(within(target).queryByText('@docs')).toBeNull()
+        expect(screen.queryByRole('group', { name: 'Recipients' })).toBeNull()
+        expect(sendButton('Start loop')).toBeEnabled()
+        expectNothingSent(spies)
+      })
+
+      it('keeps showing the resolved target while the prompt is still being typed', () => {
+        renderComposer(loopMesh())
+        type('/loop 5m @qa')
+        const target = screen.getByRole('group', { name: 'Loop target' })
+        expect(within(target).getByText('@qa')).toBeInTheDocument()
+        type('/loop 5m @qa ')
+        expect(within(screen.getByRole('group', { name: 'Loop target' })).getByText('@qa')).toBeInTheDocument()
+      })
+
+      it('Send already reads Run for an in-progress /loop stop or /loop list, before the rest parses', () => {
+        renderComposer(loopMesh())
+        type('/loop stop')
+        // Still clickable (malformed syntax is rejected visibly on submit, like every other case), but its
+        // label must already say Run, not Start loop, once the subcommand itself is unambiguous.
+        expect(sendButton('Run')).toBeEnabled()
+        type('/loop list x')
+        expect(sendButton('Run')).toBeEnabled()
+        type('/loop')
+        expect(sendButton('Start loop')).toBeEnabled()
+      })
+
+      it('an unknown, ineligible or unreachable target is a visible problem and keeps Send off', () => {
+        renderComposer(loopMesh())
+        for (const [text, problem] of [
+          ['/loop 5m @nobody check', /No one is called @nobody/],
+          ['/loop 5m @s1 check', /run agent or a helper of this stage/],
+          ['/loop 5m @assistant check', /run agent or a helper of this stage/],
+          ['/loop 5m @other check', /run agent or a helper of this stage/],
+          ['/loop 5m @old check', /can't receive messages/],
+        ] as const) {
+          type(text)
+          expect(screen.getByRole('alert')).toHaveTextContent(problem)
+          expect(sendButton('Start loop')).toBeDisabled()
+        }
+      })
+
+      it('Cmd/Ctrl+Enter on an unresolvable target is a no-op too: the disabled Send button has no keyboard escape hatch', () => {
+        const spies = spyOnMessageRoutes()
+        const add = vi.spyOn(meshClient, 'addMeshLoop')
+        renderComposer(loopMesh())
+        type('/loop 5m @s1 check')
+        run()
+        expect(input().value).toBe('/loop 5m @s1 check')
+        expect(add).not.toHaveBeenCalled()
+        expectNothingSent(spies)
+      })
+
+      it('malformed syntax is rejected visibly on submit, the draft stays and nothing is sent', () => {
+        const spies = spyOnMessageRoutes()
+        renderComposer(loopMesh())
+        for (const [text, error] of [
+          ['/loop 5m @qa ', /prompt/i],
+          ['/loop 5m check the logs', /target/i],
+          ['/loop soon @qa x', /duration/i],
+        ] as const) {
+          type(text)
+          expect(sendButton('Start loop')).toBeEnabled()
+          fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+          expect(screen.getByRole('alert')).toHaveTextContent(error)
+          expect(input().value).toBe(text)
+        }
+        expectNothingSent(spies)
+      })
+
+      it('malformed syntax is rejected visibly on a pointer click too, the draft stays and nothing is sent', () => {
+        const spies = spyOnMessageRoutes()
+        renderComposer(loopMesh())
+        for (const [text, error] of [
+          ['/loop 5m @qa ', /prompt/i],
+          ['/loop 5m check the logs', /target/i],
+          ['/loop soon @qa x', /duration/i],
+        ] as const) {
+          type(text)
+          const button = sendButton('Start loop')
+          expect(button).toBeEnabled()
+          fireEvent.click(button)
+          expect(screen.getByRole('alert')).toHaveTextContent(error)
+          expect(input().value).toBe(text)
+        }
+        expectNothingSent(spies)
+      })
+
+      it('typing clears a submit error', () => {
+        renderComposer(loopMesh())
+        type('/loop 5m @qa ')
+        fireEvent.keyDown(input(), { key: 'Enter', metaKey: true })
+        expect(screen.getByRole('alert')).toBeInTheDocument()
+        type('/loop 5m @qa x')
+        expect(screen.queryByRole('alert')).toBeNull()
+      })
+
+      it('a valid command never reaches the message, stage-post or attach endpoints', async () => {
+        const spies = spyOnMessageRoutes()
+        const add = vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue(created)
+        renderComposer(loopMesh())
+        type('/loop 5m @qa проверь логи')
+        run()
+        await waitFor(() => expect(add).toHaveBeenCalledTimes(1))
+        expectNothingSent(spies)
+      })
+
+      it('/loop 5m @qa <prompt> schedules exactly that prompt for the resolved target from this Feed', async () => {
+        const add = vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue(created)
+        renderComposer(loopMesh())
+        type('/loop 5m @qa проверь логи @docs')
+        fireEvent.click(sendButton('Start loop'))
+        await waitFor(() => expect(add).toHaveBeenCalledWith({ requestId: expect.any(String), target: 'run:t-1', every: '5m', prompt: 'проверь логи @docs', originStage: 's1' }))
+      })
+
+      it('--until-stage-end bounds the loop to the stage whose Feed it is created in', async () => {
+        const add = vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue({ ...created, until_stage: 's1' })
+        renderComposer(loopMesh())
+        type('/loop 1h --until-stage-end @qa check')
+        run()
+        await waitFor(() => expect(add).toHaveBeenCalledWith(expect.objectContaining({ every: '1h', prompt: 'check', untilStage: 's1', originStage: 's1' })))
+        expect(await screen.findByRole('status')).toHaveTextContent(/ends with Backend/)
+      })
+
+      it('a created loop shows its id, next tick in host time with seconds, stop command and origin Feed, and clears the draft', async () => {
+        vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue(created)
+        renderComposer(loopMesh(), {}, inTokyo)
+        type('/loop 5m @qa проверь логи')
+        run()
+        const receipt = await screen.findByRole('status')
+        expect(receipt).toHaveTextContent('Loop L1 started')
+        expect(receipt).toHaveTextContent('every 5m')
+        expect(receipt).toHaveTextContent('@qa')
+        expect(receipt).toHaveTextContent(/Next tick .*19:05:07/)
+        expect(receipt).toHaveTextContent('/loop stop L1')
+        expect(receipt).toHaveTextContent('Feed: Backend')
+        expect(input().value).toBe('')
+      })
+
+      it.each(['create', 'list'])('uses the stage id for unnamed origin and bound stages in a %s result', async (action) => {
+        const loop = { ...created, until_stage: 's1' }
+        vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue(loop)
+        vi.spyOn(meshClient, 'listMeshLoops').mockResolvedValue({ loops: [loop] })
+        renderComposer(loopMesh({ stages: [makeStage({ name: '' })] }))
+        type(action === 'create' ? '/loop 5m --until-stage-end @qa check' : '/loop list')
+        run()
+        const receipt = await screen.findByRole('status')
+        expect(receipt).toHaveTextContent('Feed: s1')
+        expect(receipt).toHaveTextContent('ends with s1')
+      })
+
+      it('clears only the submitted command: text typed while it was in flight stays', async () => {
+        let finish: (loop: meshClient.MeshLoop) => void = () => {}
+        vi.spyOn(meshClient, 'addMeshLoop').mockReturnValue(new Promise((resolve) => { finish = resolve }))
+        renderComposer(loopMesh())
+        type('/loop 5m @qa check')
+        run()
+        expect(sendButton('Sending…')).toBeDisabled()
+        type('/loop 5m @qa check\nand more')
+        await act(async () => finish(created))
+        expect(input().value).toBe('and more')
+      })
+
+      it('the receipt stays until the next edit, and Escape dismisses it', async () => {
+        vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue(created)
+        renderComposer(loopMesh())
+        type('/loop 5m @qa check')
+        run()
+        expect(await screen.findByRole('status')).toHaveTextContent('Loop L1 started')
+        fireEvent.keyDown(input(), { key: 'Escape' })
+        expect(screen.queryByRole('status')).toBeNull()
+
+        type('/loop 5m @qa again')
+        run()
+        expect(await screen.findByRole('status')).toBeInTheDocument()
+        type('hello')
+        expect(screen.queryByRole('status')).toBeNull()
+      })
+
+      it('a failed create keeps the draft, shows the server reason as an alert and retries under the same request id', async () => {
+        const add = vi.spyOn(meshClient, 'addMeshLoop')
+          .mockRejectedValueOnce(new meshClient.MeshApiError('/api/mesh/loop', 409, 'invalid_status', 'at most 16 loops can run at once'))
+          .mockResolvedValueOnce(created)
+        renderComposer(loopMesh())
+        type('/loop 5m @qa check')
+        run()
+        expect(await screen.findByRole('alert')).toHaveTextContent('at most 16 loops can run at once')
+        expect(input().value).toBe('/loop 5m @qa check')
+        expect(screen.queryByRole('status')).toBeNull()
+        expect(sendButton('Start loop')).toBeEnabled()
+
+        fireEvent.click(sendButton('Start loop'))
+        await waitFor(() => expect(add).toHaveBeenCalledTimes(2))
+        expect(add.mock.calls[0]?.[0].requestId).toBe(add.mock.calls[1]?.[0].requestId)
+        expect(await screen.findByRole('status')).toHaveTextContent('Loop L1 started')
+        expect(screen.queryByRole('alert')).toBeNull()
+      })
+
+      it('the error of a failed command goes away when the draft is edited', async () => {
+        vi.spyOn(meshClient, 'stopMeshLoop').mockRejectedValue(new Error('unknown loop "L9"'))
+        renderComposer(loopMesh())
+        type('/loop stop L9')
+        run()
+        expect(await screen.findByRole('alert')).toHaveTextContent('unknown loop "L9"')
+        type('/loop stop L1')
+        expect(screen.queryByRole('alert')).toBeNull()
+      })
+
+      const doneFeed = () => {
+        const done = { ...stageAgent, reachable: false, unreachable_reason: 'stage s1 has reached a terminal status' }
+        return loopMesh({ roster: roster({ participants: [runAgent, done] }), stages: [makeStage({ status: 'done' })] })
+      }
+
+      it('/loop list and /loop stop L1 are offered in a completed stage\'s Feed with no recipient and no Interrupt', () => {
+        const spies = spyOnMessageRoutes()
+        renderComposer(doneFeed(), { reviseAvailable: false })
+        for (const text of ['/loop list', '/loop stop L1']) {
+          type(text)
+          expect(screen.queryByRole('group', { name: 'Recipients' })).toBeNull()
+          expect(screen.queryByLabelText('Interrupt agent')).toBeNull()
+          expect(within(screen.getByRole('group', { name: 'Loop target' })).getByText(/whole run/i)).toBeInTheDocument()
+          expect(sendButton('Run')).toBeEnabled()
+        }
+        expectNothingSent(spies)
+      })
+
+      it('/loop list shows every loop of the run: id, creator, target, interval, origin Feed, stage bound and state', async () => {
+        const spies = spyOnMessageRoutes()
+        const list = vi.spyOn(meshClient, 'listMeshLoops').mockResolvedValue({
+          loops: [
+            created,
+            { id: 'L2', creator_id: 'run:t-2', target_id: 'helper:t-5', every: '1m30s', until_stage: 's2', status: 'ended', end_reason: 'the conversation reached its message limit' },
+            { id: 'L3', creator_id: 'user', target_id: 'run:t-2', every: '1h', origin_stage: 's2', status: 'stopped', end_reason: 'stopped by You' },
+          ],
+        })
+        renderComposer(loopMesh({ stages: [makeStage(), makeStage({ id: 's2', name: 'Docs stage' })] }), {}, inTokyo)
+        type('/loop list')
+        run()
+        const result = await screen.findByRole('status')
+        expect(list).toHaveBeenCalledTimes(1)
+        const rows = within(result).getAllByRole('listitem').map((li) => li.textContent ?? '')
+        expect(rows).toHaveLength(3)
+        expect(rows[0]).toMatch(/L1.*active.*every 5m.*@qa.*You.*Feed: Backend.*next tick .*19:05:07/)
+        expect(rows[1]).toMatch(/L2.*ended.*the conversation reached its message limit.*every 1m30s.*@rev.*Docs writer.*run conversations.*ends with Docs stage/)
+        expect(rows[2]).toMatch(/L3.*stopped.*stopped by You.*every 1h.*@docs.*Feed: Docs stage/)
+        expect(input().value).toBe('')
+        expectNothingSent(spies)
+      })
+
+      it('/loop list says when the run has no loops', async () => {
+        vi.spyOn(meshClient, 'listMeshLoops').mockResolvedValue({ loops: [] })
+        renderComposer(loopMesh())
+        type('/loop list')
+        run()
+        expect(await screen.findByRole('status')).toHaveTextContent('No loops in this run')
+      })
+
+      it('/loop stop L1 works from a completed stage\'s Feed and reports the stopped loop', async () => {
+        const spies = spyOnMessageRoutes()
+        const stop = vi.spyOn(meshClient, 'stopMeshLoop').mockResolvedValue({ ...created, status: 'stopped', end_reason: 'stopped by You', next_tick_at: undefined })
+        renderComposer(doneFeed(), { reviseAvailable: false })
+        type('/loop stop l1')
+        fireEvent.click(sendButton('Run'))
+        expect(await screen.findByRole('status')).toHaveTextContent('Loop L1 stopped')
+        expect(stop).toHaveBeenCalledWith({ requestId: expect.any(String), loopId: 'L1' })
+        expect(input().value).toBe('')
+        expectNothingSent(spies)
+      })
+
+      it('a failed /loop list keeps the draft and shows the reason', async () => {
+        vi.spyOn(meshClient, 'listMeshLoops').mockRejectedValue(new meshClient.MeshApiError('/api/mesh/loops', 404, undefined))
+        renderComposer(loopMesh())
+        type('/loop list')
+        run()
+        expect(await screen.findByRole('alert')).toHaveTextContent('/api/mesh/loops -> 404')
+        expect(input().value).toBe('/loop list')
+      })
+
+      it('/loop list ignores a reply draft, People-panel chips and an attaching profile', async () => {
+        const spies = spyOnMessageRoutes()
+        const list = vi.spyOn(meshClient, 'listMeshLoops').mockResolvedValue({ loops: [] })
+        const reply = { messageId: 'm5', threadId: 'mt-docs', senderId: 'run:t-2', preview: 'Docs question', members: ['user', 'run:t-2'] }
+        const { rerender } = renderComposer(loopMesh({ pick: { participantId: 'run:t-1', seq: 1 } }), { meshReply: reply })
+        type('/loop list')
+        expect(screen.queryByRole('group', { name: 'Recipients' })).toBeNull()
+        expect(sendButton('Run')).toBeEnabled()
+        run()
+        await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+        expectNothingSent(spies)
+        rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={loopMesh()} meshReply={null} />)
+        type('')
+        selectMention('@frontendDeveloper')
+        type('/loop list')
+        fireEvent.click(sendButton('Run'))
+        await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+        expect(screen.queryByRole('dialog', { name: /attach helper/i })).toBeNull()
+        expectNothingSent(spies)
+        // Leaving loop mode brings the attach chip and its ordinary Send back.
+        type('please look')
+        expect(within(recipients()).getByText(/Attach helper/)).toBeInTheDocument()
+      })
+
+      it('a /loop note in Revise says slash commands run in Message and cannot be applied', () => {
+        const { onSend } = renderComposer(loopMesh())
+        fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
+        const note = screen.getByPlaceholderText('Note to agent…')
+        fireEvent.change(note, { target: { value: '/loop 5m @qa check' } })
+        expect(screen.getByText('Slash commands run in Message')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Apply Revise' })).toBeDisabled()
+        fireEvent.keyDown(note, { key: 'Enter', metaKey: true })
+        expect(onSend).not.toHaveBeenCalled()
+        expect(note).toHaveValue('/loop 5m @qa check')
+        fireEvent.change(note, { target: { value: '/loops are fine here' } })
+        expect(screen.queryByText('Slash commands run in Message')).toBeNull()
+        expect(screen.getByRole('button', { name: 'Apply Revise' })).toBeEnabled()
       })
     })
   })

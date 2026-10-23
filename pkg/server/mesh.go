@@ -50,6 +50,9 @@ type MeshActions interface {
 	BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error)
 	// BoardTask makes one change to a typed board task as the human operator.
 	BoardTask(ctx context.Context, requestID string, req MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error)
+	// Loops lists every loop of the run; Loop adds or stops one as the human operator.
+	Loops(ctx context.Context) (orchestrator.LoopPage, error)
+	Loop(ctx context.Context, requestID string, cmd MeshLoopCommand) (orchestrator.LoopView, error)
 }
 
 // MeshOpenThreadRequest is POST /api/mesh/threads' body (opening a NEW thread — orchestrator.OpenThread).
@@ -143,6 +146,8 @@ const (
 	meshSegThreadClose    = "close"
 	meshSegThreadTopic    = "topic"
 	meshSegStages         = "stages"
+	meshSegLoops          = "loops"
+	meshSegLoop           = "loop"
 )
 
 // routeMesh handles every /api/mesh/* route. Capability-off (s.mesh == nil) 404s before anything else, the
@@ -164,6 +169,10 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshPublishBoard(w, r)
 	case path == meshSegTasks && r.Method == http.MethodPost:
 		s.handleMeshBoardTask(w, r)
+	case path == meshSegLoops && r.Method == http.MethodGet:
+		s.handleMeshLoops(w, r)
+	case path == meshSegLoop && r.Method == http.MethodPost:
+		s.handleMeshLoop(w, r)
 	case path == meshSegInbox && r.Method == http.MethodGet:
 		s.handleMeshInbox(w, r)
 	case path == meshSegThreads && r.Method == http.MethodGet:
@@ -255,6 +264,35 @@ func (s *Server) handleMeshBoardTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, receipt)
+}
+
+// handleMeshLoops is GET /api/mesh/loops: every loop of the run, whoever created it.
+func (s *Server) handleMeshLoops(w http.ResponseWriter, r *http.Request) {
+	page, err := s.mesh.Loops(r.Context())
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, loopsForClient(page))
+}
+
+// handleMeshLoop is POST /api/mesh/loop: the human operator adds or stops a loop. Same-origin and request_id
+// rules as every other dashboard mutation; origin_stage is the Feed the loop is created from.
+func (s *Server) handleMeshLoop(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOK(r) {
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	requestID, cmd, ok := decodeLoopBody(w, r)
+	if !ok {
+		return
+	}
+	view, err := s.mesh.Loop(r.Context(), requestID, cmd)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, view)
 }
 
 func (s *Server) handleMeshInbox(w http.ResponseWriter, r *http.Request) {

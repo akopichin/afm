@@ -142,6 +142,13 @@ func (c *Collector) SetBusy(busy bool) {
 	}
 }
 
+// Busy lets external loop restarts avoid competing with an already claimed checkpoint fire.
+func (c *Collector) Busy() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.busy
+}
+
 // Stop permanently disables further firing (T5.4: TestTrigger_ParentFailedStopsNewPasses — the root stage
 // failed; whatever the watcher already produced stays exactly as recorded, but no new pass will ever be
 // requested again).

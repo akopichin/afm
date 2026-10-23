@@ -460,3 +460,48 @@ func TestTruncateUTF8(t *testing.T) {
 		}
 	}
 }
+
+// A self-loop wakes a later turn without requiring a mesh wait.
+func TestAgentComm_LoopInstructions(t *testing.T) {
+	for name, typedBoardTasks := range map[string]bool{"typed": true, "legacy": false} {
+		block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "helper:abc", Scope: "run", Available: true, TypedBoardTasks: typedBoardTasks, CanSelfLoop: true})
+		for _, want := range []string{
+			"afm agent loop add --every", "--prompt-file -", "--until-stage", "afm agent loop list", "afm agent loop stop --loop-id",
+			"never register `afm agent wait` for a tick",
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("%s block missing %q:\n%s", name, want, block)
+			}
+		}
+	}
+}
+
+// Stage main agents can schedule eligible colleagues but cannot create self-loops.
+func TestAgentComm_LoopInstructionsSelfTargetByRole(t *testing.T) {
+	helper := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "helper:abc", Scope: "stage", Available: true, CanSelfLoop: true})
+	if !strings.Contains(helper, "it comes to YOU") {
+		t.Errorf("helper block must offer a self-loop:\n%s", helper)
+	}
+	if strings.Contains(helper, "cannot target itself") {
+		t.Errorf("helper block must not say it cannot target itself:\n%s", helper)
+	}
+
+	stageAgent := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, CanSelfLoop: false})
+	if strings.Contains(stageAgent, "it comes to YOU") {
+		t.Errorf("a stage's own agent cannot be a loop target, so it must not be told a bare `loop add` comes to it:\n%s", stageAgent)
+	}
+	if !strings.Contains(stageAgent, "cannot target itself") {
+		t.Errorf("stage-agent block must say it cannot target itself:\n%s", stageAgent)
+	}
+}
+
+func TestAgentComm_UnavailableAndSideBlocksHaveNoLoop(t *testing.T) {
+	for name, block := range map[string]string{
+		"unavailable": AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage"}),
+		"side":        SideAgentCommunicationBlock("side:1"),
+	} {
+		if strings.Contains(block, "afm agent loop") {
+			t.Errorf("%s block must not offer loops:\n%s", name, block)
+		}
+	}
+}

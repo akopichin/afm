@@ -22,9 +22,8 @@ function formatHostTime(date: Date, timeZone: string): { clock: string; full: st
   }
 }
 
-// Keep the IANA zone authoritative for historical DST. The server's offset is only a fallback when
-// the host has no IANA name or this browser cannot format that name.
-function displayTime(date: Date, timeZone: string, utcOffsetMinutes: number): { clock: string; full: string } {
+// The IANA zone preserves historical DST; the offset is a fallback for unsupported zones.
+export function displayTime(date: Date, timeZone: string, utcOffsetMinutes: number): { clock: string; full: string } {
   if (timeZone !== '') {
     try {
       return formatHostTime(date, timeZone)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMeshMentionGroups } from './mesh-recipients'
+import { buildLoopMentionGroups, buildMeshMentionGroups, isLoopTarget } from './mesh-recipients'
 import { findExistingDirectThread, participantLabel } from '../../lib/mesh-roster'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
 import type { AssistantProfile } from '../../types/assistant-profile'
@@ -85,6 +85,30 @@ describe('buildMeshMentionGroups', () => {
     const groups = buildMeshMentionGroups([runAgent], [], 's1')
     const item = groups.find((g) => g.label === 'This run')?.items[0]
     expect(item?.target).toEqual({ kind: 'participant', id: 'run:qa', scope: 'run' })
+  })
+})
+
+describe('loop targets', () => {
+  const helperOnS2: MeshParticipant = { id: 'helper:t2', kind: 'helper', scope: 'stage', stage_id: 's2', alias: 't2', display_name: 'Other helper', reachable: true }
+  const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
+  const gone: MeshParticipant = { ...runAgent, id: 'run:old', reachable: false, unreachable_reason: 'task has reached a terminal status' }
+  const roster = [user, runAgent, stageAgent, otherStageAgent, helperOnS1, helperOnS2, side, gone]
+
+  it('isLoopTarget accepts run agents and the stage\'s own helpers only', () => {
+    expect(roster.filter((p) => isLoopTarget(p, 's1')).map((p) => p.id)).toEqual(['run:qa', 'helper:t1', 'run:old'])
+  })
+
+  it('offers only reachable run agents and this stage\'s helpers — no stage agent, Side agent, human or attach profile', () => {
+    const groups = buildLoopMentionGroups(roster, 's1')
+    expect(groups.map((g) => [g.label, g.items.map((i) => i.id)])).toEqual([
+      ['This run', ['run:qa']],
+      ['This stage', ['helper:t1']],
+    ])
+    expect(groups.flatMap((g) => g.items).every((i) => i.target.kind === 'participant')).toBe(true)
+  })
+
+  it('offers nothing when the run has no eligible agent', () => {
+    expect(buildLoopMentionGroups([user, stageAgent, side], 's1').flatMap((g) => g.items)).toEqual([])
   })
 })
 

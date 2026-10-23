@@ -245,14 +245,8 @@ func agentMemberSet(members []agentcomm.ParticipantID) []agentcomm.ParticipantID
 	return slices.DeleteFunc(sortedMemberSet(members), func(m agentcomm.ParticipantID) bool { return m == meshUserParticipantID })
 }
 
-// openThreadWithMembers returns the open conversation of the same agents as members (order-insensitive), or
-// "" — the conversation an agent continues when it messages the same colleagues again. The human does not
-// count: a conversation opened before the human joined every new thread (D1) is still the one those agents
-// continue after a resume. A stage's discussion thread is never picked — it belongs to the human's Discussion
-// with the stage, and the agents' own conversation must not end up there. shownIn — a stage feed the
-// conversation must show in (threadInStageFeed), so a message written from that feed never lands in a
-// conversation it does not show; "" — any conversation. sender — who writes: a conversation it is not a member
-// of cannot take its message (the human is not in the agents' conversations opened before D1).
+// openThreadWithMembers reuses an ordinary conversation visible in the requested Feed.
+// Discussion and loop threads stay separate so ordinary traffic cannot consume their budgets.
 func openThreadWithMembers(rs state.RunState, members []agentcomm.ParticipantID, sender agentcomm.ParticipantID, shownIn string) agentcomm.ThreadID {
 	return selectOpenThreadWithMembers(rs, members, sender, shownIn, false)
 }
@@ -272,6 +266,9 @@ func selectOpenThreadWithMembers(rs state.RunState, members []agentcomm.Particip
 			continue
 		}
 		if _, discussion := discussionStageOfThread(rs, id); discussion {
+			continue
+		}
+		if _, isLoop := loopKeyOfThread(rs, id); isLoop {
 			continue
 		}
 		if !directWithHuman {

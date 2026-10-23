@@ -53,7 +53,7 @@ export function typedMentionHandles(draft: string): string[] {
 // recipientProblem — why p cannot get a message from the human right now, or null. A stage agent waiting for
 // its helpers has finished its turn: the server would accept the message, but the agent reads it only when a
 // Revise restarts it, so the composer says so instead of letting it sit unread.
-function recipientProblem(p: MeshParticipant, handle: string, stages: StageStatusLike[]): string | null {
+export function recipientProblem(p: MeshParticipant, handle: string, stages: StageStatusLike[]): string | null {
   if (p.kind === 'user') return `@${handle} is you — you can't write to yourself`
   if (!p.reachable) return `@${handle} can't receive messages: ${p.unreachable_reason !== undefined && p.unreachable_reason !== '' ? p.unreachable_reason : 'unavailable'}`
   if (p.kind === 'stage_agent' && stages.find((s) => s.id === p.stage_id)?.status === 'awaiting_assistants') {
@@ -64,7 +64,7 @@ function recipientProblem(p: MeshParticipant, handle: string, stages: StageStatu
 
 // resolveTyped — the participant a typed handle names: its roster-unique @handle, its id, or an alias only it
 // has (case-insensitive). Several people sharing the alias is an error, never a silent pick.
-function resolveTyped(handle: string, participants: MeshParticipant[], handles: Map<string, string>): MeshParticipant | 'ambiguous' | null {
+export function resolveTyped(handle: string, participants: MeshParticipant[], handles: Map<string, string>): MeshParticipant | 'ambiguous' | null {
   const h = handle.toLowerCase()
   const byHandle = participants.find((p) => (handles.get(p.id) ?? p.id).toLowerCase() === h || p.id.toLowerCase() === h)
   if (byHandle !== undefined) return byHandle

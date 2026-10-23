@@ -543,6 +543,27 @@
 .mesh-recipients-add:focus-visible,
 .mesh-recipients-use-revise:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
+/* /loop command mode: muted syntax guidance and native interval buttons under the input. */
+.mesh-loop-hint { color: var(--text-muted); font-size: 11px; }
+.mesh-loop-intervals { display: flex; flex-wrap: wrap; gap: 4px 6px; font-size: 12px; }
+.mesh-loop-interval {
+  padding: 1px 8px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.mesh-loop-interval:hover { color: var(--text-primary); background: var(--surface-hover); }
+.mesh-loop-interval:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* The one-shot result of a /loop command (started, stopped, or the run's loops): muted like the other receipts. */
+.mesh-loop-result p { margin: 0; }
+.mesh-loop-result ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.mesh-loop-result strong { color: var(--text-secondary); font-weight: 600; }
+.mesh-loop-result code { color: var(--text-secondary); }
+
 /* Answering a conversation message (Message mode) is told apart from answering a thought (Revise, accent):
    its chip and the message it answers use the success hue. */
 .feed-reply-chip--conversation { border-left-color: var(--success); }

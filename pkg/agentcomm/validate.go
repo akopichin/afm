@@ -23,17 +23,8 @@ var (
 	ErrTooManyArtifactRefs      = errors.New("agentcomm: too many artifact refs")
 )
 
-// ValidateMessage enforces every structural rule a Message must satisfy before it can be
-// admitted to a thread. It deliberately does not know about addressing/reachability
-// (CanAddress) or thread-level policy beyond membership (open/closed, who may add members) —
-// those need the full roster and thread state, which is the orchestrator's job once it has a
-// Store to read from.
-//
-// threadMemberIDs is the thread's fixed member set; when nil or empty, the thread-membership
-// check is skipped (useful for validating a message's own shape before a thread exists yet, e.g.
-// OpenThread's first message). knownMessageIDsInThread is the set of message ids already present
-// in the thread, used to validate InReplyTo. Both are supplied by the caller rather than looked
-// up here, keeping this function pure and testable without a store.
+// ValidateMessage rejects malformed messages before admission.
+// Scheduler self-ticks must carry a loop key; ordinary self-sends remain invalid.
 func ValidateMessage(msg Message, threadMemberIDs []ParticipantID, knownMessageIDsInThread map[MessageID]bool) error {
 	if !msg.Kind.Valid() {
 		return fmt.Errorf("%w: %q", ErrUnknownMessageKind, msg.Kind)
@@ -55,7 +46,7 @@ func ValidateMessage(msg Message, threadMemberIDs []ParticipantID, knownMessageI
 
 	seen := make(map[ParticipantID]bool, len(msg.Recipients))
 	for _, r := range msg.Recipients {
-		if r == msg.Sender {
+		if r == msg.Sender && (msg.LoopKey == "" || len(msg.Recipients) != 1) {
 			return fmt.Errorf("%w: %q", ErrSenderInRecipients, r)
 		}
 		if seen[r] {

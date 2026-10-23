@@ -203,6 +203,9 @@ type Message struct {
 	// that turn. It waits in the recipient's inbox for its next turn but never wakes it (state.MeshState's
 	// HasWakingUnreadFor).
 	AutoResult bool `json:"auto_result,omitempty"`
+	// LoopKey marks a message as the tick of the loop with that internal key. Only afm's loop scheduler sets it;
+	// it is journaled on the message and checked against the loop by the projection (applyMeshMessageSent).
+	LoopKey string `json:"loop_key,omitempty"`
 	// Seq is assigned by the journal writer, sharing the run's single event-log sequence.
 	Seq uint64 `json:"seq"`
 	// CreatedAt is stamped from the control record's own time, never time.Now(), so replay stays

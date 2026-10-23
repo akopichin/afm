@@ -39,6 +39,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -239,6 +240,18 @@ func smokeBoardTaskRequest(requestID string, actor agentcomm.ParticipantID, req 
 		ExpectedVersion: req.ExpectedVersion, AssignmentID: req.AssignmentID, To: req.To, Title: req.Title,
 		Description: req.Description, CoordinatorID: req.Coordinator, Text: req.Text, ArtifactRefs: req.ArtifactRefs,
 	}
+}
+
+// errLoopsNotExercised is what the loop methods of this package's test adapters answer: these tests drive
+// loops through the orchestrator directly, not through an HTTP adapter.
+var errLoopsNotExercised = errors.New("loops are not exercised through this test adapter")
+
+func (a smokeMeshActions) Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error) {
+	return orchestrator.LoopPage{}, errLoopsNotExercised
+}
+
+func (a smokeMeshActions) Loop(ctx context.Context, requestID, actor string, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
+	return orchestrator.LoopView{}, errLoopsNotExercised
 }
 
 var _ server.AgentMeshActions = smokeMeshActions{}

@@ -121,6 +121,10 @@ type AssistantsState struct {
 	// participants, threads, messages+receipts, waits and the shared board. See mesh_projection.go/
 	// mesh_waits.go/mesh_board.go.
 	Mesh MeshState `json:"mesh,omitempty"`
+	// Loops are the run's recurring-prompt schedules by key; LoopOrder lists the keys in creation order, which
+	// fixes the short L<n> ids. See loop_projection.go.
+	Loops     map[string]*LoopState `json:"loops,omitempty"`
+	LoopOrder []string              `json:"loop_order,omitempty"`
 
 	// admitting is true only on the scratch copy that validates a NEW record before it is written
 	// (applyOperationCommitted with dryRun). Never persisted. See admittingNewRecord.
@@ -222,6 +226,7 @@ func newAssistantsState() AssistantsState {
 		},
 		FeedbackIntents: map[string]*FeedbackIntent{},
 		Mesh:            newMeshState(),
+		Loops:           map[string]*LoopState{},
 	}
 }
 
@@ -263,6 +268,11 @@ func (as AssistantsState) Clone() AssistantsState {
 	out.Policy = as.Policy
 	out.QuotaReserved = as.QuotaReserved
 	out.Mesh = as.Mesh.clone()
+	// A loop is replaced, never changed in place, so the pointers may be shared (see changeLoop).
+	for key, l := range as.Loops {
+		out.Loops[key] = l
+	}
+	out.LoopOrder = append([]string(nil), as.LoopOrder...)
 	return out
 }
 
@@ -606,6 +616,12 @@ func dispatchControlKind(as *AssistantsState, c *Control, dryRun bool) error {
 		return applyBoardTaskEffect(as, c, dryRun, reopenBoardTask)
 	case kindMeshBoardTaskEdited:
 		return applyBoardTaskEffect(as, c, dryRun, editBoardTask)
+	case kindLoopCreated:
+		return applyLoopCreated(as, c, dryRun)
+	case kindLoopTicked:
+		return applyLoopTicked(as, c, dryRun)
+	case kindLoopStopped:
+		return applyLoopStopped(as, c, dryRun)
 	default:
 		// controlKinds already rejected anything not listed above during decodeLine — reaching here would
 		// be a registry/switch drift, not a journal problem.
@@ -720,6 +736,8 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 	}
 	if status.Terminal() {
 		t.FinishedAt = c.Time
+	} else {
+		t.FinishedAt = time.Time{} // a finished task put back in the queue (a loop tick) is not finished any more
 	}
 	switch {
 	case p.Turn == 0:

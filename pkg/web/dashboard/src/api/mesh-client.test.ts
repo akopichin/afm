@@ -2,16 +2,19 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   MeshApiError,
   attachAndSendMesh,
+  addMeshLoop,
   genMeshRequestId,
   getMeshBoard,
   getMeshThread,
   getStageMessages,
+  listMeshLoops,
   listMeshParticipants,
   listMeshThreads,
   openMeshThread,
   postMeshTask,
   sendMeshMessage,
   sendMeshMessageTo,
+  stopMeshLoop,
   updateMeshThreadTitle,
 } from './mesh-client'
 
@@ -212,6 +215,50 @@ describe('mesh-client', () => {
       }),
     )
     expect(receipt).toEqual({ message_id: 'm2', seq: 4, thread_id: 'mt-9' })
+  })
+
+  test('addMeshLoop posts the add action with the feed it is created from and returns the loop as it is', async () => {
+    const loop = { id: 'L1', creator_id: 'user', target_id: 'run:t-1', every: '5m', origin_stage: 'impl', until_stage: 'impl', status: 'active', next_tick_at: '2026-10-23T10:05:00Z' }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => loop } as Response)
+
+    const created = await addMeshLoop({ requestId: 'req-5', target: 'run:t-1', every: '5m', prompt: 'проверь логи @docs', untilStage: 'impl', originStage: 'impl' })
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/mesh/loop',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ request_id: 'req-5', action: 'add', target: 'run:t-1', every: '5m', prompt: 'проверь логи @docs', until_stage: 'impl', origin_stage: 'impl' }),
+      }),
+    )
+    expect(created).toEqual(loop)
+  })
+
+  test('addMeshLoop leaves out a stage bound it was not given', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => ({}) } as Response)
+    await addMeshLoop({ requestId: 'req-6', target: 'qa', every: '1h', prompt: 'x' })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/loop', expect.objectContaining({ body: JSON.stringify({ request_id: 'req-6', action: 'add', target: 'qa', every: '1h', prompt: 'x' }) }))
+  })
+
+  test('stopMeshLoop posts the stop action with the short loop id', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'L1', status: 'stopped' }) } as Response)
+    const stopped = await stopMeshLoop({ requestId: 'req-7', loopId: 'L1' })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/loop', expect.objectContaining({ method: 'POST', body: JSON.stringify({ request_id: 'req-7', action: 'stop', loop_id: 'L1' }) }))
+    expect(stopped).toMatchObject({ id: 'L1', status: 'stopped' })
+  })
+
+  test('listMeshLoops reads GET /api/mesh/loops and defaults a missing list to empty', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => ({ loops: [{ id: 'L1', status: 'ended', end_reason: 'thread full' }] }) } as Response)
+    expect(await listMeshLoops()).toEqual({ loops: [{ id: 'L1', status: 'ended', end_reason: 'thread full' }] })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/mesh/loops')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => ({ loops: null }) } as Response)
+    expect((await listMeshLoops()).loops).toEqual([])
+  })
+
+  test("a rejected loop call carries the server's reason", async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'not_found', message: 'unknown loop "L9"' }) } as Response)
+    const err = await stopMeshLoop({ requestId: 'r', loopId: 'L9' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(MeshApiError)
+    expect((err as Error).message).toBe('unknown loop "L9"')
   })
 
   test("a rejected request's error reads as the server's reason", async () => {

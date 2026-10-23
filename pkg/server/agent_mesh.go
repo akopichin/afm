@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -39,6 +40,9 @@ type AgentMeshActions interface {
 	BoardTask(ctx context.Context, requestID, actor string, req MeshBoardTaskRequest) (orchestrator.BoardTaskReceipt, error)
 	// BoardTasks returns every typed board task, or only the one under key.
 	BoardTasks(ctx context.Context, key string) ([]agentcomm.BoardTaskView, error)
+	// Loops lists the loops actor created; Loop adds or stops one of them as actor.
+	Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error)
+	Loop(ctx context.Context, requestID, actor string, cmd MeshLoopCommand) (orchestrator.LoopView, error)
 }
 
 // MeshSendRequest is POST /api/agent-mesh/{send,reply}'s body. Kind is set by the handler for /reply
@@ -118,6 +122,78 @@ func decodeBoardTaskBody(w http.ResponseWriter, r *http.Request) (requestID stri
 	return body.RequestID, body.MeshBoardTaskRequest, true
 }
 
+// The two loop actions of POST /api/agent-mesh/loop and POST /api/mesh/loop.
+const (
+	MeshLoopAdd  = "add"
+	MeshLoopStop = "stop"
+)
+
+// MeshLoopCommand shares the dashboard and agent body, with caller identity supplied by the adapter.
+// Every is parsed before the Service validates the target and stage semantics.
+type MeshLoopCommand struct {
+	Action      string
+	Target      string
+	Every       time.Duration
+	Prompt      string
+	UntilStage  string
+	OriginStage string
+	LoopID      string
+}
+
+// decodeLoopBody reads a loop change's body; it has answered the request itself when ok is false.
+func decodeLoopBody(w http.ResponseWriter, r *http.Request) (requestID string, cmd MeshLoopCommand, ok bool) {
+	var body struct {
+		RequestID   string `json:"request_id"`
+		Action      string `json:"action"`
+		Target      string `json:"target"`
+		Every       string `json:"every"`
+		Prompt      string `json:"prompt"`
+		UntilStage  string `json:"until_stage"`
+		OriginStage string `json:"origin_stage"`
+		LoopID      string `json:"loop_id"`
+	}
+	if !decodeAgentMeshBody(w, r, &body) {
+		return "", MeshLoopCommand{}, false
+	}
+	reject := func(code string) (string, MeshLoopCommand, bool) {
+		writeAssistantErrCode(w, http.StatusBadRequest, code)
+		return "", MeshLoopCommand{}, false
+	}
+	switch {
+	case body.RequestID == "":
+		return reject("request_id_required")
+	case body.UntilStage != "" && !isValidStageID(body.UntilStage), body.OriginStage != "" && !isValidStageID(body.OriginStage):
+		return reject("invalid_stage_id")
+	}
+	cmd = MeshLoopCommand{
+		Action: body.Action, Target: body.Target, Prompt: body.Prompt,
+		UntilStage: body.UntilStage, OriginStage: body.OriginStage, LoopID: body.LoopID,
+	}
+	switch body.Action {
+	case MeshLoopAdd:
+		every, err := time.ParseDuration(body.Every)
+		if err != nil {
+			return reject("invalid_every")
+		}
+		cmd.Every = every
+	case MeshLoopStop:
+		if body.LoopID == "" {
+			return reject("loop_id_required")
+		}
+	default:
+		return reject("invalid_action")
+	}
+	return body.RequestID, cmd, true
+}
+
+// loopsForClient shows no loops as an empty list, never null.
+func loopsForClient(page orchestrator.LoopPage) orchestrator.LoopPage {
+	if page.Loops == nil {
+		page.Loops = []orchestrator.LoopView{}
+	}
+	return page
+}
+
 // boardTasksForClient shows a task without active assignments with an empty assignments array, never null,
 // and no tasks as an empty list.
 func boardTasksForClient(tasks []agentcomm.BoardTaskView) []agentcomm.BoardTaskView {
@@ -188,6 +264,10 @@ func (s *Server) routeAgentMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentMeshBoardTasks(w, r)
 	case action == "task" && r.Method == http.MethodPost:
 		s.handleAgentMeshBoardTask(w, r, actor)
+	case action == "loops" && r.Method == http.MethodGet:
+		s.handleAgentMeshLoops(w, r, actor)
+	case action == "loop" && r.Method == http.MethodPost:
+		s.handleAgentMeshLoop(w, r, actor)
 	case action == "send" && r.Method == http.MethodPost:
 		s.handleAgentMeshSend(w, r, actor, "")
 	case action == agentMeshActionReply && r.Method == http.MethodPost:
@@ -288,6 +368,31 @@ func (s *Server) handleAgentMeshBoardTask(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, receipt)
+}
+
+func (s *Server) handleAgentMeshLoops(w http.ResponseWriter, r *http.Request, actor string) {
+	page, err := s.agentMesh.Loops(r.Context(), actor)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, loopsForClient(page))
+}
+
+// handleAgentMeshLoop is POST /api/agent-mesh/loop. The agent's Feed is derived from the agent itself, so a
+// body origin_stage is dropped here rather than trusted.
+func (s *Server) handleAgentMeshLoop(w http.ResponseWriter, r *http.Request, actor string) {
+	requestID, cmd, ok := decodeLoopBody(w, r)
+	if !ok {
+		return
+	}
+	cmd.OriginStage = ""
+	view, err := s.agentMesh.Loop(r.Context(), requestID, actor, cmd)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, view)
 }
 
 func (s *Server) handleAgentMeshSend(w http.ResponseWriter, r *http.Request, actor, forcedKind string) {

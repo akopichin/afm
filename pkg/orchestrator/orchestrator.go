@@ -368,6 +368,22 @@ type Orchestrator struct {
 	// lock-free.
 	reviewMarker atomic.Pointer[state.PauseMarker]
 
+	// loopTick доставляет тик лупа; nil означает commitLoopTick. Подменяется в тестах планировщика, как
+	// runHelperAgent.
+	loopTick loopTickFunc
+	// loopWake будит планировщик лупов при создании и остановке лупа (agentcomm_loop_scheduler.go).
+	loopWake wakeSignal
+	// testAfterLoopRestartCommit exposes the gap between the durable restart and collector claim.
+	testAfterLoopRestartCommit func()
+	// testAfterCheckpointCommit exposes the gap between checkpoint persistence and its fire CAS.
+	testAfterCheckpointCommit func()
+	// testAfterFireCASLost runs in commitAndFire after fireWatcherTask's CAS failed but before the fire debt
+	// is registered, so a test can settle a competing turn in that gap.
+	testAfterFireCASLost func()
+	// testAfterLostFireStatusRead lets a test settle the competing turn after commitAndFire has observed its
+	// status but before commitAndFire retries. The owed fire must already be registered at that point.
+	testAfterLostFireStatusRead func(assistants.TaskStatus)
+
 	// reviewResumed помечает owner'ов, запущенных review-recovery, чтобы последующий bootstrap не спавнил их
 	// повторно.
 	reviewResumed sync.Map
@@ -790,6 +806,12 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	o.startQuestionPoller(ctx) // file-based dialog poller
 	if o.opts.AssistantsEnabled {
 		o.startWatchPoller(ctx) // Этап 5: checkpoints/on_completion watcher firing
+	}
+	if o.opts.AssistantsEnabled && !poisoned {
+		// Планировщик лупов останавливается и ожидается раньше cancel и WaitAgents (LIFO defer): тик не
+		// переживёт ран и не пишет в журнал после закрытия Store.
+		stopLoops := o.startLoopScheduler(ctx)
+		defer stopLoops()
 	}
 
 	for {

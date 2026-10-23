@@ -62,6 +62,7 @@ nav:
       - Dashboard: dashboard.md
       - Telegram bot: telegram-bot.md
       - Helpers and collaboration: collaboration.md
+      - Repeating prompts: loops.md
       - Managed browser: browser.md
       - Docker mode: docker.md
       - Go SDK: sdk.md

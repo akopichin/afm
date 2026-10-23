@@ -12,11 +12,13 @@ import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
 import { TabList, tabPanelProps } from '../tab-list'
 import { MeshAvatar } from '../team/MeshAvatar'
-import { sendMeshMessageTo, type MeshAttachAndSendResult, type MeshMessage, type MeshParticipant } from '../../api/mesh-client'
-import { buildMeshMentionGroups, type MeshMentionItem } from './mesh-recipients'
+import { addMeshLoop, listMeshLoops, sendMeshMessageTo, stopMeshLoop, type MeshAttachAndSendResult, type MeshMessage, type MeshParticipant } from '../../api/mesh-client'
+import { buildLoopMentionGroups, buildMeshMentionGroups, type MeshMentionItem } from './mesh-recipients'
+import { isLoopCommandDraft, LOOP_INTERVAL_EXAMPLES, LOOP_SYNTAX, loopIntervalSlot, loopSubcommand, parseLoopCommand, resolveLoopTarget, type IntervalSlot, type LoopCommand, type LoopTarget } from './loop-command'
+import { LoopOutcomeView, type LoopOutcome } from './LoopResult'
 import { composerRecipients, messageRoute, recipientFence, withoutRecipient, type ComposerRecipient, type MessageRoute } from './composer-recipients'
 import { postStageDiscussionMessage } from '../../api/run-client'
-import { participantLabel } from '../../lib/mesh-roster'
+import { mentionHandles, participantLabel } from '../../lib/mesh-roster'
 import { computeReceiptPhase, deliveryKey, sideAgentOutcome, RECEIPT_LABEL } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
@@ -175,6 +177,8 @@ export function FeedComposer({
   }, [meshReplyId])
 
   const empty = value.trim() === ''
+  // A slash command runs in Message: as a stage Revise it would put the literal text into the agent's feedback.
+  const slashInRevise = mesh !== undefined && isLoopCommandDraft(value)
 
   // Выбор мысли — это ответ через Revise: показываем его поле и переводим туда фокус, чтобы Cmd/Ctrl+Enter
   // сразу отправлял ответ. Фокус — после того, как поле стало видимым (с mesh оно могло быть скрыто за Message).
@@ -187,7 +191,7 @@ export function FeedComposer({
   }, [replyKey, shownMode])
 
   async function submit(): Promise<void> {
-    if (empty || sending) return
+    if (empty || sending || slashInRevise) return
     const submitted = value // снимок на момент отправки
     const body = buildReplyBody(replyQuote, submitted)
     setSending(true)
@@ -269,12 +273,17 @@ export function FeedComposer({
         />
         <ChatSendButton
           label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
-          disabled={empty}
+          disabled={empty || slashInRevise}
           sending={sending}
           paused={paused}
           onClick={() => void submit()}
         />
       </div>
+      {slashInRevise && (
+        <div className="mesh-message-error" role="alert">
+          {SLASH_IN_REVISE}
+        </div>
+      )}
     </>
   )
 
@@ -322,6 +331,7 @@ export function FeedComposer({
   )
 }
 
+const SLASH_IN_REVISE = 'Slash commands run in Message'
 const NO_MESSAGES: MeshMessage[] = []
 const NO_PICKS: string[] = []
 const MAX_MESSAGE_TEXTAREA_HEIGHT = 200
@@ -342,6 +352,25 @@ type MeshMessageComposerProps = {
   initialMessage: string
   initialPicked: string[]
   onDraftChange: (patch: { message: string; picked: string[] }) => void
+}
+
+// LoopPayload — a /loop command as the intent a retry is recognised by: plain JSON data, with the target already
+// resolved to its participant id.
+type LoopPayload = { kind: 'add'; target: string; every: string; prompt: string; untilStageEnd: boolean } | { kind: 'stop'; loopId: string } | { kind: 'list' }
+
+// runLoopCommand — the one request a /loop command is. originStage is the Feed it runs in: a new loop shows there,
+// and --until-stage-end ends it with that stage.
+function runLoopCommand(p: LoopPayload, requestId: string, originStage: string): Promise<LoopOutcome> {
+  switch (p.kind) {
+    case 'add':
+      return addMeshLoop({ requestId, target: p.target, every: p.every, prompt: p.prompt, originStage, ...(p.untilStageEnd ? { untilStage: originStage } : {}) }).then(
+        (loop) => ({ kind: 'created', loop }),
+      )
+    case 'stop':
+      return stopMeshLoop({ requestId, loopId: p.loopId }).then((loop) => ({ kind: 'stopped', loop }))
+    case 'list':
+      return listMeshLoops().then(({ loops }) => ({ kind: 'list', loops }))
+  }
 }
 
 // Attaching — an "Attach to stage" profile picked with @: Send opens the attach preview instead of sending.
@@ -411,6 +440,26 @@ function MeshMessageComposer({
   const submitter = useRetryableSubmit<{ recipientIds: string[]; inReplyTo?: string; body: string; route: MessageRoute; interrupt: boolean }>('mesh-feed-send', fence)
   const route = messageRoute(stageId, recipientIds, reply !== null)
 
+  // loopMode — the draft is a /loop command: an operation of its own, never a message. The reply, the picked
+  // people, the stage agent and an attaching profile take no part in it (they come back when the draft stops being one).
+  const loopMode = isLoopCommandDraft(draft)
+  const loopParse = loopMode ? parseLoopCommand(draft) : null
+  const loopCommand = loopParse?.ok === true ? loopParse.command : null
+  // loopTargetToken — a resolved `@target` shows its row even while the rest of the command (e.g. the prompt)
+  // is still being typed: parseLoopCommand carries it on its one failure that can follow a valid target.
+  const loopTargetToken = loopCommand?.kind === 'add' ? loopCommand.target : (loopParse !== null && !loopParse.ok ? loopParse.target : undefined)
+  const loopTarget = loopTargetToken !== undefined ? resolveLoopTarget(loopTargetToken, participants, stageId) : null
+  const loopProblem = loopTarget !== null && 'problem' in loopTarget ? loopTarget.problem : null
+  // Malformed syntax keeps Send clickable so mouse users can reveal its error.
+  // An unusable resolved target already explains its error and disables Send.
+  const loopCanSend = loopProblem === null
+  const intervalSlot = loopMode ? loopIntervalSlot(draft) : null
+  const loopHintId = useId()
+  // loopOutcome — the result of the last /loop command, shown until the next edit or Escape. Its own submitter: a
+  // loop command and a message never share a pending state, an error or a request id.
+  const [loopOutcome, setLoopOutcome] = useState<LoopOutcome | null>(null)
+  const loopSubmitter = useRetryableSubmit<LoopPayload>('mesh-feed-loop', stageId)
+
   const autoGrowRef = useAutoGrowTextarea(draft, MAX_MESSAGE_TEXTAREA_HEIGHT)
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -423,7 +472,9 @@ function MeshMessageComposer({
     [autoGrowRef, caretNodeRef],
   )
 
-  const groups = useMemo(() => buildMeshMentionGroups(participants, mesh.profiles, stageId), [participants, mesh.profiles, stageId])
+  const messageGroups = useMemo(() => buildMeshMentionGroups(participants, mesh.profiles, stageId), [participants, mesh.profiles, stageId])
+  const loopGroups = useMemo(() => buildLoopMentionGroups(participants, stageId), [participants, stageId])
+  const groups = loopMode ? loopGroups : messageGroups
   // A person picked with @ stays in the text as @handle (a typed recipient); a profile to attach becomes a chip.
   const mention = useMentionMenu<MeshMentionItem>({
     matchesFor: (query) => filterMentionGroups(groups, query).flatMap((g) => g.items),
@@ -486,6 +537,7 @@ function MeshMessageComposer({
     setDraft(v)
     if (!v.endsWith('\n')) setNudged(false)
     setLocalError(null)
+    setLoopOutcome(null)
     mention.onInput(v, e.target.selectionStart ?? v.length)
   }
 
@@ -494,6 +546,7 @@ function MeshMessageComposer({
   const [nudged, setNudged] = useState(false)
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
     if (mention.onKeyDown(e)) return
+    if (e.key === 'Escape') setLoopOutcome(null)
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
     if (e.metaKey || e.ctrlKey) {
       e.preventDefault()
@@ -506,7 +559,42 @@ function MeshMessageComposer({
 
   const explicit = recipients.filter((r) => r.source !== 'default')
 
+  // pickInterval — an interval example replaces the interval typed so far; the caret stays in the draft.
+  function pickInterval(slot: IntervalSlot, example: string): void {
+    replaceRange(slot.start, slot.end, `${slot.lead}${example} `)
+    textareaRef.current?.focus()
+  }
+
+  // submitLoop — a malformed command is rejected visibly with the draft kept; a target problem is already shown.
+  // A command that ran clears only the text it was made of; one that failed keeps the draft and shows why.
+  function submitLoop(): void {
+    if (loopParse === null) return
+    if (!loopParse.ok) {
+      setLocalError(loopParse.error)
+      return
+    }
+    if (loopProblem !== null) return
+    const submitted = draft
+    setLocalError(null)
+    setLoopOutcome(null)
+    loopSubmitter.submit(
+      loopPayload(loopParse.command, loopTarget),
+      (p, requestId) => runLoopCommand(p, requestId, stageId),
+      {
+        onSuccess: (outcome) => {
+          setLoopOutcome(outcome)
+          setDraft((cur) => removeSubmittedText(cur, submitted))
+        },
+        onFailure: setLocalError,
+      },
+    )
+  }
+
   function submit(): void {
+    if (loopMode) {
+      submitLoop()
+      return
+    }
     const submitted = draft
     const text = submitted.trim()
     if (text === '') return
@@ -570,10 +658,10 @@ function MeshMessageComposer({
           return { id, name: participant !== undefined ? participantLabel(participant) : 'New agent', label: RECEIPT_LABEL[phase] }
         })
 
-  const canSend = draft.trim() !== '' && (attaching !== null || (recipientIds.length > 0 && problems.length === 0))
-  const offerInterrupt = attaching === null && route.kind === 'stage' && stageStatus(stageId) === 'running'
+  const canSend = loopMode ? loopCanSend : draft.trim() !== '' && (attaching !== null || (recipientIds.length > 0 && problems.length === 0))
+  const offerInterrupt = !loopMode && attaching === null && route.kind === 'stage' && stageStatus(stageId) === 'running'
   // The stage agent waiting for its helpers reads only a Revise: offer the switch.
-  const offerRevise = onUseRevise !== undefined && recipients.length === 0 && stageStatus(stageId) === 'awaiting_assistants'
+  const offerRevise = !loopMode && onUseRevise !== undefined && recipients.length === 0 && stageStatus(stageId) === 'awaiting_assistants'
 
   return (
     <div className="mesh-message-composer">
@@ -589,7 +677,7 @@ function MeshMessageComposer({
         />
       )}
 
-      {reply !== null && (
+      {reply !== null && !loopMode && (
         <div className="feed-reply-chip feed-reply-chip--conversation">
           <span className="feed-reply-chip-label">↩ Reply in conversation</span>
           <span className="feed-reply-chip-src">{reply.preview}</span>
@@ -599,42 +687,57 @@ function MeshMessageComposer({
         </div>
       )}
 
-      <div className="mesh-recipients" role="group" aria-label="Recipients">
-        <span className="mesh-recipients-label">To</span>
-        {recipients.map((r) => (
-          <RecipientChip
-            key={r.key}
-            recipient={r}
-            participants={participants}
-            // The stage agent by default and the sender of the message answered (cancel the reply) have no ×.
-            onRemove={r.source === 'default' || r.source === 'reply' ? undefined : () => removeRecipient(r)}
-          />
-        ))}
-        {attaching !== null && (
-          <span className="mesh-recipient-chip is-attach" title="A new helper of this stage; the text is its assignment">
-            Attach helper: {attaching.title}
-            <button type="button" className="mesh-recipient-remove" aria-label={`Don't attach ${attaching.title}`} onClick={() => setAttaching(null)}>
-              ×
-            </button>
-          </span>
-        )}
-        {recipients.length === 0 && attaching === null && <span className="mesh-recipients-empty">{defaultProblem ?? 'Pick someone to write to'}</span>}
-        <button type="button" className="mesh-recipients-add" aria-label="Add recipient" title="Add recipient (@)" onClick={openPicker}>
-          +
-        </button>
-        {offerRevise && (
-          <button type="button" className="mesh-recipients-use-revise" onClick={onUseRevise}>
-            Use Revise
+      {loopMode && (
+        <div className="mesh-recipients mesh-loop-target" role="group" aria-label="Loop target">
+          <span className="mesh-recipients-label">Loop</span>
+          {loopTarget !== null && 'participant' in loopTarget ? (
+            <RecipientChip recipient={loopTargetChip(loopTarget.participant, participants)} participants={participants} />
+          ) : loopCommand !== null && loopCommand.kind !== 'add' ? (
+            <span className="mesh-recipients-empty">Runs for the whole run — no recipient</span>
+          ) : (
+            <span className="mesh-recipients-empty">Name one target with @agent</span>
+          )}
+        </div>
+      )}
+
+      {!loopMode && (
+        <div className="mesh-recipients" role="group" aria-label="Recipients">
+          <span className="mesh-recipients-label">To</span>
+          {recipients.map((r) => (
+            <RecipientChip
+              key={r.key}
+              recipient={r}
+              participants={participants}
+              // The stage agent by default and the sender of the message answered (cancel the reply) have no ×.
+              onRemove={r.source === 'default' || r.source === 'reply' ? undefined : () => removeRecipient(r)}
+            />
+          ))}
+          {attaching !== null && (
+            <span className="mesh-recipient-chip is-attach" title="A new helper of this stage; the text is its assignment">
+              Attach helper: {attaching.title}
+              <button type="button" className="mesh-recipient-remove" aria-label={`Don't attach ${attaching.title}`} onClick={() => setAttaching(null)}>
+                ×
+              </button>
+            </span>
+          )}
+          {recipients.length === 0 && attaching === null && <span className="mesh-recipients-empty">{defaultProblem ?? 'Pick someone to write to'}</span>}
+          <button type="button" className="mesh-recipients-add" aria-label="Add recipient" title="Add recipient (@)" onClick={openPicker}>
+            +
           </button>
-        )}
-        {offerInterrupt && (
-          <label className="switch mesh-recipients-interrupt" title="The agent stops its current turn, answers this message, then continues its work">
-            <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
-            <span className="track" aria-hidden="true" />
-            <span className="switch-label">Interrupt agent</span>
-          </label>
-        )}
-      </div>
+          {offerRevise && (
+            <button type="button" className="mesh-recipients-use-revise" onClick={onUseRevise}>
+              Use Revise
+            </button>
+          )}
+          {offerInterrupt && (
+            <label className="switch mesh-recipients-interrupt" title="The agent stops its current turn, answers this message, then continues its work">
+              <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
+              <span className="track" aria-hidden="true" />
+              <span className="switch-label">Interrupt agent</span>
+            </label>
+          )}
+        </div>
+      )}
 
       <div className="chat-composer-row">
         <textarea
@@ -646,6 +749,7 @@ function MeshMessageComposer({
           onKeyDown={onKeyDown}
           placeholder="Message… (@ to add someone)"
           aria-label="Message the mesh"
+          aria-describedby={loopMode ? loopHintId : undefined}
           rows={1}
         />
         {mention.open && (
@@ -658,27 +762,47 @@ function MeshMessageComposer({
             ariaLabel="Mention a mesh participant or profile"
           />
         )}
-        <ChatSendButton label="Send message" disabled={!canSend} sending={submitter.pending} onClick={submit} />
+        <ChatSendButton label={loopMode ? loopSendLabel(loopSubcommand(draft)) : 'Send message'} disabled={!canSend} sending={loopMode ? loopSubmitter.pending : submitter.pending} onClick={submit} />
       </div>
+      {loopMode && (
+        <div id={loopHintId} className="mesh-loop-hint">
+          {LOOP_SYNTAX}
+        </div>
+      )}
+      {intervalSlot !== null && (
+        <div className="mesh-loop-intervals" role="group" aria-label="Interval examples">
+          {LOOP_INTERVAL_EXAMPLES.map((example) => (
+            <button key={example} type="button" className="mesh-loop-interval" aria-describedby={loopHintId} onClick={() => pickInterval(intervalSlot, example)}>
+              {example}
+            </button>
+          ))}
+        </div>
+      )}
       {draft.trim() !== '' && (
         <div className={`composer-send-hint${nudged ? ' is-nudged' : ''}`} role={nudged ? 'status' : undefined}>
           Cmd/Ctrl+Enter to send · Enter adds a line
         </div>
       )}
 
-      {problems.length > 0 && (
+      {loopProblem !== null && (
+        <div className="mesh-message-error" role="alert">
+          {loopProblem}
+        </div>
+      )}
+      {!loopMode && problems.length > 0 && (
         <ul className="mesh-message-error mesh-recipient-problems" role="alert">
           {problems.map((p) => (
             <li key={p}>{p}</li>
           ))}
         </ul>
       )}
-      {(submitter.error ?? localError) !== null && (
+      {(loopMode ? localError : (submitter.error ?? localError)) !== null && (
         <div className="mesh-message-error" role="alert">
-          {submitter.error ?? localError}
+          {loopMode ? localError : (submitter.error ?? localError)}
         </div>
       )}
-      {submitter.pending ? (
+      {loopOutcome !== null && <LoopOutcomeView outcome={loopOutcome} participants={participants} stages={mesh.stages} />}
+      {loopMode ? null : submitter.pending ? (
         <div className="mesh-message-receipt" role="status">
           {RECEIPT_LABEL.awaiting}
         </div>
@@ -695,6 +819,29 @@ function MeshMessageComposer({
       )}
     </div>
   )
+}
+
+// loopPayload — the request intent of a valid command; the target of an add is the participant it resolved to.
+function loopPayload(command: LoopCommand, target: LoopTarget | null): LoopPayload {
+  switch (command.kind) {
+    case 'add':
+      return { kind: 'add', target: target !== null && 'participant' in target ? target.participant.id : command.target, every: command.every, prompt: command.prompt, untilStageEnd: command.untilStageEnd }
+    case 'stop':
+      return { kind: 'stop', loopId: command.loopId }
+    case 'list':
+      return { kind: 'list' }
+  }
+}
+
+// loopSendLabel distinguishes creating a loop from running list or stop, even during an incomplete draft.
+function loopSendLabel(kind: 'add' | 'list' | 'stop' | null): string {
+  return kind === 'list' || kind === 'stop' ? 'Run' : 'Start loop'
+}
+
+// loopTargetChip — the loop target as a chip of the "To" row's own kind.
+function loopTargetChip(p: MeshParticipant, participants: MeshParticipant[]): ComposerRecipient {
+  const handle = mentionHandles(participants).get(p.id) ?? p.id
+  return { key: p.id, handle, participantId: p.id, source: 'typed', picked: false, typedTokens: [], problem: null, note: null }
 }
 
 // RecipientChip — one "To" chip: avatar and @handle; the stage agent chosen by default says so; a recipient

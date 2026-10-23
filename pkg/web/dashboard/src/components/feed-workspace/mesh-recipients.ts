@@ -58,3 +58,21 @@ export function buildMeshMentionGroups(
     { label: 'Attach to stage', items: attach },
   ]
 }
+
+// isLoopTarget — who a `/loop` may repeat a prompt to: a run agent or a helper of THIS stage. The stage's own
+// agent, the Side agent, the human and other stages' helpers are no loop targets.
+export function isLoopTarget(p: MeshParticipant, stageId: string): boolean {
+  return p.kind === 'run_agent' || (p.kind === 'helper' && p.stage_id === stageId)
+}
+
+// buildLoopMentionGroups — the `@` menu while a loop command is typed: only reachable loop targets, in the usual
+// "This run" / "This stage" groups. No attach profiles: a loop never creates a helper.
+export function buildLoopMentionGroups(participants: MeshParticipant[], stageId: string): MentionGroup<MeshMentionItem>[] {
+  const handles = mentionHandles(participants)
+  const items = (kind: string): MeshMentionItem[] =>
+    participants.filter((p) => p.kind === kind && p.reachable && isLoopTarget(p, stageId)).map((p) => toParticipantItem(p, handles.get(p.id) ?? p.id))
+  return [
+    { label: 'This run', items: items('run_agent') },
+    { label: 'This stage', items: items('helper') },
+  ]
+}

@@ -218,3 +218,13 @@ func (a meshActions) participant(ctx context.Context, id agentcomm.ParticipantID
 	}
 	return &roster[i]
 }
+
+// Loops lists every loop of the run: the human operator sees the agents' loops too.
+func (a meshActions) Loops(ctx context.Context) (orchestrator.LoopPage, error) {
+	return a.orch.ListLoops(ctx, orchestrator.ListLoopsRequest{Actor: meshUIActor})
+}
+
+// Loop adds or stops a loop as the human operator; origin_stage is the Feed it is created from.
+func (a meshActions) Loop(ctx context.Context, requestID string, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
+	return applyLoopCommand(ctx, a.orch, requestID, meshUIActor, cmd)
+}
