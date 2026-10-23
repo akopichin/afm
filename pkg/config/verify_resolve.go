@@ -52,6 +52,21 @@ func (c Config) IsCodexCommand(cmd string) bool {
 	return resolved == codexAdapterCommand
 }
 
+// UsageLimitProvider возвращает ключ аккаунта-провайдера, чей лимит исчерпывается командой cmd: общий для всех
+// путей запуска (стадия, verify-шаг, профиль помощника). Тип recipe перекрывает имя команды: все codex-recipe
+// делят лимит провайдера "codex", bare codex-as-claude — тоже. Остальные команды без recipe не делят ключ друг
+// с другом — ключом остаётся сама разрешённая команда. Секреты и auth в ключ не входят.
+func (c Config) UsageLimitProvider(cmd string) string {
+	resolved, _ := ResolveAgentCommand(cmd, c)
+	if recipe, ok := c.Docker.Agents[resolved]; ok && recipe.Type != "" {
+		return recipe.Type
+	}
+	if resolved == codexAdapterCommand {
+		return RecipeTypeCodex
+	}
+	return resolved
+}
+
 // HelperCommandRejection returns a non-empty reason if cmd cannot be trusted to run a read-only helper
 // profile (dev-plan.md Этап 1 T1.5, §7.4 + grooming decision 2.3a), and "" if it can. Modeled on
 // VerifyCommandRejection and reusing the existing IsCodexCommand classifier — no new command resolver.

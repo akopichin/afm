@@ -106,6 +106,59 @@ func (c VerifyConfig) ResolvedFreshCorrection() bool {
 	return defaultVerifyFreshCorrection
 }
 
+// Дефолты usage_limit: сколько ждать сброса лимита подписки/квоты провайдера.
+const (
+	defaultUsageLimitResumeMargin  = time.Minute
+	defaultUsageLimitProbeInterval = 15 * time.Minute
+	defaultUsageLimitMaxWait       = 12 * time.Hour
+	defaultUsageLimitMaxWaits      = 4
+)
+
+// UsageLimitConfig — как стадия ждёт сброса лимита провайдера (awaiting_quota). Указатели отличают «не
+// задано» (дефолт) от явного значения, чтобы неположительное значение было ошибкой, а не молча дефолтом.
+type UsageLimitConfig struct {
+	// ResumeMargin — запас сверх известного времени сброса, до которого стадия не просыпается.
+	ResumeMargin *time.Duration `yaml:"resume_margin"`
+	// ProbeInterval — как часто перепроверять лимит, если время сброса неизвестно.
+	ProbeInterval *time.Duration `yaml:"probe_interval"`
+	// MaxWait — дольше этого ждать не стоит: стадия ставится на паузу с причиной.
+	MaxWait *time.Duration `yaml:"max_wait"`
+	// MaxWaits — сколько подряд отказов агента без прогресса терпеть, прежде чем поставить стадию на паузу.
+	MaxWaits *int `yaml:"max_waits"`
+}
+
+// ResolvedResumeMargin возвращает запас после сброса: значение из конфига или 60s.
+func (c UsageLimitConfig) ResolvedResumeMargin() time.Duration {
+	if c.ResumeMargin != nil {
+		return *c.ResumeMargin
+	}
+	return defaultUsageLimitResumeMargin
+}
+
+// ResolvedProbeInterval возвращает интервал перепроверки при неизвестном сбросе: значение из конфига или 15m.
+func (c UsageLimitConfig) ResolvedProbeInterval() time.Duration {
+	if c.ProbeInterval != nil {
+		return *c.ProbeInterval
+	}
+	return defaultUsageLimitProbeInterval
+}
+
+// ResolvedMaxWait возвращает предел ожидания одного сброса: значение из конфига или 12h.
+func (c UsageLimitConfig) ResolvedMaxWait() time.Duration {
+	if c.MaxWait != nil {
+		return *c.MaxWait
+	}
+	return defaultUsageLimitMaxWait
+}
+
+// ResolvedMaxWaits возвращает предел последовательных отказов: значение из конфига или 4.
+func (c UsageLimitConfig) ResolvedMaxWaits() int {
+	if c.MaxWaits != nil {
+		return *c.MaxWaits
+	}
+	return defaultUsageLimitMaxWaits
+}
+
 // ServerConfig configures the web dashboard server.
 type ServerConfig struct {
 	Port        *int  `yaml:"port"`
@@ -512,6 +565,8 @@ type Config struct {
 	// Verify — глобальные настройки verify-гейта (число допустимых отклонений).
 	// Per-stage override — flow.VerifySpec.MaxFailures.
 	Verify VerifyConfig `yaml:"verify"`
+	// UsageLimit — сколько ждать сброса лимита подписки/квоты провайдера до паузы стадии.
+	UsageLimit UsageLimitConfig `yaml:"usage_limit"`
 	// Browser — managed Chrome DevTools browser capability (afm_chrome MCP).
 	// nil/auto = offered on a supported host; per-stage opt-out via flow.Stage.Browser.
 	Browser BrowserConfig `yaml:"browser"`
@@ -600,10 +655,35 @@ func LoadFrom(globalDir, projectDir string) (Config, error) {
 	if err := validateVerify(cfg.Verify); err != nil {
 		return cfg, err
 	}
+	if err := validateUsageLimit(cfg.UsageLimit); err != nil {
+		return cfg, err
+	}
 	if err := cfg.ValidateBrowser(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// validateUsageLimit отвергает неположительные значения usage_limit: ноль или минус не имеют смысла для
+// ожидания и не должны молча превращаться в дефолт.
+func validateUsageLimit(u UsageLimitConfig) error {
+	durations := []struct {
+		name string
+		v    *time.Duration
+	}{
+		{"resume_margin", u.ResumeMargin},
+		{"probe_interval", u.ProbeInterval},
+		{"max_wait", u.MaxWait},
+	}
+	for _, d := range durations {
+		if d.v != nil && *d.v <= 0 {
+			return fmt.Errorf("usage_limit.%s: must be positive, got %s", d.name, *d.v)
+		}
+	}
+	if u.MaxWaits != nil && *u.MaxWaits <= 0 {
+		return fmt.Errorf("usage_limit.max_waits: must be positive, got %d", *u.MaxWaits)
+	}
+	return nil
 }
 
 // validateVerify отвергает отрицательный verify.max_failures. Клампа нет —
@@ -812,6 +892,18 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	if overlay.Verify.FreshCorrection != nil {
 		dst.Verify.FreshCorrection = overlay.Verify.FreshCorrection
+	}
+	if overlay.UsageLimit.ResumeMargin != nil {
+		dst.UsageLimit.ResumeMargin = overlay.UsageLimit.ResumeMargin
+	}
+	if overlay.UsageLimit.ProbeInterval != nil {
+		dst.UsageLimit.ProbeInterval = overlay.UsageLimit.ProbeInterval
+	}
+	if overlay.UsageLimit.MaxWait != nil {
+		dst.UsageLimit.MaxWait = overlay.UsageLimit.MaxWait
+	}
+	if overlay.UsageLimit.MaxWaits != nil {
+		dst.UsageLimit.MaxWaits = overlay.UsageLimit.MaxWaits
 	}
 	if overlay.Browser.Enabled != nil {
 		dst.Browser.Enabled = overlay.Browser.Enabled

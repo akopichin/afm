@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactElement } from 'react'
 import {
-  ASSISTANT_TASK_STATUS_LABELS,
   assistantBlockingExplanation,
+  assistantTaskStatusLabel,
   type AssistantTask,
   type AssistantTaskNode,
 } from '../../types/assistant-task'
@@ -49,7 +49,7 @@ export function AssistantTaskRow({
   const hasChildren = node.children.length > 0
   const isExpanded = expanded.has(node.id)
   const indent = Math.min(depth, MAX_VISUAL_DEPTH)
-  const label = ASSISTANT_TASK_STATUS_LABELS[node.status]
+  const label = assistantTaskStatusLabel(node)
   // blockingText (T7.9/§4.3) — "Blocks stage completion" vs "Blocks <parent task>", shown only for a
   // required, non-waived task. null for advisory tasks (and for waived ones) renders nothing extra.
   const blockingText = assistantBlockingExplanation(node, allTasks ?? [])
@@ -66,7 +66,12 @@ export function AssistantTaskRow({
             the box. The expand/collapse toggle is a SEPARATE sibling button (never nested inside this one —
             same "no nested interactive elements" constraint StagesList documents for .stage-row). */}
         <button type="button" className="assistant-task-row" title={label} onClick={() => onSelect(node.id)}>
-          <span className="assistant-task-status-dot" data-status={node.status} aria-hidden="true" />
+          <span
+            className="assistant-task-status-dot"
+            data-status={node.status}
+            data-quota={node.status === 'queued' && node.quota !== undefined ? 'true' : undefined}
+            aria-hidden="true"
+          />
           <span className="assistant-task-label">
             <span className="assistant-task-title">{node.title !== '' ? node.title : node.profileId}</span>
             {/* Required/advisory is distinguished by TEXT, not just color (T3.10 accessibility requirement) —

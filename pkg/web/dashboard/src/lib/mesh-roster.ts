@@ -95,6 +95,7 @@ export function stagePresence(status: string): Presence {
     case 'awaiting_approval':
     case 'awaiting_assistants':
     case 'awaiting_peer':
+    case 'awaiting_quota':
       return 'waiting'
     case 'failed':
     case 'hook_failed':

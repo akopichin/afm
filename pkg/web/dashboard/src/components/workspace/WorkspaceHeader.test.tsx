@@ -25,6 +25,15 @@ describe('WorkspaceHeader', () => {
     expect(screen.getByText('thinking')).toBeInTheDocument()
   })
 
+  it('shows the usage-limit countdown next to the status while the stage waits for the limit (the feed view has no plan panel)', () => {
+    const quota = { provider: 'claude', window: 'five_hour', source: 'structured', until: '2099-01-01T00:00:00Z', resetAt: '', pauseReason: '' } as const
+    const { container, rerender } = render(<WorkspaceHeader stage={stage({ status: 'awaiting_quota', quota })} connected={false} />)
+    expect(document.getElementById('detail-status')).toHaveTextContent('Usage limit')
+    expect(container.querySelector('.quota-badge')).not.toBeNull()
+    rerender(<WorkspaceHeader stage={stage({ status: 'paused', pausedFrom: 'awaiting_quota', quota: { ...quota, pauseReason: 'no_reset' } })} connected={false} />)
+    expect(container.querySelector('.quota-badge')).toBeNull()
+  })
+
   it('renders no attention-nav by default', () => {
     render(<WorkspaceHeader stage={stage()} connected={false} />)
     expect(screen.queryByRole('group', { name: /needing attention/i })).toBeNull()

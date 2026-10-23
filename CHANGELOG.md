@@ -20,6 +20,17 @@ Unsent plan and question text stays available while moving between dashboard
 views during a run. Closing an editor folds nonempty text without discarding it;
 comments on an earlier plan version can be shown, copied or dismissed.
 
+### Improvement: wait for provider usage limits without spending retries
+
+When a stage agent, verifier or helper hits a provider usage limit, afm records
+the wait and resumes after the reported reset or a timed probe. Other work using
+that provider shares the hold. Resets beyond the maximum wait and exhausted
+quotas with no reset pause with a reason;
+the dashboard shows the wait and lets you Pause then Continue to try sooner.
+`usage_limit` configures the timing and refusal limit. See
+[Stage lifecycle](docs/stage-lifecycle.md#stage-lifecycle) and
+[Usage limits](docs/config-reference.md#usage-limits).
+
 ### Improvement: control adding stages during a run
 
 Set `add_stage.enabled` in global or project config, or override it with

@@ -5,6 +5,7 @@ import type { AccountingState, Coverage } from '../../types/cost'
 import { attentionKindFor } from '../../hooks/use-attention'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import { AssistantTaskRow } from '../assistants'
+import { QuotaCountdown } from './QuotaCountdown'
 
 // Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
 // иначе right-выравнивание относительно кнопки съедет.
@@ -44,6 +45,8 @@ type StagesListProps = {
   assistants?: Record<string, StageAssistantsSummary>
   selectedTaskId?: string | null
   onSelectTask?: (stageId: string, taskId: string) => void
+  // statusAvailable — свежесть /api/status из useStatus: пока он устарел, счётчик ожидания лимита замирает.
+  statusAvailable?: boolean
 }
 
 // verifyBadgeGlyph/verifyBadgeTitle — единая точка презентации индикатора: один нейтральный глиф "AI
@@ -65,12 +68,12 @@ function verifyPhaseLabel(phase: StageVerify['phase']): string {
   }
 }
 
-// isStaleRunningVerify — defensive gate: a terminal (done/failed) stage must never render the pulsing
-// "running" verify badge. A real verify pass ends on a terminal phase (pass/accepted_stalemate/…), so a
-// `running` phase lingering on an already-terminal stage is stale; hide the badge rather than pulse amber
-// beside a green done dot.
+// isStaleRunningVerify — defensive gate: the pulsing "running" verify badge is only true while the stage
+// itself is running. A verify pass that is interrupted (terminal stage, usage-limit wait, pause, retry)
+// leaves `running` in the durable verify state until the next verify event, so on any other status the badge
+// is stale; hide it rather than pulse amber beside a done/parked dot.
 function isStaleRunningVerify(status: Stage['status'], phase: StageVerify['phase']): boolean {
-  return (status === 'done' || status === 'failed') && phase === 'running'
+  return status !== 'running' && phase === 'running'
 }
 
 // Статусы, для которых имеет смысл плейсхолдер «оценка ожидается» — стадия
@@ -102,8 +105,9 @@ function railCost(stage: Stage, accounting: AccountingState): { text: string; a1
 // Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
 // Статусы, из которых можно поставить стадию на паузу вручную (POST /api/stages/{id}/pause). awaiting_peer —
 // стадия припаркована в ожидании коллеги: пауза держит её, Continue возвращает в ожидание (и продолжает сама,
-// если ожидание тем временем ответили).
-const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer'])
+// если ожидание тем временем ответили). awaiting_quota — ожидание сброса лимита: Continue напрямую недоступен,
+// поэтому пауза — путь к ручной пробе «сейчас».
+const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'])
 
 // Статусы, при которых у стадии есть ЖИВОЙ агент, которому Revise доставит промпт:
 // running/awaiting_approval и никогда скрипт. Гейтит кастомные кнопки стадии (см. hasLiveAgent).
@@ -148,7 +152,7 @@ function hasKebab(stage: Stage, collaborationEnabled: boolean): boolean {
 export function StagesList({
   stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting,
   version, assistants, selectedTaskId, onSelectTask, collaborationEnabled = false, onAttachHelper,
-  canAddStage = false, onAddStage,
+  canAddStage = false, onAddStage, statusAvailable = true,
 }: StagesListProps): ReactElement {
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -352,6 +356,9 @@ export function StagesList({
                   <circle cx="8" cy="11.5" r="1.15" fill="var(--surface-canvas)" />
                 </svg>
               </span>
+            )}
+            {stage.status === 'awaiting_quota' && stage.quota !== undefined && (
+              <QuotaCountdown quota={stage.quota} live={statusAvailable} compact />
             )}
             {awaitingAssistantsBlocked && (
               <span className="assistants-blocked-badge" title="A required helper task needs your decision">⚠</span>

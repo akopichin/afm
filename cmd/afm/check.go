@@ -12,6 +12,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -31,7 +32,7 @@ func statusColor(s state.StageStatus) string {
 		return colorGreen
 	case state.StatusFailed:
 		return colorRed
-	case state.StatusAwaitingApproval, state.StatusPaused, state.StatusAwaitingAssistants:
+	case state.StatusAwaitingApproval, state.StatusPaused, state.StatusAwaitingAssistants, state.StatusAwaitingQuota:
 		return colorYellow
 	case state.StatusRunning, state.StatusPlanning:
 		return colorBlue
@@ -117,6 +118,9 @@ func newCheckCmd() *cobra.Command {
 					if blocked := blockingTaskNote(rs, id); blocked != "" {
 						action = blocked
 					}
+				}
+				if q := orchestrator.StageQuota(s); q != nil {
+					action = orchestrator.StageQuotaMessage(s, q) // the agent's last log line says nothing about the wait
 				}
 				r := row{
 					id:         id,

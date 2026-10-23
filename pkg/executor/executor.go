@@ -139,14 +139,18 @@ type Config struct {
 	// mask their JSON-escaped spellings. It is read when the process starts writing, after its own mesh token
 	// exists.
 	Secrets    func() []string
-	WrapperDir string                       // if set, prepended to PATH in agent env so generated wrapper scripts resolve
-	Dir        string                       // if set, agent runs with this working directory (project root from flow.root_dir)
-	Debug      bool                         // if true, log the exact agent input (prompt) to debug logs
-	RunDir     string                       // run directory root; with Debug, <RunDir>/debug.log gets every agent input
-	StageID    string                       // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
-	Phase      string                       // phase label for the accounting Observation this invocation produces
-	UsageHint  accounting.UsageHint         // non-authoritative channel/model hint fed to accounting.NewCollector
-	OnUsage    func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
+	WrapperDir string               // if set, prepended to PATH in agent env so generated wrapper scripts resolve
+	Dir        string               // if set, agent runs with this working directory (project root from flow.root_dir)
+	Debug      bool                 // if true, log the exact agent input (prompt) to debug logs
+	RunDir     string               // run directory root; with Debug, <RunDir>/debug.log gets every agent input
+	StageID    string               // stage id for debug log tagging + per-stage prompt log path (decoupled from StageDir/AFM_STAGE_DIR)
+	Phase      string               // phase label for the accounting Observation this invocation produces
+	UsageHint  accounting.UsageHint // non-authoritative channel/model hint fed to accounting.NewCollector
+	Provider   string               // account whose usage limit this command exhausts (config.UsageLimitProvider); copied into UsageLimitError.Provider
+	// OnLimitWarning, if set, is called for every provider "limit is close" event (rate_limit_event allowed_warning). The
+	// event is not an agent action and stops nothing, so OnAction does not carry it; may be called repeatedly (dedupe is the caller's).
+	OnLimitWarning func(LimitWarning)
+	OnUsage        func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
 	// InterruptCh, if set, is watched during RunAgent: a signal on this channel sends SIGINT to the
 	// subprocess — graceful, user-requested interrupt, distinct from idle timeout / full-run shutdown.
 	InterruptCh <-chan struct{}
@@ -516,8 +520,10 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 		obsSeq = countExistingObservations(obsMeta, jsonlFile)
 	}
 	collector := accounting.NewCollector(e.cfg.UsageHint)
+	limits := newUsageLimitScanner(e.clk().Now, e.cfg)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
+		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -562,6 +568,9 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	lg.LogEnd(runErr)
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
+	}
+	if limit := e.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+		return limit
 	}
 	runErr = withStderrTail(logFile, stderrFrom, runErr)
 	if runErr != nil {
@@ -670,11 +679,13 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 		obsSeq = countExistingObservations(obsMeta, jsonlFile)
 	}
 	collector := accounting.NewCollector(e.cfg.UsageHint)
+	limits := newUsageLimitScanner(e.clk().Now, e.cfg)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		if redactOutput {
 			line = red.jsonText(line)
 		}
+		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -720,6 +731,9 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
 	}
+	if limit := e.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+		return limit
+	}
 	runErr = withStderrTail(logFile, stderrFrom, runErr)
 	if runErr != nil && firstErr != "" {
 		return fmt.Errorf("%s: %w", firstErr, runErr)
@@ -744,8 +758,10 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	defer jf.Close()
 
 	var stderr = io.Discard
-	if sf := openStderrLog(logFile); sf != nil {
+	var stderrFrom int64
+	if sf, from := openStderrLogAt(logFile); sf != nil {
 		stderr = sf
+		stderrFrom = from
 		defer sf.Close()
 	}
 
@@ -765,8 +781,10 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(ve.cfg.UsageHint)
+	limits := newUsageLimitScanner(ve.clk().Now, ve.cfg)
 	runErr := ve.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
+		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -801,6 +819,10 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	}
 	if firstErr != "" {
 		lg.LogAction("verify-note", "process reported an error line; see log above: "+firstErr)
+	}
+	// Лимит — не вердикт и не сбой гейта: возвращаем типизированную ошибку, чтобы вызывающий дождался сброса.
+	if limit := ve.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+		return verify.RunOutcome{}, limit
 	}
 
 	outcome := verify.RunOutcome{}

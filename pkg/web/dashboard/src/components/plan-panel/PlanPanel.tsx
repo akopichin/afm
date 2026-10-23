@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode, type UIEvent } from 'react'
 import { approveStage, continueStage, retryHookStage, retryStage, reviseStage, skipHookStage } from '../../api/run-client'
-import type { Stage } from '../../types'
+import { useMessageTimeZone } from '../../lib/message-time-zone'
+import { quotaTitle, type Stage } from '../../types'
 import { useComments } from '../comments/CommentProvider'
 import { Maximizable } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { renderMarkdown } from './markdown'
 import { LineCommentedDocument, StaleComments, staleComments, type DocumentComment, type LineCommentDocumentApi } from './LineCommentedDocument'
+import { QuotaCountdown, quotaPausedReasonText } from '../stages-list/QuotaCountdown'
 
 // EMPTY_DOC — zero-state владельца для случая «review, но плана нет»: панель
 // действий (Approve/Send revision) должна остаться доступной без комментариев.
@@ -30,12 +32,15 @@ type PlanPanelProps = {
   // banner — attention-шапка, рендерится ПЕРВЫМ ребёнком внутри скролл-области #plan-section, а не над
   // панелью.
   banner?: ReactNode
+  // statusAvailable — свежесть /api/status из useStatus: пока он устарел, счётчик ожидания лимита замирает.
+  statusAvailable?: boolean
 }
 
 // Панель плана стадии: загрузка markdown, рендер, действия Approve/Send revision/Retry.
-export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps): ReactElement {
+export function PlanPanel({ stage, attention = false, banner, statusAvailable = true }: PlanPanelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const { comments: allComments, acknowledge, scroll } = useComments()
+  const hostZone = useMessageTimeZone()
   const [planMarkdown, setPlanMarkdown] = useState('')
   // loadedStageId — стадия, для которой попытка загрузки плана ЗАВЕРШИЛАСЬ (не «идёт»); привязка к стадии
   // не даёт принять план прошлой стадии за текущий в первом рендере после переключения.
@@ -55,6 +60,8 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
   const showRetry = stage?.status === 'failed'
   const showHookFailed = stage?.status === 'hook_failed'
   const showPaused = stage?.status === 'paused'
+  const showQuotaWait = stage?.status === 'awaiting_quota'
+  const pausedFromQuota = showPaused && stage?.pausedFrom === 'awaiting_quota'
   const planEmpty = planMarkdown.trim() === ''
   const version = planVersion(planMarkdown)
   const staleEntries = staleComments(allComments, stageId, 'plan', { kind: 'plan', version })
@@ -313,9 +320,25 @@ export function PlanPanel({ stage, attention = false, banner }: PlanPanelProps):
               </div>
             )}
 
+            {showQuotaWait && (
+              <div id="quota-section" className="section">
+                {stage.quota !== undefined ? <QuotaCountdown quota={stage.quota} live={statusAvailable} /> : <p className="quota-title">Usage limit</p>}
+                <p className="quota-hint">
+                  The stage resumes by itself when the limit resets. To retry sooner, pause the stage from its menu in the
+                  stage list, then press Continue.
+                </p>
+              </div>
+            )}
+
             {showPaused && (
               <div id="paused-section" className="section">
-                <p className="paused-reason">{pausedReasonText(stage?.pausedFrom ?? '')}</p>
+                {pausedFromQuota && <p className="quota-title">{quotaTitle(stage.quota)}</p>}
+                <p className="paused-reason">
+                  {pausedFromQuota ? quotaPausedReasonText(stage.quota, hostZone, 'stage') : pausedReasonText(stage?.pausedFrom ?? '')}
+                </p>
+                {pausedFromQuota && (
+                  <p className="quota-hint">Continue tries once, right now, with a fresh session; if the limit is still active, the stage waits again.</p>
+                )}
                 <div className="actions-row">
                   <button id="btn-continue" className={`btn btn-approve${clicked === 'continue' ? ' ok' : ''}`} type="button" disabled={busy} onClick={doContinue}>
                     <span className="btn-ripple" aria-hidden="true" />

@@ -16,6 +16,7 @@ export const STAGE_STATUSES = [
   "hook_failed",
   "awaiting_assistants",
   "awaiting_peer",
+  "awaiting_quota",
 ] as const
 
 export type StageStatus = (typeof STAGE_STATUSES)[number]

@@ -487,6 +487,7 @@ func (o *Orchestrator) runResumeTransaction(ctx context.Context, m state.PauseMa
 	o.startPlanningForUnblocked(ctx)
 	o.startReadyStages(ctx)
 	o.tryActivatePrePlanned(ctx)
+	o.recoverQuotaWaits(ctx) // wakes of quota waits were held back by the review pause
 
 	// Durable cleanup is part of the transaction result: only once notes AND marker are gone from disk may
 	// the in-memory marker be dropped.

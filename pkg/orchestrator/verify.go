@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -34,6 +35,9 @@ const verifyShellOutputLimit = stagefiles.VerifyOutputLimit
 const (
 	verifyOutcomePass  = "pass"
 	verifyOutcomeError = "error"
+	// verifyOutcomeQuotaWait помечает в manifest шаг, упёршийся в usage-limit: по нему wake проверяет, что
+	// проход тот самый, который припаркован.
+	verifyOutcomeQuotaWait = "awaiting_quota"
 )
 
 // verifyTimedOutReason — общий текст ошибки step-таймаута и idle-таймаута verify.
@@ -68,6 +72,21 @@ const (
 	execErrorKindInterrupted = "interrupted"
 	execErrorKindExecFailure = "exec_failure"
 )
+
+// verifyLimitError — verify-шаг Step прохода VerifyID упёрся в usage-limit провайдера (настоящий отказ или hold
+// чужого парка). Не провал и не отклонение: цикл автора паркует стадию (parkVerifyForQuota), а не тратит бюджеты
+// verify. Unwrap отдаёт *executor.UsageLimitError для errors.As и Classify.
+type verifyLimitError struct {
+	Limit    *executor.UsageLimitError
+	VerifyID string
+	Step     int
+}
+
+func (e *verifyLimitError) Error() string {
+	return fmt.Sprintf("verify step %d: %v", e.Step, e.Limit)
+}
+
+func (e *verifyLimitError) Unwrap() error { return e.Limit }
 
 // emitVerifyStarted публикует событие live и в notices.jsonl; оно не входит в FSM-лог или flow.Phases.
 func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, command string) {
@@ -201,6 +220,14 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	verID := stagefiles.NewVerificationID()
+	// Пробуждение verify-парка продолжает тот же проход: принятые шаги восстанавливаются, повторяется шаг парка.
+	resume := verifyResumeFrom(ctx)
+	if resume != nil && !resume.take() {
+		resume = nil
+	}
+	if resume != nil {
+		verID = resume.quota.VerifyID
+	}
 
 	manifestSteps := make([]stagefiles.ManifestStep, len(s.Verify.Steps))
 	for i, st := range s.Verify.Steps {
@@ -231,8 +258,20 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	prevReport := previousVerifyReport(stageDir)
 
 	var passedSteps strings.Builder
+	firstStep := 0
+	if resume != nil {
+		firstStep = resume.quota.VerifyStep - 1
+		if err := restoreVerifyPasses(stageDir, s, resume.quota, manifestSteps, &passedSteps); err != nil {
+			reason := "verify storage failure: " + err.Error()
+			o.emitVerifyResult(s.ID, verID, resume.quota.VerifyStep, "", "", "", execErrorKindExecFailure, reason, "")
+			return &VerifyExecError{Reason: reason, Step: resume.quota.VerifyStep}
+		}
+	}
 
 	for i, st := range s.Verify.Steps {
+		if i < firstStep {
+			continue
+		}
 		idx := i + 1
 		kind := verifyStepManifestKind(st)
 		command := verifyStepManifestCommand(st)
@@ -288,6 +327,17 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 				}
 			}
 			if err != nil {
+				var limit *executor.UsageLimitError
+				if errors.As(err, &limit) {
+					// Лимит провайдера — не ошибка проверки: шаг и счётчики сохраняются, стадия паркуется до сброса.
+					manifestSteps[i].Outcome = verifyOutcomeQuotaWait
+					if perr := persistManifest(); perr != nil {
+						reason := "verify storage failure: " + perr.Error()
+						o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
+						return &VerifyExecError{Reason: reason, Step: idx}
+					}
+					return &verifyLimitError{Limit: limit, VerifyID: verID, Step: idx}
+				}
 				manifestSteps[i].Outcome = verifyManifestErrorOutcome(err)
 				_ = persistManifest()
 				execKind := execErrorKindExecFailure
@@ -333,7 +383,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 					return &VerifyExecError{Reason: reason, Step: idx}
 				}
 				manifestSteps[i].Outcome = string(result.Verdict)
-				fmt.Fprintf(&passedSteps, "Step %d (agent %s): "+verifyOutcomePass+" — %s\n", idx, alias, result.Summary)
+				passedSteps.WriteString(passedAgentStepLine(idx, alias, result.Summary))
 				o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictPass, "", result.Summary, verifyReportPath(stageDir, verID))
 
 			case verify.VerdictNeedsChanges:
@@ -430,7 +480,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			return raceErr
 		}
 		manifestSteps[i].Outcome = verifyOutcomePass
-		fmt.Fprintf(&passedSteps, "Step %d (shell): `%s` — passed\n", idx, st.Run)
+		passedSteps.WriteString(passedShellStepLine(idx, st.Run))
 		o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictPass, "", "passed", "")
 	}
 
@@ -477,6 +527,13 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		return verify.ModelResult{}, st.Command, abortErr
 	}
 
+	// Admission провайдера verify-агента — после слота его команды (SwapTo выше): hold, появившийся, пока мы ждали
+	// слот, держит и проверку. Типизированный provider_hold-limit идёт тем же путём, что usage-limit настоящего
+	// отказа: RunVerification оборачивает его в verifyLimitError, цикл автора паркует стадию.
+	if hold := o.admitProvider(o.opts.Config.UsageLimitProvider(st.Command), s.ID); hold != nil {
+		return verify.ModelResult{}, st.Command, hold
+	}
+
 	stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
 	// Найдено этой задачей: в отличие от shell-шага чуть выше по файлу, agent-шаг никогда не создавал stepDir
 	// сам — progress.NewLogger просто os.OpenFile'ит agentLog без MkdirAll родителя.
@@ -496,8 +553,15 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		o.emitVerifyTreeModified(s.ID, verID, idx, st.Command)
 	}
 	if err != nil {
+		// Истёкший дедлайн шага — таймаут, даже если отказ провайдера пришёл вместе с ним: паркуя такой шаг, повтор
+		// получил бы свежий таймаут и мог бы пройти.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+		}
+		// Usage-limit — раньше обёртки в VerifyExecError (иначе он уйдёт в ретраи/провал verify) и раньше ProcessOK.
+		var limit *executor.UsageLimitError
+		if errors.As(err, &limit) {
+			return verify.ModelResult{}, st.Command, limit
 		}
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify execution failed: " + err.Error(), Step: idx}
 	}
@@ -788,4 +852,69 @@ func verifyStepManifestCommand(st flow.VerifyStep) string {
 		return st.Command
 	}
 	return st.Run
+}
+
+// passedAgentStepLine/passedShellStepLine — строка принятого шага в PassedSteps промпта следующих шагов; общая
+// для живого прохода и для восстановления после парка.
+func passedAgentStepLine(idx int, alias, summary string) string {
+	return fmt.Sprintf("Step %d (agent %s): "+verifyOutcomePass+" — %s\n", idx, alias, summary)
+}
+
+func passedShellStepLine(idx int, command string) string {
+	return fmt.Sprintf("Step %d (shell): `%s` — passed\n", idx, command)
+}
+
+// loadVerifyManifest читает manifest.json прохода verID.
+func loadVerifyManifest(stageDir, verID string) (stagefiles.Manifest, error) {
+	var m stagefiles.Manifest
+	data, err := os.ReadFile(filepath.Join(stagefiles.VerifyDir(stageDir), verID, "manifest.json"))
+	if err != nil {
+		return m, fmt.Errorf("read manifest: %w", err)
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return m, fmt.Errorf("parse manifest: %w", err)
+	}
+	return m, nil
+}
+
+// restoreVerifyPasses восстанавливает принятые шаги 1..VerifyStep-1 припаркованного прохода из его manifest и
+// result.json: проставляет outcome в manifestSteps и дописывает PassedSteps. Проверяет целостность: manifest
+// принадлежит этой стадии и проходу, повторяет её шаги, шаг парка помечен verifyOutcomeQuotaWait, а каждый
+// прежний шаг — pass (agent-шаг — ещё и сохранённый принятый pass-результат). Любое расхождение — ошибка, и
+// verify не продолжается (fail-closed: вызывающий отдаёт её как verify storage failure).
+func restoreVerifyPasses(stageDir string, s flow.Stage, q state.QuotaWait, manifestSteps []stagefiles.ManifestStep, passed *strings.Builder) error {
+	steps := s.Verify.Steps
+	if q.VerifyID == "" || q.VerifyStep < 1 || q.VerifyStep > len(steps) {
+		return fmt.Errorf("verify cursor %q step %d does not fit the stage's %d steps", q.VerifyID, q.VerifyStep, len(steps))
+	}
+	m, err := loadVerifyManifest(stageDir, q.VerifyID)
+	if err != nil {
+		return err
+	}
+	if m.StageID != s.ID || m.VerificationID != q.VerifyID || len(m.Steps) != len(steps) {
+		return fmt.Errorf("manifest %s does not describe this stage's verification", q.VerifyID)
+	}
+	if m.Steps[q.VerifyStep-1].Outcome != verifyOutcomeQuotaWait {
+		return fmt.Errorf("manifest %s step %d is not the parked step", q.VerifyID, q.VerifyStep)
+	}
+	for i := 0; i < q.VerifyStep-1; i++ {
+		idx, st, ms := i+1, steps[i], m.Steps[i]
+		if ms.Outcome != verifyOutcomePass || ms.Kind != verifyStepManifestKind(st) || ms.Command != verifyStepManifestCommand(st) {
+			return fmt.Errorf("manifest %s step %d is not an accepted pass of the stage's step", q.VerifyID, idx)
+		}
+		if st.Kind == flow.VerifyAgent {
+			result, ok, err := stagefiles.AcceptedResult(stageDir, q.VerifyID, idx)
+			if err != nil {
+				return err
+			}
+			if !ok || result.Verdict != verify.VerdictPass {
+				return fmt.Errorf("step %d has no accepted pass result", idx)
+			}
+			passed.WriteString(passedAgentStepLine(idx, ms.Command, result.Summary))
+		} else {
+			passed.WriteString(passedShellStepLine(idx, st.Run))
+		}
+		manifestSteps[i].Outcome = ms.Outcome
+	}
+	return nil
 }

@@ -1,3 +1,5 @@
+import { quotaTitle, type StageQuota } from './stage'
+
 // Типы фронтенда для задач помощников стадии (collaboration, Этап 3): один advisory-помощник per stage,
 // без рекурсии/делегирования (то — Этап 4a). Источник — GET /api/stages/{id}/assistants
 // (pkg/server/assistants.go's AssistantTaskView) и GET /api/assistants/{id}/events
@@ -77,6 +79,15 @@ export type AssistantTask = {
   // рисовать задачу как "blocks stage"/"blocks helper X" — см. assistantBlockingExplanation.
   waived: boolean
   waiverReason: string
+  // quota — durable-парковка queued-задачи на сбросе лимита подписки (та же форма, что у stage.quota). Статус
+  // остаётся queued (mesh identity и inbox сохраняются), поэтому «Usage limit» выводится из этого поля.
+  quota?: StageQuota
+}
+
+// assistantTaskStatusLabel — подпись статуса задачи: queued с quota-парковкой читается «Usage limit» (или
+// «Quota exhausted»), остальные статусы — обычная подпись.
+export function assistantTaskStatusLabel(task: Pick<AssistantTask, 'status' | 'quota'>): string {
+  return task.status === 'queued' && task.quota !== undefined ? quotaTitle(task.quota) : ASSISTANT_TASK_STATUS_LABELS[task.status]
 }
 
 // AssistantTaskNode — AssistantTask плюс дети по дереву (ByParent-проекция). Глубина не ограничена данными —

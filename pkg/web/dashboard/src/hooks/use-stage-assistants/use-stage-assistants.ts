@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { listStageAssistants, type AssistantTaskWire } from '../../api/run-client'
+import { parseStageQuota } from '../../types/stage'
 import {
   isAssistantTaskMode,
   isAssistantTaskStatus,
@@ -40,6 +41,7 @@ function toAssistantTask(raw: AssistantTaskWire): AssistantTask {
     blocksRootCompletion: raw.blocks_root_completion === true,
     waived: raw.waived === true,
     waiverReason: raw.waiver_reason ?? '',
+    quota: parseStageQuota(raw.quota),
   }
 }
 
@@ -85,11 +87,16 @@ function summarize(tasks: AssistantTask[]): StageAssistantsSummary {
 // changed ORDER (same set, different sequence) is deliberately treated as a change too: buildTree's sibling
 // order is server order, and a reordered poll response is a real content change for display purposes, not
 // noise.
+function quotaSignature(t: AssistantTask): string {
+  const q = t.quota
+  return q === undefined ? '' : `${q.provider}/${q.window}/${q.source}/${q.until}/${q.resetAt}/${q.pauseReason}`
+}
+
 function tasksSignature(tasks: AssistantTask[]): string {
   return tasks
     .map(
       (t) =>
-        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}`,
+        `${t.id}|${t.parentTaskId ?? ''}|${t.status}|${t.statusReason}|${t.title}|${t.mode}|${t.depth}|${t.watchPasses ?? ''}|${t.watchLastCheckpointSeq ?? ''}|${t.blocksRootCompletion}|${t.waived}|${quotaSignature(t)}`,
     )
     .join('\n')
 }

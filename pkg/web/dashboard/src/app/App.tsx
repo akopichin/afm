@@ -568,15 +568,15 @@ export function App(): ReactElement {
     if (wsState.view === 'attention') {
       detailPanel = contextKind === 'question'
         ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
-        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} />
+        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} statusAvailable={statusAvailable} />
     } else if (wsState.view === 'plan-history') {
       detailPanel = showPlan
-        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} />
+        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} />
         : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} /> : null
     } else if (wsState.view === 'dialog-history') {
       detailPanel = showDialog
         ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
-        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} /> : null
+        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} /> : null
     }
   }
 
@@ -652,6 +652,7 @@ export function App(): ReactElement {
                 onAttachHelper={setAttachHelperStageId}
                 canAddStage={capabilities.addStage}
                 onAddStage={() => setAddStageOpen(true)}
+                statusAvailable={statusAvailable}
               />
             }
             tabs={
@@ -694,6 +695,7 @@ export function App(): ReactElement {
                   <WorkspaceHeader
                     stage={workspaceStage}
                     connected={connected}
+                    statusAvailable={statusAvailable}
                     attentionNav={
                       inAttention && attnIndex >= 0 && attnItems.length > 1
                         ? { pos: attnIndex + 1, total: attnItems.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }

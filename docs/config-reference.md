@@ -26,6 +26,12 @@ executor:
   max_parallel: 4           # max parallel stages (0 = unlimited)
   truncate_output: 0        # max chars for logged agent text/Bash commands (0 = no limit, default)
 
+# usage_limit:
+#   resume_margin: 60s       # wait after a known provider reset (default: 60s)
+#   probe_interval: 15m      # retry when reset time is unknown (default: 15m)
+#   max_wait: 12h            # pause if the reset is farther away (default: 12h)
+#   max_waits: 4             # pause after more than 4 consecutive refusals (default: 4)
+
 server:
   port: 9876                # web dashboard port
   open_browser: false       # open the browser on startup (default: false)
@@ -95,6 +101,24 @@ existing configs) or `assistants`. The value in `flow.yaml` takes precedence ove
 project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
 still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
+
+## Usage limits
+
+`usage_limit` controls how long afm waits when an agent reports that its
+provider's subscription or quota is exhausted. Set it in project or global
+`.afm/config.yaml`; project values override global values for each field. All
+four settings must be positive:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `resume_margin` | `60s` | Extra time after a reported reset before work resumes; wake times get a small spread around this margin. |
+| `probe_interval` | `15m` | Time until the next attempt when no reset time is known. |
+| `max_wait` | `12h` | Pause instead of waiting when a known reset is farther away. |
+| `max_waits` | `4` | Pause after more than this many consecutive usage-limit refusals without progress. |
+
+The wait and its wake time survive a restart. Work using the same provider
+shares the hold, so it waits without consuming another refusal. A normal
+temporary rate-limit or transport error still follows the [retry policy](stage-lifecycle.md).
 
 ## Reasoning effort
 

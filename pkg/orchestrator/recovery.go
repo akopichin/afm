@@ -137,6 +137,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		// Trigger succeeded).
 		case state.StatusDone, state.StatusFailed, state.StatusAwaitingApproval, state.StatusReady, state.StatusPaused, state.StatusAwaitingPeer:
 			continue
+		case state.StatusAwaitingQuota:
+			// Парк пережил рестарт: таймер ждёт остаток until, истёкший — будит стадию сразу, ручная проба — тоже.
+			o.resumeQuotaWait(ctx, s)
+			continue
 		case state.StatusAwaitingAssistants:
 			// Этап 7 (T7.2/T7.3): without this case the stage would fall into `default` below and be
 			// mishandled as a plannable/pending-like stage (activatePrePlannedStage/EvStartPlanning — both
@@ -266,6 +270,9 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusAwaitingPeer:
 		// Continue of a paused park: the continuation is decided on the park's waits again.
 		o.continueParkedStage(ctx, s.ID)
+	case state.StatusAwaitingQuota:
+		// Continue of a quota pause records the manual-probe intent: the shared wake path starts the probe.
+		o.resumeQuotaWait(ctx, s)
 	case state.StatusRevising:
 		kind := o.revisingKind(s)
 		o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind))
@@ -313,9 +320,12 @@ func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, s
 	}
 
 	if status == state.StatusRunning || kind == kindAutonomous || completionErr == nil {
-		if s.IsScript() {
+		switch {
+		case s.IsScript():
 			o.concurrency.SpawnAgent(ctx, s, o.withBeforeHook(o.runScriptStage))
-		} else {
+		case status == state.StatusRunning && o.resumeWokenVerify(ctx, s):
+			// the saved verify step is repeated without the author
+		default:
 			// Resumed agents continue their work without rerunning before-hooks.
 			o.spawnKind(ctx, s, kind, o.plainRunner(kind))
 		}
@@ -327,6 +337,35 @@ func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, s
 	}
 	o.Trigger(s.ID, bus.EvStartPlanning, bus.GuardCtx{}, "restart after retry")
 	o.spawnKind(ctx, s, kindPlanning, o.runPlanningAgent)
+}
+
+// resumeWokenVerify finishes the wake of a verify park that a restart interrupted between EvQuotaReset and the
+// spawn: the saved verify step is repeated without the author, exactly as wakeFromQuota would have started it.
+// false — no such wake is pending, the stage recovers as an ordinary running turn.
+func (o *Orchestrator) resumeWokenVerify(ctx context.Context, s flow.Stage) bool {
+	st := o.opts.Store.Snapshot().Stages[s.ID]
+	q := st.Quota
+	if q == nil || !q.VerifyResume || q.Target != state.QuotaTargetVerify || !o.verifyStepStillParked(s, q) {
+		return false
+	}
+	kind, ok := kindOfPhase(o.verifyWakePhase(s, q))
+	if !ok {
+		return false
+	}
+	o.spawnKind(withVerifyResume(ctx, *q, st.Epoch), s, kind, o.turnRunner(kind, q.Feedback))
+	return true
+}
+
+// verifyStepStillParked — шаг парка ещё не вынес вердикт: его manifest-запись так и осталась awaiting_quota. Намерение
+// VerifyResume живёт в журнале и не знает, чем закончился повторённый шаг (отклонение не пишет переход: коррекция
+// автора идёт в том же статусе) — по settled-шагу recovery обычный. Нечитаемый manifest не отменяет повтор:
+// RunVerification закроется ошибкой verify storage.
+func (o *Orchestrator) verifyStepStillParked(s flow.Stage, q *state.QuotaWait) bool {
+	m, err := loadVerifyManifest(o.stageDir(s.ID), q.VerifyID)
+	if err != nil || q.VerifyStep < 1 || q.VerifyStep > len(m.Steps) {
+		return true
+	}
+	return m.Steps[q.VerifyStep-1].Outcome == verifyOutcomeQuotaWait
 }
 
 // resumeInteractiveAgent re-runs the agent of the phase whose session.json exists most recently.

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { MeshParticipant, MeshThread } from '../api/mesh-client'
-import { boardNotifyCandidates, findExistingDirectThread, mentionHandle, mentionHandles, participantInitials, participantLabel, participantRole, senderLabel, threadLabel } from './mesh-roster'
+import { boardNotifyCandidates, findExistingDirectThread, mentionHandle, mentionHandles, participantInitials, participantLabel, participantRole, senderLabel, stagePresence, threadLabel } from './mesh-roster'
 
 const side: MeshParticipant = { id: 'side:run-20261018-162731-b5f0', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'claude', reachable: true }
 const commit: MeshParticipant = { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', alias: 'commit', display_name: 'Commit & cleanup', stage_id: 'commit', reachable: true }
@@ -106,5 +106,11 @@ describe('mesh-roster', () => {
   test('boardNotifyCandidates leaves out a running script stage: nobody reads its messages', () => {
     const script: MeshParticipant = { ...commit, id: 'stage:lint', stage_id: 'lint', reachable: false, unreachable_reason: 'script stage: no agent reads messages' }
     expect(boardNotifyCandidates([script, commit], [{ id: 'lint', status: 'running' }, { id: 'commit', status: 'running' }])).toEqual([commit])
+  })
+
+  test('awaiting_quota — presence "waiting"; такой stage agent не получает board-уведомлений', () => {
+    expect(stagePresence('awaiting_quota')).toBe('waiting')
+    const parked: MeshParticipant = { ...commit, id: 'stage:parked', stage_id: 'parked' }
+    expect(boardNotifyCandidates([parked, commit], [{ id: 'parked', status: 'awaiting_quota' }, { id: 'commit', status: 'running' }])).toEqual([commit])
   })
 })

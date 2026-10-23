@@ -89,16 +89,22 @@ resolve_codex_model() {
     ' "$config_file" 2>/dev/null | sed -E 's/^[[:space:]]*model[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/'
 }
 
+# Terminal turn.failed message of the raw codex stream ("" when the turn did not fail); set by extract_failure.
+failure_msg=""
+
 # Emit the terminal result; omit absent usage so accounting records unmetered rather than zero cost.
+# A failed turn adds is_error and the original message, the shape afm's usage-limit detection reads.
 build_result_line() {
     local subtype="$1"
     if [[ -z "$usage_json" ]]; then
-        jq -nc --arg st "$subtype" '{type:"result", subtype:$st}'
+        jq -nc --arg st "$subtype" --arg err "$failure_msg" \
+            '{type:"result", subtype:$st} + (if $err != "" then {is_error:true, result:$err} else {} end)'
         return
     fi
-    jq -nc --arg st "$subtype" --arg model "$resolved_model" --argjson usage "$usage_json" \
+    jq -nc --arg st "$subtype" --arg model "$resolved_model" --arg err "$failure_msg" --argjson usage "$usage_json" \
         '{type:"result", subtype:$st, usage_contract_version:1, usage_schema:"openai", channel:"codex", usage:$usage}
-         + (if $model != "" then {model:$model} else {} end)'
+         + (if $model != "" then {model:$model} else {} end)
+         + (if $err != "" then {is_error:true, result:$err} else {} end)'
 }
 
 # Verify emits one final answer for strict JSON decoding; normal runs translate each completed item live.
@@ -173,6 +179,22 @@ extract_usage() {
     done < "$f"
 }
 
+# extract_failure <file> — sets failure_msg from the raw codex stream when the LAST turn ended with
+# turn.failed. An error event that a later turn.completed recovered from is not terminal.
+extract_failure() {
+    failure_msg=$(jq -Rrs '
+        split("\n")
+        | map(fromjson? | select(type == "object"))
+        | reduce .[] as $e ({pending: "", msg: ""};
+            if $e.type == "error" then .pending = ($e.message // $e.error.message // "")
+            elif $e.type == "turn.completed" then {pending: "", msg: ""}
+            elif $e.type == "turn.failed" then {pending: "", msg: ($e.error.message // $e.message // .pending)}
+            else . end)
+        | .msg' "$1" 2>/dev/null) || failure_msg=""
+    # jq receives the message as an exec argument (128 KiB limit): cap it so the result line is always built.
+    failure_msg=${failure_msg:0:4096}
+}
+
 if [[ "$CODEX_VERIFY" == "1" ]]; then
     # --- verify mode: UNCHANGED aggregation path ---
     set +e
@@ -212,6 +234,7 @@ if [[ "$CODEX_VERIFY" == "1" ]]; then
     fi
 
     resolved_model=$(resolve_codex_model)
+    extract_failure "$out_file"
 
     if [[ "$codex_exit" -ne 0 ]]; then
         echo "error: codex exited with status $codex_exit" >&2
@@ -238,6 +261,7 @@ codex_exit=${PIPESTATUS[1]}
 set -e
 
 extract_usage "$out_file"
+extract_failure "$out_file"
 resolved_model=$(resolve_codex_model)
 
 if [[ "$codex_exit" -ne 0 ]]; then

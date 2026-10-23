@@ -80,6 +80,18 @@ func TestClassify(t *testing.T) {
 		{"context canceled is fatal", context.Canceled, ClassFatal},
 		{"idle timeout is unknown-retryable", fmt.Errorf("idle timeout after 30m0s: %w", executor.ErrIdleTimeout), ClassRetryableUnknown},
 		{"exit status 1 is unknown-retryable (was fatal)", errors.New("exit status 1"), ClassRetryableUnknown},
+
+		// Usage-limit: типизированная ошибка executor'а побеждает текстовые правила (в том числе wrapped).
+		{"typed usage limit", &executor.UsageLimitError{Message: "x"}, ClassUsageLimit},
+		{"wrapped usage limit", fmt.Errorf("stage failed: %w", &executor.UsageLimitError{Message: "x"}), ClassUsageLimit},
+		{"typed usage limit beats rate-limit text", &executor.UsageLimitError{Message: "rate limit, too many requests"}, ClassUsageLimit},
+		{"no-reset quota is a usage limit", &executor.UsageLimitError{NoReset: true, Message: "insufficient_quota"}, ClassUsageLimit},
+		// Без типа текстовые классы не меняются: transient 429/529 и широкая подстрока «limit» не usage-limit.
+		{"plain 429 stays retryable", errors.New("API Error: 429 Too Many Requests"), ClassRetryable},
+		{"plain 529 stays retryable", errors.New("API Error: 529 Overloaded"), ClassRetryable},
+		{"plain usage-limit text stays unknown-retryable", errors.New("You've hit your usage limit"), ClassRetryableUnknown},
+		{"not-your-limit text stays unknown-retryable", errors.New("this is not your usage limit"), ClassRetryableUnknown},
+		{"verify exec error with usage-limit text stays verify-failed", &VerifyExecError{Reason: "hit your usage limit", Step: 1}, ClassVerifyFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

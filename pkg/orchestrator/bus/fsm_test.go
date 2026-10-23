@@ -542,3 +542,155 @@ func TestFSM_Apply_AfterStoreClosed_IsBenignNotFatal(t *testing.T) {
 		t.Fatalf("Apply after store close must NOT be a fatal StorageError: %v", err)
 	}
 }
+
+// parkInQuota parks stage "a" (already running) in awaiting_quota via the FSM and returns the park's seq.
+func parkInQuota(t *testing.T, fsm *FSM, quota *state.QuotaWait) uint64 {
+	t.Helper()
+	_, to, seq, ok, err := fsm.Apply("a", EvAwaitQuota, GuardCtx{Quota: quota}, "usage limit")
+	if err != nil || !ok || to != state.StatusAwaitingQuota {
+		t.Fatalf("park: got (%v, %v, %v), want (awaiting_quota, true, nil)", to, ok, err)
+	}
+	return seq
+}
+
+func TestFSM_AwaitQuota_ReachableFromTheRetryPhases(t *testing.T) {
+	retryFrom := []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}
+	// EvAwaitQuota covers everything EvScheduleRetry does, plus retrying itself (a usage limit hit by a retry attempt).
+	from := append([]state.StageStatus{state.StatusRetrying}, retryFrom...)
+	for _, status := range from {
+		fsm, store := newTestFSM(t, []string{"a"})
+		setStatus(t, store, status)
+		_, to, _, ok, err := fsm.Apply("a", EvAwaitQuota, GuardCtx{Quota: &state.QuotaWait{Provider: "claude"}}, "")
+		store.Close()
+		if err != nil || !ok || to != state.StatusAwaitingQuota {
+			t.Errorf("%s -> awaiting_quota: got (%v, %v, %v)", status, to, ok, err)
+		}
+	}
+	for _, status := range []state.StageStatus{state.StatusPending, state.StatusReady, state.StatusPaused, state.StatusDone, state.StatusFailed, state.StatusAwaitingQuota, state.StatusAwaitingAssistants} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		setStatus(t, store, status)
+		_, _, _, ok, err := fsm.Apply("a", EvAwaitQuota, GuardCtx{Quota: &state.QuotaWait{Provider: "claude"}}, "")
+		store.Close()
+		if err != nil || ok {
+			t.Errorf("%s -> awaiting_quota: ok=%v err=%v, want refused", status, ok, err)
+		}
+	}
+}
+
+func TestFSM_AwaitQuota_RecordsQuotaInTheJournal(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	setStatus(t, store, state.StatusRunning)
+	q := &state.QuotaWait{Provider: "codex", Source: state.QuotaSourceText, Waits: 1}
+	parkInQuota(t, fsm, q)
+	got := store.Snapshot().Stages["a"].Quota
+	if got == nil || got.Provider != "codex" || got.Waits != 1 {
+		t.Fatalf("stage quota = %+v, want the park's metadata", got)
+	}
+	hist, err := store.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := hist[len(hist)-1]
+	if last.Event != "await_quota" || last.Quota == nil || last.Quota.Provider != "codex" {
+		t.Fatalf("journal tail = %+v, want await_quota with quota", last)
+	}
+}
+
+func TestFSM_QuotaReset_DispatchesToThePhase(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		want  state.StageStatus
+	}{
+		{phasePlanning, state.StatusPlanning},
+		{string(flow.PhaseImplementation), state.StatusRunning},
+		{"", state.StatusRunning},
+	} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		setStatus(t, store, state.StatusRunning)
+		parkInQuota(t, fsm, &state.QuotaWait{Provider: "claude"})
+		_, to, _, ok, err := fsm.Apply("a", EvQuotaReset, GuardCtx{Phase: tc.phase}, "")
+		store.Close()
+		if err != nil || !ok || to != tc.want {
+			t.Errorf("phase %q: quota_reset = (%v, %v, %v), want (%s, true, nil)", tc.phase, to, ok, err, tc.want)
+		}
+	}
+}
+
+func TestFSM_QuotaReset_RefusedOutsideTheWait(t *testing.T) {
+	for _, status := range []state.StageStatus{state.StatusRunning, state.StatusPaused, state.StatusRetrying, state.StatusAwaitingPeer} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		setStatus(t, store, status)
+		_, _, _, ok, err := fsm.Apply("a", EvQuotaReset, GuardCtx{}, "")
+		store.Close()
+		if err != nil || ok {
+			t.Errorf("quota_reset from %s: ok=%v err=%v, want refused", status, ok, err)
+		}
+	}
+}
+
+func TestFSM_Quota_PauseAndFailFromTheWait(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	setStatus(t, store, state.StatusRunning)
+	parkInQuota(t, fsm, &state.QuotaWait{Provider: "claude", Waits: 2})
+	_, to, _, ok, err := fsm.Apply("a", EvPause, GuardCtx{}, "manual")
+	if err != nil || !ok || to != state.StatusPaused {
+		t.Fatalf("pause from the wait = (%v, %v, %v)", to, ok, err)
+	}
+	if got := store.PausedFrom("a"); got != state.StatusAwaitingQuota {
+		t.Fatalf("PausedFrom = %q, want awaiting_quota", got)
+	}
+	// Continue returns to the park; the caller decides the manual probe via GuardCtx.Quota.
+	probe := &state.QuotaWait{Provider: "claude", ManualProbe: true}
+	_, to, _, ok, err = fsm.Apply("a", EvContinue, GuardCtx{PausedFrom: state.StatusAwaitingQuota, Quota: probe}, "")
+	if err != nil || !ok || to != state.StatusAwaitingQuota {
+		t.Fatalf("continue = (%v, %v, %v), want back to awaiting_quota", to, ok, err)
+	}
+	if q := store.Snapshot().Stages["a"].Quota; q == nil || !q.ManualProbe {
+		t.Fatalf("quota after continue = %+v, want the manual probe", q)
+	}
+	_, to, _, ok, err = fsm.Apply("a", EvFail, GuardCtx{}, "cancelled")
+	store.Close()
+	if err != nil || !ok || to != state.StatusFailed {
+		t.Fatalf("fail (cancel) from the wait = (%v, %v, %v)", to, ok, err)
+	}
+}
+
+// Revise and a direct Continue stay refused while the stage waits: Pause first.
+func TestFSM_Quota_ReviseAndContinueRefusedInTheWait(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	setStatus(t, store, state.StatusRunning)
+	parkInQuota(t, fsm, &state.QuotaWait{Provider: "claude"})
+	for _, ev := range []FSMEvent{EvRevise, EvContinue, EvComplete, EvVerifyFail, EvAwaitAssistants} {
+		_, _, _, ok, err := fsm.Apply("a", ev, GuardCtx{PausedFrom: state.StatusAwaitingQuota}, "")
+		if err != nil || ok {
+			t.Errorf("%s in awaiting_quota: ok=%v err=%v, want refused", ev, ok, err)
+		}
+	}
+}
+
+func TestFSM_Quota_GuardsAreCheckedInStoreApply(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	setStatus(t, store, state.StatusRunning)
+	staleEpoch := store.Snapshot().Stages["a"].Epoch
+	firstPark := parkInQuota(t, fsm, &state.QuotaWait{Provider: "claude"})
+	for _, ev := range []FSMEvent{EvPause, EvContinue} {
+		if _, _, _, ok, err := fsm.Apply("a", ev, GuardCtx{PausedFrom: state.StatusAwaitingQuota}, ""); err != nil || !ok {
+			t.Fatalf("%s: ok=%v err=%v", ev, ok, err)
+		}
+	}
+	// The timer of the first park cannot move the stage that was paused and continued into a new park.
+	if _, _, _, ok, err := fsm.Apply("a", EvQuotaReset, GuardCtx{ExpectStageSeq: &firstPark}, ""); err != nil || ok {
+		t.Fatalf("timer of an earlier park: ok=%v err=%v, want refused", ok, err)
+	}
+	currentPark := store.Snapshot().Stages["a"].Seq
+	if _, _, _, ok, err := fsm.Apply("a", EvQuotaReset, GuardCtx{ExpectStageSeq: &currentPark}, ""); err != nil || !ok {
+		t.Fatalf("timer of the current park: ok=%v err=%v, want applied", ok, err)
+	}
+	// A stale author (older epoch) cannot park the stage again.
+	if _, _, _, ok, err := fsm.Apply("a", EvAwaitQuota, GuardCtx{ExpectEpoch: &staleEpoch, Quota: &state.QuotaWait{Provider: "claude"}}, ""); err != nil || ok {
+		t.Fatalf("stale author park: ok=%v err=%v, want refused", ok, err)
+	}
+}

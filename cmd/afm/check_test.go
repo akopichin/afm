@@ -534,3 +534,119 @@ func TestStatusColor_PausedGetsItsOwnColor(t *testing.T) {
 		t.Error("statusColor(paused) = colorGray, want a distinct attention color")
 	}
 }
+
+// A stage waiting for a provider usage limit is yellow, and LAST ACTION names the provider and until when (UTC).
+func TestCheck_AwaitingQuotaIsYellowAndNamesProviderAndUntil(t *testing.T) {
+	chdirTemp(t)
+	until := time.Date(2026, 10, 23, 23, 51, 0, 0, time.UTC)
+	runDir := filepath.Join(".afm", "runs", "flow-20260101-120000")
+	writeEventsLog(t, runDir, []state.Transition{
+		{Seq: 1, Time: time.Now(), StageID: cmdInit, From: state.StatusPending, To: state.StatusRunning, Event: "start"},
+		{Seq: 2, Time: time.Now(), StageID: cmdInit, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{
+			Provider: "claude", Window: "five_hour", Source: state.QuotaSourceStructured, Until: until, Target: "implementation",
+		}},
+	})
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, colorYellow+"awaiting_quota") {
+		t.Errorf("awaiting_quota must be yellow, got:\n%q", out)
+	}
+	for _, want := range []string{"claude", "five_hour", "2026-10-23 23:51:00 UTC"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("LAST ACTION must mention %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// A stage paused out of a quota park shows why it is paused instead of the stale agent log line.
+func TestCheck_QuotaPausedShowsTheReason(t *testing.T) {
+	chdirTemp(t)
+	reset := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	runDir := filepath.Join(".afm", "runs", "flow-20260101-120000")
+	writeEventsLog(t, runDir, []state.Transition{
+		{Seq: 1, Time: time.Now(), StageID: cmdInit, From: state.StatusPending, To: state.StatusRunning, Event: "start"},
+		{Seq: 2, Time: time.Now(), StageID: cmdInit, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{
+			Provider: "claude", Source: state.QuotaSourceStructured, ResetAt: reset, PauseReason: state.QuotaPauseExceedsMaxWait,
+		}},
+		{Seq: 3, Time: time.Now(), StageID: cmdInit, From: state.StatusAwaitingQuota, To: state.StatusPaused, Event: "pause"},
+	})
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "2026-10-24 12:00:00 UTC") || !strings.Contains(out, "max_wait") {
+		t.Errorf("a quota-paused stage must show the reset time and the reason, got:\n%s", out)
+	}
+}
+
+// A human Pause of a stage that waits for a limit leaves no pause reason: LAST ACTION must not promise a resume
+// at the old until, because only Continue probes now.
+func TestCheck_ManualPauseOfQuotaWaitDoesNotPromiseResumeAtUntil(t *testing.T) {
+	chdirTemp(t)
+	runDir := filepath.Join(".afm", "runs", "flow-20260101-120000")
+	writeEventsLog(t, runDir, []state.Transition{
+		{Seq: 1, Time: time.Now(), StageID: cmdInit, From: state.StatusPending, To: state.StatusRunning, Event: "start"},
+		{Seq: 2, Time: time.Now(), StageID: cmdInit, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{
+			Provider: "claude", Window: "five_hour", Source: state.QuotaSourceStructured, Until: time.Date(2026, 10, 23, 23, 51, 0, 0, time.UTC),
+		}},
+		{Seq: 3, Time: time.Now(), StageID: cmdInit, From: state.StatusAwaitingQuota, To: state.StatusPaused, Event: "pause"},
+	})
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "Usage limit (claude, five_hour): paused while waiting; Continue probes now") {
+		t.Errorf("a manually paused quota wait must say Continue probes now, got:\n%s", out)
+	}
+	if strings.Contains(out, "waiting until") {
+		t.Errorf("a paused stage must not claim to wait until the old time, got:\n%s", out)
+	}
+}
+
+// An ordinary pause (not out of a quota park) keeps the normal LAST ACTION even though the stage still carries
+// its earlier quota series.
+func TestCheck_OrdinaryPauseIgnoresCarriedQuota(t *testing.T) {
+	chdirTemp(t)
+	runDir := filepath.Join(".afm", "runs", "flow-20260101-120000")
+	writeEventsLog(t, runDir, []state.Transition{
+		{Seq: 1, Time: time.Now(), StageID: cmdInit, From: state.StatusPending, To: state.StatusRunning, Event: "start"},
+		{Seq: 2, Time: time.Now(), StageID: cmdInit, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{
+			Provider: "claude", Source: state.QuotaSourceStructured, Until: time.Date(2026, 10, 23, 23, 51, 0, 0, time.UTC),
+		}},
+		{Seq: 3, Time: time.Now(), StageID: cmdInit, From: state.StatusAwaitingQuota, To: state.StatusRunning, Event: "quota_reset"},
+		{Seq: 4, Time: time.Now(), StageID: cmdInit, From: state.StatusRunning, To: state.StatusPaused, Event: "pause"},
+	})
+
+	out := captureStdout(t, func() {
+		cmd := newCheckCmd()
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "Usage limit") {
+		t.Errorf("a stage paused from running must not show the old usage limit, got:\n%s", out)
+	}
+}

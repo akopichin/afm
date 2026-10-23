@@ -331,6 +331,16 @@ type Orchestrator struct {
 	// однократно.
 	resumeContextOnce sync.Map
 
+	// manualProbeSpent — stageID -> StageState.Seq, при котором первая admission-проверка уже потратила
+	// одноразовую ручную пробу (Quota.ManualProbe). Флаг в журнале живёт до следующего перехода FSM, а попыток и
+	// verify-проверок за это время может быть несколько: обходит hold только первая. Память процесса: после
+	// рестарта до spawn журнал сохраняет пробу, и её тратит первая admission нового процесса.
+	manualProbeSpent sync.Map
+
+	// quotaWarned — ключи (provider|window|reset) уже показанных quota_warning: провайдер повторяет allowed_warning
+	// на каждом ходе, а notice нужен один раз на окно. Память процесса: после рестарта лента заново получит один.
+	quotaWarned sync.Map
+
 	// retryCASBarrier — тестовый хук между проверкой failed и CAS; проверяет, что проигравший retry не
 	// очищает данные победителя.
 	retryCASBarrier func(stageID string)
@@ -1087,35 +1097,57 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 // parkSeq, when non-zero, binds the resume to one park (state.StageState.Seq of the awaiting_peer transition):
 // the transition commits only while the stage is still in that park.
 func (o *Orchestrator) resumeStageForPhase(ctx context.Context, stage flow.Stage, phase string, ev bus.FSMEvent, parkSeq uint64) error {
+	return o.resumeStageForPhaseAs(ctx, stage, phase, ev, parkSeq, false)
+}
+
+// resumeStageForPhaseAs is resumeStageForPhase that can resume the feedback run of a Revise instead of a fresh
+// agent (feedback, see feedbackTurnRunner): the stage is no longer revising, so the run does not claim a Revise.
+func (o *Orchestrator) resumeStageForPhaseAs(ctx context.Context, stage flow.Stage, phase string, ev bus.FSMEvent, parkSeq uint64, feedback bool) error {
 	var expectSeq *uint64
 	if parkSeq != 0 {
 		expectSeq = &parkSeq
 	}
-	switch phase {
-	case phasePlanning:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phasePlanning, ExpectStageSeq: expectSeq}, ""); !ok {
-			return nil // another resume won the transition — or the stage left the status: nothing to spawn
-		}
-		o.spawnKind(ctx, stage, kindPlanning, o.runPlanningAgent)
-	case phaseImplementation:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseImplementation, ExpectStageSeq: expectSeq}, ""); !ok {
-			return nil // another resume won the transition — or the stage left the status: nothing to spawn
-		}
-		o.spawnKind(ctx, stage, kindImplementation, o.runImplementationAgent)
-	case phaseReview:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseReview, ExpectStageSeq: expectSeq}, ""); !ok {
-			return nil // another resume won the transition — or the stage left the status: nothing to spawn
-		}
-		o.spawnKind(ctx, stage, kindReview, o.runReviewAgent)
-	case phaseAutonomous:
-		if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phaseAutonomous, ExpectStageSeq: expectSeq}, ""); !ok {
-			return nil // another resume won the transition — or the stage left the status: nothing to spawn
-		}
-		o.spawnKind(ctx, stage, kindAutonomous, o.runAutonomousAgent)
-	default:
+	kind, ok := kindOfPhase(phase)
+	if !ok {
 		return fmt.Errorf("unexpected phase: %q", phase)
 	}
+	var parked *state.QuotaWait // the wait this wake ends (EvQuotaReset only)
+	reason := ""
+	if ev == bus.EvQuotaReset {
+		parked = o.opts.Store.Snapshot().Stages[stage.ID].Quota
+		reason = quotaResetMessage(parked)
+	}
+	if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phase, ExpectStageSeq: expectSeq}, reason); !ok {
+		return nil // another resume won the transition — or the stage left the status: nothing to spawn
+	}
+	if parked != nil {
+		o.publishQuotaNotice(eventQuotaReset, stage.ID, "", quotaNoticeData(parked, reason))
+	}
+	o.spawnKind(ctx, stage, kind, o.turnRunner(kind, feedback))
 	return nil
+}
+
+// kindOfPhase is the runner kind that executes a phase (the inverse of executionPhases and phasePlanning).
+func kindOfPhase(phase string) (string, bool) {
+	switch phase {
+	case phasePlanning:
+		return kindPlanning, true
+	case phaseImplementation:
+		return kindImplementation, true
+	case phaseReview:
+		return kindReview, true
+	case phaseAutonomous:
+		return kindAutonomous, true
+	}
+	return "", false
+}
+
+// turnRunner is the runner of a resumed turn: the feedback run of a Revise (feedbackTurnRunner) or a fresh agent.
+func (o *Orchestrator) turnRunner(kind string, feedback bool) func(context.Context, flow.Stage) {
+	if feedback {
+		return o.feedbackTurnRunner(kind)
+	}
+	return o.plainRunner(kind)
 }
 
 func (o *Orchestrator) currentStatus(id string) state.StageStatus {

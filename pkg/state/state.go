@@ -68,6 +68,11 @@ const (
 	// running work. Classified as ACTIVITY, not human-idle (isIdle below): a colleague working on a reply is
 	// machine work, exactly like awaiting_assistants.
 	StatusAwaitingPeer StageStatus = "awaiting_peer"
+	// StatusAwaitingQuota — the stage's agent hit a provider usage limit; the park is durable (StageState.Quota
+	// holds until/reason) and the process that hit it has exited, freeing its max_parallel lease. Non-terminal;
+	// wakes back into the phase it was in (EvQuotaReset's phaseDispatch) or exits to paused/failed. Classified
+	// as ACTIVITY, not human-idle (isIdle below): the wait ends by itself, no user decision is pending.
+	StatusAwaitingQuota StageStatus = "awaiting_quota"
 )
 
 // AllStatuses returns every StageStatus in declaration order.
@@ -76,6 +81,7 @@ func AllStatuses() []StageStatus {
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
 		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants, StatusAwaitingPeer,
+		StatusAwaitingQuota,
 	}
 }
 
@@ -100,7 +106,76 @@ type StageState struct {
 	// Seq is the seq of the stage's latest transition. While parked, it identifies the park: a resume is fenced
 	// to it (Transition.ExpectStageSeq), so a resume decided for an earlier park cannot move a later one.
 	Seq uint64 `json:"seq,omitempty"`
+	// Quota — the stage's latest usage-limit park (Transition.Quota). Kept while the stage waits (also while it is
+	// paused from the wait) and after the wake, so the consecutive-waits series survives until the stage ends;
+	// consumers show it only in awaiting_quota or in paused with PausedFrom == awaiting_quota. Derived on replay.
+	Quota *QuotaWait `json:"quota,omitempty"`
 }
+
+// QuotaWait is the durable metadata of a usage-limit park: what the stage waits for, until when, and what to
+// resume. All fields are optional on the wire; journals written before quota existed replay without it.
+type QuotaWait struct {
+	// Provider is the provider key (config.UsageLimitProvider) the limit belongs to; never a secret or account.
+	Provider string `json:"provider,omitempty"`
+	// ResetAt is the reset the provider reported (UTC). Zero = unknown.
+	ResetAt time.Time `json:"reset_at,omitzero"`
+	// Until is when the stage wakes (UTC): ResetAt plus margin, the next probe, or the provider hold's end. Zero
+	// while the stage is parked only to be paused (PauseReason set).
+	Until time.Time `json:"until,omitzero"`
+	// Window is the provider's limit window (e.g. "five_hour"), when known.
+	Window string `json:"window,omitempty"`
+	// Source says where Until came from: QuotaSource*.
+	Source string `json:"source,omitempty"`
+	// PauseReason is set when the limit cannot be waited out and the stage is paused right after the park:
+	// QuotaPause*. Empty = an ordinary wait (or a manual pause of one).
+	PauseReason string `json:"pause_reason,omitempty"`
+	// Target is what the wake resumes: a flow.Phase name (planning, implementation, ...) or QuotaTargetVerify.
+	Target string `json:"target,omitempty"`
+	// VerifyID is the verification pass the wake continues (its manifest and accepted steps live in the stage's
+	// verify/<id>/); VerifyStep is the verify step to repeat after the wake (numbered by the orchestrator);
+	// VerifyPhase is the execution phase (implementation, review or autonomous) whose gate ran the verification —
+	// the turn the wake resumes; empty in journals written before it (the phase is then derived from the stage);
+	// VerifyFailures and VerifyStalemates are the verify counters at the park. Meaningful only for QuotaTargetVerify.
+	VerifyID         string `json:"verify_id,omitempty"`
+	VerifyStep       int    `json:"verify_step,omitempty"`
+	VerifyPhase      string `json:"verify_phase,omitempty"`
+	VerifyFailures   int    `json:"verify_failures,omitempty"`
+	VerifyStalemates int    `json:"verify_stalemates,omitempty"`
+	// VerifyResume is the one-shot intent recorded by the wake of a verify park: the turn that follows repeats the
+	// parked verify step (VerifyID/VerifyStep) and does not call the author. It lives in the wake transition, so a
+	// crash between the wake and the spawn keeps it; any other transition (Pause, Revise, retry, a new park)
+	// consumes it. Derived on replay.
+	VerifyResume bool `json:"verify_resume,omitempty"`
+	// Waits is the number of consecutive real refusals, provider holds not counted.
+	Waits int `json:"waits,omitempty"`
+	// ProgressMark is an opaque watermark of the stage's progress at the park (e.g. recorded agent actions); the
+	// next refusal restarts the series if the stage moved past it.
+	ProgressMark uint64 `json:"progress_mark,omitempty"`
+	// Feedback marks that the parked turn was the feedback run of a Revise: the wake resumes it with the user's
+	// feedback (feedback.md, the previous plan) instead of starting the phase from scratch.
+	Feedback bool `json:"feedback,omitempty"`
+	// ManualProbe is the one-shot intent of Continue from a quota pause: the next admission bypasses the
+	// provider hold. It survives only the Continue and the wake transitions, so a crash before the spawn keeps it.
+	ManualProbe bool `json:"manual_probe,omitempty"`
+}
+
+// Quota Source values.
+const (
+	QuotaSourceStructured   = "structured"    // reset from the agent's structured event
+	QuotaSourceText         = "text"          // reset parsed from the message text
+	QuotaSourceProbe        = "probe"         // reset unknown: re-check after probe_interval
+	QuotaSourceProviderHold = "provider_hold" // waits out another stage's park of the same provider
+)
+
+// Quota PauseReason values.
+const (
+	QuotaPauseExceedsMaxWait = "exceeds_max_wait" // reset is later than max_wait
+	QuotaPauseNoReset        = "no_reset"         // no reset to wait for (e.g. insufficient_quota)
+	QuotaPauseMaxWaits       = "max_waits"        // too many consecutive refusals
+)
+
+// QuotaTargetVerify marks a park of the AI-verify gate; other targets are flow.Phase names.
+const QuotaTargetVerify = "verify"
 
 // stageTakeoverEvents are the FSM events (pkg/orchestrator/bus) by which someone other than the stage's running
 // process takes the stage over or hands it to a new process; each one starts a new StageState.Epoch.
@@ -219,7 +294,7 @@ func isIdle(rs *RunState) bool {
 			anyActive = true // машинная работа помощника — как running/planning/revising
 		case StatusFailed:
 			hasFailed = true
-		case StatusRunning, StatusPlanning, StatusRevising, StatusAwaitingPeer:
+		case StatusRunning, StatusPlanning, StatusRevising, StatusAwaitingPeer, StatusAwaitingQuota:
 			anyActive = true
 		default:
 			// pending/ready/retrying/done/hook_failed — не влияют на isIdle.
@@ -319,9 +394,31 @@ func (rs *RunState) applyTransition(t *Transition) {
 		st.PeerWaits = slices.Clone(prev.PeerWaits)
 	}
 	st.PeerContinued = continuesPeerTurn(prev, t)
+	st.Quota = quotaAfter(prev.Quota, t)
 	st.Seq = t.Seq
 	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()
+}
+
+// quotaAfter derives the stage's quota after transition t: the transition's own value replaces it; otherwise
+// it is carried (a pause of the park, the wake, the series counter between parks) until the stage ends. The
+// one-shot ManualProbe survives only the Continue and the wake; the wake of a verify park records the one-shot
+// VerifyResume, which every later transition consumes.
+func quotaAfter(prev *QuotaWait, t *Transition) *QuotaWait {
+	if t.Quota != nil {
+		q := *t.Quota
+		return &q
+	}
+	if prev == nil || t.To == StatusDone || t.To == StatusFailed || t.To == StatusPending {
+		return nil
+	}
+	q := *prev
+	wake := t.Event == "quota_reset"
+	if t.Event != "continue" && !wake {
+		q.ManualProbe = false
+	}
+	q.VerifyResume = wake && prev.Target == QuotaTargetVerify
+	return &q
 }
 
 // accountIdleAndBackoff обновляет таймеры ДО перехода; вызывается и из live Apply, и из replay

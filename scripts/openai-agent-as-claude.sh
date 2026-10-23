@@ -115,16 +115,19 @@ extract_turn_model() {
     ' 2>/dev/null | grep -v '^$' | tail -n1 || true
 }
 
-# build_result_line <subtype> — emits the terminal result line.
+# build_result_line <subtype> [error] — emits the terminal result line. An error message adds is_error and
+# result, the shape afm's usage-limit detection reads (the body keeps error.code).
 build_result_line() {
-    local subtype="$1"
+    local subtype="$1" err="${2:-}"
     if [[ "$upstream_usages" == "[]" ]]; then
-        jq -nc --arg st "$subtype" '{type:"result", subtype:$st}'
+        jq -nc --arg st "$subtype" --arg err "$err" \
+            '{type:"result", subtype:$st} + (if $err != "" then {is_error:true, result:$err} else {} end)'
         return
     fi
-    printf '%s' "$upstream_usages" | jq -c --arg st "$subtype" --arg model "$resolved_model" \
+    printf '%s' "$upstream_usages" | jq -c --arg st "$subtype" --arg model "$resolved_model" --arg err "$err" \
         '{type:"result", subtype:$st, usage_contract_version:1, usage_schema:"openai_chat", channel:"openai-api", upstream_usages:.}
-         + (if $model != "" then {model:$model} else {} end)'
+         + (if $model != "" then {model:$model} else {} end)
+         + (if $err != "" then {is_error:true, result:$err} else {} end)'
 }
 
 # Linux limits each exec argument to 128 KiB on 4 KiB pages. Keep arbitrary payloads in stdin/files,
@@ -182,11 +185,14 @@ while :; do
     fi
 
     if [[ "$curl_exit" -ne 0 || "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
-        echo "error: request to $OPENAI_BASE_URL failed (curl exit $curl_exit, http $http_code): $body" >&2
+        failure="request to $OPENAI_BASE_URL failed (curl exit $curl_exit, http $http_code): "
+        # Full body only on stderr (echo is a builtin, no exec argument limit); the result line gets a capped
+        # copy because jq receives it as an exec argument.
+        echo "error: $failure$body" >&2
         # still emit whatever text/usage were gathered across earlier turns before this failure — afm
         # fails the stage via the non-zero exit below regardless of what's printed here.
         jq -nc --rawfile text <(printf '%s' "$final_text") '{type:"assistant", message:{content:[{type:"text", text:$text}]}}'
-        build_result_line "error_during_execution"
+        build_result_line "error_during_execution" "$failure${body:0:4096}"
         exit 1
     fi
 

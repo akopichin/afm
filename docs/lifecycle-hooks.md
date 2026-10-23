@@ -78,6 +78,13 @@ run emits `flow_started`. Each later cycle emits `flow_repeated` instead of
 `stage_question_answered`, `stage_retry_scheduled`, `stage_retry_started`,
 `stage_paused`, `stage_resumed`, `stage_finished`, `stage_failed`.
 
+Usage-limit waits add `stage_awaiting_quota` when a stage is parked and
+`stage_quota_reset` when the wait ends and work resumes. They are included in
+`events: all`. Their `reason` names the provider and, when known, the limit
+window and wait time. Times in these reasons are explicitly **UTC**. An
+unwaitable limit also emits `stage_paused` with its reason; a recognized
+usage-limit wait does not emit the ordinary retry events.
+
 **Scripts (script stages & `script_before`/`script_after`):**
 `stage_script_started`, `stage_script_finished`, `stage_script_failed`,
 `stage_script_before_started`, `stage_script_before_finished`,

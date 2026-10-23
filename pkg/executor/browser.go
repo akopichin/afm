@@ -31,6 +31,10 @@ func (e *Executor) BrowserMCPConfig() *BrowserMCP { return e.cfg.BrowserMCP }
 // runner received client.reasoning through to its executor.Config.
 func (e *Executor) ReasoningConfig() string { return e.cfg.Reasoning }
 
+// ProviderConfig returns the configured usage-limit provider ("" = unknown). It lets tests confirm that a
+// factory stamped the provider into its executor.Config.
+func (e *Executor) ProviderConfig() string { return e.cfg.Provider }
+
 // IsBrowserTransportEnv reports whether an env entry is a managed-browser transport variable.
 func IsBrowserTransportEnv(kv string) bool {
 	return browser.IsTransportEnv(kv)

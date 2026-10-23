@@ -29,6 +29,9 @@ type Transition struct {
 	// exiting turn yielded on). Projected onto StageState.PeerWaits until the stage's next transition. Absent
 	// in journals written before it, and on a park for unread messages.
 	PeerWaits []agentcomm.WaitID `json:"peer_waits,omitempty"`
+	// Quota — on a park in awaiting_quota (and on a Continue back into one): the usage-limit metadata, projected
+	// onto StageState.Quota. Absent in journals written before it and on every other transition.
+	Quota *QuotaWait `json:"quota,omitempty"`
 	// ExpectEpoch, when set, fences the transition: it commits only while the stage's StageState.Epoch still
 	// has this value — the process that decided it still owns the stage. Never journaled.
 	ExpectEpoch *uint64 `json:"-"`
