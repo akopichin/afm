@@ -827,9 +827,11 @@ describe('PlanPanel', () => {
         <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><PlanPanel stage={stage} statusAvailable /></MessageTimeZoneProvider>,
       )
       rerender(
-        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
-          <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><PlanPanel stage={stage} statusAvailable={false} /></MessageTimeZoneProvider>
-        </FileBrowserProvider>,
+        <CommentProvider runId="run-1">
+          <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+            <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><PlanPanel stage={stage} statusAvailable={false} /></MessageTimeZoneProvider>
+          </FileBrowserProvider>
+        </CommentProvider>,
       )
       act(() => { vi.advanceTimersByTime(30_000) })
       expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 06s')
