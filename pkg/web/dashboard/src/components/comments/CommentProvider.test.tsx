@@ -219,4 +219,3 @@ describe('CommentProvider', () => {
     expect(api().scroll.get('plan:s1')).toBeUndefined()
   })
 })
-
