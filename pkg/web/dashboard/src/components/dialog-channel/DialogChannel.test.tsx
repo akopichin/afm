@@ -272,7 +272,7 @@ describe('DialogChannel', () => {
     expect(body).toMatchObject({ answer: 'my own answer', from_options: false })
   })
 
-  test('Ctrl+Enter in the custom textarea sends the answer', async () => {
+  test('Enter in the custom textarea sends the answer', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -297,7 +297,7 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'ctrl enter answer' } })
-    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
 
     await waitFor(() => {
       expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true)
@@ -344,7 +344,7 @@ describe('DialogChannel', () => {
     expect(body).toMatchObject({ answer: 'cmd enter answer', from_options: false })
   })
 
-  test('Enter without Ctrl/Cmd in the custom textarea does not send', async () => {
+  test('Shift+Enter in the custom textarea does not send', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -369,7 +369,7 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'plain enter' } })
-    fireEvent.keyDown(textarea, { key: 'Enter' })
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -770,7 +770,7 @@ describe('DialogChannel', () => {
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
     fireEvent.change(commentTextarea, { target: { value: 'ctrl enter comment' } })
-    fireEvent.keyDown(commentTextarea, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(commentTextarea, { key: 'Enter' })
 
     expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(false)
     expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
@@ -869,7 +869,7 @@ describe('DialogChannel', () => {
 
     const answerTextarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(answerTextarea, { target: { value: 'should not send' } })
-    fireEvent.keyDown(answerTextarea, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(answerTextarea, { key: 'Enter' })
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))

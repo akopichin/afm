@@ -56,7 +56,7 @@ export function AgentNoteModal({
           // Заметка агенту тоже может ссылаться на файлы проекта и прикладывать изображение — скрепка
           // появляется только при включённом файловом браузере, на хосте её нет.
           allowFileReferences
-          // Cmd/Ctrl+Enter отправляет заметку — тот же гейт, что и у кнопки Send/Save.
+          // Enter отправляет заметку — тот же гейт, что и у кнопки Send/Save.
           onSubmit={() => { if (isPreNote || note.trim() !== '') onSubmit(note.trim()) }}
         />
         <div className="modal-actions">

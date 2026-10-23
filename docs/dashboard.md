@@ -3,6 +3,11 @@
 On startup (if `server.open_browser: true`) the dashboard opens; otherwise its URL
 is printed to the log.
 
+In message and feedback fields, **Enter** submits and **Shift+Enter** adds a line.
+This applies to Feed Message/Revise, Team and run conversations, the Assistant,
+dialog answers, notes to agents, and plan, question, file and review-note editors.
+Creating stages, agents, helpers and Board tasks keeps its existing behavior.
+
 ## Following a repeated flow
 
 When [repeat](flow-reference.md#repeat-run-successful-flows-again) starts the next
@@ -408,8 +413,8 @@ Revise note.
 1. Select the stage and open its **Feed** tab (with modes, pick **Revise**). The
    input is a growing textarea, an **Attach** button and a send button.
 2. Type your note and send it — click **Apply Revise** when the composer has
-   modes (otherwise the send button), or press **Cmd/Ctrl+Enter**
-   (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
+   modes (otherwise the send button), or press **Enter**
+   (**Shift+Enter** inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file.
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
    not a kill); the stage moves through `revising` and restarts the same phase
@@ -462,9 +467,9 @@ Sending posts **one** message to all recipients:
   recorded, not read*. The post is kept in your conversation with that stage and
   reaches the other agents you named; the stage's agent does not read it.
 
-**Cmd/Ctrl+Enter** sends; plain **Enter** adds a line. While there is text, a
-hint under the input says so, and it is highlighted when you press plain Enter
-on a message that could be sent.
+**Enter** sends; **Shift+Enter** adds a line. While there is text, a hint under
+the input shows these shortcuts. With the `@` menu open, **Enter** selects the
+highlighted person or role instead of sending.
 
 **Interrupt agent** is reset after each successful send and kept after a failed
 one, so a retry interrupts too.

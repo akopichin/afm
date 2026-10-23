@@ -1,3 +1,4 @@
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { PasteableTextarea } from '../pasteable-textarea'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
@@ -176,7 +177,7 @@ export function FeedComposer({
 
   const empty = value.trim() === ''
 
-  // Выбор мысли — это ответ через Revise: показываем его поле и переводим туда фокус, чтобы Cmd/Ctrl+Enter
+  // Выбор мысли — это ответ через Revise: показываем его поле и переводим туда фокус, чтобы Enter
   // сразу отправлял ответ. Фокус — после того, как поле стало видимым (с mesh оно могло быть скрыто за Message).
   useEffect(() => {
     if (replyKey !== undefined) setMode('revise')
@@ -484,24 +485,13 @@ function MeshMessageComposer({
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
     const v = e.target.value
     setDraft(v)
-    if (!v.endsWith('\n')) setNudged(false)
     setLocalError(null)
     mention.onInput(v, e.target.selectionStart ?? v.length)
   }
 
-  // nudged — a plain Enter was pressed in a draft that could be sent: Enter only adds a line here (as in every
-  // composer), so the send hint is emphasised instead of the message silently not going.
-  const [nudged, setNudged] = useState(false)
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
     if (mention.onKeyDown(e)) return
-    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
-    if (e.metaKey || e.ctrlKey) {
-      e.preventDefault()
-      setNudged(false)
-      submit()
-    } else if (!e.shiftKey && canSend) {
-      setNudged(true)
-    }
+    handleTextareaSubmit(e, submit, canSend && !submitter.pending)
   }
 
   const explicit = recipients.filter((r) => r.source !== 'default')
@@ -661,8 +651,8 @@ function MeshMessageComposer({
         <ChatSendButton label="Send message" disabled={!canSend} sending={submitter.pending} onClick={submit} />
       </div>
       {draft.trim() !== '' && (
-        <div className={`composer-send-hint${nudged ? ' is-nudged' : ''}`} role={nudged ? 'status' : undefined}>
-          Cmd/Ctrl+Enter to send · Enter adds a line
+        <div className="composer-send-hint">
+          Enter to send · Shift+Enter adds a line
         </div>
       )}
 

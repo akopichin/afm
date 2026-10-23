@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactElement } from 'react'
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { PasteableTextarea } from '../pasteable-textarea/PasteableTextarea'
 import { CommentQuote, subjectOf, type CommentContext } from './CommentCard'
 
@@ -97,11 +98,7 @@ export function CommentEditor({
           autoFocus
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
-            if (submit !== undefined && (event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-              event.preventDefault()
-              submit()
-              return
-            }
+            if (submit !== undefined && handleTextareaSubmit(event, submit)) return
             handleKeyDown(event)
           }}
         />

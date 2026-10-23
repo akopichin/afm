@@ -400,7 +400,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               // скриншоты уже работают через use-image-paste.
               allowFileReferences
               onSubmit={() => {
-                // codex MEDIUM: Ctrl/Cmd+Enter is a keyboard-submit path that a
+                // codex MEDIUM: Enter is a keyboard-submit path that a
                 // disabled SEND button does not intercept — guard it separately.
                 if (doc.activeCommentLine !== null) return
                 void sendAnswer()

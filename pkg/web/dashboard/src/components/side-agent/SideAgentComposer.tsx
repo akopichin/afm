@@ -1,3 +1,4 @@
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { useCallback, useRef, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
@@ -76,11 +77,7 @@ export function SideAgentComposer({
     // The first Escape only closes the suggestions (the hook stops it from bubbling), so it does not close
     // the conversation modal too (TestMention_EscapeClosesSuggestionsThenModal); the second one bubbles.
     if (mention.onKeyDown(e)) return
-    // Cmd/Ctrl+Enter — отправка; обычный Enter оставляем textarea (новая строка).
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
-      e.preventDefault()
-      submit()
-    }
+    handleTextareaSubmit(e, submit, canSend)
   }
 
   return (
@@ -107,7 +104,7 @@ export function SideAgentComposer({
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
-          placeholder="Message the assistant…  (Cmd/Ctrl+Enter to send, @ to mention a role)"
+          placeholder="Message the assistant…  (Enter to send, Shift+Enter for a new line, @ to mention a role)"
           aria-label="Message the assistant"
           rows={1}
         />

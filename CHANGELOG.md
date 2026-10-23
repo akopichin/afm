@@ -20,6 +20,13 @@ Unsent plan and question text stays available while moving between dashboard
 views during a run. Closing an editor folds nonempty text without discarding it;
 comments on an earlier plan version can be shown, copied or dismissed.
 
+### Improvement: send messages and feedback with Enter
+
+Dashboard message and feedback fields now submit with **Enter** and add a line
+with **Shift+Enter**. The `@` menu keeps Enter for choosing a person or role;
+hints show the new shortcuts. Creation forms keep their existing behavior.
+See [Dashboard](docs/dashboard.md).
+
 ### Improvement: wait for provider usage limits without spending retries
 
 When a stage agent, verifier or helper hits a provider usage limit, afm records

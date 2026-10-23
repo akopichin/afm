@@ -43,7 +43,7 @@ describe('PasteableTextarea', () => {
     expect(onChange).toHaveBeenCalledWith('hi there')
   })
 
-  it('Cmd/Ctrl+Enter fires onSubmit (and plain Enter / disabled do not)', () => {
+  it('submits on Enter and leaves Shift+Enter to the textarea', () => {
     const onSubmit = vi.fn()
     const onKeyDown = vi.fn()
     const { rerender } = render(
@@ -51,21 +51,24 @@ describe('PasteableTextarea', () => {
     )
     const textarea = screen.getByRole('textbox')
 
-    // Обычный Enter — не отправляет, делегируется onKeyDown.
-    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })).toBe(true)
     expect(onSubmit).not.toHaveBeenCalled()
-    expect(onKeyDown).toHaveBeenCalled()
+    expect(onKeyDown).toHaveBeenCalledTimes(1)
 
-    // Cmd+Enter и Ctrl+Enter — отправляют.
-    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
-    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
-    expect(onSubmit).toHaveBeenCalledTimes(2)
+    expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(false)
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onKeyDown).toHaveBeenCalledTimes(1)
 
-    // disabled — не отправляет.
-    onSubmit.mockClear()
     rerender(<PasteableTextarea stageId="s1" value="x" onChange={vi.fn()} onSubmit={onSubmit} disabled />)
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true })
-    expect(onSubmit).not.toHaveBeenCalled()
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps Enter as a newline when there is no submit action', () => {
+    const onKeyDown = vi.fn()
+    render(<PasteableTextarea stageId="s1" value="x" onChange={vi.fn()} onKeyDown={onKeyDown} />)
+    expect(fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })).toBe(true)
+    expect(onKeyDown).toHaveBeenCalledTimes(1)
   })
 
   it('passes className/placeholder through to the inner textarea', () => {
