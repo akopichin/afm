@@ -556,7 +556,9 @@ func TestMesh_CloseRemainingMeshWaits_ResolvesPendingToRunClosedWithoutResuming(
 
 	taskID := deriveTaskID("op-close-1")
 	helperID := meshHelperParticipantID(taskID)
+	var calls atomic.Int32
 	o.runHelperAgent = func(ctx context.Context, tid, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		calls.Add(1)
 		if _, err := o.Wait(context.Background(), WaitRequest{
 			OperationID: "op-close-1-wait", Waiter: helperID,
 			Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnAddressedMessage, ThreadID: "t-does-not-exist-yet"}, Deadline: testFarDeadline(),
@@ -567,6 +569,8 @@ func TestMesh_CloseRemainingMeshWaits_ResolvesPendingToRunClosedWithoutResuming(
 	}
 	attachTestTask(ctx, t, o, "op-close-1")
 	waitForTaskStatus(t, store, taskID, assistants.StatusWaitingPeer, 2*time.Second)
+	// The status precedes the helper's final resume check; drain it before closing waits, as Run does.
+	o.concurrency.WaitAgents()
 
 	o.closeRemainingMeshWaits()
 
@@ -587,8 +591,10 @@ func TestMesh_CloseRemainingMeshWaits_ResolvesPendingToRunClosedWithoutResuming(
 	if !found {
 		t.Fatal("no wait found for helper participant")
 	}
-	// closeRemainingMeshWaits deliberately does not resume anyone — the task must stay exactly where it was.
-	time.Sleep(50 * time.Millisecond)
+	o.concurrency.WaitAgents()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("helper invoked %d times, want one turn (closing waits must not resume it)", got)
+	}
 	if got := store.Snapshot().Assistants.Tasks[taskID].Status; got != assistants.StatusWaitingPeer {
 		t.Fatalf("task status = %s, want unchanged waiting_peer (closeRemainingMeshWaits must not resume anyone)", got)
 	}
