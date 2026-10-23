@@ -965,3 +965,24 @@ describe('StagesList — usage-limit wait (awaiting_quota)', () => {
     expect(second.container.querySelector('.assistant-task-row')).toHaveAttribute('title', 'Queued')
   })
 })
+
+describe('StagesList: кнопка «+ Stage» зависит от capability add_stage', () => {
+  function renderRail(props: { canAddStage?: boolean; onAddStage?: () => void }) {
+    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} {...props} />)
+  }
+
+  test.each([
+    ['canAddStage=false', { canAddStage: false }],
+    ['canAddStage не передан', {}],
+  ])('%s: кнопки нет', (_name, props) => {
+    renderRail({ ...props, onAddStage: vi.fn() })
+    expect(screen.queryByRole('button', { name: '+ Stage' })).not.toBeInTheDocument()
+  })
+
+  test('canAddStage=true: кнопка видна, клик вызывает onAddStage один раз', () => {
+    const onAddStage = vi.fn()
+    renderRail({ canAddStage: true, onAddStage })
+    fireEvent.click(screen.getByRole('button', { name: '+ Stage' }))
+    expect(onAddStage).toHaveBeenCalledTimes(1)
+  })
+})

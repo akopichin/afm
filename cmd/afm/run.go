@@ -303,6 +303,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		BrowserDescriptor:  browserDesc,
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
+		AddStageDisabled:   !cfg.AddStage.IsEnabled(),
 		Team:               f.Team,
 		SecretValues:       loadRedactionSecrets(absRootDir(), cfg, hooks),
 	}

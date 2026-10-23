@@ -619,6 +619,46 @@ func TestReExec_ForwardsSideAgentEnv(t *testing.T) {
 	})
 }
 
+func TestReExec_ForwardsAddStageEnv(t *testing.T) {
+	run := func(t *testing.T, envVal string) string {
+		var capturedArgs []string
+		docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+			capturedArgs = argv
+			return nil
+		})
+		defer docker.ResetExecFunc()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		t.Setenv("AFM_ADD_STAGE", envVal)
+
+		if err := docker.ReExec(docker.ReExecConfig{
+			Image:      "akopichin/afm:latest",
+			ProjectDir: "/tmp/proj",
+			ExtraArgs:  []string{"run", "flow.yaml"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(capturedArgs, " ")
+	}
+
+	for _, v := range []string{"0", "1"} {
+		t.Run("forwards "+v, func(t *testing.T) {
+			if got := run(t, v); !strings.Contains(got, "-e AFM_ADD_STAGE="+v) {
+				t.Errorf("AFM_ADD_STAGE=%s not forwarded by value: %s", v, got)
+			}
+		})
+	}
+	t.Run("empty forwards nothing", func(t *testing.T) {
+		if got := run(t, ""); strings.Contains(got, "AFM_ADD_STAGE") {
+			t.Errorf("AFM_ADD_STAGE must not appear when empty (must not be invented): %s", got)
+		}
+	})
+}
+
 // TestDockerReExec_ForwardsExplicitCollaborationEnv — T1.4: an explicitly-set AFM_COLLABORATION value is
 // forwarded by value (not bare -e: this is a switch, not a secret). An UNSET host env must not be invented
 // inside the container — otherwise host and container would silently diverge in how they interpret the

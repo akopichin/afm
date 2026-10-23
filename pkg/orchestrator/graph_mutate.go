@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
@@ -91,9 +92,21 @@ func (o *Orchestrator) planDraft(reg *graph.Registry, req AddStageDraft) (graph.
 	}
 }
 
+// rejectIfAddStageDisabled — единая точка отказа для всех путей создания стадий в ходе рана
+// (диалог, подтверждённый черновик, принятое предложение), когда add_stage выключен конфигурацией.
+func (o *Orchestrator) rejectIfAddStageDisabled() error {
+	if o.opts.AddStageDisabled {
+		return &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "adding stages is disabled"}
+	}
+	return nil
+}
+
 // PreviewAddStage validates req against the CURRENT registry and returns the resolved dependency diff —
 // WITHOUT touching the journal or bumping the registry revision (TestPreview_NoMutation).
 func (o *Orchestrator) PreviewAddStage(req AddStageDraft) (AddStagePreview, error) {
+	if err := o.rejectIfAddStageDisabled(); err != nil {
+		return AddStagePreview{}, err
+	}
 	if err := o.rejectIfReviewPaused(); err != nil {
 		return AddStagePreview{}, err
 	}
@@ -124,6 +137,9 @@ var ErrRequestIDRequired = errors.New("add-stage: request id is required")
 // validated the same way, but Store.AddStageToGraph's idempotency index is what actually short-circuits the
 // durable write.
 func (o *Orchestrator) CommitAddStage(ctx context.Context, req AddStageDraft) (AddStageResult, error) {
+	if err := o.rejectIfAddStageDisabled(); err != nil {
+		return AddStageResult{}, err
+	}
 	if err := o.rejectIfReviewPaused(); err != nil {
 		return AddStageResult{}, err
 	}

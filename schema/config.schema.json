@@ -39,6 +39,7 @@
     "browser": { "$ref": "#/definitions/browser" },
     "side_agent": { "$ref": "#/definitions/sideAgent" },
     "worktrees": { "$ref": "#/definitions/worktrees" },
+    "add_stage": { "$ref": "#/definitions/addStage" },
     "collaboration": { "$ref": "#/definitions/collaboration" }
   },
   "definitions": {
@@ -100,6 +101,17 @@
         "enabled": {
           "type": "boolean",
           "description": "Enable the side-agent. ON by default; explicit false / env AFM_SIDEAGENT=0 disables it."
+        }
+      }
+    },
+    "addStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Adding stages to a running flow (dashboard \"+ Stage\" button, graph API, agent proposals). Precedence: env AFM_ADD_STAGE > project > global > default ON.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Allow adding stages during a run. ON by default; explicit false / env AFM_ADD_STAGE=0 hides the button and rejects graph changes."
         }
       }
     },

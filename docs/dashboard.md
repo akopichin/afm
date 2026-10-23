@@ -75,6 +75,13 @@ right (there is no three-column layout or bottom progress bar).
   [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
   can add a stage to a live run. See [Helpers and collaboration](collaboration.md).
 
+The **+ Stage** button is hidden when adding stages is disabled by
+[`add_stage.enabled` or `AFM_ADD_STAGE`](config-reference.md#adding-stages-during-a-run);
+it is not shown as a disabled button. In that state `/api/status` reports
+`capabilities.add_stage: false`, and `/api/run/graph/preview` and
+`/api/run/graph/commit` return HTTP 404. The setting takes effect when afm
+starts or resumes the run.
+
 ## Usage-limit waits
 
 When an agent hits a provider usage limit, its stage shows **Usage limit** in
