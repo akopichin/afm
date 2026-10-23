@@ -318,6 +318,21 @@ func (c SideAgentConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// AddStageConfig gates adding stages to a running flow (dashboard "+ Stage" button, graph API and
+// agent proposals). nil Enabled = ON by default; env AFM_ADD_STAGE wins over this field.
+type AddStageConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled сообщает, разрешено ли добавлять стадии во время рана. Приоритет: env AFM_ADD_STAGE > config
+// (проект > глобальный) > по умолчанию ВКЛЮЧЕНО. Зеркалит SideAgentConfig.IsEnabled.
+func (c AddStageConfig) IsEnabled() bool {
+	if v, set := envBool("AFM_ADD_STAGE"); set {
+		return v
+	}
+	return c.Enabled == nil || *c.Enabled
+}
+
 // WorktreesConfig gates per-flow git worktrees. nil/absent Enabled = OFF by
 // default — the inverse of SideAgentConfig's default (nil/true = ON there).
 // env AFM_WORKTREES wins over this field; flow.yaml worktrees overrides both.
@@ -510,6 +525,9 @@ type Config struct {
 	// Collaboration gates the helper-agent ("collaboration") feature: side helpers/sub-tasks a stage agent
 	// can delegate to. nil/true = ON by default; explicit false / AFM_COLLABORATION=0 disables it.
 	Collaboration CollaborationConfig `yaml:"collaboration,omitempty"`
+	// AddStage gates adding stages during a run (dashboard "+ Stage" button, graph API, agent proposals).
+	// nil/true = ON by default; explicit false / AFM_ADD_STAGE=0 disables it. No flow.yaml override.
+	AddStage AddStageConfig `yaml:"add_stage,omitempty"`
 }
 
 // Default returns the built-in default configuration.
@@ -701,6 +719,9 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	if overlay.SideAgent.Enabled != nil {
 		dst.SideAgent.Enabled = overlay.SideAgent.Enabled
+	}
+	if overlay.AddStage.Enabled != nil {
+		dst.AddStage.Enabled = overlay.AddStage.Enabled
 	}
 	if overlay.Worktrees.Enabled != nil {
 		dst.Worktrees.Enabled = overlay.Worktrees.Enabled

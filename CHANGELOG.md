@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-23
 
+### Improvement: control adding stages during a run
+
+Set `add_stage.enabled` in global or project config, or override it with
+`AFM_ADD_STAGE`, to allow or prevent new stages during a run. Adding stages is
+enabled by default. When disabled, **+ Stage** is hidden, graph API routes
+return 404, and agent proposals cannot add stages. See
+[Configuration](docs/config-reference.md#adding-stages-during-a-run).
+
 ### Improvement: collect replies and start temporary stage helpers
 
 Stage agents can use `afm agent wait --condition reply_to_all --message-ids ...`

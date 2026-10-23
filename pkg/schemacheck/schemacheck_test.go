@@ -402,3 +402,35 @@ func TestRepositoryYAMLExamplesMatchSchemas(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigSchemaMatchesAddStageSwitch(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"enabled false", "add_stage:\n  enabled: false\n", true},
+		{"enabled true", "add_stage:\n  enabled: true\n", true},
+		{"empty mapping", "add_stage: {}\n", true},
+		{"string instead of bool", "add_stage:\n  enabled: \"false\"\n", false},
+		{"number instead of bool", "add_stage:\n  enabled: 0\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaAcceptsYAML(t, sch, tt.body); got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(t.TempDir(), projectDir)
+			if runtimeAccepts := err == nil; runtimeAccepts != tt.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
+	}
+}

@@ -66,7 +66,10 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	sc.ShowMoney = cfg.Accounting.ShowMoneyEnabled()
 	sc.UIBus = orch.UIBus()
 	sc.Actions, sc.Secondary, sc.FlowActions = orch, orch, orch
-	sc.GraphActions = orch
+	// Выключенный add_stage: GraphActions остаётся nil-интерфейсом (capability=false, маршруты графа 404).
+	if cfg.AddStage.IsEnabled() {
+		sc.GraphActions = orch
+	}
 	sc.AgentMesh = agentMeshServerActions(orch)
 	sc.Mesh = meshServerActions(orch)
 	sc.RedactSecrets = orch.RedactSecrets

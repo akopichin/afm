@@ -78,6 +78,10 @@ func deliverOperationID(requestID string) string {
 // AddStageDraft (the same shape PreviewAddStage/CommitAddStage already validate against for the manual
 // dialog and the side-agent draft-confirm path) — CommitAddStage is called VERBATIM, not re-implemented.
 func (o *Orchestrator) acceptAddStageProposal(ctx context.Context, p assistants.Proposal, requestID string, actor state.Actor) error {
+	// Before markProposalAccepted: a rejected accept must leave the proposal pending, not accepted-but-undelivered.
+	if err := o.rejectIfAddStageDisabled(); err != nil {
+		return err
+	}
 	if len(p.Payload) == 0 {
 		return errors.New("assistants: add_stage proposal has no payload")
 	}

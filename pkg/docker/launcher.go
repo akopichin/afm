@@ -398,26 +398,14 @@ func ReExec(cfg ReExecConfig) error {
 			)
 		}
 	}
-	// AFM_DEBUG — не секрет, передаём значением, чтобы --debug/AFM_DEBUG на
-	// хосте включал логирование промптов и внутри контейнера.
-	if os.Getenv("AFM_DEBUG") != "" {
-		args = append(args, "-e", "AFM_DEBUG="+os.Getenv("AFM_DEBUG"))
-	}
-	// AFM_ACCOUNTING — не секрет, передаём значением: выключатель отображения стоимости резолвится ВНУТРИ
-	// контейнера, поэтому env с хоста должен доехать до контейнера.
-	if os.Getenv("AFM_ACCOUNTING") != "" {
-		args = append(args, "-e", "AFM_ACCOUNTING="+os.Getenv("AFM_ACCOUNTING"))
-	}
-	// Передаём AFM_SIDEAGENT в контейнер, где env переопределяет смонтированный конфиг.
-	if os.Getenv("AFM_SIDEAGENT") != "" {
-		args = append(args, "-e", "AFM_SIDEAGENT="+os.Getenv("AFM_SIDEAGENT"))
-	}
-	// AFM_COLLABORATION — не секрет, передаём значением (не bare -e), т.к. это тоггл, а не токен. Пробрасываем
-	// ТОЛЬКО явно заданное хостом значение: невыставленный хостовый env не должен "придумываться" внутри
-	// контейнера — иначе resolveCollaboration на хосте и в контейнере разойдутся в интерпретации
-	// config/flow-слоёв (T1.4).
-	if os.Getenv("AFM_COLLABORATION") != "" {
-		args = append(args, "-e", "AFM_COLLABORATION="+os.Getenv("AFM_COLLABORATION"))
+	// Несекретные переключатели передаём значением (не bare -e) и ТОЛЬКО если хост задал их явно:
+	// config резолвится заново внутри контейнера, поэтому env с хоста должен доехать и переопределить
+	// смонтированный конфиг, а невыставленный env не должен "придумываться" — иначе хост и контейнер разойдутся.
+	// AFM_DEBUG включает логирование промптов, AFM_ACCOUNTING — отображение стоимости, остальные — тогглы фич.
+	for _, name := range []string{"AFM_DEBUG", "AFM_ACCOUNTING", "AFM_SIDEAGENT", "AFM_COLLABORATION", "AFM_ADD_STAGE"} {
+		if value := os.Getenv(name); value != "" {
+			args = append(args, "-e", name+"="+value)
+		}
 	}
 	// File browser: манифест корней (не секрет) передаём значением — контейнер
 	// читает его один раз при старте, чтобы знать, какие пути показывать в UI.

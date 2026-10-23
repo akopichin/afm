@@ -1806,6 +1806,52 @@ func TestSideAgent_ProjectOverridesGlobal(t *testing.T) {
 	}
 }
 
+// TestAddStage_Resolution — add_stage.enabled: env AFM_ADD_STAGE > project > global > ON by default.
+// Слои проходят через LoadFrom, чтобы проверить и merge (явный false не теряется), и IsEnabled.
+func TestAddStage_Resolution(t *testing.T) {
+	const enabledTrue = "add_stage:\n  enabled: true\n"
+	const enabledFalse = "add_stage:\n  enabled: false\n"
+	cases := []struct {
+		name    string
+		global  string
+		project string
+		env     string // "" = не задан (envBool: пусто => не переопределяет)
+		want    bool
+	}{
+		{name: "absent defaults ON", want: true},
+		{name: "global false inherited when project omits", global: enabledFalse, want: false},
+		{name: "global true", global: enabledTrue, want: true},
+		{name: "project true over global false", global: enabledFalse, project: enabledTrue, want: true},
+		{name: "project false over global true", global: enabledTrue, project: enabledFalse, want: false},
+		{name: "project false alone", project: enabledFalse, want: false},
+		{name: "env 0 over config true", global: enabledTrue, project: enabledTrue, env: "0", want: false},
+		{name: "env 1 over config false", global: enabledFalse, project: enabledFalse, env: "1", want: true},
+		{name: "env false over default", env: "false", want: false},
+		{name: "env yes disables", env: "yes", want: false},
+		{name: "empty env does not override config", project: enabledFalse, env: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir := t.TempDir()
+			projectDir := t.TempDir()
+			if tc.global != "" {
+				writeYAML(t, globalDir, "config.yaml", tc.global)
+			}
+			if tc.project != "" {
+				writeYAML(t, projectDir, "config.yaml", tc.project)
+			}
+			t.Setenv("AFM_ADD_STAGE", tc.env)
+			cfg, err := config.LoadFrom(globalDir, projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.AddStage.IsEnabled(); got != tc.want {
+				t.Errorf("AddStage.IsEnabled(): got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestWorktrees_DefaultsDisabled — в отличие от SideAgent (default ON), nil
 // Worktrees.Enabled должен давать IsEnabled() == false. Это инверсия дефолта —
 // самое вероятное место для опечатки.

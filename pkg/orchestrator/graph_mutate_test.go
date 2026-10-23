@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
@@ -317,5 +318,54 @@ func TestCommit_SharedAdmissionSerialization(t *testing.T) {
 		store.Close()
 		// Both failing, or exactly one succeeding, are both fine outcomes — the point is the above
 		// inconsistency can never happen.
+	}
+}
+
+// requireAddStageDisabled проверяет, что err — отказ feature_disabled от выключенного переключателя add_stage.
+func requireAddStageDisabled(t *testing.T, err error) {
+	t.Helper()
+	var rejected *state.OperationRejectedError
+	if !errors.As(err, &rejected) || rejected.Code != assistants.CodeFeatureDisabled {
+		t.Fatalf("err = %v, want *state.OperationRejectedError{Code: feature_disabled}", err)
+	}
+}
+
+// TestAddStageDisabled_RejectsPreviewAndCommit — при Options.AddStageDisabled оба публичных метода отвечают
+// feature_disabled ДО любой другой проверки (пустой RequestID и несуществующая цель не успевают сработать) и
+// не трогают ни журнал, ни реестр.
+func TestAddStageDisabled_RejectsPreviewAndCommit(t *testing.T) {
+	cmd := newSafeAgentCommand(t)
+	orch, store := newGraphMutateTestOrchestrator(t, cmd, []flow.Stage{autoStage("a", cmd)})
+	orch.opts.AddStageDisabled = true
+	seqBefore := store.Snapshot().LastSeq
+	revBefore := orch.GraphRevision()
+	invalid := AddStageDraft{Kind: AddStageKindInsertBefore, TargetID: "missing", Stage: draftN("n", cmd)}
+
+	_, previewErr := orch.PreviewAddStage(invalid)
+	requireAddStageDisabled(t, previewErr)
+	_, commitErr := orch.CommitAddStage(context.Background(), invalid) // RequestID пуст
+	requireAddStageDisabled(t, commitErr)
+
+	if got := store.Snapshot().LastSeq; got != seqBefore {
+		t.Fatalf("journal advanced while add_stage disabled: LastSeq %d -> %d", seqBefore, got)
+	}
+	if got := orch.GraphRevision(); got != revBefore {
+		t.Fatalf("registry revision changed while add_stage disabled: %d -> %d", revBefore, got)
+	}
+}
+
+// TestAddStageDisabled_DefaultStillCommits — нулевое значение Options.AddStageDisabled оставляет добавление стадий
+// включённым для всех существующих вызывающих.
+func TestAddStageDisabled_DefaultStillCommits(t *testing.T) {
+	cmd := newSafeAgentCommand(t)
+	orch, _ := newGraphMutateTestOrchestrator(t, cmd, []flow.Stage{autoStage("a", cmd)})
+
+	if _, err := orch.CommitAddStage(context.Background(), AddStageDraft{
+		Kind: AddStageKindAppend, RequestID: "req-default", Stage: draftN("n", cmd),
+	}); err != nil {
+		t.Fatalf("CommitAddStage with default options: %v", err)
+	}
+	if _, ok := orch.reg().StageByID("n"); !ok {
+		t.Fatal("stage n was not installed")
 	}
 }

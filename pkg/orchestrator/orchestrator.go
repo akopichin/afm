@@ -115,6 +115,10 @@ type Options struct {
 	// its own (Инвариант 9).
 	AssistantsEnabled  bool
 	AssistantsRegistry *assistants.Registry
+	// AddStageDisabled — add_stage switch (config add_stage.enabled / AFM_ADD_STAGE) resolved ONCE by cmd/afm.
+	// True rejects every runtime stage creation (preview, commit, add_stage proposal); the zero value keeps
+	// the capability on. Stages already durable in the journal still materialize on resume.
+	AddStageDisabled bool
 	// Team — the flow's team: declarations, run agents initTeam creates before the stages start. Read from
 	// the CURRENT flow.yaml on every start; on resume the agents the run already created are kept as saved.
 	Team flow.Team

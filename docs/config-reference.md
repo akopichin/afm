@@ -51,6 +51,10 @@ server:
 #   enabled: true           # per-flow git worktrees; OFF by default. env AFM_WORKTREES
 #                           # overrides, and flow.yaml worktrees overrides both
 
+# add_stage:
+#   enabled: false          # allow adding stages during a run; ON by default.
+#                           # env AFM_ADD_STAGE overrides; no flow.yaml override
+
 accounting:
   enabled: false            # hide cost display everywhere (dashboard + afm check/report);
                             # ON by default, env AFM_ACCOUNTING overrides. Data is still
@@ -125,6 +129,21 @@ Set `worktrees.enabled: true` in `.afm/config.yaml` (or globally in
 worktree regardless of those settings. The default is off. See
 [Per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) for paths,
 reuse, and the `--worktree-clear` flags.
+
+## Adding stages during a run
+
+Set `add_stage.enabled: false` in the project's `.afm/config.yaml` or global
+`~/.afm/config.yaml` to prevent new stages from being added during a run. The
+default is `true`. Priority is `AFM_ADD_STAGE` (when nonempty) > project config >
+global config > default. The environment variable enables the feature only for
+the exact values `1` or `true`; any other nonempty value disables it. An empty
+value is treated as unset. The setting is resolved when afm starts or resumes a
+run, including in Docker mode. There is no `flow.yaml` override.
+
+When disabled, the dashboard hides **+ Stage**, `/api/status` reports
+`capabilities.add_stage: false`, and the graph preview and commit API routes
+return HTTP 404. Agent proposals to add a stage cannot be accepted. Stages
+already added to a run remain in its graph.
 
 See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and
