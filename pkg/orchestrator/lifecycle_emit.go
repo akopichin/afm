@@ -24,6 +24,9 @@ var fsmLifecycleEvents = map[bus.FSMEvent]lifecyclehooks.EventType{
 	bus.EvContinue:         lifecyclehooks.EventStageResumed,
 	bus.EvComplete:         lifecyclehooks.EventStageFinished,
 	bus.EvFail:             lifecyclehooks.EventStageFailed,
+	// Ожидание usage-limit провайдера: reason несёт момент пробуждения с явной UTC (QuotaWaitMessage).
+	bus.EvAwaitQuota: lifecyclehooks.EventStageAwaitingQuota,
+	bus.EvQuotaReset: lifecyclehooks.EventStageQuotaReset,
 	// EvVerifyFail — атомарный verify-driven аналог EvFail: тот же публичный исход stage_failed для
 	// потребителей lifecycle-хуков, просто с другим FSM-событием внутри.
 	bus.EvVerifyFail: lifecyclehooks.EventStageFailed,

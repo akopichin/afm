@@ -1,0 +1,151 @@
+/* Общие карточка и редактор комментариев (plan, question, file, review). Каркас формы — в plan-panel.css. */
+.comment-card,
+.comment-editor { min-width: 0; }
+
+.comment-display-header .comment-title { margin-right: auto; }
+
+.comment-draft-badge {
+  padding: 1px 6px;
+  border: 1px solid rgba(var(--attention-rgb), 0.5);
+  border-radius: var(--radius-sm);
+  color: var(--attention);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.comment-caption {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Полный текст без обрезки: переносы строк сохраняются, длинные слова и пути переносятся. */
+.comment-text {
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.line-comment-quote-src { overflow-wrap: anywhere; }
+
+.comment-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.comment-recipient {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.comment-recipient-select {
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+  font-size: 13px;
+  /* Нативная стрелка Chrome игнорирует padding и липнет к краю — рисуем свою с отступом справа. */
+  appearance: none;
+  padding: 4px 28px 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--separator-subtle);
+  background:
+    linear-gradient(45deg, transparent 50%, currentColor 50%) no-repeat right 14px center / 5px 5px,
+    linear-gradient(135deg, currentColor 50%, transparent 50%) no-repeat right 9px center / 5px 5px,
+    var(--surface-canvas);
+  color: var(--text-primary);
+}
+.comment-recipient-note {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Диалог Send / Send all: поверх Files, поэтому слой выше его оверлея. */
+.send-dialog-overlay { z-index: 1200; }
+.send-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 640px;
+  max-height: calc(100vh - 48px);
+  padding: 18px 20px;
+}
+.send-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.send-dialog-header h2 { margin: 0; font-size: 16px; }
+.send-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow-y: auto;
+}
+.send-dialog-summary { margin: 0; font-family: var(--font-ui); font-size: 13px; color: var(--text-secondary); }
+.send-dialog-file { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.send-dialog-file-title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.send-dialog-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-tool);
+}
+.send-dialog-source { display: flex; flex-direction: column; gap: 6px; }
+.send-dialog-confirm { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-ui); font-size: 12px; }
+.send-dialog-field { display: flex; flex-direction: column; gap: 4px; font-family: var(--font-ui); font-size: 12px; color: var(--text-secondary); }
+.send-dialog-field textarea {
+  min-height: 64px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+.send-dialog-hint { margin: 0; font-family: var(--font-ui); font-size: 12px; color: var(--attention); }
+.send-dialog-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.send-dialog-packet {
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+}
+
+/* Состояние отправки в футере Files: статус занимает свободное место, кнопка Send all остаётся справа. */
+.file-comment-send-status {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}

@@ -1,14 +1,9 @@
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from 'react'
-import { PasteableTextarea } from '../pasteable-textarea'
+import { Fragment, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { copyToClipboard } from '../../lib/clipboard'
+import { CommentCard } from '../comments/CommentCard'
+import { CommentEditor } from '../comments/CommentEditor'
+import { commentKey, isDraft, type CommentAnchor, type CommentEntry } from '../comments/comment-state'
+import { useComments } from '../comments/CommentProvider'
 import { renderAnchoredSections, type Block, type Section } from './markdown'
 import { useLineComments } from './use-line-comments'
 
@@ -25,24 +20,59 @@ export function quotedSourceLine(sourceLines: string[], line: number): string {
   return trimmed
 }
 
+// DocumentScope — какую версию документа показывает компонент: комментарии другой версии не прикрепляются.
+export type DocumentScope =
+  | { kind: 'plan'; version: string }
+  | { kind: 'question'; phase: string; questionId: string }
+
+function anchorFor(stageId: string, scope: DocumentScope, line: number): CommentAnchor {
+  if (scope.kind === 'plan') return { kind: 'plan', stageId, document: 'plan', version: scope.version, line }
+  return { kind: 'question', stageId, phase: scope.phase, questionId: scope.questionId, line }
+}
+
+function inDocument(anchor: CommentAnchor, stageId: string, scope: DocumentScope): boolean {
+  if (anchor.kind === 'plan' && scope.kind === 'plan') return anchor.stageId === stageId && anchor.version === scope.version
+  if (anchor.kind === 'question' && scope.kind === 'question') {
+    return anchor.stageId === stageId && anchor.phase === scope.phase && anchor.questionId === scope.questionId
+  }
+  return false
+}
+
+// staleComments — записи этой стадии от прошлой версии плана / закрытого вопроса (current === null: открытого
+// вопроса нет, устарели все).
+export function staleComments(
+  all: readonly CommentEntry[],
+  stageId: string,
+  kind: DocumentScope['kind'],
+  current: DocumentScope | null,
+): CommentEntry[] {
+  return all.filter(({ anchor }) => {
+    if (anchor.kind === 'file' || anchor.kind !== kind || anchor.stageId !== stageId) return false
+    return current === null || !inDocument(anchor, stageId, current)
+  })
+}
+
+// DocumentComment — непустой комментарий к строке документа; key/revision нужны для подтверждения отправки.
+export type DocumentComment = { line: number; key: string; revision: number; text: string }
+
 // API, который владелец отдаёт потребителю через render-prop.
 export type LineCommentDocumentApi = {
   // body — готовый к рендеру markdown-контейнер (со всеми блоками, формами и
   // индикаторами внутри). Потребитель кладёт его в свой лейаут где нужно.
   body: ReactNode
-  comments: Record<number, string>
+  // comments — все непустые комментарии (и сохранённые, и черновики), по возрастанию строки.
+  comments: DocumentComment[]
   commentCount: number
   activeCommentLine: number | null
-  draft: string
   // hasOpenDraft — открыта форма с НЕПУСТЫМ черновиком.
   hasOpenDraft: boolean
-  clearComments: () => void
 }
 
 type LineCommentedDocumentProps = {
   text: string
   specialSections: boolean
   stageId: string
+  scope: DocumentScope
   // beforeOpen — синхронный колбэк ПЕРЕД открытием формы (Dialog передаёт feed.release, чтобы стик-к-низу
   // не утащил канал после автоскролла к форме; Plan — noop/не передаёт).
   beforeOpen?: () => void
@@ -52,66 +82,86 @@ type LineCommentedDocumentProps = {
   children: (doc: LineCommentDocumentApi) => ReactNode
 }
 
-// LineCommentedDocument — keyed-владелец ОДНОЙ версии документа.
+// LineCommentedDocument — одна версия документа; тексты комментариев живут в run-scoped CommentProvider,
+// поэтому переживают размонтирование (смена вкладки/стадии).
 export function LineCommentedDocument({
   text,
   specialSections,
   stageId,
+  scope,
   beforeOpen,
   allowFileReferences = true,
   bodyId,
   bodyClassName,
   children,
 }: LineCommentedDocumentProps): ReactElement {
-  const [comments, setComments] = useState<Record<number, string>>({})
-  const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
-  const [draft, setDraft] = useState('')
+  const { comments: all, open, edit, fold, saveAndFold, discard } = useComments()
   const [rovingLine, setRovingLine] = useState<number | null>(null)
   const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set())
 
   const sections = useMemo(() => renderAnchoredSections(text, { specialSections }), [text, specialSections])
   const sourceLines = useMemo(() => text.split('\n'), [text])
 
-  const commentCount = Object.keys(comments).length
-  const hasOpenDraft = activeCommentLine !== null && draft.trim() !== ''
+  // entries — записи этого документа по строкам; scope читаем по его содержимому, а не по идентичности.
+  const scopeId = JSON.stringify(scope)
+  const entries = useMemo(() => {
+    const byLine = new Map<number, CommentEntry>()
+    for (const entry of all) {
+      const { anchor } = entry
+      if (anchor.kind !== 'file' && anchor.line !== null && inDocument(anchor, stageId, scope)) byLine.set(anchor.line, entry)
+    }
+    return byLine
+  }, [all, stageId, scopeId])
 
-  // Свежие значения для onActivate (вызывается из делегированного слушателя хука
-  // через ref — без пересборки слушателей).
-  const activeRef = useRef(activeCommentLine)
-  activeRef.current = activeCommentLine
-  const draftRef = useRef(draft)
-  draftRef.current = draft
-  const commentsRef = useRef(comments)
-  commentsRef.current = comments
-
-  const openComment = useCallback(
-    (line: number) => {
-      // ПЕРВЫМ синхронный beforeOpen (release стика), затем атомарно active+roving.
-      beforeOpen?.()
-      setActiveCommentLine(line)
-      setRovingLine(line)
-      setDraft(commentsRef.current[line] ?? '')
-    },
-    [beforeOpen],
+  const documentComments = useMemo(
+    () =>
+      Array.from(entries, ([line, entry]) => ({ line, key: entry.key, revision: entry.revision, text: entry.text.trim() }))
+        .filter((comment) => comment.text !== '')
+        .sort((a, b) => a.line - b.line),
+    [entries],
+  )
+  const commentedLines = useMemo(
+    () => Object.fromEntries(documentComments.map((comment) => [comment.line, comment.text])),
+    [documentComments],
   )
 
-  // onActivate — реакция на клик/Enter по якорю: непустой черновик игнорирует любые клики; повторный клик
-  // по активной строке (с пустым черновиком) закрывает форму; иначе открываем/переключаемся.
-  const onActivate = useCallback(
-    (line: number) => {
-      if (activeRef.current !== null && draftRef.current.trim() !== '') return
-      if (activeRef.current === line) {
-        setActiveCommentLine(null)
-        setDraft('')
-        return
-      }
-      openComment(line)
-    },
-    [openComment],
-  )
+  const openEntry = Array.from(entries).find(([, entry]) => entry.editorOpen)
+  const activeCommentLine = openEntry?.[0] ?? null
+  const hasOpenDraft = openEntry !== undefined && openEntry[1].text.trim() !== ''
+
+  function openLine(line: number): void {
+    // ПЕРВЫМ синхронный beforeOpen (release стика), затем открытие формы.
+    beforeOpen?.()
+    setRovingLine(line)
+    const anchor = anchorFor(stageId, scope, line)
+    open(commentKey(anchor), { anchor, quote: quotedSourceLine(sourceLines, line) })
+  }
+
+  // Крестик/Escape прячет форму, но текст остаётся; пустая форма (или стёртый текст) исчезает совсем.
+  function foldLine(line: number, entry: CommentEntry): void {
+    fold(entry.key)
+    focusAnchor(line)
+  }
+
+  // onActivate — реакция на клик/Enter по якорю: форма с непустым текстом игнорирует клики по строкам;
+  // повторный клик по активной строке (с пустым текстом) закрывает форму; иначе открываем/переключаемся.
+  function onActivate(line: number): void {
+    if (hasOpenDraft) return
+    if (openEntry !== undefined) {
+      foldLine(openEntry[0], openEntry[1])
+      if (openEntry[0] === line) return
+    }
+    openLine(line)
+  }
+
+  // Edit на карточке: другая открытая форма сворачивается (текст остаётся карточкой), поэтому клик не теряется.
+  function editLine(line: number): void {
+    if (openEntry !== undefined && openEntry[0] !== line) foldLine(openEntry[0], openEntry[1])
+    openLine(line)
+  }
 
   const { containerRef, focusAnchor } = useLineComments({
-    comments,
+    comments: commentedLines,
     activeCommentLine,
     rovingLine,
     setRovingLine,
@@ -120,128 +170,82 @@ export function LineCommentedDocument({
     visibilitySignal: collapsedSections,
   })
 
-  const closeForm = useCallback(
-    (line: number) => {
-      setActiveCommentLine(null)
-      setDraft('')
-      focusAnchor(line)
-    },
-    [focusAnchor],
-  )
+  function saveLine(line: number, entry: CommentEntry): void {
+    saveAndFold(entry.key)
+    focusAnchor(line)
+  }
 
-  const saveComment = useCallback(
-    (line: number) => {
-      const text = draftRef.current.trim()
-      setComments((prev) => {
-        const next = { ...prev }
-        if (text === '') delete next[line]
-        else next[line] = text
-        return next
-      })
-      setActiveCommentLine(null)
-      setDraft('')
-      focusAnchor(line)
-    },
-    [focusAnchor],
-  )
+  function deleteLine(line: number, entry: CommentEntry): void {
+    discard(entry.key)
+    focusAnchor(line)
+  }
 
-  const deleteComment = useCallback(
-    (line: number) => {
-      setComments((prev) => {
-        const next = { ...prev }
-        delete next[line]
-        return next
-      })
-      setActiveCommentLine(null)
-      setDraft('')
-      focusAnchor(line)
-    },
-    [focusAnchor],
-  )
+  // Collapse секции с активным непустым черновиком запрещён — он пропал бы из виду.
+  function sectionHasOpenDraft(section: Section): boolean {
+    if (!hasOpenDraft || activeCommentLine === null) return false
+    return section.blocks.some((b) => activeCommentLine >= b.startLine && activeCommentLine < b.endLineExclusive)
+  }
 
-  const clearComments = useCallback(() => {
-    setComments({})
-    setActiveCommentLine(null)
-    setDraft('')
-  }, [])
-
-  // Свёрнута ли секция, содержащая активный непустой черновик — collapse такой
-  // секции запрещён (черновик потерялся бы визуально из виду).
-  const draftSectionHasOpenDraft = useCallback(
-    (section: Section): boolean => {
-      if (activeCommentLine === null || draft.trim() === '') return false
-      return section.blocks.some((b) => activeCommentLine >= b.startLine && activeCommentLine < b.endLineExclusive)
-    },
-    [activeCommentLine, draft],
-  )
-
-  const toggleSection = useCallback(
-    (index: number, section: Section, headerEl: HTMLButtonElement | null) => {
-      setCollapsedSections((prev) => {
-        const collapsing = !prev.has(index)
-        // Collapse с непустым черновиком в этой секции запрещён — оставляем
-        // раскрытой, фокус на заголовок (draft сохраняется).
-        if (collapsing && draftSectionHasOpenDraft(section)) {
-          headerEl?.focus()
-          return prev
-        }
-        const next = new Set(prev)
-        if (next.has(index)) next.delete(index)
-        else next.add(index)
-        return next
-      })
-    },
-    [draftSectionHasOpenDraft],
-  )
-
-  const commentedLinesIn = useCallback(
-    (block: Block): number[] =>
-      Object.keys(comments)
-        .map(Number)
-        .filter((line) => line >= block.startLine && line < block.endLineExclusive)
-        .sort((a, b) => a - b),
-    [comments],
-  )
+  function toggleSection(index: number, section: Section, headerEl: HTMLButtonElement | null): void {
+    setCollapsedSections((prev) => {
+      const collapsing = !prev.has(index)
+      // Фокус на заголовок, секция остаётся раскрытой, черновик на месте.
+      if (collapsing && sectionHasOpenDraft(section)) {
+        headerEl?.focus()
+        return prev
+      }
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
 
   const renderBlock = (block: Block): ReactNode => {
-    const displays = commentedLinesIn(block)
-    const showForm =
-      activeCommentLine !== null &&
-      activeCommentLine >= block.startLine &&
-      activeCommentLine < block.endLineExclusive
+    const blockEntries = Array.from(entries)
+      .filter(([line]) => line >= block.startLine && line < block.endLineExclusive)
+      .sort(([a], [b]) => a - b)
 
     return (
       <Fragment key={`block-${block.startLine}`}>
         <div className="md" dangerouslySetInnerHTML={{ __html: block.html }} />
-        {displays
-          // Активную (редактируемую) строку не показываем карточкой — её
-          // цитату и текст уже рендерит открытая форма ниже. Иначе цитата
-          // задвоилась бы (карточка + форма).
-          .filter((line) => line !== activeCommentLine)
-          .map((line) => (
-            <LineCommentDisplay
+        {blockEntries.map(([line, entry]) => {
+          // Редактируемая запись показывается формой (цитата не задваивается карточкой).
+          if (entry.editorOpen) {
+            return (
+              <CommentEditor
+                key={`form-${line}`}
+                context={scope.kind}
+                stageId={stageId}
+                allowAttachments={allowFileReferences}
+                title={`Comment on line ${line}`}
+                line={line}
+                quote={entry.quote}
+                placeholder={`Comment on line ${line}...`}
+                value={entry.text}
+                onChange={(value) => edit(entry.key, value)}
+                onSave={() => saveLine(line, entry)}
+                onFold={() => foldLine(line, entry)}
+                onDiscard={entry.saved !== '' ? () => deleteLine(line, entry) : undefined}
+                saveLabel={entry.saved !== '' ? 'Update' : 'Add'}
+                discardLabel="Delete"
+              />
+            )
+          }
+          if (entry.text.trim() === '') return null
+          return (
+            <CommentCard
               key={`display-${line}`}
+              title={`Comment on line ${line}`}
               line={line}
-              text={comments[line] ?? ''}
-              quotedLine={quotedSourceLine(sourceLines, line)}
-              onRemove={() => deleteComment(line)}
+              quote={entry.quote}
+              text={entry.text}
+              draft={isDraft(entry)}
+              onEdit={() => editLine(line)}
+              onRemove={() => deleteLine(line, entry)}
             />
-          ))}
-        {showForm && activeCommentLine !== null && (
-          <LineCommentForm
-            key={`form-${activeCommentLine}`}
-            line={activeCommentLine}
-            stageId={stageId}
-            allowFileReferences={allowFileReferences}
-            hasComment={comments[activeCommentLine] !== undefined}
-            quotedLine={quotedSourceLine(sourceLines, activeCommentLine)}
-            draft={draft}
-            onDraftChange={setDraft}
-            onSave={() => saveComment(activeCommentLine)}
-            onDelete={() => deleteComment(activeCommentLine)}
-            onClose={() => closeForm(activeCommentLine)}
-          />
-        )}
+          )
+        })}
       </Fragment>
     )
   }
@@ -270,7 +274,66 @@ export function LineCommentedDocument({
     </div>
   )
 
-  return <>{children({ body, comments, commentCount, activeCommentLine, draft, hasOpenDraft, clearComments })}</>
+  return (
+    <>
+      {children({ body, comments: documentComments, commentCount: documentComments.length, activeCommentLine, hasOpenDraft })}
+    </>
+  )
+}
+
+// StaleComments — комментарии от прошлой версии плана / закрытого вопроса: их можно посмотреть, скопировать
+// или убрать, но к новой версии они не прикрепляются. С unsentReason (документ не загрузился) устарелость
+// неизвестна: комментарии подписываются как неотправленные, а удаление называется Discard.
+export function StaleComments({
+  entries,
+  source,
+  unsentReason,
+}: {
+  entries: readonly CommentEntry[]
+  source: string
+  unsentReason?: string
+}): ReactElement | null {
+  const { discard } = useComments()
+  const [shown, setShown] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const stale = entries.filter((entry) => entry.text.trim() !== '')
+  if (stale.length === 0) return null
+
+  const noun = stale.length === 1 ? 'comment' : 'comments'
+  const caption = unsentReason === undefined ? `${stale.length} ${noun} from ${source}` : `${stale.length} unsent ${noun} - ${unsentReason}`
+  const lineOf = (entry: CommentEntry): number | null => (entry.anchor.kind === 'file' ? null : entry.anchor.line)
+  const copyAll = async (): Promise<void> => {
+    const lines = stale.map((entry) => (lineOf(entry) === null ? entry.text : `Line ${lineOf(entry)}: ${entry.text}`))
+    setCopyState((await copyToClipboard(lines.join('\n\n'))) ? 'copied' : 'failed')
+  }
+
+  return (
+    <div className="stale-comments" data-comment-ui="">
+      <div className="comment-caption">
+        <span>{caption}</span>
+        {' · '}
+        <button type="button" className="btn btn-edit" onClick={() => setShown(!shown)}>
+          {shown ? 'Hide' : 'Show'}
+        </button>
+        <button type="button" className="btn btn-edit" onClick={() => void copyAll()}>
+          {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+        </button>
+        <button type="button" className="btn btn-cancel" onClick={() => stale.forEach((entry) => discard(entry.key))}>
+          {unsentReason === undefined ? 'Dismiss' : 'Discard'}
+        </button>
+      </div>
+      {shown &&
+        stale.map((entry) => (
+          <CommentCard
+            key={entry.key}
+            title={lineOf(entry) === null ? 'Answer draft' : `Comment on line ${lineOf(entry)}`}
+            quote={entry.quote}
+            text={entry.text}
+            onRemove={() => discard(entry.key)}
+          />
+        ))}
+    </div>
+  )
 }
 
 function SpecialSectionWrapper({
@@ -302,114 +365,6 @@ function SpecialSectionWrapper({
       </button>
       <div className="plan-section-body" hidden={collapsed}>
         {children}
-      </div>
-    </div>
-  )
-}
-
-// QuoteBlock — dimmed-превью строки-источника. Одна и та же разметка у открытой формы и у сохранённого
-// комментария; пустой quotedLine (пустая/hr-строка) не рендерит ничего.
-function QuoteBlock({ quotedLine }: { quotedLine: string }): ReactElement | null {
-  if (quotedLine === '') return null
-  return (
-    <div className="line-comment-quote">
-      <span className="line-comment-quote-src">{quotedLine}</span>
-    </div>
-  )
-}
-
-function LineCommentDisplay({
-  line,
-  text,
-  quotedLine,
-  onRemove,
-}: {
-  line: number
-  text: string
-  quotedLine: string
-  onRemove: () => void
-}): ReactElement {
-  return (
-    <div className="line-comment-form line-comment-display" data-comment-ui="" data-comment-line={line}>
-      <div className="comment-display-header">
-        <span className="comment-title">Comment on line {line}</span>
-        <button type="button" className="comment-remove" aria-label={`Remove comment on line ${line}`} title="Remove comment" onClick={onRemove}>
-          ✕
-        </button>
-      </div>
-      <QuoteBlock quotedLine={quotedLine} />
-      <div style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{text}</div>
-    </div>
-  )
-}
-
-function LineCommentForm({
-  line,
-  stageId,
-  allowFileReferences,
-  hasComment,
-  quotedLine,
-  draft,
-  onDraftChange,
-  onSave,
-  onDelete,
-  onClose,
-}: {
-  line: number
-  stageId: string
-  allowFileReferences: boolean
-  hasComment: boolean
-  quotedLine: string
-  draft: string
-  onDraftChange: (value: string) => void
-  onSave: () => void
-  onDelete: () => void
-  onClose: () => void
-}): ReactElement {
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-
-  // Автоскролл к форме при открытии (block:'nearest') — форма контейнера (списка/
-  // таблицы) появляется ПОД всем блоком, поэтому её надо подтянуть в вид.
-  useEffect(() => {
-    const el = wrapRef.current
-    if (el !== null && typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ block: 'nearest' })
-    }
-  }, [])
-
-  return (
-    <div className="line-comment-form" data-comment-ui="" data-comment-line={line} ref={wrapRef}>
-      <div className="comment-display-header">
-        <span className="comment-title">Comment on line {line}</span>
-        <button type="button" className="comment-remove" aria-label={`Close comment on line ${line}`} title="Close" onClick={onClose}>
-          ✕
-        </button>
-      </div>
-      <QuoteBlock quotedLine={quotedLine} />
-      <PasteableTextarea
-        stageId={stageId}
-        placeholder={`Comment on line ${line}...`}
-        value={draft}
-        onChange={onDraftChange}
-        autoFocus
-        allowFileReferences={allowFileReferences}
-        onSubmit={onSave}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onClose()
-          }
-        }}
-      />
-      <div className="comment-actions">
-        <button className="btn btn-send" type="button" onClick={onSave}>
-          {hasComment ? 'Update' : 'Add'}
-        </button>
-        {hasComment && (
-          <button className="btn btn-cancel" type="button" onClick={onDelete}>
-            Delete
-          </button>
-        )}
       </div>
     </div>
   )

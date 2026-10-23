@@ -14,6 +14,10 @@ pending → running(autonomous_execution) → done
 
 # agent-to-agent wait:
 running → awaiting_peer → running
+
+# provider usage limit (also applies during planning and verify):
+running → awaiting_quota → running
+                         ↘ paused → running (Continue)
 ```
 
 - `pending` — not started yet; planning starts once all `depends_on` are complete
@@ -27,6 +31,13 @@ running → awaiting_peer → running
   completes when the required helper gate closes
 - `awaiting_peer` — the stage agent yielded while waiting for an Agent Mesh reply;
   it resumes when that wait resolves (see [Team conversations](collaboration.md#team-conversations))
+- `awaiting_quota` — an agent hit a provider usage limit. afm records the wait in
+  the event log and releases the agent's execution slot. With a known reset time,
+  it resumes after the reset plus the configured margin; without one, it probes
+  again after the configured interval. The same wait can occur during planning,
+  execution, or an AI verify step. A parked verify step resumes at that step
+  without rerunning the author. Other work using the same provider waits for the
+  existing hold instead of making another request. See [Usage limits](config-reference.md#usage-limits).
 - `awaiting_user_input` — an [interactive stage](interactive-stages.md) is waiting for
   a user answer; once answered, it returns to the phase where the question was asked
 - `revising` — feedback was sent and the AI is reworking: either the plan (from
@@ -38,12 +49,19 @@ running → awaiting_peer → running
   fails immediately. Delays start at 5 seconds, double up to a 60-second cap,
   and are reduced by up to 20% of jitter. The retry notice shows the actual delay.
   Completion-check corrections and `verify` retries have separate rules.
+  A recognized provider usage limit uses `awaiting_quota` instead: waiting does
+  not consume the ordinary retry or verify correction budget.
 - `hook_failed` — a [`script_before` hook](script-stages.md) exhausted its retries;
   the stage is blocked until you hit **Retry** or **Skip** on the dashboard (a
   `script_after` failure never uses this status — the stage stays `done`)
 - `paused` — waiting for you to hit **Continue** on the dashboard: either gated by
   `auto_run: false` on first activation, or manually paused mid-run via the kebab (⋮)
-  menu (see [Dashboard → Pausing a stage](dashboard.md#pausing-a-stage-before-it-starts))
+  menu. A usage limit also pauses the stage when the provider reports quota
+  exhaustion with no reset, its reset exceeds `usage_limit.max_wait`, or
+  consecutive refusals without progress exceed `usage_limit.max_waits`.
+  Continue makes one immediate attempt;
+  another limit can park or pause it again. See
+  [Dashboard → Pausing a stage](dashboard.md#pausing-a-stage-before-it-starts).
 - `done` / `failed` — complete
 
 ## Resume on restart
@@ -58,6 +76,8 @@ When you invoke `afm run` again, the tool automatically:
   stage when its wait resolves; a `running` stage whose turn had already
   yielded on waits (`afm agent wait` answered `yield`) is parked on them
   instead of restarted
+- Restores `awaiting_quota` with its recorded wake time; a stage whose wait
+  expired while afm was stopped resumes on restart
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
 - Preserves stages in `awaiting_user_input`: question/answer files survive the

@@ -1,5 +1,6 @@
 import { type ReactElement } from 'react'
 import type { ChangeList, ChangeEntry, ChangeStatus, TreeEntry } from '../../api/files-client'
+import { FileCommentCount, noComments } from './FileCommentCount'
 
 type ChangedFilesListProps = {
   // null — изменения ещё не загружены/очищены; result с entries — ответ бэкенда.
@@ -12,6 +13,8 @@ type ChangedFilesListProps = {
   activePath: string | null
   // Чекбоксы выбора: только в режиме attach (см. FileTree.showCheckboxes).
   showCheckboxes?: boolean
+  // Число комментариев к файлу по пути — маркер «● N» в строке.
+  commentCount?: (path: string) => number
 }
 
 const BADGE: Record<ChangeStatus, string> = { modified: 'M', added: 'A', deleted: 'D' }
@@ -27,7 +30,7 @@ function dirPrefix(path: string): string {
 
 // Плоский список изменённых файлов. Цвет badge — не единственный сигнал: буква статуса (M/A/D) всегда
 // видна текстом.
-export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: ChangedFilesListProps): ReactElement {
+export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true, commentCount = noComments }: ChangedFilesListProps): ReactElement {
   return (
     <div className="file-search-results" role="list" aria-label="Changed files">
       {error !== null ? (
@@ -59,6 +62,7 @@ export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, is
                     {prefix !== '' && <span className="file-search-dir">{prefix}</span>}
                     <span className="file-tree-name">{entry.name}</span>
                   </span>
+                  <FileCommentCount count={commentCount(entry.path)} />
                   <span className="file-change-reason">Deleted or unavailable in the working tree</span>
                 </div>
               )
@@ -84,6 +88,7 @@ export function ChangedFilesList({ result, error, onOpenFile, onToggleSelect, is
                     {prefix !== '' && <span className="file-search-dir">{prefix}</span>}
                     <span className="file-tree-name">{entry.name}</span>
                   </span>
+                  <FileCommentCount count={commentCount(entry.path)} />
                 </button>
               </div>
             )

@@ -33,6 +33,10 @@ type MeshWait struct {
 	// only a reply from a recipient of the awaited message answers it. A wait journaled before that rule keeps
 	// the old one — any reply answers it — so replaying an old journal resolves its waits as it did then.
 	RecipientReplyOnly bool `json:"recipient_reply_only,omitempty"`
+	// BatchID groups the reply_to waits one operation registered for several requests at once: they share
+	// the id, while each keeps its own wait id, status and reason. Empty for a wait registered on its own and
+	// in journals written before batches existed.
+	BatchID string `json:"batch_id,omitempty"`
 	// RegisteredSeq is the seq of the record that registered the wait, and Yielded whether it was still pending
 	// then — `afm agent wait` answered "yield", so the waiter ended its turn for it. Both are derived from the
 	// registration on replay; recovery uses them to find the waits a turn interrupted before its park yielded on.
@@ -58,6 +62,8 @@ type MeshWaitRegisteredPayload struct {
 	// RecipientReplyOnly (set on every new reply_to wait) accepts only a reply from a recipient of the awaited
 	// message. Absent in older journals: there any reply answered the wait, and replay keeps that.
 	RecipientReplyOnly bool `json:"recipient_reply_only,omitempty"`
+	// BatchID is set on every wait of one batch registration (see MeshWait.BatchID); absent otherwise.
+	BatchID string `json:"batch_id,omitempty"`
 }
 
 // applyMeshWaitRegistered projects one mesh_wait_registered control record. If the condition is ALREADY
@@ -89,7 +95,7 @@ func applyMeshWaitRegistered(as *AssistantsState, c *Control, dryRun bool) error
 
 	mw := &MeshWait{
 		Wait: w, TargetTaskID: c.Target.TaskID, TargetStageID: c.Target.StageID, Generation: p.Generation,
-		FreshResultOnly: p.FreshResultOnly, RecipientReplyOnly: p.RecipientReplyOnly,
+		FreshResultOnly: p.FreshResultOnly, RecipientReplyOnly: p.RecipientReplyOnly, BatchID: p.BatchID,
 	}
 	if p.FreshResultOnly && w.Condition.Kind == agentcomm.WaitOnTaskResult {
 		if t, ok := as.Tasks[assistants.TaskID(w.Condition.TaskID)]; ok {

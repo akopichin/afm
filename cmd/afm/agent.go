@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/server"
 )
 
 // Agent Mesh Phase 3, T3.2: the afm agent CLI — a hidden command (never meant to be typed by a human) every
@@ -23,6 +25,13 @@ const (
 	agentWaitStatusReady = "ready"
 )
 
+// agentWaitReplyToAll is the --condition of a batch wait. The service knows no such condition: it is reply_to
+// with a list of message ids.
+const agentWaitReplyToAll = "reply_to_all"
+
+// agentWaitStatusName is the `afm agent wait-status` command and its /api/agent-mesh route.
+const agentWaitStatusName = "wait-status"
+
 // newAgentCmd registers `afm agent`.
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -32,7 +41,7 @@ func newAgentCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newAgentWhoamiCmd(), newAgentListCmd(), newAgentSendCmd(), newAgentReplyCmd(),
-		newAgentInboxCmd(), newAgentAckCmd(), newAgentWaitCmd(), newAgentBoardCmd(), newAgentTaskCmd(), newAgentLoopCmd(),
+		newAgentInboxCmd(), newAgentAckCmd(), newAgentWaitCmd(), newAgentWaitStatusCmd(), newAgentSpawnCmd(), newAgentHelperResultCmd(), newAgentBoardCmd(), newAgentTaskCmd(), newAgentLoopCmd(),
 	)
 	return cmd
 }
@@ -223,12 +232,20 @@ func newAgentAckCmd() *cobra.Command {
 // the "status" field tells the caller what to do next: "ready" means the condition already holds (no need
 // to end the turn), "yield" means the caller should end its turn now and let the next invocation pick up
 // the reply via the <inbox> block or a fresh `afm agent inbox` call.
+//
+// --condition reply_to_all --message-ids a,b,c (also spelled --condition reply_to --message-ids a,b,c) is ONE
+// wait for the reply to every listed request: it answers with a batch_id and the outcome of each item, and the
+// agent is resumed once after all of them ended.
 func newAgentWaitCmd() *cobra.Command {
-	var condKind, messageID, threadID, taskID, stageID, key, status, note string
+	var condKind, messageID, messageIDs, threadID, taskID, stageID, key, status, note string
 	var deadlineSeconds int64
 	c := &cobra.Command{
-		Use:          "wait",
-		Short:        "Register a wait on a reply/addressed-message/task-result/board-key/stage-status condition",
+		Use:   "wait",
+		Short: "Register a wait on a reply/addressed-message/task-result/board-key/stage-status condition",
+		Long: "Register a durable wait, then end your turn. --condition reply_to_all --message-ids a,b,c waits for the reply to " +
+			"EACH listed request (up to 16 distinct ids of requests you sent) with one deadline for the whole set: you are resumed " +
+			"once, after every one of them was answered, cancelled or expired. Read each item's outcome and the reason an item " +
+			"ended without an answer with `afm agent wait-status`; the answers are in your inbox.",
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
@@ -237,13 +254,21 @@ func newAgentWaitCmd() *cobra.Command {
 					ThreadID: agentcomm.ThreadID(threadID), TaskID: taskID, StageID: stageID, Key: key, Status: status,
 				}
 				reqBody := map[string]any{"request_id": newAgentRequestID(), "condition": cond, "continuation_note": note}
+				batch := condKind == agentWaitReplyToAll || (condKind == string(agentcomm.WaitOnReplyTo) && messageIDs != "")
+				if batch {
+					ids, err := batchMessageIDs(messageID, messageIDs)
+					if err != nil {
+						return nil, err
+					}
+					cond.Kind = agentcomm.WaitOnReplyTo
+					reqBody["condition"], reqBody["message_ids"] = cond, ids
+				} else if messageIDs != "" {
+					return nil, newAgentCLIError("invalid_request", "--message-ids goes with --condition %s (or reply_to)", agentWaitReplyToAll)
+				}
 				if deadlineSeconds > 0 {
 					reqBody["deadline_unix"] = time.Now().Unix() + deadlineSeconds
 				}
-				var out struct {
-					WaitID string `json:"wait_id"`
-					Status string `json:"status"`
-				}
+				var out server.MeshWaitReceipt
 				if err := c2.do("POST", "wait", reqBody, &out); err != nil {
 					return nil, err
 				}
@@ -251,19 +276,142 @@ func newAgentWaitCmd() *cobra.Command {
 				if out.Status == string(agentcomm.WaitReady) {
 					cliStatus = agentWaitStatusReady
 				}
+				if batch {
+					return map[string]any{"status": cliStatus, "batch_id": out.BatchID, "items": out.Items}, nil
+				}
 				return map[string]string{"status": cliStatus, "wait_id": out.WaitID}, nil
 			})
 		},
 	}
-	c.Flags().StringVar(&condKind, "condition", "", "reply_to|addressed_message|task_result|board_key|stage_status (required)")
+	c.Flags().StringVar(&condKind, "condition", "", "reply_to|reply_to_all|addressed_message|task_result|board_key|stage_status (required)")
 	c.Flags().StringVar(&messageID, "message-id", "", "for condition=reply_to")
+	c.Flags().StringVar(&messageIDs, "message-ids", "", "for condition=reply_to_all (or reply_to): comma-separated ids of the requests to wait for (1-16, no duplicates)")
 	c.Flags().StringVar(&threadID, "thread-id", "", "for condition=addressed_message; omit to wait for a new message to you in any thread")
 	c.Flags().StringVar(&taskID, "task-id", "", "for condition=task_result")
 	c.Flags().StringVar(&stageID, "stage-id", "", "for condition=stage_status")
 	c.Flags().StringVar(&key, "key", "", "for condition=board_key")
 	c.Flags().StringVar(&status, "status", "", "for condition=board_key or stage_status")
 	c.Flags().StringVar(&note, "note", "", "continuation note shown when this participant resumes")
-	c.Flags().Int64Var(&deadlineSeconds, "deadline-seconds", 0, "optional deadline, seconds from now (0 = no deadline)")
+	c.Flags().Int64Var(&deadlineSeconds, "deadline-seconds", 0, "optional deadline, seconds from now (0 = no deadline); one deadline covers a whole reply_to_all set")
+	return c
+}
+
+// batchMessageIDs reads --message-ids of a reply_to_all wait: a comma-separated list, spaces around an id
+// dropped, with no empty entry and no id twice. It names the entry at fault, so the agent can fix the call.
+func batchMessageIDs(messageID, csv string) ([]string, error) {
+	invalid := func(format string, args ...any) error { return newAgentCLIError("invalid_request", format, args...) }
+	if messageID != "" {
+		return nil, invalid("a batch wait takes --message-ids, not --message-id")
+	}
+	if strings.TrimSpace(csv) == "" {
+		return nil, invalid("condition %s needs --message-ids (comma-separated request ids)", agentWaitReplyToAll)
+	}
+	parts := strings.Split(csv, ",")
+	ids := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for i, part := range parts {
+		id := strings.TrimSpace(part)
+		switch {
+		case id == "":
+			return nil, invalid("--message-ids has an empty entry at position %d", i+1)
+		case seen[id]:
+			return nil, invalid("message id %s is listed twice in --message-ids", id)
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// newAgentWaitStatusCmd registers `afm agent wait-status`: how the waits of this participant stand now — one
+// object per batch with its overall status (pending|ready|expired) and, per request, the wait, its status and
+// the reason it ended without an answer. --wait-id opens one batch, or one single wait as a group of one;
+// without it every batch of this participant is listed. A batch or wait of someone else is never shown.
+func newAgentWaitStatusCmd() *cobra.Command {
+	var waitID string
+	c := &cobra.Command{
+		Use:          agentWaitStatusName,
+		Short:        "Read the outcome of each request of your batch waits (--wait-id for one batch)",
+		SilenceUsage: true, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
+				path := agentWaitStatusName
+				if waitID != "" {
+					path += "?wait_id=" + url.QueryEscape(waitID)
+				}
+				var out map[string]any
+				if err := c2.do("GET", path, nil, &out); err != nil {
+					return nil, err
+				}
+				return out, nil
+			})
+		},
+	}
+	c.Flags().StringVar(&waitID, "wait-id", "", "batch id (from `afm agent wait --condition reply_to_all`) or a single wait id; omit to list every batch of yours")
+	return c
+}
+
+// newAgentSpawnCmd registers `afm agent spawn`: a stage agent starts a temporary helper of a profile for one
+// instruction. It returns at once with the task, participant and message ids; the message id is the request the
+// helper answers, so wait for it like for any other (`wait --condition reply_to_all --message-ids ...` for several).
+// Nothing else is the agent's to choose — the stage, the command and the model follow from the caller and the profile.
+func newAgentSpawnCmd() *cobra.Command {
+	var profile, title, instruction string
+	var requestID *string
+	c := &cobra.Command{
+		Use:   "spawn",
+		Short: "Start a temporary helper of a profile for one instruction (stage agents only)",
+		Long: "Start a one-shot advisory helper. It returns task_id, participant_id and message_id: the message is the request " +
+			"the helper answers. Wait for it with `afm agent wait --condition reply_to --message-id <message_id>`, or for several helpers " +
+			"at once with --condition reply_to_all --message-ids <id1,id2,...>. Read the full result with `afm agent helper-result --task-id <task_id>`.",
+		SilenceUsage: true, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
+				required := []struct{ flag, value string }{{"--profile", profile}, {"--title", title}, {"--instruction", instruction}}
+				for _, r := range required {
+					if strings.TrimSpace(r.value) == "" {
+						return nil, newAgentCLIError("invalid_request", "%s is required", r.flag)
+					}
+				}
+				reqBody := map[string]any{"request_id": *requestID, "profile_id": profile, "title": title, "instruction": instruction}
+				var out server.MeshSpawnReceipt
+				if err := c2.do("POST", "spawn", reqBody, &out); err != nil {
+					return nil, err
+				}
+				return out, nil
+			})
+		},
+	}
+	c.Flags().StringVar(&profile, "profile", "", "profile id of the helper (required)")
+	c.Flags().StringVar(&title, "title", "", "short title of the helper's task (required)")
+	c.Flags().StringVar(&instruction, "instruction", "", "what the helper must do (required)")
+	requestID = requestIDFlag(c)
+	return c
+}
+
+// newAgentHelperResultCmd registers `afm agent helper-result`: the status of one helper you spawned and, once it
+// finished, its full result (verdict, findings, evidence) — the inbox reply only summarises it. A helper that is
+// still running shows its status and no result; one that failed shows status_reason.
+func newAgentHelperResultCmd() *cobra.Command {
+	var taskID string
+	c := &cobra.Command{
+		Use:          "helper-result",
+		Short:        "Read the status and full result of a helper you spawned",
+		SilenceUsage: true, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
+				if strings.TrimSpace(taskID) == "" {
+					return nil, newAgentCLIError("invalid_request", "--task-id is required")
+				}
+				var out map[string]any
+				if err := c2.do("GET", "helper?task_id="+url.QueryEscape(taskID), nil, &out); err != nil {
+					return nil, err
+				}
+				return out, nil
+			})
+		},
+	}
+	c.Flags().StringVar(&taskID, "task-id", "", "task id printed by `afm agent spawn` (required)")
 	return c
 }
 

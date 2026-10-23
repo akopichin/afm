@@ -107,6 +107,7 @@ afm compares the working tree before and after each helper turn. If it
 changed, the stage feed shows *"The working tree changed during <agent>'s
 turn"*. This is an observation: the stage agent works in the same tree, so it
 does not say who made the change, and it never changes the helper's verdict.
+The same host/container guarantees apply to helpers started by a stage agent.
 
 ## Attach helpers from flow.yaml
 
@@ -210,6 +211,11 @@ Choose when it runs:
 Attached helpers appear as child rows in the stage rail. Select one to see its
 status, verdict, findings, delegation breadcrumb, and, for watchers, pass count.
 The task view offers **Pause**, **Continue**, and **Cancel** while applicable.
+A helper that hits a provider usage limit remains queued with its wait time and
+reason shown in the task view. It resumes after the wait; if the limit cannot be
+waited out, it is paused and Continue makes one immediate attempt. The wait
+survives a run restart. See [Usage limits](config-reference.md#usage-limits).
+
 A paused task with work waiting — a message it has not read yet or a turn it was
 in — keeps the run open until you continue or cancel it.
 If a required helper cannot pass, **Waive…** lets a human unblock the stage by
@@ -654,11 +660,36 @@ answer nobody can send any more (every recipient of the message, or every other
 member of the thread, has finished or gave the message up as undeliverable), or
 one that would close a cycle of agents waiting on each other is refused.
 
+To collect several replies in one continuation, send separate requests and
+register one batch wait with their returned message IDs:
+
+```sh
+afm agent wait --condition reply_to_all --message-ids ID1,ID2,ID3 --deadline-seconds 1800
+```
+
+A batch accepts 1–16 distinct requests sent by the waiter. Registration is
+all-or-nothing: one invalid ID rejects the whole call. Replies that arrived
+before registration already count. The command returns `batch_id`, an item for
+each request, and `status: ready` if every item has ended; otherwise it returns
+`status: yield`, so the agent ends its turn. The stage resumes once the last
+item receives a reply, is cancelled because no recipient can answer, or expires
+at the shared deadline. A separate incoming question can still wake it sooner;
+the batch remains pending. Separate single waits remain alternatives: a stage
+can resume when one of them ends.
+
+After resuming, use `afm agent wait-status --wait-id <batch_id>` to read each
+item's `message_id`, status and reason; without `--wait-id`, it lists your
+batches. The aggregate is `pending` while any item is pending, `expired` if a
+deadline expired an item, and otherwise `ready`, even if an item was cancelled.
+Read answer text with `afm agent inbox --all` or from the request history in
+the next prompt. The batch and its completed items survive a restart.
+
 A wait that would create such a cycle reports `wait_cycle`. The check treats a
 helper or run agent's pending waits together: that agent resumes only after all
 of them end, so a new wait can be refused even if one of its other waits has an
 independent responder. Within one message wait, any eligible recipient can
-answer; a stage agent with several waits can resume when one ends. The check
+answer; a stage agent's separate waits remain alternatives, while a batch
+requires all its items to end. The check
 also includes a run agent waiting for its delegated children, and refuses a
 child's wait on that parent when it would close a cycle.
 
@@ -701,6 +732,28 @@ A stage's [Feed composer](dashboard.md#writing-to-a-stage-from-its-feed) sends a
 default — or attaches a configured helper through a preview. Its **Revise** mode
 continues to send stage feedback through the existing revision path. In the Assistant, an `@` mention records a role with
 the chat message; it still does not attach a helper by itself.
+
+## Temporary helpers from a stage agent
+
+A stage agent can start a one-shot advisory helper from an available configured
+profile. It chooses the profile, task title and instruction; afm uses that
+profile's command and model and the caller's stage. Quota, depth and helper
+access rules still apply. For example:
+
+```sh
+afm agent spawn --profile reviewer --title "Review API" --instruction "Check the API changes"
+```
+
+The command returns `task_id`, `participant_id` and `message_id`. The message
+is the request to the helper: wait for it with `reply_to`, or include several
+spawned helpers' message IDs in one `reply_to_all` batch. A completed helper
+replies with a summary, verdict and task ID; if it cannot finish, the wait ends
+with a reason. Use `afm agent helper-result --task-id <task_id>` for its status
+and full committed result, including findings and evidence. A running helper
+has no result yet. The next stage turn lists its spawned helpers' IDs, titles
+and statuses in `<your_helpers>` (up to 20 from the current stage attempt), so
+it can pick up the same tasks after a restart. Only that stage agent can read
+its helper's result.
 
 ## Helper answers and protocol errors
 

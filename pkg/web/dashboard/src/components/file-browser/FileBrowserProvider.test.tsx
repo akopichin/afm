@@ -1,9 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render as rtlRender, screen, waitFor, type RenderResult } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import type { DraftComment } from './draft-comments'
-import { renderDraftComments } from './draft-comments'
-import { FileBrowserProvider, useFileBrowser } from './FileBrowserProvider'
+import { CommentProvider } from '../comments/CommentProvider'
+import { CommentRecipientsContext } from '../comments/comment-recipients'
 import { SideAgentContext, type SideAgentContextValue } from '../side-agent/side-agent-context'
+import { FileBrowserProvider, useFileBrowser } from './FileBrowserProvider'
 import { FilesApiMock, errorResponse, jsonResponse } from './test-support'
 
 function BrowseHarness() {
@@ -15,29 +15,27 @@ function BrowseHarness() {
   )
 }
 
-function sideAgentValue(overrides: Partial<SideAgentContextValue> = {}): SideAgentContextValue {
-  return {
-    enabled: false,
-    isOpen: false,
-    open: vi.fn(),
-    openWith: vi.fn(),
-    unseenResult: false,
-    active: false,
-    ...overrides,
-  }
+// Files внутри читают комментарии из run-scoped CommentProvider, как в App.
+function render(ui: React.ReactElement): RenderResult {
+  return rtlRender(ui, { wrapper: ({ children }) => <CommentProvider runId="r1">{children}</CommentProvider> })
 }
 
-// renderEnabled wraps FileBrowserProvider in an enabled SideAgentContext — supplied via the leaf module
-// `side-agent-context.ts` that SideAgentContext/useSideAgentContext live in, specifically to avoid
-// FileBrowserProvider needing to import the real SideAgentProvider (module cycle). A directly-supplied
-// context value is the least invasive way to exercise the enabled path from this test file.
-function renderEnabled(openWith: (quote: string) => void = vi.fn()) {
-  return render(
-    <SideAgentContext.Provider value={sideAgentValue({ enabled: true, openWith })}>
-      <FileBrowserProvider flowName="flow1" startedAt="t1">
+// filesUnderRun — для теста смены рана: runId задаёт сам тест.
+function filesUnderRun(runId: string, startedAt: string) {
+  return (
+    <CommentProvider runId={runId}>
+      <FileBrowserProvider flowName="flow1" startedAt={startedAt}>
         <BrowseHarness />
       </FileBrowserProvider>
-    </SideAgentContext.Provider>,
+    </CommentProvider>
+  )
+}
+
+function FilesHarness(): React.ReactElement {
+  return (
+    <FileBrowserProvider flowName="flow1" startedAt="t1">
+      <BrowseHarness />
+    </FileBrowserProvider>
   )
 }
 
@@ -65,17 +63,15 @@ async function openBrowseFile(name: string): Promise<void> {
   fireEvent.click(await screen.findByText(name))
 }
 
-async function startNoPauseOnLine(line: number): Promise<void> {
-  const el = await screen.findByTestId(`file-line-${line}`)
-  fireEvent.click(el)
-  fireEvent.click(screen.getByText('Without pause'))
+async function commentOnLine(line: number, text: string): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: `Comment on line ${line}` }))
+  fireEvent.change(screen.getByPlaceholderText(`Comment on line ${line}...`), { target: { value: text } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 }
 
-async function typeAndSave(text: string): Promise<void> {
-  // Scoped by placeholder, not role: the modal's own file-search input is also an (ambiguous) "textbox".
-  const textbox = await screen.findByPlaceholderText(/comment on line/i)
-  fireEvent.change(textbox, { target: { value: text } })
-  fireEvent.click(screen.queryByText('Save') ?? screen.getByText('Update'))
+async function openFiles(): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
 }
 
 function PickHarness({ onInsert }: { onInsert: (refs: string[]) => void }) {
@@ -420,170 +416,312 @@ describe('FileBrowserProvider', () => {
     })
   })
 
-  describe('no-pause drafts → assistant', () => {
-    test('without any side-agent context (default disabled): no "Without pause" button — the feature is invisible', async () => {
+  describe('file comments', () => {
+    test('a line click opens a local comment immediately — no pause confirmation, no Without pause mode', async () => {
       installOneFile()
-      render(
-        <FileBrowserProvider flowName="flow1" startedAt="t1">
-          <BrowseHarness />
-        </FileBrowserProvider>,
-      )
+      render(<FilesHarness />)
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openFiles()
       await openBrowseFile('a.go')
-      fireEvent.click(await screen.findByTestId('file-line-1'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1' }))
 
-      expect(screen.getByText('Pause')).toBeInTheDocument()
-      expect(screen.getByText('Cancel')).toBeInTheDocument()
-      expect(screen.queryByText('Without pause')).toBeNull()
-    })
-
-    test('with an enabled side-agent context: the "Without pause" button appears, and the mode starts inactive', async () => {
-      installOneFile()
-      renderEnabled()
-
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
-      await openBrowseFile('a.go')
-      fireEvent.click(await screen.findByTestId('file-line-1'))
-
-      expect(screen.getByText('Pause')).toBeInTheDocument()
-      expect(screen.getByText('Cancel')).toBeInTheDocument()
-      expect(screen.getByText('Without pause')).toBeInTheDocument()
-      // Mode is still inactive: the gate confirm is showing, not the editor.
-      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
-    })
-
-    test('start(): clicking "Without pause" flips active to true and opens the editor for the clicked line', async () => {
-      installOneFile()
-      renderEnabled()
-
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
-      await openBrowseFile('a.go')
-      await startNoPauseOnLine(1)
-
+      expect(screen.getByPlaceholderText('Comment on line 1...')).toBeInTheDocument()
       expect(screen.queryByText(/pausing the flow/i)).toBeNull()
-      expect(screen.getByPlaceholderText(/comment on line/i)).toBeInTheDocument()
-      expect(screen.getByText('Comment on line 1')).toBeInTheDocument()
+      expect(screen.queryByText('Without pause')).toBeNull()
+      expect(screen.queryByText('Send to assistant')).toBeNull()
     })
 
-    test('save(): drafts accumulate across files, and saving the same root/path/line again replaces rather than duplicates', async () => {
+    test('comments and unsaved text survive closing and reopening Files', async () => {
       installTwoFiles()
-      const { container } = renderEnabled()
+      render(<FilesHarness />)
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openFiles()
       await openBrowseFile('a.go')
-      await startNoPauseOnLine(1)
-      await typeAndSave('first')
-      await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('1 comment in 1 file'))
-
-      // noPauseActive is already true session-wide — switching files and clicking a line opens the editor
-      // directly, no gate confirm this time.
+      await commentOnLine(1, 'saved on a')
       await openBrowseFile('b.go')
-      fireEvent.click(await screen.findByTestId('file-line-1'))
-      await typeAndSave('second')
-      await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 2' }))
+      fireEvent.change(screen.getByPlaceholderText('Comment on line 2...'), { target: { value: 'typed on b' } })
 
-      // Re-open a.go and overwrite the same line's draft — must replace, not add a third entry.
-      await openBrowseFile('a.go')
-      fireEvent.click(await screen.findByTestId('file-line-1'))
-      await typeAndSave('first-edited')
-      await waitFor(() => expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files'))
-    })
-
-    test('send(): renders the drafts to text, closes the modal, resets the session, and calls the assistant\'s openWith with that text', async () => {
-      installTwoFiles()
-      const openWith = vi.fn()
-      renderEnabled(openWith)
-
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
-      await openBrowseFile('a.go')
-      await startNoPauseOnLine(1)
-      await typeAndSave('first')
-      await openBrowseFile('b.go')
-      fireEvent.click(await screen.findByTestId('file-line-1'))
-      await typeAndSave('second')
-
-      fireEvent.click(screen.getByRole('button', { name: 'Send to assistant' }))
-
-      const expectedDrafts: DraftComment[] = [
-        { root: 'project', path: 'a.go', displayPath: 'afm/a.go', reference: '[AFM file: "project/a.go"]', line: 1, origLineText: 'alpha one', text: 'first' },
-        { root: 'project', path: 'b.go', displayPath: 'afm/b.go', reference: '[AFM file: "project/b.go"]', line: 1, origLineText: 'beta one', text: 'second' },
-      ]
-      expect(openWith).toHaveBeenCalledTimes(1)
-      expect(openWith).toHaveBeenCalledWith(renderDraftComments(expectedDrafts))
-
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-
-      // Reopening starts a clean session: drafts and the no-pause mode are both reset.
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openFiles()
+      await openBrowseFile('b.go')
+      expect(await screen.findByText('typed on b')).toBeInTheDocument()
+      expect(screen.getByText('Draft')).toBeInTheDocument()
       await openBrowseFile('a.go')
-      const line1 = await screen.findByTestId('file-line-1')
-      expect(line1.className).not.toContain('has-comment')
-      fireEvent.click(line1)
-      expect(screen.getByText('Pause')).toBeInTheDocument()
-      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
+      expect(await screen.findByText('saved on a')).toBeInTheDocument()
     })
 
-    test('clear(): drops drafts and turns the mode off, but does not close the modal', async () => {
+    test('a new run closes Files and drops its comments', async () => {
       installOneFile()
-      renderEnabled()
-
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      const { rerender } = rtlRender(filesUnderRun('r1', 't1'))
+      await openFiles()
       await openBrowseFile('a.go')
-      await startNoPauseOnLine(1)
-      await typeAndSave('first')
-      expect(await screen.findByText(/1 comment in 1 file/)).toBeInTheDocument()
+      await commentOnLine(1, 'old run note')
 
-      fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(screen.queryByText(/comment in/)).toBeNull()
-
-      // Mode is off again: the now comment-less line re-asks the pause gate instead of opening the editor.
-      const line1 = screen.getByTestId('file-line-1')
-      expect(line1.className).not.toContain('has-comment')
-      fireEvent.click(line1)
-      expect(screen.getByText('Pause')).toBeInTheDocument()
-      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
-    })
-
-    test('changing flowName/startedAt resets drafts and the no-pause mode (same effect that resets selection)', async () => {
-      installTwoFiles()
-      const { rerender } = renderEnabled()
-
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
-      await openBrowseFile('a.go')
-      await startNoPauseOnLine(1)
-      await typeAndSave('first')
-      expect(await screen.findByText(/1 comment in 1 file/)).toBeInTheDocument()
-
-      // New run — the flow footer would report a different startedAt.
-      rerender(
-        <SideAgentContext.Provider value={sideAgentValue({ enabled: true })}>
-          <FileBrowserProvider flowName="flow1" startedAt="t2">
-            <BrowseHarness />
-          </FileBrowserProvider>
-        </SideAgentContext.Provider>,
-      )
-
+      rerender(filesUnderRun('r2', 't2'))
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
-      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await openFiles()
       await openBrowseFile('a.go')
-      const line1 = await screen.findByTestId('file-line-1')
-      expect(line1.className).not.toContain('has-comment')
-      fireEvent.click(line1)
-      expect(screen.getByText('Pause')).toBeInTheDocument()
-      expect(screen.queryByPlaceholderText(/comment on line/i)).toBeNull()
+      expect(await screen.findByTestId('file-line-1')).toBeInTheDocument()
+      expect(screen.queryByText('old run note')).toBeNull()
+    })
+  })
+
+  describe('sending file comments', () => {
+    const assistant = (sendExactMessage: SideAgentContextValue['sendExactMessage']): SideAgentContextValue => ({
+      enabled: true, isOpen: false, open: () => {}, openWith: () => {}, sendExactMessage, unseenResult: false, active: false,
+    })
+
+    function renderWithAssistant(sendExactMessage: SideAgentContextValue['sendExactMessage'] = () => Promise.resolve()) {
+      return rtlRender(
+        <SideAgentContext.Provider value={assistant(sendExactMessage)}>
+          <CommentRecipientsContext.Provider value={{ runId: 'r1', participants: [], stages: [] }}>
+            <CommentProvider runId="r1">
+              <FilesHarness />
+            </CommentProvider>
+          </CommentRecipientsContext.Provider>
+        </SideAgentContext.Provider>,
+      )
+    }
+
+    async function twoComments(): Promise<void> {
+      await openFiles()
+      await openBrowseFile('a.go')
+      await commentOnLine(2, 'note on a')
+      await openBrowseFile('b.go')
+      await commentOnLine(1, 'note on b')
+    }
+
+    test('the footer counts the comments and Send all is disabled without any', async () => {
+      installTwoFiles()
+      renderWithAssistant()
+      await openFiles()
+      expect(screen.getByRole('button', { name: 'Send all (0)' })).toBeDisabled()
+
+      await openBrowseFile('a.go')
+      await commentOnLine(1, 'x')
+      expect(screen.getByRole('button', { name: 'Send all (1)' })).toBeEnabled()
+    })
+
+    test('Send all sends one message to the chosen agent; closing Files first still clears only that packet', async () => {
+      installTwoFiles()
+      let resolve!: () => void
+      const sendExactMessage = vi.fn(() => new Promise<void>((r) => { resolve = r }))
+      renderWithAssistant(sendExactMessage)
+      await twoComments()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send all (2)' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Send file comments' })
+      expect(dialog).toHaveTextContent('2 comments in 2 files')
+      const send = await screen.findByRole('button', { name: 'Send 2 comments' })
+      await waitFor(() => expect(send).toBeEnabled())
+      fireEvent.click(send)
+      await waitFor(() => expect(sendExactMessage).toHaveBeenCalledTimes(1))
+
+      // Files закрыт до ответа сервера.
+      fireEvent.click(screen.getByRole('button', { name: 'Close send dialog' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      await act(async () => resolve())
+
+      await openFiles()
+      expect(await screen.findByText('Accepted: 2 comments → Assistant (not read yet)')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Send all (0)' })).toBeDisabled()
+    })
+
+    test('Escape closes only the send dialog and Files stays open; focus returns to the Send button', async () => {
+      installTwoFiles()
+      renderWithAssistant()
+      await openFiles()
+      await openBrowseFile('a.go')
+      await commentOnLine(1, 'keep me')
+
+      const sendButton = screen.getByRole('button', { name: 'Send comment on line 1' })
+      sendButton.focus()
+      fireEvent.click(sendButton)
+      const dialog = await screen.findByRole('dialog', { name: 'Send file comments' })
+      expect(dialog).toHaveTextContent('keep me')
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Send file comments' })).toBeNull())
+      expect(screen.getByRole('dialog', { name: /browse project files/i })).toBeInTheDocument()
+      expect(sendButton).toHaveFocus()
+      expect(screen.getByText('keep me')).toBeInTheDocument()
+    })
+
+    test('after a successful card Send focus stays inside Files, not on the page behind', async () => {
+      installTwoFiles()
+      renderWithAssistant()
+      await openFiles()
+      await openBrowseFile('a.go')
+      await commentOnLine(1, 'only one')
+
+      const card = screen.getByRole('button', { name: 'Send comment on line 1' })
+      card.focus()
+      fireEvent.click(card)
+      const send = await screen.findByRole('button', { name: 'Send 1 comment' })
+      await waitFor(() => expect(send).toBeEnabled())
+      fireEvent.click(send)
+
+      await screen.findByText('Accepted: 1 comment → Assistant (not read yet)')
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Send file comments' })).toBeNull())
+      expect(document.activeElement).not.toBe(document.body)
+      expect(screen.getByRole('dialog', { name: /browse project files/i }).contains(document.activeElement)).toBe(true)
+    })
+
+    test('after Send all of the last comment focus stays inside Files', async () => {
+      installTwoFiles()
+      renderWithAssistant()
+      await openFiles()
+      await openBrowseFile('a.go')
+      await commentOnLine(1, 'only one')
+
+      const all = screen.getByRole('button', { name: 'Send all (1)' })
+      all.focus()
+      fireEvent.click(all)
+      const send = await screen.findByRole('button', { name: 'Send 1 comment' })
+      await waitFor(() => expect(send).toBeEnabled())
+      fireEvent.click(send)
+
+      await screen.findByText('Accepted: 1 comment → Assistant (not read yet)')
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Send file comments' })).toBeNull())
+      expect(document.activeElement).not.toBe(document.body)
+      expect(screen.getByRole('dialog', { name: /browse project files/i }).contains(document.activeElement)).toBe(true)
+    })
+
+    test('Tab does not leave the send dialog while Files is under it', async () => {
+      installTwoFiles()
+      renderWithAssistant()
+      await openFiles()
+      await openBrowseFile('a.go')
+      await commentOnLine(1, 'keep me')
+      fireEvent.click(screen.getByRole('button', { name: 'Send comment on line 1' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Send file comments' })
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send 1 comment' })).toBeEnabled())
+
+      screen.getByRole('button', { name: 'Send 1 comment' }).focus()
+      fireEvent.keyDown(document, { key: 'Tab' })
+
+      expect(dialog.contains(document.activeElement)).toBe(true)
+    })
+
+    test('a failed send is reported in the footer and reopening the dialog retries it', async () => {
+      installTwoFiles()
+      const sendExactMessage = vi.fn().mockRejectedValueOnce(new Error('connection lost')).mockResolvedValue(undefined)
+      renderWithAssistant(sendExactMessage)
+      await openFiles()
+      await openBrowseFile('a.go')
+      await commentOnLine(1, 'retry me')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send all (1)' }))
+      const send = await screen.findByRole('button', { name: 'Send 1 comment' })
+      await waitFor(() => expect(send).toBeEnabled())
+      fireEvent.click(send)
+      await screen.findByRole('alert')
+      fireEvent.click(screen.getByRole('button', { name: 'Close send dialog' }))
+      expect(screen.getByRole('status')).toHaveTextContent('Not sent: connection lost')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send all (1)' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+
+      await waitFor(() => expect(sendExactMessage).toHaveBeenCalledTimes(2))
+      expect(sendExactMessage.mock.calls[1]).toEqual(sendExactMessage.mock.calls[0])
+      expect(await screen.findByText('Accepted: 1 comment → Assistant (not read yet)')).toBeInTheDocument()
+    })
+  })
+
+  describe('browser view across close/reopen', () => {
+    function installTwoRoots(): FilesApiMock {
+      const api = new FilesApiMock()
+      api.setRoots([
+        { id: 'project', label: 'afm' },
+        { id: 'docs', label: 'docs' },
+      ])
+      api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+      api.setTree('docs', '.', [{ name: 'guide.md', path: 'guide.md', kind: 'file', language: 'markdown' }])
+      api.setContent('project', 'a.go', { language: 'go', content: 'alpha one\nalpha two' })
+      api.setContent('docs', 'guide.md', { language: 'markdown', content: 'guide one\nguide two' })
+      api.setDiff('docs', 'guide.md', { diff: '--- a\n+++ b\n' })
+      api.install()
+      return api
+    }
+
+    async function closeFiles(): Promise<void> {
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    }
+
+    test('reopening restores root, file, tab and scroll position', async () => {
+      installTwoRoots()
+      render(<FilesHarness />)
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'docs' }))
+      await openBrowseFile('guide.md')
+      await screen.findByText('guide one')
+      const pane = document.querySelector('.file-browser-pane') as HTMLElement
+      pane.scrollTop = 120
+      fireEvent.scroll(pane)
+      await closeFiles()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+
+      expect(await screen.findByText('guide one')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'docs' })).toHaveAttribute('aria-pressed', 'true')
+      expect(document.querySelector('.file-browser-breadcrumb')?.textContent).toBe('docs / guide.md')
+      expect((document.querySelector('.file-browser-pane') as HTMLElement).scrollTop).toBe(120)
+    })
+
+    test('the DIFF tab is restored too', async () => {
+      installTwoRoots()
+      render(<FilesHarness />)
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'docs' }))
+      await openBrowseFile('guide.md')
+      fireEvent.click(await screen.findByRole('tab', { name: 'DIFF' }))
+      await closeFiles()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+
+      expect(await screen.findByRole('tab', { name: 'DIFF' })).toHaveAttribute('aria-selected', 'true')
+    })
+
+    test('a slow roots response does not overwrite the restored root', async () => {
+      const api = installTwoRoots()
+      render(<FilesHarness />)
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'docs' }))
+      await closeFiles()
+
+      const passThrough = api.fetchMock!.getMockImplementation()!
+      let releaseRoots!: () => void
+      const gate = new Promise<void>((resolve) => {
+        releaseRoots = resolve
+      })
+      api.fetchMock!.mockImplementation(async (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : (input as Request).url, 'http://localhost')
+        if (url.pathname === '/api/files/roots') await gate
+        return passThrough(input, init)
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      releaseRoots()
+
+      expect(await screen.findByRole('button', { name: 'docs' })).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    test('a new run starts from an empty browser view', async () => {
+      installTwoRoots()
+      const { rerender } = rtlRender(filesUnderRun('r1', 't1'))
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'docs' }))
+      await closeFiles()
+
+      rerender(filesUnderRun('r2', 't2'))
+      fireEvent.click(screen.getByRole('button', { name: 'Open browser' }))
+
+      expect(await screen.findByRole('button', { name: 'afm' })).toHaveAttribute('aria-pressed', 'true')
     })
   })
 })

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -383,4 +384,193 @@ func TestMesh_WaitRecordsRegistrationSeqAndYield(t *testing.T) {
 	if w := as.Mesh.Waits["w-ready"]; w.Yielded || w.RegisteredSeq != 4 {
 		t.Fatalf("w-ready = %+v, want ready at registration (no yield) at seq 4", w)
 	}
+}
+
+// ---- batch reply_to waits: one operation, N reply_to waits sharing a BatchID ----
+
+// batchWaitEffects builds one mesh_wait_registered effect per awaited message, all carrying batchID, the way a
+// single batch registration operation journals them. Wait ids are "w-<message id>".
+func batchWaitEffects(t *testing.T, batchID, waiter string, messageIDs ...string) []Effect {
+	t.Helper()
+	effects := make([]Effect, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: agentcomm.MessageID(id)}
+		payload := MeshWaitRegisteredPayload{Waiter: waiter, Condition: cond, RecipientReplyOnly: true, BatchID: batchID}
+		effects = append(effects, Effect{
+			Kind: kindMeshWaitRegistered, Target: Target{WaitID: "w-" + id}, Payload: mustMarshal(t, payload),
+		})
+	}
+	return effects
+}
+
+func meshEffectOf(c *Control) Effect {
+	return Effect{Kind: c.Kind, Target: c.Target, Payload: c.Payload}
+}
+
+// openBatchStore opens a store with the participants author, rev, qa and user in thread th-1, and three
+// requests from author: m1 -> rev, m2 -> qa, m3 -> rev and qa.
+func openBatchStore(t *testing.T, dir string) *Store {
+	t.Helper()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for _, id := range []string{"author", "rev", "qa", "user"} {
+		if err := store.AppendControl(meshParticipantAddedControl(id, string(agentcomm.KindStageAgent), string(agentcomm.ScopeStage))); err != nil {
+			t.Fatalf("add participant %s: %v", id, err)
+		}
+	}
+	if err := store.AppendControl(meshThreadOpenedControl("th-1", []string{"author", "rev", "qa", "user"})); err != nil {
+		t.Fatalf("open thread: %v", err)
+	}
+	sendBatchMessage(t, store, "m1", "author", []string{"rev"}, nil)
+	sendBatchMessage(t, store, "m2", "author", []string{"qa"}, nil)
+	sendBatchMessage(t, store, "m3", "author", []string{"rev", "qa"}, nil)
+	return store
+}
+
+func sendBatchMessage(t *testing.T, store *Store, id, sender string, recipients []string, inReplyTo *string) {
+	t.Helper()
+	kind := agentcomm.MessageKindRequest
+	if inReplyTo != nil {
+		kind = agentcomm.MessageKindReply
+	}
+	op := Operation{ID: "send-" + id, Kind: "mesh_send", Actor: Actor{Kind: "system"},
+		Effects: []Effect{meshEffectOf(meshMessageSentControl(0, id, "th-1", sender, recipients, string(kind), inReplyTo, "body "+id))}}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil {
+		t.Fatalf("send %s: %v", id, err)
+	}
+}
+
+func registerBatch(t *testing.T, store *Store, opID, batchID string, messageIDs ...string) {
+	t.Helper()
+	op := Operation{ID: opID, Kind: "mesh_wait", Actor: Actor{Kind: "system"}, Effects: batchWaitEffects(t, batchID, "author", messageIDs...)}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil {
+		t.Fatalf("register batch: %v", err)
+	}
+}
+
+func resolveBatchWait(t *testing.T, store *Store, waitID, status, reason string) {
+	t.Helper()
+	op := Operation{ID: "resolve-" + waitID, Kind: "mesh_wait_resolve", Actor: Actor{Kind: "system"},
+		Effects: []Effect{meshEffectOf(meshWaitResolvedControl(waitID, status, reason))}}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil {
+		t.Fatalf("resolve %s: %v", waitID, err)
+	}
+}
+
+// waitSummary is the part of a MeshWait a batch reader needs: which group it belongs to, its outcome and why.
+type waitSummary struct {
+	BatchID string
+	Status  agentcomm.WaitStatus
+	Reason  string
+}
+
+func summarizeWaits(as AssistantsState) map[agentcomm.WaitID]waitSummary {
+	out := make(map[agentcomm.WaitID]waitSummary, len(as.Mesh.Waits))
+	for id, w := range as.Mesh.Waits {
+		out[id] = waitSummary{BatchID: w.BatchID, Status: w.Status, Reason: w.Reason}
+	}
+	return out
+}
+
+// A batch registration journals N waits sharing one BatchID. Each keeps its own status and reason — an answer
+// that arrived before registration, a cancellation with a reason, an expiry — and replay restores exactly the
+// same group, outcomes and order.
+func TestMesh_BatchWaitsSurviveReplay(t *testing.T) {
+	dir := t.TempDir()
+	store := openBatchStore(t, dir)
+	sendBatchMessage(t, store, "r1", "rev", []string{"author"}, strp("m1")) // answered before registration
+
+	registerBatch(t, store, "op-batch", "batch-1", "m1", "m2", "m3")
+	resolveBatchWait(t, store, "w-m2", string(agentcomm.WaitCancelled), "qa is unreachable")
+	sendBatchMessage(t, store, "u3", "user", []string{"author"}, strp("m3")) // the human is not a recipient of m3
+	resolveBatchWait(t, store, "w-m3", string(agentcomm.WaitExpired), "deadline passed")
+
+	want := map[agentcomm.WaitID]waitSummary{
+		"w-m1": {BatchID: "batch-1", Status: agentcomm.WaitReady},
+		"w-m2": {BatchID: "batch-1", Status: agentcomm.WaitCancelled, Reason: "qa is unreachable"},
+		"w-m3": {BatchID: "batch-1", Status: agentcomm.WaitExpired, Reason: "deadline passed"},
+	}
+	wantOrder := []agentcomm.WaitID{"w-m1", "w-m2", "w-m3"}
+	live := store.Snapshot().Assistants
+	assertBatchState(t, "live", live, want, wantOrder)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	assertBatchState(t, "replayed", rs.Assistants, want, wantOrder)
+}
+
+func assertBatchState(t *testing.T, label string, as AssistantsState, want map[agentcomm.WaitID]waitSummary, wantOrder []agentcomm.WaitID) {
+	t.Helper()
+	if got := summarizeWaits(as); !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s waits = %+v, want %+v", label, got, want)
+	}
+	if !reflect.DeepEqual(as.Mesh.WaitOrder, wantOrder) {
+		t.Fatalf("%s wait order = %v, want %v", label, as.Mesh.WaitOrder, wantOrder)
+	}
+}
+
+// Replies after registration resolve each batch wait on its own: a reply from any recipient of a
+// multi-recipient request answers it, a non-recipient's does not, and the rest of the group stays pending.
+func TestMesh_BatchWaitsResolveIndependentlyAndReplay(t *testing.T) {
+	dir := t.TempDir()
+	store := openBatchStore(t, dir)
+	registerBatch(t, store, "op-batch", "batch-1", "m1", "m2", "m3")
+
+	sendBatchMessage(t, store, "u1", "user", []string{"author"}, strp("m1")) // non-recipient
+	sendBatchMessage(t, store, "q3", "qa", []string{"author"}, strp("m3"))   // one of two recipients
+
+	want := map[agentcomm.WaitID]waitSummary{
+		"w-m1": {BatchID: "batch-1", Status: agentcomm.WaitPending},
+		"w-m2": {BatchID: "batch-1", Status: agentcomm.WaitPending},
+		"w-m3": {BatchID: "batch-1", Status: agentcomm.WaitReady},
+	}
+	wantOrder := []agentcomm.WaitID{"w-m1", "w-m2", "w-m3"}
+	assertBatchState(t, "live", store.Snapshot().Assistants, want, wantOrder)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	assertBatchState(t, "replayed", rs.Assistants, want, wantOrder)
+}
+
+// Two batches and a lone reply_to wait never merge: each keeps its own BatchID, and a wait registered without
+// one (every journal written before batches existed) stays outside any group.
+func TestMesh_BatchIDKeepsGroupsApart(t *testing.T) {
+	dir := t.TempDir()
+	store := openBatchStore(t, dir)
+	registerBatch(t, store, "op-batch-a", "batch-a", "m1", "m2")
+	registerBatch(t, store, "op-batch-b", "batch-b", "m3")
+	lone := Operation{ID: "op-lone", Kind: "mesh_wait", Actor: Actor{Kind: "system"}, Effects: []Effect{
+		meshEffectOf(recipientReplyWaitControl("w-lone", "author", agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m1"})),
+	}}
+	if _, err := store.ApplyRunOperation(lone, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	want := map[agentcomm.WaitID]waitSummary{
+		"w-m1":   {BatchID: "batch-a", Status: agentcomm.WaitPending},
+		"w-m2":   {BatchID: "batch-a", Status: agentcomm.WaitPending},
+		"w-m3":   {BatchID: "batch-b", Status: agentcomm.WaitPending},
+		"w-lone": {Status: agentcomm.WaitPending},
+	}
+	assertBatchState(t, "replayed", rs.Assistants, want, []agentcomm.WaitID{"w-m1", "w-m2", "w-m3", "w-lone"})
 }

@@ -28,7 +28,8 @@ Choosing an example replaces the interval and returns focus to the input. You
 can type another interval, including `10s`, `90s` or `1h30m`. Intervals use Go
 duration syntax and must be at least one second; `1d` is not a duration unit.
 
-Submit with **Start loop** or **Cmd/Ctrl+Enter**. The receipt shows the loop's
+Submit with **Start loop** or **Enter**. **Shift+Enter** adds a line, and
+**Cmd/Ctrl+Enter** also submits. The receipt shows the loop's
 short ID (`L1`, `L2`, …), target, interval, next tick in the host's time zone with
 seconds, original Feed and stop command. Stage IDs are shown when stages have
 no display name. Results remain until the next edit or Escape; use `/loop list`

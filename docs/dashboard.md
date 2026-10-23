@@ -3,6 +3,11 @@
 On startup (if `server.open_browser: true`) the dashboard opens; otherwise its URL
 is printed to the log.
 
+In message and feedback fields, **Enter** submits and **Shift+Enter** adds a line.
+This applies to Feed Message/Revise, Team and run conversations, the Assistant,
+dialog answers, notes to agents, and plan, question, file and review-note editors.
+Creating stages, agents, helpers and Board tasks keeps its existing behavior.
+
 ## Following a repeated flow
 
 When [repeat](flow-reference.md#repeat-run-successful-flows-again) starts the next
@@ -74,6 +79,30 @@ right (there is no three-column layout or bottom progress bar).
   in its **Feed** (see [Message](#message) and
   [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
   can add a stage to a live run. See [Helpers and collaboration](collaboration.md).
+
+The **+ Stage** button is hidden when adding stages is disabled by
+[`add_stage.enabled` or `AFM_ADD_STAGE`](config-reference.md#adding-stages-during-a-run);
+it is not shown as a disabled button. In that state `/api/status` reports
+`capabilities.add_stage: false`, and `/api/run/graph/preview` and
+`/api/run/graph/commit` return HTTP 404. The setting takes effect when afm
+starts or resumes the run.
+
+## Usage-limit waits
+
+When an agent hits a provider usage limit, its stage shows **Usage limit** in
+the rail. The stage panel shows the provider, limit window when known, the
+expected resume or next check time, and a countdown. The Feed records a notice;
+it remains visible after reconnect. `afm check` also shows the wait reason and
+time. A helper task can show the same wait in its task row. Times in the panel
+use the afm host's time zone, as described under [Message times](#message-times).
+
+The stage resumes automatically when its wait expires. To try sooner, use
+**Pause** in the stage's kebab (⋮) menu, then **Continue** in its panel. Continue
+makes one immediate attempt with a fresh session; if the provider still refuses,
+the stage waits again. A provider quota with no reset, a reset beyond
+`usage_limit.max_wait`, or too many consecutive refusals instead shows a paused
+stage with the reason. See [Stage lifecycle](stage-lifecycle.md#stage-lifecycle)
+and [Usage limits](config-reference.md#usage-limits).
 
 ## Team workspace
 
@@ -253,10 +282,10 @@ project, or run a quick command-style exchange *without* touching the run.
   native resume. The assembled prompt has a hard byte budget — exceeding it is a
   `context_limit` error (your history and draft are preserved), never a silent drop of
   older turns.
-- **File comments can be attached from the Docker file browser.** Choose
-  **Without pause** while commenting on a file, then **Send to assistant** to open
-  this chat with the comments attached. Write a message and send it to deliver both
-  the comments and your request. See [File comments without pausing](#file-comments-without-pausing-docker-mode).
+- **File comments can be sent to the Assistant from the Docker file browser.**
+  Use **Send** on one comment or **Send all (N)**, select Assistant, and optionally
+  add a message. The accepted request appears in Assistant history. See
+  [File comments](#file-comments-docker-mode).
 - **Mention a helper role.** When collaboration is available, type `@` in the
   message field to choose a configured role. A mention is recorded with the
   message; it does not attach a helper by itself. See
@@ -341,6 +370,14 @@ When a stage is in `awaiting_approval`:
 3. Click "Send revision (N)" — all comments are sent to the agent, each tagged with
    its source line (`Line N: …`).
 
+The editor saves with **Add** (or **Update** for an existing comment) or
+**Cmd/Ctrl+Enter**. **Escape** or ✕ folds it without discarding nonempty text;
+unsaved edits show **Draft** when folded. Plan and question
+comments survive switching tabs or stages within the run, but not a page reload or
+new run. **Approve** stays disabled while the plan has unsent comments. Comments on
+an older plan version can be shown, copied or dismissed; they are not sent with a
+new version. Question answers and free-text drafts are likewise retained until sent.
+
 The plan renders as proper markdown (lists, tables, blockquotes and code stay intact),
 and comments anchor to the **sub-element** you clicked — an individual `<li>` or table
 row, not just the whole block. Keyboard: the plan body is navigable (↑/↓ move between
@@ -376,8 +413,8 @@ Revise note.
 1. Select the stage and open its **Feed** tab (with modes, pick **Revise**). The
    input is a growing textarea, an **Attach** button and a send button.
 2. Type your note and send it — click **Apply Revise** when the composer has
-   modes (otherwise the send button), or press **Cmd/Ctrl+Enter**
-   (plain Enter inserts a newline). **Attach** lets you paste or upload an image,
+   modes (otherwise the send button), or press **Enter**
+   (**Shift+Enter** inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file.
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
    not a kill); the stage moves through `revising` and restarts the same phase
@@ -430,9 +467,9 @@ Sending posts **one** message to all recipients:
   recorded, not read*. The post is kept in your conversation with that stage and
   reaches the other agents you named; the stage's agent does not read it.
 
-**Cmd/Ctrl+Enter** sends; plain **Enter** adds a line. While there is text, a
-hint under the input says so, and it is highlighted when you press plain Enter
-on a message that could be sent.
+**Enter** sends; **Shift+Enter** adds a line. While there is text, a hint under
+the input shows these shortcuts. With the `@` menu open, **Enter** selects the
+highlighted person or role instead of sending.
 
 **Interrupt agent** is reset after each successful send and kept after a failed
 one, so a retry interrupts too.
@@ -467,7 +504,7 @@ In **Feed → Message**, type `/loop` to see syntax guidance and selectable
 
 The `@` menu offers existing run agents and this stage's helpers. One explicit
 target is required; later mentions are part of the prompt. **Start loop** or
-**Cmd/Ctrl+Enter** creates the schedule. The receipt names its ID, next tick
+**Enter** creates the schedule; **Shift+Enter** adds a line. The receipt names its ID, next tick
 in host time with seconds, original Feed and stop command. If a stage has no
 display name, its ID identifies the Feed. The receipt stays until the next edit
 or Escape; `/loop list` retrieves saved schedules after a reload.
@@ -604,9 +641,10 @@ line comments and "Send revision" (see [Inline plan comments](#inline-plan-comme
 > menu; that item was replaced by this Feed composer. The kebab still hosts stage
 > buttons, **Pause**, and the pre-note item for `pending` stages. **Pause** is
 > offered while a stage is `planning`, `running` (not for a running script),
-> `revising`, `retrying` or `awaiting_peer` (parked waiting for a colleague's
+> `revising`, `retrying`, `awaiting_peer` (parked waiting for a colleague's
 > reply); **Continue** returns a paused `awaiting_peer` stage to its wait, and it
-> goes on by itself if the wait was answered meanwhile.
+> goes on by itself if the wait was answered meanwhile. It is also offered for
+> `awaiting_quota` (parked for a provider usage limit).
 
 A message whose post the server refuses — for example because someone you named
 can no longer read it — keeps its draft and shows the server's reason under the
@@ -661,48 +699,61 @@ note to a running stage, which restarts an already-running agent). Use "Add note
 (before start)" in the kebab menu of a pending stage; a 📝 indicator marks a stage
 that has one.
 
-## File comments without pausing (Docker mode)
+## File comments (Docker mode)
 
-When the Assistant is enabled, clicking a file line while the flow is running
-offers **Without pause** alongside **Pause** and **Cancel**. Choose it to open the
-line comment editor while the flow keeps running. Save comments on multiple lines
-or files; the bar at the bottom of the file browser shows the draft count. Use
-**Clear** to discard all drafts, or **Send to assistant** to open the Assistant
-with the comments attached above its message field. The handoff clears the file
-browser drafts. Type a message and press **Send** to deliver the comments with your
-request; an attachment alone cannot be sent. You can remove the attachment with
-its ✕ button before sending.
+In **Files**, click a line number in the **FILE** view to write a local comment.
+**Save** or **Cmd/Ctrl+Enter** saves and folds it; **Escape** or ✕ folds nonempty
+text without saving it, and the card then shows **Draft**. **Delete** removes a
+comment. Clicking a line does not pause the flow, including when an external
+review pause is already active. These comments are separate from review notes.
 
-These drafts live only in the browser: closing and reopening the file browser
-keeps them for the same run, but reloading the page or switching runs clears them.
-They are not saved as review notes or delivered to a flow stage. **Without pause**
-is hidden when the Assistant is disabled.
+Use **Files / Comments (N)** to see the full text, file and line for every local
+file comment and open its source. On narrow screens, **Comments (N)** opens this
+list in a drawer. The file preview also keeps comments under
+their lines, and files with comments show **● N** in the file tree, search results
+and changed-files list. Comments survive switching files and **FILE / DIFF** tabs.
+Leaving a file — another file, **DIFF** or closing Files — folds its open editor
+into a card; unsaved text shows **Draft**. Closing and
+reopening Files also restores the selected file, tab and scroll position in this run.
+Reloading the page or starting a new run clears the local comments.
+
+Use **Send** on a comment card or **Send all (N)** at the bottom of Files. The send
+dialog previews the comments and lets you add an optional message and choose
+**one** recipient. Available choices are the Assistant and reachable stage,
+helper or run agents; when Assistant is the only choice it is selected
+automatically. **Send all** sends one message to the chosen agent, regardless of
+recipients selected on individual cards. The Assistant route works without Agent
+Mesh. Sending does not pause or revise a stage.
+
+Before sending, Files checks the source again. If a line changed or disappeared,
+confirm the old quote or choose its current line; if a file is gone, confirm
+sending without a current quote or delete its comment. A read error blocks Send
+while keeping the text. The dialog also blocks packets over the 16 KiB Mesh or
+64 KiB Assistant message limit. After the server accepts a request, only the
+submitted versions are removed and **Accepted: N comments → Agent (not read yet)**
+appears; this means acceptance, not that the agent has read or answered. A failed
+request keeps the comments. **Retry** resends the same packet, while edits made
+during the request remain as new drafts.
 
 ## Review notes — pause the whole flow and comment on files (Docker mode)
 
-Where a Feed note redirects **one running stage** with free-text,
-**review notes** let you pause the **entire flow**, walk the project source in the
-[file browser](docker.md#project-file-browser), attach comments **anchored to
-specific file lines**, and then hand the whole batch to a stage of your choice. It's
-Docker-only.
+Where a Feed note redirects **one running stage** with free-text, the
+flow-wide review pause holds the **entire flow** and can deliver stored,
+line-anchored review notes to a stage. This path requires the Docker file browser.
 
-1. Open the file browser and click a line of any file. If the flow is still running,
-   a small confirm appears — **"pause the flow to write notes?"**. Confirming puts the
-   flow into **review mode**: a banner appears at the top, every currently-active
-   agent stage is gracefully paused (SIGINT), and new stages are held from starting.
-   Scripts and stages that already finished are left alone.
-2. Write a comment on the line — it's saved immediately and the line gets a marker
-   dot. Repeat across as many lines and files as you like; the banner keeps a running
-   note count. Each note is anchored to `(file, line)` together with the file's
-   content hash, so if the file changes before the notes are delivered the agent is
-   told the content drifted.
-3. Click **Send notes** to open the review modal: it lists every note grouped by file,
-   lets you edit/delete individual ones, and asks which **target stage** should receive
-   them. Then:
-   - **Inject** — the notes are rendered into that stage's `feedback.md` (exactly once,
-     crash-safe) and the flow resumes: the target stage restarts with the notes in its
-     context, every other paused stage continues where it left off.
-   - **Cancel** — discards the notes and resumes the flow unchanged.
+The dashboard no longer starts a flow-wide review pause by clicking a file line.
+An existing review pause started through the flow API remains supported: it shows
+a banner, holds new stages, and gracefully pauses active agent stages. Review
+notes stored through that API remain distinct from the local file comments above.
+They are labelled **Review note · sent with Continue** in the dashboard. The
+**Review notes** modal can edit and delete those stored notes.
+
+When a review pause and its notes already exist, click **Send notes** to open the
+modal. It groups notes by file, lets you edit or delete them, and asks which
+**target stage** should receive them. **Inject** renders the notes into that
+stage's `feedback.md` (exactly once, crash-safe) and resumes the flow: the target
+stage restarts with the notes in its context, and other paused stages continue
+where they left off. **Cancel** discards the notes and resumes without them.
 
 The pause/notes/resume cycle is durable: it survives an `afm` restart mid-review, a
 resume interrupted by a crash finishes on the next start, and while a review round is
@@ -755,3 +806,6 @@ from the kebab (⋮) menu — the same "Pause" action, just triggered manually. 
 gets a graceful interrupt (SIGINT), and Continue resumes it exactly where
 recovery-on-restart would (`--resume` for agents that support it). Script-only stages
 (`script:`) can only be paused via `auto_run: false`, before they start.
+
+An `awaiting_quota` stage can also be paused while its agent is parked; its
+countdown then stops until you press Continue.

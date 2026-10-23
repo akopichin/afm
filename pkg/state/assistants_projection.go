@@ -73,6 +73,11 @@ type TaskState struct {
 	// ProfileSnapshot.ReadonlyEnforcement after a resume in another environment. "" before the first recorded
 	// turn and in an older journal.
 	TurnReadonlyEnforcement assistants.ReadonlyEnforcement `json:"turn_readonly_enforcement,omitempty"`
+	// Quota — the usage-limit park of a queued task (TaskStatusChangedPayload.Quota): the task keeps its
+	// identity, mesh reachability and TurnInbox and only waits for Until. Carried across the wake so the next
+	// refusal continues the series of consecutive ones (Waits); a turn that consumed its input or a terminal
+	// status ends the series. See taskQuotaAfter.
+	Quota *QuotaWait `json:"quota,omitempty"`
 	// Waived/WaiverReason/WaivedBy/WaivedAt (Этап 7, T7.6) record a human's explicit decision to accept the
 	// risk of this required task never closing its own gate — a SEPARATE, audited operation (kindTaskWaived),
 	// never a side effect of cancel/retry/any task_result. Once Waived, RequiredBlocker treats this task's
@@ -475,7 +480,14 @@ type TaskStatusChangedPayload struct {
 	// ReadonlyEnforcement — on a turn start only: the read-only guarantee the environment gives the turn
 	// ("os"/"none"), recorded because the admission snapshot no longer says it after a resume elsewhere.
 	ReadonlyEnforcement string `json:"readonly_enforcement,omitempty"`
+	// Quota — on the queued record that parks the task after a provider usage limit: until when it waits, or
+	// why it cannot (PauseReason). Absent on every other record, in which case the task's earlier Quota is
+	// carried (taskQuotaAfter); an older binary ignores it.
+	Quota *QuotaWait `json:"quota,omitempty"`
 }
+
+// QuotaTargetHelper marks a usage-limit park of a helper task's turn: unlike a stage, a task has no phases.
+const QuotaTargetHelper = "helper"
 
 // TaskHoldPayload is the task_hold_set/task_hold_cleared control records' shared payload — decoded here by
 // applyTaskHoldSet/applyTaskHoldCleared, encoded by pkg/orchestrator's taskHoldEffect.
@@ -753,9 +765,33 @@ func applyTaskStatusChanged(as *AssistantsState, c *Control, dryRun bool) error 
 		t.TurnInbox = nil
 	default: // a stale turn number ends nothing
 	}
+	t.Quota = taskQuotaAfter(t.Quota, p, status, p.Turn != 0 && p.Turn == t.Turn)
 	as.resolveTaskResultWaits(id)
 	return nil
 }
+
+// taskQuotaAfter derives a task's quota after a status record: the record's own value replaces it; a terminal
+// status or a turn that ran to its end (turnEnded: the input was consumed, which is progress) drops it, ending
+// the series of refusals; otherwise it is carried so the next refusal continues the series. A turn start
+// (running with a Turn) spends the park — Until, PauseReason and the one-shot ManualProbe — and keeps Waits/Target.
+func taskQuotaAfter(prev *QuotaWait, p TaskStatusChangedPayload, status assistants.TaskStatus, turnEnded bool) *QuotaWait {
+	if p.Quota != nil {
+		q := *p.Quota
+		return &q
+	}
+	if prev == nil || status.Terminal() || (turnEnded && status != assistants.StatusRunning) {
+		return nil
+	}
+	q := *prev
+	if status == assistants.StatusRunning && p.Turn != 0 {
+		q.Until, q.PauseReason, q.ManualProbe = time.Time{}, "", false
+	}
+	return &q
+}
+
+// parked reports whether q still describes a wait: until a time, or until a human continues. After the turn
+// started, only the series counter is left.
+func (q *QuotaWait) parked() bool { return q != nil && (!q.Until.IsZero() || q.PauseReason != "") }
 
 // carriedRequests is t's OpenRequests once its current turn ends in status: a turn that ends waiting for a
 // colleague or for its children keeps them and adds the requests among the turn's own messages — neither
@@ -810,7 +846,15 @@ func applyTaskHoldCleared(as *AssistantsState, c *Control, dryRun bool) error {
 	if dryRun {
 		return nil
 	}
+	_, held := t.Holds[p.Owner]
 	delete(t.Holds, p.Owner)
+	if held && len(t.Holds) == 0 && t.Status == assistants.StatusQueued && t.Quota.parked() {
+		// Continue of a parked task: one manual probe in a new series (the stage rule, StageState.Quota.ManualProbe).
+		// It is part of this record, so a crash before the task starts keeps it; the turn start spends it.
+		q := *t.Quota
+		q.ManualProbe, q.Waits, q.PauseReason = true, 0, ""
+		t.Quota = &q
+	}
 	return nil
 }
 

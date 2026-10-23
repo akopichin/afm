@@ -343,6 +343,9 @@ func (r collaborationReader) TaskTree(stageID string) ([]server.AssistantTaskVie
 		}
 		// T5.6: surface a watcher's own progress (trigger kind is already view.Trigger above) — ok is false for
 		// a plain one_shot task (never bound), leaving both pointers nil/omitted.
+		if t.Status == assistants.StatusQueued {
+			view.Quota = server.NewQuotaView(r.orch.TaskQuota(t.ID)) // a usage-limit park: same view as a stage's
+		}
 		if waived, reason, ok := r.orch.TaskWaiver(t.ID); ok && waived {
 			view.Waived = true
 			view.WaiverReason = reason

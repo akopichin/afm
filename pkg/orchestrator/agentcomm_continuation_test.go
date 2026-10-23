@@ -249,3 +249,76 @@ func TestRequestsBlock_EndedWaitReasonIsBoundedAndCharged(t *testing.T) {
 		t.Fatalf("an entry's cost = %d, want its body, its ended-wait text and the overhead (%d)", got, want)
 	}
 }
+
+// ---- Which waits of a parked stage make it continue ----
+
+// episodeState is a run in which stage "frontend" is parked on the waits of episode, each as given.
+func episodeState(episode []agentcomm.WaitID, waits ...*state.MeshWait) state.RunState {
+	rs := *state.NewRunState([]string{unreadTestStageID})
+	st := rs.Stages[unreadTestStageID]
+	st.Status, st.PeerWaits = state.StatusAwaitingPeer, episode
+	rs.Stages[unreadTestStageID] = st
+	rs.Assistants.Mesh.Waits = map[agentcomm.WaitID]*state.MeshWait{}
+	for _, w := range waits {
+		w.Waiter = unreadTestStage
+		rs.Assistants.Mesh.Waits[w.ID] = w
+	}
+	return rs
+}
+
+func episodeWait(id agentcomm.WaitID, batch string, status agentcomm.WaitStatus) *state.MeshWait {
+	return &state.MeshWait{BatchID: batch, Wait: agentcomm.Wait{ID: id, Status: status, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: agentcomm.MessageID("mm-" + id)}}}
+}
+
+// Waits without a batch id — the only kind a journal written before batches holds — keep their any-of meaning;
+// the items of a batch continue the stage together, when the last of them has ended.
+func TestPeerContinuation_BatchItemsAreAllOfAndOtherWaitsAnyOf(t *testing.T) {
+	const (
+		pending   = agentcomm.WaitPending
+		ready     = agentcomm.WaitReady
+		cancelled = agentcomm.WaitCancelled
+		expired   = agentcomm.WaitExpired
+	)
+	cases := []struct {
+		name   string
+		waits  []*state.MeshWait
+		want   bus.EventType
+		wakes  bool
+		hint   bus.EventType
+		unread bool // an unread answer to w1 in the stage's inbox
+	}{
+		{"plain: one answer is enough", []*state.MeshWait{episodeWait("w1", "", ready), episodeWait("w2", "", pending)}, bus.EventPeerReplied, true, "", false},
+		{"plain: one ended is enough", []*state.MeshWait{episodeWait("w1", "", cancelled), episodeWait("w2", "", pending)}, bus.EventPeerWaitEnded, true, "", false},
+		{"plain: nothing ended", []*state.MeshWait{episodeWait("w1", "", pending), episodeWait("w2", "", pending)}, "", false, "", false},
+		{"batch: one answer is not enough", []*state.MeshWait{episodeWait("w1", "b", ready), episodeWait("w2", "b", pending)}, "", false, "", false},
+		{"batch: an unread answer is not a question", []*state.MeshWait{episodeWait("w1", "b", ready), episodeWait("w2", "b", pending)}, "", false, bus.EventPeerQuestion, true},
+		{"batch: all answered", []*state.MeshWait{episodeWait("w1", "b", ready), episodeWait("w2", "b", ready)}, bus.EventPeerReplied, true, "", false},
+		{"batch: answered and cancelled", []*state.MeshWait{episodeWait("w1", "b", cancelled), episodeWait("w2", "b", ready)}, bus.EventPeerReplied, true, "", false},
+		{"batch: cancelled and expired", []*state.MeshWait{episodeWait("w1", "b", cancelled), episodeWait("w2", "b", expired)}, bus.EventPeerWaitEnded, true, "", false},
+		{"a plain wait beats an open batch", []*state.MeshWait{episodeWait("w1", "b", pending), episodeWait("w2", "b", ready), episodeWait("w3", "", ready)}, bus.EventPeerReplied, true, "", false},
+		{"two batches: one closed is enough", []*state.MeshWait{episodeWait("w1", "b1", ready), episodeWait("w2", "b1", ready), episodeWait("w3", "b2", pending)}, bus.EventPeerReplied, true, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var episode []agentcomm.WaitID
+			for _, w := range tc.waits {
+				episode = append(episode, w.ID)
+			}
+			rs := episodeState(episode, tc.waits...)
+			if tc.unread {
+				mesh := &rs.Assistants.Mesh
+				answered := agentcomm.MessageID("mm-w1")
+				mesh.Messages = map[agentcomm.MessageID]*agentcomm.Message{
+					answered:   {ID: answered, Sender: unreadTestStage, Recipients: []agentcomm.ParticipantID{meshUserParticipantID}, Kind: agentcomm.MessageKindRequest},
+					"mm-reply": {ID: "mm-reply", Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{unreadTestStage}, Kind: agentcomm.MessageKindReply, InReplyTo: &answered},
+				}
+				mesh.Inbox = map[agentcomm.ParticipantID][]agentcomm.MessageID{unreadTestStage: {"mm-reply"}}
+				mesh.Receipts = map[agentcomm.MessageID]map[agentcomm.ParticipantID]agentcomm.DeliveryStatus{"mm-reply": {unreadTestStage: agentcomm.DeliveryAccepted}}
+			}
+			got, wakes := peerContinuation(rs, unreadTestStageID, tc.hint)
+			if got != tc.want || wakes != tc.wakes {
+				t.Fatalf("peerContinuation = %q, %v; want %q, %v", got, wakes, tc.want, tc.wakes)
+			}
+		})
+	}
+}

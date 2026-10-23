@@ -77,7 +77,11 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
         setHighlightIndex((highlightIndex - 1 + matches.length) % matches.length)
         return true
       case 'Enter': {
-        if (e.nativeEvent.isComposing) return false
+        if (e.shiftKey || e.altKey || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return false
+        if (e.repeat) {
+          e.preventDefault()
+          return true
+        }
         e.preventDefault()
         const item = matches[highlightIndex]
         if (item !== undefined) pick(item)

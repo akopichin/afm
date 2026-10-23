@@ -167,6 +167,8 @@ const (
 	OriginUser      Origin = "user"
 	OriginSideAgent Origin = "side_agent"
 	OriginAssistant Origin = "assistant"
+	// OriginStageAgent — helper, которого запустил агент стадии командой `afm agent spawn`.
+	OriginStageAgent Origin = "stage_agent"
 )
 
 // Task — одна задача помощника в дереве задач стадии.

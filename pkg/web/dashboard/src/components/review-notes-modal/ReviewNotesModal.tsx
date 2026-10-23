@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { cancelNotes, deleteNote, injectNotes, listNotes, updateNote, FlowApiError } from '../../api/run-client'
 import type { ReviewNote } from '../../types'
+import { CommentCard } from '../comments/CommentCard'
+import { CommentEditor } from '../comments/CommentEditor'
 
 type ReviewNotesModalProps = {
   // Стадии, реально приостановленные прямо сейчас — только они могут быть целью инжекта заметок: агенту
@@ -20,6 +22,12 @@ function describeApiError(err: unknown): string {
     if (err.code !== undefined) return `Request failed: ${err.code}`
   }
   return err instanceof Error ? err.message : 'Request failed'
+}
+
+const noteTitle = 'Review note · sent with Continue'
+
+function noteLabel(note: ReviewNote): string {
+  return note.line !== null ? `review note on line ${note.line}` : 'file-level review note'
 }
 
 // Заметки одного файла идут одной группой, в порядке первого появления файла в списке (а не
@@ -48,9 +56,21 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
   const [actionError, setActionError] = useState<string | null>(null)
 
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState('')
+  // Правки по ID заметки: крестик/Escape сворачивают редактор, но набранное остаётся до Save или Delete.
+  const [drafts, setDrafts] = useState<Readonly<Record<string, string>>>({})
 
   const [selectedStage, setSelectedStage] = useState(pausedStages[0] ?? '')
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const restoreFocusId = useRef<string | null>(null)
+
+  // После выхода из редактора фокус возвращается на Edit той же заметки.
+  useEffect(() => {
+    if (editingId !== null || restoreFocusId.current === null) return
+    const id = restoreFocusId.current
+    restoreFocusId.current = null
+    const item = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-note-id]') ?? []).find((el) => el.dataset.noteId === id)
+    item?.querySelector<HTMLElement>('[data-comment-edit]')?.focus()
+  }, [editingId])
 
   useEffect(() => {
     let cancelled = false
@@ -74,23 +94,30 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
   function startEdit(note: ReviewNote): void {
     setActionError(null)
     setEditingId(note.id)
-    setEditDraft(note.text)
   }
 
-  function cancelEdit(): void {
+  function foldEdit(id: string): void {
+    restoreFocusId.current = id
     setEditingId(null)
-    setEditDraft('')
   }
 
-  async function saveEdit(id: string): Promise<void> {
-    const text = editDraft.trim()
+  function setDraft(id: string, text: string): void {
+    setDrafts((prev) => ({ ...prev, [id]: text }))
+  }
+
+  function clearDraft(id: string): void {
+    setDrafts(({ [id]: _removed, ...rest }) => rest)
+  }
+
+  async function saveEdit(id: string, draft: string): Promise<void> {
+    const text = draft.trim()
     if (text === '') return
     try {
       const res = await updateNote(id, text, rev)
       setRev(res.rev)
       setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, text } : n)))
-      setEditingId(null)
-      setEditDraft('')
+      clearDraft(id)
+      foldEdit(id)
       setActionError(null)
     } catch (err) {
       setActionError(describeApiError(err))
@@ -104,6 +131,8 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
       const res = await listNotes()
       setNotes(res.notes)
       setRev(res.rev)
+      clearDraft(id)
+      setEditingId(null)
       setActionError(null)
     } catch (err) {
       setActionError(describeApiError(err))
@@ -151,7 +180,7 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
         {loadError !== null && <p className="review-notes-error" role="alert">{loadError}</p>}
         {actionError !== null && <p className="review-notes-error" role="alert">{actionError}</p>}
 
-        <div className="review-notes-list">
+        <div className="review-notes-list" ref={listRef}>
           {loading ? (
             <p className="review-notes-hint">Loading notes…</p>
           ) : groups.length === 0 ? (
@@ -161,48 +190,49 @@ export function ReviewNotesModal({ pausedStages, onClose, attentionShortcut = nu
               <div className="review-notes-group" key={displayPath}>
                 <h3 className="review-notes-file">{displayPath}</h3>
                 <ul className="review-notes-items">
-                  {fileNotes.map((note) => (
-                    <li key={note.id} className="review-note-item">
-                      {editingId === note.id ? (
-                        <div className="review-note-edit">
-                          <textarea
-                            className="review-note-textarea"
-                            value={editDraft}
-                            onChange={(e) => setEditDraft(e.target.value)}
-                            autoFocus
-                            onKeyDown={(e) => {
-                              // Cmd/Ctrl+Enter сохраняет правку (как кнопка Save).
-                              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editDraft.trim() !== '') {
-                                e.preventDefault()
-                                void saveEdit(note.id)
-                              }
-                            }}
+                  {fileNotes.map((note) => {
+                    const draft = drafts[note.id]
+                    return (
+                      <li key={note.id} data-note-id={note.id}>
+                        {editingId === note.id ? (
+                          <CommentEditor
+                            context="review"
+                            title={noteTitle}
+                            label={noteLabel(note)}
+                            quote={note.orig_line_text ?? ''}
+                            value={draft ?? note.text}
+                            onChange={(text) => setDraft(note.id, text)}
+                            onSave={() => void saveEdit(note.id, draft ?? note.text)}
+                            saveDisabled={(draft ?? note.text).trim() === ''}
+                            onFold={() => foldEdit(note.id)}
+                            onDiscard={() => void handleDelete(note.id)}
+                            discardLabel="Delete"
+                            saveLabel="Save"
                           />
-                          <div className="review-note-actions">
-                            <button type="button" className="btn btn-send" disabled={editDraft.trim() === ''} onClick={() => void saveEdit(note.id)}>
-                              Save
-                            </button>
-                            <button type="button" className="btn btn-cancel" onClick={cancelEdit}>
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <span className="review-note-line">{note.line !== null ? `Line ${note.line}` : 'File-level'}</span>
-                          <p className="review-note-text">{note.text}</p>
-                          <div className="review-note-actions">
-                            <button type="button" className="btn btn-edit" onClick={() => startEdit(note)}>
-                              Edit
-                            </button>
-                            <button type="button" className="btn btn-delete" onClick={() => void handleDelete(note.id)}>
-                              Delete
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </li>
-                  ))}
+                        ) : (
+                          <CommentCard
+                            title={noteTitle}
+                            label={noteLabel(note)}
+                            caption={note.line !== null ? `Line ${note.line}` : 'File-level'}
+                            quote={note.orig_line_text ?? ''}
+                            text={note.text}
+                            draft={draft !== undefined && draft !== note.text}
+                            onEdit={() => startEdit(note)}
+                            actions={
+                              <button
+                                type="button"
+                                className="btn btn-cancel"
+                                aria-label={`Delete ${noteLabel(note)}`}
+                                onClick={() => void handleDelete(note.id)}
+                              >
+                                Delete
+                              </button>
+                            }
+                          />
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
             ))

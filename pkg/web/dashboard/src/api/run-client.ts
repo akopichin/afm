@@ -278,6 +278,9 @@ export type AssistantTaskWire = {
   // helper X" even though blocks_root_completion stays structurally true.
   waived?: boolean
   waiver_reason?: string
+  // quota — durable usage-limit park of a queued task (same shape as StageView.quota); parsed by
+  // parseStageQuota, which validates every field.
+  quota?: unknown
 }
 
 // listStageAssistants reads one stage's task tree (flat, parent-linked) — GET /api/stages/{id}/assistants.

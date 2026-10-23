@@ -98,11 +98,18 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	red := helperRedactor{redact: e.cfg.Redact, secrets: e.cfg.Secrets}
 
 	var stderr = io.Discard
-	if sf := openStderrLog(logFile); sf != nil {
+	var stderrFrom int64
+	var stderrStream io.WriteCloser
+	if sf, from := openStderrLogAt(logFile); sf != nil {
 		defer sf.Close()
-		stream := red.stream(sf)
-		defer func() { _ = stream.Close() }() // deferred after sf.Close, so it runs first; a lost log tail is not fatal
-		stderr = stream
+		stderrFrom = from
+		stderrStream = red.stream(sf)
+		defer func() { // deferred after sf.Close, so it runs first; a lost log tail is not fatal
+			if stderrStream != nil {
+				_ = stderrStream.Close()
+			}
+		}()
+		stderr = stderrStream
 	}
 
 	lg.LogStart(profileID, taskID)
@@ -123,11 +130,13 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(he.cfg.UsageHint)
+	limits := newUsageLimitScanner(he.clk().Now, he.cfg)
 	runErr := he.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		// Everything below reads the redacted line, so no field of the event — text, tool name, tool input —
 		// can carry a secret to a sink.
 		line = red.jsonText(line)
+		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -162,6 +171,15 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 	if firstErr != "" {
 		lg.LogAction("helper-note", "process reported an error line; see log above: "+firstErr)
+	}
+	// The redacted stderr must be flushed before its tail is read for the limit text.
+	if stderrStream != nil {
+		_ = stderrStream.Close()
+		stderrStream = nil
+	}
+	// A usage limit is neither an answer nor a crash: the caller waits for the reset instead of failing the task.
+	if limit := he.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+		return HelperOutcome{ProcessErr: limit}, limit
 	}
 
 	outcome := HelperOutcome{}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 import {
   getChanged,
   getRoots,
@@ -8,41 +8,29 @@ import {
   type SearchResult,
   type TreeEntry,
 } from '../../api/files-client'
-import { addNote, listNotes, pauseFlow, type AddNoteRequest } from '../../api/run-client'
-import type { ReviewNote } from '../../types'
-import type { DraftComment } from './draft-comments'
 import { ChangedFilesList } from './ChangedFilesList'
 import { DiffViewer } from './DiffViewer'
+import { FileCommentsList, type CommentTarget } from './FileCommentsList'
 import { FileSearchResults } from './FileSearchResults'
 import { FileTree } from './FileTree'
-import { FileViewer, type NoPauseAnnotations } from './FileViewer'
+import { FileViewer } from './FileViewer'
 import { useFilePreview, type ActiveFile, type PreviewTab } from './use-file-preview'
 import { visibleFocusables } from '../../lib/focus-trap'
+import { useComments } from '../comments/CommentProvider'
+import { FileCommentSendDialog, FileCommentSendStatus } from '../comments/FileCommentSendDialog'
+import { fileKey, isSendableFileComment } from '../comments/file-comment-source'
+import { fileGroupKey } from './draft-comments'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
 
-// NoPauseNotes — the whole-session no-pause drafts, owned by FileBrowserProvider (survives modal
-// close/reopen). undefined ⇒ the side agent capability is off, so the "Without pause" path doesn't exist.
-export type NoPauseNotes = {
-  active: boolean // the mode is on for this file-browser session
-  start: () => void // user clicked "Without pause"
-  comments: DraftComment[] // ALL drafts, across every file touched this session
-  save: (comment: DraftComment) => void // upsert a draft (delegated to FileViewer's noPause.save)
-  clear: () => void // drop every draft and turn the mode off again (does NOT close the modal)
-  send: () => void // render drafts to text, close the browser, open the side agent with that text as a quote
-}
+// BrowserView — что открыто в Files; провайдер хранит его между закрытиями модалки.
+export type BrowserView = { root: string | null; file: ActiveFile | null; tab: PreviewTab; scrollTop: number }
 
-// sameLine matches the backend's note-dedup key semantics: two line pointers denote the same note iff both
-// are file-level or both the same number.
-function sameLine(a: number | null, b: number | null): boolean {
-  return a === b
-}
-
-// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — см. её же комментарий в
-// FileViewer.tsx/ReviewBanner.tsx для семантики.
-type FlowPauseState = 'none' | 'paused' | 'resuming'
+export const EMPTY_BROWSER_VIEW: BrowserView = { root: null, file: null, tab: 'FILE', scrollTop: 0 }
 
 export type FileBrowserModalProps = {
+  initialView?: BrowserView
+  onViewChange?: (view: BrowserView) => void
   // 'browse' — свободный просмотр проекта, кнопка снизу копирует референсы в буфер.
   mode: 'browse' | 'picker'
   selection: SelectedFile[]
@@ -52,11 +40,6 @@ export type FileBrowserModalProps = {
   onSubmit: () => void
   // Кнопка ждущего действия закрывает Files и открывает вопрос или approval; без ожидания скрыта.
   attentionShortcut?: { label: string; onActivate: () => void } | null
-  // flowPauseState разрешает аннотации только на review-паузе; по умолчанию none.
-  flowPauseState?: FlowPauseState
-  // Whole-session no-pause drafts owned by FileBrowserProvider. undefined ⇒ side agent capability off —
-  // no "Without pause" button, no drafts bar.
-  noPauseNotes?: NoPauseNotes
 }
 
 // Resizable left panel: the file list/tree column can be dragged wider/narrower via the divider between it
@@ -75,6 +58,13 @@ function loadLeftWidth(): number {
     // localStorage unavailable (private mode / SSR) — fall back to the default
   }
   return DEFAULT_LEFT_WIDTH
+}
+
+// После успешной отправки открывший диалог элемент пропадает (карточка) или отключается (Send all (0)):
+// фокус уходит на статус «Accepted», иначе на кнопку закрытия Files, чтобы Tab не утёк на страницу под модалкой.
+function sendReturnTarget(opener: HTMLElement, modal: HTMLElement | null, closeButton: HTMLElement | null): HTMLElement | null {
+  if (opener.isConnected && !(opener instanceof HTMLButtonElement && opener.disabled)) return opener
+  return modal?.querySelector<HTMLElement>('.file-comment-send-status button') ?? closeButton
 }
 
 // Живой файл может прийти с невалидной/пустой modified_at (см. бэкенд — content.go отдаёт то, что вернул
@@ -97,14 +87,27 @@ export function FileBrowserModal({
   onClose,
   onSubmit,
   attentionShortcut = null,
-  flowPauseState = 'none',
-  noPauseNotes,
+  initialView = EMPTY_BROWSER_VIEW,
+  onViewChange,
 }: FileBrowserModalProps): ReactElement {
   const [roots, setRoots] = useState<RootView[]>([])
   const [rootsError, setRootsError] = useState<string | null>(null)
-  const [selectedRoot, setSelectedRoot] = useState<string | null>(null)
-  const [activeFile, setActiveFile] = useState<ActiveFile | null>(null)
-  const [activeTab, setActiveTab] = useState<PreviewTab>('FILE')
+  const [selectedRoot, setSelectedRoot] = useState<string | null>(initialView.root)
+  const [activeFile, setActiveFile] = useState<ActiveFile | null>(initialView.file)
+  const [activeTab, setActiveTab] = useState<PreviewTab>(initialView.tab)
+  // Левая панель: файлы или список комментариев; режим файлов (All/Unstaged/…) при этом не теряется.
+  const [panel, setPanel] = useState<'files' | 'comments'>('files')
+  // Строка, к которой нужно прокрутить после загрузки файла (переход из списка комментариев).
+  const [focusLine, setFocusLine] = useState<{ root: string; path: string; line: number } | null>(null)
+  const { comments, send } = useComments()
+  // Диалог отправки: only — ключ одного комментария или null для Send all; opener — кнопка, на которую вернётся фокус.
+  const [sendDialog, setSendDialog] = useState<{ only: string | null; opener: HTMLElement } | null>(null)
+  const sendDialogOpen = sendDialog !== null
+  const fileComments = comments.filter(isSendableFileComment)
+  const fileCommentCount = fileComments.length
+  const commentsPerFile = new Map<string, number>()
+  for (const entry of fileComments) commentsPerFile.set(fileKey(entry), (commentsPerFile.get(fileKey(entry)) ?? 0) + 1)
+  const commentCountIn = (root: string) => (path: string) => commentsPerFile.get(fileGroupKey(root, path)) ?? 0
 
   // Left-panel width (px) + drag state. bodyRef anchors clientX to the body's
   // left edge; draggingRef gates the document-level move/up listeners.
@@ -139,10 +142,11 @@ export function FileBrowserModal({
       const el = asideRef.current
       if (el !== null) visibleFocusables(el)[0]?.focus()
     } else if (!treeOpen && prevTreeOpen.current) {
-      treeToggleRef.current?.focus()
+      // Фокус возвращается на кнопку, которая открыла шторку: дерево или комментарии.
+      ;(panel === 'comments' ? commentsToggleRef : treeToggleRef).current?.focus()
     }
     prevTreeOpen.current = treeOpen
-  }, [treeOpen, isNarrowModal])
+  }, [treeOpen, isNarrowModal, panel])
 
   // Переключатель вида левой панели: 'all' — дерево + поиск, 'index'/'head'/'base' — плоский список
   // изменённых файлов ('base' — изменения ветки worktree от точки форка, только если корень их содержит).
@@ -162,72 +166,30 @@ export function FileBrowserModal({
 
   const { content, contentLoading, contentError, diff, diffLoading, diffError, reloading, reloadError, reload: handleReload } = useFilePreview(activeFile, activeTab)
 
-  // Per-active-file slice of the whole-session drafts — FileViewer only ever needs to know about the
-  // comments on the file it's currently showing.
-  const fileDrafts = useMemo(() => {
-    const m: Record<number, string> = {}
-    if (content === null || activeFile === null) return m
-    for (const c of noPauseNotes?.comments ?? []) {
-      if (c.root === activeFile.root && c.path === content.path) m[c.line] = c.text
-    }
-    return m
-  }, [noPauseNotes?.comments, activeFile, content])
+  // Прокрутка восстанавливается один раз после загрузки восстановленного файла; любой другой выбор
+  // начинает с верха, поэтому pending сбрасывается в openFile/selectTab.
+  const pendingScrollRef = useRef<number | null>(initialView.file !== null ? initialView.scrollTop : null)
+  const scrollTopRef = useRef(initialView.scrollTop)
+  const previewReady = activeTab === 'FILE' ? content !== null : diff !== null
+  useLayoutEffect(() => {
+    const pending = pendingScrollRef.current
+    if (pending === null || !previewReady || paneRef.current === null) return
+    paneRef.current.scrollTop = pending
+    pendingScrollRef.current = null
+  }, [previewReady, content, diff])
 
-  const noPause: NoPauseAnnotations | undefined = useMemo(
-    () =>
-      noPauseNotes === undefined
-        ? undefined
-        : { active: noPauseNotes.active, start: noPauseNotes.start, comments: fileDrafts, save: noPauseNotes.save },
-    [noPauseNotes, fileDrafts],
-  )
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
+  function reportView(): void {
+    onViewChangeRef.current?.({ root: selectedRoot, file: activeFile, tab: activeTab, scrollTop: scrollTopRef.current })
+  }
+  useEffect(reportView, [selectedRoot, activeFile, activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Distinct files represented in the whole-session drafts, for the "N comments in M files" bar text —
-  // counted by displayPath (the human-facing label), not root+path.
-  const noteFileCount = useMemo(
-    () => (noPauseNotes === undefined ? 0 : new Set(noPauseNotes.comments.map((c) => c.displayPath)).size),
-    [noPauseNotes],
-  )
-
-  // Optimistic-concurrency rev для FileViewer's addNote: flow-wide, а не per-file — тот же rev, что
-  // ReviewNotesModal читает/пишет через listNotes/addNote/updateNote/deleteNote.
-  const [notesRev, setNotesRev] = useState(0)
-  // The authoritative note list for the round, kept so FileViewer can rehydrate a reopened file's saved
-  // markers/prefill. Loaded once on open and kept in sync by every successful addNote below.
-  const [notes, setNotes] = useState<ReviewNote[]>([])
-  useEffect(() => {
-    let cancelled = false
-    void listNotes()
-      .then((res) => {
-        if (!cancelled) {
-          setNotesRev(res.rev)
-          setNotes(res.notes)
-        }
-      })
-      .catch(() => {
-        // Нет активного review-раунда либо бэкенд ещё не отдаёт эту ручку —
-        // не критично, FileViewer просто не сможет ставить заметки, пока
-        // flowPauseState не 'paused' (см. её canAnnotate).
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  async function handleAddNote(body: AddNoteRequest): Promise<{ note: ReviewNote; rev: number }> {
-    const result = await addNote(body)
-    setNotesRev(result.rev)
-    // Keep the authoritative list in sync so FileViewer's saved-note hydration survives a file switch:
-    // replace a note with the same root/path/line, otherwise append.
-    setNotes((prev) => {
-      const i = prev.findIndex(
-        (n) => n.root === result.note.root && n.path === result.note.path && sameLine(n.line, result.note.line),
-      )
-      if (i === -1) return [...prev, result.note]
-      const next = prev.slice()
-      next[i] = result.note
-      return next
-    })
-    return result
+  // Пока превью грузится, браузер зажимает scrollTop до 0 — это не выбор пользователя.
+  function onPaneScroll(e: React.UIEvent<HTMLDivElement>): void {
+    if (!previewReady || pendingScrollRef.current !== null) return
+    scrollTopRef.current = e.currentTarget.scrollTop
+    reportView()
   }
 
   const [query, setQuery] = useState('')
@@ -241,13 +203,16 @@ export function FileBrowserModal({
   const closeBtnRef = useRef<HTMLButtonElement | null>(null)
   const asideRef = useRef<HTMLElement | null>(null)
   const treeToggleRef = useRef<HTMLButtonElement | null>(null)
+  const commentsToggleRef = useRef<HTMLButtonElement | null>(null)
+  const paneRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     let cancelled = false
     void getRoots()
       .then((r) => {
         if (cancelled) return
         setRoots(r)
-        if (r.length > 0 && r[0] !== undefined) setSelectedRoot(r[0].id)
+        // Восстановленный корень не перетираем запоздавшим ответом; исчезнувший корень заменяем первым.
+        setSelectedRoot((prev) => (prev !== null && r.some((root) => root.id === prev) ? prev : (r[0]?.id ?? null)))
       })
       .catch((e: unknown) => {
         if (cancelled) return
@@ -348,6 +313,8 @@ export function FileBrowserModal({
   const treeOpenRef = useRef(treeOpen)
   treeOpenRef.current = treeOpen
   useEffect(() => {
+    // Пока открыт диалог отправки, Escape и Tab обрабатывает он: иначе один Escape закрыл бы и Files.
+    if (sendDialogOpen) return
     const modal = modalRef.current
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') {
@@ -376,7 +343,7 @@ export function FileBrowserModal({
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  }, [onClose, sendDialogOpen])
 
   // Persist the panel width so it survives close/reopen and reload.
   useEffect(() => {
@@ -430,11 +397,36 @@ export function FileBrowserModal({
     setLeftWidth((w) => Math.max(LEFT_MIN, Math.min(w + delta, max)))
   }
 
+  function resetScroll(): void {
+    pendingScrollRef.current = null
+    scrollTopRef.current = 0
+  }
+
+  function selectTab(tab: PreviewTab): void {
+    resetScroll()
+    setActiveTab(tab)
+  }
+
   function openFile(root: string, entry: TreeEntry): void {
+    resetScroll()
+    setFocusLine(null)
     setActiveFile({ root, entry })
     setActiveTab('FILE')
     // На мобиле выбор файла = дерево своё отработало → закрываем шторку, показываем превью.
     if (isNarrowModal) setTreeOpen(false)
+  }
+
+  // Переход из списка комментариев: тот же файл не перезагружаем, а только прокручиваем к строке.
+  function openComment({ root, path, line }: CommentTarget): void {
+    setSelectedRoot(root)
+    if (activeFile?.root === root && activeFile.entry.path === path && activeTab === 'FILE') {
+      resetScroll()
+      setFocusLine({ root, path, line })
+      if (isNarrowModal) setTreeOpen(false)
+      return
+    }
+    openFile(root, { name: path.split('/').pop() ?? path, path, kind: 'file', selectable: true })
+    setFocusLine({ root, path, line })
   }
 
   function rootLabel(rootId: string): string {
@@ -456,13 +448,39 @@ export function FileBrowserModal({
               type="button"
               className="file-browser-tree-toggle"
               aria-label="Toggle file tree"
-              aria-expanded={treeOpen}
-              onClick={() => setTreeOpen((v) => !v)}
+              aria-expanded={treeOpen && panel === 'files'}
+              onClick={() => {
+                if (treeOpen && panel === 'files') {
+                  setTreeOpen(false)
+                  return
+                }
+                setPanel('files')
+                setTreeOpen(true)
+              }}
             >
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
                 <path d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
+            {/* На узком экране левая панель — шторка, поэтому вход в комментарии лежит в шапке. */}
+            {isNarrowModal && (
+              <button
+                ref={commentsToggleRef}
+                type="button"
+                className="file-browser-comments-toggle"
+                aria-expanded={treeOpen && panel === 'comments'}
+                onClick={() => {
+                  if (treeOpen && panel === 'comments') {
+                    setTreeOpen(false)
+                    return
+                  }
+                  setPanel('comments')
+                  setTreeOpen(true)
+                }}
+              >
+                Comments ({fileCommentCount})
+              </button>
+            )}
             {/* Шорткат к ждущему действию (Finding #4): не даём ожиданию
                 потеряться за непрозрачным оверлеем — закрывает Files и открывает
                 нужный attention-воркспейс. */}
@@ -495,6 +513,30 @@ export function FileBrowserModal({
             onClick={() => setTreeOpen(false)}
           />
           <aside ref={asideRef} className="file-browser-roots" style={isNarrowModal ? undefined : { flexBasis: leftWidth }}>
+            {!isNarrowModal && (
+              <div className="file-browser-viewswitch file-browser-panelswitch" role="group" aria-label="Left panel">
+                <button
+                  type="button"
+                  aria-pressed={panel === 'files'}
+                  className={`file-browser-viewbtn${panel === 'files' ? ' active' : ''}`}
+                  onClick={() => setPanel('files')}
+                >
+                  Files
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={panel === 'comments'}
+                  className={`file-browser-viewbtn${panel === 'comments' ? ' active' : ''}`}
+                  onClick={() => setPanel('comments')}
+                >
+                  Comments ({fileCommentCount})
+                </button>
+              </div>
+            )}
+            {panel === 'comments' && (
+              <FileCommentsList rootLabel={rootLabel} onOpen={openComment} />
+            )}
+            <div hidden={panel === 'comments'} className="file-browser-files-panel">
             <div className="file-browser-toolbar">
               <div className="file-browser-viewswitch" role="group" aria-label="File panel view">
                 <button
@@ -592,6 +634,7 @@ export function FileBrowserModal({
                         isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
                         activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
                         showCheckboxes={mode === 'picker'}
+                        commentCount={commentCountIn(selectedRoot)}
                       />
                     ) : null}
                   </>
@@ -607,6 +650,7 @@ export function FileBrowserModal({
                     isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
                     activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
                     showCheckboxes={mode === 'picker'}
+                    commentCount={commentCountIn(selectedRoot)}
                   />
                 ) : null}
 
@@ -621,10 +665,12 @@ export function FileBrowserModal({
                     isSelected={(path) => selection.some((f) => f.root === selectedRoot && f.path === path)}
                     activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
                     showCheckboxes={mode === 'picker'}
+                    commentCount={commentCountIn(selectedRoot)}
                   />
                 </div>
               </>
             )}
+            </div>
           </aside>
 
           <div
@@ -660,7 +706,7 @@ export function FileBrowserModal({
                 role="tab"
                 aria-selected={activeTab === 'FILE'}
                 className={`file-browser-tab${activeTab === 'FILE' ? ' active' : ''}`}
-                onClick={() => setActiveTab('FILE')}
+                onClick={() => selectTab('FILE')}
               >
                 FILE
               </button>
@@ -669,24 +715,21 @@ export function FileBrowserModal({
                 role="tab"
                 aria-selected={activeTab === 'DIFF'}
                 className={`file-browser-tab${activeTab === 'DIFF' ? ' active' : ''}`}
-                onClick={() => setActiveTab('DIFF')}
+                onClick={() => selectTab('DIFF')}
               >
                 DIFF
               </button>
             </div>
-            <div className="file-browser-pane">
+            <div className="file-browser-pane" ref={paneRef} onScroll={onPaneScroll}>
               {activeTab === 'FILE' ? (
                 <FileViewer
                   content={content}
                   loading={contentLoading}
                   error={contentError}
                   root={activeFile?.root}
-                  flowPauseState={flowPauseState}
-                  pauseFlow={pauseFlow}
-                  addNote={handleAddNote}
-                  expectedRev={notesRev}
-                  savedNotes={notes}
-                  noPause={noPause}
+                  focus={focusLine}
+                  onFocusHandled={() => setFocusLine(null)}
+                  onSend={(key, opener) => setSendDialog({ only: key, opener })}
                 />
               ) : (
                 <DiffViewer diff={diff} loading={diffLoading} error={diffError} />
@@ -695,29 +738,24 @@ export function FileBrowserModal({
           </section>
         </div>
 
-        {/* Бар черновиков "Without pause" — независим от режима модалки (picker/browse) и от mode:
-            накопленные комменты из любого файла этой сессии браузера, пока их не отправили или не
-            очистили. */}
-        {noPauseNotes !== undefined && noPauseNotes.comments.length > 0 && (
-          <div className="file-browser-notes-bar">
-            <span>
-              {noPauseNotes.comments.length} comment{noPauseNotes.comments.length === 1 ? '' : 's'} in {noteFileCount} file
-              {noteFileCount === 1 ? '' : 's'}
-            </span>
-            <button type="button" className="btn btn-cancel" onClick={noPauseNotes.clear}>
-              Clear
-            </button>
-            <button type="button" className="btn btn-approve" onClick={noPauseNotes.send}>
-              Send to assistant
-            </button>
-          </div>
-        )}
-
         {/* Футер с выбором (чипы + «Insert/Copy references») — только в режиме
             attach (picker). В режиме просмотра (открыт из шапки) файлы не
             выбираются: чекбоксов нет, поэтому и футер выбора не нужен —
             модалка становится чистым просмотрщиком (дерево + превью + diff),
             закрывается кнопкой Close в шапке / Esc. */}
+        {mode === 'browse' && (
+          <footer className="file-browser-footer file-browser-send-footer">
+            <FileCommentSendStatus />
+            <button
+              type="button"
+              className="btn btn-approve"
+              disabled={(fileCommentCount === 0 && send.operation === null) || send.pending}
+              onClick={(event) => setSendDialog({ only: null, opener: event.currentTarget })}
+            >
+              Send all ({fileCommentCount})
+            </button>
+          </footer>
+        )}
         {mode === 'picker' && (
           <footer className="file-browser-footer">
             <div className="file-browser-chips">
@@ -740,6 +778,17 @@ export function FileBrowserModal({
           </footer>
         )}
       </div>
+      {sendDialog !== null && (
+        <FileCommentSendDialog
+          only={sendDialog.only}
+          onClose={() => setSendDialog(null)}
+          onOpenSource={(target) => {
+            setSendDialog(null)
+            openComment(target)
+          }}
+          returnFocus={() => sendReturnTarget(sendDialog.opener, modalRef.current, closeBtnRef.current)}
+        />
+      )}
     </div>
   )
 }

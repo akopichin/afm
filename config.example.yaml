@@ -61,6 +61,12 @@ client:
 # worktrees:
 #   enabled: true
 
+# Adding stages during a run is ON by default. Set false to hide + Stage and reject graph changes.
+# A nonempty AFM_ADD_STAGE overrides this setting: exact 1/true enables; any other value disables.
+# Priority: environment > project config > global config > default (true). Empty env means unset.
+# add_stage:
+#   enabled: false
+
 # Accounting DISPLAY switch. Controls only whether cost is SHOWN: the dashboard cost tile/tab/rail, the
 # TOKENS/CACHE/EST.
 

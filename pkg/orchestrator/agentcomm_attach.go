@@ -46,7 +46,14 @@ type AttachAndSendRequest struct {
 	Title        string
 	Instruction  string
 	FirstMessage *string // nil = no first message; the task is still created and addressable
-	Recipients   []agentcomm.ParticipantID
+	// Sender and FirstKind describe the first message when it is not the human's plain message: a stage
+	// agent's request (SpawnHelper) names its stage as Sender and is addressed only to the new participant.
+	// Zero values: the human sends a message to every other member of the thread.
+	Sender    agentcomm.ParticipantID
+	FirstKind agentcomm.MessageKind
+	// Origin is recorded as the task's CreatedBy; "" = the actor's kind.
+	Origin     assistants.Origin
+	Recipients []agentcomm.ParticipantID
 	// OriginStage — for a run agent, the stage whose feed it was added from: its first thread shows there
 	// (agentcomm.Thread.OriginStage). A stage helper's thread always belongs to its StageID.
 	OriginStage string
@@ -145,6 +152,31 @@ func attachThreadMembers(newParticipant agentcomm.ParticipantID, recipients []ag
 	return members
 }
 
+// attachFirstMessageSender is who sends an attach's first message: the request's Sender, else the human.
+func attachFirstMessageSender(req AttachAndSendRequest) (agentcomm.ParticipantID, error) {
+	if req.Sender != "" {
+		return req.Sender, nil
+	}
+	return meshActorSenderID(req.Actor)
+}
+
+// attachFirstMessageKind is the kind of an attach's first message: a plain message unless the request says so.
+func attachFirstMessageKind(req AttachAndSendRequest) agentcomm.MessageKind {
+	if req.FirstKind != "" {
+		return req.FirstKind
+	}
+	return agentcomm.MessageKindMessage
+}
+
+// attachFirstMessageRecipients are the recipients of an attach's first message: only the new participant when
+// the request names its Sender, else every thread member but the human sender.
+func attachFirstMessageRecipients(req AttachAndSendRequest, sender, newParticipant agentcomm.ParticipantID, members []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	if req.Sender != "" {
+		return []agentcomm.ParticipantID{newParticipant}
+	}
+	return slices.DeleteFunc(slices.Clone(members), func(m agentcomm.ParticipantID) bool { return m == sender })
+}
+
 // replayedAttachAndSend answers an AttachAndSend whose request id already committed, from the committed
 // operation: its task, its thread's exact member set and its first message (or its absence) must all be what
 // req asks for, otherwise the request id was reused for another request — a conflict.
@@ -179,6 +211,14 @@ func (o *Orchestrator) replayedAttachAndSend(op state.CommittedOperation, treq t
 		return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
 	}
 	if sent {
+		sender, err := attachFirstMessageSender(req)
+		if err != nil {
+			return AttachAndSendResult{}, err
+		}
+		if msg.Kind != string(attachFirstMessageKind(req)) || msg.Sender != string(sender) ||
+			!slices.Equal(sortedMemberSet(toParticipantIDs(msg.Recipients)), sortedMemberSet(attachFirstMessageRecipients(req, sender, res.ParticipantID, want))) {
+			return AttachAndSendResult{}, state.OperationIDConflictError(req.OperationID)
+		}
 		mid := agentcomm.MessageID(msgTarget.MessageID)
 		res.MessageID = &mid
 	}
@@ -248,7 +288,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	}
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
-		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Actor: req.Actor,
+		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Origin: req.Origin, Actor: req.Actor,
 	}
 	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachAndSend); err != nil || committed {
 		if err != nil {
@@ -321,20 +361,15 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	var messageID *agentcomm.MessageID
 	var msgs []plannedMessage
 	if req.FirstMessage != nil {
-		senderID, err := meshActorSenderID(req.Actor)
+		senderID, err := attachFirstMessageSender(req)
 		if err != nil {
 			return AttachAndSendResult{}, err
 		}
 		mid := deriveMeshMessageID(req.OperationID)
 		messageID = &mid
-		var msgRecipients []agentcomm.ParticipantID
-		for _, m := range members {
-			if m != senderID {
-				msgRecipients = append(msgRecipients, m)
-			}
-		}
 		msg, merr := o.planMessage(rs, SendRequest{
-			ThreadID: threadID, Sender: senderID, Recipients: msgRecipients, Kind: agentcomm.MessageKindMessage,
+			ThreadID: threadID, Sender: senderID, Recipients: attachFirstMessageRecipients(req, senderID, newParticipant.ID, members),
+			Kind: attachFirstMessageKind(req),
 			Body: *req.FirstMessage, Actor: req.Actor,
 		}, mid, nil)
 		if merr != nil {

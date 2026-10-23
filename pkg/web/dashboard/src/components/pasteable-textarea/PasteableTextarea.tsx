@@ -1,3 +1,4 @@
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useImagePaste } from '../../hooks/use-image-paste'
@@ -18,7 +19,7 @@ type PasteableTextareaProps = {
   // (фокус ставит стадию на паузу, blur снимает).
   onFocus?: () => void
   onBlur?: () => void
-  // onSubmit — отправка по Cmd/Ctrl+Enter. Встроено в PasteableTextarea, чтобы каждый потребитель не
+  // onSubmit — отправка по Enter; Shift+Enter добавляет строку. Встроено в PasteableTextarea, чтобы каждый потребитель не
   // дублировал обработчик и это не «отваливалось» при рефакторингах.
   onSubmit?: () => void
   // Показывает кнопку "Attach project file": открывает пикер файлов проекта и вставляет собранные
@@ -72,14 +73,8 @@ export function PasteableTextarea({
     onChange(event.target.value)
   }
 
-  // Cmd/Ctrl+Enter → onSubmit (единый путь отправки во всех полях). Компонуется с
-  // переданным onKeyDown: сначала обрабатываем submit, иначе делегируем дальше.
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (onSubmit !== undefined && !disabled && (event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      event.preventDefault()
-      onSubmit()
-      return
-    }
+    if (onSubmit !== undefined && handleTextareaSubmit(event, onSubmit, !disabled)) return
     onKeyDown?.(event)
   }
 

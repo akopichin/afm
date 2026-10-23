@@ -268,7 +268,9 @@ func (o *Orchestrator) Pause(_ context.Context, stageID string) error {
 	// пока она ждёт required-помощников — EvPause.From уже разрешает этот переход (bus/fsm.go).
 	// awaiting_peer: a stage parked waiting for a colleague keeps its park's waits while paused; Continue decides
 	// its continuation on them again (resumeStageAtStatus).
-	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer:
+	// awaiting_quota: пользователь может остановить ожидание сброса лимита; Continue из такой паузы делает
+	// одну ручную пробу (Continue ниже).
+	case state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer, state.StatusAwaitingQuota:
 	default:
 		return nil
 	}
@@ -309,7 +311,12 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 	}
 	pausedFrom := o.opts.Store.PausedFrom(stageID)
 	o.continuedThisProcess.Store(stageID, struct{}{})
-	to, ok := o.Trigger(stageID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "")
+	guard := bus.GuardCtx{PausedFrom: pausedFrom}
+	if pausedFrom == state.StatusAwaitingQuota {
+		// Одна ручная проба: намерение пишется в сам переход, чтобы crash до spawn его не потерял.
+		guard.Quota = manualProbeQuota(o.opts.Store.Snapshot().Stages[stageID].Quota)
+	}
+	to, ok := o.Trigger(stageID, bus.EvContinue, guard, "")
 	if !ok {
 		o.continuedThisProcess.Delete(stageID)
 		o.continueMu.Unlock()

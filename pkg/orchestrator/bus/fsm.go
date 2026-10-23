@@ -64,6 +64,12 @@ const (
 	// it was actually answered. An exact twin of EvPeerReplied/EvPeerQuestion's transition row (same From/To)
 	// for the same reason EvPeerQuestion already is — only the recorded event differs.
 	EvPeerWaitEnded FSMEvent = "peer_wait_ended"
+	// EvAwaitQuota — the stage's agent hit a provider usage limit: park durably (GuardCtx.Quota carries until/reason)
+	// and let the process exit. Reachable from the statuses EvScheduleRetry is, plus retrying itself.
+	EvAwaitQuota FSMEvent = "await_quota"
+	// EvQuotaReset — the wait is over: dispatch back to the phase the stage was in (phaseDispatch), like
+	// EvUserAnswered. Callers fence it with GuardCtx.ExpectStageSeq of the park they decided it for.
+	EvQuotaReset FSMEvent = "quota_reset"
 )
 
 type GuardCtx struct {
@@ -85,6 +91,8 @@ type GuardCtx struct {
 	// ExpectStageSeq, when set, fences the transition to the stage's latest transition (state.Transition.
 	// ExpectStageSeq): a resume decided for one park cannot move a later park.
 	ExpectStageSeq *uint64
+	// Quota is recorded by EvAwaitQuota, and by EvContinue back into a park (the one-shot manual probe).
+	Quota *state.QuotaWait
 }
 
 type Rule struct {
@@ -150,6 +158,10 @@ func NewFSM(store *state.Store) *FSM {
 			// EvPeerWaitEnded — T5.6: another exact twin, used when the stage's own wait ended WITHOUT being
 			// satisfied (cancelled or expired) — see its own doc comment above.
 			EvPeerWaitEnded: {From: []state.StageStatus{state.StatusAwaitingPeer}, To: phaseDispatch},
+			// EvAwaitQuota — the same live-executor statuses EvScheduleRetry covers, plus Retrying: a retry attempt
+			// can hit the limit too. EvQuotaReset returns to the phase; Pause/Fail leave the wait like any other.
+			EvAwaitQuota: {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusAwaitingQuota)},
+			EvQuotaReset: {From: []state.StageStatus{state.StatusAwaitingQuota}, To: phaseDispatch},
 			// Разрешаем retry из AwaitingUserInput/AwaitingPeer: поллер мог сменить статус до возврата
 			// ретраибельной ошибки агента.
 			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusRetrying)},
@@ -159,10 +171,10 @@ func NewFSM(store *state.Store) *FSM {
 			EvReady:            {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
 			EvHookFailed:       {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
 			EvHookResolved:     {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
-			// awaiting_assistants/awaiting_peer допускают выход в paused: пользователь может вручную
+			// awaiting_assistants/awaiting_peer/awaiting_quota допускают выход в paused: пользователь может вручную
 			// поставить на паузу стадию, пока она ждёт помощников/коллегу по mesh (T5.1: "awaiting_peer...
 			// is pausable").
-			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer}, To: to(state.StatusPaused)},
+			EvPause:    {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying, state.StatusAwaitingAssistants, state.StatusAwaitingPeer, state.StatusAwaitingQuota}, To: to(state.StatusPaused)},
 			EvContinue: {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
 		},
 	}
@@ -199,6 +211,7 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		Reason:  reason,
 
 		PeerWaits:      ctx.PeerWaits,
+		Quota:          ctx.Quota,
 		ExpectEpoch:    ctx.ExpectEpoch,
 		ExpectStageSeq: ctx.ExpectStageSeq,
 	}

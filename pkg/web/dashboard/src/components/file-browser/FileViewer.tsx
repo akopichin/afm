@@ -1,372 +1,248 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { FlowApiError, type AddNoteRequest } from '../../api/run-client'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactElement } from 'react'
 import type { FileContent } from '../../api/files-client'
-import type { ReviewNote } from '../../types'
-import type { DraftComment } from './draft-comments'
+import { CommentCard } from '../comments/CommentCard'
+import { CommentEditor } from '../comments/CommentEditor'
+import { useComments } from '../comments/CommentProvider'
+import { CommentRecipientSelect } from '../comments/CommentRecipientSelect'
+import { isDraft, type CommentEntry } from '../comments/comment-state'
+import { newFileCommentKey, rawSourceLines, sourceDrift, type SourceDrift } from './draft-comments'
 import { highlight, splitHighlightedLines } from './highlight'
-
-// Преобразуем коды API в текст; stale_content требует перечитать файл, rev_conflict — обновить заметки.
-function describeAddNoteError(err: unknown): string {
-  if (err instanceof FlowApiError) {
-    if (err.code === 'stale_content') return 'File changed since it was opened — reload and re-anchor the note.'
-    if (err.code === 'rev_conflict') return 'Notes changed elsewhere — reload and retry.'
-    if (err.code !== undefined) return `Request failed: ${err.code}`
-  }
-  return err instanceof Error ? err.message : 'Request failed'
-}
-
-// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — 'none', 'paused', 'resuming'.
-type FlowPauseState = 'none' | 'paused' | 'resuming'
-
-// NoPauseAnnotations — комменты к строкам, которые копятся на клиенте и уходят сайд-агенту, а не
-// серверному review-note store. undefined ⇒ фича выключена целиком (нет кнопки "Without pause").
-export type NoPauseAnnotations = {
-  active: boolean // режим включён (после клика "Without pause")
-  start: () => void // нажали "Without pause"
-  comments: Record<number, string> // черновики ТЕКУЩЕГО файла, по номеру строки
-  save: (comment: DraftComment) => void // upsert черновика
-}
 
 type FileViewerProps = {
   content: FileContent | null
   loading: boolean
   error: string | null
-  // Annotation props are optional; without them FileViewer renders a read-only preview.
+  // Без root предпросмотр только для чтения: комментарию нужен корень, чтобы привязаться к файлу.
   root?: string
-  // Master gate for the annotate affordance — lines open the comment editor directly only when the flow is
-  // actually paused.
-  flowPauseState?: FlowPauseState
-  // pauseFlow runs after the user confirms the pause dialog.
-  pauseFlow?: () => Promise<{ paused_stages: string[] }>
-  addNote?: (body: AddNoteRequest) => Promise<{ note: ReviewNote; rev: number }>
-  // Optimistic-concurrency token the backend checks addNote against. Defaults to 0 (an empty/never-fetched
-  // store), which is also what a fresh review round starts at server-side.
-  expectedRev?: number
-  // Notes already persisted for the current review round. Local optimistic edits still take precedence
-  // until the modal's list catches up.
-  savedNotes?: ReviewNote[]
-  // Test-only override: lets FileViewer.test.tsx supply a fixed hash without depending on jsdom's
-  // crypto.subtle.
-  contentSha?: string
-  // Client-side draft comments bound for the side agent instead of the server review-note store.
-  // undefined ⇒ feature fully disabled — existing pause-gate behavior is untouched.
-  noPause?: NoPauseAnnotations
+  // Строка, к которой прокрутить после загрузки файла (переход из списка комментариев).
+  focus?: { root: string; path: string; line: number } | null
+  // Вызывается после прокрутки к focus: владелец сбрасывает его, чтобы Reload не возвращал вид к строке.
+  onFocusHandled?: () => void
+  // Открывает диалог отправки одного комментария; opener — кнопка Send, на неё вернётся фокус. Без обработчика
+  // карточки без отправки (предпросмотр вне Files).
+  onSend?: (key: string, opener: HTMLElement) => void
 }
 
-// Показывает содержимое выбранного файла, построчно.
-export function FileViewer({
-  content,
-  loading,
-  error,
-  root,
-  flowPauseState = 'none',
-  pauseFlow,
-  addNote,
-  expectedRev = 0,
-  savedNotes,
-  contentSha,
-  noPause,
-}: FileViewerProps): ReactElement {
-  const [comments, setComments] = useState<Record<number, string>>({})
-  const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null)
-  const [draft, setDraft] = useState('')
-  const [saving, setSaving] = useState(false)
-  // Инлайновая ошибка последнего addNote: форма остаётся открытой, пользователь видит причину рядом с
-  // редактором и может перечитать/повторить — а не молча закрывшуюся форму без сигнала.
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [computedSha, setComputedSha] = useState<string | null>(null)
-  // Line clicked while flowPauseState === 'none', awaiting the user's yes/no on the pause-gate confirm.
-  const [pendingPauseLine, setPendingPauseLine] = useState<number | null>(null)
-
-  const canUseNotes = addNote !== undefined && root !== undefined && content !== null
-  const canAnnotate = flowPauseState === 'paused' && canUseNotes // existing server path
-  const noPauseActive = noPause?.active === true && root !== undefined && content !== null
-  const annotating = canAnnotate || noPauseActive
-  // noPauseActive is covered by `annotating` above (it ORs it in) — both call sites of canRequestPause
-  // short-circuit on `annotating` first, so no explicit `!noPauseActive` conjunct is needed here.
-  const canRequestPause = flowPauseState === 'none' && canUseNotes && pauseFlow !== undefined
-  const sha = contentSha ?? computedSha
-  // sha is only needed by the server-side addNote (it validates content_sha); a no-pause draft goes to the
-  // side agent instead and never needs a hash.
-  const canSaveDraft = !saving && draft.trim() !== '' && (noPauseActive || sha !== null)
-
-  // Raw source lines (no highlighting markup) for the no-pause draft's origLineText — mirrors the
-  // backend's trim-trailing-newline-then-split (cmd/afm/run_workspace.go:63-74).
-  const rawLines = useMemo(() => (content === null ? [] : content.content.replace(/\n$/, '').split('\n')), [content])
-
-  // Persisted line notes for THIS file, keyed by line number, so a reopened file shows its saved
-  // markers/prefill again.
-  const savedByLine = useMemo(() => {
-    const m: Record<number, string> = {}
-    if (root === undefined || content === null || savedNotes === undefined) return m
-    for (const n of savedNotes) {
-      if (n.root === root && n.path === content.path && n.line != null) m[n.line] = n.text
-    }
-    return m
-  }, [savedNotes, root, content])
-  // In no-pause mode, only the client-side drafts for this file are shown — server notes from a
-  // previous review round aren't relevant to this mode.
-  const displayComments = useMemo(
-    () => (noPauseActive ? (noPause?.comments ?? {}) : { ...savedByLine, ...comments }),
-    [noPauseActive, noPause?.comments, savedByLine, comments],
-  )
-
-  // Открыть отложенную строку, как только гейт реально разрешил аннотирование — либо флоу встал на
-  // паузу, либо включился режим "Without pause". Один механизм на оба пути.
-  useEffect(() => {
-    if (!annotating || pendingPauseLine === null) return
-    setActiveCommentLine(pendingPauseLine)
-    setDraft(displayComments[pendingPauseLine] ?? '')
-    setPendingPauseLine(null)
-    // `displayComments`/`comments` deliberately excluded: they only change after a save, and by
-    // then pendingPauseLine has already been cleared above, so re-running
-    // this effect on a comments change is a no-op guarded by that check.
-  }, [annotating, pendingPauseLine])
-
-  // "Clear" in the no-pause notes bar turns noPauseActive off without closing the modal; a comment form
-  // left open under it would otherwise silently fall through to saveComment's SERVER branch on Save. Close
-  // it whenever noPauseActive itself flips true → false — displayComments only shows noPause.comments while
-  // noPauseActive is true, so any form open at that point is always a no-pause draft, never a server one.
-  // `!wasNoPauseActive` alone already excludes a pure server-path draft (it was never noPauseActive to begin
-  // with) — a flowPauseState flicker (e.g. 'paused' → 'resuming') can't trigger this branch. Deliberately NOT
-  // conditioned on `annotating`: flowPauseState can independently become 'paused' (a real review-pause
-  // starting elsewhere) while the user is mid no-pause draft, which keeps `annotating` true even after Clear
-  // turns noPauseActive off — gating on it left the stale no-pause draft open for Save to leak into addNote.
-  const wasNoPauseActiveRef = useRef(noPauseActive)
-  useEffect(() => {
-    const wasNoPauseActive = wasNoPauseActiveRef.current
-    wasNoPauseActiveRef.current = noPauseActive
-    if (!wasNoPauseActive || noPauseActive || activeCommentLine === null) return
-    setActiveCommentLine(null)
-    setDraft('')
-    setSaveError(null)
-  }, [noPauseActive, activeCommentLine])
-
-  // Свежий файл — свежее состояние комментариев/формы.
-  useEffect(() => {
-    setComments({})
-    setActiveCommentLine(null)
-    setDraft('')
-    setSaveError(null)
-  }, [root, content?.path])
-
-  // content_sha считается один раз на загруженный файл — не на каждый рендер и не на каждое нажатие Save.
-  // contentSha-проп (тестовый) пропускает вычисление целиком.
-  useEffect(() => {
-    if (contentSha !== undefined || content === null) return
-
-    let cancelled = false
-    computeContentSha(content.content)
-      .then((value) => {
-        if (!cancelled) setComputedSha(value)
-      })
-      .catch(() => {
-        if (!cancelled) setComputedSha(null)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [content, contentSha])
+// Показывает содержимое выбранного файла построчно; комментарии лежат в run-scoped CommentProvider,
+// поэтому переживают смену файла, вкладку DIFF и закрытие Files.
+export function FileViewer({ content, loading, error, root, focus = null, onFocusHandled, onSend }: FileViewerProps): ReactElement {
+  const { comments: all, open, edit, saveAndFold, fold, foldFile, discard, reanchor, setRecipient, send } = useComments()
 
   const lines = useMemo(() => {
     if (content === null) return []
     return splitHighlightedLines(highlight(content.language, content.content), content.content)
   }, [content])
+  const rawLines = useMemo(() => (content === null ? [] : rawSourceLines(content.content)), [content])
+
+  const path = content?.path
+  const entries = useMemo(() => {
+    const byLine = new Map<number, CommentEntry>()
+    for (const entry of all) {
+      const { anchor } = entry
+      if (anchor.kind === 'file' && anchor.root === root && anchor.path === path) byLine.set(anchor.line, entry)
+    }
+    return byLine
+  }, [all, root, path])
+
+  // Уход из файла (другой файл, DIFF, закрытие Files) сворачивает его формы: при возврате видна карточка Draft.
+  useEffect(() => {
+    if (root === undefined || path === undefined) return
+    return () => foldFile(root, path)
+  }, [root, path, foldFile])
+
+  const sourceRef = useRef<HTMLDivElement | null>(null)
+  // content может ещё быть старым файлом, пока грузится новый, поэтому сверяем путь и корень.
+  useLayoutEffect(() => {
+    const source = sourceRef.current
+    if (source === null || focus === null || content === null || focus.root !== root || focus.path !== content.path) return
+    // Строки уже нет в новой версии файла — комментарий показан карточкой под текстом.
+    const target = source.querySelector(`[data-line="${focus.line}"]`) ?? source.querySelector(`[data-comment-line="${focus.line}"]`)
+    target?.scrollIntoView({ block: 'center' })
+    onFocusHandled?.()
+  }, [focus, content, root, onFocusHandled])
+
+  // После закрытия формы или карточки фокус иначе падает на body; у строки без номера (orphan) — на контейнер.
+  function focusLine(line: number): void {
+    const source = sourceRef.current
+    const button = source?.querySelector<HTMLElement>(`[data-line="${line}"] .file-line-num`)
+    ;(button ?? source)?.focus()
+  }
 
   if (loading) return <div className="file-viewer-hint">Loading file…</div>
   if (error !== null) return <div className="file-viewer-hint file-viewer-error">{error}</div>
   if (content === null) return <div className="file-viewer-hint">Select a file to preview</div>
+  const file = content
 
-  return <div className="file-viewer-source">{lines.map((html, index) => renderLine(index + 1, html))}</div>
-
-  function handleLineClick(line: number) {
-    if (annotating) {
-      if (activeCommentLine === line) {
-        setActiveCommentLine(null)
-        return
-      }
-
-      setActiveCommentLine(line)
-      setDraft(displayComments[line] ?? '')
-      setSaveError(null)
+  // Клик открывает форму; повторный клик по строке с открытой формой сворачивает её (пустая исчезает).
+  // Открыта только одна форма: другая сворачивается, как по крестику.
+  function toggleLine(line: number): void {
+    if (root === undefined) return
+    const existing = entries.get(line)
+    if (existing?.editorOpen === true) {
+      foldLine(existing, line)
       return
     }
-
-    if (!canRequestPause) return
-
-    // Toggle, same as the direct-editor path above: clicking the same
-    // pending line again closes the confirm instead of re-asking.
-    setPendingPauseLine((prev) => (prev === line ? null : line))
-  }
-
-  function closeCommentForm() {
-    setActiveCommentLine(null)
-    setDraft('')
-    setSaveError(null)
-  }
-
-  function confirmPause() {
-    if (pauseFlow === undefined) return
-    // pendingPauseLine stays set — the useEffect above opens the editor for it once flowPauseState
-    // actually reports 'paused'.
-    void pauseFlow().catch(() => setPendingPauseLine(null))
-  }
-
-  function declinePause() {
-    setPendingPauseLine(null)
-  }
-
-  function startNoPause() {
-    noPause?.start()
-    // pendingPauseLine stays set — the generalized useEffect above opens the editor for it once
-    // noPause.active actually reports true.
-  }
-
-  async function saveComment(line: number) {
-    const text = draft.trim()
-    if (text === '') return
-
-    if (noPauseActive) {
-      if (root === undefined || content === null) return
-      noPause?.save({
+    foldFile(root, file.path)
+    const key = existing?.key ?? newFileCommentKey()
+    open(key, {
+      anchor: {
+        kind: 'file',
         root,
-        path: content.path,
-        displayPath: content.displayPath,
-        reference: content.reference,
+        path: file.path,
+        displayPath: file.displayPath,
+        reference: file.reference,
+        etag: file.etag,
         line,
-        origLineText: rawLines[line - 1] ?? '',
-        text,
-      })
-      setActiveCommentLine(null)
-      setDraft('')
-      return
-    }
-
-    if (addNote === undefined || root === undefined || content === null || sha === null) return
-
-    setSaving(true)
-    setSaveError(null)
-    try {
-      await addNote({
-        root,
-        path: content.path,
-        line,
-        text,
-        content_sha: sha,
-        expected_rev: expectedRev,
-      })
-      setComments((prev) => ({ ...prev, [line]: text }))
-      setActiveCommentLine(null)
-      setDraft('')
-    } catch (err) {
-      // Keep the form open with the draft intact so the user can reload/retry
-      // rather than losing the note to a silently-closed editor.
-      setSaveError(describeAddNoteError(err))
-    } finally {
-      setSaving(false)
-    }
+      },
+      quote: rawLines[line - 1] ?? '',
+    })
   }
 
-  function renderLine(lineNumber: number, html: string): ReactNode {
-    const hasComment = displayComments[lineNumber] !== undefined
-    const editing = activeCommentLine === lineNumber
-    const confirmingPause = pendingPauseLine === lineNumber
-    // Lines stay clickable for both direct annotation and the pause confirmation gate.
-    const clickable = annotating || canRequestPause
+  function saveLine(entry: CommentEntry, line: number): void {
+    saveAndFold(entry.key)
+    focusLine(line)
+  }
 
+  function foldLine(entry: CommentEntry, line: number): void {
+    fold(entry.key)
+    focusLine(line)
+  }
+
+  function removeLine(entry: CommentEntry, line: number): void {
+    discard(entry.key)
+    focusLine(line)
+  }
+
+  function renderComment(line: number, entry: CommentEntry): ReactElement | null {
+    if (entry.editorOpen) {
+      return (
+        <CommentEditor
+          context="file"
+          title={`Comment on line ${line}`}
+          line={line}
+          quote={entry.quote}
+          placeholder={`Comment on line ${line}...`}
+          value={entry.text}
+          onChange={(value) => edit(entry.key, value)}
+          onSave={() => saveLine(entry, line)}
+          onFold={() => foldLine(entry, line)}
+          onDiscard={entry.saved !== '' ? () => removeLine(entry, line) : undefined}
+          saveLabel={entry.saved !== '' ? 'Update' : 'Save'}
+          discardLabel="Delete"
+        />
+      )
+    }
+    if (entry.text.trim() === '') return null
+    const drift = sourceDrift(entry.quote, line, rawLines)
     return (
-      <div
-        key={lineNumber}
-        className={`file-line${hasComment ? ' has-comment' : ''}${clickable ? ' annotatable' : ''}`}
-        data-line={lineNumber}
-        data-testid={`file-line-${lineNumber}`}
-        onClick={() => handleLineClick(lineNumber)}
-      >
-        <span className="file-line-num">{lineNumber}</span>
-        <code className={`hljs language-${content?.language ?? 'plain'}`} dangerouslySetInnerHTML={{ __html: html }} />
-        {clickable && <span className="file-line-comment-marker">●</span>}
-
-        {confirmingPause && (
-          <div className="review-pause-confirm" onClick={(event) => event.stopPropagation()}>
-            <p>Writing notes requires pausing the flow. Pause it?</p>
-            <div className="comment-actions">
-              <button className="btn btn-send" type="button" onClick={confirmPause}>
-                Pause
-              </button>
-              <button className="btn btn-cancel" type="button" onClick={declinePause}>
-                Cancel
-              </button>
-              {noPause !== undefined && (
-                <button className="btn" type="button" onClick={startNoPause}>
-                  Without pause
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {editing && (
-          <div className="line-comment-form" onClick={(event) => event.stopPropagation()}>
-            <div className="comment-display-header">
-              <span style={{ color: 'var(--c-awaiting)', fontSize: '12px' }}>Comment on line {lineNumber}</span>
-              <button
-                type="button"
-                className="comment-remove"
-                aria-label={`Close comment on line ${lineNumber}`}
-                title="Close"
-                onClick={closeCommentForm}
-              >
-                ✕
-              </button>
-            </div>
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder={`Comment on line ${lineNumber}...`}
-              autoFocus
-              onKeyDown={(event) => {
-                // Cmd/Ctrl+Enter сохраняет комментарий (как кнопка Save/Update).
-                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canSaveDraft) {
-                  event.preventDefault()
-                  void saveComment(lineNumber)
-                }
-              }}
-            />
-            {saveError !== null && (
-              <p className="line-comment-error" role="alert">
-                {saveError}
-              </p>
-            )}
-            <div className="comment-actions">
-              <button
-                className="btn btn-send"
-                type="button"
-                disabled={!canSaveDraft}
-                onClick={() => void saveComment(lineNumber)}
-              >
-                {hasComment ? 'Update' : 'Save'}
-              </button>
-              <button className="btn btn-cancel" type="button" onClick={closeCommentForm}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <CommentCard
+        title={`Comment on line ${line}`}
+        line={line}
+        quote={entry.quote}
+        text={entry.text}
+        draft={isDraft(entry)}
+        caption={drift === null ? undefined : describeDrift(line, drift)}
+        onEdit={() => toggleLine(line)}
+        onRemove={() => removeLine(entry, line)}
+        actions={cardActions(entry, line, drift)}
+      />
     )
   }
+
+  function cardActions(entry: CommentEntry, line: number, drift: SourceDrift | null): ReactElement {
+    return (
+      <>
+        {onSend !== undefined && (
+          <>
+            <button
+              type="button"
+              className="btn btn-send"
+              aria-label={`Send comment on line ${line}`}
+              disabled={send.pending}
+              onClick={(event) => onSend(entry.key, event.currentTarget)}
+            >
+              Send
+            </button>
+            <CommentRecipientSelect recipientId={entry.recipientId} onChange={(id) => setRecipient(entry.key, id)} />
+          </>
+        )}
+        {drift !== null && driftActions(entry, line, drift)}
+      </>
+    )
+  }
+
+  function driftActions(entry: CommentEntry, line: number, drift: SourceDrift): ReactElement {
+    const { moveTo, currentText } = drift
+    return (
+      <>
+        {currentText !== null && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => reanchor(entry.key, { line, quote: currentText, etag: file.etag })}
+          >
+            Use current line {line}
+          </button>
+        )}
+        {moveTo !== null && (
+          <button
+            type="button"
+            className="btn"
+            disabled={entries.has(moveTo)}
+            title={entries.has(moveTo) ? `Line ${moveTo} already has a comment` : undefined}
+            onClick={() => reanchor(entry.key, { line: moveTo, quote: entry.quote, etag: file.etag })}
+          >
+            Move to line {moveTo}
+          </button>
+        )}
+      </>
+    )
+  }
+
+  const orphans = Array.from(entries).filter(([line]) => line > lines.length)
+
+  return (
+    <div className="file-viewer-source" ref={sourceRef} tabIndex={-1}>
+      {lines.map((html, index) => {
+        const line = index + 1
+        const entry = entries.get(line)
+        const hasComment = entry !== undefined && (entry.editorOpen || entry.text.trim() !== '')
+        const annotatable = root !== undefined
+        return (
+          <Fragment key={line}>
+            <div
+              className={`file-line${hasComment ? ' has-comment' : ''}${annotatable ? ' annotatable' : ''}`}
+              data-line={line}
+              data-testid={`file-line-${line}`}
+              onClick={() => toggleLine(line)}
+            >
+              {annotatable ? (
+                <button type="button" className="file-line-num" aria-label={`Comment on line ${line}`}>
+                  {line}
+                </button>
+              ) : (
+                <span className="file-line-num">{line}</span>
+              )}
+              <code className={`hljs language-${file.language}`} dangerouslySetInnerHTML={{ __html: html }} />
+              {annotatable && (
+                <span className="file-line-comment-marker" aria-hidden="true">
+                  ●
+                </span>
+              )}
+            </div>
+            {entry !== undefined && renderComment(line, entry)}
+          </Fragment>
+        )
+      })}
+      {/* Комментарии к строкам, которых в новой версии файла уже нет, остаются видимыми под текстом. */}
+      {orphans.map(([line, entry]) => (
+        <Fragment key={`orphan-${line}`}>{renderComment(line, entry)}</Fragment>
+      ))}
+    </div>
+  )
 }
 
-// computeContentSha возвращает sha256:<hex> через WebCrypto; формула должна совпадать с серверной
-// проверкой content_sha.
-async function computeContentSha(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return `sha256:${toHex(new Uint8Array(digest))}`
-}
-
-function toHex(bytes: Uint8Array): string {
-  let hex = ''
-  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
-  return hex
+function describeDrift(line: number, drift: SourceDrift): string {
+  if (drift.currentText === null) return `Source changed — line ${line} no longer exists`
+  return `Source changed — line ${line} now reads: "${drift.currentText}"`
 }

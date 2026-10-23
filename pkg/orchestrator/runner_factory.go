@@ -57,6 +57,12 @@ func (o *Orchestrator) stageCommand(s flow.Stage) string {
 	return o.opts.Config.Client.Command
 }
 
+// stageProvider is the usage-limit provider key of the command a stage's agent runs (the same resolver that
+// stamps executor.Config.Provider), for the provider admission before each of its turns.
+func (o *Orchestrator) stageProvider(s flow.Stage) string {
+	return o.opts.Config.UsageLimitProvider(o.stageCommand(s))
+}
+
 // browserRuntimeFor returns the prompt-side browser runtime block for a stage, gated by the SAME policy as
 // the MCP injection so the prompt and the actual tool availability stay in lockstep.
 func (o *Orchestrator) browserRuntimeFor(s flow.Stage) *prompts.BrowserRuntime {
@@ -147,6 +153,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
+		OnLimitWarning: o.limitWarningSink(s.ID, ""),
 		SessionID:      sessionID,
 		Resume:         resume,
 		StageDir:       stageDir,
@@ -157,6 +164,7 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		StageID:        s.ID,
 		Phase:          phase,
 		UsageHint:      o.usageHintFor(cmd),
+		Provider:       o.opts.Config.UsageLimitProvider(cmd),
 		OnUsage:        o.recordUsage(s.ID, phase, ""),
 		BrowserMCP:     o.browserForStage(s, cmd),
 		MeshClient:     o.meshClientFor(meshStageParticipantID(s.ID)),
@@ -188,6 +196,7 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
+		OnLimitWarning: o.limitWarningSink(s.ID, ""),
 		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Dir:            o.opts.RootDir,
 		Debug:          o.opts.Debug,
@@ -199,6 +208,7 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		StageDir:      o.stageDir(s.ID),
 		Phase:         phase,
 		UsageHint:     o.usageHintFor(cmd),
+		Provider:      o.opts.Config.UsageLimitProvider(cmd),
 		OnUsage:       o.recordUsage(s.ID, phase, ""),
 		BrowserMCP:    o.browserForStage(s, cmd),
 		MeshClient:    o.meshClientFor(meshStageParticipantID(s.ID)),
@@ -229,6 +239,7 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Execu
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
+		OnLimitWarning: o.limitWarningSink(s.ID, ""),
 		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
 		Dir:            o.opts.RootDir,
 		Debug:          o.opts.Debug,
@@ -236,6 +247,7 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Execu
 		StageID:        s.ID,
 		Phase:          verifyExecutionLabel,
 		UsageHint:      o.usageHintFor(cmd),
+		Provider:       o.opts.Config.UsageLimitProvider(cmd),
 		OnUsage:        o.recordUsage(s.ID, verifyExecutionLabel, ""),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {

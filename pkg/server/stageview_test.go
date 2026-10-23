@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
@@ -239,6 +241,35 @@ func TestBuildStageViews_AutonomousPausedShowsPlan(t *testing.T) {
 
 	if !views[0].ShowPlan {
 		t.Errorf("autonomous stage paused: ShowPlan should be true (Continue button lives in PlanPanel), got %+v", views[0])
+	}
+}
+
+// An autonomous stage that hit a usage limit keeps its plan panel: the quota section and Pause → Continue live there.
+func TestBuildStageViews_AutonomousQuotaWaitShowsPlan(t *testing.T) {
+	cases := map[string]state.StageState{
+		"awaiting_quota":         {Status: state.StatusAwaitingQuota},
+		"paused from quota":      {Status: state.StatusPaused, PausedFrom: state.StatusAwaitingQuota},
+		"autonomous but running": {Status: state.StatusRunning},
+		"autonomous but done":    {Status: state.StatusDone},
+	}
+	wantPlan := map[string]bool{"awaiting_quota": true, "paused from quota": true}
+	for name, stage := range cases {
+		t.Run(name, func(t *testing.T) {
+			runDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(runDir, "a"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(runDir, "a", "autonomous.flag"), nil, 0644); err != nil {
+				t.Fatal(err)
+			}
+			rs := state.RunState{StageOrder: []string{"a"}, Stages: map[string]state.StageState{"a": stage}}
+
+			views := buildStageViews(rs, runDir, nil, nil)
+
+			if views[0].ShowPlan != wantPlan[name] {
+				t.Errorf("ShowPlan = %v, want %v for %+v", views[0].ShowPlan, wantPlan[name], views[0])
+			}
+		})
 	}
 }
 
@@ -539,5 +570,129 @@ func TestBuildStageViews_VerifySurvivesFarPastNoticeHorizon(t *testing.T) {
 	other := findStage(views, "other").Verify
 	if other == nil || other.Phase != "needs_changes" || other.Step != 3 || other.Command != "codex" {
 		t.Fatalf("other verify view = %+v, want {3 codex needs_changes} — must survive 2100 later notices past the 2000-notice horizon", other)
+	}
+}
+
+// --- usage-limit wait: StageView.quota -----------------------------------------------------------------------
+
+func stageViewsByID(t *testing.T, stages map[string]state.StageState) map[string]StageView {
+	t.Helper()
+	ids := make([]string, 0, len(stages))
+	for id := range stages {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	rs := state.RunState{StageOrder: ids, Stages: stages}
+	out := map[string]StageView{}
+	for _, v := range buildStageViews(rs, t.TempDir(), nil, nil) {
+		out[v.ID] = v
+	}
+	return out
+}
+
+func TestBuildStageViews_QuotaVisibleOnlyWhileWaitingOrPausedFromIt(t *testing.T) {
+	until := time.Date(2026, 10, 23, 23, 51, 3, 123456789, time.UTC)
+	reset := time.Date(2026, 10, 23, 23, 50, 0, 0, time.UTC)
+	park := &state.QuotaWait{
+		Provider: "claude", Window: "five_hour", Source: state.QuotaSourceStructured, ResetAt: reset, Until: until,
+		Target: "implementation", Waits: 2, ProgressMark: 7, Feedback: true, ManualProbe: true, VerifyID: "v1", VerifyStep: 3,
+	}
+	paused := &state.QuotaWait{Provider: "codex", Source: state.QuotaSourceText, ResetAt: reset, PauseReason: state.QuotaPauseExceedsMaxWait}
+	views := stageViewsByID(t, map[string]state.StageState{
+		"waiting":       {Status: state.StatusAwaitingQuota, Quota: park},
+		"paused-reason": {Status: state.StatusPaused, PausedFrom: state.StatusAwaitingQuota, Quota: paused},
+		"paused-manual": {Status: state.StatusPaused, PausedFrom: state.StatusAwaitingQuota, Quota: park},
+		"paused-other":  {Status: state.StatusPaused, PausedFrom: state.StatusRunning, Quota: park}, // carried series
+		"running":       {Status: state.StatusRunning, Quota: park},
+		"done":          {Status: state.StatusDone},
+		"legacy":        {Status: state.StatusAwaitingQuota}, // journal without quota metadata
+	})
+
+	w := views["waiting"].Quota
+	if w == nil || w.Provider != "claude" || w.Window != "five_hour" || w.Source != "structured" || w.PauseReason != "" {
+		t.Fatalf("waiting quota = %+v", w)
+	}
+	if !w.Until.Equal(until.Truncate(time.Second)) || !w.ResetAt.Equal(reset) {
+		t.Errorf("until/reset = %s / %s", w.Until, w.ResetAt)
+	}
+	if p := views["paused-reason"].Quota; p == nil || p.PauseReason != "exceeds_max_wait" || p.Provider != "codex" || !p.Until.IsZero() {
+		t.Errorf("paused-with-reason quota = %+v", p)
+	}
+	if p := views["paused-manual"].Quota; p == nil || p.Provider != "claude" || p.PauseReason != "" {
+		t.Errorf("manually paused park quota = %+v", p)
+	}
+	for _, id := range []string{"paused-other", "running", "done", "legacy"} {
+		if q := views[id].Quota; q != nil {
+			t.Errorf("%s must not carry quota, got %+v", id, q)
+		}
+	}
+}
+
+// The view is a small shared type: RFC3339 UTC, and none of the journal-only bookkeeping.
+func TestStageView_QuotaJSONShape(t *testing.T) {
+	views := stageViewsByID(t, map[string]state.StageState{"a": {Status: state.StatusAwaitingQuota, Quota: &state.QuotaWait{
+		Provider: "claude", Window: "five_hour", Source: state.QuotaSourceProviderHold,
+		ResetAt: time.Date(2026, 10, 23, 23, 50, 0, 0, time.FixedZone("UTC+3", 3*3600)),
+		Until:   time.Date(2026, 10, 23, 23, 51, 3, 999, time.UTC),
+		Target:  "verify", VerifyID: "v1", VerifyStep: 2, Waits: 3, ProgressMark: 9, Feedback: true, ManualProbe: true,
+	}}})
+	raw, err := json.Marshal(views["a"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	var quota map[string]any
+	if err := json.Unmarshal(top["quota"], &quota); err != nil {
+		t.Fatalf("quota: %v (%s)", err, top["quota"])
+	}
+	want := map[string]any{
+		"provider": "claude", "window": "five_hour", "source": "provider_hold",
+		"until": "2026-10-23T23:51:03Z", "reset_at": "2026-10-23T20:50:00Z",
+	}
+	if len(quota) != len(want) {
+		t.Errorf("quota keys = %v, want only %v", quota, want)
+	}
+	for k, v := range want {
+		if quota[k] != v {
+			t.Errorf("quota[%s] = %v, want %v", k, quota[k], v)
+		}
+	}
+	// A stage without a wait omits the field entirely.
+	raw, _ = json.Marshal(StageView{ID: "x", Status: state.StatusRunning})
+	if strings.Contains(string(raw), "quota") {
+		t.Errorf("quota must be omitted outside a wait: %s", raw)
+	}
+}
+
+// After a restart the view comes from the journal, not from memory.
+func TestBuildStageViews_QuotaSurvivesReplayFromJournal(t *testing.T) {
+	runDir := t.TempDir()
+	store, err := state.Open(runDir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Date(2026, 10, 23, 23, 51, 0, 0, time.UTC)
+	for _, tr := range []*state.Transition{
+		{StageID: "s1", From: state.StatusPending, To: state.StatusRunning, Event: "start_run"},
+		{StageID: "s1", From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota",
+			Quota: &state.QuotaWait{Provider: "claude", Source: state.QuotaSourceText, Until: until, Target: "implementation"}},
+	} {
+		if err := store.Apply(tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.Close()
+
+	reopened, err := state.Open(runDir, []string{"s1"}) // the restart: nothing but events.jsonl carries over
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	views := buildStageViews(reopened.Snapshot(), runDir, nil, nil)
+	if len(views) != 1 || views[0].Quota == nil || views[0].Quota.Provider != "claude" || !views[0].Quota.Until.Equal(until) || views[0].Quota.Source != "text" {
+		t.Fatalf("replayed view = %+v", views)
 	}
 }

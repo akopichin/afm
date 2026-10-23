@@ -88,6 +88,23 @@ describe('ReviewNotesModal', () => {
     expect(await screen.findByText('new text')).toBeInTheDocument()
   })
 
+  it('saves an edited note on Enter and leaves Shift+Enter for a newline', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'old text' })] })
+    const update = vi.mocked(updateNote).mockResolvedValue({ rev: 2 })
+    render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+    await screen.findByText('old text')
+    fireEvent.click(screen.getByText('Edit'))
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'new text' } })
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true })
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() => expect(update).toHaveBeenCalledWith('n1', 'new text', 1))
+    expect(await screen.findByText('new text')).toBeInTheDocument()
+  })
+
   it('deletes a note and refreshes via listNotes to pick up the new rev', async () => {
     vi.mocked(listNotes)
       .mockResolvedValueOnce({ rev: 1, notes: [note({ id: 'n1', text: 'goner' })] })
@@ -96,7 +113,7 @@ describe('ReviewNotesModal', () => {
     render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
 
     await screen.findByText('goner')
-    fireEvent.click(screen.getByText('Delete'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete review note on line 2' }))
 
     await waitFor(() => expect(del).toHaveBeenCalledWith('n1', 1))
     await waitFor(() => expect(screen.queryByText('goner')).toBeNull())
@@ -127,5 +144,100 @@ describe('ReviewNotesModal', () => {
     fireEvent.click(screen.getByText('Save'))
 
     expect(await screen.findByText(/rev conflict/i)).toBeInTheDocument()
+  })
+
+  it('labels a note as a review note sent with Continue and shows its full text', async () => {
+    const long = `${'x'.repeat(300)}\nsecond line`
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: long })] })
+    const { container } = render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+
+    await screen.findByText(/Review note · sent with Continue/)
+    expect(container.querySelector('.comment-text')?.textContent).toBe(long)
+  })
+
+  it('edits in the shared editor; Escape folds it back without saving, closing the modal or losing the note', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'old text' })] })
+    const onClose = vi.fn()
+    const { container } = render(<ReviewNotesModal pausedStages={['s1']} onClose={onClose} />)
+
+    await screen.findByText('old text')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit review note on line 2' }))
+    expect(container.querySelector('.comment-editor[data-comment-context="review"]')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half typed' } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' })
+
+    expect(container.querySelector('.comment-editor')).toBeNull()
+    expect(screen.getByText('old text')).toBeInTheDocument()
+    expect(updateNote).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Edit review note on line 2' })).toHaveFocus()
+  })
+
+  it('keeps a half-typed edit after folding and restores it in the editor', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'old text' })] })
+    const { container } = render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+
+    await screen.findByText('old text')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit review note on line 2' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half typed' } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' })
+
+    expect(container.querySelector('.comment-draft-badge')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit review note on line 2' }))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('half typed')
+  })
+
+  it('drops the kept edit once it is saved', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'old text' })] })
+    vi.mocked(updateNote).mockResolvedValue({ rev: 2 })
+    const { container } = render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+
+    await screen.findByText('old text')
+    fireEvent.click(screen.getByText('Edit'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'new text' } })
+    fireEvent.click(screen.getByText('Save'))
+    await screen.findByText('new text')
+
+    expect(container.querySelector('.comment-draft-badge')).toBeNull()
+    fireEvent.click(screen.getByText('Edit'))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('new text')
+  })
+
+  it('has no one-click cross on a saved note; deleting needs the explicit Delete button', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'keep me' })] })
+    render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+
+    await screen.findByText('keep me')
+
+    expect(screen.queryByRole('button', { name: /^Remove/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete review note on line 2' })).toBeInTheDocument()
+  })
+
+  it('saves with Cmd/Ctrl+Enter from the editor', async () => {
+    vi.mocked(listNotes).mockResolvedValue({ rev: 1, notes: [note({ text: 'old text' })] })
+    const update = vi.mocked(updateNote).mockResolvedValue({ rev: 2 })
+    render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+
+    await screen.findByText('old text')
+    fireEvent.click(screen.getByText('Edit'))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'new text' } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ctrlKey: true })
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('n1', 'new text', 1))
+  })
+
+  it('deletes explicitly from the editor', async () => {
+    vi.mocked(listNotes)
+      .mockResolvedValueOnce({ rev: 1, notes: [note({ text: 'goner' })] })
+      .mockResolvedValueOnce({ rev: 2, notes: [] })
+    const del = vi.mocked(deleteNote).mockResolvedValue()
+    render(<ReviewNotesModal pausedStages={['s1']} onClose={() => {}} />)
+
+    await screen.findByText('goner')
+    fireEvent.click(screen.getByText('Edit'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(del).toHaveBeenCalledWith('n1', 1))
   })
 })

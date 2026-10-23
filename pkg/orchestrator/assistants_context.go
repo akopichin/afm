@@ -17,6 +17,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/redact"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // ErrTaskContextTooLarge is returned by buildTaskContext BEFORE a task is admitted/run when the assembled
@@ -208,7 +209,11 @@ func (o *Orchestrator) collectChildResultsJSON(taskID assistants.TaskID) string 
 // leave an answer the journal never accepted. Deliberately keyed by THIS task's own id only: a task never sees
 // another (sibling) task's context or result (TestContext_DoesNotIncludeSiblingBranches).
 func (o *Orchestrator) previousTaskResultJSON(taskID assistants.TaskID) string {
-	events := o.opts.Store.TaskEvents(taskID)
+	return latestTaskResultJSON(o.opts.Store.TaskEvents(taskID))
+}
+
+// latestTaskResultJSON is the last task_result payload in events (newest first), as indented JSON — "" if none.
+func latestTaskResultJSON(events []state.TaskEvent) string {
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Kind != taskResultEffectKind {
 			continue

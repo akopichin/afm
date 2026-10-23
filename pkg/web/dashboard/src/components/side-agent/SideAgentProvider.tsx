@@ -61,8 +61,16 @@ export function SideAgentProvider({ runId, enabled, blocked = false, onOpenChang
   }, [enabled, isOpen, onOpenChange])
 
   const value = useMemo<SideAgentContextValue>(
-    () => ({ enabled, isOpen, open, openWith: api.openWith, unseenResult: api.unseenResult, active: api.requestState === 'running' }),
-    [enabled, isOpen, open, api.openWith, api.unseenResult, api.requestState],
+    () => ({
+      enabled,
+      isOpen,
+      open,
+      openWith: api.openWith,
+      sendExactMessage: api.sendExact,
+      unseenResult: api.unseenResult,
+      active: api.requestState === 'running',
+    }),
+    [enabled, isOpen, open, api.openWith, api.sendExact, api.unseenResult, api.requestState],
   )
 
   return (

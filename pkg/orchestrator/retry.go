@@ -240,9 +240,32 @@ func (o *Orchestrator) parkForPeers(ctx context.Context, stageID, phase string, 
 	o.continueParkedStage(ctx, stageID)
 }
 
-// runWithRetry wraps an agent function with automatic retry on rate limit errors. After exhausting all
-// retries: publishes EventRetryExhausted.
+// claimVerifyResume решает, чей приказ пробуждения verify-парка держит этот цикл. nil — цикл обычный (приказа нет
+// или его уже принял другой цикл того же ctx: hand-off проснувшегося хода). ok == false — приказ принят, но стадию
+// забрали между пробуждением и стартом цикла (эпоха сменилась): цикл устарел и лишь передаёт стадию feedback-ходу
+// своего Revise, если он был.
+func (o *Orchestrator) claimVerifyResume(ctx context.Context, stageID string, onUserInterrupted func()) (order *verifyResume, ok bool) {
+	order = verifyResumeFrom(ctx)
+	if order == nil || !order.claimLoop() {
+		return nil, true
+	}
+	if o.opts.Store.Snapshot().Stages[stageID].Epoch != order.epoch {
+		order.spend()
+		o.handOffRevise(stageID, order.epoch, onUserInterrupted)
+		return nil, false
+	}
+	return order, true
+}
+
+// runWithRetry runs a fresh (not a Revise's) turn of the stage under runRetryLoop.
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
+	o.runRetryLoop(ctx, s, phase, false, agentFn, completionCheck, onUserInterrupted)
+}
+
+// runRetryLoop wraps an agent function with automatic retry on rate limit errors. After exhausting all
+// retries: publishes EventRetryExhausted. feedback marks the turn as the feedback run of a Revise: a usage-limit
+// park of it records that (state.QuotaWait.Feedback), so the wake resumes the feedback run and not a fresh one.
+func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase string, feedback bool, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
 	// SpawnAgent checks pause after acquiring its slot; interruptChans handles pauses after the agent starts.
 	interruptCh := make(chan struct{}, 1)
 	o.interruptChans.Store(s.ID, interruptCh)
@@ -277,6 +300,14 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	// verifyFailures — счётчик verify-отклонений этой горутины; maxVerifyFailures — их бюджет. In-memory,
 	// сбрасывается на resume — как и прежнее однократное поведение.
 	verifyFailures := 0
+	// Пробуждение verify-парка продолжает цикл с теми же счётчиками: парк не тратит и не обнуляет бюджеты verify.
+	verifyResume, ok := o.claimVerifyResume(ctx, s.ID, onUserInterrupted)
+	if !ok {
+		return // приказ устарел: стадию забрали, пока ход ждал слот
+	}
+	if verifyResume != nil {
+		verifyFailures = verifyResume.quota.VerifyFailures
+	}
 	maxVerifyFailures := o.verifyMaxFailures(s)
 	freshCorrection := o.verifyFreshCorrection(s)
 	// B1 stalemate: reviewPatience = 0 → выключено. prevFingerprint/unchangedRejections — in-memory состояние
@@ -284,7 +315,12 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	reviewPatience := o.verifyReviewPatience(s)
 	prevFingerprint := ""
 	unchangedRejections := 0
+	if verifyResume != nil {
+		unchangedRejections = verifyResume.quota.VerifyStalemates
+	}
 	fingerprintDir := o.projectDir()
+	// progressed — ход этой горутины уже успешно завершался: следующий usage-limit начинает серию отказов заново.
+	progressed := false
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
 		if attempt > 0 || resumeCtx {
@@ -307,19 +343,41 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 
 		// The turn's ownership and its waits as it starts: the exit decides on both (parkForPeers).
 		epoch := o.opts.Store.Snapshot().Stages[s.ID].Epoch
+		// Пробуждение verify-парка: автор уже отработал, первая попытка идёт сразу в completionCheck, и verify
+		// продолжает припаркованный проход (RunVerification).
+		resumesVerify := attempt == 0 && verifyResume != nil
+		if !resumesVerify {
+			// Admission провайдера — после слота команды и before-hook (мы внутри lease), на каждом ходе, в том числе на
+			// пробуждении: другая стадия того же провайдера, запаркованная пока мы ждали слот, держит и эту. Парк по
+			// hold'у не расходует retry, unknownRetries и серию отказов.
+			progressed = progressed || o.progressedSincePark(s.ID, stageDir, phase)
+			if hold := o.admitStageTurn(s); hold != nil {
+				o.parkForQuota(ctx, s, phase, epoch, hold, progressed, feedback, onUserInterrupted)
+				return
+			}
+		}
 		waitsBefore := o.meshWaitStatusesOf(meshStageParticipantID(s.ID))
-		err := agentFn(retryCtx)
+		var err error
+		if !resumesVerify {
+			err = agentFn(retryCtx)
+		}
 		if err == nil {
+			progressed = true
 			// Everything below acts for this turn: if Pause, Continue or Revise took the stage over while the process
 			// was exiting, the stage is another turn's now (or the Revise's feedback run's).
 			if !o.turnOwnsStage(s.ID, epoch) {
+				if resumesVerify {
+					verifyResume.spend() // feedback-ход, который стартует следом, не продолжит этот проход
+				}
 				o.handOffRevise(s.ID, epoch, onUserInterrupted)
 				return
 			}
 			// The turn ran to its end, so its <inbox> messages were handed over. The executor marks them at
 			// process start (OnDelivered); repeating it here (idempotent) also covers a runner that never calls
 			// it — otherwise they would look unread and earn the stage an extra turn (agentcomm_unread.go).
-			o.deliverRenderedInbox(meshStageParticipantID(s.ID))()
+			if !resumesVerify {
+				o.deliverRenderedInbox(meshStageParticipantID(s.ID))()
+			}
 			// afm bug: интерактивный агент может завершиться, не дождавшись ответа пользователя — на диске остаётся
 			// question.json без answer.json.
 			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {
@@ -344,12 +402,18 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// The turn yielded when it ended for waits — still pending, or already answered or ended while the
 			// process was exiting (the live resume then found the stage running and did nothing).
 			if episode := o.turnEpisode(meshStageParticipantID(s.ID), waitsBefore); len(episode) > 0 {
+				if resumesVerify {
+					verifyResume.spend()
+				}
 				o.parkForPeers(ctx, s.ID, phase, epoch, episode, onUserInterrupted)
 				return
 			}
 			var checkErr error
 			if completionCheck != nil {
 				checkErr = completionCheck()
+			}
+			if resumesVerify {
+				verifyResume.spend() // verify мимо этого прохода (проба файлов не прошла) не продолжит старый проход позже
 			}
 			// F1: completionCheck может занять сколько угодно времени ПОСЛЕ того, как автор уже вернулся, — за это
 			// время Pause/Revise мог долговечно перевести стадию в paused/revising.
@@ -365,6 +429,13 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			// всплывает сюда либо этим сентинелом, либо уже долговечным paused/revising-статусом.
 			if errors.Is(checkErr, executor.ErrUserInterrupted) {
 				onUserInterrupted()
+				return
+			}
+			// Usage-limit verify-агента — не провал и не отклонение: стадия паркуется на шаге verify с текущими
+			// счётчиками, бюджеты коррекции и stalemate не тратятся.
+			var verifyLimit *verifyLimitError
+			if errors.As(checkErr, &verifyLimit) {
+				o.parkVerifyForQuota(ctx, s, phase, epoch, verifyLimit, verifyCounters{Failures: verifyFailures, Stalemates: unchangedRejections}, feedback, onUserInterrupted)
 				return
 			}
 			// Incomplete work — две НЕЗАВИСИМЫЕ политики коррекции без backoff. verifyFailures++ — только для
@@ -430,7 +501,14 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			return
 		}
 
+		// Usage limit провайдера — не сбой: стадия паркуется durable до сброса и не расходует ни retry-бюджет, ни
+		// unknownRetries (parkForQuota). Тип проверяет errors.As внутри Classify.
 		class := Classify(err)
+		var limit *executor.UsageLimitError
+		if class == ClassUsageLimit && errors.As(err, &limit) {
+			o.parkForQuota(ctx, s, phase, epoch, limit, progressed, feedback, onUserInterrupted)
+			return
+		}
 		if class != ClassRetryable && class != ClassRetryableUnknown {
 			// Drop the session file so a later retry starts a fresh Claude session instead of resuming a
 			// conversation that was never created. Mirrors the retryable branch.

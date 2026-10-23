@@ -26,6 +26,12 @@ executor:
   max_parallel: 4           # max parallel stages (0 = unlimited)
   truncate_output: 0        # max chars for logged agent text/Bash commands (0 = no limit, default)
 
+# usage_limit:
+#   resume_margin: 60s       # wait after a known provider reset (default: 60s)
+#   probe_interval: 15m      # retry when reset time is unknown (default: 15m)
+#   max_wait: 12h            # pause if the reset is farther away (default: 12h)
+#   max_waits: 4             # pause after more than 4 consecutive refusals (default: 4)
+
 server:
   port: 9876                # web dashboard port
   open_browser: false       # open the browser on startup (default: false)
@@ -50,6 +56,10 @@ server:
 # worktrees:
 #   enabled: true           # per-flow git worktrees; OFF by default. env AFM_WORKTREES
 #                           # overrides, and flow.yaml worktrees overrides both
+
+# add_stage:
+#   enabled: false          # allow adding stages during a run; ON by default.
+#                           # env AFM_ADD_STAGE overrides; no flow.yaml override
 
 accounting:
   enabled: false            # hide cost display everywhere (dashboard + afm check/report);
@@ -92,6 +102,24 @@ project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
 still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
 
+## Usage limits
+
+`usage_limit` controls how long afm waits when an agent reports that its
+provider's subscription or quota is exhausted. Set it in project or global
+`.afm/config.yaml`; project values override global values for each field. All
+four settings must be positive:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `resume_margin` | `60s` | Extra time after a reported reset before work resumes; wake times get a small spread around this margin. |
+| `probe_interval` | `15m` | Time until the next attempt when no reset time is known. |
+| `max_wait` | `12h` | Pause instead of waiting when a known reset is farther away. |
+| `max_waits` | `4` | Pause after more than this many consecutive usage-limit refusals without progress. |
+
+The wait and its wake time survive a restart. Work using the same provider
+shares the hold, so it waits without consuming another refusal. A normal
+temporary rate-limit or transport error still follows the [retry policy](stage-lifecycle.md).
+
 ## Reasoning effort
 
 `client.reasoning` sets the reasoning (thinking) effort for the default claude
@@ -125,6 +153,21 @@ Set `worktrees.enabled: true` in `.afm/config.yaml` (or globally in
 worktree regardless of those settings. The default is off. See
 [Per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) for paths,
 reuse, and the `--worktree-clear` flags.
+
+## Adding stages during a run
+
+Set `add_stage.enabled: false` in the project's `.afm/config.yaml` or global
+`~/.afm/config.yaml` to prevent new stages from being added during a run. The
+default is `true`. Priority is `AFM_ADD_STAGE` (when nonempty) > project config >
+global config > default. The environment variable enables the feature only for
+the exact values `1` or `true`; any other nonempty value disables it. An empty
+value is treated as unset. The setting is resolved when afm starts or resumes a
+run, including in Docker mode. There is no `flow.yaml` override.
+
+When disabled, the dashboard hides **+ Stage**, `/api/status` reports
+`capabilities.add_stage: false`, and the graph preview and commit API routes
+return HTTP 404. Agent proposals to add a stage cannot be accepted. Stages
+already added to a run remain in its graph.
 
 See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and

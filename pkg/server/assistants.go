@@ -64,6 +64,10 @@ type AssistantTaskView struct {
 	// "blocks stage"/"blocks helper X" once Waived is true, or render it as outstanding work.
 	Waived       bool   `json:"waived,omitempty"`
 	WaiverReason string `json:"waiver_reason,omitempty"`
+	// Quota — the usage-limit park of a queued helper task, the same small view as StageView.quota: until when it
+	// waits (RFC3339 until/reset_at), the provider/window/source, and pause_reason when the limit cannot be waited
+	// out (the task is then held until a human continues it). Absent for a task that is not parked.
+	Quota *QuotaView `json:"quota,omitempty"`
 }
 
 // AssistantEventView is one entry of a task's event history page — GET /api/assistants/{id}/events.

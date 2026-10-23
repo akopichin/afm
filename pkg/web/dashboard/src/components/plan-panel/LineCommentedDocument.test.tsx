@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { StrictMode, type ReactElement } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { FileBrowserProvider } from '../file-browser'
-import { LineCommentedDocument, quotedSourceLine, type LineCommentDocumentApi } from './LineCommentedDocument'
+import { CommentProvider } from '../comments/CommentProvider'
+import { LineCommentedDocument, quotedSourceLine, StaleComments, type LineCommentDocumentApi } from './LineCommentedDocument'
+import { useComments } from '../comments/CommentProvider'
 
 // Проверяем useLineComments через реальный DOM: ввод, навигацию, классы, collapse и reset.
 
@@ -10,18 +12,22 @@ type HarnessProps = {
   text: string
   specialSections?: boolean
   identity?: string
+  version?: string
+  show?: boolean
   beforeOpen?: () => void
   docRef?: { current: LineCommentDocumentApi | null }
 }
 
-function Harness({ text, specialSections = true, identity = 'doc-1', beforeOpen, docRef }: HarnessProps): ReactElement {
+function Harness({ text, specialSections = true, identity = 'doc-1', version = 'v1', show = true, beforeOpen, docRef }: HarnessProps): ReactElement {
   return (
+    <CommentProvider runId="run-1">
     <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={true}>
-      <LineCommentedDocument
+      {show && <LineCommentedDocument
         key={identity}
         text={text}
         specialSections={specialSections}
         stageId="s1"
+        scope={{ kind: 'plan', version }}
         beforeOpen={beforeOpen}
         bodyId="plan-content"
         bodyClassName="line-commented"
@@ -36,8 +42,9 @@ function Harness({ text, specialSections = true, identity = 'doc-1', beforeOpen,
             </>
           )
         }}
-      </LineCommentedDocument>
+      </LineCommentedDocument>}
     </FileBrowserProvider>
+    </CommentProvider>
   )
 }
 
@@ -178,18 +185,68 @@ describe('LineCommentedDocument / useLineComments', () => {
     expect(a1.classList.contains('has-comment')).toBe(true)
   })
 
-  test('changing documentIdentity atomically resets all comment state', () => {
-    const { container, rerender } = render(<Harness text={'# First line'} identity="a" />)
+  test('a new document version starts clean; the old version drafts come back with that version', () => {
+    const { container, rerender } = render(<Harness text={'# First line'} version="a" />)
     fireEvent.click(anchor(container, 1))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'x' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
     expect(screen.getByTestId('count').textContent).toBe('1')
 
-    // Смена identity (key) → remount → всё обнулено.
-    rerender(<Harness text={'# First line'} identity="b" />)
+    rerender(<Harness text={'# First line'} version="b" />)
     expect(screen.getByTestId('count').textContent).toBe('0')
     expect(container.querySelector('.line-comment-form')).toBeNull()
     expect(anchor(container, 1).classList.contains('has-comment')).toBe(false)
+
+    rerender(<Harness text={'# First line'} version="a" />)
+    expect(screen.getByTestId('count').textContent).toBe('1')
+    expect(anchor(container, 1).classList.contains('has-comment')).toBe(true)
+  })
+
+  test('unmounting and mounting the document restores the open editor text and the saved card', () => {
+    const { container, rerender } = render(<Harness text={'# First\n# Second'} />)
+    fireEvent.click(anchor(container, 1))
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'saved one' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(anchor(container, 2))
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'typing two' } })
+
+    rerender(<Harness text={'# First\n# Second'} show={false} />)
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    rerender(<Harness text={'# First\n# Second'} show={true} />)
+
+    expect(container.querySelector('.line-comment-display[data-comment-line="1"] .comment-text')?.textContent).toBe('saved one')
+    const editor = container.querySelector('.line-comment-form:not(.line-comment-display)[data-comment-line="2"] textarea') as HTMLTextAreaElement
+    expect(editor.value).toBe('typing two')
+    expect(screen.getByTestId('count').textContent).toBe('2')
+  })
+
+  test('closing the editor with unsaved text folds it into a Draft card that keeps the text and counts', () => {
+    const { container } = render(<Harness text={'# Line'} />)
+    fireEvent.click(anchor(container, 1))
+    const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'half done' } })
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+
+    const card = container.querySelector('.line-comment-display[data-comment-line="1"]') as HTMLElement
+    expect(card.querySelector('.comment-text')?.textContent).toBe('half done')
+    expect(card.querySelector('.comment-draft-badge')).not.toBeNull()
+    expect(screen.getByTestId('count').textContent).toBe('1')
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit comment on line 1' }))
+    expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('half done')
+  })
+
+  test('the api lists non-empty comments with key, revision and trimmed text, ordered by line', () => {
+    const docRef: { current: LineCommentDocumentApi | null } = { current: null }
+    const { container } = render(<Harness text={'# One\n# Two'} docRef={docRef} />)
+    fireEvent.click(anchor(container, 2))
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: '  second  ' } })
+    fireEvent.keyDown(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { key: 'Escape' })
+    fireEvent.click(anchor(container, 1))
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'first' } })
+
+    expect(docRef.current?.comments.map((c) => [c.line, c.text])).toEqual([[1, 'first'], [2, 'second']])
+    expect(docRef.current?.comments.every((c) => c.revision > 0 && c.key !== '')).toBe(true)
   })
 
   test('re-render with the SAME identity keeps an in-progress draft (no remount, caret preserved)', () => {
@@ -348,6 +405,81 @@ describe('LineCommentedDocument render-prop api', () => {
   })
 })
 
+// Уведомление о комментариях, оставшихся от прошлой версии документа.
+describe('StaleComments', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  function StaleHarness(): ReactElement {
+    const { comments, open, edit } = useComments()
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            open('k1', { anchor: { kind: 'plan', stageId: 's1', document: 'plan', version: 'old', line: 3 }, quote: 'old line' })
+            edit('k1', 'stale text')
+          }}
+        >
+          seed
+        </button>
+        <StaleComments entries={comments} source="previous version" />
+      </>
+    )
+  }
+
+  function renderStale() {
+    return render(
+      <CommentProvider runId="run-1">
+        <StaleHarness />
+      </CommentProvider>,
+    )
+  }
+
+  test('renders nothing without entries', () => {
+    const { container } = renderStale()
+    expect(container.querySelector('.stale-comments')).toBeNull()
+  })
+
+  test('shows the count and source, Show reveals the old text, Dismiss discards it', () => {
+    const { container } = renderStale()
+    fireEvent.click(screen.getByRole('button', { name: 'seed' }))
+    expect(screen.getByText('1 comment from previous version')).toBeInTheDocument()
+    expect(screen.queryByText('stale text')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    expect(screen.getByText('stale text')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(container.querySelector('.stale-comments')).toBeNull()
+  })
+
+  test('Copy writes every old comment to the clipboard', () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    renderStale()
+    fireEvent.click(screen.getByRole('button', { name: 'seed' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(writeText).toHaveBeenCalledWith('Line 3: stale text')
+  })
+
+  test('Copy confirms success on the button', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.resolve() }, configurable: true })
+    renderStale()
+    fireEvent.click(screen.getByRole('button', { name: 'seed' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
+
+  test('Copy reports a failure instead of throwing when the Clipboard API is unavailable', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    renderStale()
+    fireEvent.click(screen.getByRole('button', { name: 'seed' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument()
+    expect(screen.getByText('1 comment from previous version')).toBeInTheDocument()
+  })
+})
+
 // Quote preview above the comment textarea.
 describe('LineCommentedDocument quote preview', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -501,5 +633,59 @@ describe('LineCommentedDocument saved-comment quote', () => {
     // Форма редактирования закрыта. NB: карточка тоже имеет класс
     // .line-comment-form, поэтому форму отличаем через :not(.line-comment-display).
     expect(container.querySelector('.line-comment-form:not(.line-comment-display)[data-comment-line="2"]')).toBeNull()
+  })
+})
+
+// Общий CommentCard/CommentEditor: тот же текст, клавиатура и Escape, что и в других контекстах.
+describe('LineCommentedDocument shared card and editor', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  function saveCommentAt(container: HTMLElement, line: number, text: string): void {
+    fireEvent.click(anchor(container, line))
+    fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: text } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+  }
+
+  test('Escape in the editor stops before document-level handlers', () => {
+    const documentKey = vi.fn()
+    const { container } = render(<Harness text={'First line\nSecond line'} />)
+    fireEvent.click(anchor(container, 1))
+    document.addEventListener('keydown', documentKey)
+    fireEvent.keyDown(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { key: 'Escape' })
+    document.removeEventListener('keydown', documentKey)
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    expect(documentKey).not.toHaveBeenCalled()
+  })
+
+  test('Cmd/Ctrl+Enter saves the comment', () => {
+    const { container } = render(<Harness text={'First line'} />)
+    fireEvent.click(anchor(container, 1))
+    const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'kbd save' } })
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+    expect(container.querySelector('.line-comment-display[data-comment-line="1"]')).not.toBeNull()
+  })
+
+  test('card shows full multi-line text and Edit reopens the editor with it', () => {
+    const { container } = render(<Harness text={'First line'} />)
+    saveCommentAt(container, 1, 'alpha\nbeta')
+    const card = container.querySelector('.line-comment-display[data-comment-line="1"]') as HTMLElement
+    expect(card.querySelector('.comment-text')?.textContent).toBe('alpha\nbeta')
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit comment on line 1' }))
+    expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('alpha\nbeta')
+  })
+
+  test('quote is the raw source line as plain text', () => {
+    const { container } = render(<Harness text={'Use <b>bold</b> here'} specialSections={false} />)
+    fireEvent.click(anchor(container, 1))
+    const quote = container.querySelector('.line-comment-quote-src') as HTMLElement
+    expect(quote.textContent).toBe('Use <b>bold</b> here')
+    expect(quote.querySelector('b')).toBeNull()
+  })
+
+  test('plan editor keeps the Attach affordance', () => {
+    const { container } = render(<Harness text={'First line'} />)
+    fireEvent.click(anchor(container, 1))
+    expect(screen.getByRole('button', { name: 'Attach' })).toBeInTheDocument()
   })
 })

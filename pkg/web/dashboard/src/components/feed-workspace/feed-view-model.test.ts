@@ -796,4 +796,76 @@ describe('buildFeedTimeline — stage events and conversation messages in one fe
     expect(shape(buildFeedTimeline(items, messages, 'conversations'))).toEqual(['a+b'])
     expect(shape(buildFeedTimeline(items, messages, 'author'))).toEqual(['→ running', 'working', 'b', 'done'])
   })
+
+describe('quota_wait / quota_reset / quota_warning — usage-limit notices', () => {
+  it('quota_wait: warning-строка со смысловым текстом, провайдером и абсолютным UTC-временем, не raw type', () => {
+    const items = toFeedItems([
+      ev('quota_wait', { stage_id: 's1', provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z', reset_at: '2026-10-23T17:02:00Z' }, 's1', '2026-10-23T14:00:00Z', 5),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
+    expect(items[0]?.text).toBe('Usage limit reached (claude, five_hour) — waiting until 2026-10-23 17:02 UTC')
+    expect(items[0]?.text).not.toContain('quota_wait')
+  })
+
+  it('quota_wait с source=probe говорит «next check», а без времени — что сброс неизвестен', () => {
+    const [probe, unknown] = toFeedItems([
+      ev('quota_wait', { stage_id: 's1', provider: 'codex', source: 'probe', until: '2026-10-23T17:15:00Z' }, 's1', '2026-10-23T17:00:00Z', 1),
+      ev('quota_wait', { stage_id: 's1', provider: 'codex', source: 'text' }, 's1', '2026-10-23T17:00:01Z', 2),
+    ])
+    expect(probe?.text).toBe('Usage limit reached (codex) — next check at 2026-10-23 17:15 UTC')
+    expect(unknown?.text).toBe('Usage limit reached (codex) — reset time unknown')
+  })
+
+  it('quota_reset: нейтральная строка «cleared»; quota_warning: warning с текстом сервера или значением по умолчанию', () => {
+    const [reset, warnWithMessage, warnPlain] = toFeedItems([
+      ev('quota_reset', { stage_id: 's1', provider: 'claude', window: 'five_hour' }, 's1', '2026-10-23T17:02:10Z', 3),
+      ev('quota_warning', { stage_id: 's1', provider: 'claude', window: 'five_hour', message: 'Used 90% of the window' }, 's1', '2026-10-23T16:00:00Z', 1),
+      ev('quota_warning', { stage_id: 's1', provider: 'claude' }, 's1', '2026-10-23T16:01:00Z', 2),
+    ])
+    expect(reset).toMatchObject({ tone: 'neutral', kind: 'status', text: 'Usage limit (claude, five_hour): the wait is over' })
+    expect(warnWithMessage).toMatchObject({ tone: 'warning', text: 'Used 90% of the window' })
+    expect(warnPlain).toMatchObject({ tone: 'warning', text: 'Usage limit (claude): the provider says the limit is close' })
+  })
+
+  it('helper-уведомление (task_id вместо stage_id) называет задачу помощника', () => {
+    const [item] = toFeedItems([
+      ev('quota_wait', { task_id: 't-9', provider: 'claude', source: 'structured', until: '2026-10-23T17:02:06Z' }, 's1', '2026-10-23T14:00:00Z', 7),
+    ])
+    expect(item?.text).toBe('Helper task t-9: usage limit reached (claude) — waiting until 2026-10-23 17:02 UTC')
+  })
+
+  it('quota_wait/quota_reset/quota_warning показывают текст сервера как есть, без второго префикса', () => {
+    const [wait, probe, warning, helper] = toFeedItems([
+      ev('quota_wait', { stage_id: 's1', provider: 'claude', window: 'five_hour', until: '2026-10-23T17:02:06Z', message: 'Usage limit (claude, five_hour): waiting until 2026-10-23 17:02 UTC' }, 's1', '2026-10-23T14:00:00Z', 1),
+      ev('quota_reset', { stage_id: 's1', provider: 'claude', window: 'five_hour', message: 'Usage limit (claude, five_hour): probing after a manual continue' }, 's1', '2026-10-23T14:01:00Z', 2),
+      ev('quota_warning', { stage_id: 's1', provider: 'claude', window: 'five_hour', message: 'Usage limit (claude, five_hour): 92% used' }, 's1', '2026-10-23T14:02:00Z', 3),
+      ev('quota_wait', { task_id: 't-9', provider: 'claude', message: 'Usage limit (claude): no reset time to wait for; paused' }, 's1', '2026-10-23T14:03:00Z', 4),
+    ])
+    expect(wait?.text).toBe('Usage limit (claude, five_hour): waiting until 2026-10-23 17:02 UTC')
+    expect(probe).toMatchObject({ tone: 'neutral', text: 'Usage limit (claude, five_hour): probing after a manual continue' })
+    expect(probe?.text).not.toContain('cleared')
+    expect(warning).toMatchObject({ tone: 'warning', text: 'Usage limit (claude, five_hour): 92% used' })
+    expect(helper?.text).toBe('Helper task t-9: usage limit (claude): no reset time to wait for; paused')
+  })
+
+  it('quota_wait без message: неожидаемый лимит (pause_reason) — «paused», а не «waiting until»', () => {
+    const [exceeds, noReset, maxWaits, manualReset] = toFeedItems([
+      ev('quota_wait', { stage_id: 's1', provider: 'claude', source: 'structured', pause_reason: 'exceeds_max_wait', reset_at: '2026-10-23T22:00:00Z' }, 's1', '2026-10-23T14:00:00Z', 1),
+      ev('quota_wait', { stage_id: 's1', provider: 'claude', source: 'text', pause_reason: 'no_reset' }, 's1', '2026-10-23T14:00:01Z', 2),
+      ev('quota_wait', { stage_id: 's1', provider: 'claude', pause_reason: 'max_waits', reset_at: '2026-10-23T22:00:00Z' }, 's1', '2026-10-23T14:00:02Z', 3),
+      ev('quota_reset', { stage_id: 's1', provider: 'claude' }, 's1', '2026-10-23T14:00:03Z', 4),
+    ])
+    expect(exceeds?.text).toBe('Usage limit reached (claude) — reset at 2026-10-23 22:00 UTC is later than max_wait; paused')
+    expect(noReset?.text).toBe('Usage limit reached (claude) — no reset time to wait for; paused')
+    expect(maxWaits?.text).toBe('Usage limit reached (claude) — too many consecutive refusals; paused')
+    for (const item of [exceeds, noReset, maxWaits]) expect(item?.text).not.toContain('waiting until')
+    expect(manualReset?.text).toBe('Usage limit (claude): the wait is over')
+  })
+
+  it('stage_status_changed → awaiting_quota имеет warning-тон', () => {
+    const [item] = toFeedItems([ev('stage_status_changed', 'awaiting_quota', 's1', '2026-10-23T14:00:00Z', 1)])
+    expect(item?.tone).toBe('warning')
+  })
+})
 })

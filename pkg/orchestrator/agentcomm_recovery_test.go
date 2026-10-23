@@ -38,6 +38,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -47,6 +48,7 @@ import (
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -613,5 +615,174 @@ func TestMesh_CostsAccountedExactlyOncePerTaskAcrossRestart(t *testing.T) {
 	}
 	if forTask[0].ProfileID != "reviewer" {
 		t.Fatalf("task usage record profile = %q, want reviewer", forTask[0].ProfileID)
+	}
+}
+
+// yieldedBatchStage is a running stage that sent two requests to the human, registered one batch wait on them and
+// parked on it (with deadline, if given) — what the exit of a turn that yielded on `afm agent wait --message-ids`
+// leaves behind. It returns the thread, the requests and the wait of each of them.
+func yieldedBatchStage(t *testing.T, o *Orchestrator, deadline *time.Time) (agentcomm.ThreadID, []agentcomm.MessageID, []agentcomm.WaitID) {
+	t.Helper()
+	ctx := context.Background()
+	activateStage(t, o, unreadTestStageID)
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-batch-thread", Members: []agentcomm.ParticipantID{meshUserParticipantID, unreadTestStage}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests []agentcomm.MessageID
+	for i := range 2 {
+		sent, err := o.Send(ctx, SendRequest{
+			OperationID: fmt.Sprintf("op-batch-ask-%d", i), ThreadID: thread.ID, Sender: unreadTestStage,
+			Recipients: []agentcomm.ParticipantID{meshUserParticipantID}, Kind: agentcomm.MessageKindRequest, Body: "please review",
+			Actor: state.Actor{Kind: "assistant", ID: string(unreadTestStage)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, sent.MessageID)
+	}
+	receipt, err := o.Wait(ctx, WaitRequest{
+		OperationID: "op-batch-wait", Waiter: unreadTestStage, Deadline: deadline,
+		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo}, MessageIDs: requests,
+	})
+	if err != nil || receipt.Status != agentcomm.WaitPending {
+		t.Fatalf("batch Wait = %+v, %v; want a pending batch (a yield)", receipt, err)
+	}
+	epoch := o.opts.Store.Snapshot().Stages[unreadTestStageID].Epoch
+	o.parkForPeers(ctx, unreadTestStageID, phaseAutonomous, epoch, receiptWaitIDs(receipt), func() { t.Error("no revise here") })
+	return thread.ID, requests, receiptWaitIDs(receipt)
+}
+
+func answerRequest(t *testing.T, o *Orchestrator, thread agentcomm.ThreadID, request agentcomm.MessageID, opID string) {
+	t.Helper()
+	if _, err := o.Send(context.Background(), SendRequest{
+		OperationID: opID, ThreadID: thread, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{unreadTestStage},
+		Kind: agentcomm.MessageKindReply, InReplyTo: &request, Body: "done",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The process died after the last answer of a batch committed but before the stage was resumed: recovery gives
+// the stage exactly one turn. With the last answer still missing it leaves the stage parked.
+func TestMesh_BatchWaitRecoveryResumesTheStageOnceAfterTheLastAnswer(t *testing.T) {
+	t.Run("all answered", func(t *testing.T) {
+		runDir := t.TempDir()
+		o, store := newUnreadTestOrchestratorAt(t, runDir, flow.AgentAuto, &scriptedStageRunner{turn: func(int32) error { return nil }})
+		thread, requests, _ := yieldedBatchStage(t, o, nil)
+		answerRequest(t, o, thread, requests[0], "op-answer-0")
+		answerRequest(t, o, thread, requests[1], "op-answer-1")
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		runner := &scriptedStageRunner{turn: func(int32) error { return nil }}
+		_, store2 := restartAndRecover(t, runDir, runner)
+		deadline := time.Now().Add(5 * time.Second)
+		for runner.turns.Load() == 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("no continuation turn after recovery (status %s)", store2.Get(unreadTestStageID))
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		time.Sleep(150 * time.Millisecond)
+		if got := runner.turns.Load(); got != 1 {
+			t.Fatalf("turns after recovery = %d, want exactly 1", got)
+		}
+	})
+	t.Run("last answer missing", func(t *testing.T) {
+		runDir := t.TempDir()
+		o, store := newUnreadTestOrchestratorAt(t, runDir, flow.AgentAuto, &scriptedStageRunner{turn: func(int32) error { return nil }})
+		thread, requests, _ := yieldedBatchStage(t, o, nil)
+		answerRequest(t, o, thread, requests[0], "op-answer-0")
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		runner := &scriptedStageRunner{turn: func(int32) error { return nil }}
+		_, store2 := restartAndRecover(t, runDir, runner)
+		time.Sleep(150 * time.Millisecond)
+		if got := store2.Get(unreadTestStageID); got != state.StatusAwaitingPeer || runner.turns.Load() != 0 {
+			t.Fatalf("status %s, turns %d: want the stage still parked, no turn", got, runner.turns.Load())
+		}
+	})
+}
+
+// A stage parked on a batch of two requests, one to a reviewer who finished without answering and one to the
+// human. The restart's release of that unanswerable item ends only a part of the batch: the stage stays
+// parked. The last answer then continues it once.
+func TestMesh_BatchWaitUnanswerableItemAtStartupDoesNotWakeTheStageEarly(t *testing.T) {
+	runDir := t.TempDir()
+	o, store := newUnreadTestOrchestratorAt(t, runDir, flow.AgentAuto, &scriptedStageRunner{turn: func(int32) error { return nil }})
+	ctx := context.Background()
+	activateStage(t, o, unreadTestStageID)
+	rev, err := o.AddRunAgent(ctx, AddRunAgentRequest{OperationID: "op-rev", ProfileID: "qa", Title: "QA", Actor: state.Actor{Kind: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-batch-thread", Members: []agentcomm.ParticipantID{unreadTestStage, rev.ParticipantID, meshUserParticipantID}, Scope: agentcomm.ScopeStage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.runHelperAgent = func(ctx context.Context, _, _, _, _, _, _ string) (executor.HelperOutcome, error) {
+		<-ctx.Done() // the reviewer never answers: it is cancelled below
+		return executor.HelperOutcome{Interrupted: true}, nil
+	}
+	var requests []agentcomm.MessageID
+	for i, to := range []agentcomm.ParticipantID{rev.ParticipantID, meshUserParticipantID} {
+		sent, err := o.Send(ctx, SendRequest{
+			OperationID: fmt.Sprintf("op-batch-ask-%d", i), ThreadID: thread.ID, Sender: unreadTestStage, Recipients: []agentcomm.ParticipantID{to},
+			Kind: agentcomm.MessageKindRequest, Body: "please review", Actor: state.Actor{Kind: "assistant", ID: string(unreadTestStage)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, sent.MessageID)
+	}
+	receipt, err := batchWait(o, "op-batch-wait", unreadTestStage, requests...)
+	if err != nil || receipt.Status != agentcomm.WaitPending {
+		t.Fatalf("batch Wait = %+v, %v; want a pending batch (a yield)", receipt, err)
+	}
+	epoch := store.Snapshot().Stages[unreadTestStageID].Epoch
+	o.parkForPeers(ctx, unreadTestStageID, phaseAutonomous, epoch, receiptWaitIDs(receipt), func() { t.Error("no revise here") })
+	// The reviewer's end is committed directly — as if the process stopped right after that commit.
+	eff, err := taskStatusEffect(rev.TaskID, assistants.StatusCancelled, "cancelled by user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyRunOperation(state.Operation{ID: "op-crash-cancel", Kind: "finish_task", Effects: []state.Effect{eff}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	o.concurrency.WaitAgents()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var turns atomic.Int32
+	restarted, store2 := newUnreadTestOrchestratorAt(t, runDir, flow.AgentAuto, &scriptedStageRunner{turn: func(int32) error { turns.Add(1); return nil }})
+	runCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(func() { cancel(); restarted.concurrency.WaitAgents() })
+
+	restarted.releaseUnanswerableWaits(runCtx, restarted.resumeWaiterAfterTerminalWaitAtStartup)
+
+	waits := store2.Snapshot().Assistants.Mesh.Waits
+	if got := waits[receipt.Items[0].WaitID].Status; got != agentcomm.WaitCancelled {
+		t.Fatalf("the unanswerable item = %s, want cancelled", got)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := store2.Get(unreadTestStageID); got != state.StatusAwaitingPeer || turns.Load() != 0 {
+		t.Fatalf("status %s, turns %d: want the stage still parked while the human's item is pending", got, turns.Load())
+	}
+
+	answerRequest(t, restarted, thread.ID, requests[1], "op-answer-1")
+	restarted.recoverMeshWaits(runCtx)
+	waitUntil(t, "the continuation turn", func() bool { return turns.Load() > 0 })
+	time.Sleep(150 * time.Millisecond)
+	if got := turns.Load(); got != 1 {
+		t.Fatalf("turns after the last answer = %d, want exactly 1", got)
 	}
 }

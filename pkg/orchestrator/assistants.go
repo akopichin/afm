@@ -22,6 +22,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/prompts"
@@ -157,6 +158,17 @@ func (o *Orchestrator) taskHeld(taskID assistants.TaskID) bool {
 	rs := o.opts.Store.Snapshot()
 	held, _ := rs.Assistants.EffectivelyHeld(taskID)
 	return held
+}
+
+// TaskQuota returns a copy of the usage-limit park of a queued task (state.TaskState.Quota) — nil for a task
+// without one or an unknown id. A side lookup like TaskWaiver: the dashboard shows it while the task is queued.
+func (o *Orchestrator) TaskQuota(taskID assistants.TaskID) *state.QuotaWait {
+	t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
+	if !ok || t.Quota == nil {
+		return nil
+	}
+	q := *t.Quota
+	return &q
 }
 
 // taskParent reads a task's parent id from the current projection — ("", false) for a top-level task or an
@@ -398,6 +410,17 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	if idleRunAgent(rs, t) {
 		return
 	}
+	// Durable usage-limit park (Quota.Until ahead): the turn is not due yet. The park armed the wake timer; after a
+	// restart this very call, made by recovery, arms it again from the journal. A manual probe starts now.
+	if q := t.Quota; q != nil && !q.ManualProbe && q.Until.After(o.clk().Now()) {
+		o.retryTaskAt(ctx, taskID, q.Until)
+		return
+	}
+	// Hold провайдера: ход не стартует (и не меняет статус), повтор — к концу hold'а.
+	if hold := o.taskAdmissionHold(t.Task); hold != nil {
+		o.retryTaskAt(ctx, taskID, hold.ResetAt)
+		return
+	}
 	eff, err := taskStatusEffect(taskID, assistants.StatusRunning, "")
 	if err != nil {
 		return
@@ -409,10 +432,17 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 		Effects: []state.Effect{eff},
 	}
 	task := t.Task
+	var parked *state.QuotaWait // the usage-limit wait this start ends, if any
+	if q := t.Quota; q != nil && (q.ManualProbe || !q.Until.IsZero()) {
+		parked = q
+	}
 	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: task.RootStageID, Data: map[string]any{
 			"task_id": string(taskID), "status": string(assistants.StatusRunning),
 		}})
+		if parked != nil {
+			o.publishQuotaNotice(eventQuotaReset, task.RootStageID, taskID, quotaNoticeData(parked, quotaResetMessage(parked)))
+		}
 		o.spawnTask(ctx, taskID, task)
 	}); err != nil {
 		// Lost the CAS race (already running/cancelled/held by the time we tried), or the task simply isn't
@@ -422,6 +452,17 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 		o.handleTaskOperationErr(err)
 		return
 	}
+}
+
+// taskAdmissionHold is the provider hold a task's next turn waits for, nil when it may start. The one-shot manual
+// probe a Continue of a parked task recorded (state.QuotaWait.ManualProbe) bypasses it: the probe lasts until the
+// turn starts, so the check after the command slot is granted lets the same probe through, and any later
+// admission is held again.
+func (o *Orchestrator) taskAdmissionHold(task assistants.Task) *executor.UsageLimitError {
+	if q := o.TaskQuota(task.ID); q != nil && q.ManualProbe {
+		return nil
+	}
+	return o.taskProviderHold(task)
 }
 
 // spawnTask hands the task's turn to concurrency.SpawnOwned under its profile command's semaphore. The
@@ -452,6 +493,12 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 			if !o.taskHeld(taskID) {
 				o.maybeScheduleTask(ctx, taskID)
 			}
+			return
+		}
+		// Слот команды получен: hold мог появиться, пока задача ждала его (тот же возврат в queued, что и при паузе).
+		if hold := o.taskAdmissionHold(task); hold != nil {
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: provider usage limit hold")
+			o.retryTaskAt(ctx, taskID, hold.ResetAt)
 			return
 		}
 		o.runHelperTask(runCtx, taskID, task)

@@ -1,19 +1,17 @@
 import type { ReactElement } from 'react'
 import type { MeshLoop, MeshParticipant } from '../../api/mesh-client'
-import { displayTime } from '../message-time/MessageTime'
-import { useMessageTimeZone } from '../../lib/message-time-zone'
+import { formatHostTime, useMessageTimeZone } from '../../lib/message-time-zone'
 import { mentionHandles, senderLabel } from '../../lib/mesh-roster'
 import type { Stage } from '../../types'
 
 // LoopOutcome — what a /loop command answered: the loop it created or stopped, or the run's loops.
 export type LoopOutcome = { kind: 'created' | 'stopped'; loop: MeshLoop } | { kind: 'list'; loops: MeshLoop[] }
 
-// formatHostTime — the instant in the host's time zone, with seconds ("Oct 23, 2026, 19:05:07"), via the same
-// IANA-authoritative/UTC-offset-fallback rule the Feed's own message times use (MessageTime.tsx's displayTime).
-function formatHostTime(iso: string, timeZone: string, utcOffsetMinutes: number): string {
+// loopTime uses the shared host zone formatter so receipts match Feed timestamps.
+function loopTime(iso: string, timeZone: string, utcOffsetMinutes: number): string {
   const date = new Date(iso)
   if (!Number.isFinite(date.getTime())) return iso
-  return displayTime(date, timeZone, utcOffsetMinutes).full
+  return formatHostTime(date, { timeZone, utcOffsetMinutes }).full
 }
 
 type Names = { stages: Stage[]; handles: Map<string, string> }
@@ -32,7 +30,7 @@ const ended = (loop: MeshLoop): string => (loop.end_reason !== undefined && loop
 export function LoopOutcomeView({ outcome, participants, stages }: { outcome: LoopOutcome; participants: MeshParticipant[]; stages: Stage[] }): ReactElement {
   const { timeZone, utcOffsetMinutes } = useMessageTimeZone()
   const names: Names = { stages, handles: mentionHandles(participants) }
-  const time = (iso: string): string => formatHostTime(iso, timeZone, utcOffsetMinutes)
+  const time = (iso: string): string => loopTime(iso, timeZone, utcOffsetMinutes)
 
   if (outcome.kind === 'list') {
     return (

@@ -9,8 +9,8 @@ import {
   type AssistantEventWire,
 } from '../../api/run-client'
 import {
-  ASSISTANT_TASK_STATUS_LABELS,
   ASSISTANT_TASK_TERMINAL,
+  assistantTaskStatusLabel,
   buildBreadcrumbChain,
   parseAssistantResult,
   verdictGlyph,
@@ -20,6 +20,7 @@ import {
 } from '../../types/assistant-task'
 import { AssistantBreadcrumb } from './AssistantBreadcrumb'
 import { MarkdownRenderer } from '../plan-panel'
+import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 
 const POLL_INTERVAL_MS = 3000
 // MAX_ACCUMULATED_EVENTS bounds useTaskResult's in-memory accumulated event history (T11.2, "bounded
@@ -122,7 +123,7 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
     )
   }
 
-  const label = ASSISTANT_TASK_STATUS_LABELS[task.status]
+  const label = assistantTaskStatusLabel(task)
   const isError = task.status === 'failed' || task.status === 'cancelled'
   const isTerminal = ASSISTANT_TASK_TERMINAL.has(task.status)
   const title = task.title !== '' ? task.title : task.profileId
@@ -143,6 +144,7 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
         </span>
         <span className="assistant-task-view-status" data-status={task.status}>{label}</span>
       </div>
+      {task.status === 'queued' && task.quota !== undefined && <QuotaCountdown quota={task.quota} />}
       <TaskActions task={task} passed={result?.verdict === 'pass'} />
       {isWatcher && (
         <div className="assistant-task-view-watch" data-trigger={task.trigger}>
@@ -258,8 +260,11 @@ function TaskActions({ task, passed }: { task: AssistantTask; passed: boolean })
   const [reason, setReason] = useState('')
 
   const terminal = ASSISTANT_TASK_TERMINAL.has(task.status)
-  const canPause = !terminal && task.status !== 'paused'
-  const canContinue = task.status === 'paused'
+  // Helper, припаркованный на неожидаемом лимите (quota.pauseReason), остаётся queued под ручным hold: сам он
+  // не проснётся, поэтому ему нужен Continue, а не Pause.
+  const heldByQuota = task.status === 'queued' && task.quota !== undefined && task.quota.pauseReason !== ''
+  const canPause = !terminal && task.status !== 'paused' && !heldByQuota
+  const canContinue = task.status === 'paused' || heldByQuota
   const canCancel = !terminal
   // A required task can be waived until it either passes cleanly or is already waived — waiving is exactly how
   // a human unblocks a stage held by a required task that returned needs_changes (which is a terminal

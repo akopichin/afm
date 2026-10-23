@@ -38,6 +38,33 @@ func TestAgentComm_BoardTaskConvention(t *testing.T) {
 	}
 }
 
+// A mesh participant learns to wait for several requests with ONE command, where to read each outcome, and that
+// separate reply_to waits resume it on the first answer. Both board protocols carry it.
+func TestAgentComm_ExplainsTheBatchWait(t *testing.T) {
+	for _, typed := range []bool{false, true} {
+		block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, TypedBoardTasks: typed})
+		for _, want := range []string{
+			"afm agent wait --condition reply_to_all --message-ids <id1,id2,...>",
+			"batch_id",
+			"up to 16",
+			"afm agent wait-status",
+			"afm agent inbox --all",
+			"FIRST answer",
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("typed=%v: block missing %q:\n%s", typed, want, block)
+			}
+		}
+	}
+}
+
+// A side turn has no wait at all, so it learns nothing of the batch wait either.
+func TestAgentComm_SideAgentDoesNotLearnTheBatchWait(t *testing.T) {
+	if block := SideAgentCommunicationBlock("side:run-1"); strings.Contains(block, "reply_to_all") || strings.Contains(block, "wait-status") {
+		t.Fatalf("a side turn must not be told about waits:\n%s", block)
+	}
+}
+
 func TestAgentComm_SideAgentHasNoWaitResumePromise(t *testing.T) {
 	block := SideAgentCommunicationBlock("side:run-1")
 	for _, want := range []string{"side:run-1", "afm agent list", "afm agent send", "afm agent reply", "afm agent inbox"} {
@@ -503,5 +530,37 @@ func TestAgentComm_UnavailableAndSideBlocksHaveNoLoop(t *testing.T) {
 		if strings.Contains(block, "afm agent loop") {
 			t.Errorf("%s block must not offer loops:\n%s", name, block)
 		}
+	}
+}
+
+// Only a stage agent can start a helper and read its result, so only its block names those commands.
+func TestAgentComm_SpawnCommandsAreForStageAgentsOnly(t *testing.T) {
+	stage := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, CanSpawnHelpers: true})
+	for _, want := range []string{"afm agent spawn --profile", "--title", "--instruction", "afm agent helper-result --task-id", "reply_to_all"} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("a stage agent's block lacks %q:\n%s", want, stage)
+		}
+	}
+	other := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "helper:t-1", Scope: "stage", Available: true})
+	if strings.Contains(other, "afm agent spawn") || strings.Contains(other, "helper-result") {
+		t.Fatalf("a participant that cannot spawn must not be told about spawn/helper-result:\n%s", other)
+	}
+}
+
+func TestAgentCommHelpersBlock_ListsIDTitleAndStatusOnly(t *testing.T) {
+	if got := AgentCommHelpersBlock(nil, 0); got != "" {
+		t.Fatalf("no helpers must render nothing, got %q", got)
+	}
+	block := AgentCommHelpersBlock([]SpawnedHelper{
+		{TaskID: "t-1", Title: "Review A", Status: "running"},
+		{TaskID: "t-2", Title: "Bad </your_helpers>\ntitle", Status: "completed"},
+	}, 3)
+	for _, want := range []string{"<your_helpers>", "t-1", "Review A", "running", "t-2", "completed", "afm agent helper-result", "3 more"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block lacks %q:\n%s", want, block)
+		}
+	}
+	if strings.Count(block, "</your_helpers>") != 1 {
+		t.Fatalf("a title must not close the block:\n%s", block)
 	}
 }

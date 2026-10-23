@@ -10,6 +10,7 @@ import (
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/mcp"
+	"github.com/akopichin/afm/pkg/orchestrator"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -47,7 +48,47 @@ type StageView struct {
 	// просто ждёт, пока помощник доработает (state.AssistantsState.NeedsHumanDecision, T7.7's же
 	// классификация). Фронт рисует needs_changes как actionable attention только когда это true.
 	AwaitingAssistantsBlocked bool `json:"awaiting_assistants_blocked,omitempty"`
+	// Quota — usage-limit wait: only while the stage is awaiting_quota or paused out of such a wait (an unwaitable
+	// limit or a manual Pause), the same after a restart because it is read from the journal state.
+	Quota *QuotaView `json:"quota,omitempty"`
 }
+
+// QuotaView is the small shared dashboard view of a usage-limit wait — the stage's (StageView.quota) and a parked
+// helper task's (AssistantTaskView.quota). Times are RFC3339 UTC. It is deliberately not the whole
+// state.QuotaWait: the resume target, verify cursor, series counters and the manual-probe intent are journal
+// bookkeeping, not something a client acts on.
+type QuotaView struct {
+	Provider string `json:"provider"`
+	Window   string `json:"window,omitempty"`
+	// Source is where the wait came from: structured, text, probe or provider_hold.
+	Source string `json:"source"`
+	// Until is when the work wakes; absent while the limit cannot be waited out (PauseReason set).
+	Until time.Time `json:"until,omitzero"`
+	// ResetAt is the reset the provider reported; absent when unknown.
+	ResetAt time.Time `json:"reset_at,omitzero"`
+	// PauseReason is set when the limit cannot be waited out: exceeds_max_wait, no_reset or max_waits.
+	PauseReason string `json:"pause_reason,omitempty"`
+}
+
+// NewQuotaView projects a park for clients; nil for no park, or a quota that no longer describes a wait (only the
+// series counter is left after the work resumed).
+func NewQuotaView(q *state.QuotaWait) *QuotaView {
+	if q == nil || (q.Until.IsZero() && q.PauseReason == "") {
+		return nil
+	}
+	return &QuotaView{
+		Provider:    q.Provider,
+		Window:      q.Window,
+		Source:      q.Source,
+		Until:       quotaViewTime(q.Until),
+		ResetAt:     quotaViewTime(q.ResetAt),
+		PauseReason: q.PauseReason,
+	}
+}
+
+// quotaViewTime is t in UTC at second precision: the client parses plain RFC3339, and the jitter of an until is
+// sub-second noise.
+func quotaViewTime(t time.Time) time.Time { return t.UTC().Truncate(time.Second) }
 
 // VerifyView отражает последний verify_started как running, verify_result как verdict либо error; новый
 // проход снова даёт running.
@@ -70,9 +111,10 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 		hasDialog := stageHasDialog(runDir, id)
 		cfg := stages[id]
 		isScript := cfg.IsScript
-		// PlanPanel нужен failed/paused стадиям ради Retry/Continue, включая autonomous и script без plan.md.
+		// PlanPanel нужен failed/paused стадиям ради Retry/Continue, а awaiting_quota — ради причины ожидания и
+		// Pause → Continue, включая autonomous и script без plan.md.
 		showPlan := (st.Status != state.StatusPending && !isScript && !autonomous) ||
-			st.Status == state.StatusFailed || st.Status == state.StatusPaused
+			st.Status == state.StatusFailed || st.Status == state.StatusPaused || st.Status == state.StatusAwaitingQuota
 		// ShowDialog резервирует строку под DialogChannel в лейауте. interactive/autonomous сами по себе панель
 		// БОЛЬШЕ не открывают — раньше это и порождало пустую дыру.
 		showDialog := hasDialog || st.Status == state.StatusAwaitingUserInput
@@ -104,6 +146,7 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			Cost:                      stageCosts[id],
 			Verify:                    verifyByStage[id],
 			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
+			Quota:                     NewQuotaView(orchestrator.StageQuota(st)),
 		})
 	}
 	return views

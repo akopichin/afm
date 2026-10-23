@@ -108,7 +108,13 @@ http_code=$(printf '%s' "$response" | tail -n1)
 response=$(printf '%s' "$response" | sed '$d')
 
 if [[ "$curl_exit" -ne 0 || "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
-    echo "error: request to $OPENAI_BASE_URL failed (curl exit $curl_exit, http $http_code): $response" >&2
+    failure="request to $OPENAI_BASE_URL failed (curl exit $curl_exit, http $http_code): "
+    # Full body only on stderr (echo is a builtin, no exec argument limit); the result line gets a capped
+    # copy because jq receives it as an exec argument.
+    echo "error: $failure$response" >&2
+    # The body keeps error.code (insufficient_quota vs rate_limit_exceeded); is_error+result is the shape
+    # afm's usage-limit detection reads.
+    jq -nc --arg err "$failure${response:0:4096}" '{type:"result", subtype:"error_during_execution", is_error:true, result:$err}'
     exit 1
 fi
 

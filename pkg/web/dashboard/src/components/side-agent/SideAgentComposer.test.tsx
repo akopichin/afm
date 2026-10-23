@@ -29,20 +29,18 @@ describe('SideAgentComposer', () => {
     expect(screen.getByRole('button', { name: 'Send' })).not.toBeDisabled()
   })
 
-  it('sends on Cmd/Ctrl+Enter when non-empty and idle', () => {
+  it('sends on Enter when non-empty and idle', () => {
     const onSend = vi.fn()
     render(<SideAgentComposer draft="hello" onDraftChange={vi.fn()} onSend={onSend} onStop={vi.fn()} running={false} />)
     const ta = screen.getByRole('combobox')
-    fireEvent.keyDown(ta, { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(ta, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledTimes(1)
-    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true })
-    expect(onSend).toHaveBeenCalledTimes(2)
   })
 
-  it('plain Enter does not send (newline)', () => {
+  it('Shift+Enter does not send or prevent the newline', () => {
     const onSend = vi.fn()
     render(<SideAgentComposer draft="hello" onDraftChange={vi.fn()} onSend={onSend} onStop={vi.fn()} running={false} />)
-    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
+    expect(fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', shiftKey: true })).toBe(true)
     expect(onSend).not.toHaveBeenCalled()
   })
 
@@ -128,7 +126,7 @@ describe('SideAgentComposer', () => {
   it('names the textbox and placeholder after the assistant', () => {
     render(<SideAgentComposer draft="" onDraftChange={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} running={false} />)
     const ta = screen.getByRole('combobox', { name: 'Message the assistant' })
-    expect(ta).toHaveAttribute('placeholder', 'Message the assistant…  (Cmd/Ctrl+Enter to send, @ to mention a role)')
+    expect(ta).toHaveAttribute('placeholder', 'Message the assistant…  (Enter to send, Shift+Enter for a new line, @ to mention a role)')
   })
 
   it('names the mention listbox "Mention a role"', () => {
@@ -167,6 +165,19 @@ describe('SideAgentComposer', () => {
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true })
     expect(onSend).toHaveBeenCalledTimes(1)
   })
+
+  it.each([{ shiftKey: true }, { isComposing: true }, { keyCode: 229 }, { repeat: true }])(
+    'does not select a mention or send on modified Enter: %j', (keys) => {
+      const onSend = vi.fn()
+      render(<ControlledComposer onSend={onSend} running={false} assistantProfiles={PROFILES} />)
+      const ta = screen.getByRole('combobox')
+      fireEvent.change(ta, { target: { value: '@fro', selectionStart: 4 } })
+      expect(fireEvent.keyDown(ta, { key: 'Enter', ...keys })).toBe(!('repeat' in keys))
+      expect(ta).toHaveValue('@fro')
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+      expect(onSend).not.toHaveBeenCalled()
+    },
+  )
 
   it('first Escape closes the mention list without reaching a parent handler, second Escape propagates', () => {
     const parentEscape = vi.fn()

@@ -73,6 +73,7 @@
 .status-badge[data-status="hook_failed"]          { color: var(--c-hook-failed); }
 .status-badge[data-status="paused"]               { color: var(--c-paused); }
 .status-badge[data-status="awaiting_assistants"]  { color: var(--c-awaiting-assistants); }
+.status-badge[data-status="awaiting_quota"]       { color: var(--c-awaiting-quota); }
 /* Blocked (T7.9) — same escalation as the rail's status-dot: a required gate needing a human decision reads
    as attention/failed, overriding the amber rule above via the extra [data-blocked] attribute. */
 .status-badge[data-status="awaiting_assistants"][data-blocked="true"] { color: var(--c-failed); }
@@ -602,6 +603,7 @@
 .workspace-body #actions-section,
 .workspace-body #retry-section,
 .workspace-body #paused-section,
+.workspace-body #quota-section,
 .workspace-body #hook-failed-section,
 .workspace-body #auto-approved-section {
   flex: none;
@@ -638,3 +640,40 @@
 .thinking .td:nth-child(2) { animation-delay: 0.15s; }
 .thinking .td:nth-child(3) { animation-delay: 0.3s; }
 @keyframes thinkBlink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+
+/* === Usage-limit wait (awaiting_quota) and quota pauses === */
+.quota-wait-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.quota-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-awaiting-quota);
+}
+.quota-detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.quota-wait-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-hi);
+}
+.quota-countdown {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-awaiting-quota);
+}
+.quota-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}

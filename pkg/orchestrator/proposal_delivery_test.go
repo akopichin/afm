@@ -188,3 +188,28 @@ func TestAction_InternalDelegationReusesStage4aChecks(t *testing.T) {
 }
 
 const assistantsTestStageIDForProposals = "impl-proposals"
+
+// TestAddStageDisabled_AcceptProposalKeepsProposalPending — при выключенном add_stage принятие предложения
+// отвечает feature_disabled ДО смены статуса: предложение остаётся pending, журнал и граф не меняются.
+func TestAddStageDisabled_AcceptProposalKeepsProposalPending(t *testing.T) {
+	cmd := newSafeAgentCommand(t)
+	o, store := newProposalDeliveryTestOrchestrator(t, cmd, []flow.Stage{autoStage("impl", cmd)})
+	ctx := context.Background()
+	propID := seedAddStageProposal(ctx, t, o, "op-disabled", "impl", "new-stage", cmd)
+	o.opts.AddStageDisabled = true
+	seqBefore := store.Snapshot().LastSeq
+	revBefore := o.reg().Revision()
+
+	requireAddStageDisabled(t, o.AcceptProposal(ctx, propID, "accept-disabled", state.Actor{Kind: "user"}))
+
+	p, ok := o.Proposal(propID)
+	if !ok || p.Status != assistants.ProposalPending {
+		t.Fatalf("proposal after rejected accept = %+v (found=%v), want status pending", p, ok)
+	}
+	if got := store.Snapshot().LastSeq; got != seqBefore {
+		t.Fatalf("journal advanced by rejected accept: LastSeq %d -> %d", seqBefore, got)
+	}
+	if got := o.reg().Revision(); got != revBefore {
+		t.Fatalf("registry revision changed by rejected accept: %d -> %d", revBefore, got)
+	}
+}

@@ -1,3 +1,4 @@
+import { handleTextareaSubmit } from '../../lib/textarea-submit'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactElement, type SetStateAction } from 'react'
 import { genMeshRequestId, openMeshThread, sendMeshMessage, type MeshParticipant, type MeshSendReceipt, type MeshThread, type MeshThreadSummaries } from '../../api/mesh-client'
 import { useMeshThread } from '../../hooks/use-mesh'
@@ -484,10 +485,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
             }}
             onKeyDown={(e) => {
               if (mention.onKeyDown(e)) return
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                e.preventDefault()
-                send()
-              }
+              handleTextareaSubmit(e, send, canSend && !submitter.pending)
             }}
             rows={1}
           />

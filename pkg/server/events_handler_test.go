@@ -566,3 +566,45 @@ func TestHandleEvents_StageFilterSurvivesFlowWideNoticeNoise(t *testing.T) {
 		t.Fatalf("early notices truncated by flow-wide noise: got %d, want >= 5", len(got))
 	}
 }
+
+// A reconnecting client rebuilds the usage-limit feed from notices.jsonl alone: quota_wait / quota_reset /
+// quota_warning of the stage and of its helper tasks (filed under the root stage) replay with their RFC3339 data.
+func TestHandleEvents_QuotaNoticesReplayFromNoticesLog(t *testing.T) {
+	srv, runDir := setupTestServer(t)
+	stagefiles.AppendNotice(runDir, testStageID, "quota_warning", map[string]string{
+		"stage_id": testStageID, "provider": "claude", "window": "five_hour", "reset_at": "2026-10-23T23:50:00Z", "message": "Usage limit (claude, five_hour): the limit is close",
+	})
+	stagefiles.AppendNotice(runDir, testStageID, "quota_wait", map[string]string{
+		"stage_id": testStageID, "provider": "claude", "source": "structured", "until": "2026-10-23T23:51:00Z", "message": "Usage limit (claude): waiting until 2026-10-23 23:51:00 UTC",
+	})
+	stagefiles.AppendNotice(runDir, testStageID, "quota_wait", map[string]string{"task_id": "t-1", "provider": "codex", "until": "2026-10-23T23:52:00Z"})
+	stagefiles.AppendNotice(runDir, testStageID, "quota_reset", map[string]string{"stage_id": testStageID, "provider": "claude"})
+	stagefiles.AppendNotice(runDir, "other-stage", "quota_wait", map[string]string{"stage_id": "other-stage", "provider": "claude"})
+
+	for _, query := range []string{"/api/events", "/api/events?stage=" + testStageID} {
+		w := httptest.NewRecorder()
+		srv.handleEvents(w, httptest.NewRequest("GET", query, nil))
+		var events []feedEvent
+		if err := json.Unmarshal(w.Body.Bytes(), &events); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		var types []string
+		for _, e := range events {
+			if len(e.Type) > 6 && e.Type[:6] == "quota_" && e.StageID == testStageID {
+				types = append(types, e.Type)
+				data, _ := e.Data.(map[string]any)
+				if data["provider"] == nil {
+					t.Errorf("%s: %s lost its data: %+v", query, e.Type, e)
+				}
+				if e.Type == "quota_wait" && data["task_id"] == nil && data["until"] != "2026-10-23T23:51:00Z" {
+					t.Errorf("%s: stage quota_wait until = %v, want RFC3339 UTC", query, data["until"])
+				}
+			}
+		}
+		slices.Sort(types) // notices written within one clock tick may tie on the timestamp
+		want := []string{"quota_reset", "quota_wait", "quota_wait", "quota_warning"}
+		if !slices.Equal(types, want) {
+			t.Errorf("%s: replayed quota notices = %v, want %v", query, types, want)
+		}
+	}
+}

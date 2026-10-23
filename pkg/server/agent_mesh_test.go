@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // fakeAgentMeshActions is an in-memory AgentMeshActions good enough to exercise the HTTP handlers without a
@@ -38,26 +40,30 @@ type fakeAgentMeshActions struct {
 	lastTasksKey  string
 	tasks         []agentcomm.BoardTaskView
 
-	loops         []orchestrator.LoopView
-	loopCalls     int
-	lastLoopReq   string
-	lastLoopActor string
-	lastLoop      MeshLoopCommand
-}
+	lastWait       MeshWaitRequest
+	lastWaitActor  string
+	waitReceipt    MeshWaitReceipt
+	lastCancel     MeshCancelWaitRequest
+	lastCancelUser string
+	statusActor    string
+	statusBatchID  string
+	batches        []MeshWaitReceipt
+	statusErr      error
 
-func (f *fakeAgentMeshActions) Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.lastLoopActor = actor
-	return orchestrator.LoopPage{Loops: f.loops}, nil
-}
-
-func (f *fakeAgentMeshActions) Loop(ctx context.Context, requestID, actor string, cmd MeshLoopCommand) (orchestrator.LoopView, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.loopCalls++
-	f.lastLoopReq, f.lastLoopActor, f.lastLoop = requestID, actor, cmd
-	return orchestrator.LoopView{ID: "L1", CreatorID: agentcomm.ParticipantID(actor), TargetID: agentcomm.ParticipantID(actor), Every: cmd.Every.String(), Status: orchestrator.LoopActive}, nil
+	lastSpawnReqID string
+	lastSpawnActor string
+	lastSpawn      MeshSpawnRequest
+	spawnCalls     int
+	spawnErr       error
+	helperActor    string
+	helperTaskID   string
+	helperResult   MeshHelperResult
+	helperErr      error
+	loops          []orchestrator.LoopView
+	loopCalls      int
+	lastLoopReq    string
+	lastLoopActor  string
+	lastLoop       MeshLoopCommand
 }
 
 func newFakeAgentMeshActions() *fakeAgentMeshActions {
@@ -121,10 +127,44 @@ func (f *fakeAgentMeshActions) Ack(ctx context.Context, requestID, actor, messag
 }
 
 func (f *fakeAgentMeshActions) Wait(ctx context.Context, requestID, actor string, req MeshWaitRequest) (MeshWaitReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastWait, f.lastWaitActor = req, actor
+	if f.waitReceipt.Status != "" {
+		return f.waitReceipt, nil
+	}
 	return MeshWaitReceipt{WaitID: "wait-" + requestID, Status: "pending"}, nil
 }
 
-func (f *fakeAgentMeshActions) CancelWait(ctx context.Context, requestID, actor, waitID, reason string) error {
+func (f *fakeAgentMeshActions) WaitStatus(ctx context.Context, actor, batchID string) ([]MeshWaitReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statusActor, f.statusBatchID = actor, batchID
+	return f.batches, f.statusErr
+}
+
+func (f *fakeAgentMeshActions) Spawn(ctx context.Context, requestID, actor string, req MeshSpawnRequest) (MeshSpawnReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSpawnReqID, f.lastSpawnActor, f.lastSpawn = requestID, actor, req
+	f.spawnCalls++
+	if f.spawnErr != nil {
+		return MeshSpawnReceipt{}, f.spawnErr
+	}
+	return MeshSpawnReceipt{TaskID: "t-" + requestID, ParticipantID: "helper:t-" + requestID, MessageID: "mm-" + requestID}, nil
+}
+
+func (f *fakeAgentMeshActions) HelperResult(ctx context.Context, actor, taskID string) (MeshHelperResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.helperActor, f.helperTaskID = actor, taskID
+	return f.helperResult, f.helperErr
+}
+
+func (f *fakeAgentMeshActions) CancelWait(ctx context.Context, requestID, actor string, req MeshCancelWaitRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastCancel, f.lastCancelUser = req, actor
 	return nil
 }
 
@@ -334,7 +374,7 @@ func TestAgentMesh_RequestBodiesCarryNoSenderActorGenerationOrRunOverride(t *tes
 		"sender_id": true, "sender": true, "actor": true, "actor_id": true,
 		"generation": true, "run_id": true, "task_generation": true,
 	}
-	types := []any{MeshSendRequest{}, MeshWaitRequest{}, MeshPublishRequest{}}
+	types := []any{MeshSendRequest{}, MeshWaitRequest{}, MeshCancelWaitRequest{}, MeshPublishRequest{}, MeshSpawnRequest{}}
 	for _, v := range types {
 		rt := reflect.TypeOf(v)
 		for i := 0; i < rt.NumField(); i++ {
@@ -476,6 +516,322 @@ func TestAgentMesh_BoardTasks_KeyAndEmptyAssignments(t *testing.T) {
 	}
 }
 
+// ---- Batch waits: one wait for several requests, read back by the batch's own waiter only. ----
+
+// postAgentMesh posts body to /api/agent-mesh/<action> as the participant of token.
+func postAgentMesh(t *testing.T, srv *Server, token, action string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent-mesh/"+action, bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	return w
+}
+
+// A batch wait carries the list of request ids to the Service and the token's participant as the waiter; a
+// waiter or actor in the body is ignored. Its receipt shows the batch id and one outcome per request.
+func TestAgentMesh_Wait_BatchReachesServiceAndShowsEveryOutcome(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	fake.waitReceipt = MeshWaitReceipt{BatchID: "mb-1", Status: "pending", Items: []MeshWaitItem{
+		{MessageID: "m1", WaitID: "mw-1", Status: "ready"},
+		{MessageID: "m2", WaitID: "mw-2", Status: "pending"},
+	}}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := postAgentMesh(t, srv, "tok-A", "wait", map[string]any{
+		"request_id": "req-1", "condition": map[string]any{"kind": "reply_to"}, "message_ids": []string{"m1", "m2"},
+		"waiter": "stage:other", "actor": "stage:other",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	if fake.lastWaitActor != "stage:s1" || !reflect.DeepEqual(fake.lastWait.MessageIDs, []string{"m1", "m2"}) || fake.lastWait.Condition.Kind != agentcomm.WaitOnReplyTo {
+		t.Fatalf("Service got %q %+v, want the token's stage:s1 and the two ids", fake.lastWaitActor, fake.lastWait)
+	}
+	want := `{"status":"pending","batch_id":"mb-1","items":[{"message_id":"m1","wait_id":"mw-1","status":"ready"},{"message_id":"m2","wait_id":"mw-2","status":"pending"}]}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("receipt = %s, want %s", got, want)
+	}
+}
+
+// 16 requests with long ids still fit the body limit by a wide margin, so the limit never cuts a batch.
+func TestAgentMesh_Wait_SixteenLongIDsFitTheBodyLimit(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+	ids := make([]string, orchestrator.MaxBatchWaits)
+	for i := range ids {
+		ids[i] = strings.Repeat("m", 200) + string(rune('a'+i))
+	}
+
+	w := postAgentMesh(t, srv, "tok-A", "wait", map[string]any{"request_id": "req-1", "condition": map[string]any{"kind": "reply_to"}, "message_ids": ids})
+	if w.Code != http.StatusOK || len(fake.lastWait.MessageIDs) != orchestrator.MaxBatchWaits {
+		t.Fatalf("HTTP %d, ids = %d, want 200 with all %d ids", w.Code, len(fake.lastWait.MessageIDs), orchestrator.MaxBatchWaits)
+	}
+}
+
+// A plain wait keeps its receipt exactly: wait id and status, nothing of a batch.
+func TestAgentMesh_Wait_SingleReceiptIsUnchanged(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := postAgentMesh(t, srv, "tok-A", "wait", map[string]any{"request_id": "req-1", "condition": map[string]any{"kind": "reply_to", "message_id": "m1"}})
+	if got, want := strings.TrimSpace(w.Body.String()), `{"wait_id":"wait-req-1","status":"pending"}`; got != want {
+		t.Fatalf("receipt = %s, want %s", got, want)
+	}
+	if len(fake.lastWait.MessageIDs) != 0 {
+		t.Fatalf("a single wait reached the Service with ids %v", fake.lastWait.MessageIDs)
+	}
+}
+
+// GET wait-status reads for the token's participant only: the actor comes from the token, the batch id from
+// the query, and a refusal of the Service (a batch that is not the caller's) reaches the client as not found.
+func TestAgentMesh_WaitStatus_ReadsForTheTokenActorOnly(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	fake.batches = []MeshWaitReceipt{{BatchID: "mb-1", Status: "ready", Items: []MeshWaitItem{{MessageID: "m1", WaitID: "mw-1", Status: "cancelled", Reason: "gone"}}}}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+	get := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/agent-mesh/wait-status"+query, nil)
+		req.Header.Set("Authorization", "Bearer tok-A")
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		return w
+	}
+
+	w := get("")
+	if w.Code != http.StatusOK || fake.statusActor != "stage:s1" || fake.statusBatchID != "" {
+		t.Fatalf("list: HTTP %d, actor %q, batch %q", w.Code, fake.statusActor, fake.statusBatchID)
+	}
+	want := `{"batches":[{"status":"ready","batch_id":"mb-1","items":[{"message_id":"m1","wait_id":"mw-1","status":"cancelled","reason":"gone"}]}]}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+
+	if w := get("?wait_id=mb-1"); w.Code != http.StatusOK || fake.statusBatchID != "mb-1" {
+		t.Fatalf("one batch: HTTP %d, batch %q, want 200 and mb-1", w.Code, fake.statusBatchID)
+	}
+
+	fake.statusErr = &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: "unknown batch mb-9"}
+	if w := get("?wait_id=mb-9"); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "not_found") {
+		t.Fatalf("a batch of someone else: HTTP %d (%s), want 404 not_found", w.Code, w.Body.String())
+	}
+}
+
+// Without a batch the list is an empty array, never null.
+func TestAgentMesh_WaitStatus_NoBatchesIsAnEmptyList(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent-mesh/wait-status", nil)
+	req.Header.Set("Authorization", "Bearer tok-A")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if got, want := strings.TrimSpace(w.Body.String()), `{"batches":[]}`; got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+}
+
+func TestAgentMesh_WaitStatus_RequiresAToken(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent-mesh/wait-status", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized || fake.statusActor != "" {
+		t.Fatalf("HTTP %d, actor %q, want 401 and no Service call", w.Code, fake.statusActor)
+	}
+}
+
+// cancel-wait takes one wait or a whole batch; a body naming neither, or both, is refused before the Service.
+func TestAgentMesh_CancelWait_TakesAWaitOrABatch(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	if w := postAgentMesh(t, srv, "tok-A", "cancel-wait", map[string]any{"request_id": "r1", "batch_id": "mb-1", "reason": "not needed"}); w.Code != http.StatusOK {
+		t.Fatalf("batch: HTTP %d (%s)", w.Code, w.Body.String())
+	}
+	if want := (MeshCancelWaitRequest{BatchID: "mb-1", Reason: "not needed"}); fake.lastCancel != want || fake.lastCancelUser != "stage:s1" {
+		t.Fatalf("Service got %q %+v, want %+v for the token's stage:s1", fake.lastCancelUser, fake.lastCancel, want)
+	}
+
+	if w := postAgentMesh(t, srv, "tok-A", "cancel-wait", map[string]any{"request_id": "r2", "wait_id": "mw-1"}); w.Code != http.StatusOK {
+		t.Fatalf("wait: HTTP %d (%s)", w.Code, w.Body.String())
+	}
+	if want := (MeshCancelWaitRequest{WaitID: "mw-1"}); fake.lastCancel != want {
+		t.Fatalf("Service got %+v, want %+v", fake.lastCancel, want)
+	}
+
+	for name, body := range map[string]map[string]any{
+		"neither": {"request_id": "r3"},
+		"both":    {"request_id": "r4", "wait_id": "mw-1", "batch_id": "mb-1"},
+	} {
+		fake.lastCancel = MeshCancelWaitRequest{}
+		if w := postAgentMesh(t, srv, "tok-A", "cancel-wait", body); w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: HTTP %d, want 400", name, w.Code)
+		}
+		if fake.lastCancel != (MeshCancelWaitRequest{}) {
+			t.Fatalf("%s: a cancel that is not of exactly one wait or batch reached the Service: %+v", name, fake.lastCancel)
+		}
+	}
+}
+
+// ---- Spawn: a stage agent starts a helper; it names only the profile, the title and the instruction. ----
+
+func TestAgentMesh_Spawn_NeedsRequestIDProfileTitleAndInstruction(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+	full := map[string]any{"request_id": "r1", "profile_id": "reviewer", "title": "Review", "instruction": "look"}
+
+	for _, missing := range []string{"request_id", "profile_id", "title", "instruction"} {
+		body := map[string]any{}
+		for k, v := range full {
+			if k != missing {
+				body[k] = v
+			}
+		}
+		if w := postAgentMesh(t, srv, "tok-A", "spawn", body); w.Code != http.StatusBadRequest {
+			t.Fatalf("without %s: HTTP %d, want 400", missing, w.Code)
+		}
+	}
+	if fake.spawnCalls != 0 {
+		t.Fatalf("an incomplete spawn reached the Service %d times", fake.spawnCalls)
+	}
+
+	w := postAgentMesh(t, srv, "tok-A", "spawn", full)
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (%s)", w.Code, w.Body.String())
+	}
+	want := `{"task_id":"t-r1","participant_id":"helper:t-r1","message_id":"mm-r1"}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+}
+
+// The stage is the token's, and nothing else about the helper is the client's to choose: a stage, scope, mode,
+// command, model or actor in the body is ignored.
+func TestAgentMesh_Spawn_StageComesFromTheTokenAndExtraFieldsAreIgnored(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := postAgentMesh(t, srv, "tok-A", "spawn", map[string]any{
+		"request_id": "r1", "profile_id": "reviewer", "title": "Review", "instruction": "look",
+		"stage_id": "s2", "scope": "run", "mode": "required", "trigger": "watcher", "command": "rm -rf /", "model": "x",
+		"actor": "user", "sender_id": "user", "capabilities": []string{"write"},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("HTTP %d (%s)", w.Code, w.Body.String())
+	}
+	if want := (MeshSpawnRequest{ProfileID: "reviewer", Title: "Review", Instruction: "look"}); fake.lastSpawn != want {
+		t.Fatalf("Service got %+v, want only %+v", fake.lastSpawn, want)
+	}
+	if fake.lastSpawnActor != "stage:s1" || fake.lastSpawnReqID != "r1" {
+		t.Fatalf("Service got actor %q request %q, want stage:s1 and r1", fake.lastSpawnActor, fake.lastSpawnReqID)
+	}
+}
+
+func TestAgentMesh_Spawn_ServiceRefusalReachesTheClient(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-H"] = "helper:t-1"
+	fake.spawnErr = &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only a stage agent can spawn a helper"}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := postAgentMesh(t, srv, "tok-H", "spawn", map[string]any{"request_id": "r1", "profile_id": "p", "title": "t", "instruction": "i"})
+	if w.Code == http.StatusOK || !strings.Contains(w.Body.String(), "actor_not_allowed") {
+		t.Fatalf("HTTP %d (%s), want a refusal naming actor_not_allowed", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentMesh_Spawn_RequiresAToken(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	srv := newTestServer(t, Config{AgentMesh: fake})
+	if w := postAgentMesh(t, srv, "nope", "spawn", map[string]any{"request_id": "r1", "profile_id": "p", "title": "t", "instruction": "i"}); w.Code != http.StatusUnauthorized || fake.spawnCalls != 0 {
+		t.Fatalf("HTTP %d, calls %d, want 401 and no Service call", w.Code, fake.spawnCalls)
+	}
+}
+
+// ---- helper: the status and the full committed result of one helper of the caller's stage. ----
+
+func getAgentMesh(srv *Server, token, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/agent-mesh/"+path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	return w
+}
+
+func TestAgentMesh_HelperResult_ReadsForTheTokenActorByTaskID(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	fake.helperResult = MeshHelperResult{TaskID: "t-1", Title: "Review", Status: "completed", Result: json.RawMessage(`{"verdict":"pass"}`)}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := getAgentMesh(srv, "tok-A", "helper?task_id=t-1")
+	if w.Code != http.StatusOK || fake.helperActor != "stage:s1" || fake.helperTaskID != "t-1" {
+		t.Fatalf("HTTP %d, actor %q, task %q", w.Code, fake.helperActor, fake.helperTaskID)
+	}
+	want := `{"task_id":"t-1","title":"Review","status":"completed","result":{"verdict":"pass"}}`
+	if got := strings.TrimSpace(w.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+
+	// A helper that has not finished is a status with no result, not an error.
+	fake.helperResult = MeshHelperResult{TaskID: "t-2", Title: "Other", Status: "running"}
+	w = getAgentMesh(srv, "tok-A", "helper?task_id=t-2")
+	if got, want := strings.TrimSpace(w.Body.String()), `{"task_id":"t-2","title":"Other","status":"running"}`; w.Code != http.StatusOK || got != want {
+		t.Fatalf("HTTP %d, body = %s, want %s", w.Code, got, want)
+	}
+}
+
+func TestAgentMesh_HelperResult_NeedsATaskIDAndAToken(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	if w := getAgentMesh(srv, "tok-A", "helper"); w.Code != http.StatusBadRequest || fake.helperActor != "" {
+		t.Fatalf("no task id: HTTP %d, actor %q, want 400 and no Service call", w.Code, fake.helperActor)
+	}
+	if w := getAgentMesh(srv, "", "helper?task_id=t-1"); w.Code != http.StatusUnauthorized || fake.helperActor != "" {
+		t.Fatalf("no token: HTTP %d, actor %q, want 401 and no Service call", w.Code, fake.helperActor)
+	}
+}
+
+func TestAgentMesh_HelperResult_AnotherStagesTaskIsNotFound(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	fake.helperErr = &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: "unknown helper t-9"}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	if w := getAgentMesh(srv, "tok-A", "helper?task_id=t-9"); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "not_found") {
+		t.Fatalf("HTTP %d (%s), want 404 not_found", w.Code, w.Body.String())
+	}
+}
+
+func (f *fakeAgentMeshActions) Loops(ctx context.Context, actor string) (orchestrator.LoopPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastLoopActor = actor
+	return orchestrator.LoopPage{Loops: f.loops}, nil
+}
+
+func (f *fakeAgentMeshActions) Loop(ctx context.Context, requestID, actor string, cmd MeshLoopCommand) (orchestrator.LoopView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loopCalls++
+	f.lastLoopReq, f.lastLoopActor, f.lastLoop = requestID, actor, cmd
+	return orchestrator.LoopView{ID: "L1", CreatorID: agentcomm.ParticipantID(actor), TargetID: agentcomm.ParticipantID(actor), Every: cmd.Every.String(), Status: orchestrator.LoopActive}, nil
+}
+
 func doAgentLoop(srv *Server, method, path, token string, body any) *httptest.ResponseRecorder {
 	var reader *bytes.Reader
 	if body != nil {
@@ -520,8 +876,6 @@ func TestAgentMesh_Loop_404WhenCapabilityOff(t *testing.T) {
 	}
 }
 
-// The creator is the token's participant and the origin is never read from the body: a model cannot make a
-// loop in someone else's name or Feed.
 func TestAgentMesh_Loop_ActorIsTheTokenAndOriginIsNotTheBodys(t *testing.T) {
 	fake := newFakeAgentMeshActions()
 	fake.tokens["tok-A"] = "run:a"

@@ -18,6 +18,56 @@ explain why a loop ended. See [Repeating prompts](docs/loops.md).
 
 ## 2026-10-23
 
+### Improvement: keep and send file comments from Files
+
+Draft comments on file lines now stay available while switching files or closing
+Files within a run; leaving a file folds an open editor into a **Draft** card,
+and files with comments show **● N** in the file list. **Comments (N)** lists
+them, and **Send** or **Send all (N)** delivers one message to the Assistant or a reachable agent after source checks.
+Clicking a file line no longer starts a flow-wide review pause; existing external
+review pauses and their notes remain supported. See [Dashboard](docs/dashboard.md#file-comments-docker-mode).
+
+### Fix: retain unfinished plan and question comments
+
+Unsent plan and question text stays available while moving between dashboard
+views during a run. Closing an editor folds nonempty text without discarding it;
+comments on an earlier plan version can be shown, copied or dismissed.
+
+### Improvement: send messages and feedback with Enter
+
+Dashboard message and feedback fields now submit with **Enter** and add a line
+with **Shift+Enter**. The `@` menu keeps Enter for choosing a person or role;
+hints show the new shortcuts. Creation forms keep their existing behavior.
+See [Dashboard](docs/dashboard.md).
+
+### Improvement: wait for provider usage limits without spending retries
+
+When a stage agent, verifier or helper hits a provider usage limit, afm records
+the wait and resumes after the reported reset or a timed probe. Other work using
+that provider shares the hold. Resets beyond the maximum wait and exhausted
+quotas with no reset pause with a reason;
+the dashboard shows the wait and lets you Pause then Continue to try sooner.
+`usage_limit` configures the timing and refusal limit. See
+[Stage lifecycle](docs/stage-lifecycle.md#stage-lifecycle) and
+[Usage limits](docs/config-reference.md#usage-limits).
+
+### Improvement: control adding stages during a run
+
+Set `add_stage.enabled` in global or project config, or override it with
+`AFM_ADD_STAGE`, to allow or prevent new stages during a run. Adding stages is
+enabled by default. When disabled, **+ Stage** is hidden, graph API routes
+return 404, and agent proposals cannot add stages. See
+[Configuration](docs/config-reference.md#adding-stages-during-a-run).
+
+### Improvement: collect replies and start temporary stage helpers
+
+Stage agents can use `afm agent wait --condition reply_to_all --message-ids ...`
+to collect up to 16 request outcomes under one durable batch and resume after
+they have all ended. `afm agent wait-status` reports each outcome and the reason
+for a missing reply. Stage agents can also start an advisory, one-shot helper
+with `afm agent spawn` and read its full committed result with
+`afm agent helper-result`. See [Helpers and collaboration](docs/collaboration.md).
+
 ### Improvement: repeat successful flows in fresh runs
 
 Set `repeat: true` in `flow.yaml` to restart a successful flow in a new run, or

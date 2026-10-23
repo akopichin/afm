@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from 'react'
 import type { Stage } from '../../types'
 import { STAGE_STATUS_LABELS } from '../../types'
+import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 
 // AttentionNav — навигация prev/next между стадиями очереди attention (rule 6),
 // показывается только когда таких стадий больше одной.
@@ -17,11 +18,13 @@ type WorkspaceHeaderProps = {
   attentionNav?: AttentionNav
   // actions — the view's own buttons at the header's right end (the Feed's 👥 people toggle).
   actions?: ReactNode
+  // statusAvailable — свежесть /api/status: пока он устарел, счётчик ожидания лимита замирает.
+  statusAvailable?: boolean
 }
 
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + статус-бейдж +
 // «thinking»-индикатор во время running.
-export function WorkspaceHeader({ stage, connected, attentionNav, actions }: WorkspaceHeaderProps): ReactElement {
+export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true }: WorkspaceHeaderProps): ReactElement {
   return (
     <div className="workspace-header">
       <h2 id="detail-title" className="workspace-title">{stage.name !== '' ? stage.name : stage.id}</h2>
@@ -34,6 +37,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions }: Wor
         >
           {STAGE_STATUS_LABELS[stage.status]}
         </span>
+        {stage.status === 'awaiting_quota' && stage.quota !== undefined && <QuotaCountdown quota={stage.quota} live={statusAvailable} compact />}
         {stage.status === 'running' && connected && (
           <span className="thinking" aria-hidden="true">
             <span className="td" />

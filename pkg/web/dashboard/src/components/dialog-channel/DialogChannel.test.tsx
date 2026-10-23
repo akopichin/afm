@@ -5,6 +5,7 @@ import type { Stage } from '../../types'
 import { MaximizeProvider } from '../layout/Maximizable'
 import { DialogChannel } from './DialogChannel'
 import { FileBrowserProvider } from '../file-browser'
+import { CommentProvider } from '../comments/CommentProvider'
 import { answerDialog, FlowApiError } from '../../api/run-client'
 
 // vi.fn оборачивает реальный answerDialog; отдельные тесты подменяют rejection без потери проверок fetch.
@@ -70,14 +71,22 @@ function makeStage(overrides: Partial<Stage> = {}): Stage {
   }
 }
 
-// DialogChannel's per-line question-comment textarea now renders with allowFileReferences — its "Attach
-// project file" button calls useFileBrowser, which throws outside a FileBrowserProvider.
-function renderDialogChannel(ui: ReactElement, enabled = true) {
-  return render(
-    <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={enabled}>
-      {ui}
-    </FileBrowserProvider>,
+// DialogChannel's per-line question-comment textarea renders with allowFileReferences — its "Attach project file"
+// button calls useFileBrowser, which throws outside a FileBrowserProvider. CommentProvider owns drafts for the
+// whole run, so rerenderChannel keeps it mounted while the channel itself comes and goes.
+function Wrap({ children, enabled }: { children: ReactElement; enabled: boolean }): ReactElement {
+  return (
+    <CommentProvider runId="run-1">
+      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={enabled}>
+        {children}
+      </FileBrowserProvider>
+    </CommentProvider>
   )
+}
+
+function renderDialogChannel(ui: ReactElement, enabled = true) {
+  const view = render(<Wrap enabled={enabled}>{ui}</Wrap>)
+  return { ...view, rerenderChannel: (next: ReactElement) => view.rerender(<Wrap enabled={enabled}>{next}</Wrap>) }
 }
 
 describe('DialogChannel', () => {
@@ -263,7 +272,7 @@ describe('DialogChannel', () => {
     expect(body).toMatchObject({ answer: 'my own answer', from_options: false })
   })
 
-  test('Ctrl+Enter in the custom textarea sends the answer', async () => {
+  test('Enter in the custom textarea sends the answer', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -288,7 +297,7 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'ctrl enter answer' } })
-    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
 
     await waitFor(() => {
       expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true)
@@ -335,7 +344,7 @@ describe('DialogChannel', () => {
     expect(body).toMatchObject({ answer: 'cmd enter answer', from_options: false })
   })
 
-  test('Enter without Ctrl/Cmd in the custom textarea does not send', async () => {
+  test('Shift+Enter in the custom textarea does not send', async () => {
     const calls: FetchCall[] = []
     const pending: RawDialogEntry = {
       id: 'q1',
@@ -360,7 +369,7 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'plain enter' } })
-    fireEvent.keyDown(textarea, { key: 'Enter' })
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -532,7 +541,7 @@ describe('DialogChannel', () => {
     }
   })
 
-  test('a non-empty draft ignores clicks on other question lines and on itself; only × discards it', async () => {
+  test('a non-empty draft ignores clicks on other question lines and on itself; × folds it into a Draft card', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -562,10 +571,11 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.line-comment-form[data-comment-line="3"]')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
-    expect(container.querySelector('.line-comment-form')).toBeNull()
+    expect(container.querySelector('.line-comment-form:not(.line-comment-display)')).toBeNull()
+    expect(container.querySelector('.line-comment-display[data-comment-line="1"] .comment-text')?.textContent).toBe('in progress')
   })
 
-  test('▸ SEND is disabled while a draft comment is open but unsaved, and re-enables once the form is closed', async () => {
+  test('▸ SEND is disabled while a draft comment is open but unsaved; folding keeps the text as Send feedback (1), discarding restores SEND', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -590,8 +600,11 @@ describe('DialogChannel', () => {
     expect(sendBtn).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
+    expect(screen.queryByRole('button', { name: '▸ SEND' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Send feedback (1)' })).not.toBeDisabled()
 
-    expect(sendBtn).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove comment on line 1' }))
+    expect(screen.getByRole('button', { name: '▸ SEND' })).not.toBeDisabled()
   })
 
   test('an empty draft still lets a row click switch to a different question line', async () => {
@@ -757,7 +770,7 @@ describe('DialogChannel', () => {
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
     fireEvent.change(commentTextarea, { target: { value: 'ctrl enter comment' } })
-    fireEvent.keyDown(commentTextarea, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(commentTextarea, { key: 'Enter' })
 
     expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(false)
     expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
@@ -856,7 +869,7 @@ describe('DialogChannel', () => {
 
     const answerTextarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(answerTextarea, { target: { value: 'should not send' } })
-    fireEvent.keyDown(answerTextarea, { key: 'Enter', ctrlKey: true })
+    fireEvent.keyDown(answerTextarea, { key: 'Enter' })
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -1238,7 +1251,7 @@ describe('DialogChannel', () => {
       return jsonResponse([])
     })
 
-    const { rerender } = renderDialogChannel(<DialogChannel stage={stageA} />)
+    const { rerenderChannel } = renderDialogChannel(<DialogChannel stage={stageA} />)
 
     await screen.findByRole('button', { name: 'AlphaA' })
     fireEvent.click(screen.getByRole('button', { name: 'AlphaA' }))
@@ -1247,11 +1260,7 @@ describe('DialogChannel', () => {
     fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
 
     // The user switches the panel to stage B BEFORE A's POST resolves.
-    rerender(
-      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
-        <DialogChannel stage={stageB} />
-      </FileBrowserProvider>,
-    )
+    rerenderChannel(<DialogChannel stage={stageB} />)
     await screen.findByRole('button', { name: 'BetaB' })
 
     // Now A's stale answer POST resolves — its reload must see that the panel has moved on to stage B and
@@ -1418,6 +1427,195 @@ describe('DialogChannel', () => {
 
     const newTextarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     expect(newTextarea.value).toBe('')
+  })
+
+  describe('drafts survive remounts and question changes', () => {
+    const q1: RawDialogEntry = { id: 'q1', phase: 'p1', question: 'First line\n\nSecond line', answer: null, options: ['Alpha'], allow_custom: true }
+    const q2: RawDialogEntry = { id: 'q2', phase: 'p1', question: 'Another', answer: null, options: ['Beta'], allow_custom: true }
+
+    function custom(container: HTMLElement): HTMLTextAreaElement {
+      return container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
+    }
+
+    test('free-form answer text survives unmount and mount of the channel', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'half an answer' } })
+
+      rerenderChannel(<div />)
+      rerenderChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+
+      expect(custom(container).value).toBe('half an answer')
+    })
+
+    test('a failed answer keeps the free-form text after remount too', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      vi.mocked(answerDialog).mockRejectedValueOnce(new Error('network blip'))
+      const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'keep this' } })
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
+
+      rerenderChannel(<div />)
+      rerenderChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+
+      expect(custom(container).value).toBe('keep this')
+    })
+
+    test('an accepted answer clears only the sent text; text typed during the request stays', async () => {
+      let acceptAnswer!: () => void
+      vi.mocked(answerDialog).mockImplementationOnce(() => new Promise<void>((resolve) => { acceptAnswer = resolve }))
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'sent text' } })
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+
+      fireEvent.change(custom(container), { target: { value: 'sent text and more' } })
+      await act(async () => acceptAnswer())
+
+      await waitFor(() => expect(screen.getByRole('button', { name: '▸ SEND' })).not.toBeDisabled())
+      expect(custom(container).value).toBe('sent text and more')
+    })
+
+    test('an accepted answer removes its own text', async () => {
+      let acceptAnswer!: () => void
+      vi.mocked(answerDialog).mockImplementationOnce(() => new Promise<void>((resolve) => { acceptAnswer = resolve }))
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'sent text' } })
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      await act(async () => acceptAnswer())
+
+      await waitFor(() => expect(custom(container).value).toBe(''))
+    })
+
+    test('line comments survive unmount: saved card and folded draft come back', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+      fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
+      fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'line one note' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+      rerenderChannel(<div />)
+      rerenderChannel(<DialogChannel stage={makeStage()} />)
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+
+      expect(container.querySelector('.line-comment-display[data-comment-line="1"] .comment-text')?.textContent).toBe('line one note')
+      expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
+    })
+
+    test('accepted feedback clears only the captured line comments', async () => {
+      let acceptAnswer!: () => void
+      vi.mocked(answerDialog).mockImplementationOnce(() => new Promise<void>((resolve) => { acceptAnswer = resolve }))
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+      for (const [line, text] of [[1, 'one'], [3, 'three']] as const) {
+        fireEvent.click(container.querySelector(`[data-line="${line}"]`) as HTMLElement)
+        fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: text } })
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      }
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send feedback (2)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Edit comment on line 1' }))
+      fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'one, revised' } })
+      await act(async () => acceptAnswer())
+
+      await waitFor(() => expect(container.querySelector('.line-comment-display[data-comment-line="3"]')).toBeNull())
+      expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
+      expect((container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement).value).toBe('one, revised')
+    })
+
+    test('no previous-question notice while the dialog reloads after a remount', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'live answer draft' } })
+
+      rerenderChannel(<div />)
+      vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise<Response>(() => {}))
+      rerenderChannel(<DialogChannel stage={makeStage({ hasDialog: true })} />)
+
+      expect(container.querySelector('.stale-comments')).toBeNull()
+    })
+
+    test('a failed dialog fetch after a remount does not label the live draft as a previous question', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'live answer draft' } })
+
+      rerenderChannel(<div />)
+      const failing = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 500 } as Response)
+      rerenderChannel(<DialogChannel stage={makeStage({ hasDialog: true })} />)
+      await waitFor(() => expect(failing).toHaveBeenCalled())
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(container.querySelector('.stale-comments')).toBeNull()
+      expect(screen.queryByText(/previous question/)).toBeNull()
+    })
+
+    test('choosing a suggested option keeps the typed free-form answer', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'my own answer' } })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+      expect(custom(container).value).toBe('my own answer')
+
+      fireEvent.change(custom(container), { target: { value: 'my own answer, edited' } })
+      expect(screen.getByRole('button', { name: 'Alpha' })).toHaveAttribute('aria-pressed', 'false')
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      await waitFor(() => expect(answerDialog).toHaveBeenCalledWith('s1', 'p1', 'q1', 'my own answer, edited', false))
+    })
+
+    test('a failed option send keeps the typed free-form answer', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
+      vi.mocked(answerDialog).mockRejectedValueOnce(new Error('network blip'))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await screen.findByRole('button', { name: 'Alpha' })
+      fireEvent.change(custom(container), { target: { value: 'keep me' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
+      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
+
+      expect(answerDialog).toHaveBeenLastCalledWith('s1', 'p1', 'q1', 'Alpha', true)
+      expect(custom(container).value).toBe('keep me')
+    })
+
+    test('a new pending question shows the closed question text as a previous-question notice', async () => {
+      vi.useFakeTimers()
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse([q1]))
+        .mockResolvedValue(jsonResponse([{ ...q1, answer: 'Alpha' }, q2]))
+      const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      fireEvent.change(custom(container), { target: { value: 'about q1' } })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+
+      expect(custom(container).value).toBe('')
+      expect(screen.getByText('1 comment from previous question')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+      expect(screen.getByText('about q1')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+      expect(screen.queryByText('1 comment from previous question')).toBeNull()
+    })
   })
 
   // Task 6: переход из ленты передаёт scrollTarget — канал должен доскроллить до конкретного Q&A.

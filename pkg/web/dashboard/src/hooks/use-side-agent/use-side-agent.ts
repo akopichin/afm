@@ -71,6 +71,9 @@ export type SideAgentApi = {
   unseenResult: boolean
   error: string | null
   send: (text: string) => Promise<void>
+  // sendExact — отправка чужого пакета (файловые комментарии): id и тело задаёт вызывающий и сам повторяет
+  // тот же id. Отказ (busy, API-ошибка) уходит ему в reject, а не в error модалки; композер не трогается.
+  sendExact: (clientMessageId: string, body: string) => Promise<void>
   interrupt: () => void
   quote: string | null
   openWith: (quote: string) => void
@@ -261,6 +264,25 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     }
   }, [keepAlive, runId, syncHistory])
 
+  // acceptTurn — общий хвост принятого сервером сообщения (обычный send и sendExact): ход заведён, состояние
+  // берём из ответа, а не форсируем running.
+  const acceptTurn = useCallback(
+    (resp: SendResponse, gen: number): void => {
+      // Принятое сообщение — новейшая операция: поднимаем op, чтобы любой ещё летящий догон истории
+      // (начатый до него) не применил свой снапшот.
+      opRef.current += 1
+      const op = opRef.current
+      if (resp.turnId !== '') lastTurnIdRef.current = resp.turnId
+      // Идемпотентный повтор уже ЗАВЕРШЁННОГО хода возвращает state:'idle' — агент не запускался, нового
+      // терминального события не будет.
+      setRequestState(resp.state)
+      // running: keepAlive поднимется и connection-эффект догонит историю. idle: терминал SSE не придёт —
+      // догоняем сами, чтобы восстановить пропущенный вывод завершённого хода.
+      if (resp.state !== 'running') void syncHistory(() => gen === genRef.current && op === opRef.current)
+    },
+    [syncHistory],
+  )
+
   const send = useCallback(
     async (text: string): Promise<void> => {
       if (!enabled) return
@@ -283,12 +305,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
         const body = buildReplyBody(sentQuote, text)
         const resp = await depsRef.current.sendMessage(clientMessageId, body, sentStageId)
         if (gen !== genRef.current) return
-        // Принятый send — новейшая операция: поднимаем op, чтобы любой ещё
-        // летящий догон истории (начатый до этого send) не применил свой снапшот.
-        opRef.current += 1
-        const op = opRef.current
-        // Принято сервером: ход заведён.
-        if (resp.turnId !== '') lastTurnIdRef.current = resp.turnId
+        acceptTurn(resp, gen)
         // Чистим id (следующий свежий send возьмёт новый).
         inflightIdRef.current = null
         // Чистим ТОЛЬКО черновик, равный отправленному: если пользователь успел напечатать следующее
@@ -298,17 +315,6 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
         // ответ стёр бы свежеприкреплённую (гонка с openWith/clearQuote, вызванными, пока этот send ещё в
         // полёте), в том числе когда новая цитата текстуально совпадает со старой.
         if (quoteGenRef.current === sentQuoteGen) setQuote(null)
-        // Состояние берём ИЗ ОТВЕТА, не форсируя running: идемпотентный повтор уже ЗАВЕРШЁННОГО хода
-        // возвращает state:'idle' — агент не запускался, нового терминального события не будет.
-        setRequestState(resp.state)
-        if (resp.state === 'running') {
-          // keepAlive поднимется (running) → connection-эффект догонит историю и
-          // откроет стрим. Отдельный догон тут не нужен.
-        } else {
-          // idle: терминал SSE не придёт — догоняем историю сами, чтобы восстановить пропущенный
-          // хвост/вывод завершённого хода.
-          void syncHistory(() => gen === genRef.current && op === opRef.current)
-        }
       } catch (err: unknown) {
         if (gen !== genRef.current) return
         // id СОХРАНЯЕМ — повтор после сетевой ошибки переиспользует его.
@@ -316,7 +322,20 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
         setError(code !== undefined ? errorCodeToMessage(code) : 'Request failed')
       }
     },
-    [enabled, syncHistory],
+    [enabled, syncHistory, acceptTurn],
+  )
+
+  const sendExact = useCallback(
+    async (clientMessageId: string, body: string): Promise<void> => {
+      if (!enabled) throw new Error('Assistant unavailable')
+      if (requestStateRef.current === 'running') throw new SideAgentApiError(409, 'busy')
+      const gen = genRef.current
+      const resp = await depsRef.current.sendMessage(clientMessageId, body)
+      // Ран сменился во время запроса: принятие относится к чужой беседе.
+      if (gen !== genRef.current) return
+      acceptTurn(resp, gen)
+    },
+    [enabled, acceptTurn],
   )
 
   const interruptTurn = useCallback((): void => {
@@ -368,6 +387,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     unseenResult,
     error,
     send,
+    sendExact,
     interrupt: interruptTurn,
     quote,
     openWith,

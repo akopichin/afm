@@ -1,18 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { getReference, type TreeEntry } from '../../api/files-client'
-import type { DraftComment } from './draft-comments'
-import { draftKey, renderDraftComments } from './draft-comments'
-import { FileBrowserModal, type NoPauseNotes, type SelectedFile } from './FileBrowserModal'
-// Строго листовой модуль, НЕ барабан '../side-agent' — иначе цикл file-browser → side-agent/SideAgentProvider
-// → SideAgentModal → SideAgentHistory → feed-workspace → FeedComposer → pasteable-textarea → file-browser
-// barrel → FileBrowserProvider.
-import { useSideAgentContext } from '../side-agent/side-agent-context'
+import { copyToClipboard } from '../../lib/clipboard'
+import { EMPTY_BROWSER_VIEW, FileBrowserModal, type BrowserView, type SelectedFile } from './FileBrowserModal'
 
 type FileBrowserMode = 'browse' | 'picker'
-
-// Совпадает с use-status.ts's FlowStatus['flowPauseState'] — продублирован тем же приёмом, что и в
-// FileViewer.tsx/FileBrowserModal.tsx/ReviewBanner.tsx.
-type FlowPauseState = 'none' | 'paused' | 'resuming'
 
 type FileBrowserContextValue = {
   // Открывает модалку в свободном режиме просмотра проекта (кнопка снизу —
@@ -53,9 +44,6 @@ type FileBrowserProviderProps = {
   startedAt: string
   // capabilities.file_browser, проброшенный из App.tsx.
   enabled?: boolean
-  // Флоу-wide review-pause состояние, проброшенное в FileBrowserModal → FileViewer, чтобы аннотирование
-  // строк файла было живым только пока флоу реально на паузе.
-  flowPauseState?: FlowPauseState
   // onOpenChange сообщает App о модалке, чтобы подавить auto-attention за оверлеем.
   onOpenChange?: (open: boolean) => void
   attentionShortcut?: { label: string; onActivate: () => void } | null
@@ -67,18 +55,14 @@ function selectionKey(root: string, path: string): string {
 }
 
 // FileBrowserProvider хранит selection и режим между закрытиями; модалка при закрытии размонтируется.
-export function FileBrowserProvider({ children, flowName, startedAt, enabled = true, flowPauseState = 'none', onOpenChange, attentionShortcut = null }: FileBrowserProviderProps): ReactElement {
+export function FileBrowserProvider({ children, flowName, startedAt, enabled = true, onOpenChange, attentionShortcut = null }: FileBrowserProviderProps): ReactElement {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<FileBrowserMode>('browse')
   const [selection, setSelection] = useState<Map<string, SelectedFile>>(new Map())
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const onInsertRef = useRef<((references: string[]) => void) | null>(null)
-
-  // "Without pause" drafts — whole file-browser session, survives modal close/reopen (same lifetime as
-  // selection above). sideAgent gates whether the feature is visible at all (capabilities.sideAgent).
-  const [noPauseActive, setNoPauseActive] = useState(false)
-  const [drafts, setDrafts] = useState<Map<string, DraftComment>>(new Map())
-  const sideAgent = useSideAgentContext()
+  // Открытый файл/корень/вкладка/прокрутка переживают закрытие Files; ref, потому что перерисовка не нужна.
+  const viewRef = useRef<BrowserView>(EMPTY_BROWSER_VIEW)
 
   // Finding 7: генерация "эпохи" selection'а — счётчик, а не boolean, потому что за время жизни провайдера
   // таких эпох может смениться сколько угодно.
@@ -109,8 +93,7 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     setSelection(new Map())
     setSelectionError(null)
     onInsertRef.current = null
-    setNoPauseActive(false)
-    setDrafts(new Map())
+    viewRef.current = EMPTY_BROWSER_VIEW
     restoreOpener() // no-op на маунте (opener пуст) и когда кнопка уже исчезла
   }, [flowName, startedAt])
 
@@ -192,42 +175,6 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
     })
   }, [])
 
-  const startNoPause = useCallback(() => setNoPauseActive(true), [])
-
-  const saveDraft = useCallback((c: DraftComment) => {
-    setDrafts((prev) => {
-      const next = new Map(prev)
-      next.set(draftKey(c.root, c.path, c.line), c)
-      return next
-    })
-  }, [])
-
-  const clearDrafts = useCallback(() => {
-    setDrafts(new Map())
-    setNoPauseActive(false)
-  }, [])
-
-  // send() renders the accumulated drafts, resets the no-pause session, closes the browser, returns focus
-  // to its opener — then hands off to the side agent (which remembers the just-restored focus as ITS own
-  // opener), carrying the rendered text as a quote.
-  const sendDrafts = useCallback(() => {
-    const text = renderDraftComments(Array.from(drafts.values()))
-    setDrafts(new Map())
-    setNoPauseActive(false)
-    setOpen(false)
-    restoreOpener()
-    sideAgent.openWith(text)
-  }, [drafts, sideAgent])
-
-  // Feature invisible whenever the side agent capability is off — drafts can only ever be sent there.
-  const noPauseNotes: NoPauseNotes | undefined = useMemo(
-    () =>
-      sideAgent.enabled
-        ? { active: noPauseActive, start: startNoPause, comments: Array.from(drafts.values()), save: saveDraft, clear: clearDrafts, send: sendDrafts }
-        : undefined,
-    [sideAgent.enabled, noPauseActive, drafts, startNoPause, saveDraft, clearDrafts, sendDrafts],
-  )
-
   function submit(): void {
     const references = Array.from(selection.values()).map((f) => f.reference)
     if (mode === 'picker') {
@@ -252,9 +199,11 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
           onRemoveSelect={removeSelect}
           onClose={close}
           onSubmit={submit}
+          initialView={viewRef.current}
+          onViewChange={(view) => {
+            viewRef.current = view
+          }}
           attentionShortcut={attentionShortcut}
-          flowPauseState={flowPauseState}
-          noPauseNotes={noPauseNotes}
         />
       )}
       {selectionError !== null && (
@@ -264,14 +213,4 @@ export function FileBrowserProvider({ children, flowName, startedAt, enabled = t
       )}
     </FileBrowserContext.Provider>
   )
-}
-
-// Буфер обмена недоступен в некоторых окружениях — best-effort, как и остальные неблокирующие побочные
-// действия в дашборде.
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard?.writeText(text)
-  } catch {
-    // не критично — референсы всё равно видны чипами в футере модалки
-  }
 }

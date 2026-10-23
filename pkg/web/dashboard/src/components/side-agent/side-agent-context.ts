@@ -14,6 +14,9 @@ export type SideAgentContextValue = {
   isOpen: boolean
   open: () => void
   openWith: (quote: string) => void
+  // sendExactMessage — отправить Assistant ровно этот пакет под id вызывающего (файловые комментарии): после
+  // принятия обновляются running/история/индикатор как у обычного send; busy и API-ошибки уходят в reject.
+  sendExactMessage: (clientMessageId: string, body: string) => Promise<void>
   unseenResult: boolean
   active: boolean
 }
@@ -23,6 +26,7 @@ export const SideAgentContext = createContext<SideAgentContextValue>({
   isOpen: false,
   open: () => {},
   openWith: () => {},
+  sendExactMessage: () => Promise.reject(new Error('Assistant unavailable')),
   unseenResult: false,
   active: false,
 })

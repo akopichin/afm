@@ -8,6 +8,8 @@ import coffeeCss from '../../skins/coffee/index.css?raw'
 import graphiteCss from '../../skins/graphite/index.css?raw'
 import novacorpsCss from '../../skins/novacorps/index.css?raw'
 import assistantsCss from '../../skins/base/assistants.css?raw'
+import stagesListCss from '../../skins/base/stages-list.css?raw'
+import planPanelCss from '../../skins/base/plan-panel.css?raw'
 
 // decl reads the LAST declared value of a custom property in a stylesheet string (cascade order).
 const decl = (css: string, name: string): string | undefined => {
@@ -46,6 +48,21 @@ describe('status-color mapping lives once in base/tokens.css', () => {
     expect(decl(tokensCss, '--c-hook-failed')).toBe('var(--c-failed)')
     expect(decl(tokensCss, '--c-awaiting-user')).toBe('var(--violet)')
     expect(decl(tokensCss, '--c-pending')).toBe('var(--ink-dim)')
+  })
+})
+
+// awaiting_quota — ожидание сброса лимита подписки: машинное ожидание, как awaiting_assistants, поэтому
+// active-amber, а не failed/attention. Цвет задаётся одним токеном, rail и badge читают его же.
+describe('awaiting_quota uses a real amber token in the rail, the header badge and the helper row', () => {
+  it('declares --c-awaiting-quota once, in the active-amber family', () => {
+    expect(decl(tokensCss, '--c-awaiting-quota')).toBe('var(--amber)')
+  })
+  it('rail dot and workspace badge both read --c-awaiting-quota', () => {
+    expect(declInRule(stagesListCss, '.status-dot[data-status="awaiting_quota"]', 'color')).toBe('var(--c-awaiting-quota)')
+    expect(declInRule(planPanelCss, '.status-badge[data-status="awaiting_quota"]', 'color')).toBe('var(--c-awaiting-quota)')
+  })
+  it('a quota-parked helper dot uses --attention, not a new --c-* token', () => {
+    expect(declInRule(assistantsCss, '.assistant-task-status-dot[data-quota="true"]', 'background')).toBe('var(--attention)')
   })
 })
 

@@ -57,6 +57,7 @@ function statusTone(status: string): FeedTone {
       return 'danger'
     case 'retrying':
     case 'paused':
+    case 'awaiting_quota':
       return 'warning'
     case 'awaiting_approval':
     case 'awaiting_user_input':
@@ -183,6 +184,10 @@ function mapEvent(event: AfmEvent): Mapped | null {
       // Финальный сбой lifecycle хука — чисто информационное предупреждение: FSM/стадию/ран оно не
       // трогает, поэтому tone 'warning', а не 'danger', как у блокирующего hook_failed выше.
       return { actor: 'system', tone: 'warning', kind: 'status', text: `lifecycle hook ${str(obj.hook_id)} failed: ${str(obj.error)}`, mono: false }
+    case 'quota_wait':
+    case 'quota_reset':
+    case 'quota_warning':
+      return mapQuotaNotice(event.type, obj)
     case 'team_warning':
       // The flow's team: declaration could not be applied as written for one member (a durable run-level notice,
       // pkg/orchestrator/team.go) — the run goes on, so a warning, not an error.
@@ -371,6 +376,51 @@ function mapEvent(event: AfmEvent): Mapped | null {
     default:
       return { actor: 'system', tone: 'neutral', kind: 'status', text: event.type, mono: false }
   }
+}
+
+// formatUtcMinute — «2026-10-23 17:02 UTC»: лента не знает зону хоста, поэтому время в notice подписано явной
+// зоной, а не серверным «HH:MM». Невалидное значение — пустая строка (времени нет).
+function formatUtcMinute(iso: string): string {
+  const date = new Date(iso)
+  return iso !== '' && Number.isFinite(date.getTime()) ? `${date.toISOString().slice(0, 16).replace('T', ' ')} UTC` : ''
+}
+
+// quotaWaitFallback — текст quota_wait, когда сервер не прислал message. Неожидаемый лимит (pause_reason) —
+// это пауза, а не ожидание: до reset_at афм сам не продолжит.
+function quotaWaitFallback(obj: Record<string, unknown>): string {
+  switch (str(obj.pause_reason)) {
+    case 'exceeds_max_wait': {
+      const resetAt = formatUtcMinute(str(obj.reset_at))
+      return `reset${resetAt !== '' ? ` at ${resetAt}` : ''} is later than max_wait; paused`
+    }
+    case 'no_reset':
+      return 'no reset time to wait for; paused'
+    case 'max_waits':
+      return 'too many consecutive refusals; paused'
+  }
+  const until = formatUtcMinute(str(obj.until))
+  if (until === '') return 'reset time unknown'
+  return str(obj.source) === 'probe' ? `next check at ${until}` : `waiting until ${until}`
+}
+
+// mapQuotaNotice — notices ожидания лимита подписки (quota_wait/quota_reset/quota_warning). Текст целиком
+// строит сервер (data.message, время в явном UTC; тот же текст у lifecycle-хуков и `afm check`) — здесь он
+// показывается как есть, без второго префикса; fallback нужен только когда message нет. У helper-notice вместо
+// stage_id — task_id, поэтому задача называется явно.
+function mapQuotaNotice(type: 'quota_wait' | 'quota_reset' | 'quota_warning', obj: Record<string, unknown>): Mapped {
+  const scope = [str(obj.provider), str(obj.window)].filter((part) => part !== '').join(', ')
+  const subject = scope !== '' ? ` (${scope})` : ''
+  const taskId = str(obj.stage_id) === '' ? str(obj.task_id) : ''
+  const lead = (text: string) => (taskId !== '' ? `Helper task ${taskId}: ${text.charAt(0).toLowerCase()}${text.slice(1)}` : text)
+
+  const message = str(obj.message)
+  const fallback = {
+    quota_wait: `Usage limit reached${subject} — ${quotaWaitFallback(obj)}`,
+    quota_reset: `Usage limit${subject}: the wait is over`,
+    quota_warning: `Usage limit${subject}: the provider says the limit is close`,
+  }[type]
+  const tone = type === 'quota_reset' ? 'neutral' : 'warning'
+  return { actor: 'system', tone, kind: 'status', text: lead(message !== '' ? message : fallback), mono: false }
 }
 
 // mapVerifyEvent — презентация AI-verify наблюдательных событий.

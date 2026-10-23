@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/clock"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -623,5 +626,110 @@ func TestMesh_CloseRemainingMeshWaits_IsIdempotentAndLeavesSatisfiedWaitsAlone(t
 	rs := store.Snapshot()
 	if got := rs.Assistants.Mesh.Waits[receipt.WaitID].Status; got != agentcomm.WaitReady {
 		t.Fatalf("an already-satisfied wait = %q, want untouched ready (closeRemainingMeshWaits only acts on Pending)", got)
+	}
+}
+
+// --- Batch waits: each item has its own deadline timer; the stage resumes only when the last item has ended. ---
+
+func TestMesh_BatchWaitDeadlineEndingPartOfTheSetDoesNotResume(t *testing.T) {
+	f := newBatchFixture(t, 2)
+	ids := receiptWaitIDs(f.mustWait("op-batch-wait", testFarDeadline(), 0, 1))
+	f.park(ids)
+
+	f.o.expireMeshWait(context.Background(), ids[0])
+	f.requireResumes()
+	if got := f.waitStatus(ids[0]); got != agentcomm.WaitExpired {
+		t.Fatalf("item 0 = %s, want expired", got)
+	}
+
+	f.o.expireMeshWait(context.Background(), ids[1])
+	f.requireResumes(bus.EventPeerWaitEnded)
+}
+
+// The last pending item running out of time wakes the stage with what the answered items brought.
+func TestMesh_BatchWaitDeadlineOfTheLastPendingItemWakesWithTheAnswers(t *testing.T) {
+	f := newBatchFixture(t, 2)
+	ids := receiptWaitIDs(f.mustWait("op-batch-wait", testFarDeadline(), 0, 1))
+	f.park(ids)
+	f.reply(0)
+	f.requireResumes()
+
+	f.o.expireMeshWait(context.Background(), ids[1])
+	f.requireResumes(bus.EventPeerReplied)
+	if got := f.waitStatus(ids[1]); got != agentcomm.WaitExpired {
+		t.Fatalf("item 1 = %s, want expired", got)
+	}
+}
+
+// The deadline of a batch applies to every item: each pending one gets its own timer and ends expired.
+func TestMesh_BatchWaitDeadlineExpiresEveryPendingItem(t *testing.T) {
+	f := newBatchFixture(t, 3)
+	f.reply(0)
+	deadline := f.o.clk().Now().Add(time.Millisecond) // the pumped fake clock runs it out at once
+	receipt := f.mustWait("op-batch-wait", &deadline, 0, 1, 2)
+	ids := receiptWaitIDs(receipt)
+
+	for _, id := range ids[1:] {
+		waitForWaitStatus(t, f.o, id, agentcomm.WaitExpired, 2*time.Second)
+	}
+	if got := f.waitStatus(ids[0]); got != agentcomm.WaitReady {
+		t.Fatalf("the answered item = %s, want it left ready", got)
+	}
+}
+
+// A restart finds a batch whose deadline passed while the process was down: every overdue item ends and the
+// stage is resumed once, at the last of them, with the event that fits what the batch brought. The first
+// process runs on a fake clock that never fires, so no live timer ends an item before the recovery sweep does.
+func TestMesh_RecoverMeshWaitDeadlines_OverdueBatchEndsEveryItem(t *testing.T) {
+	cases := []struct {
+		name      string
+		answered  []int // requests answered before the restart
+		wantEvent bus.FSMEvent
+	}{
+		{"nothing answered", nil, bus.EvPeerWaitEnded},
+		{"one item answered", []int{0}, bus.EvPeerReplied},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDir := t.TempDir()
+			o, store := newUnreadTestOrchestratorAt(t, runDir, flow.AgentAuto, &scriptedStageRunner{turn: func(int32) error { return nil }})
+			o.clock = clock.NewFake(time.Now())
+			past := o.clk().Now().Add(-time.Hour)
+			thread, requests, waits := yieldedBatchStage(t, o, &past)
+			for _, i := range tc.answered {
+				answerRequest(t, o, thread, requests[i], fmt.Sprintf("op-answer-%d", i))
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			var turns atomic.Int32
+			restarted, store2 := restartAndRecover(t, runDir, &scriptedStageRunner{turn: func(int32) error { turns.Add(1); return nil }})
+			restarted.recoverMeshWaitDeadlines(context.Background())
+
+			for i, id := range waits {
+				if got := store2.Snapshot().Assistants.Mesh.Waits[id].Status; got == agentcomm.WaitPending {
+					t.Fatalf("item %d still pending after the sweep", i)
+				}
+			}
+			waitUntil(t, "the continuation turn", func() bool { return turns.Load() > 0 })
+			time.Sleep(150 * time.Millisecond)
+			if got := turns.Load(); got != 1 {
+				t.Fatalf("turns = %d, want exactly 1", got)
+			}
+			history, err := store2.History()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var continuations []string
+			for _, tr := range history {
+				if tr.StageID == unreadTestStageID && tr.From == state.StatusAwaitingPeer {
+					continuations = append(continuations, tr.Event)
+				}
+			}
+			if want := []string{string(tc.wantEvent)}; !slices.Equal(continuations, want) {
+				t.Fatalf("continuations of the stage = %v, want exactly %v", continuations, want)
+			}
+		})
 	}
 }

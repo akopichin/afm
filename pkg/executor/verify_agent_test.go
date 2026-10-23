@@ -3,6 +3,7 @@ package executor_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -769,5 +770,26 @@ func TestRunVerifyAgent_Interrupted(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "signaled")); err != nil {
 		t.Errorf("script did not receive SIGINT (marker file missing): %v", err)
+	}
+}
+
+// Голый codex-as-claude как verify-агент: «Try again at …» в stderr при exit 1 — usage-limit провайдера codex со
+// временем сброса, а не VerifyExecError и не вердикт.
+func TestRunVerifyAgent_CodexTryAgainAtIsUsageLimit(t *testing.T) {
+	t.Setenv("TZ", "UTC")
+	dir := t.TempDir()
+	e := executor.New(executor.Config{
+		Command:     "bash",
+		ExtraArgs:   []string{"-c", "echo \"You've hit your usage limit. Try again at 11:55 PM.\" >&2\nexit 1"},
+		IdleTimeout: 5 * time.Second,
+		Provider:    "codex",
+	})
+	outcome, err := e.RunVerifyAgent(context.Background(), "codex-as-claude", "s1", "verify", filepath.Join(dir, "v.log"), filepath.Join(dir, "r.json"))
+	var limit *executor.UsageLimitError
+	if !errors.As(err, &limit) || limit.ResetAt.IsZero() || limit.NoReset || limit.Provider != "codex" {
+		t.Fatalf("want a UsageLimitError with a known reset and provider codex, got %v", err)
+	}
+	if outcome.ProcessOK || outcome.Result != nil || outcome.ProtocolErr != nil {
+		t.Errorf("a limited verify run must not look like a verdict: %+v", outcome)
 	}
 }

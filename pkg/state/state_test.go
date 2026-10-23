@@ -13,6 +13,7 @@ func TestAllStatuses_MatchesConsts(t *testing.T) {
 		StatusPending, StatusPlanning, StatusAwaitingApproval, StatusRevising,
 		StatusReady, StatusRunning, StatusRetrying, StatusPaused, StatusAwaitingUserInput,
 		StatusDone, StatusFailed, StatusHookFailed, StatusAwaitingAssistants, StatusAwaitingPeer,
+		StatusAwaitingQuota,
 	}
 	got := AllStatuses()
 	if len(got) != len(want) {

@@ -38,6 +38,49 @@ export type Stage = {
   // StageView.AwaitingAssistantsBlocked (omitempty на бэке). Опционально и здесь же — чтобы существующие
   // Stage-фикстуры в тестах не пришлось поголовно трогать (как cost/verify выше).
   awaitingAssistantsBlocked?: boolean
+  // quota — durable-ожидание сброса лимита подписки (Go StageView.Quota). Есть только у awaiting_quota и у
+  // paused, припаркованной по лимиту; у остальных стадий undefined.
+  quota?: StageQuota
+}
+
+// StageQuota — малый общий вид quota-парковки стадии или helper-задачи (сервер отдаёт RFC3339 в UTC; не вся
+// state.QuotaWait). until — когда продолжит сам афм, resetAt — когда лимит сбросит провайдер; у source=probe
+// until — время следующей проверки. pauseReason пуст при ручной паузе и пока стадия просто ждёт.
+export const QUOTA_SOURCES = ['structured', 'text', 'probe', 'provider_hold'] as const
+export const QUOTA_PAUSE_REASONS = ['exceeds_max_wait', 'no_reset', 'max_waits'] as const
+export type StageQuota = {
+  provider: string
+  window: string
+  source: (typeof QUOTA_SOURCES)[number]
+  until: string
+  resetAt: string
+  pauseReason: (typeof QUOTA_PAUSE_REASONS)[number] | ''
+}
+
+// parseStageQuota приводит объект `quota` из API к StageQuota. Без provider объект бесполезен (undefined);
+// неизвестные source/pause_reason заменяются безопасными значениями, как и прочие enum'ы из API.
+export function parseStageQuota(raw: unknown): StageQuota | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.provider !== 'string' || obj.provider === '') return undefined
+  const source = (QUOTA_SOURCES as readonly unknown[]).includes(obj.source) ? (obj.source as StageQuota['source']) : 'text'
+  const pauseReason = (QUOTA_PAUSE_REASONS as readonly unknown[]).includes(obj.pause_reason)
+    ? (obj.pause_reason as StageQuota['pauseReason'])
+    : ''
+  return {
+    provider: obj.provider,
+    window: typeof obj.window === 'string' ? obj.window : '',
+    source,
+    until: typeof obj.until === 'string' ? obj.until : '',
+    resetAt: typeof obj.reset_at === 'string' ? obj.reset_at : '',
+    pauseReason,
+  }
+}
+
+// quotaTitle — «Usage limit» для временного лимита, «Quota exhausted» для insufficient_quota (пауза no_reset:
+// пополнение квоты автоматически не ждётся).
+export function quotaTitle(quota: StageQuota | undefined): string {
+  return quota?.pauseReason === 'no_reset' ? 'Quota exhausted' : 'Usage limit'
 }
 
 // StageVerify — компактное текущее состояние AI-verify одной стадии: verify_started → 'running',
@@ -69,6 +112,9 @@ export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
   // awaiting_peer (Agent Mesh Phase 5, T5.1) — the stage's executor registered a wait on a colleague and
   // exited; it resumes automatically once the colleague replies. Machine work, not a human decision.
   awaiting_peer: 'Awaiting colleague',
+  // awaiting_quota — стадия припаркована до сброса лимита подписки провайдера и продолжит сама; это машинное
+  // ожидание, не решение человека. Причина и время — в stage.quota.
+  awaiting_quota: 'Usage limit',
 }
 
 // Статусы, считающиеся «активными» — стадия либо в работе, либо блокирует прогресс флоу и ждёт решения
@@ -84,5 +130,6 @@ export const ACTIVE_STAGE_STATUSES: ReadonlySet<StageStatus> = new Set([
   'hook_failed',
   'awaiting_assistants',
   'awaiting_peer',
+  'awaiting_quota',
 ])
 

@@ -103,7 +103,9 @@ and repeated delivery failures after a helper creator finishes.
 Only a leading `/loop` token, allowing leading whitespace, enters command
 mode. `/loops` stays normal text. Command mode bypasses recipients, attach,
 reply and Interrupt paths. Revise rejects the command before invoking its
-normal handler. The first target mention is resolved; later mentions stay in
+normal handler. The shared Enter-to-send handler also covers loop commands,
+with Shift+Enter for newlines and the loop operation's own pending guard.
+The first target mention is resolved; later mentions stay in
 the prompt. Create and stop use the existing retryable request-ID mechanism.
 
 Tests cover projection replay, idempotency, ownership, slot timing/recovery,

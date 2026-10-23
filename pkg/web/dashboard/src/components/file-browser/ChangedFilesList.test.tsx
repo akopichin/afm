@@ -19,6 +19,13 @@ describe('ChangedFilesList', () => {
     expect(screen.getByText('dir/')).toBeInTheDocument()
   })
 
+  it('marks files with comments, including a deleted one', () => {
+    const counts: Record<string, number> = { 'a.go': 1, 'dir/gone.go': 3 }
+    render(<ChangedFilesList result={list} loading={false} error={null} onOpenFile={vi.fn()} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} commentCount={(path) => counts[path] ?? 0} />)
+    expect(screen.getByLabelText('1 comment')).toHaveTextContent('● 1')
+    expect(screen.getByLabelText('3 comments')).toHaveTextContent('● 3')
+  })
+
   it('opens a selectable file on click', () => {
     const onOpen = vi.fn()
     render(<ChangedFilesList result={list} loading={false} error={null} onOpenFile={onOpen} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} />)

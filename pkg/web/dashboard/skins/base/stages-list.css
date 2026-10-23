@@ -179,9 +179,11 @@
   text-overflow: ellipsis;
 }
 /* Только для скринридеров: .stage-status-sr попадает в accessible name кнопки строки; .stage-cost-sr —
-   полное предложение про стоимость, на которое указывает aria-describedby строки. */
+   полное предложение про стоимость, на которое указывает aria-describedby строки; .quota-sr — статичная
+   подпись ожидания лимита (<time dateTime>), тикающий текст рядом помечен aria-hidden. */
 .stage-status-sr,
-.stage-cost-sr {
+.stage-cost-sr,
+.quota-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -235,6 +237,8 @@
   color: var(--c-failed);
   border-color: var(--c-failed);
 }
+
+.status-dot[data-status="awaiting_quota"]       { color: var(--c-awaiting-quota); border-color: var(--c-awaiting-quota); }
 
 /* Filled node for every active/attention/terminal status; the number is punched out in the canvas colour
    so it reads on the bright fill. Pending/ready stay as hollow rings with a muted number. */
@@ -340,6 +344,19 @@
 .verify-badge[data-phase="error"] { color: var(--danger); }
 @media (prefers-reduced-motion: reduce) {
   .verify-badge[data-phase="running"] { animation: none; }
+}
+
+/* Ожидание сброса лимита: часы + обратный отсчёт. Видимый счётчик aria-hidden (меняется каждую секунду),
+   статичная подпись — в .quota-sr. tabular-nums, чтобы цифры не дёргали строку. */
+.quota-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-awaiting-quota);
+  white-space: nowrap;
 }
 
 /* Per-stage cost figure: a quiet mono span, never opacity — intensifies via COLOR on row hover/active so

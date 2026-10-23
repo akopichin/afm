@@ -203,6 +203,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* «● N» у файла с комментариями — справа от имени. */
+.file-comment-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+  color: var(--attention);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .file-tree-row[data-kind='symlink'] {
   cursor: default;
   color: var(--text-muted);
@@ -369,6 +378,11 @@
   overflow-x: auto;
 }
 
+/* Контейнер получает фокус программно (после удаления карточки без строки), кольцо на всём файле лишнее. */
+.file-viewer-source:focus {
+  outline: none;
+}
+
 /* === Построчный рендер файла === Один div на строку исходника — по образцу .plan-line: та же
    grid-раскладка "номер / контент / маркер", тот же ●-маркер и та же инлайновая .line-comment-form. */
 .file-line {
@@ -402,12 +416,22 @@
 
 .file-line-num {
   text-align: right;
-  padding-right: 10px;
+  padding: 0 10px 0 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  line-height: inherit;
   color: var(--text-muted);
   font-size: 11px;
   opacity: 0.5;
   user-select: none;
   transition: color 0.1s, opacity 0.1s;
+}
+button.file-line-num { cursor: pointer; }
+button.file-line-num:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+  opacity: 1;
 }
 .file-line.annotatable:hover .file-line-num {
   color: var(--accent-primary);
@@ -436,44 +460,12 @@
   opacity: 1;
 }
 
-/* Shared form styles come from plan-panel.css. Span all three file-line grid columns so the editor sits
-   below the source instead of in the 48px gutter. */
-.file-line .line-comment-form {
-  grid-column: 1 / -1;
+/* Карточка и редактор комментария — соседи строки, а не её дети: их кнопки не вложены в строку файла.
+   Отступ под номером строки; форма не наследует white-space: pre строки. */
+.file-viewer-source > .comment-card,
+.file-viewer-source > .comment-editor {
+  margin: 4px 20px 8px 72px;
   white-space: normal;
-  margin-left: 48px;
-}
-
-/* Инлайновая ошибка сохранения заметки (409 stale_content/rev_conflict и т.п.):
-   форма остаётся открытой, ошибка показывается между textarea и кнопками. */
-.file-line .line-comment-error {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--danger);
-}
-
-/* При flowPauseState=none первый клик по строке предлагает поставить флоу на паузу. */
-.file-line .review-pause-confirm {
-  white-space: normal;
-  margin-left: 48px;
-  grid-column: 1 / -1;
-  padding: 10px 12px;
-  border: 1px solid var(--attention);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--attention-rgb), 0.08);
-}
-.file-line .review-pause-confirm p {
-  margin: 0 0 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-/* Pause confirmation sits outside .line-comment-form and needs its own button gap.
-   flex-wrap: wrap — the "no pause" mode adds a third button (Pause/Cancel/Without
-   pause) here; at narrow modal widths three buttons no longer fit on one line. */
-.file-line .review-pause-confirm .comment-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 /* === Дифф === */
@@ -529,6 +521,8 @@
   border-top: 1px solid var(--separator-subtle);
   flex: 0 0 auto;
 }
+/* Футер просмотра: статус отправки слева, Send all справа; без статуса кнопка остаётся у правого края. */
+.file-browser-send-footer { justify-content: flex-end; }
 .file-browser-chips {
   display: flex;
   flex-wrap: wrap;
@@ -578,27 +572,6 @@
 }
 .file-browser-footer .btn-approve:disabled {
   opacity: 0.5;
-}
-
-/* === Бар черновиков комментариев ("без паузы" → сайд-агент) ===
-   Markup is flat (span + btn-cancel + btn-approve, no wrapper — see
-   FileBrowserModal.tsx), so the counter label gets flex: 1 to hug the left
-   edge and push both buttons together against the right edge; .file-browser-footer
-   does the same thing with .file-browser-chips flex: 1 next to its single button. */
-.file-browser-notes-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--separator-subtle);
-  background: var(--surface-raised);
-  flex: 0 0 auto;
-}
-.file-browser-notes-bar span {
-  flex: 1;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: 12px;
 }
 
 .file-browser-toast {
@@ -676,15 +649,20 @@
 
 /* Поиск файлов: строки переиспользуют .file-tree-row; здесь только раскладка
    имени с приглушённым префиксом каталога и поле ввода запроса. */
+/* Длинный путь обрезается слева от маркера «● N», а не наезжает на него. */
 .file-search-name {
   display: inline-flex;
   min-width: 0;
+  overflow: hidden;
   align-items: baseline;
   gap: 0;
 }
 .file-search-dir {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-muted);
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /* The openable part of a result row is a real <button> (keyboard focus +
    Enter/Space) styled as a flat, full-width clickable region. */
@@ -839,6 +817,69 @@
   margin-left: auto;
 }
 
+/* Files / Comments switch above the file panel; the files panel keeps its own column layout. */
+.file-browser-panelswitch { align-self: flex-start; }
+.file-browser-files-panel:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* === Comments list: one row-button per file comment, grouped by root / file. === */
+.file-comments-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.file-comments-group { display: flex; flex-direction: column; gap: 6px; }
+.file-comments-group-title {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.file-comments-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 32px;
+  padding: 8px 10px;
+  text-align: left;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.file-comments-row:hover { background: var(--surface-hover); }
+.file-comments-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.file-comments-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11.5px; }
+.file-comments-row-line { font-weight: 600; color: var(--text-secondary); }
+.file-comments-row-recipient { font-family: var(--font-ui); font-size: 11px; color: var(--text-muted); }
+.file-comments-row-text {
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.file-comments-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border: 1px solid var(--separator-subtle);
+}
+.file-comments-badge-warn {
+  color: var(--attention);
+  border-color: rgba(var(--attention-rgb), 0.5);
+}
+
 /* Уважаем prefers-reduced-motion: гасим все декоративные переходы браузера. */
 @media (prefers-reduced-motion: reduce) {
   .file-browser-resizer,
@@ -874,6 +915,37 @@
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
+  }
+  /* Header on a phone: the title truncates first; the actions never shrink below tappable size. */
+  .file-browser-header { gap: 8px; padding: 10px 12px; }
+  .file-browser-header h2 {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-browser-header-actions { flex: 0 0 auto; gap: 8px; }
+  .file-browser-header-actions button { min-width: 32px; min-height: 32px; }
+  .file-browser-comments-toggle {
+    padding: 0 10px;
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--separator-subtle);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+  .file-browser-comments-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .file-browser-comments-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .file-browser-attention-shortcut {
+    max-width: 38vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .file-browser-tree-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
   .file-browser-tree-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
