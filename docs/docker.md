@@ -195,13 +195,13 @@ doesn't have it (`/api/files/*` returns `404` and the button isn't shown).
   [per-flow git worktree](flow-reference.md#per-flow-git-worktrees); it lists the files
   the worktree branch changed since its fork point (work committed on the branch),
   rendered under `.worktrees/<flow>/`.
-- **Review notes.** Clicking a file line while a flow is running lets you pause the
-  whole flow and attach line-anchored comments — see
+- **Review notes.** An externally started flow review pause still exposes its
+  banner and stored notes; file-line clicks create local comments instead — see
   [Dashboard → Review notes](dashboard.md#review-notes-pause-the-whole-flow-and-comment-on-files-docker-mode).
-- **Comments without pausing.** With the Assistant enabled, choose **Without pause**
-  at the file-line prompt to collect draft comments and attach them to an Assistant
-  message while the flow keeps running — see
-  [Dashboard → File comments without pausing](dashboard.md#file-comments-without-pausing-docker-mode).
+- **File comments.** Click a line to draft a comment without pausing the flow. The
+  **Files / Comments (N)** list keeps comments across file and tab switches; **Send**
+  or **Send all (N)** addresses one message to the Assistant or a reachable agent —
+  see [Dashboard → File comments](dashboard.md#file-comments-docker-mode).
 - **Strictly read-only.** `.git` and `.afm` are always hidden. No create/edit/rename/
   delete. File content is capped at 2 MiB, diffs at 4 MiB; symlinks are listed but not
   opened.

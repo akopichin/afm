@@ -106,6 +106,93 @@ describe('useSideAgent', () => {
     expect(result.current.error).toBe('Another request is in progress')
   })
 
+  describe('sendExact (caller-owned id and body)', () => {
+    it('posts the caller id and the exact body, goes running and leaves the composer draft alone', async () => {
+      const { deps, sendMessage } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps, 'build'))
+      act(() => { result.current.setDraft('typing') })
+      await act(async () => { await result.current.sendExact('req-1', '  ## File comments\n- a  \n') })
+      expect(sendMessage).toHaveBeenCalledWith('req-1', '  ## File comments\n- a  \n')
+      expect(result.current.requestState).toBe('running')
+      expect(result.current.draft).toBe('typing')
+      expect(result.current.error).toBeNull()
+    })
+
+    it('rejects as busy without a POST while a turn runs and keeps the composer error clean', async () => {
+      const { deps, sendMessage } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      await act(async () => { await result.current.send('first') })
+      let failure: unknown
+      await act(async () => { failure = await result.current.sendExact('req-1', 'body').catch((e: unknown) => e) })
+      expect(sendMessage).toHaveBeenCalledTimes(1)
+      expect(failure).toBeInstanceOf(SideAgentApiError)
+      expect((failure as SideAgentApiError).code).toBe('busy')
+      expect(result.current.error).toBeNull()
+    })
+
+    it('rejects with the API error and stays idle so the caller can retry the same id', async () => {
+      const { deps, sendMessage } = makeDeps()
+      sendMessage.mockRejectedValueOnce(new SideAgentApiError(413, 'message_too_large'))
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      let failure: unknown
+      await act(async () => { failure = await result.current.sendExact('req-1', 'body').catch((e: unknown) => e) })
+      expect((failure as SideAgentApiError).code).toBe('message_too_large')
+      expect(result.current.requestState).toBe('idle')
+      await act(async () => { await result.current.sendExact('req-1', 'body') })
+      expect(sendMessage.mock.calls.map((c) => c[0])).toEqual(['req-1', 'req-1'])
+    })
+
+    it('rejects when the capability is off', async () => {
+      const { deps, sendMessage } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', false, deps))
+      await expect(result.current.sendExact('req-1', 'body')).rejects.toThrow()
+      expect(sendMessage).not.toHaveBeenCalled()
+    })
+
+    it('an idle idempotent answer catches the history up like a normal send', async () => {
+      const completed = [
+        parsed(1, 'turn_accepted', { message: 'q', client_message_id: 'req-1' }, 'tdone'),
+        parsed(2, 'turn_completed', {}, 'tdone'),
+      ]
+      const getConversation = vi.fn(async () => emptyConversation({ state: 'idle', events: completed, lastSeq: 2, nextCursor: 2 }))
+      const deps: SideAgentDeps = {
+        getConversation,
+        sendMessage: vi.fn(async () => ({ turnId: 'tdone', state: 'idle' as const, cursor: 2 })),
+        interrupt: vi.fn(async () => {}),
+        openStream: vi.fn(() => ({ close: vi.fn() })),
+      }
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      await act(async () => { await result.current.sendExact('req-1', 'q') })
+      await waitFor(() => expect(result.current.events).toHaveLength(2))
+      expect(result.current.requestState).toBe('idle')
+    })
+
+    it('an accepted turn raises unseenResult when it finishes while the window is closed', async () => {
+      const { deps, emit } = makeDeps()
+      const { result } = renderHook(() => useSideAgent('r1', true, deps))
+      await act(async () => { await result.current.sendExact('req-1', 'body') })
+      await waitFor(() => expect(deps.openStream).toHaveBeenCalled())
+      await act(async () => { emit(wire(1, 'turn_completed', {})) })
+      expect(result.current.unseenResult).toBe(true)
+      expect(result.current.requestState).toBe('idle')
+    })
+
+    it('a run change during the request drops the late acceptance', async () => {
+      const { deps, sendMessage } = makeDeps()
+      let release!: () => void
+      sendMessage.mockImplementationOnce(async () => {
+        await new Promise<void>((r) => { release = r })
+        return { turnId: 't1', state: 'running' as const, cursor: 1 }
+      })
+      const { result, rerender } = renderHook(({ runId }) => useSideAgent(runId, true, deps), { initialProps: { runId: 'r1' } })
+      let pending!: Promise<void>
+      act(() => { pending = result.current.sendExact('req-1', 'body') })
+      rerender({ runId: 'r2' })
+      await act(async () => { release(); await pending })
+      expect(result.current.requestState).toBe('idle')
+    })
+  })
+
   it('a network error on send keeps the same client_message_id for retry', async () => {
     const { deps, sendMessage } = makeDeps()
     sendMessage.mockRejectedValueOnce(new Error('network'))

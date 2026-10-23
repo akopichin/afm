@@ -54,52 +54,6 @@
   gap: 8px;
 }
 
-.review-note-item {
-  background: var(--bg);
-  border: 1px solid var(--mint-soft);
-  border-radius: 4px;
-  padding: 8px 10px;
-}
-
-.review-note-line {
-  display: block;
-  font-size: 10px;
-  letter-spacing: 0.03em;
-  color: var(--ink-dim);
-  margin-bottom: 4px;
-}
-
-.review-note-text {
-  font-size: 12px;
-  color: var(--ink);
-  margin: 0 0 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.review-note-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.review-note-textarea {
-  width: 100%;
-  background: var(--bg);
-  color: var(--ink);
-  border: 1px solid var(--mint-soft);
-  border-radius: 4px;
-  padding: 8px;
-  font-family: inherit;
-  font-size: 12px;
-  resize: vertical;
-  min-height: 50px;
-  margin-bottom: 8px;
-}
-.review-note-textarea:focus {
-  outline: none;
-  border-color: var(--mint);
-}
-
 .review-notes-target {
   display: flex;
   flex-direction: column;

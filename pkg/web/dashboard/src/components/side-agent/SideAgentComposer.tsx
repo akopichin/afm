@@ -18,9 +18,8 @@ export type SideAgentComposerProps = {
   // Stop доступен только для хода из модального окна; Mesh-ход нельзя прервать отсюда.
   onStop?: () => void
   running: boolean
-  // quote — приложенные file-comments (file-browser "Without pause" → "Send to side agent"). Чип
-  // рендерится только когда не null; сама цитата не делает сообщение отправляемым — draft всё равно
-  // должен быть непустым.
+  // quote — приложенная цитата (openWith). Чип рендерится только когда не null; сама цитата не делает
+  // сообщение отправляемым — draft всё равно должен быть непустым.
   quote?: string | null
   // onCancelQuote — снять приложенную цитату (✕ на чипе).
   onCancelQuote?: () => void

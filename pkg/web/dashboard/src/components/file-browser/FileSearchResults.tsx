@@ -1,5 +1,6 @@
 import { type ReactElement } from 'react'
 import type { SearchResult, TreeEntry } from '../../api/files-client'
+import { FileCommentCount, noComments } from './FileCommentCount'
 
 type FileSearchResultsProps = {
   // null — поиск ещё не запускался/очищен; result с entries — ответ бэкенда.
@@ -13,6 +14,8 @@ type FileSearchResultsProps = {
   // Чекбоксы выбора: только в режиме attach (см. FileTree.showCheckboxes).
   // По умолчанию true — изолированные тесты компонента без изменений.
   showCheckboxes?: boolean
+  // Число комментариев к файлу по пути — маркер «● N» в строке.
+  commentCount?: (path: string) => number
 }
 
 // dirPrefix возвращает каталог файла с завершающим слэшем ("pkg/server/") или
@@ -24,7 +27,7 @@ function dirPrefix(path: string): string {
 
 // Плоский список результатов поиска: переиспользует классы дерева ради единого вида. Имя файла — основной
 // текст, каталог — приглушённый префикс.
-export function FileSearchResults({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: FileSearchResultsProps): ReactElement {
+export function FileSearchResults({ result, loading, error, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true, commentCount = noComments }: FileSearchResultsProps): ReactElement {
   if (error !== null) return <div className="file-tree-hint file-tree-error">{error}</div>
   if (loading && result === null) return <div className="file-tree-hint">Searching…</div>
   if (result === null) return <div className="file-tree-hint">Type to search</div>
@@ -55,6 +58,7 @@ export function FileSearchResults({ result, loading, error, onOpenFile, onToggle
                 {prefix !== '' && <span className="file-search-dir">{prefix}</span>}
                 <span className="file-tree-name">{entry.name}</span>
               </span>
+              <FileCommentCount count={commentCount(entry.path)} />
             </button>
           </div>
         )

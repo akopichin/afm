@@ -17,6 +17,13 @@ describe('FileSearchResults', () => {
     expect(screen.getByText(/No files match/i)).toBeTruthy()
   })
 
+  test('marks a file with comments', () => {
+    render(
+      <FileSearchResults result={{ entries: [entry], truncated: false }} loading={false} error={null} onOpenFile={vi.fn()} onToggleSelect={vi.fn()} isSelected={() => false} activePath={null} commentCount={() => 2} />,
+    )
+    expect(screen.getByLabelText('2 comments')).toHaveTextContent('● 2')
+  })
+
   test('renders name + muted dir, truncation notice, and wires open/select', () => {
     const onOpenFile = vi.fn()
     const onToggleSelect = vi.fn()

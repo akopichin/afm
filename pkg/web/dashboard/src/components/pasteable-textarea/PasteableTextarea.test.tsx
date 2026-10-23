@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PasteableTextarea } from './PasteableTextarea'
+import { CommentProvider } from '../comments/CommentProvider'
 import { FileBrowserProvider } from '../file-browser'
 import { FilesApiMock } from '../file-browser/test-support'
 
@@ -138,9 +139,11 @@ describe('PasteableTextarea', () => {
     installFileBrowserApi()
     const onChange = vi.fn()
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
@@ -162,9 +165,11 @@ describe('PasteableTextarea', () => {
     installFileBrowserApi()
     const onChange = vi.fn()
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     const attach = screen.getByRole('button', { name: 'Attach' })
@@ -193,9 +198,11 @@ describe('PasteableTextarea', () => {
     })
     const onChange = vi.fn()
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
@@ -216,9 +223,11 @@ describe('PasteableTextarea', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const onChange = vi.fn()
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={false}>
-        <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled={false}>
+          <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     // Скрепка есть, но проект-пикер (и вызовы /api/files) отсутствуют — только загрузка.
@@ -230,9 +239,11 @@ describe('PasteableTextarea', () => {
 
   it('disabled field shows no Attach affordance (R2 #6b — no reference into a disabled input)', () => {
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
-        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences disabled />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+          <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences disabled />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
     expect(screen.queryByRole('button', { name: 'Attach' })).toBeNull()
   })
@@ -244,9 +255,11 @@ describe('PasteableTextarea', () => {
 
     function Harness({ show }: { show: boolean }) {
       return (
-        <FileBrowserProvider flowName="flow1" startedAt="t1">
+        <CommentProvider runId="r1">
+          <FileBrowserProvider flowName="flow1" startedAt="t1">
           {show && <PasteableTextarea stageId="s1" value="x" onChange={onChange} allowFileReferences />}
-        </FileBrowserProvider>
+          </FileBrowserProvider>
+        </CommentProvider>
       )
     }
 
@@ -271,9 +284,11 @@ describe('PasteableTextarea', () => {
 
   it('attachInline: renders the Attach button inline in a .pasteable-input-row together with the textarea', () => {
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
-        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+          <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     const attach = screen.getByRole('button', { name: 'Attach' })
@@ -287,9 +302,11 @@ describe('PasteableTextarea', () => {
 
   it('regression: default (no attachInline) keeps the Attach button on the .pasteable-attachments strip and renders no .pasteable-input-row', () => {
     const { container } = render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
-        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+          <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     const attach = screen.getByRole('button', { name: 'Attach' })
@@ -300,9 +317,11 @@ describe('PasteableTextarea', () => {
   it('attachInline: a queued image preview renders on the .pasteable-attachments strip above while the Attach button stays in the input row', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ path: '/afm/run/s1/attachments/paste-1.png' }))
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
-        <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+          <PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [makeImageItem()] } })
@@ -317,9 +336,11 @@ describe('PasteableTextarea', () => {
     installFileBrowserApi()
     const onChange = vi.fn()
     const { container } = render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences attachInline />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          <PasteableTextarea stageId="s1" value="see  end" onChange={onChange} allowFileReferences attachInline />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     // Скрытый <input type=file> существует ровно один раз (не дублируется).
@@ -349,9 +370,11 @@ describe('PasteableTextarea', () => {
     })
     const onChange = vi.fn()
     render(
-      <FileBrowserProvider flowName="flow1" startedAt="t1">
-        <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences attachInline />
-      </FileBrowserProvider>,
+      <CommentProvider runId="r1">
+        <FileBrowserProvider flowName="flow1" startedAt="t1">
+          <PasteableTextarea stageId="s1" value="" onChange={onChange} allowFileReferences attachInline />
+        </FileBrowserProvider>
+      </CommentProvider>,
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }))

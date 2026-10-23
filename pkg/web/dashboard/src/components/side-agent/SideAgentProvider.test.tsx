@@ -157,4 +157,53 @@ describe('SideAgentProvider (App-level wiring)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open assistant' }))
   })
+
+  describe('sendExactMessage in the context', () => {
+    // ExactConsumer — как провайдер комментариев: шлёт чужой пакет и показывает исход и активность.
+    function ExactConsumer({ onResult }: { onResult: (r: string) => void }): React.ReactElement {
+      const { sendExactMessage, active } = useSideAgentContext()
+      return (
+        <button type="button" data-active={active} onClick={() => sendExactMessage('req-1', 'exact body').then(() => onResult('ok'), (e: Error) => onResult(e.message))}>
+          exact
+        </button>
+      )
+    }
+
+    // После принятия сервер сообщает running и в истории — иначе догон истории вернул бы idle.
+    function runningDeps(): SideAgentDeps {
+      const deps = fakeDeps()
+      deps.getConversation = vi.fn().mockResolvedValue({
+        conversationId: 'c1', runId: 'r1', command: 'claude', unavailable: false,
+        state: 'running', events: [], lastSeq: 0, nextCursor: 0, hasMore: false,
+      })
+      return deps
+    }
+
+    it('posts the caller id and body through the Assistant path and marks it active', async () => {
+      const deps = runningDeps()
+      const onResult = vi.fn()
+      render(<SideAgentProvider runId="r1" enabled deps={deps}><ExactConsumer onResult={onResult} /></SideAgentProvider>)
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'exact' })) })
+      expect(deps.sendMessage).toHaveBeenCalledWith('req-1', 'exact body')
+      expect(onResult).toHaveBeenCalledWith('ok')
+      await waitFor(() => expect(screen.getByRole('button', { name: 'exact' })).toHaveAttribute('data-active', 'true'))
+    })
+
+    it('rejects to the caller while a turn runs, with no second POST', async () => {
+      const deps = runningDeps()
+      const onResult = vi.fn()
+      render(<SideAgentProvider runId="r1" enabled deps={deps}><ExactConsumer onResult={onResult} /></SideAgentProvider>)
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'exact' })) })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'exact' })) })
+      expect(deps.sendMessage).toHaveBeenCalledTimes(1)
+      expect(onResult).toHaveBeenLastCalledWith(expect.stringMatching(/busy|progress/i))
+    })
+
+    it('without a provider (Assistant off) the default context rejects', async () => {
+      const onResult = vi.fn()
+      render(<ExactConsumer onResult={onResult} />)
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'exact' })) })
+      await waitFor(() => expect(onResult).toHaveBeenCalledWith(expect.stringMatching(/unavailable/i)))
+    })
+  })
 })

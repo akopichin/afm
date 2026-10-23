@@ -17,6 +17,8 @@ import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
+import { CommentProvider } from '../components/comments/CommentProvider'
+import { CommentRecipientsContext } from '../components/comments/comment-recipients'
 import { FileBrowserProvider } from '../components/file-browser'
 import { SideAgentProvider } from '../components/side-agent'
 import { MessageTimeZoneProvider } from '../lib/message-time-zone'
@@ -394,6 +396,12 @@ export function App(): ReactElement {
   // both the mesh and collaboration: with collaboration off the stage Feed is the plain pre-mesh Feed. (The
   // Team tab keeps its own gate, the mesh probe alone.)
   const stageMesh = meshRoster.enabled && capabilities.collaboration
+  // commentRoster — the roster the file-comment recipient picker reads: the same poll as the Feed, with the same
+  // gate; without the mesh only the Assistant (side-agent capability alone) can receive comments.
+  const commentRoster = useMemo(
+    () => ({ runId, participants: stageMesh ? meshParticipants : NO_PARTICIPANTS, stages }),
+    [runId, stageMesh, meshParticipants, stages],
+  )
   // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
   // composerDrafts — every stage's Feed composer draft for this page session (FeedWorkspace's composerDrafts).
   // A new run starts without them: the same stage ID in the next run is another conversation.
@@ -591,7 +599,11 @@ export function App(): ReactElement {
       stages={stages.map((s) => ({ id: s.id, title: s.name }))}
       mentionsEnabled={capabilities.collaboration}
     >
-      <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} flowPauseState={flowPauseState} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
+      {/* CommentProvider выше FileBrowserProvider, PlanPanel и DialogChannel: черновики и отправка
+          живут весь ран и переживают размонтирование Files. */}
+      <CommentProvider runId={runId}>
+      <CommentRecipientsContext.Provider value={commentRoster}>
+      <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
       <GlobalHeader
         flowName={flowName}
         description={description}
@@ -891,6 +903,8 @@ export function App(): ReactElement {
         />
       )}
       </FileBrowserProvider>
+      </CommentRecipientsContext.Provider>
+      </CommentProvider>
     </SideAgentProvider>
     </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>

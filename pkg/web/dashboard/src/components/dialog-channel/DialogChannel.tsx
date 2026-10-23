@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { answerDialog, cancelDialog, FlowApiError } from '../../api/run-client'
+import { commentKey, type CommentAnchor } from '../comments/comment-state'
+import { useComments } from '../comments/CommentProvider'
 import { PasteableTextarea } from '../pasteable-textarea'
 import type { Stage } from '../../types'
 import { Maximizable, useMaximize } from '../layout/Maximizable'
 import { PanelFrame } from '../panel-frame/PanelFrame'
 import { MarkdownRenderer } from '../plan-panel'
-import { LineCommentedDocument, type LineCommentDocumentApi } from '../plan-panel/LineCommentedDocument'
+import {
+  LineCommentedDocument,
+  StaleComments,
+  staleComments,
+  type DocumentComment,
+  type DocumentScope,
+  type LineCommentDocumentApi,
+} from '../plan-panel/LineCommentedDocument'
 import { JumpToLatestButton } from '../jump-to-latest'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 
@@ -46,14 +55,17 @@ const TARGET_GIVE_UP_MS = 4000
 export function DialogChannel({ stage, attention = false, banner, scrollTarget = null, onTargetConsumed }: DialogChannelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const [entries, setEntries] = useState<DialogEntry[]>([])
+  // loadedStageId — стадия, чей диалог уже получен: до этого текущего вопроса не знаем, и живые черновики
+  // нельзя выдавать за комментарии к закрытому вопросу.
+  const [loadedStageId, setLoadedStageId] = useState<string | null>(null)
+  const { comments: allComments, open, edit, discard, acknowledge } = useComments()
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
-  const [customText, setCustomText] = useState('')
   // Пока есть активный вопрос, сначала показываем только его. Если вопрос
   // исчез (ответили/история открыта), история раскрывается автоматически.
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
 
-  // Построчные комментарии к pending-вопросу живут внутри keyed-владельца LineCommentedDocument: смена
-  // размонтирует его и атомарно сбрасывает комментарии/черновик.
+  // Построчные комментарии и свободный ответ хранит run-scoped CommentProvider: они переживают смену вкладки,
+  // стадии и вопроса.
   const [clickedSend, setClickedSend] = useState(false)
   // submitting блокирует повторную отправку; submitError показывает отказ POST вместо ложного Sent.
   const [submitting, setSubmitting] = useState(false)
@@ -77,14 +89,14 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   // currentStageIdRef — какая стадия сейчас смонтирована в этой панели.
   const currentStageIdRef = useRef<string | null>(null)
 
-  // applyDialog сбрасывает черновик только при смене pending (phase,id), сохраняя ввод между poll/reload.
+  // applyDialog сбрасывает выбранную опцию только при смене pending (phase,id), сохраняя ввод между poll/reload.
   const applyDialog = useCallback((data: DialogEntry[]) => {
     setEntries(data)
+    setLoadedStageId(currentStageIdRef.current)
     const nextKey = questionKey(findPending(data))
     if (nextKey !== lastPendingKeyRef.current) {
       lastPendingKeyRef.current = nextKey
       setSelectedOption(null)
-      setCustomText('')
       setHistoryCollapsed(nextKey !== undefined)
     }
   }, [])
@@ -106,8 +118,8 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     currentStageIdRef.current = current.id
 
     setEntries([])
+    setLoadedStageId(null)
     setSelectedOption(null)
-    setCustomText('')
 
     const refresh = (): void => {
       // Опрос issue независимые fetch каждые 2 c; ответы приходят не обязательно в порядке отправки.
@@ -133,6 +145,14 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   }, [stage?.id, applyDialog])
 
   const pending = useMemo(() => findPending(entries), [entries])
+  // Свободный ответ — запись вопроса без строки: ключ (стадия, фаза, id вопроса) отделяет его от других вопросов.
+  const questionScope: Extract<DocumentScope, { kind: 'question' }> | null =
+    pending === null ? null : { kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }
+  const answerAnchor: CommentAnchor | null =
+    questionScope === null ? null : { kind: 'question', stageId, phase: questionScope.phase, questionId: questionScope.questionId, line: null }
+  const answerKey = answerAnchor === null ? null : commentKey(answerAnchor)
+  const answerEntry = answerKey === null ? undefined : allComments.find((entry) => entry.key === answerKey)
+  const customText = answerEntry?.text ?? ''
   // stage.hasDialog сохраняет видимость панели, пока локальный fetch истории не догнал сервер.
   const hasContent = stage !== null && (entries.length > 0 || stage.status === 'awaiting_user_input' || stage.hasDialog)
   const hasAnswered = entries.some((entry) => entry.answer !== null && entry.answer !== undefined)
@@ -245,25 +265,28 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     const question = pending
     if (question === null || question.id === undefined) return
 
+    // Последнее действие пользователя решает, что уйдёт: выбранная опция или набранный текст (ввод снимает выбор).
     const trimmed = customText.trim()
     let answer: string | null = null
     let fromOptions = false
 
-    if (trimmed !== '') {
-      answer = trimmed
-      fromOptions = false
-    } else if (selectedOption !== null) {
+    if (selectedOption !== null) {
       answer = selectedOption
       fromOptions = true
+    } else if (trimmed !== '') {
+      answer = trimmed
     } else {
       return
     }
 
     if (submitting) return // не даём второму клику отправить дубликат (→ 409)
+    // acknowledge привязан к рану и снимает только отправленную ревизию текста.
+    const sent = fromOptions || answerEntry === undefined ? [] : [{ key: answerEntry.key, revision: answerEntry.revision }]
     setSubmitting(true)
     setSubmitError(null)
     try {
       await answerDialog(stage.id, question.phase ?? '', question.id, answer, fromOptions)
+      acknowledge(sent)
       setClickedSend(true)
       window.setTimeout(() => setClickedSend(false), 1200)
       await reload()
@@ -278,7 +301,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
   }
 
   // При наличии комментариев отправляем их как feedback через /dialog/answer с from_options=false.
-  async function sendFeedback(comments: Record<number, string>) {
+  async function sendFeedback(comments: DocumentComment[]) {
     if (stage === null) return
     const question = pending
     if (question === null || question.id === undefined) return
@@ -287,10 +310,12 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     if (feedback === '') return
 
     if (submitting) return
+    const sent = comments.map(({ key, revision }) => ({ key, revision }))
     setSubmitting(true)
     setSubmitError(null)
     try {
       await answerDialog(stage.id, question.phase ?? '', question.id, feedback, false)
+      acknowledge(sent)
       setClickedSend(true)
       window.setTimeout(() => setClickedSend(false), 1200)
       await reload()
@@ -310,16 +335,20 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
     void cancelDialog(stage.id)
   }
 
+  // Выбор опции не трогает набранный текст: он остаётся черновиком, пока его не отправят или не сотрут.
   function selectOption(option: string) {
     setSelectedOption(option)
-    setCustomText('')
   }
 
   function onCustomInput(value: string) {
-    setCustomText(value)
-    if (value.length > 0) {
-      setSelectedOption(null)
+    if (answerAnchor === null || answerKey === null) return
+    if (value === '') {
+      discard(answerKey)
+      return
     }
+    if (answerEntry === undefined) open(answerKey, { anchor: answerAnchor, quote: '' })
+    edit(answerKey, value)
+    setSelectedOption(null)
   }
 
   // renderPending переключает ответ на feedback при наличии комментариев; открытый редактор строки
@@ -431,6 +460,10 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               {renderHistory(entries)}
             </div>
 
+            {loadedStageId === stageId && (
+              <StaleComments entries={staleComments(allComments, stageId, 'question', questionScope)} source="previous question" />
+            )}
+
             {pending !== null && (
               <div id="dialog-pending" className={`dialog-pending${flash ? ' dialog-flash' : ''}`}>
                 <LineCommentedDocument
@@ -438,6 +471,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
                   text={pending.question ?? ''}
                   specialSections={false}
                   stageId={stageId}
+                  scope={{ kind: 'question', phase: pending.phase ?? '', questionId: pending.id ?? '' }}
                   beforeOpen={releaseStick}
                   bodyClassName="dialog-question line-commented"
                 >
@@ -466,14 +500,10 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
 }
 
 // Собираем ответ из цитат строк и комментариев, отсортированных по номеру строки.
-function buildFeedback(comments: Record<number, string>, question: string): string {
+function buildFeedback(comments: DocumentComment[], question: string): string {
   const lines = question.split('\n')
 
-  return Object.keys(comments)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .map((line) => `> ${lines[line - 1] ?? ''}\nLine ${line}: ${comments[line]}`)
-    .join('\n\n')
+  return comments.map(({ line, text }) => `> ${lines[line - 1] ?? ''}\nLine ${line}: ${text}`).join('\n\n')
 }
 
 function renderHistory(entries: DialogEntry[]): ReactNode[] {

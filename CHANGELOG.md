@@ -5,6 +5,21 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-23
 
+### Improvement: keep and send file comments from Files
+
+Draft comments on file lines now stay available while switching files or closing
+Files within a run; leaving a file folds an open editor into a **Draft** card,
+and files with comments show **● N** in the file list. **Comments (N)** lists
+them, and **Send** or **Send all (N)** delivers one message to the Assistant or a reachable agent after source checks.
+Clicking a file line no longer starts a flow-wide review pause; existing external
+review pauses and their notes remain supported. See [Dashboard](docs/dashboard.md#file-comments-docker-mode).
+
+### Fix: retain unfinished plan and question comments
+
+Unsent plan and question text stays available while moving between dashboard
+views during a run. Closing an editor folds nonempty text without discarding it;
+comments on an earlier plan version can be shown, copied or dismissed.
+
 ### Improvement: control adding stages during a run
 
 Set `add_stage.enabled` in global or project config, or override it with

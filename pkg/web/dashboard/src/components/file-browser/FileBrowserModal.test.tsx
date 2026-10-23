@@ -1,34 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { TreeEntry } from '../../api/files-client'
-import type { DraftComment } from './draft-comments'
-import { FileBrowserModal, type NoPauseNotes, type SelectedFile } from './FileBrowserModal'
+import { CommentProvider } from '../comments/CommentProvider'
+import { FileBrowserModal, type SelectedFile } from './FileBrowserModal'
 import { errorResponse, FilesApiMock, jsonResponse } from './test-support'
-
-function makeDraft(overrides: Partial<DraftComment> = {}): DraftComment {
-  return {
-    root: 'project',
-    path: 'a.go',
-    displayPath: 'afm/a.go',
-    reference: '[AFM file: "/w/afm/a.go"]',
-    line: 1,
-    origLineText: 'package a',
-    text: 'fix this',
-    ...overrides,
-  }
-}
-
-function makeNoPauseNotes(overrides: Partial<NoPauseNotes> = {}): NoPauseNotes {
-  return {
-    active: false,
-    start: vi.fn(),
-    comments: [],
-    save: vi.fn(),
-    clear: vi.fn(),
-    send: vi.fn(),
-    ...overrides,
-  }
-}
 
 function renderModal(overrides: Partial<React.ComponentProps<typeof FileBrowserModal>> = {}) {
   const props: React.ComponentProps<typeof FileBrowserModal> = {
@@ -40,7 +15,11 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof FileBrowserM
     onSubmit: vi.fn(),
     ...overrides,
   }
-  return render(<FileBrowserModal {...props} />)
+  return render(
+    <CommentProvider runId="r1">
+      <FileBrowserModal {...props} />
+    </CommentProvider>,
+  )
 }
 
 describe('FileBrowserModal', () => {
@@ -474,7 +453,7 @@ describe('FileBrowserModal', () => {
       api.install()
 
       const onToggleSelect = vi.fn()
-      render(<FileBrowserModal mode="browse" selection={[]} onToggleSelect={onToggleSelect} onRemoveSelect={vi.fn()} onClose={vi.fn()} onSubmit={vi.fn()} />)
+      renderModal({ onToggleSelect })
 
       // roots + tree load
       await act(async () => { await vi.runOnlyPendingTimersAsync() })
@@ -554,7 +533,7 @@ describe('FileBrowserModal', () => {
       api.setSearch('project', 'work', [{ name: 'workspace.go', path: 'pkg/workspace.go', kind: 'file', language: 'go' }])
       api.install()
 
-      render(<FileBrowserModal mode="browse" selection={[]} onToggleSelect={vi.fn()} onRemoveSelect={vi.fn()} onClose={vi.fn()} onSubmit={vi.fn()} />)
+      renderModal()
       await act(async () => { await vi.runOnlyPendingTimersAsync() })
       fireEvent.click(screen.getByRole('button', { name: 'afm' }))
       await act(async () => { await vi.runOnlyPendingTimersAsync() })
@@ -692,92 +671,8 @@ describe('FileBrowserModal', () => {
     }
   })
 
-  describe('no-pause notes bar', () => {
-    test('noPauseNotes undefined: no drafts bar (host-run / assistant disabled regression)', async () => {
-      const api = new FilesApiMock()
-      api.setRoots([{ id: 'project', label: 'afm' }])
-      api.install()
-
-      const { container } = renderModal()
-      await screen.findByRole('button', { name: 'afm' })
-
-      expect(container.querySelector('.file-browser-notes-bar')).toBeNull()
-    })
-
-    test('noPauseNotes with an empty comments list: still no bar', async () => {
-      const api = new FilesApiMock()
-      api.setRoots([{ id: 'project', label: 'afm' }])
-      api.install()
-
-      const { container } = renderModal({ noPauseNotes: makeNoPauseNotes({ comments: [] }) })
-      await screen.findByRole('button', { name: 'afm' })
-
-      expect(container.querySelector('.file-browser-notes-bar')).toBeNull()
-    })
-
-    test('bar text pluralizes comments and files independently', async () => {
-      const api = new FilesApiMock()
-      api.setRoots([{ id: 'project', label: 'afm' }])
-      api.install()
-
-      // 1 comment, 1 file.
-      const { container, rerender } = renderModal({
-        noPauseNotes: makeNoPauseNotes({ comments: [makeDraft({ displayPath: 'afm/a.go', line: 1 })] }),
-      })
-      await screen.findByRole('button', { name: 'afm' })
-      expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('1 comment in 1 file')
-
-      // 2 comments, 2 different files.
-      rerender(
-        <FileBrowserModal
-          mode="browse"
-          selection={[]}
-          onToggleSelect={vi.fn()}
-          onRemoveSelect={vi.fn()}
-          onClose={vi.fn()}
-          onSubmit={vi.fn()}
-          noPauseNotes={makeNoPauseNotes({
-            comments: [makeDraft({ displayPath: 'afm/a.go', line: 1 }), makeDraft({ displayPath: 'afm/b.go', line: 1 })],
-          })}
-        />,
-      )
-      expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 2 files')
-
-      // 2 comments, same file (different lines).
-      rerender(
-        <FileBrowserModal
-          mode="browse"
-          selection={[]}
-          onToggleSelect={vi.fn()}
-          onRemoveSelect={vi.fn()}
-          onClose={vi.fn()}
-          onSubmit={vi.fn()}
-          noPauseNotes={makeNoPauseNotes({
-            comments: [makeDraft({ displayPath: 'afm/a.go', line: 1 }), makeDraft({ displayPath: 'afm/a.go', line: 2 })],
-          })}
-        />,
-      )
-      expect(container.querySelector('.file-browser-notes-bar')?.textContent).toContain('2 comments in 1 file')
-    })
-
-    test('Send to assistant calls send; Clear calls clear', async () => {
-      const api = new FilesApiMock()
-      api.setRoots([{ id: 'project', label: 'afm' }])
-      api.install()
-      const send = vi.fn()
-      const clear = vi.fn()
-
-      renderModal({ noPauseNotes: makeNoPauseNotes({ comments: [makeDraft()], send, clear }) })
-      await screen.findByRole('button', { name: 'afm' })
-
-      fireEvent.click(screen.getByRole('button', { name: 'Send to assistant' }))
-      expect(send).toHaveBeenCalledTimes(1)
-
-      fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
-      expect(clear).toHaveBeenCalledTimes(1)
-    })
-
-    test('FileViewer only receives drafts for the currently active file', async () => {
+  describe('file comments', () => {
+    function installTwoFiles(): FilesApiMock {
       const api = new FilesApiMock()
       api.setRoots([{ id: 'project', label: 'afm' }])
       api.setTree('project', '.', [
@@ -785,23 +680,224 @@ describe('FileBrowserModal', () => {
         { name: 'b.go', path: 'b.go', kind: 'file', language: 'go' },
       ])
       api.setContent('project', 'a.go', { language: 'go', content: 'line one\nline two' })
-      api.setContent('project', 'b.go', { language: 'go', content: 'line one\nline two' })
+      api.setContent('project', 'b.go', { language: 'go', content: 'other one\nother two' })
       api.install()
+      return api
+    }
 
-      renderModal({
-        noPauseNotes: makeNoPauseNotes({
-          active: true,
-          comments: [makeDraft({ root: 'project', path: 'a.go', displayPath: 'afm/a.go', line: 1 })],
-        }),
-      })
+    test('a line click creates a local comment and calls neither pause nor review-notes endpoints', async () => {
+      const api = installTwoFiles()
+      renderModal()
 
       fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
       fireEvent.click(await screen.findByText('a.go'))
-      await waitFor(() => expect(screen.getByTestId('file-line-1').className).toContain('has-comment'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 2' }))
+      fireEvent.change(screen.getByPlaceholderText('Comment on line 2...'), { target: { value: 'local note' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
+      expect(screen.getByText('local note')).toBeInTheDocument()
+      const urls = (api.fetchMock?.mock.calls ?? []).map(([input]) => String(input))
+      expect(urls.filter((url) => !url.startsWith('/api/files/'))).toEqual([])
+    })
+
+    test('leaving a file (DIFF, another file) folds its open editor into a Draft card with the unsaved text', async () => {
+      installTwoFiles()
+      renderModal()
+
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      fireEvent.click(await screen.findByText('a.go'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1' }))
+      fireEvent.change(screen.getByPlaceholderText('Comment on line 1...'), { target: { value: 'typed on a' } })
+
+      fireEvent.click(screen.getByRole('tab', { name: 'DIFF' }))
+      fireEvent.click(screen.getByRole('tab', { name: 'FILE' }))
+      expect(await screen.findByText('typed on a')).toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Comment on line 1...')).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit comment on line 1' }))
+      fireEvent.change(screen.getByPlaceholderText('Comment on line 1...'), { target: { value: 'typed on a, more' } })
       fireEvent.click(screen.getByText('b.go'))
-      await waitFor(() => expect(screen.getByTestId('file-line-1')).toBeInTheDocument())
-      expect(screen.getByTestId('file-line-1').className).not.toContain('has-comment')
+      await screen.findByText('other one')
+
+      fireEvent.click(screen.getByText('a.go'))
+      expect(await screen.findByText('typed on a, more')).toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Comment on line 1...')).toBeNull()
+      expect(screen.getByText('Draft')).toBeInTheDocument()
+    })
+
+    test('the tree marks a file with its comment count; an empty open editor does not count', async () => {
+      installTwoFiles()
+      renderModal()
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await commentOn('a.go', 1, 'one')
+      await commentOn('a.go', 2, 'two')
+      fireEvent.click(screen.getByText('b.go'))
+      await screen.findByText('other one')
+      fireEvent.click(screen.getByRole('button', { name: 'Comment on line 1' }))
+
+      const rowOf = (name: string) => screen.getByText(name).closest('[role="treeitem"]') as HTMLElement
+      expect(within(rowOf('a.go')).getByLabelText('2 comments')).toHaveTextContent('● 2')
+      expect(within(rowOf('b.go')).queryByText(/●/)).toBeNull()
+    })
+
+    test('Escape folds the comment editor while Files stays open', async () => {
+      installTwoFiles()
+      const onClose = vi.fn()
+      renderModal({ onClose })
+
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      fireEvent.click(await screen.findByText('a.go'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1' }))
+      const editor = screen.getByPlaceholderText('Comment on line 1...')
+      fireEvent.change(editor, { target: { value: 'folded' } })
+
+      fireEvent.keyDown(editor, { key: 'Escape' })
+
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByText('folded')).toBeInTheDocument()
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    async function commentOn(file: string, line: number, text: string): Promise<void> {
+      fireEvent.click(await screen.findByText(file))
+      fireEvent.click(await screen.findByRole('button', { name: `Comment on line ${line}` }))
+      fireEvent.change(screen.getByPlaceholderText(`Comment on line ${line}...`), { target: { value: text } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    }
+
+    test('the Comments switch lists saved comments and a row opens its file and scrolls to the line', async () => {
+      installTwoFiles()
+      const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+      const { container } = renderModal()
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await commentOn('a.go', 2, 'note on a')
+      await commentOn('b.go', 1, 'note on b')
+      await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('other one'))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comments (2)' }))
+      expect(screen.queryByText('Search in afm…')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: /note on a/ }))
+
+      await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('line one'))
+      await waitFor(() => expect(scrollIntoView.mock.contexts.at(-1)).toHaveProperty('dataset.line', '2'))
+      fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+      expect(screen.getByPlaceholderText('Search in afm…')).toBeInTheDocument()
+    })
+
+    test('a late response of a previously opened file does not replace the file picked from the list', async () => {
+      const api = installTwoFiles()
+      const { container } = renderModal()
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      await commentOn('a.go', 1, 'note on a')
+      await commentOn('b.go', 1, 'note on b')
+
+      const passThrough = api.fetchMock!.getMockImplementation()!
+      let releaseA!: () => void
+      const gateA = new Promise<void>((resolve) => {
+        releaseA = resolve
+      })
+      api.fetchMock!.mockImplementation(async (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : (input as Request).url, 'http://localhost')
+        if (url.pathname === '/api/files/content' && url.searchParams.get('path') === 'a.go') await gateA
+        return passThrough(input, init)
+      })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comments (2)' }))
+      fireEvent.click(screen.getByRole('button', { name: /note on a/ }))
+      fireEvent.click(screen.getByRole('button', { name: /note on b/ }))
+      await waitFor(() => expect(container.querySelector('code')?.textContent).toBe('other one'))
+
+      releaseA()
+      await act(async () => {
+        await gateA
+      })
+      expect(container.querySelector('code')?.textContent).toBe('other one')
+    })
+
+    test('has no Without-pause drafts bar', async () => {
+      installTwoFiles()
+      const { container } = renderModal()
+      await screen.findByRole('button', { name: 'afm' })
+
+      expect(container.querySelector('.file-browser-notes-bar')).toBeNull()
+    })
+  })
+
+  describe('narrow viewport comments', () => {
+    let prevMM: typeof window.matchMedia
+    beforeEach(() => {
+      prevMM = window.matchMedia
+      window.matchMedia = ((query: string) => ({
+        matches: true, media: query, onchange: null,
+        addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia
+    })
+    afterEach(() => {
+      window.matchMedia = prevMM
+    })
+
+    function installOne(): void {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.setTree('project', '.', [{ name: 'a.go', path: 'a.go', kind: 'file', language: 'go' }])
+      api.setContent('project', 'a.go', { language: 'go', content: 'line one\nline two' })
+      api.install()
+    }
+
+    async function saveCommentOnA(): Promise<void> {
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle file tree' }))
+      fireEvent.click(await screen.findByText('a.go'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1' }))
+      fireEvent.change(screen.getByPlaceholderText('Comment on line 1...'), { target: { value: 'mobile note' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    }
+
+    test('header Comments (N) opens the drawer on the list; picking a row closes it and returns focus to that button', async () => {
+      installOne()
+      const { container } = renderModal({ attentionShortcut: { label: 'Question waiting', onActivate: vi.fn() } })
+      await screen.findByRole('button', { name: 'afm' })
+      await saveCommentOnA()
+
+      const comments = screen.getByRole('button', { name: 'Comments (1)' })
+      expect(screen.getByRole('button', { name: 'Close' })).toBeVisible()
+      expect(screen.getByRole('button', { name: /question waiting/i })).toBeVisible()
+
+      fireEvent.click(comments)
+      const body = container.querySelector('.file-browser-body') as HTMLElement
+      expect(body.classList.contains('tree-open')).toBe(true)
+      const row = screen.getByRole('button', { name: /mobile note/ })
+      expect(row.closest('.file-browser-roots')?.contains(document.activeElement)).toBe(true)
+
+      fireEvent.click(row)
+      expect(body.classList.contains('tree-open')).toBe(false)
+      expect(document.activeElement).toBe(comments)
+    })
+
+    test('the tree toggle is not expanded while the drawer shows Comments', async () => {
+      installOne()
+      renderModal()
+      await screen.findByRole('button', { name: 'afm' })
+      await saveCommentOnA()
+      const treeToggle = screen.getByRole('button', { name: 'Toggle file tree' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comments (1)' }))
+      expect(treeToggle).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.getByRole('button', { name: 'Comments (1)' })).toHaveAttribute('aria-expanded', 'true')
+
+      fireEvent.click(treeToggle)
+      expect(treeToggle).toHaveAttribute('aria-expanded', 'true')
+    })
+
+    test('the tree toggle after Comments shows the file tree again', async () => {
+      installOne()
+      renderModal()
+      await screen.findByRole('button', { name: 'afm' })
+      await saveCommentOnA()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Comments (1)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle file tree' }))
+      expect(screen.getByPlaceholderText('Search in afm…')).toBeInTheDocument()
     })
   })
 })

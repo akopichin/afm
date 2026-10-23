@@ -260,10 +260,10 @@ project, or run a quick command-style exchange *without* touching the run.
   native resume. The assembled prompt has a hard byte budget — exceeding it is a
   `context_limit` error (your history and draft are preserved), never a silent drop of
   older turns.
-- **File comments can be attached from the Docker file browser.** Choose
-  **Without pause** while commenting on a file, then **Send to assistant** to open
-  this chat with the comments attached. Write a message and send it to deliver both
-  the comments and your request. See [File comments without pausing](#file-comments-without-pausing-docker-mode).
+- **File comments can be sent to the Assistant from the Docker file browser.**
+  Use **Send** on one comment or **Send all (N)**, select Assistant, and optionally
+  add a message. The accepted request appears in Assistant history. See
+  [File comments](#file-comments-docker-mode).
 - **Mention a helper role.** When collaboration is available, type `@` in the
   message field to choose a configured role. A mention is recorded with the
   message; it does not attach a helper by itself. See
@@ -347,6 +347,14 @@ When a stage is in `awaiting_approval`:
 2. Write a remark — the target stays highlighted and shows a saved-comment indicator.
 3. Click "Send revision (N)" — all comments are sent to the agent, each tagged with
    its source line (`Line N: …`).
+
+The editor saves with **Add** (or **Update** for an existing comment) or
+**Cmd/Ctrl+Enter**. **Escape** or ✕ folds it without discarding nonempty text;
+unsaved edits show **Draft** when folded. Plan and question
+comments survive switching tabs or stages within the run, but not a page reload or
+new run. **Approve** stays disabled while the plan has unsent comments. Comments on
+an older plan version can be shown, copied or dismissed; they are not sent with a
+new version. Question answers and free-text drafts are likewise retained until sent.
 
 The plan renders as proper markdown (lists, tables, blockquotes and code stay intact),
 and comments anchor to the **sub-element** you clicked — an individual `<li>` or table
@@ -636,48 +644,61 @@ note to a running stage, which restarts an already-running agent). Use "Add note
 (before start)" in the kebab menu of a pending stage; a 📝 indicator marks a stage
 that has one.
 
-## File comments without pausing (Docker mode)
+## File comments (Docker mode)
 
-When the Assistant is enabled, clicking a file line while the flow is running
-offers **Without pause** alongside **Pause** and **Cancel**. Choose it to open the
-line comment editor while the flow keeps running. Save comments on multiple lines
-or files; the bar at the bottom of the file browser shows the draft count. Use
-**Clear** to discard all drafts, or **Send to assistant** to open the Assistant
-with the comments attached above its message field. The handoff clears the file
-browser drafts. Type a message and press **Send** to deliver the comments with your
-request; an attachment alone cannot be sent. You can remove the attachment with
-its ✕ button before sending.
+In **Files**, click a line number in the **FILE** view to write a local comment.
+**Save** or **Cmd/Ctrl+Enter** saves and folds it; **Escape** or ✕ folds nonempty
+text without saving it, and the card then shows **Draft**. **Delete** removes a
+comment. Clicking a line does not pause the flow, including when an external
+review pause is already active. These comments are separate from review notes.
 
-These drafts live only in the browser: closing and reopening the file browser
-keeps them for the same run, but reloading the page or switching runs clears them.
-They are not saved as review notes or delivered to a flow stage. **Without pause**
-is hidden when the Assistant is disabled.
+Use **Files / Comments (N)** to see the full text, file and line for every local
+file comment and open its source. On narrow screens, **Comments (N)** opens this
+list in a drawer. The file preview also keeps comments under
+their lines, and files with comments show **● N** in the file tree, search results
+and changed-files list. Comments survive switching files and **FILE / DIFF** tabs.
+Leaving a file — another file, **DIFF** or closing Files — folds its open editor
+into a card; unsaved text shows **Draft**. Closing and
+reopening Files also restores the selected file, tab and scroll position in this run.
+Reloading the page or starting a new run clears the local comments.
+
+Use **Send** on a comment card or **Send all (N)** at the bottom of Files. The send
+dialog previews the comments and lets you add an optional message and choose
+**one** recipient. Available choices are the Assistant and reachable stage,
+helper or run agents; when Assistant is the only choice it is selected
+automatically. **Send all** sends one message to the chosen agent, regardless of
+recipients selected on individual cards. The Assistant route works without Agent
+Mesh. Sending does not pause or revise a stage.
+
+Before sending, Files checks the source again. If a line changed or disappeared,
+confirm the old quote or choose its current line; if a file is gone, confirm
+sending without a current quote or delete its comment. A read error blocks Send
+while keeping the text. The dialog also blocks packets over the 16 KiB Mesh or
+64 KiB Assistant message limit. After the server accepts a request, only the
+submitted versions are removed and **Accepted: N comments → Agent (not read yet)**
+appears; this means acceptance, not that the agent has read or answered. A failed
+request keeps the comments. **Retry** resends the same packet, while edits made
+during the request remain as new drafts.
 
 ## Review notes — pause the whole flow and comment on files (Docker mode)
 
-Where a Feed note redirects **one running stage** with free-text,
-**review notes** let you pause the **entire flow**, walk the project source in the
-[file browser](docker.md#project-file-browser), attach comments **anchored to
-specific file lines**, and then hand the whole batch to a stage of your choice. It's
-Docker-only.
+Where a Feed note redirects **one running stage** with free-text, the
+flow-wide review pause holds the **entire flow** and can deliver stored,
+line-anchored review notes to a stage. This path requires the Docker file browser.
 
-1. Open the file browser and click a line of any file. If the flow is still running,
-   a small confirm appears — **"pause the flow to write notes?"**. Confirming puts the
-   flow into **review mode**: a banner appears at the top, every currently-active
-   agent stage is gracefully paused (SIGINT), and new stages are held from starting.
-   Scripts and stages that already finished are left alone.
-2. Write a comment on the line — it's saved immediately and the line gets a marker
-   dot. Repeat across as many lines and files as you like; the banner keeps a running
-   note count. Each note is anchored to `(file, line)` together with the file's
-   content hash, so if the file changes before the notes are delivered the agent is
-   told the content drifted.
-3. Click **Send notes** to open the review modal: it lists every note grouped by file,
-   lets you edit/delete individual ones, and asks which **target stage** should receive
-   them. Then:
-   - **Inject** — the notes are rendered into that stage's `feedback.md` (exactly once,
-     crash-safe) and the flow resumes: the target stage restarts with the notes in its
-     context, every other paused stage continues where it left off.
-   - **Cancel** — discards the notes and resumes the flow unchanged.
+The dashboard no longer starts a flow-wide review pause by clicking a file line.
+An existing review pause started through the flow API remains supported: it shows
+a banner, holds new stages, and gracefully pauses active agent stages. Review
+notes stored through that API remain distinct from the local file comments above.
+They are labelled **Review note · sent with Continue** in the dashboard. The
+**Review notes** modal can edit and delete those stored notes.
+
+When a review pause and its notes already exist, click **Send notes** to open the
+modal. It groups notes by file, lets you edit or delete them, and asks which
+**target stage** should receive them. **Inject** renders the notes into that
+stage's `feedback.md` (exactly once, crash-safe) and resumes the flow: the target
+stage restarts with the notes in its context, and other paused stages continue
+where they left off. **Cancel** discards the notes and resumes without them.
 
 The pause/notes/resume cycle is durable: it survives an `afm` restart mid-review, a
 resume interrupted by a crash finishes on the next start, and while a review round is

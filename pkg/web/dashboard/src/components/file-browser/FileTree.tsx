@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { getTree, type TreeEntry } from '../../api/files-client'
+import { FileCommentCount, noComments } from './FileCommentCount'
 
 type FileTreeProps = {
   root: string
@@ -12,6 +13,8 @@ type FileTreeProps = {
   // Показывать чекбоксы выбора файлов. В режиме просмотра (открыт из шапки) их быть НЕ должно — только
   // просмотр; в режиме attach (pickFiles) — нужны.
   showCheckboxes?: boolean
+  // Число комментариев к файлу по пути — маркер «● N» в строке.
+  commentCount?: (path: string) => number
 }
 
 // Состояние одной раскрытой директории: то, что реально пришло с бэкенда — страницы конкатенируются по
@@ -25,7 +28,7 @@ type DirState = {
 
 // Ленивое дерево файлов проекта: верхний уровень грузится сразу при монтировании/смене root; поддиректории
 // — только по клику на раскрытие, и только один раз.
-export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true }: FileTreeProps): ReactElement {
+export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true, commentCount = noComments }: FileTreeProps): ReactElement {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['.']))
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
@@ -185,6 +188,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
             {entry.kind === 'directory' ? '📁' : entry.kind === 'symlink' ? '🔗' : '📄'}
           </span>
           <span className="file-tree-name">{entry.name}</span>
+          {entry.kind === 'file' && <FileCommentCount count={commentCount(entry.path)} />}
         </div>
 
         {entry.kind === 'directory' && isExpanded && (

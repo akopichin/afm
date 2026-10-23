@@ -18,6 +18,7 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
     unseenResult: false,
     error: null,
     send: vi.fn().mockResolvedValue(undefined),
+    sendExact: vi.fn().mockResolvedValue(undefined),
     interrupt: vi.fn(),
     quote: null,
     openWith: vi.fn(),
