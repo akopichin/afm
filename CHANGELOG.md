@@ -16,6 +16,15 @@ Fixed slots skip busy, paused and unread recipients and resume without a
 catch-up burst. Schedules and delivered ticks survive restart, and list results
 explain why a loop ended. See [Repeating prompts](docs/loops.md).
 
+### Improvement: escalate repeated mesh development failures
+
+The bundled mesh development skill now requires independent diagnosis after
+repeated unsuccessful repairs, explicit file ownership handoffs for specialist
+fixes, and evidence before dismissing flaky tests as environmental. It also
+reuses applicable check results while preserving required final gates. These are
+agent instructions; automatic engine monitoring is unchanged. See
+[Mesh development escalation](docs/collaboration.md#mesh-development-escalation).
+
 ## 2026-10-23
 
 ### Improvement: keep and send file comments from Files

@@ -62,6 +62,9 @@ helpers are available for bounded review and analysis (see below).
    Record the baseline (`git rev-parse HEAD` plus the dirty state) before
    dispatching — acceptance is read against it. Corrections are linked
    follow-up requests to the same writer, not replays of the original.
+   Include the diagnosis and escalation checkpoints below in writer requests:
+   writers may not have loaded this skill. An ownership handoff records a new
+   assignee instead of sending another correction to the original writer.
 3. **Record, then wait.** Record every returned message_id immediately (step 0
    fields). For independent requests whose outcomes belong in one round, register
    ONE `afm agent wait --condition reply_to_all --message-ids <id1,id2,...>`
@@ -91,13 +94,80 @@ helpers are available for bounded review and analysis (see below).
    first; if the test-first step simply did not happen, record the unmet
    requirement — never invent evidence or rewind the shared tree to
    manufacture a red state.
-6. **Integrate.** When the current unit's writers have finished, run the
-   required checks yourself. Attribute a failure BEFORE routing it: it may
-   belong to this task, to another writer's unfinished work, or to the
-   environment — do not send writer A to fix writer B's red phase, and do
-   not expand anyone's ownership just to make an aggregate check green.
-   Small integration fixes are yours; a writer-sized defect goes back to its
-   owning writer as a linked follow-up.
+6. **Integrate.** Reuse successful writer checks for the same relevant code
+   and environment; `HEAD` alone does not identify a dirty shared tree. Run
+   missing checks and checks needed for combined changes. Repeat broad suites
+   after relevant edits, failures or a concrete new concern, not on every
+   wake-up. Preserve every final gate required by the calling flow. Record
+   the command, actual exit code, log location and tested tree state; piping
+   through `tail` must not hide the check's failure.
+   Attribute a failure BEFORE routing it: it may belong to this task, another
+   writer's unfinished work, or the environment — do not send writer A to fix
+   writer B's red phase or expand ownership just to make an aggregate check
+   green. Small integration fixes are yours; a writer-sized defect goes back
+   to its owner, subject to the escalation budget below.
+
+## Diagnosis and escalation
+
+These are agent workflow rules, not an automatic AFM watchdog. Use the calling
+flow's explicit repair budget when it supplies one; otherwise apply these
+checkpoints. Verify failure ceilings and transport retry limits do not override
+the diagnosis checkpoints:
+
+- **Stop repeating unsuccessful repairs.** After two unsuccessful fix-and-check
+  attempts for the same symptom, or a second verify rejection of the same
+  underlying defect, obtain an independent diagnosis before another correction.
+  Count attempts across requests, sessions, resumes and verify rounds in the
+  ledger. Renaming the failing test or narrowing the same race does not reset
+  the count. Expected TDD red, planned stability repetitions and infrastructure
+  failures are not failed repair attempts.
+- **Test a hypothesis.** For each repair, record the symptom, suspected cause,
+  a check that distinguishes it from alternatives, and the observed result.
+  Keep this concise and link logs instead of copying them. Another run of the
+  same check without a new hypothesis is not progress.
+- **Investigate flakes.** A passing rerun does not establish an environmental
+  or pre-existing failure. Require evidence that separates code/test lifecycle
+  errors from resource contention or infrastructure. Do not increase timeouts,
+  weaken assertions or exclude a test merely to get green. Filtered diagnostic
+  runs never replace a required unfiltered gate.
+- **Reason about the whole race.** Before another concurrency fix, state the
+  ownership, commit and completion invariants. A published status may precede
+  deferred cleanup. Reproduce the relevant interleavings with controlled gates
+  or barriers rather than sleeps or repeated runs alone; fix the invariant
+  instead of adding a special case for each review finding.
+- **Get a fresh specialist.** Send a bounded diagnosis request to an independent
+  named architect or reviewer, preferably using a more capable configured model
+  than the stalled executor. Include the task, invariant, owned files/current
+  diff, failing command/logs and attempted hypotheses. A temporary review helper
+  below is another option when available. Resolve concrete findings with a fix
+  or counterevidence; "already solved" or a green suite alone does not answer a
+  reported interleaving.
+- **Transfer the fix when needed.** If diagnosis calls for an architectural
+  correction, or the same defect survives a correction after consultation,
+  assign a bounded fix to a capable named writer/architect with write access.
+  First confirm the previous owner and its file-modifying commands have stopped;
+  record the new owner, file grant (including tests), prior request IDs and
+  acceptance checks in the ledger/board. The previous owner and coordinator
+  leave those files untouched until the handoff finishes. A read-only advisory
+  helper cannot substitute for the new implementation owner. An explicit user
+  instruction to hand off takes effect immediately, without another self-fix.
+- **Bound the rescue.** After the specialist's bounded correction, evaluate its
+  evidence and the required gates. If the defect remains unresolved, report the
+  remaining failure, hypotheses and attempted fixes through the flow's dialog
+  protocol instead of starting another repair loop. A successful handoff does
+  not waive independent review or final checks.
+
+## Unavailable participants and tools
+
+Authentication errors, missing commands and unavailable participants need an
+infrastructure response, not another code correction. Record the actual error,
+check the roster/capabilities and select a reachable replacement with the needed
+access and independence. Reconcile pending work and confirm its writer stopped
+before reassigning files. Do not keep sending to a failed participant or replace
+required independent review with the coordinator's self-review. If no suitable
+replacement is available, report that concrete blocker through the flow's dialog
+protocol. Use temporary helper commands below only when the running AFM binary
+supports them; otherwise use the existing named team.
 
 ## Parallel dispatch
 
@@ -123,7 +193,7 @@ IDs in one `reply_to_all` batch, then read each full committed result with
 summary. Check `<your_helpers>` on resume so an already started helper is not
 spawned again.
 
-The stage's configured profile supplies the helper's command and model. The
+The selected profile's configuration supplies the helper's command and model. The
 helper is advisory and one-shot, under the existing quota and depth limits.
 Use named mesh writers for implementation work with file ownership. A helper's
 read-only prompt is not OS isolation: on the host the Codex adapter runs in a
