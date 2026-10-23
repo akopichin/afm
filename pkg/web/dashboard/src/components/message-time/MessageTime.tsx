@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useMessageTimeZone } from '../../lib/message-time-zone'
+import { formatHostTime, useMessageTimeZone } from '../../lib/message-time-zone'
 
 export type MessageTimeProps = {
   timestamp: string | number
@@ -11,36 +11,12 @@ export type MessageTimeProps = {
   firstEvent?: boolean
 }
 
-function formatHostTime(date: Date, timeZone: string): { clock: string; full: string } {
-  const options = { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' } as const
-  return {
-    clock: new Intl.DateTimeFormat('en-US', options).format(date),
-    full: new Intl.DateTimeFormat('en-US', {
-      ...options,
-      month: 'short', day: 'numeric', year: 'numeric', second: '2-digit',
-    }).format(date),
-  }
-}
-
-// Keep the IANA zone authoritative for historical DST. The server's offset is only a fallback when
-// the host has no IANA name or this browser cannot format that name.
-function displayTime(date: Date, timeZone: string, utcOffsetMinutes: number): { clock: string; full: string } {
-  if (timeZone !== '') {
-    try {
-      return formatHostTime(date, timeZone)
-    } catch (error) {
-      if (!(error instanceof RangeError)) throw error
-    }
-  }
-  return formatHostTime(new Date(date.getTime() + utcOffsetMinutes * 60_000), 'UTC')
-}
-
 export function MessageTime({ timestamp, gap, focusable = false, firstEvent = false }: MessageTimeProps): ReactElement | null {
-  const { timeZone, utcOffsetMinutes } = useMessageTimeZone()
+  const zone = useMessageTimeZone()
   const date = new Date(timestamp)
   if (!Number.isFinite(date.getTime())) return null
 
-  const { clock, full } = displayTime(date, timeZone, utcOffsetMinutes)
+  const { clock, full } = formatHostTime(date, zone)
   const elapsed = firstEvent ? `first event (+${gap})` : `+${gap} after previous`
   const description = `${full} (host time) · ${elapsed}`
 

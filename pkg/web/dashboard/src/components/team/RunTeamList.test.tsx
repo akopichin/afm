@@ -405,4 +405,11 @@ describe('RunTeamList without focusStageId (the Team tab)', () => {
     expect(screen.getByText('task h1 has reached a terminal status')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add run agent' })).toBeInTheDocument()
   })
+
+  test('a stage parked on a usage limit says "Usage limit" with a waiting presence dot', () => {
+    renderList({ stages: [stages[0], { id: 'implement', title: 'Implement feature', status: 'awaiting_quota' }, stages[2]] as typeof stages })
+    const row = screen.getByText('Implement feature').closest('button') as HTMLElement
+    expect(within(row).getByText('Usage limit')).toBeInTheDocument()
+    expect(row.querySelector('.team-presence')).toHaveAttribute('data-presence', 'waiting')
+  })
 })

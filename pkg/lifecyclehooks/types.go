@@ -39,6 +39,11 @@ const (
 	EventStageResumed          EventType = "stage_resumed"
 	EventStageFinished         EventType = "stage_finished"
 	EventStageFailed           EventType = "stage_failed"
+	// EventStageAwaitingQuota — агент упёрся в usage-limit провайдера, стадия ждёт сброса (durable park);
+	// reason содержит момент пробуждения с явной UTC. EventStageQuotaReset — ожидание закончилось, стадия
+	// возвращается к работе.
+	EventStageAwaitingQuota EventType = "stage_awaiting_quota"
+	EventStageQuotaReset    EventType = "stage_quota_reset"
 )
 
 // События script-стадии и script_before/script_after (не-FSM границы).
@@ -71,6 +76,7 @@ func AllEvents() []EventType {
 		EventStageQuestionAsked, EventStageQuestionAnswered,
 		EventStageRetryScheduled, EventStageRetryStarted,
 		EventStagePaused, EventStageResumed, EventStageFinished, EventStageFailed,
+		EventStageAwaitingQuota, EventStageQuotaReset,
 		EventStageScriptStarted, EventStageScriptFinished, EventStageScriptFailed,
 		EventStageScriptBeforeStarted, EventStageScriptBeforeFinished, EventStageScriptBeforeFailed,
 		EventStageScriptAfterStarted, EventStageScriptAfterFinished, EventStageScriptAfterFailed,

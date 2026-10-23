@@ -7,6 +7,7 @@ import (
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -97,3 +98,42 @@ func RunAgentParticipantIDForTest(operationID string) agentcomm.ParticipantID {
 
 // AwaitReleaseForTest is awaitRelease for the external test package's fakes.
 func AwaitReleaseForTest(t testing.TB, release <-chan struct{}) { awaitRelease(t, release) }
+
+// ParkForQuotaForTest вызывает приватный parkForQuota — тест подставляет эпоху, в которой «якобы» стартовал ход,
+// чтобы проверить фенс ExpectEpoch для устаревшего парка.
+func ParkForQuotaForTest(o *Orchestrator, s flow.Stage, phase string, epoch uint64, limit *executor.UsageLimitError) {
+	o.parkForQuota(context.Background(), s, phase, epoch, limit, false, false, func() {})
+}
+
+// WakeFromQuotaForTest вызывает приватный wakeFromQuota для парка с номером parkSeq — тест подставляет seq
+// старого таймера, чтобы проверить фенс ExpectStageSeq.
+func WakeFromQuotaForTest(o *Orchestrator, stageID string, parkSeq uint64) {
+	o.wakeFromQuota(context.Background(), stageID, parkSeq)
+}
+
+// SetFingerprintFnForTest подменяет отпечаток рабочего дерева (review_patience) для внешних тестов.
+func SetFingerprintFnForTest(o *Orchestrator, fn func(dir string) (string, bool)) {
+	o.fingerprintFn = fn
+}
+
+// ParkVerifyForQuotaForTest вызывает приватный parkVerifyForQuota: тест подставляет эпоху, в которой «якобы»
+// стартовал ход автора, чтобы проверить фенс ExpectEpoch для устаревшего verify-парка.
+func ParkVerifyForQuotaForTest(o *Orchestrator, s flow.Stage, epoch uint64, limit *executor.UsageLimitError, verifyID string, step int) {
+	o.parkVerifyForQuota(context.Background(), s, phaseImplementation, epoch, &verifyLimitError{Limit: limit, VerifyID: verifyID, Step: step}, verifyCounters{}, false, func() {})
+}
+
+// VerifyResumeCtxForTest возвращает ctx с приказом пробуждения verify-парка стадии — таким, как его строит
+// wakeFromQuota: тест гоняет retry-цикл напрямую и проверяет, чья это работа.
+func VerifyResumeCtxForTest(ctx context.Context, o *Orchestrator, stageID string) context.Context {
+	st := o.opts.Store.Snapshot().Stages[stageID]
+	return withVerifyResume(ctx, *st.Quota, st.Epoch)
+}
+
+// RunRetryLoopForTest запускает retry-цикл стадии напрямую — без раннера, lease и спавна.
+func RunRetryLoopForTest(ctx context.Context, o *Orchestrator, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
+	o.runRetryLoop(ctx, s, phase, false, agentFn, completionCheck, onUserInterrupted)
+}
+
+// SetLifecycleHooksForTest подставляет lifecycle-dispatcher до Run (внешние тесты собирают оркестратор через Options
+// без Hooks).
+func SetLifecycleHooksForTest(o *Orchestrator, d *lifecyclehooks.Dispatcher) { o.hooks = d }

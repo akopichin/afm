@@ -35,6 +35,7 @@
       "items": { "$ref": "#/definitions/lifecycleHook" }
     },
     "verify": { "$ref": "#/definitions/verify" },
+    "usage_limit": { "$ref": "#/definitions/usageLimit" },
     "browser": { "$ref": "#/definitions/browser" },
     "side_agent": { "$ref": "#/definitions/sideAgent" },
     "worktrees": { "$ref": "#/definitions/worktrees" },
@@ -156,6 +157,21 @@
         "fresh_correction": {
           "type": "boolean",
           "description": "Give the author a FRESH session (no --resume) when AI-verify returns needs_changes, reconstructing the lost context from the action log, the prior user Q&A and verify/feedback.md. Default true; false keeps the pre-existing resume-the-same-session behavior. A per-stage override lives inside the stage's verify block (container form)."
+        }
+      }
+    },
+    "usageLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How a stage waits out a provider usage limit (subscription window or quota): it parks in awaiting_quota instead of failing, without spending retries.",
+      "properties": {
+        "resume_margin": { "$ref": "#/definitions/duration", "description": "Extra time after the reported reset before the stage wakes. Must be positive. Default 60s." },
+        "probe_interval": { "$ref": "#/definitions/duration", "description": "How often to re-check the limit when the reset time is unknown. Must be positive. Default 15m." },
+        "max_wait": { "$ref": "#/definitions/duration", "description": "A reset later than this is not waited for: the stage is paused with a reason. Must be positive. Default 12h." },
+        "max_waits": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many consecutive limit refusals without progress are waited out before the stage is paused. Default 4."
         }
       }
     },

@@ -82,8 +82,8 @@ func TestAllEventsCatalog(t *testing.T) {
 		}
 		got[ev] = true
 	}
-	if len(got) != 28 {
-		t.Errorf("catalog size: got %d want 28 (%v)", len(got), AllEvents())
+	if len(got) != 30 {
+		t.Errorf("catalog size: got %d want 30 (%v)", len(got), AllEvents())
 	}
 	for _, ev := range AllEvents() {
 		if ev == "" {
@@ -189,4 +189,28 @@ func TestBuildPayload_RepeatJSON(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Usage-limit wait: stage events stage_awaiting_quota / stage_quota_reset are public, stage-scoped catalog entries
+// (a stage hook may subscribe to them; `events: all` includes them).
+func TestAllEventsCatalog_IncludesQuotaEvents(t *testing.T) {
+	want := map[EventType]string{
+		EventStageAwaitingQuota: "stage_awaiting_quota",
+		EventStageQuotaReset:    "stage_quota_reset",
+	}
+	in := map[EventType]bool{}
+	for _, ev := range AllEvents() {
+		in[ev] = true
+	}
+	for ev, name := range want {
+		if string(ev) != name {
+			t.Errorf("event name = %q, want %q", ev, name)
+		}
+		if !in[ev] {
+			t.Errorf("%s missing from the catalog (events: all would skip it)", name)
+		}
+		if IsFlowEvent(ev) {
+			t.Errorf("%s must be a stage event", name)
+		}
+	}
 }

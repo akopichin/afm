@@ -127,4 +127,13 @@ describe('regression: manually clicking back onto a stage after detouring throug
     rerender({ stages: [stage('a', 'done'), stage('b', 'running')] })
     expect(result.current[0]).toEqual({ kind: 'stage', stageId: 'a' })
   })
+
+  it('awaiting_quota считается активной стадией: автовыбор и автопереход идут на неё', () => {
+    const { result, rerender } = renderHook(({ stages }: { stages: Stage[] }) => useSelectedStage(stages, null), {
+      initialProps: { stages: [stage('a', 'running'), stage('b', 'pending')] },
+    })
+    expect(result.current[0]).toEqual({ kind: 'stage', stageId: 'a' })
+    rerender({ stages: [stage('a', 'done'), stage('b', 'awaiting_quota')] })
+    expect(result.current[0]).toEqual({ kind: 'stage', stageId: 'b' })
+  })
 })

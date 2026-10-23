@@ -809,6 +809,61 @@ func TestHandlePause_AwaitingPeer(t *testing.T) {
 	}
 }
 
+// A stage waiting for a provider usage limit (awaiting_quota) can be paused; Continue is only for paused.
+func TestHandlePause_AwaitingQuota(t *testing.T) {
+	var pausedID string
+	srv, _ := setupTestServer(t)
+	for _, tr := range []state.Transition{
+		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
+		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{Provider: "claude", Target: "implementation"}},
+	} {
+		if err := srv.store.Apply(&tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.actions = fakeStageActions{pause: func(ctx context.Context, id string) error { pausedID = id; return nil }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/pause", nil)
+	w := httptest.NewRecorder()
+	srv.handlePause(w, req)
+
+	if w.Code != http.StatusOK || pausedID != testStageID {
+		t.Fatalf("pause of awaiting_quota: status %d, paused %q; want 200 and the stage paused", w.Code, pausedID)
+	}
+}
+
+func TestHandleContinue_AwaitingQuotaNeedsPauseFirst(t *testing.T) {
+	continued := false
+	srv, _ := setupTestServer(t)
+	for _, tr := range []state.Transition{
+		{StageID: testStageID, From: state.StatusAwaitingApproval, To: state.StatusRunning, Event: "test_setup"},
+		{StageID: testStageID, From: state.StatusRunning, To: state.StatusAwaitingQuota, Event: "await_quota", Quota: &state.QuotaWait{Provider: "claude", Target: "implementation"}},
+	} {
+		if err := srv.store.Apply(&tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.actions = fakeStageActions{continue_: func(context.Context, string) error { continued = true; return nil }}
+
+	req := httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil)
+	w := httptest.NewRecorder()
+	srv.handleContinue(w, req)
+
+	if w.Code == http.StatusOK || continued {
+		t.Fatalf("direct Continue of awaiting_quota: status %d, continued=%v; want it refused (Pause first)", w.Code, continued)
+	}
+
+	// После Pause стадия paused (PausedFrom=awaiting_quota): Continue принимается — это ручная проба.
+	if err := srv.store.Apply(&state.Transition{StageID: testStageID, From: state.StatusAwaitingQuota, To: state.StatusPaused, Event: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	srv.handleContinue(w, httptest.NewRequest("POST", "/api/stages/"+testStageID+"/continue", nil))
+	if w.Code != http.StatusOK || !continued {
+		t.Fatalf("Continue of a quota pause: status %d, continued=%v; want 200", w.Code, continued)
+	}
+}
+
 func TestHandlePause_WrongStatus(t *testing.T) {
 	srv, _ := setupTestServer(t) // seeded at awaiting_approval by setupTestServer itself
 	srv.actions = fakeStageActions{}

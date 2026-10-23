@@ -28,6 +28,10 @@ const (
 	// детерминированный сбой (сломанный wrapper, отсутствующий jq) жёг бы полный бюджет наравне с настоящим
 	// транспортным сбоем. Добавлена в конец const-блока, чтобы не сдвинуть значения существующих классов.
 	ClassRetryableUnknown
+	// ClassUsageLimit — аккаунт провайдера исчерпал лимит использования (типизированный
+	// *executor.UsageLimitError). Это не транзиентный сбой: ретрай сразу бесполезен, нужно ждать сброса.
+	// Добавлена в конец const-блока, чтобы не сдвинуть значения существующих классов.
+	ClassUsageLimit
 )
 
 // Retryable error pattern substrings used by Classify and tests.
@@ -143,6 +147,13 @@ func Classify(err error) Classification {
 	var store *StorageError
 	if errors.As(err, &store) {
 		return ClassStorageFatal
+	}
+	// Типизированный usage-limit идёт ДО текстовых правил: узкое распознавание сделал executor, а широкие
+	// подстроки ("rate limit", "limit") не должны ни пропустить его как транспортный сбой, ни принять за лимит
+	// обычный 429/529.
+	var limit *executor.UsageLimitError
+	if errors.As(err, &limit) {
+		return ClassUsageLimit
 	}
 	// VerifyExecError — типизированная проверка ДО скана по подстрокам ниже: свободный текст Reason не должен
 	// пройти как транспортная ретраебельная ошибка (даже если Reason упоминает "rate limit" — тип побеждает).

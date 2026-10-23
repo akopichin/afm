@@ -211,6 +211,11 @@ Choose when it runs:
 Attached helpers appear as child rows in the stage rail. Select one to see its
 status, verdict, findings, delegation breadcrumb, and, for watchers, pass count.
 The task view offers **Pause**, **Continue**, and **Cancel** while applicable.
+A helper that hits a provider usage limit remains queued with its wait time and
+reason shown in the task view. It resumes after the wait; if the limit cannot be
+waited out, it is paused and Continue makes one immediate attempt. The wait
+survives a run restart. See [Usage limits](config-reference.md#usage-limits).
+
 A paused task with work waiting — a message it has not read yet or a turn it was
 in — keeps the run open until you continue or cancel it.
 If a required helper cannot pass, **Waive…** lets a human unblock the stage by

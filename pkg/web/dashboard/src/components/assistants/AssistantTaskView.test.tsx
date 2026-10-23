@@ -2,8 +2,11 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-li
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { AssistantTaskView, useTaskResult } from './AssistantTaskView'
 import type { AssistantTask } from '../../types/assistant-task'
+import { parseStageQuota } from '../../types/stage'
+import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
 import {
   cancelAssistantTask,
+  continueAssistantTask,
   getAssistantTaskEvents,
   getAssistantTaskRaw,
   pauseAssistantTask,
@@ -25,6 +28,7 @@ vi.mock('../../api/run-client', async () => {
 const mockGetEvents = getAssistantTaskEvents as unknown as ReturnType<typeof vi.fn>
 const mockGetRaw = getAssistantTaskRaw as unknown as ReturnType<typeof vi.fn>
 const mockPause = pauseAssistantTask as unknown as ReturnType<typeof vi.fn>
+const mockContinue = continueAssistantTask as unknown as ReturnType<typeof vi.fn>
 const mockCancel = cancelAssistantTask as unknown as ReturnType<typeof vi.fn>
 const mockWaive = waiveAssistantTask as unknown as ReturnType<typeof vi.fn>
 
@@ -48,6 +52,7 @@ describe('AssistantTaskView', () => {
     vi.useRealTimers() // some sibling tests opt into fake timers; make sure waitFor here uses real ones.
     mockPause.mockImplementation(() => Promise.resolve())
     mockCancel.mockImplementation(() => Promise.resolve())
+    mockContinue.mockImplementation(() => Promise.resolve())
     mockWaive.mockImplementation(() => Promise.resolve())
     mockGetRaw.mockClear()
     mockGetRaw.mockImplementation(() => Promise.resolve(''))
@@ -280,5 +285,50 @@ describe('AssistantTaskView', () => {
     expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
     // Terminal + waived + advisory-less → the action bar renders nothing at all.
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+  })
+
+  // Helper, припаркованный на неожидаемом лимите: статус queued + ручной hold на сервере, until пуст. Сам он не
+  // проснётся — счётчика нет, а человеку нужен Continue (Pause бессмысленен).
+  describe('helper parked by an unwaitable usage limit', () => {
+    const heldQuota = parseStageQuota({ provider: 'claude', window: 'five_hour', source: 'structured', reset_at: '2026-10-24T22:00:00Z', pause_reason: 'exceeds_max_wait' })
+    const heldTask = () => makeTask({ status: 'queued', quota: heldQuota })
+
+    test('offers Continue (wired to continueAssistantTask), no Pause', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+      render(<AssistantTaskView task={heldTask()} />)
+      expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+      await waitFor(() => expect(mockContinue).toHaveBeenCalledWith('t1'))
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    })
+
+    test('shows the reason instead of a countdown or "Resumes at"', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+      const { container } = render(
+        <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><AssistantTaskView task={heldTask()} /></MessageTimeZoneProvider>,
+      )
+      expect(container.querySelector('.quota-countdown')).toBeNull()
+      expect(container.textContent).not.toContain('Resumes')
+      expect(container.querySelector('.quota-wait')).toHaveTextContent(/later than the maximum wait, so the task was paused/)
+    })
+
+    test('no_reset and max_waits also offer Continue', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+      for (const pauseReason of ['no_reset', 'max_waits']) {
+        const { unmount } = render(<AssistantTaskView task={makeTask({ status: 'queued', quota: parseStageQuota({ provider: 'codex', source: 'text', pause_reason: pauseReason }) })} />)
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
+        unmount()
+      }
+    })
+  })
+
+  test('a helper that simply waits for a limit (until set, no pause_reason) keeps countdown and Pause, no Continue', () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
+    const quota = parseStageQuota({ provider: 'claude', source: 'structured', until: '2099-01-01T00:00:00Z', reset_at: '2099-01-01T00:00:00Z' })
+    const { container } = render(<AssistantTaskView task={makeTask({ status: 'queued', quota })} />)
+    expect(container.querySelector('.quota-countdown')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
 })

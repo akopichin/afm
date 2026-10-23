@@ -51,6 +51,9 @@
      still working; the row switches to --c-failed via a separate [data-blocked] modifier once that helper's
      gate needs a human decision (see stages-list.css/plan-panel.css) rather than a second token here. */
   --c-awaiting-assistants: var(--amber);
+  /* awaiting_quota — стадия ждёт сброса лимита подписки провайдера и продолжит сама: то же активное-amber
+     семейство, это не решение человека (failed/attention остаются для paused по лимиту через --c-paused). */
+  --c-awaiting-quota: var(--amber);
 
   /* chrome */
   --focus-ring:     rgba(95, 120, 255, 0.5);

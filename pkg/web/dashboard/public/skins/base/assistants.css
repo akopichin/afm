@@ -113,6 +113,8 @@
 .assistant-task-status-dot[data-status="completed"] { background: var(--success); }
 .assistant-task-status-dot[data-status="failed"],
 .assistant-task-status-dot[data-status="cancelled"] { background: var(--danger); }
+/* queued, но припаркован до сброса лимита подписки: amber, как paused, чтобы не читался как обычная очередь. */
+.assistant-task-status-dot[data-quota="true"] { background: var(--attention); }
 
 .assistant-task-label {
   display: flex;

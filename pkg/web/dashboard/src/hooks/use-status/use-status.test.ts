@@ -741,4 +741,33 @@ describe('useStatus', () => {
     const status = normalizeStatus(raw)
     expect(status.accounting).toEqual({ supported: true, health: 'ok', hasData: true, showMoney: true })
   })
+
+  test('парсит quota (awaiting_quota / quota-пауза) в camelCase, мусор и отсутствие дают undefined', () => {
+    const { stages } = normalizeStatus({
+      stages: [
+        {
+          id: 'a', status: 'awaiting_quota',
+          quota: { provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z', reset_at: '2026-10-23T17:02:00Z' },
+        },
+        { id: 'b', status: 'paused', paused_from: 'awaiting_quota', quota: { provider: 'codex', source: 'text', reset_at: '2026-10-24T05:00:00Z', pause_reason: 'exceeds_max_wait' } },
+        { id: 'c', status: 'running' },
+        { id: 'd', status: 'awaiting_quota', quota: 'oops' },
+        { id: 'e', status: 'awaiting_quota', quota: { source: 'probe' } },
+        { id: 'f', status: 'awaiting_quota', quota: { provider: 'claude', source: 'bogus', pause_reason: 'bogus' } },
+      ],
+    })
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('a')?.status).toBe('awaiting_quota')
+    expect(byId.get('a')?.quota).toEqual({
+      provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z', resetAt: '2026-10-23T17:02:00Z', pauseReason: '',
+    })
+    expect(byId.get('b')?.pausedFrom).toBe('awaiting_quota')
+    expect(byId.get('b')?.quota).toEqual({
+      provider: 'codex', window: '', source: 'text', until: '', resetAt: '2026-10-24T05:00:00Z', pauseReason: 'exceeds_max_wait',
+    })
+    expect(byId.get('c')?.quota).toBeUndefined()
+    expect(byId.get('d')?.quota).toBeUndefined()
+    expect(byId.get('e')?.quota).toBeUndefined() // provider обязателен
+    expect(byId.get('f')?.quota).toMatchObject({ provider: 'claude', source: 'text', pauseReason: '' }) // неизвестные enum → безопасные значения
+  })
 })

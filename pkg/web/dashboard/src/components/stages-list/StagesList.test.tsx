@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
-import type { Stage } from '../../types'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import type { Stage, StageQuota } from '../../types'
 import type { AccountingState, CostSummary } from '../../types/cost'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import type { AssistantTask } from '../../types/assistant-task'
@@ -685,6 +685,17 @@ describe('StagesList', () => {
       }
     })
 
+    test('a running verify badge is hidden while the stage is not running (awaiting_quota/paused/retrying)', () => {
+      for (const status of ['awaiting_quota', 'paused', 'retrying'] as const) {
+        const parked: Stage = { ...stage, status, verify: { step: 1, command: 'codex', phase: 'running' } }
+        const { container, unmount } = render(
+          <StagesList stages={[parked]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
+        )
+        expect(container.querySelector('.verify-badge'), status).toBeNull()
+        unmount()
+      }
+    })
+
     test('a terminal stage still shows a finished-outcome verify badge', () => {
       const donePass: Stage = { ...stage, status: 'done', verify: { step: 1, command: 'codex', phase: 'pass' } }
       const { container } = render(
@@ -861,5 +872,96 @@ describe('StagesList — helper-task child rows (T3.9)', () => {
     // always siblings, never descendants, of the row button.
     expect(container.querySelectorAll('.stage-row button')).toHaveLength(0)
     expect(container.querySelectorAll('.assistant-task-row button')).toHaveLength(0)
+  })
+})
+
+describe('StagesList — usage-limit wait (awaiting_quota)', () => {
+  const NOW = new Date('2026-10-23T16:50:00Z')
+  const baseStage: Stage = {
+    id: 'a', name: 'Build', status: 'awaiting_quota', updatedAt: '', interactive: false, autonomous: false, autoApprove: false,
+    hasDialog: false, showPlan: false, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [],
+  }
+  const quota: StageQuota = {
+    provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z', resetAt: '2026-10-23T17:02:00Z', pauseReason: '',
+  }
+  const waiting: Stage = { ...baseStage, quota }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  test('the row says "Usage limit" in its title and for screen readers, with a ticking countdown badge', () => {
+    vi.useFakeTimers({ now: NOW })
+    const { container } = render(<StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(container.querySelector('.stage-row')).toHaveAttribute('title', 'Usage limit')
+    expect(container.querySelector('.stage-status-sr')).toHaveTextContent('Usage limit')
+    expect(container.querySelector('.stage-item')).toHaveAttribute('data-status', 'awaiting_quota')
+    expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 06s')
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 05s')
+  })
+
+  test('awaiting_quota is machine work: no human-attention marker on the row', () => {
+    const { container } = render(<StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(container.querySelector('.stage-item')).not.toHaveAttribute('data-attention')
+  })
+
+  test('the countdown freezes while /api/status is stale (statusAvailable=false)', () => {
+    vi.useFakeTimers({ now: NOW })
+    const { container, rerender } = render(
+      <StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} statusAvailable />,
+    )
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 04s')
+    rerender(<StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} statusAvailable={false} />)
+    act(() => { vi.advanceTimersByTime(20_000) })
+    expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 04s')
+  })
+
+  test('after zero the badge says "Resuming…"', () => {
+    vi.useFakeTimers({ now: NOW })
+    const soon: Stage = { ...waiting, quota: { ...quota, until: '2026-10-23T16:50:01Z' } }
+    const { container } = render(<StagesList stages={[soon]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(container.querySelector('.quota-countdown')).toHaveTextContent('Resuming…')
+  })
+
+  test('probe source and a quota with no time: the rail never shows a misleading countdown', () => {
+    vi.useFakeTimers({ now: NOW })
+    const noTime: Stage = { ...waiting, quota: { ...quota, source: 'text', until: '', resetAt: '' } }
+    const { container } = render(<StagesList stages={[noTime]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(container.querySelector('.quota-countdown')).toBeNull()
+  })
+
+  test('a stage paused from a quota wait (pause reason set) shows no countdown badge: nothing is scheduled', () => {
+    const paused: Stage = { ...baseStage, status: 'paused', pausedFrom: 'awaiting_quota', quota: { ...quota, pauseReason: 'exceeds_max_wait' } }
+    const { container } = render(<StagesList stages={[paused]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(container.querySelector('.quota-badge')).toBeNull()
+  })
+
+  test('Pause is offered while waiting (and Continue is not a rail action)', () => {
+    const onPause = vi.fn()
+    render(<StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} onPause={onPause} accounting={{ supported: false }} />)
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    expect(screen.queryByText('Continue')).toBeNull()
+    fireEvent.click(screen.getByText('Pause'))
+    expect(onPause).toHaveBeenCalledWith('a')
+  })
+
+  test('a helper queued on a usage-limit park reads "Usage limit" (label, title and amber dot), not "Queued"', () => {
+    const helper = makeTask({ id: 'h1', title: 'Reviewer', status: 'queued', quota })
+    const { container } = render(
+      <StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} assistants={{ a: summaryOf([helper]) }} />,
+    )
+    const row = container.querySelector('.assistant-task-row') as HTMLElement
+    expect(row).toHaveAttribute('title', 'Usage limit')
+    expect(row.querySelector('.assistant-task-status-sr')).toHaveTextContent('Usage limit')
+    expect(container.querySelector('.assistant-task-status-dot')).toHaveAttribute('data-quota', 'true')
+    // обычный queued без quota остаётся «Queued»
+    const plain = makeTask({ id: 'h2', title: 'Plain', status: 'queued' })
+    const second = render(
+      <StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} assistants={{ a: summaryOf([plain]) }} />,
+    )
+    expect(second.container.querySelector('.assistant-task-row')).toHaveAttribute('title', 'Queued')
   })
 })

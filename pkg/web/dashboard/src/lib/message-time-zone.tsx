@@ -18,6 +18,38 @@ function browserLocalZone(): MessageTimeZone {
   }
 }
 
+export type HostTimeText = {
+  // «17:02» — для строк, где день ясен из контекста (лента).
+  clock: string
+  // «Oct 23, 17:02» — абсолютное время, понятное и через сутки (ожидание лимита).
+  short: string
+  // «Oct 23, 2026, 17:02:06» — полная подпись для title/aria.
+  full: string
+}
+
+function formatInZone(date: Date, timeZone: string): HostTimeText {
+  const clockOptions = { timeZone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' } as const
+  const format = (options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-US', { ...clockOptions, ...options }).format(date)
+  return {
+    clock: format({}),
+    short: format({ month: 'short', day: 'numeric' }),
+    full: format({ month: 'short', day: 'numeric', year: 'numeric', second: '2-digit' }),
+  }
+}
+
+// formatHostTime форматирует момент в зоне хоста. IANA-имя остаётся источником истины для исторического DST;
+// offset сервера — только fallback, когда у хоста нет IANA-имени или браузер не знает это имя.
+export function formatHostTime(date: Date, { timeZone, utcOffsetMinutes }: MessageTimeZone): HostTimeText {
+  if (timeZone !== '') {
+    try {
+      return formatInZone(date, timeZone)
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error
+    }
+  }
+  return formatInZone(new Date(date.getTime() + utcOffsetMinutes * 60_000), 'UTC')
+}
+
 const MessageTimeZoneContext = createContext<MessageTimeZone | null>(null)
 
 export function useMessageTimeZone(): MessageTimeZone {

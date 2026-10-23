@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import type { Stage } from '../../types'
+import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
+import type { Stage, StageQuota } from '../../types'
 import { PlanPanel } from './PlanPanel'
 import { FileBrowserProvider } from '../file-browser'
 
@@ -558,6 +559,101 @@ describe('PlanPanel', () => {
     fireEvent.click(continueBtn)
 
     await waitFor(() => expect(calls.some((c) => c.endsWith('/continue'))).toBe(true))
+  })
+
+  describe('usage-limit wait and quota pauses', () => {
+    const quota: StageQuota = {
+      provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z', resetAt: '2026-10-23T17:02:00Z', pauseReason: '',
+    }
+    // Хост приложения живёт в UTC+0: абсолютное время берётся из контекста зоны хоста, а не браузера.
+    function renderInHostZone(ui: ReactElement) {
+      return renderPlanPanel(<MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}>{ui}</MessageTimeZoneProvider>)
+    }
+    const pausedFor = (pauseReason: StageQuota['pauseReason'], extra: Partial<StageQuota> = {}) =>
+      makeStage({ status: 'paused', pausedFrom: 'awaiting_quota', quota: { ...quota, pauseReason, ...extra } })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    test('awaiting_quota: shows "Usage limit", the absolute resume time, a countdown and how to retry sooner — no Continue', async () => {
+      vi.useFakeTimers({ now: new Date('2026-10-23T16:50:00Z'), toFake: ['Date', 'setInterval', 'clearInterval'] })
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      const { container } = renderInHostZone(<PlanPanel stage={makeStage({ status: 'awaiting_quota', quota })} />)
+      const section = container.querySelector('#quota-section') as HTMLElement
+      expect(within(section).getByText('Usage limit')).toBeInTheDocument()
+      expect(section.querySelector('time')).toHaveTextContent('Resumes at Oct 23, 17:02')
+      expect(section.querySelector('.quota-countdown')).toHaveTextContent('12m 06s')
+      expect(within(section).getByText(/pause the stage/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+      expect(container.querySelector('#paused-section')).toBeNull()
+      act(() => { vi.advanceTimersByTime(1000) })
+      expect(section.querySelector('.quota-countdown')).toHaveTextContent('12m 05s')
+    })
+
+    test('awaiting_quota countdown freezes when the status poll is stale', () => {
+      vi.useFakeTimers({ now: new Date('2026-10-23T16:50:00Z'), toFake: ['Date', 'setInterval', 'clearInterval'] })
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      const stage = makeStage({ status: 'awaiting_quota', quota })
+      const { container, rerender } = renderPlanPanel(
+        <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><PlanPanel stage={stage} statusAvailable /></MessageTimeZoneProvider>,
+      )
+      rerender(
+        <FileBrowserProvider flowName="flow1" startedAt="t1" enabled>
+          <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><PlanPanel stage={stage} statusAvailable={false} /></MessageTimeZoneProvider>
+        </FileBrowserProvider>,
+      )
+      act(() => { vi.advanceTimersByTime(30_000) })
+      expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 06s')
+    })
+
+    test('probe source says "Next check"', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      const { container } = renderInHostZone(<PlanPanel stage={makeStage({ status: 'awaiting_quota', quota: { ...quota, source: 'probe', window: '', resetAt: '' } })} />)
+      expect(container.querySelector('#quota-section time')).toHaveTextContent('Next check at Oct 23, 17:02')
+    })
+
+    test('paused exceeds_max_wait: says the reset is later than the wait limit, with the time, and Continue explains the immediate probe', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      const { container } = renderInHostZone(<PlanPanel stage={pausedFor('exceeds_max_wait', { until: '', resetAt: '2026-10-24T05:00:00Z' })} />)
+      const section = container.querySelector('#paused-section') as HTMLElement
+      expect(within(section).getByText('Usage limit')).toBeInTheDocument()
+      expect(await within(section).findByText(/resets at Oct 24, 05:00.*later than the maximum wait/i)).toBeInTheDocument()
+      expect(within(section).getByText(/Continue.*once, right now, with a fresh session/i)).toBeInTheDocument()
+      expect(within(section).getByRole('button', { name: 'Continue' })).toBeInTheDocument()
+      expect(container.textContent).not.toMatch(/paused while it was running/i)
+      expect(container.querySelector('.quota-countdown')).toBeNull()
+    })
+
+    test('paused no_reset: "Quota exhausted" with no time and no countdown', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      const { container } = renderInHostZone(<PlanPanel stage={pausedFor('no_reset', { source: 'text', until: '', resetAt: '' })} />)
+      const section = container.querySelector('#paused-section') as HTMLElement
+      expect(within(section).getByText('Quota exhausted')).toBeInTheDocument()
+      expect(within(section).getByText(/no reset time/i)).toBeInTheDocument()
+      expect(section.querySelector('time')).toBeNull()
+      expect(section.querySelector('.quota-countdown')).toBeNull()
+    })
+
+    test('paused max_waits: names the consecutive-limit reason', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      renderInHostZone(<PlanPanel stage={pausedFor('max_waits')} />)
+      expect(screen.getByText(/several times in a row/i)).toBeInTheDocument()
+    })
+
+    test('manual pause of a parked stage (no pause_reason): says it was paused while waiting for the limit', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      const { container } = renderInHostZone(<PlanPanel stage={pausedFor('')} />)
+      expect(screen.getByText(/manually paused while waiting for the claude usage limit/i)).toBeInTheDocument()
+      expect(container.textContent).toMatch(/Continue.*once, right now, with a fresh session/i)
+      expect(container.textContent).not.toMatch(/paused while it was running/i)
+    })
+
+    test('a quota pause without the quota object (older server) still gets a quota-specific reason', () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+      renderInHostZone(<PlanPanel stage={makeStage({ status: 'paused', pausedFrom: 'awaiting_quota' })} />)
+      expect(screen.getByText(/manually paused while waiting for the usage limit/i)).toBeInTheDocument()
+    })
   })
 
   test('stage=null: renders the panel shell without fetching or crashing', () => {

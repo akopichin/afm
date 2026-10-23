@@ -134,7 +134,7 @@ func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	// "по месту" на каждой попытке.
 	preNote := o.preNoteBlock(stageDir)
 
-	o.runPlanningAttempt(ctx, s, stageDir, flow.PhaseLogFile(flow.PhasePlanning), "planning",
+	o.runPlanningAttempt(ctx, s, stageDir, flow.PhaseLogFile(flow.PhasePlanning), "planning", false,
 		func(retryContext string, in *prompts.Inputs) error {
 			in.RetryContext = retryContext + preNote
 			return nil
@@ -149,6 +149,11 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 		prompts.EscapeTagsForReprompt(prevPlan),
 	)
 	logFile := filepath.Join(stageDir, "planning-reprompt.log")
+	// Второй процесс хода: hold мог появиться после admission перед ходом (runRetryLoop) — тот же admission, и
+	// типизированный provider_hold уходит в общий путь парковки.
+	if hold := o.admitStageTurn(s); hold != nil {
+		return hold
+	}
 	r := o.runnerFor(s, phasePlanning)
 	if err := r.RunPlanning(ctx, s.Name, prompt, outFile, logFile); err != nil {
 		return err
@@ -165,9 +170,9 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 }
 
 // runPlanningAttempt строит контекст, запускает и проверяет план; fillInputs обновляет feedback до сбора
-// контекста на каждой попытке.
-func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, stageDir, logFileName, artifactsWarnLabel string, fillInputs func(retryContext string, in *prompts.Inputs) error) {
-	o.runWithRetry(ctx, s, phasePlanning, func(retryContext string) error {
+// контекста на каждой попытке. feedback — попытка является feedback-запуском Revise (см. runRetryLoop).
+func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, stageDir, logFileName, artifactsWarnLabel string, feedback bool, fillInputs func(retryContext string, in *prompts.Inputs) error) {
+	o.runRetryLoop(ctx, s, phasePlanning, feedback, func(retryContext string) error {
 		in := prompts.Inputs{
 			Template:         o.opts.Prompts.Planning,
 			Stage:            s,
@@ -219,13 +224,17 @@ func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, sta
 
 func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindPlanning)
-	stageDir := filepath.Join(o.opts.RunDir, s.ID)
-
 	if !o.claimRevise(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}) {
 		return
 	}
+	o.runPlanningFeedbackTurn(ctx, s)
+}
 
-	o.runPlanningAttempt(ctx, s, stageDir, "planning-revision.log", "revise",
+// runPlanningFeedbackTurn — тело feedback-запуска planning после claimRevise; им же пробуждается припаркованный по
+// usage-limit feedback-ход (feedbackTurnRunner).
+func (o *Orchestrator) runPlanningFeedbackTurn(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	o.runPlanningAttempt(ctx, s, stageDir, "planning-revision.log", "revise", true,
 		func(_ string, in *prompts.Inputs) error {
 			// feedback.md и LatestPlanVersion читаются ЗАНОВО на КАЖДОЙ попытке — так было в исходном
 			// runPlanningWithFeedback, момент чтения сохранён дословно.
@@ -245,7 +254,7 @@ func (o *Orchestrator) runImplementationAgent(ctx context.Context, s flow.Stage)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	preNote := o.preNoteBlock(stageDir)
 
-	o.runImplementationAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseImplementation), "impl")
+	o.runImplementationAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseImplementation), "impl", false)
 }
 
 // runEmbeddedReview — review-шаг, встроенный в implementation-попытку. runnerFor вызывается здесь, внутри
@@ -272,14 +281,18 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 		AgentCommInbox:  o.agentCommInboxBlock(s),
 	})
 	reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
+	// Второй процесс хода: см. rePromptMissingSections.
+	if hold := o.admitStageTurn(s); hold != nil {
+		return hold
+	}
 	rr := o.runnerFor(s, phaseReview)
 	return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
 }
 
 // runImplementationAttempt выполняет fresh/feedback-попытку и встроенный review; note читается до
-// retry-цикла.
-func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
-	o.runWithRetry(ctx, s, phaseImplementation, func(retryContext string) error {
+// retry-цикла; feedback — см. runRetryLoop.
+func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string, feedback bool) {
+	o.runRetryLoop(ctx, s, phaseImplementation, feedback, func(retryContext string) error {
 		planData, err := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 		if err != nil {
 			return err
@@ -358,13 +371,13 @@ func (o *Orchestrator) runReviewAgent(ctx context.Context, s flow.Stage) {
 	depPlans := o.collectDependencyPlansNoticing(s)
 	artCtx := o.collectArtifactsNoticing(s, "review")
 
-	o.runReviewAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseReview), depPlans, artCtx)
+	o.runReviewAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseReview), depPlans, artCtx, false)
 }
 
 // runReviewAttempt — общее тело review-попытки: строит промпт и запускает существующий runWithRetry. Общий
-// и для fresh (runReviewAgent), и для feedback (runReviewWithFeedback) раннеров.
-func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, depPlans, artCtx string) {
-	o.runWithRetry(ctx, s, phaseReview, func(retryContext string) error {
+// и для fresh (runReviewAgent), и для feedback (runReviewWithFeedback) раннеров; feedback — см. runRetryLoop.
+func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, depPlans, artCtx string, feedback bool) {
+	o.runRetryLoop(ctx, s, phaseReview, feedback, func(retryContext string) error {
 		verifyNote := o.verifyFeedbackBlock(stageDir)
 		// T8/D6: standalone review (resume/revise/pause-recovery паths) гейтится на .done так же, как
 		// embedded review — промпт теперь тоже об этом говорит.
@@ -404,13 +417,13 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 	_ = os.WriteFile(filepath.Join(stageDir, "autonomous.flag"), nil, 0644)
 	preNote := o.preNoteBlock(stageDir)
 
-	o.runAutonomousAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseAutonomous), "autonomous")
+	o.runAutonomousAttempt(ctx, s, stageDir, preNote, flow.PhaseLogFile(flow.PhaseAutonomous), "autonomous", false)
 }
 
 // runAutonomousAttempt — общее тело autonomous-попытки: собирает контекст, строит промпт и запускает
-// существующий runWithRetry.
-func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
-	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
+// существующий runRetryLoop; feedback — см. там же.
+func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string, feedback bool) {
+	o.runRetryLoop(ctx, s, phaseAutonomous, feedback, func(retryContext string) error {
 		artCtx := o.collectArtifactsNoticing(s, artifactsWarnLabel)
 		depCtx := o.collectDependencyPlansNoticing(s)
 
@@ -451,46 +464,76 @@ func (o *Orchestrator) claimRevise(stageID string, ev bus.FSMEvent, guard bus.Gu
 	return ok
 }
 
+// feedbackTurnRunner maps a resume_kind to the body of the feedback run of that kind WITHOUT claimRevise — what
+// the wake of a parked feedback turn runs: the stage is no longer revising, and the turn must see feedback.md.
+func (o *Orchestrator) feedbackTurnRunner(kind string) func(context.Context, flow.Stage) {
+	switch kind {
+	case kindPlanning:
+		return o.runPlanningFeedbackTurn
+	case kindReview:
+		return o.runReviewFeedbackTurn
+	case kindAutonomous:
+		return o.runAutonomousFeedbackTurn
+	default:
+		return o.runImplementationFeedbackTurn
+	}
+}
+
 // runImplementationWithFeedback перезапускает implementation-фазу с фидбеком пользователя — как
 // runImplementationAgent, но с добавленной в контекст фразой из feedback.md.
 func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindImplementation)
-	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// Возвращаемся в Running. Без этого onAgentCompleted и EvComplete не увидели бы подходящий статус, и
 	// стадия зависла бы в Revising даже после успешного завершения агента.
 	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
 		return
 	}
+	o.runImplementationFeedbackTurn(ctx, s)
+}
+
+// runImplementationFeedbackTurn — тело feedback-запуска implementation после claimRevise.
+func (o *Orchestrator) runImplementationFeedbackTurn(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
-	o.runImplementationAttempt(ctx, s, stageDir, feedbackNote, "implementation-feedback.log", "impl (feedback restart)")
+	o.runImplementationAttempt(ctx, s, stageDir, feedbackNote, "implementation-feedback.log", "impl (feedback restart)", true)
 }
 
 // runReviewWithFeedback — как runReviewAgent, с фразой пользователя в контексте.
 func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindReview)
-	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
 		return
 	}
+	o.runReviewFeedbackTurn(ctx, s)
+}
+
+// runReviewFeedbackTurn — тело feedback-запуска review после claimRevise.
+func (o *Orchestrator) runReviewFeedbackTurn(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	depPlans := o.collectDependencyPlansNoticing(s)
 	artCtx := o.collectArtifactsNoticing(s, "review (feedback restart)")
 
-	o.runReviewAttempt(ctx, s, stageDir, feedbackNote, "review-feedback.log", depPlans, artCtx)
+	o.runReviewAttempt(ctx, s, stageDir, feedbackNote, "review-feedback.log", depPlans, artCtx, true)
 }
 
 // runAutonomousWithFeedback — как runAutonomousAgent, с фразой пользователя в контексте.
 func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindAutonomous)
-	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
 	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
 		return
 	}
+	o.runAutonomousFeedbackTurn(ctx, s)
+}
+
+// runAutonomousFeedbackTurn — тело feedback-запуска autonomous после claimRevise.
+func (o *Orchestrator) runAutonomousFeedbackTurn(ctx context.Context, s flow.Stage) {
+	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
-	o.runAutonomousAttempt(ctx, s, stageDir, feedbackNote, "autonomous-feedback.log", "autonomous (feedback restart)")
+	o.runAutonomousAttempt(ctx, s, stageDir, feedbackNote, "autonomous-feedback.log", "autonomous (feedback restart)", true)
 }

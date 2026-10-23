@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-23
 
+### Improvement: wait for provider usage limits without spending retries
+
+When a stage agent, verifier or helper hits a provider usage limit, afm records
+the wait and resumes after the reported reset or a timed probe. Other work using
+that provider shares the hold. Resets beyond the maximum wait and exhausted
+quotas with no reset pause with a reason;
+the dashboard shows the wait and lets you Pause then Continue to try sooner.
+`usage_limit` configures the timing and refusal limit. See
+[Stage lifecycle](docs/stage-lifecycle.md#stage-lifecycle) and
+[Usage limits](docs/config-reference.md#usage-limits).
+
 ### Improvement: collect replies and start temporary stage helpers
 
 Stage agents can use `afm agent wait --condition reply_to_all --message-ids ...`

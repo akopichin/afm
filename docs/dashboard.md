@@ -75,6 +75,23 @@ right (there is no three-column layout or bottom progress bar).
   [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
   can add a stage to a live run. See [Helpers and collaboration](collaboration.md).
 
+## Usage-limit waits
+
+When an agent hits a provider usage limit, its stage shows **Usage limit** in
+the rail. The stage panel shows the provider, limit window when known, the
+expected resume or next check time, and a countdown. The Feed records a notice;
+it remains visible after reconnect. `afm check` also shows the wait reason and
+time. A helper task can show the same wait in its task row. Times in the panel
+use the afm host's time zone, as described under [Message times](#message-times).
+
+The stage resumes automatically when its wait expires. To try sooner, use
+**Pause** in the stage's kebab (⋮) menu, then **Continue** in its panel. Continue
+makes one immediate attempt with a fresh session; if the provider still refuses,
+the stage waits again. A provider quota with no reset, a reset beyond
+`usage_limit.max_wait`, or too many consecutive refusals instead shows a paused
+stage with the reason. See [Stage lifecycle](stage-lifecycle.md#stage-lifecycle)
+and [Usage limits](config-reference.md#usage-limits).
+
 ## Team workspace
 
 In `team` mode, Team appears when the dashboard's first Agent Mesh roster probe
@@ -572,9 +589,10 @@ line comments and "Send revision" (see [Inline plan comments](#inline-plan-comme
 > menu; that item was replaced by this Feed composer. The kebab still hosts stage
 > buttons, **Pause**, and the pre-note item for `pending` stages. **Pause** is
 > offered while a stage is `planning`, `running` (not for a running script),
-> `revising`, `retrying` or `awaiting_peer` (parked waiting for a colleague's
+> `revising`, `retrying`, `awaiting_peer` (parked waiting for a colleague's
 > reply); **Continue** returns a paused `awaiting_peer` stage to its wait, and it
-> goes on by itself if the wait was answered meanwhile.
+> goes on by itself if the wait was answered meanwhile. It is also offered for
+> `awaiting_quota` (parked for a provider usage limit).
 
 A message whose post the server refuses — for example because someone you named
 can no longer read it — keeps its draft and shows the server's reason under the
@@ -723,3 +741,6 @@ from the kebab (⋮) menu — the same "Pause" action, just triggered manually. 
 gets a graceful interrupt (SIGINT), and Continue resumes it exactly where
 recovery-on-restart would (`--resume` for agents that support it). Script-only stages
 (`script:`) can only be paused via `auto_run: false`, before they start.
+
+An `awaiting_quota` stage can also be paused while its agent is parked; its
+countdown then stops until you press Continue.

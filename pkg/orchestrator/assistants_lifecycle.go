@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -17,6 +18,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // helperAgentRunner is the subsituteable seam for one helper-agent turn — mirrors verifyAgentRunner.
@@ -42,6 +44,8 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		RunDir:         o.opts.RunDir,
 		Phase:          "helper",
 		UsageHint:      o.usageHintFor(cmd),
+		Provider:       o.opts.Config.UsageLimitProvider(cmd),
+		OnLimitWarning: o.limitWarningSink("", taskID),
 		Redact:         o.RedactSecrets,
 		Secrets:        o.secretValues,
 		MeshClient:     o.meshClientFor(participant),
@@ -255,6 +259,16 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 
+	// A provider usage limit is no failure: the task waits for the reset in queued (parkTaskForQuota) instead of
+	// ending, so its waits and mesh identity stay. Checked before the generic error: RunHelperAgent returns the
+	// limit as the error and as outcome.ProcessErr. The turn did not run to its end, so its input stays.
+	var limit *executor.UsageLimitError
+	if errors.As(err, &limit) || errors.As(outcome.ProcessErr, &limit) {
+		if !finalizedByOther {
+			o.parkTaskForQuota(ctx, taskID, limit)
+		}
+		return
+	}
 	if err != nil {
 		if finalizedByOther {
 			return
@@ -398,6 +412,60 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 	o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+}
+
+// parkTaskForQuota parks a helper turn that hit a provider usage limit: the task goes back to queued — not
+// terminal, so its mesh identity, TurnInbox and the waits on its answer stay — carrying the wait in
+// TaskState.Quota, and its process and lease end with the turn. The wait comes from the stage's shared
+// primitives (quotaWaits, planQuotaWait); the wake timer is the same run-scoped one (retryTaskAt). A limit that
+// cannot be waited out also puts PauseTask's manual hold on the task in the same commit: it stays paused with
+// the exact reason, and ContinueTask probes it once.
+func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.TaskID, limit *executor.UsageLimitError) {
+	t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
+	if !ok {
+		return
+	}
+	waits := quotaWaits(t.Quota, state.QuotaTargetHelper, false, limit)
+	q := planQuotaWait(o.opts.Config.UsageLimit, limit, state.QuotaTargetHelper, waits, o.clk().Now())
+	reason := o.sanitizeTaskReason(taskQuotaReason(q))
+	parkEff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(assistants.StatusQueued), Reason: reason, Quota: &q})
+	if err != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error())
+		return
+	}
+	effects := []state.Effect{parkEff}
+	if q.PauseReason != "" {
+		holdEff, err := taskHoldEffect("task_hold_set", taskID, holdOwnerManual, reason)
+		if err != nil {
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error())
+			return
+		}
+		effects = append(effects, holdEff)
+	}
+	op := state.Operation{
+		ID:      "task-quota-park:" + string(taskID) + ":" + randomOpSuffix(),
+		Kind:    "park_task_quota",
+		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusRunning}},
+		Effects: effects,
+	}
+	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: t.RootStageID, Data: map[string]any{
+			"task_id": string(taskID), "status": string(assistants.StatusQueued), "reason": reason,
+		}})
+		o.publishQuotaNotice(eventQuotaWait, t.RootStageID, taskID, quotaNoticeData(&q, QuotaWaitMessage(&q)))
+		if q.PauseReason == "" {
+			o.retryTaskAt(ctx, taskID, q.Until)
+		}
+	})
+	o.handleTaskOperationErr(err)
+}
+
+// taskQuotaReason is the status reason of a parked task: until when it waits, or why it is paused.
+func taskQuotaReason(q state.QuotaWait) string {
+	if q.PauseReason != "" {
+		return "usage limit: paused (" + q.PauseReason + ")"
+	}
+	return "usage limit: waiting until " + q.Until.UTC().Format(time.RFC3339)
 }
 
 // failAnsweredTurn ends a turn that ran to its end but whose answer cannot be accepted (reason says why). A

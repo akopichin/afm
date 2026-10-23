@@ -118,6 +118,40 @@ describe('useStageAssistants', () => {
     expect(result.current.s1).toBe(first) // same reference — not rebuilt
   })
 
+  it('projects a queued task\'s durable usage-limit park into task.quota (camelCase), absent otherwise', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      tasks: [
+        wire({ id: 't1', status: 'queued', quota: { provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z' } }),
+        wire({ id: 't2', status: 'queued' }),
+      ],
+    }))
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await waitFor(() => expect(result.current.s1).toBeDefined())
+    expect(result.current.s1?.tasks[0]?.quota).toEqual({
+      provider: 'claude', window: 'five_hour', source: 'structured', until: '2026-10-23T17:02:06Z', resetAt: '', pauseReason: '',
+    })
+    expect(result.current.s1?.tasks[1]?.quota).toBeUndefined()
+    // парк с квотой — не «внимание человека»: помощник ждёт сам
+    expect(result.current.s1?.hasAttention).toBe(false)
+  })
+
+  it('DOES rebuild when only the quota park moves (a new until must not be hidden by the unchanged-poll shortcut)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let until = '2026-10-23T17:02:06Z'
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      jsonResponse({ tasks: [wire({ id: 't1', status: 'queued', quota: { provider: 'claude', source: 'structured', until } })] }),
+    )
+    const { result } = renderHook(() => useStageAssistants(['s1'], true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const first = result.current.s1
+    expect(first).toBeDefined()
+
+    until = '2026-10-23T22:02:06Z'
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(result.current.s1).not.toBe(first)
+    expect(result.current.s1?.tasks[0]?.quota?.until).toBe('2026-10-23T22:02:06Z')
+  })
+
   it('DOES rebuild when the poll tick actually changes something', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let status: 'running' | 'completed' = 'running'

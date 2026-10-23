@@ -697,3 +697,93 @@ func TestCodexAsClaude_NonVerify_PropagatesExitCode(t *testing.T) {
 		t.Errorf("failure must still emit the error result line: %s", out)
 	}
 }
+
+const codexLimitMessage = "You've hit your usage limit. Try again at 3:45 PM."
+
+// codexFailureFixture — реальная форма отказа Codex: error и затем terminal turn.failed с тем же сообщением.
+var codexFailureFixture = `{"type":"thread.started","thread_id":"t1"}
+{"type":"turn.started"}
+{"type":"error","message":"` + codexLimitMessage + `"}
+{"type":"turn.failed","error":{"message":"` + codexLimitMessage + `"}}`
+
+// countResultLines возвращает все result-строки вывода wrapper'а.
+func countResultLines(out string) []string {
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(l, `"type":"result"`) {
+			lines = append(lines, strings.TrimSpace(l))
+		}
+	}
+	return lines
+}
+
+// TestCodexAsClaude_TurnFailedBecomesErrorResult: terminal turn.failed превращается ровно в одну
+// Claude-совместимую result-строку is_error:true с исходным сообщением, статус выхода сохраняется,
+// а executor распознаёт в ней usage-limit.
+func TestCodexAsClaude_TurnFailedBecomesErrorResult(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	for _, mode := range []struct {
+		name string
+		env  []string
+	}{
+		{"stream", nil},
+		{"verify", []string{"CODEX_VERIFY=1"}},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			fakeCodex := writeFakeCodex(t, codexFailureFixture, 1)
+			out, err := runCodexScript(t, fakeCodex, "go", mode.env...)
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+				t.Fatalf("want exit code 1, got %v\n%s", err, out)
+			}
+			results := countResultLines(out)
+			if len(results) != 1 {
+				t.Fatalf("want exactly one result line, got %d:\n%s", len(results), out)
+			}
+			var env struct {
+				Subtype string `json:"subtype"`
+				IsError bool   `json:"is_error"`
+				Result  string `json:"result"`
+			}
+			if jsonErr := json.Unmarshal([]byte(results[0]), &env); jsonErr != nil {
+				t.Fatalf("result line is not valid JSON: %v\n%s", jsonErr, results[0])
+			}
+			if !env.IsError || env.Result != codexLimitMessage || env.Subtype != "error_during_execution" {
+				t.Errorf("result = %+v, want is_error with the original message", env)
+			}
+			limit, ok := parseUsageLimitText(env.Result, time.Now(), time.UTC)
+			if !ok || limit.ResetAt.IsZero() {
+				t.Errorf("executor must recognize the limit with a reset time in %q", env.Result)
+			}
+		})
+	}
+}
+
+// TestCodexAsClaude_RecoveredErrorIsNotTerminal: промежуточный error, за которым следует успешный turn, —
+// не отказ: результат остаётся success без is_error.
+func TestCodexAsClaude_RecoveredErrorIsNotTerminal(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available")
+	}
+	fixture := `{"type":"error","message":"Reconnecting... 1/5"}
+{"type":"item.completed","item":{"type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":1}}`
+	for _, env := range [][]string{nil, {"CODEX_VERIFY=1"}} {
+		out, err := runCodexScript(t, writeFakeCodex(t, fixture, 0), "go", env...)
+		if err != nil {
+			t.Fatalf("script failed: %v\n%s", err, out)
+		}
+		rl := extractResultLine(t, out)
+		if strings.Contains(rl, "is_error") || !strings.Contains(rl, `"subtype":"success"`) {
+			t.Errorf("recovered error must stay a plain success: %s", rl)
+		}
+	}
+}
