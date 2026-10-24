@@ -15,6 +15,7 @@ review plans, answer questions, and steer the work.
 [![Go Report Card](https://goreportcard.com/badge/github.com/akopichin/afm)](https://goreportcard.com/report/github.com/akopichin/afm)
 [![License: MIT](https://img.shields.io/github/license/akopichin/afm)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-akopichin.github.io%2Fafm-blue)](https://akopichin.github.io/afm/)
+[![Telegram](https://img.shields.io/badge/Telegram-%40afm__development-26A5E4?logo=telegram&logoColor=white)](https://t.me/afm_development)
 
 <p align="center">
   <img src="docs/assets/afm-team.gif" alt="afm demo — agents fix checkout with a required helper review, live conversations, recurring Kafka checks, and automatic resume after usage limits" width="900">
@@ -147,6 +148,14 @@ Full documentation lives at **[akopichin.github.io/afm](https://akopichin.github
 | Running in Docker, non-Claude agents | [Docker mode](https://akopichin.github.io/afm/docker/) |
 | Driving afm from Go | [Go SDK](https://akopichin.github.io/afm/sdk/) |
 | Event log, directory layout, prompts | [Internals](https://akopichin.github.io/afm/internals/directory-layout/) |
+
+## Community
+
+Follow AFM on Telegram: [@afm_development](https://t.me/afm_development).
+
+<a href="https://t.me/afm_development">
+  <img src="docs/assets/telegram-qr.png" alt="QR code for AFM on Telegram" width="200">
+</a>
 
 ## Development
 
