@@ -44,3 +44,7 @@ dev-pipeline-codex-recov-2.yaml
 dev-pipeline-codex-recov.yaml
 dev-pipeline-legacy.yaml
 docs/superpowers/mockups/
+pipelines/
+scripts/dev-pipeline.py
+scripts/dev_pipeline_test.go
+scripts/test_dev_pipeline.py
