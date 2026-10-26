@@ -1,0 +1,46 @@
+{
+  "source_revision": "665223bbe2fecf75b5e52a726df7594b3149a800",
+  "approval_event": 60,
+  "plans": [
+    {
+      "id": "plan-1",
+      "title": "plan-one",
+      "proposal_ids": [
+        "registry-deep-copy",
+        "retry-budget-decisions",
+        "stage-executor-base",
+        "turn-prompt-base",
+        "remove-capability-api",
+        "shared-primitives-move"
+      ],
+      "depends_on": [],
+      "file": "01-plan-1.md"
+    },
+    {
+      "id": "plan-2",
+      "title": "plan-two",
+      "proposal_ids": [
+        "helper-turn-phases",
+        "verify-pass-outcomes",
+        "collab-entry-points",
+        "dialog-poll-split",
+        "runner-kind-dispatch"
+      ],
+      "depends_on": [
+        "plan-1"
+      ],
+      "file": "02-plan-2.md"
+    },
+    {
+      "id": "plan-3",
+      "title": "plan-tree-hard",
+      "proposal_ids": [
+        "retry-success-branch"
+      ],
+      "depends_on": [
+        "plan-1"
+      ],
+      "file": "03-plan-3.md"
+    }
+  ]
+}

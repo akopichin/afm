@@ -1,0 +1,3026 @@
+{
+  "schema_version": 1,
+  "document": {
+    "schema_version": 1,
+    "session_id": "refactor-20261025-063341-6a98@8d83619719bd35b81d25d948c4327b6f4c24cbfaf2203b62cd485fe3a75a5d49",
+    "revision": 1,
+    "addressed_event_id": 0,
+    "title": "pkg/orchestrator · упрощение ядра и границ подсистем",
+    "goal": "Упростить ядро pkg/orchestrator и прояснить границы его подсистем (mesh/agentcomm, assistants/helpers, verify, диалог, scheduling/recovery и др.): уменьшить связность и размер перегруженных компонентов без изменения поведения.",
+    "constraints": [
+      "Анализируется снимок run-worktree /Users/alexander.kopichin/work/personal/afm/.worktrees/refactor (ветка refactor, HEAD 665223bb); незакоммиченные изменения основного checkout в снимок не входят.",
+      "Это только план: исходники, конфигурация, зависимости и история Git не изменяются на этом этапе.",
+      "Поведение сохраняется: CLI, HTTP API, формат events.jsonl/state.json/notices.jsonl и replay, YAML-контракт flow/config.",
+      "Соблюдать инварианты из AGENTS.md и pkg/orchestrator/AGENTS.md: durable намерение до возврата API, CAS-победитель запускает работу, run-scoped context, clean shutdown, общие хелперы запуска/завершения (семафор, Pause, каскад).",
+      "Версию Go в go.mod не менять; новых зависимостей не добавлять.",
+      "Не трогать: vendor/, sdk/, schema/, docs/, dashboard (pkg/web).",
+      "Внешние пакеты (state, server, executor, config, flow, agentcomm и др.) — только как контекст связей, не как цель изменений.",
+      "Пороги strictacode — сигналы для исследования, а не доказательство необходимости переписывания."
+    ],
+    "source": {
+      "revision": "665223bbe2fecf75b5e52a726df7594b3149a800",
+      "fingerprint": "8d83619719bd35b81d25d948c4327b6f4c24cbfaf2203b62cd485fe3a75a5d49",
+      "limitations": [
+        "Scope: pkg/orchestrator на ревизии 665223bb — корневой пакет (59 не-тестовых файлов) и подпакеты bus, concurrency, graph, stagefiles, verify. cmd/afm, pkg/server, pkg/state и pkg/executor показаны только как контекст границ; vendor/, sdk/, schema/, docs/ и dashboard pkg/web не анализировались. Отсутствие анализа означает «неизвестно», а не «здорово».",
+        "Граф — курируемая карта компонентов (38 узлов, 66 рёбер), а не полный call graph. Рёбра подтверждены чтением кода и синтаксическим go/ast-графом вызовов Claude (без type-checking: вызовы через интерфейсы и значения-функции учтены только там, где имя встречается текстуально). Число «различных функций» на рёбрах collaboration — метрика этого графа.",
+        "Метрики: loc — строки файла или диапазона символа (wc -l, с комментариями; у корневого пакета — loc strictacode); complexity — цикломатика, посчитанная go/ast-инструментом Claude; rp/op — сигналы strictacode 0.0.12. Strictacode для Go здесь неполон: top-N отчёт, *Orchestrator посчитан с 36 методами вместо 526, stagefiles не оценён, «critical» получили однострочные геттеры. Узлы без метрик не измерялись.",
+        "Тесты: Codex прогнал go test -race ./pkg/orchestrator/... (go1.26.10 linux/arm64) — все 6 пакетов зелёные; Claude тесты не запускал; make lint не запускался (он применяет исправления). Дефект graph.Registry воспроизведён scratch-программой Codex; гипотеза гонки cancelRun не воспроизводилась.",
+        "Глубина чтения: детально — orchestrator.go, retry.go, agents.go, runner_factory.go, verify.go, scheduling.go, control_api.go, recovery.go, reviewpause.go (запуск), graph/registry.go, concurrency, bus/fsm.go, notices.go, dialog_poller.go (pollQuestions), assistants_lifecycle.go (runHelperTask), ключевые функции assistants.go; выборочно — остальной collaboration-домен (agentcomm_*, proposal*, discussion*, feedback_intent.go, watch_tasks.go, team.go), hooks.go, graph_mutate.go, quota.go. Непрочитанные ветки — неизвестны.",
+        "Churn — git log ветки refactor с 2026-07-01; атрибуция к функциям по заголовкам хунков (приблизительно)."
+      ]
+    },
+    "baseline": {
+      "nodes": [
+        {
+          "id": "orchestrator",
+          "label": "pkg/orchestrator",
+          "kind": "package",
+          "description": "Корневой пакет: фасад управления одним раном. Один тип-получатель *Orchestrator (526 методов, 91 поле, orchestrator.go:145-444) реализует и движок стадий, и collaboration-домен; HTTP видит его только через порты pkg/server, адаптированные в cmd/afm. Подкаталоги bus, concurrency, graph, stagefiles, verify — отдельные листовые Go-пакеты без циклов. Метрики — сигналы strictacode для корневого пакета, не вердикт.",
+          "metrics": {
+            "loc": 17736,
+            "rp": 54,
+            "op": 77
+          }
+        },
+        {
+          "id": "engine",
+          "label": "Движок стадий",
+          "kind": "subsystem",
+          "parent": "orchestrator",
+          "description": "Жизненный цикл рана и стадий: старт/завершение, FSM-переходы, планирование, команды управления, восстановление, review pause, хуки, вставка стадий, уведомления. Владеет единственной горутиной Run и порядком cleanup."
+        },
+        {
+          "id": "core",
+          "label": "Ядро рана (orchestrator.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "New собирает FSM, шины, concurrency и реестр; Run задаёт порядок старта (BeginRun → review pause → team → recovery → поллеры) и LIFO-cleanup (cancel → WaitAgents → closeMeshWaits → EndRun → lifecycle); handleEvent обрабатывает completion и peer-события из CriticalBus; triggerWithSeq — единая синхронная воронка FSM-перехода с пост-эффектами (UI, mesh waits, unread, lifecycle, watchers, feedback intents); completeStageFenced — барьер required helpers и каскад; setFatal — storage-fatal.",
+          "source": {
+            "file": "pkg/orchestrator/orchestrator.go",
+            "start": 1,
+            "end": 1223
+          },
+          "metrics": {
+            "loc": 1223
+          }
+        },
+        {
+          "id": "scheduling",
+          "label": "Планирование (scheduling.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "Активация pending/ready, CAS ready → running → spawn (startReadyStage), executionKind, failBlockedStages, решение о выходе (shouldExit, runStateAllowsExit для Store.FinalizeIf).",
+          "source": {
+            "file": "pkg/orchestrator/scheduling.go",
+            "start": 1,
+            "end": 376
+          },
+          "metrics": {
+            "loc": 376
+          }
+        },
+        {
+          "id": "control",
+          "label": "Control API (control_api.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "Команды из HTTP: Approve/Revise/Retry/Pause/Continue/Button — durable-переход до запуска работы. Здесь же объявлен runContext (104-111) — run-scoped контекст, который зовут ~12 подсистем.",
+          "source": {
+            "file": "pkg/orchestrator/control_api.go",
+            "start": 1,
+            "end": 370
+          },
+          "metrics": {
+            "loc": 370
+          }
+        },
+        {
+          "id": "recovery",
+          "label": "Восстановление (recovery.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "Диспетчеризация по статусу на старте (resumeStageAtStatus, общий с Continue), startPlanningForPending, загрузка review-pause маркера, восстановление hook/quota/verify-парков.",
+          "source": {
+            "file": "pkg/orchestrator/recovery.go",
+            "start": 1,
+            "end": 428
+          },
+          "metrics": {
+            "loc": 428
+          }
+        },
+        {
+          "id": "reviewpause",
+          "label": "Review pause (reviewpause.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "Пауза флоу с заметками ревью, resumeOwner, runResumeTransaction. Здесь же лежат общие примитивы запуска агента стадии (spawnAgentLeased 53-60, spawnKind 63-67, computeResumeKind 35-46, withFeedbackRunner/plainRunner 244-270), которыми пользуется весь движок.",
+          "source": {
+            "file": "pkg/orchestrator/reviewpause.go",
+            "start": 1,
+            "end": 725
+          },
+          "metrics": {
+            "loc": 725
+          }
+        },
+        {
+          "id": "hooks",
+          "label": "Script-хуки (hooks.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "script_before/script_after стадии с durable решением Retry/Skip и возобновлением после хука.",
+          "source": {
+            "file": "pkg/orchestrator/hooks.go",
+            "start": 1,
+            "end": 432
+          },
+          "metrics": {
+            "loc": 432
+          }
+        },
+        {
+          "id": "graph-mutate",
+          "label": "Вставка стадии (graph_mutate.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "Динамическое добавление стадии: preview и commit через Store.AddStageToGraph (revision, preconditions), затем публикация новой ревизии реестра; flow.yaml не переписывается.",
+          "source": {
+            "file": "pkg/orchestrator/graph_mutate.go",
+            "start": 1,
+            "end": 220
+          },
+          "metrics": {
+            "loc": 220
+          }
+        },
+        {
+          "id": "notices",
+          "label": "Уведомления (notices.go)",
+          "kind": "file",
+          "parent": "engine",
+          "description": "publishNotice (17-20) — общий live + notices.jsonl путь UI-уведомлений (best-effort, не замена events.jsonl); в том же файле — форматирование usage-limit сообщений (QuotaWaitMessage, StageQuota...).",
+          "source": {
+            "file": "pkg/orchestrator/notices.go",
+            "start": 1,
+            "end": 186
+          },
+          "metrics": {
+            "loc": 186
+          }
+        },
+        {
+          "id": "turn",
+          "label": "Ход стадии",
+          "kind": "subsystem",
+          "parent": "orchestrator",
+          "description": "Один ход агента стадии: сборка промпта, конфигурация executor, цикл попыток и каноническое решение о completion, quota-парк, AI-verify, файловый диалог, инъекция памяти."
+        },
+        {
+          "id": "prompts-runners",
+          "label": "Раннеры фаз (agents.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "Раннеры planning/implementation/review/autonomous в вариантах fresh, with-feedback и feedback-turn: пять сборок prompts.Inputs (176, 268, 327, 385, 434), file-probe и gateWithVerify как completionCheck.",
+          "source": {
+            "file": "pkg/orchestrator/agents.go",
+            "start": 1,
+            "end": 539
+          },
+          "metrics": {
+            "loc": 539
+          }
+        },
+        {
+          "id": "runner-factory",
+          "label": "Конфигурация executor (runner_factory.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "executor.Config стадии: runnerFor (interactive: сессия, resume, ResolveArgs) и nonInteractiveRunner — два почти одинаковых литерала (147-171, 194-217); отдельный runnerForVerify с урезанным набором capability.",
+          "source": {
+            "file": "pkg/orchestrator/runner_factory.go",
+            "start": 1,
+            "end": 272
+          },
+          "metrics": {
+            "loc": 272
+          }
+        },
+        {
+          "id": "retry",
+          "label": "Цикл попыток (retry.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "runWithRetry/runRetryLoop — каноническое решение о completion хода (AGENTS.md), parkForPeers, claimVerifyResume.",
+          "source": {
+            "file": "pkg/orchestrator/retry.go",
+            "start": 1,
+            "end": 584
+          },
+          "metrics": {
+            "loc": 584
+          }
+        },
+        {
+          "id": "run-retry-loop",
+          "label": "runRetryLoop",
+          "kind": "symbol",
+          "parent": "retry",
+          "description": "Попытки одного хода: бюджеты (attempt, unknownRetries, verifyFailures, stalemate), admission и quota-парк, доставка inbox, открытый вопрос, парк по peers, completion-check с классификацией исходов verify, epoch-фенсинг, backoff.",
+          "source": {
+            "file": "pkg/orchestrator/retry.go",
+            "start": 268,
+            "end": 584
+          },
+          "metrics": {
+            "loc": 317,
+            "complexity": 64
+          }
+        },
+        {
+          "id": "quota",
+          "label": "Quota-парк (quota.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "Durable парк и пробуждение по usage-limit провайдера для стадий, verify-шагов и задач helpers; verifyCounters переживают парк.",
+          "source": {
+            "file": "pkg/orchestrator/quota.go",
+            "start": 1,
+            "end": 422
+          },
+          "metrics": {
+            "loc": 422
+          }
+        },
+        {
+          "id": "verify-pass",
+          "label": "AI-verify (verify.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "Verify после успешного file-probe: lease swap, fail-fast по шагам, manifest/report/feedback, quota-resume прохода (restoreVerifyPasses); stalemate review_patience — в verify_stalemate.go.",
+          "source": {
+            "file": "pkg/orchestrator/verify.go",
+            "start": 1,
+            "end": 920
+          },
+          "metrics": {
+            "loc": 920
+          }
+        },
+        {
+          "id": "run-verification",
+          "label": "RunVerification",
+          "kind": "symbol",
+          "parent": "verify-pass",
+          "description": "Один проход verify: lease, resume-курсор, контекст, цикл agent/shell шагов с ретраями, парком и оформлением исхода каждого шага.",
+          "source": {
+            "file": "pkg/orchestrator/verify.go",
+            "start": 195,
+            "end": 494
+          },
+          "metrics": {
+            "loc": 300,
+            "complexity": 48
+          }
+        },
+        {
+          "id": "dialog",
+          "label": "Файловый диалог (dialog_poller.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "Поллер question.json: авто-ответ для non-interactive, показ пользователю (EvAskUser), repair битого JSON; дайджест диалога (dialog_digest.go). pollQuestions (65-228) — цикломатика 32.",
+          "source": {
+            "file": "pkg/orchestrator/dialog_poller.go",
+            "start": 1,
+            "end": 674
+          },
+          "metrics": {
+            "loc": 674
+          }
+        },
+        {
+          "id": "memory",
+          "label": "Память (memory_inject.go, reflection.go)",
+          "kind": "file",
+          "parent": "turn",
+          "description": "Инъекция среза памяти в промпт (memoryBlockForStage) и live reflection через pkg/memorypipeline; ошибка памяти не меняет FSM.",
+          "source": {
+            "file": "pkg/orchestrator/memory_inject.go",
+            "start": 1,
+            "end": 56
+          }
+        },
+        {
+          "id": "collab",
+          "label": "Collaboration-домен",
+          "kind": "subsystem",
+          "parent": "orchestrator",
+          "description": "Helpers и Agent Mesh (≈9.9k строк, ≈56% корневого пакета). Паттерн durable-first: спланировать effects → Store.ApplyRunOperation (preconditions, идемпотентный ID) → внешние эффекты (notice, пробуждение, spawn). Сообщение, receipt, изменение задачи и разрешение waits часто коммитятся ОДНОЙ операцией."
+        },
+        {
+          "id": "helpers",
+          "label": "Helpers (assistants*.go, watch_tasks.go)",
+          "kind": "subsystem",
+          "parent": "collab",
+          "description": "Жизненный цикл задач помощников: admission, queued → running CAS, ход (runHelperTask), результат и делегирование, waiver, каскад, watcher, required-барьер стадии.",
+          "source": {
+            "file": "pkg/orchestrator/assistants.go",
+            "start": 1,
+            "end": 709
+          }
+        },
+        {
+          "id": "run-helper-task",
+          "label": "runHelperTask",
+          "kind": "symbol",
+          "parent": "helpers",
+          "description": "Ход помощника: подготовка, запуск, ~12 исходов неуспеха и 4 варианта коммита успеха.",
+          "source": {
+            "file": "pkg/orchestrator/assistants_lifecycle.go",
+            "start": 133,
+            "end": 415
+          },
+          "metrics": {
+            "loc": 283,
+            "complexity": 49
+          }
+        },
+        {
+          "id": "mesh-core",
+          "label": "Mesh core (agentcomm.go и др.)",
+          "kind": "subsystem",
+          "parent": "collab",
+          "description": "Service (agentcomm.go:28-49, единственная реализация — *Orchestrator): сообщения, attach, roster, inbox, токены, side/run-agent, team, spawn участников, RedactSecrets.",
+          "source": {
+            "file": "pkg/orchestrator/agentcomm.go",
+            "start": 1,
+            "end": 435
+          }
+        },
+        {
+          "id": "mesh-waits",
+          "label": "Mesh waits (agentcomm_wait*.go, resume, unread)",
+          "kind": "subsystem",
+          "parent": "collab",
+          "description": "Ожидания и пробуждения: wait/wait-status, resume ожидающего (стадия или задача, live или startup), unread, unanswerable, turn reply.",
+          "source": {
+            "file": "pkg/orchestrator/agentcomm_wait.go",
+            "start": 1,
+            "end": 773
+          }
+        },
+        {
+          "id": "board",
+          "label": "Board (agentcomm_board*.go)",
+          "kind": "subsystem",
+          "parent": "collab",
+          "description": "Доска фактов и typed board tasks с версиями и назначениями.",
+          "source": {
+            "file": "pkg/orchestrator/agentcomm_board_tasks.go",
+            "start": 1,
+            "end": 667
+          }
+        },
+        {
+          "id": "loops",
+          "label": "Loops (agentcomm_loop*.go)",
+          "kind": "subsystem",
+          "parent": "collab",
+          "description": "Периодические подсказки (loop add/list/stop) и планировщик со stop/join до cancel рана.",
+          "source": {
+            "file": "pkg/orchestrator/agentcomm_loop_scheduler.go",
+            "start": 1,
+            "end": 390
+          }
+        },
+        {
+          "id": "proposals",
+          "label": "Предложения и обсуждения (proposal*.go, feedback_intent.go, discussion*.go)",
+          "kind": "subsystem",
+          "parent": "collab",
+          "description": "Предложения, отложенная доставка Revise (feedback intents), обсуждения. UI предложений удалён (cf300b96), backend оставлен.",
+          "source": {
+            "file": "pkg/orchestrator/feedback_intent.go",
+            "start": 1,
+            "end": 471
+          }
+        },
+        {
+          "id": "bus",
+          "label": "pkg/orchestrator/bus",
+          "kind": "package",
+          "parent": "orchestrator",
+          "description": "Правила FSM поверх state.Store (CAS по статусу/epoch/seq), CriticalBus (события в горутину Run) и UIBus (дашборд).",
+          "metrics": {
+            "rp": 16,
+            "op": 27
+          }
+        },
+        {
+          "id": "concurrency",
+          "label": "pkg/orchestrator/concurrency",
+          "kind": "package",
+          "parent": "orchestrator",
+          "description": "Командные семафоры, Lease (release-before-acquire для verify), owner-очереди SpawnOwned, SpawnDetached, учёт агентских горутин и WaitAgents.",
+          "metrics": {
+            "rp": 20,
+            "op": 29
+          }
+        },
+        {
+          "id": "graph",
+          "label": "pkg/orchestrator/graph",
+          "kind": "package",
+          "parent": "orchestrator",
+          "description": "Runtime-реестр стадий: версионные снимки Registry, atomic Store.Replace, динамическая вставка, persist. Обещает неизменяемость снимка, но копирует только DependsOn (см. находку registry-nested-alias).",
+          "metrics": {
+            "rp": 19,
+            "op": 17
+          }
+        },
+        {
+          "id": "stagefiles",
+          "label": "pkg/orchestrator/stagefiles",
+          "kind": "package",
+          "parent": "orchestrator",
+          "description": "Файловые контракты стадии: plan/completion, сессии, verify manifest/результаты/отчёты, notices.jsonl.",
+          "metrics": {
+            "loc": 1621
+          }
+        },
+        {
+          "id": "verify-types",
+          "label": "pkg/orchestrator/verify",
+          "kind": "package",
+          "parent": "orchestrator",
+          "description": "Строгий результат verify и классификация исходов (outcome.go, result.go).",
+          "metrics": {
+            "rp": 18,
+            "op": 16
+          }
+        },
+        {
+          "id": "ext",
+          "label": "Внешние границы (контекст)",
+          "kind": "subsystem",
+          "description": "Пакеты вне scope: показаны только чтобы объяснить, что пересекает границу pkg/orchestrator."
+        },
+        {
+          "id": "cmd-afm",
+          "label": "cmd/afm",
+          "kind": "package",
+          "parent": "ext",
+          "description": "Точка сборки рана (run.go: New → startDashboard → Run) и адаптеры портов pkg/server к *Orchestrator (run_collaboration.go, run_mesh.go, run_agent_mesh.go, run_side_agent*.go)."
+        },
+        {
+          "id": "server",
+          "label": "pkg/server",
+          "kind": "package",
+          "parent": "ext",
+          "description": "HTTP/WebSocket дашборда; объявляет узкие порты (actions.go: StageActions, AssistantActions, FlowActions, ...); корневой пакет импортирует только ради DTO и ошибок."
+        },
+        {
+          "id": "state",
+          "label": "pkg/state",
+          "kind": "package",
+          "parent": "ext",
+          "description": "events.jsonl — источник истины, state.json — кэш: Apply (CAS переходов), ApplyRunOperation (атомарные операции collaboration), AddStageToGraph, FinalizeIf."
+        },
+        {
+          "id": "executor",
+          "label": "pkg/executor",
+          "kind": "package",
+          "parent": "ext",
+          "description": "Subprocess агентов и verify; импортирует pkg/orchestrator/verify."
+        }
+      ],
+      "edges": [
+        {
+          "id": "e-cmd-core",
+          "source": "cmd-afm",
+          "target": "core",
+          "kind": "constructs",
+          "confidence": "confirmed",
+          "evidence": "cmd/afm/run.go:314 orchestrator.New(orchOpts); run.go:389 orch.Run(ctx); дашборд стартует раньше Run (run.go:334 startDashboard)."
+        },
+        {
+          "id": "e-cmd-server",
+          "source": "cmd-afm",
+          "target": "server",
+          "kind": "adapts",
+          "confidence": "confirmed",
+          "evidence": "cmd/afm/run.go:334-349 server.Config{AssistantActions: collab.actions(orch), ProposalActions: ...}; cmd/afm/run_collaboration.go:251-267 — адаптер *orchestrator.Orchestrator → server.AssistantActions."
+        },
+        {
+          "id": "e-server-orch",
+          "source": "server",
+          "target": "orchestrator",
+          "kind": "imports",
+          "confidence": "confirmed",
+          "evidence": "pkg/server/graph.go:10, mesh.go:9, handlers.go:22, agent_mesh.go:13 и др. импортируют корневой пакет ради DTO и ошибок (LoopView, AddStageDraft, BoardTaskReceipt, ErrFlowPaused); вызовы идут через порты pkg/server/actions.go:11-64, реализованные адаптерами cmd/afm."
+        },
+        {
+          "id": "e-executor-verifytypes",
+          "source": "executor",
+          "target": "verify-types",
+          "kind": "imports",
+          "confidence": "confirmed",
+          "evidence": "pkg/executor/executor.go:22 импортирует pkg/orchestrator/verify: нижний слой зависит от подпакета оркестратора (вне scope, отмечено)."
+        },
+        {
+          "id": "e-core-bus",
+          "source": "core",
+          "target": "bus",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:672 triggerWithSeq → o.fsm.Apply; публикация o.ui.Publish (689) и o.critical.TryPublish (702)."
+        },
+        {
+          "id": "e-bus-state",
+          "source": "bus",
+          "target": "state",
+          "kind": "persists",
+          "confidence": "confirmed",
+          "evidence": "bus/fsm.go:218 f.store.Apply(tr) — CAS перехода."
+        },
+        {
+          "id": "e-concurrency-bus",
+          "source": "concurrency",
+          "target": "bus",
+          "kind": "imports",
+          "confidence": "confirmed",
+          "evidence": "concurrency/concurrency.go:11, 68, 124: Manager держит *bus.CriticalBus, через него завершения агентов возвращаются в горутину Run."
+        },
+        {
+          "id": "e-core-graph",
+          "source": "core",
+          "target": "graph",
+          "kind": "reads",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:641 reg() = o.graph.Load(): каждый вызов — снимок текущей ревизии."
+        },
+        {
+          "id": "e-graphmut-state",
+          "source": "graph-mutate",
+          "target": "state",
+          "kind": "persists",
+          "confidence": "confirmed",
+          "evidence": "graph_mutate.go:194 o.opts.Store.AddStageToGraph(op) — durable запись определения стадии."
+        },
+        {
+          "id": "e-graphmut-graph",
+          "source": "graph-mutate",
+          "target": "graph",
+          "kind": "publishes",
+          "confidence": "confirmed",
+          "evidence": "graph_mutate.go:211 o.graph.Replace(reg.WithPlan(plan).Stages()) — новая ревизия после durable commit."
+        },
+        {
+          "id": "e-core-scheduling",
+          "source": "core",
+          "target": "scheduling",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "Run/handleEvent → shouldExit, startReadyStages, failBlockedStages, tryActivatePrePlanned; orchestrator.go:861 Store.FinalizeIf(o.runStateAllowsExit)."
+        },
+        {
+          "id": "e-core-recovery",
+          "source": "core",
+          "target": "recovery",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "Run: loadReviewPause (orchestrator.go:793, recovery.go:41), resumeReviewPause (807), startPlanningForPending (812)."
+        },
+        {
+          "id": "e-control-core",
+          "source": "control",
+          "target": "core",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "control_api.go: Trigger/triggerWithSeq (например, 214 EvRevise с ExpectFrom=awaiting_approval), bumpPauseGen."
+        },
+        {
+          "id": "e-control-scheduling",
+          "source": "control",
+          "target": "scheduling",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "control_api.go:202 executionKind; retryStage, startReadyStages, failBlockedStages (8 различных функций по графу вызовов)."
+        },
+        {
+          "id": "e-recovery-scheduling",
+          "source": "recovery",
+          "target": "scheduling",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "recovery.go → activatePrePlannedStage, startReadyStages, executionKind, failBlockedStages, clearInteractiveSessions (12 различных функций)."
+        },
+        {
+          "id": "e-scheduling-reviewpause",
+          "source": "scheduling",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "scheduling.go:144, 189, 261 spawnKind / plainRunner — объявлены в reviewpause.go:63-67, 259-270."
+        },
+        {
+          "id": "e-recovery-reviewpause",
+          "source": "recovery",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "recovery.go → spawnKind, spawnAgentLeased, withFeedbackRunner, plainRunner (запуск стадии) и runResumeTransaction (сама review pause, reviewpause.go:451)."
+        },
+        {
+          "id": "e-core-reviewpause",
+          "source": "core",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:988-991 spawnKind; turnRunner (1168-1173) → plainRunner."
+        },
+        {
+          "id": "e-control-reviewpause",
+          "source": "control",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "control_api.go:202-205 spawnKind."
+        },
+        {
+          "id": "e-hooks-reviewpause",
+          "source": "hooks",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "hooks.go:374 o.plainRunner(o.executionKind(s))(ctx, s)."
+        },
+        {
+          "id": "e-prompts-reviewpause",
+          "source": "prompts-runners",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "agents.go:222, 359, 405, 455 o.spawnKind(...) — перезапуск с feedback из раннера."
+        },
+        {
+          "id": "e-quota-reviewpause",
+          "source": "quota",
+          "target": "reviewpause",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "quota.go:254 computeResumeKind (reviewpause.go:35-46)."
+        },
+        {
+          "id": "e-reviewpause-concurrency",
+          "source": "reviewpause",
+          "target": "concurrency",
+          "kind": "spawns",
+          "confidence": "confirmed",
+          "evidence": "reviewpause.go:53-60 spawnAgentLeased → o.concurrency.SpawnAgentLease; lease регистрируется в stageLeases для verify."
+        },
+        {
+          "id": "e-reviewpause-prompts",
+          "source": "reviewpause",
+          "target": "prompts-runners",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "reviewpause.go:244-270 withFeedbackRunner/plainRunner: switch по kind → runPlanningAgent, runImplementationWithFeedback и др. (agents.go)."
+        },
+        {
+          "id": "e-core-prompts",
+          "source": "core",
+          "target": "prompts-runners",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:983-993 вручную выбирает o.runAutonomousWithFeedback / o.runImplementationWithFeedback для revising-стадии."
+        },
+        {
+          "id": "e-control-prompts-revise",
+          "source": "control",
+          "target": "prompts-runners",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "control_api.go:202-205 reviseAwaitingAssistants вручную выбирает runAutonomousWithFeedback / runImplementationWithFeedback."
+        },
+        {
+          "id": "e-control-prompts-planning",
+          "source": "control",
+          "target": "prompts-runners",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "control_api.go:228 o.concurrency.SpawnAgent(..., o.runPlanningWithFeedback) — planning-revise намеренно без lease и auto-attach."
+        },
+        {
+          "id": "e-prompts-retry",
+          "source": "prompts-runners",
+          "target": "run-retry-loop",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "agents.go:175, 295 o.runRetryLoop(ctx, s, phase, feedback, agentFn, completionCheck, ...)."
+        },
+        {
+          "id": "e-prompts-runnerfactory",
+          "source": "prompts-runners",
+          "target": "runner-factory",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "agents.go:157, 201, 288 o.runnerFor(s, phase)."
+        },
+        {
+          "id": "e-prompts-verify",
+          "source": "prompts-runners",
+          "target": "verify-pass",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "agents.go:357, 403, 453 o.gateWithVerify(...) как completionCheck; verify.go:820-830 запускает RunVerification только после file-probe."
+        },
+        {
+          "id": "e-prompts-memory",
+          "source": "prompts-runners",
+          "target": "memory",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "agents.go:185, 277 MemoryBlock: o.memoryBlockForStage(s) (memory_inject.go:14)."
+        },
+        {
+          "id": "e-runnerfactory-executor",
+          "source": "runner-factory",
+          "target": "executor",
+          "kind": "configures",
+          "confidence": "confirmed",
+          "evidence": "runner_factory.go:147-174 и 194-221 — два литерала executor.Config → executor.New(cfg); runnerForVerify (236-256) — отдельный набор полей."
+        },
+        {
+          "id": "e-runnerfactory-meshcore",
+          "source": "runner-factory",
+          "target": "mesh-core",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "runner_factory.go:167-168 MeshClient: o.meshClientFor(meshStageParticipantID(s.ID)), OnDelivered: o.agentCommOnDeliveredForStage(s)."
+        },
+        {
+          "id": "e-retry-core",
+          "source": "run-retry-loop",
+          "target": "core",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "retry.go: Trigger(EvFail/EvAskUser/EvResumeAfterRetry), triggerWithSeq(EvScheduleRetry, «retries exhausted»), completeAgent."
+        },
+        {
+          "id": "e-retry-quota",
+          "source": "run-retry-loop",
+          "target": "quota",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "retry.go:354-355 admitStageTurn/parkForQuota; 438 parkVerifyForQuota с verifyCounters; 509 parkForQuota по UsageLimitError."
+        },
+        {
+          "id": "e-retry-meshwaits",
+          "source": "run-retry-loop",
+          "target": "mesh-waits",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "retry.go:359 meshWaitStatusesOf; 404-408 turnEpisode → parkForPeers."
+        },
+        {
+          "id": "e-verify-concurrency",
+          "source": "run-verification",
+          "target": "concurrency",
+          "kind": "uses",
+          "confidence": "confirmed",
+          "evidence": "verify.go:202-219 lease из stageLeases: Release() или SwapTo(s.Command) только для VerifyRejectedError."
+        },
+        {
+          "id": "e-verify-stagefiles",
+          "source": "verify-pass",
+          "target": "stagefiles",
+          "kind": "persists",
+          "confidence": "confirmed",
+          "evidence": "verify.go:241-250 stagefiles.WriteManifest; 370-383 SaveAcceptedResult/WriteReport; 489-493 финальный manifest и ClearActiveFeedback; persistVerifyRejection (680-705)."
+        },
+        {
+          "id": "e-verify-verifytypes",
+          "source": "verify-pass",
+          "target": "verify-types",
+          "kind": "uses",
+          "confidence": "confirmed",
+          "evidence": "verify.go:369-397 switch по verify.VerdictPass/NeedsChanges/Inconclusive результата ModelResult."
+        },
+        {
+          "id": "e-verify-notices",
+          "source": "verify-pass",
+          "target": "notices",
+          "kind": "publishes",
+          "confidence": "confirmed",
+          "evidence": "verify.go:103-121 emitVerifyResult → o.publishNotice(EventVerifyResult)."
+        },
+        {
+          "id": "e-dialog-core",
+          "source": "dialog",
+          "target": "core",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "dialog_poller.go → triggerWithSeq(EvAskUser) с прикреплением seq к ask_user; resumeAfterAnswer."
+        },
+        {
+          "id": "e-core-dialog",
+          "source": "core",
+          "target": "dialog",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:820 o.startQuestionPoller(ctx); hasOpenQuestion/popPreAskPhase из ядра и retry."
+        },
+        {
+          "id": "e-core-helpers",
+          "source": "core",
+          "target": "helpers",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:813 recoverAssistants, 822 startWatchPoller, 717 finalizeWatchersForStage (пост-эффект triggerWithSeq)."
+        },
+        {
+          "id": "e-core-meshwaits",
+          "source": "core",
+          "target": "mesh-waits",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:691-699 resumeWaitersAfterTransition, releaseUnreadAfterTransition, releaseUnanswerableWaitsAfterFinish; 815-818 recoverMeshWaits … recoverMeshWaitDeadlines; handleEvent (922-927) onPeerReplied/onPeerQuestion/onPeerWaitEnded."
+        },
+        {
+          "id": "e-core-proposals",
+          "source": "core",
+          "target": "proposals",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:698 noticeUnansweredHumanPosts, 724 redeliverPendingFeedbackIntents, 814 recoverFeedbackIntents."
+        },
+        {
+          "id": "e-core-loops",
+          "source": "core",
+          "target": "loops",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "orchestrator.go:827-828 stopLoops := o.startLoopScheduler(ctx); defer stopLoops()."
+        },
+        {
+          "id": "e-helpers-meshcore",
+          "source": "helpers",
+          "target": "mesh-core",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "Граф вызовов: 35 различных функций (agentCommBlockForTask, deliverRenderedInbox, meshClientFor, announceMessage, …)."
+        },
+        {
+          "id": "e-meshcore-helpers",
+          "source": "mesh-core",
+          "target": "helpers",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "17 различных функций (admitTopLevelTask, maybeScheduleTask, finishTaskFrom, idleRunAgent, …); AttachAndSend (agentcomm_attach.go:273-413) коммитит задачу, тред и сообщение одной операцией."
+        },
+        {
+          "id": "e-helpers-meshwaits",
+          "source": "helpers",
+          "target": "mesh-waits",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "20 различных функций (notifyAndResumeWaits, planTurnReplies, tryResumePeer, releaseUnanswerableWaitsAfterFinish, …)."
+        },
+        {
+          "id": "e-meshcore-meshwaits",
+          "source": "mesh-core",
+          "target": "mesh-waits",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "13 различных функций (notifyAndResumeWaits, announceAndWakeEnded, stageIDFromMeshParticipant, …)."
+        },
+        {
+          "id": "e-meshwaits-meshcore",
+          "source": "mesh-waits",
+          "target": "mesh-core",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "38 различных функций (planMessage, deriveMesh*ID, marshalEffect, meshParticipantForTask, …)."
+        },
+        {
+          "id": "e-board-meshcore",
+          "source": "board",
+          "target": "mesh-core",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "33 различные функции (deliverCommittedMessages, liveRoster, openThreadWithMembers, …)."
+        },
+        {
+          "id": "e-loops-meshcore",
+          "source": "loops",
+          "target": "mesh-core",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "32 различные функции (planMarkedMessage, deliverCommittedMessages, liveRoster, …)."
+        },
+        {
+          "id": "e-proposals-meshcore",
+          "source": "proposals",
+          "target": "mesh-core",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "21 различная функция (ensureParticipantEffects, wakeRecipients, resolveParticipant, …)."
+        },
+        {
+          "id": "e-helpers-quota",
+          "source": "helpers",
+          "target": "quota",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "23 различные функции (planQuotaWait, retryTaskAt, taskProviderHold, limitWarningSink, …): quota-парк задач помощников."
+        },
+        {
+          "id": "e-helpers-concurrency",
+          "source": "helpers",
+          "target": "concurrency",
+          "kind": "spawns",
+          "confidence": "confirmed",
+          "evidence": "assistants.go:479 o.concurrency.SpawnOwned(ctx, concurrency.TaskOwnerKey(taskID), cmd, nil, …): owner-очередь сериализует ходы одной задачи."
+        },
+        {
+          "id": "e-meshcore-state",
+          "source": "mesh-core",
+          "target": "state",
+          "kind": "persists",
+          "confidence": "confirmed",
+          "evidence": "agentcomm_messages.go:57, 169, 198, 293, 601 o.opts.Store.ApplyRunOperation(op, …)."
+        },
+        {
+          "id": "e-helpers-state",
+          "source": "helpers",
+          "target": "state",
+          "kind": "persists",
+          "confidence": "confirmed",
+          "evidence": "assistants.go:254, 284, 311; assistants_cascade.go:93, 127 Store.ApplyRunOperation."
+        },
+        {
+          "id": "e-helpers-executor",
+          "source": "helpers",
+          "target": "executor",
+          "kind": "configures",
+          "confidence": "confirmed",
+          "evidence": "assistants_lifecycle.go:35-53 helperExecutorConfig: свой набор (ScratchDir, Redact/Secrets, mesh участника), без BrowserMCP и StageDir стадии."
+        },
+        {
+          "id": "e-helpers-control",
+          "source": "helpers",
+          "target": "control",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "assistants.go:253, 309, 589; assistants_cascade.go:92 o.runContext(…) — объявлен в control_api.go:104-111."
+        },
+        {
+          "id": "e-helpers-core",
+          "source": "helpers",
+          "target": "core",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "assistants.go:591-598: после терминального коммита задачи afterFinish в finishTaskTurnReplying вызывает maybeCompleteAfterAssistants (orchestrator.go:1076-1080) → completeStage → completeStageFenced (1040-1068): generation-aware RequiredBlocker (pkg/state/assistants_barrier.go:71-87), CAS EvComplete, затем after-hook/reflection/каскад. Тот же вход — assistants_waiver.go:69. Исход required-задачи — вход барьера завершения стадии; FSM-переход выполняет completion-путь ядра, а не helper."
+        },
+        {
+          "id": "e-meshwaits-control",
+          "source": "mesh-waits",
+          "target": "control",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "agentcomm_resume.go:116, agentcomm_unread.go:86, agentcomm_unanswerable.go:37 o.runContext(context.Background())."
+        },
+        {
+          "id": "e-meshcore-notices",
+          "source": "mesh-core",
+          "target": "notices",
+          "kind": "publishes",
+          "confidence": "confirmed",
+          "evidence": "publishNotice из mesh core (13 вызовов по графу); всего его зовут 55 функций в 12 подсистемах."
+        },
+        {
+          "id": "e-recovery-hooks",
+          "source": "recovery",
+          "target": "hooks",
+          "kind": "calls",
+          "confidence": "confirmed",
+          "evidence": "recovery.go → readHookPending, resumeAfterHook, resumeHookFailedWait, withBeforeHook."
+        },
+        {
+          "id": "e-hooks-core",
+          "source": "hooks",
+          "target": "core",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "hooks.go → Trigger/triggerWithSeq (durable Retry/Skip)."
+        },
+        {
+          "id": "e-quota-core",
+          "source": "quota",
+          "target": "core",
+          "kind": "transitions",
+          "confidence": "confirmed",
+          "evidence": "quota.go → Trigger/triggerWithSeq, resumeStageForPhaseAs, armResumeContext."
+        }
+      ]
+    },
+    "findings": [
+      {
+        "id": "registry-nested-alias",
+        "title": "graph.Registry разделяет вложенные данные стадий вопреки контракту неизменяемого снимка",
+        "severity": "medium",
+        "detail": "Факт: doc Registry (graph/registry.go:14-17) обещает, что каждый accessor возвращает копию и вызывающий может свободно мутировать результат; newRegistryAt (32-49) и cloneStage (58-64) копируют только DependsOn. Остальные reference-поля flow.Stage — Agents, Skills, Artifacts (и Artifact.Inline), Inputs, Verify.Steps и указатели VerifySpec, AutoRun, Buttons, Reflect, MemoryUse, Hooks (Events, SkipEvents, Env, ResolvedEnv), Browser, Assistants — общие у входного slice, реестра, всех выданных копий и следующих ревизий (WithStages строится из Stages() старого снимка, graph_mutate.go:211). Scratch-проба Codex: изменение Agents после NewRegistry меняет реестр; изменение Stages()[0].Verify.Steps[0].Run и *Browser меняет последующие Stage(\"s\") при revision=1. Production-мутаций вложенных полей не найдено (поиск по pkg/ и cmd/ без тестов) — это латентный дефект контракта, а не наблюдавшийся сбой. Вывод: concurrent-читатели reg() полагаются на изоляцию, которой нет; первая же правка, мутирующая полученную стадию «по документации», молча изменит трек/verify/capability без graph-коммита и создаст гонку данных. registry_test.go проверяет только ID/DependsOn. Источник: codex-f1, проверено Claude по коду.",
+        "node_ids": [
+          "graph",
+          "graph-mutate",
+          "core"
+        ],
+        "evidence": "pkg/orchestrator/graph/registry.go:14-17, 32-64, 69-120, 156-160; graph_mutate.go:211; pkg/flow/flow.go:133-190 (Stage); pkg/flow/verify.go:35-48 (VerifySpec); pkg/lifecyclehooks/types.go:118-131 (Hook); scratch registry_alias_probe.go (Codex); graph/registry_test.go:24-83, 242-258.",
+        "priority": {
+          "benefit": 5,
+          "ease": 4,
+          "reason": "Единственная correctness-находка: опасность продемонстрирована на публичном API, исправление ограничено graph/registry.go и тестами, без миграции журналов. Ease 4, а не 5: нужно пройти все вложенные типы, сохранить nil/empty и неэкспортируемый fromScalar. Выгода — предотвращение будущего сбоя, а не устранение наблюдавшегося."
+        }
+      },
+      {
+        "id": "retry-loop-overload",
+        "title": "runRetryLoop совмещает бюджеты, парки, фенсинг и классификацию исходов хода в одной функции",
+        "severity": "medium",
+        "detail": "Факт: runRetryLoop (retry.go:268-584) — каноническое решение о completion (pkg/orchestrator/AGENTS.md) — совмещает внешний attempt, отдельный бюджет unknownRetries, бюджет коррекций verifyFailures, stalemate (unchangedRejections/prevFingerprint), admission и quota-парки (admitStageTurn, parkForQuota, parkVerifyForQuota), доставку inbox, открытый вопрос (EvAskUser), парк по peers (turnEpisode/parkForPeers), completion-check с классификацией исходов verify, epoch-фенсинг (turnOwnsStage/handOffRevise) и три места verifyResume.spend() (370, 406, 416). Взаимодействие бюджетов тонкое: обязательное `attempt < maxRetries` в обеих ветках транспортного бюджета (537-545) закреплено регрессией UnknownErrorOnLastAllowedAttemptStillFails. Метрика: цикломатика 64 — максимум в пакете; 44 из 46 коммитов retry.go с 2026-07-01 меняли эту функцию; strictacode её не показал. Вывод: каждая новая причина окончания хода добавлялась веткой в путь успеха (364-494), и ревью любого изменения бюджета требует держать в голове весь цикл. Контрдоводы: порядок веток несёт смысл (фенсинг до побочных эффектов), функция линейна и покрыта ~22 тестовыми файлами, корректность текущего retry не опровергнута; epoch/Pause/Revise/yield — жизненный цикл, а не чистая политика, поэтому универсальный retry-движок не нужен (оба архитектора). Источники: claude f-1, codex-f4.",
+        "node_ids": [
+          "run-retry-loop",
+          "retry",
+          "quota",
+          "mesh-waits",
+          "verify-pass"
+        ],
+        "evidence": "pkg/orchestrator/retry.go:268-584 (runRetryLoop), 226-266; quota.go:109-166 (verifyCounters, parkVerifyForQuota); verify_stalemate.go:163 (handleStalemate); retry_budget_test.go:160-225; verify_quota_test.go:177-210; retry_test.go:161-254; цикломатика go/ast (Claude); git log --since=2026-07-01 -- pkg/orchestrator/retry.go.",
+        "priority": {
+          "benefit": 4,
+          "ease": 3,
+          "reason": "Самая сложная и самая часто меняемая функция ядра: повторяющаяся стоимость изменений подтверждена churn (рубрика 4). Ease 3: один файл, но фенсинг, spend и гонки Pause/Revise требуют характеризации последовательностей. Claude оценивал 4/3, Codex — 3/2 из-за риска для reliability-границы; расхождение снято разбиением на дешёвый первый этап (решения о бюджетах, 3/4) и рискованный второй (ветка успеха, 3/2), от которого можно отказаться."
+        }
+      },
+      {
+        "id": "stage-turn-wiring-duplicated",
+        "title": "Проводка хода стадии продублирована: пять сборок промпта и две конфигурации executor",
+        "severity": "medium",
+        "detail": "Факт: agents.go собирает prompts.Inputs пятью литералами (176, 268, 327, 385, 434) с одинаковыми семью полями (Stage, StageDir, GlobalPrompt, MemoryBlock, BrowserRuntime, AgentComm, AgentCommInbox); блок mkdir + EvFail «mkdir failed» повторён 4 раза (68, 120, 365, 413). runner_factory.go: runnerFor (147-171) и nonInteractiveRunner (194-217) одинаково вычисляют 20 полей executor.Config (IdleTimeout, TruncateOutput, OnAction, OnLimitWarning, WrapperDir, Dir, Debug, RunDir/StageID/Phase, абсолютный StageDir, UsageHint/Provider/OnUsage, BrowserMCP, MeshClient, OnDelivered, Reasoning, RunID, OnObservation) и одинаково ставят InterruptCh после литерала; Command выводится одинаково (s.Command, иначе Client.Command). Различаются только SessionID/Resume и политика ExtraArgs (ResolveArgs у interactive, Client.ExtraArgs только для дефолтной команды у non-interactive). История: одни и те же фичи правили оба места — 84c33f59 (Agent Mesh: 2 поля × 5 промптов и OnDelivered в обоих конфигах), 5451eb52 (browser: 1 поле × 5 и runner_factory.go), b052ac98 (memory: 2 поля × 5). Вывод: новая сквозная связь хода требует 5 + 2 согласованных правок; текущий рассинхрон не найден. Намеренные различия сохраняются: RetryContext фаз собирается из разных заметок (discussionQuestionNote нет у embedded review и planning — намеренность неизвестна), interactive-ветка с сессией и ResolveArgs; verify (runnerForVerify) и helper (helperExecutorConfig) имеют другой набор capability и НЕ должны наследовать стадийную проводку (предупреждение Codex). Источники: claude f-2 (промпты), codex-f2 (executor).",
+        "node_ids": [
+          "prompts-runners",
+          "runner-factory"
+        ],
+        "evidence": "pkg/orchestrator/agents.go:68-69, 120-121, 174-223, 262-290, 294-360, 365-366, 379-406, 413-414, 425-456; runner_factory.go:123-223, 226-256; assistants_lifecycle.go:35-53; git show 84c33f59 5451eb52 b052ac98 -- pkg/orchestrator/agents.go pkg/orchestrator/runner_factory.go.",
+        "priority": {
+          "benefit": 3,
+          "ease": 4,
+          "reason": "Убирает повторяющуюся стоимость каждой новой сквозной связи и риск дрейфа между фазами; изменения локальны (agents.go, runner_factory.go) и проверяются эталоном промптов и существующими wiring-тестами. Польза ограничена одной подсистемой и не исправляет наблюдавшийся сбой — 3."
+        }
+      },
+      {
+        "id": "helper-turn-monolith",
+        "title": "runHelperTask классифицирует ~12 исходов хода помощника и 4 варианта коммита в одной функции",
+        "severity": "medium",
+        "detail": "Факт: runHelperTask (assistants_lifecycle.go:133-415) включает подготовку (workspace, context.md, startTurn, очистка прежнего raw-ответа), запуск, доставку inbox, notice об изменении дерева и классификацию исходов: shutdown рана, usage-limit, ошибка исполнения, interrupted/finalizedByOther, timeout, !ProcessOK с requeue по taskPausePending/taskClarifyPending (303), yield (parkYieldedTurn, 324), protocol error, ошибка декодирования/repair, delegate, неподдерживаемый kind, pass при открытом required-ребёнке; у хвоста успеха 4 варианта коммита (watcher resting/final, run-agent idle с ответами, helper стадийного агента с ответами, обычный). Метрика: цикломатика 49; 25 из 30 коммитов assistants_lifecycle.go с июля меняли функцию. Вывод: та же проблема, что у runRetryLoop. Цена ошибки ниже только для advisory-задач. Исход required-задачи — вход барьера завершения root-стадии: после терминального коммита afterFinish в finishTaskTurnReplying вызывает maybeCompleteAfterAssistants (assistants.go:591-598) → completeStage (orchestrator.go:1076-1080) → completeStageFenced. Там generation-aware RequiredBlocker (pkg/state/assistants_barrier.go:71-87), CAS EvComplete и после него after-hook, reflection и каскад зависимых (orchestrator.go:1040-1068). Helper меняет только своё durable-состояние, FSM-переходом владеет общий completion-путь. Гейт задачи закрывают только completed с закрывающим вердиктом или waiver (pkg/assistants/tree.go:117-122, assistants_barrier.go:54-63); required-детей текущего поколения барьер обходит сам. Поэтому ошибка классификации, которая закоммитит completed с вердиктом pass вместо failed, requeue, waiting_peer или waiting_children, преждевременно завершит root-стадию и запустит зависимые. Модель исправлена по ревью Codex: в первой версии пакета было утверждение «исход helper не меняет FSM стадии». Ограничение (Codex): finishTaskTurnReplying (assistants.go:538-690) осмысленно коммитит статус задачи, ответы mesh и разрешение waits ОДНОЙ операцией — декомпозиция не должна делить коммиты. Источник: claude f-5.",
+        "node_ids": [
+          "run-helper-task",
+          "helpers"
+        ],
+        "evidence": "pkg/orchestrator/assistants_lifecycle.go:133-415, 303, 324; assistants.go:401-455 (maybeScheduleTask), 468-480 (spawnTask/SpawnOwned), 538-690 (finishTaskTurnReplying), 591-598 (maybeCompleteAfterAssistants в afterFinish); orchestrator.go:1034-1080 (completeStage/completeStageFenced/maybeCompleteAfterAssistants); pkg/state/assistants_barrier.go:71-87 (RequiredBlocker); assistants_barrier_test.go:91-399 (TestBarrier_*, TestCompletionGoesThroughCascade); цикломатика go/ast (Claude); git log --since=2026-07-01 -- pkg/orchestrator/assistants_lifecycle.go.",
+        "priority": {
+          "benefit": 3,
+          "ease": 3,
+          "reason": "Часто меняемый узел helper-подсистемы; разделение подготовки, классификации и коммита упрощает ревью исходов. Ease 3: порядок LoadAndDelete сигналов pause/clarify, finalizedByOther, атомарность коммитов и влияние исхода required-задачи на барьер завершения стадии требуют тщательной сверки. Оценка не меняется: этап не трогает completion-путь, но его регрессии входят в проверку."
+        }
+      },
+      {
+        "id": "verify-pass-mixed",
+        "title": "RunVerification смешивает исполнение шагов, состояние прохода и оформление исходов",
+        "severity": "medium",
+        "detail": "Факт: RunVerification (verify.go:195-494) в одном теле владеет lease (swap-back только для VerifyRejectedError), resume-курсором (restoreVerifyPasses), manifestSteps/passedSteps, чтением plan/summary/artifacts, step timeout, ретраями транзиентного exec-сбоя с прерываемым backoff, quota-парком, классификацией agent- и shell-исходов и публикацией. Хвост отказа «outcome = error → _ = persistManifest() → emitVerifyResult(exec_failure, reason) → return &VerifyExecError{Reason: reason, Step: idx}» дословно повторён 7 раз (verify.go:373, 380, 403, 429, 436, 452, 461). Ещё 3 хвоста похожи, но устроены иначе. Гонка дедлайна (362-366 и 475-480) публикует raceErr.Error() и возвращает исходный raceErr: его Reason = verifyTimedOutReason (709-713), а Error() добавляет префикс шага (errors.go:110-115). Storage-сбой quota-парка (333-338) срабатывает именно потому, что запись manifest с outcome quota_wait не удалась. Остальные ветки имеют свою форму: typed error с enrichExecReason (342-357), inconclusive (394-398), interrupted (413-417, 441-446), отказ через persistVerifyRejection. persistVerifyRejection (680-705) уже показывает полезную узкую границу оформления исхода; stagefiles содержит файловые примитивы. Метрика: цикломатика 48; 18 из 25 коммитов verify.go с июля меняли функцию. Вывод: каждая новая причина отказа копирует хвост, легко нарушить порядок persist/emit. Намеренные различия: shell pass не пишет AI report; Interrupted/timeout/quota сохраняют identity ошибки; порядок persist → emit и fail-closed — контракт (pkg/orchestrator/AGENTS.md:53-54). Наблюдаемое отступление от него — отдельная находка verify-manifest-order. Источники: claude f-4, codex-f3.",
+        "node_ids": [
+          "run-verification",
+          "verify-pass",
+          "stagefiles"
+        ],
+        "evidence": "pkg/orchestrator/verify.go:103-121 (emitVerifyResult), 195-494 (RunVerification), 373/380/403/429/436/452/461 (7 одинаковых хвостов), 333-338, 362-366, 475-480 (3 вариантных), 709-713 (verifyStepDeadlineRace), 680-705 (persistVerifyRejection), 880-919 (restoreVerifyPasses); pkg/orchestrator/errors.go:102-115 (VerifyExecError и Error()); stagefiles/verify.go; pkg/orchestrator/AGENTS.md:46-58; 31 тестовый файл verify_*.",
+        "priority": {
+          "benefit": 3,
+          "ease": 3,
+          "reason": "Ограниченная, но регулярная польза для часто меняемого verify-прохода, без нового пакета. Ease 3: storage-ошибки, recovery и порядок событий затрагивают несколько согласованных мест; полное выделение verify-сервиса дороже и не обосновано (оба архитектора)."
+        }
+      },
+      {
+        "id": "shared-primitives-misplaced",
+        "title": "Общие примитивы пакета лежат в файлах чужих подсистем",
+        "severity": "low",
+        "detail": "Факт: обязательный путь запуска агента стадии (AGENTS.md) — spawnAgentLeased/spawnKind и отображение kind → раннер (computeResumeKind, withFeedbackRunner, plainRunner) — объявлен в reviewpause.go (35-67, 244-270), а вызывается из scheduling, recovery, control_api, orchestrator.go, hooks, agents.go и quota; kind-константы, kindOfPhase и turnRunner — в orchestrator.go (466-470, 1153-1173), feedbackTurnRunner — в agents.go (469-480). runContext (control_api.go:104-111) зовут 33 функции из 12 подсистем. publishNotice (notices.go:17-20; 55 вызывающих функций в 12 подсистемах) делит файл с форматированием usage-limit. projectDir (verify_stalemate.go:88-93) нужен scheduling/recovery/helpers. RedactSecrets (agentcomm.go:364-407) используют 6 подсистем. Каталог стадии считается тремя способами: stageDir (абсолютный, orchestrator.go:622), stageDirFor (относительный, feedback_intent.go:392) и ~47 inline filepath.Join(o.opts.RunDir, id). Вывод: стоимость навигации и ложные ассоциации (путь запуска выглядит частью review pause); поведенческого риска нет. Уточнения при синтезе: newOperationID относится к review pause и остаётся на месте; абсолютный и относительный каталоги стадии не взаимозаменяемы (пути пересекают границу процесса и попадают в события), поэтому их унификация — не перенос и в план не входит. Источник: claude f-6.",
+        "node_ids": [
+          "reviewpause",
+          "control",
+          "notices",
+          "core",
+          "scheduling"
+        ],
+        "evidence": "pkg/orchestrator/reviewpause.go:28-67, 244-270; orchestrator.go:466-470, 622-624, 1153-1173; agents.go:469-480; control_api.go:104-111; notices.go:17-20, 64-150; verify_stalemate.go:85-93; agentcomm.go:364-407; feedback_intent.go:392-394; assistants_declared.go:13-16 (комментарий ссылается на reviewpause.go); граф вызовов Claude.",
+        "priority": {
+          "benefit": 2,
+          "ease": 5,
+          "reason": "Локальная ясность и подготовка диффа runner-kind-dispatch; чистый перенос проверяется компиляцией и тестами и легко откатывается. Риск — конфликты с параллельными ветками, поэтому влить быстро отдельным коммитом."
+        }
+      },
+      {
+        "id": "unused-exported-api",
+        "title": "Экспортированные API без продакшн-вызовов; документация CapabilityFor противоречит коду",
+        "severity": "low",
+        "detail": "Факт (поиск по всему репозиторию без _test.go): CapabilityFor и тип Capability (agentcomm_capability.go:1-41) вызываются только своим тестом; doc утверждает, что их читают roster/UI и Send, — это не так; комментарий CanYieldResume говорит, что у helpers нет yield-пути, что опровергает parkYieldedTurn (assistants_lifecycle.go:324). FollowUp и StopAndClarify (assistants_followup.go:60-107), RetryTask (assistants_cascade.go:67-104) не имели продакшн-вызовов с появления (84a2b4a2); ради StopAndClarify существуют поле taskClarifyPending и ветка в runHelperTask (303). CreateProposal (proposal.go:96-145) — единственный производитель proposal_created и тоже без вызова; UI предложений удалён в cf300b96 с пометкой «бэкенд предложений остаётся» (правило проекта «remove the trigger, keep the engine»). Вывод: CapabilityFor — мёртвый и вводящий в заблуждение код; судьба остальных API — продуктовое решение, а не архитектурное. Источник: claude f-7.",
+        "node_ids": [
+          "mesh-core",
+          "helpers",
+          "proposals"
+        ],
+        "evidence": "pkg/orchestrator/agentcomm_capability.go:1-41; agentcomm_capability_test.go:10, 22; assistants_followup.go:60-107; assistants_cascade.go:67-104; proposal.go:96-145; assistants_lifecycle.go:303, 324; grep по репозиторию; git log -S'.FollowUp(' / -S'.CreateProposal('; git show cf300b96.",
+        "priority": {
+          "benefit": 2,
+          "ease": 5,
+          "reason": "Небольшое сокращение поверхности и устранение ложной документации; удаление CapabilityFor локально и проверяется сборкой. Остальные API — только после решения пользователя."
+        }
+      },
+      {
+        "id": "collab-entry-points-implicit",
+        "title": "Граница движок ↔ collaboration не выражена: Run напрямую перечисляет восстановление и циклы домена",
+        "severity": "low",
+        "detail": "Факт (синтаксический граф Claude): collaboration-домен (assistants*.go, watch_tasks.go, agentcomm*.go, team.go, proposal*.go, feedback_intent.go, discussion*.go; ≈9.9k строк, ≈56% корневого пакета) связан с движком 47 различными функциями engine → collab (25 из них вызывает orchestrator.go) и 32 в обратную сторону. Точки слияния в ядре: Run подряд восстанавливает 6 подсистем (orchestrator.go:813-818) и запускает watch poller и loop scheduler (821-829); triggerWithSeq после перехода вызывает 5 collaboration-хуков вперемешку с ядровыми (687-725); handleEvent маршрутизирует peer-события (922-927). Churn: из последних 40 коммитов orchestrator.go (с 2026-10-15) 11 правили Run, 6 — triggerWithSeq. Контрдовод Codex (принят): triggerWithSeq — намеренная синхронная воронка, доставка feedback может вложенно вызвать EvRevise, порядок пост-эффектов значим; асинхронная шина или реестр наблюдателей недопустимы без доказательства порядка. Подпакет collaboration не обоснован: операции атомарно коммитят эффекты обоих доменов (AttachAndSend, finishTaskTurnReplying), а 158 white-box тестовых файлов опираются на внутренности. Вывод: остаётся лишь дать имена входам восстановления и циклов домена в Run; польза — локальная ясность. Источник: claude f-3 (приоритет понижен).",
+        "node_ids": [
+          "core",
+          "collab",
+          "helpers",
+          "mesh-waits",
+          "proposals",
+          "loops"
+        ],
+        "evidence": "pkg/orchestrator/orchestrator.go:687-725 (пост-эффекты), 811-829 (Run), 922-927 (handleEvent); agentcomm_attach.go:273-413; assistants.go:538-690; feedback_intent.go (guard вложенного EvRevise); граф вызовов Claude; git log -n 40 -- pkg/orchestrator/orchestrator.go.",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Понижено с 3/4 (Claude) после контрдовода Codex: triggerWithSeq менять нельзя, а именование входов в Run переносит правки, а не убирает их. Ease 4: изменение Run и новый файл домена, порядок вызовов и LIFO-defer сохраняются, проверяется recovery/mesh тестами."
+        }
+      },
+      {
+        "id": "comment-history-debt",
+        "title": "Комментарии нарушают правило AGENTS.md: ссылки на этапы плана и длинная история решений",
+        "severity": "low",
+        "detail": "Факт (grep по не-тестовым .go пакета): 277 строк со ссылками «Этап N», «T#.#», «Phase N», «dev-plan», «tmp/agent-mesh»; 352 блока комментариев длиннее 3 строк; ≈21% строк — комментарии. AGENTS.md требует 1–2 строки сути без номеров задач и фаз; scripts/check-comments.sh проверяет только новый дифф. Примеры устаревания: agentcomm_capability.go (см. unused-exported-api); graph/registry.go:166-167 — комментарий Store «Stage 8 does not yet wire any production caller into Replace», хотя graph_mutate.go:211 его вызывает (найдено при синтезе). Контрдовод: многие длинные комментарии фиксируют обоснование гонок (taskCancels, orchestrator.go:243-250; условие attempt < maxRetries в retry.go) — его нужно сжать, а не удалить. Источник: claude f-9.",
+        "node_ids": [
+          "orchestrator"
+        ],
+        "evidence": "pkg/orchestrator/*.go (grep -E 'Этап [0-9]|T[0-9]+\\.[0-9]+|Phase [0-9]|dev-plan|tmp/agent-mesh'); scripts/check-comments.sh; AGENTS.md («Рабочий процесс»); graph/registry.go:166-167 и graph_mutate.go:211.",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Читаемость и соответствие правилам проекта; правка механическая, но объёмная и с риском потерять обоснование — поэтому не отдельный этап, а критерий завершения каждого этапа для изменённого кода."
+        }
+      },
+      {
+        "id": "dialog-poll-mixed",
+        "title": "pollQuestions смешивает отбор вопроса, авто-ответ и показ пользователю",
+        "severity": "low",
+        "detail": "Факт: pollQuestions (dialog_poller.go:65-228): набор «активных» статусов продублирован в двух циклах (71-74 и 83-86); ветка авто-ответа (~55 строк: WriteAnswer, dialog_question + auto_answered, пара lifecycle asked/answered, resumeAfterAnswer) и ветка показа пользователю (preAskPhase, EvAskUser с seq, EventAskUser) встроены в цикл. Метрика: цикломатика 32; 31 коммит dialog_poller.go с июля. Инварианты: ответ пишется O_EXCL до изменения FSM; неудачная запись не помечается processed; порядок публикаций question → auto_answered; seq перехода прикрепляется к ask_user; поллер не выводит готовность стадии из файлов (AGENTS.md). Источник: claude f-10.",
+        "node_ids": [
+          "dialog"
+        ],
+        "evidence": "pkg/orchestrator/dialog_poller.go:65-228; pkg/orchestrator/AGENTS.md («Dialog and user input»); тесты dialog_*.",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Локальная ясность одного часто меняемого метода; механическое выделение в одном файле с хорошим покрытием."
+        }
+      },
+      {
+        "id": "runner-kind-dispatch-duplicated",
+        "title": "Выбор раннера по kind продублирован тремя switch и двумя ручными развилками",
+        "severity": "low",
+        "detail": "Факт: отображение kind → раннер реализовано тремя switch — withFeedbackRunner (reviewpause.go:244-255), plainRunner (259-270), feedbackTurnRunner (agents.go:469-480) — плюс turnRunner (orchestrator.go:1168-1173); ещё две развилки вручную повторяют выбор autonomous/implementation с *WithFeedback: onAgentCompleted (orchestrator.go:983-993) и reviseAwaitingAssistants (control_api.go:200-206). Они эквивалентны o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind)), так как kindOfPhase/executionKind там возвращают только autonomous или implementation. Прямой SpawnAgent для planning-revise (control_api.go:228) намеренно без lease и auto-attach — это не дублирование. Четыре функции определения kind (executionKind, computeResumeKind, revisingKind, kindOfPhase) отвечают на разные вопросы и не объединяются. Вывод: новая фаза — 5 согласованных правок; сбоев от расхождения не наблюдалось. Источник: claude f-2 (вторая часть).",
+        "node_ids": [
+          "reviewpause",
+          "core",
+          "control",
+          "prompts-runners"
+        ],
+        "evidence": "pkg/orchestrator/reviewpause.go:244-270; agents.go:469-480; orchestrator.go:983-993, 1153-1173; control_api.go:200-206, 228; scheduling.go:196-201.",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Сокращает точки правки при новой фазе; локально и проверяемо тестами revise/resume. Польза меньше, чем у проводки хода: набор kind стабилен."
+        }
+      },
+      {
+        "id": "verify-manifest-order",
+        "title": "Pass-уведомление verify-шага публикуется раньше записи manifest",
+        "severity": "low",
+        "detail": "Факт: для agent- и shell-pass RunVerification ставит outcome в памяти и сразу публикует emitVerifyResult (verify.go:385-387, 484-486) через publishNotice (live + notices.jsonl), а manifest пишет только в конце прохода (489) или при quota-парке; failure-ветки вызывают `_ = persistManifest()` и публикуют результат независимо от ошибки записи. pkg/orchestrator/AGENTS.md:53 требует, чтобы персист результата/отчёта/manifest/feedback предшествовал публикации события. Результат и отчёт agent-шага пишутся до публикации (370-383) — расходится только manifest. Вывод (не воспроизведено): при аварии процесса между pass-уведомлением и финальной записью история notices показывает pass шагов, которых нет в manifest; recovery запускает новый проход с новым verID, ложного завершения стадии не видно. Источник: codex-f3 (наблюдение об асимметрии), сверено Claude с AGENTS.md.",
+        "node_ids": [
+          "run-verification",
+          "stagefiles",
+          "notices"
+        ],
+        "evidence": "pkg/orchestrator/verify.go:103-121 (emitVerifyResult → publishNotice), 241-250 (persistManifest), 370-387, 484-493; pkg/orchestrator/AGENTS.md:53-54.",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Буквальное соответствие задокументированному инварианту и согласованность истории после аварии; влияния на FSM не найдено. Исправление небольшое, но меняет поведение (лишняя запись на шаг) — требует отдельного решения и в рефакторинг не входит."
+        }
+      }
+    ],
+    "proposals": [
+      {
+        "id": "registry-deep-copy",
+        "title": "Глубокое копирование стадий в graph.Registry",
+        "rationale": "Вернуть Registry обещанный контракт неизменяемого снимка: сейчас cloneStage копирует только DependsOn, и вложенные данные flow.Stage общие у вызывающих, реестра и старых ревизий. До: изоляция держится на том, что никто не мутирует вложенные поля. После: каждый accessor и каждая ревизия владеют своими данными. Новых абстракций нет, сигнатуры и форматы не меняются.",
+        "effort": "small",
+        "priority": {
+          "benefit": 5,
+          "ease": 4,
+          "reason": "Единственное correctness-исправление списка; локально в graph/registry.go и тестах. Ease 4: нужен полный обход вложенных типов и guard от новых полей."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "registry-nested-alias",
+          "comment-history-debt"
+        ],
+        "node_ids": [
+          "graph",
+          "graph-mutate",
+          "core"
+        ],
+        "steps": [
+          "До правки добавить в pkg/orchestrator/graph/registry_test.go тесты изоляции: изменение исходного []flow.Stage после NewRegistry/WithStages и изменение значений, полученных через Stages(), Stage(id) и StageByID(id), не меняет последующие чтения и старый снимок. Минимальная репродукция — Agents, Verify.Steps[0].Run, *Browser (как scratch-проба Codex); затем Skills, Artifacts и Artifact.Inline, Inputs, Verify.MaxFailures/ReviewPatience/FreshCorrection, AutoRun, Buttons, Reflect, MemoryUse, Hooks (Events, SkipEvents, Env, ResolvedEnv), Assistants. Сравнивать содержимое, а не адреса; отдельно проверить nil против пустого slice.",
+          "В тот же файл добавить рефлексивный guard: обход полей flow.Stage и вложенных типов (VerifySpec, VerifyStep, Artifact, lifecyclehooks.Hook, StageAssistant) падает, если появилось reference-поле, которого нет в списке, обработанном cloneStage. Рефлексия только в тесте, не в production-копии.",
+          "В graph/registry.go расширить cloneStage до явной глубокой копии всех reference-полей: slices.Clone для slice без вложенных ссылок, в том числе []VerifyStep и StageAssistants (у VerifyStep и StageAssistant только скалярные поля); поэлементная копия для []Artifact (Inline *bool) и []lifecyclehooks.Hook (Events.Events, SkipEvents, Env, ResolvedEnv); maps.Clone для map, копия значения для *bool/*int/*Reflect; nil остаётся nil. VerifySpec копировать как структуру и заменять в ней только reference-поля, чтобы неэкспортируемый fromScalar сохранился без изменения pkg/flow.",
+          "В newRegistryAt заменить ручное клонирование DependsOn на s = cloneStage(s) (deps по-прежнему строить из клона); Stages/Stage/StageByID уже идут через cloneStage.",
+          "Исправить doc-комментарии Registry и cloneStage под фактическое поведение, убрать из package doc (graph/registry.go:1-3) ссылку «dev-plan.md Этап 8, T8.1» и удалить устаревший абзац Store про «Stage 8 / Этап 9» (graph/registry.go:166-167): Replace уже вызывается из graph_mutate.go:211."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator/graph/... — новые тесты изоляции падают до шага 3 и проходят после.",
+          "go test -race ./pkg/orchestrator/... (registry_migration, graph_mutate, replay, browser_policy, verify wiring) — без изменений результата.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Глубокая копия на каждом чтении добавляет аллокации в reg().Stage(id); ожидаемо пренебрежимо (десятки стадий), но проверить, что accessor не вызывается в плотном цикле.",
+          "Пропущенное вложенное поле (например, внутри StageAssistant или EventSelector) оставит alias — закрывается рефлексивным guard'ом шага 2.",
+          "Production-вызова, мутирующего вложенные поля, не найдено: это исправление латентного дефекта, а не наблюдавшегося сбоя. Если какой-то тест опирался на alias, он упадёт — разбирать по месту.",
+          "Альтернатива «только честная документация: вложенные поля не мутировать» отклонена: контракт уже обещает изоляцию concurrent-читателям, а исправление локально. Откат — revert коммита; сохранённые журналы и определения стадий не затрагиваются."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "graph",
+              "description": "Runtime-реестр стадий: версионные снимки Registry с глубокой копией flow.Stage на входе и на каждом accessor, atomic Store.Replace, динамическая вставка, persist."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "retry-budget-decisions",
+        "title": "Выделить решения о бюджетах ретраев и коррекции verify из runRetryLoop",
+        "rationale": "Сделать правила бюджетов проверяемыми без subprocess и FSM и убрать шесть переменных коррекции из тела runRetryLoop, не трогая порядок жизненного цикла хода. До: правила бюджетов рассыпаны по циклу и проверяются только интеграционно. После: две чистые единицы с табличными тестами; цикл остаётся владельцем epoch, парков, FSM и ожиданий. Это первый, самостоятельно полезный шаг по retry-loop-overload; основное упрощение ветки успеха — отдельный этап retry-success-branch.",
+        "effort": "small",
+        "priority": {
+          "benefit": 3,
+          "ease": 4,
+          "reason": "Бюджеты становятся проверяемыми отдельно, тело цикла короче; изменение в одном файле без смены порядка операций. Польза 3, а не 4: главная сложность (ветка успеха) остаётся."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "retry-loop-overload",
+          "comment-history-debt"
+        ],
+        "node_ids": [
+          "run-retry-loop",
+          "retry",
+          "quota"
+        ],
+        "steps": [
+          "До правки зафиксировать последовательности тестами, дополнив retry_budget_test.go, verify_quota_test.go, retry_test.go и verify_stalemate_loop_test.go, где сценария нет: unknown → network → success; коррекция verify → транспортная ошибка; unknown на последнем разрешённом attempt (attempt == maxRetries); verify-отклонение при исчерпанном attempt; quota-парк и пробуждение с теми же VerifyFailures/VerifyStalemates; Pause/Revise во время completion-check и backoff. Проверять число запусков агента, последовательность FSM-событий и тексты EventRetryScheduled/EventRetryExhausted.",
+          "В retry.go выделить чистую функцию transportRetryDecision(class Classification, attempt, unknownRetries, maxRetries, maxUnknownRetries int) (retryOK bool, budget, numerator, nextUnknownRetries int) — дословно логика retry.go:537-545, включая обязательное attempt < maxRetries в обеих ветках; покрыть табличным тестом. Функция не получает Store, Orchestrator, context и функций публикации.",
+          "Собрать состояние коррекции verify в локальную структуру verifyCorrection{failures, maxFailures int; fresh bool; patience int; prevFingerprint string; unchanged int}, инициализируемую из verifyMaxFailures/verifyFreshCorrection/verifyReviewPatience и verifyResume.quota (VerifyFailures, VerifyStalemates), с методами canRetry(attempt, maxRetries int, isVerifyReject bool) bool (нынешнее выражение retryIncomplete, retry.go:459-461) и counters() verifyCounters для parkVerifyForQuota; handleStalemate сохраняет сигнатуру.",
+          "runRetryLoop остаётся владельцем регистрации interruptChans, epoch, retry-контекста, admission и парков, проверок turnOwnsStage/handOffRevise, трёх мест verifyResume.spend(), verifyOutcomeGuardHook, FSM-переходов, notice и select backoff. Комментарии изменённых участков сжать до 1–2 строк сути (ссылки T5/D1/G2/B1 убрать, обоснование «attempt < maxRetries обязательно» сохранить)."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator -run 'Retry|Budget|Backoff|Verify|Quota|Stalemate|Completion|Pause|Revise' до и после — одинаковый результат.",
+          "Табличный тест transportRetryDecision: ClassRetryable/ClassRetryableUnknown × attempt < maxRetries / == maxRetries × unknownRetries в пределах и за пределами бюджета.",
+          "git diff --color-moved: тело цикла меняется только заменой выражений на вызовы; scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Ошибка в условии attempt < maxRetries вернёт тихое зависание стадии в running — ловится регрессией UnknownErrorOnLastAllowedAttemptStillFails (retry_budget_test.go).",
+          "verifyCorrection живёт только в горутине хода, как и нынешние счётчики; durable — только через verifyCounters при парке.",
+          "Альтернатива меньшего риска (Codex): лишь переименовать и сгруппировать счётчики без функции решения; бюджеты тогда остаются непроверяемыми отдельно. Откат — revert коммита; payload quota и виды событий не меняются."
+        ],
+        "changes": {
+          "add_nodes": [
+            {
+              "id": "retry-decisions",
+              "label": "transportRetryDecision / verifyCorrection",
+              "kind": "symbol",
+              "parent": "retry",
+              "description": "Предлагаемые чистые решения о транспортном бюджете и коррекции verify; метрики будущего кода не измерены."
+            }
+          ],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "run-retry-loop",
+              "description": "Попытки одного хода: владеет epoch, admission и парками, inbox, открытым вопросом, парком по peers, completion-check, фенсингом и backoff; решения о бюджетах делегирует transportRetryDecision и verifyCorrection."
+            }
+          ],
+          "add_edges": [
+            {
+              "id": "e-retry-decisions",
+              "source": "run-retry-loop",
+              "target": "retry-decisions",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. runRetryLoop вызывает transportRetryDecision и методы verifyCorrection."
+            }
+          ],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "stage-executor-base",
+        "title": "Одна база executor.Config для interactive и non-interactive хода стадии",
+        "rationale": "Убрать второй список общей стадийной проводки executor: runnerFor и nonInteractiveRunner одинаково вычисляют 20 полей executor.Config и InterruptCh, и фичевые коммиты добавляли поле в оба литерала. До: два списка одной ответственности. После: одна база стадийной проводки и явные различия (сессия/resume, аргументы). Verify и helper намеренно остаются со своими конфигами.",
+        "effort": "small",
+        "priority": {
+          "benefit": 3,
+          "ease": 4,
+          "reason": "Новая связь хода добавляется в одном месте; изменение в одном файле, проверяется существующими wiring-тестами. Сервисов и интерфейсов не добавляется."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "stage-turn-wiring-duplicated"
+        ],
+        "node_ids": [
+          "runner-factory",
+          "executor"
+        ],
+        "steps": [
+          "До правки закрепить тестами (runner_factory_test.go, browser_policy_test.go, usage_provider_wiring_test.go, reasoning_wiring_test.go) поля executor.Config для default/custom command × interactive/non-interactive и для fallback при ошибке сессии: Command, IdleTimeout, TruncateOutput, Debug, OnAction со stage ID, OnLimitWarning, WrapperDir, Dir, RunDir/StageID/Phase, абсолютный StageDir при отличном RootDir, UsageHint/Provider/OnUsage, BrowserMCP, MeshClient, OnDelivered, Reasoning, RunID, OnObservation, InterruptCh.",
+          "В runner_factory.go выделить private baseStageExecutorConfig(s flow.Stage, phase, cmd string, extraArgs []string) executor.Config с общими полями, включая InterruptCh из interruptChans; runnerFor дописывает SessionID/Resume и ResolveArgs, nonInteractiveRunner — свою политику command/ExtraArgs. Подмена o.runner для дефолтной команды остаётся до сборки конфига.",
+          "runnerForVerify и helperExecutorConfig (assistants_lifecycle.go:35-53) не переводить на baseStageExecutorConfig: у verify и helper другие гарантии capability (нет BrowserMCP, StageDir и mesh стадии; у helper — ScratchDir и Redact/Secrets)."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator -run 'Runner|Browser|Usage|Reasoning|Execprep|Lease|Interrupt|Fallback'.",
+          "Тест шага 1 сравнивает полный executor.Config (кроме функций — по наличию и привязке stage ID) до и после.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Случайная передача стадийной capability (браузер, dialog env) в verify/helper — исключена шагом 3 и тестами browser_policy.",
+          "Альтернатива (Codex): оставить оба литерала и закрепить общие гарантии контрактным тестом — дешевле, если новых полей не ожидается; история (84c33f59, 5451eb52) показывает, что поля добавляются регулярно. Откат — в пределах файла."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "runner-factory",
+              "description": "executor.Config стадии: baseStageExecutorConfig с общей проводкой; runnerFor добавляет сессию/resume, nonInteractiveRunner — свою политику аргументов; runnerForVerify — отдельный урезанный набор."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "turn-prompt-base",
+        "title": "Общая база prompts.Inputs для раннеров фаз",
+        "rationale": "Убрать пять копий семи сквозных полей промпта и четыре копии блока mkdir + EvFail. До: каждое новое сквозное поле правится в пяти местах. После: baseStageInputs задаёт общие поля, фазы дописывают только своё; тексты промптов не меняются.",
+        "effort": "small",
+        "priority": {
+          "benefit": 3,
+          "ease": 4,
+          "reason": "Убирает повторяющуюся стоимость сквозных изменений промпта (три фичи за квартал правили пять мест); проверяется эталоном собранных промптов."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "stage-turn-wiring-duplicated"
+        ],
+        "node_ids": [
+          "prompts-runners",
+          "memory"
+        ],
+        "steps": [
+          "Характеризационный тест: фейковый Runner сохраняет собранный prompt для planning (fresh, feedback), implementation (fresh, feedback, embedded review), review и autonomous (fresh, feedback); эталон — текущий текст с включёнными блоками memory, browser и mesh.",
+          "В agents.go добавить baseStageInputs(s flow.Stage, stageDir, template string) prompts.Inputs с семью общими полями (Stage, StageDir, GlobalPrompt, MemoryBlock = memoryBlockForStage, BrowserRuntime = browserRuntimeFor, AgentComm = agentCommBlockFor, AgentCommInbox = agentCommInboxBlock) и Interactive = s.Interactive; пять литералов (176, 268, 327, 385, 434) дописывают только своё: PhaseAgent, RetryContext, DependencyPlans и Artifacts (у всех фаз, кроме planning), Plan, OutputContractMD, Autonomous, Interactive = true для autonomous. Вызов остаётся внутри closure попытки — блоки вычисляются на каждой попытке, как сейчас.",
+          "Повтор mkdir + EvFail «mkdir failed» (agents.go:68, 120, 365, 413) свести в ensureStageDir(s) bool с тем же текстом причины.",
+          "Различия RetryContext (discussionQuestionNote есть у implementation/review/autonomous и нет у embedded review и planning) не менять: зафиксировать тестом шага 1, вопрос о намеренности — в open questions."
+        ],
+        "verification": [
+          "Эталон промптов шага 1 совпадает до и после.",
+          "go test -race ./pkg/orchestrator -run 'Prompt|Planning|Implementation|Review|Autonomous|Memory|Browser|AgentComm|Inbox'.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Порядок и наличие блоков в промпте — контракт для агентов; эталон должен сравнивать полный текст.",
+          "Если вычисление блоков случайно вынести из closure попытки, memory и inbox устареют между попытками."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "prompts-runners",
+              "description": "Раннеры фаз: общие поля промпта задаёт baseStageInputs, фаза дописывает своё; ensureStageDir — общий отказ при ошибке каталога; file-probe и gateWithVerify как completionCheck."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "helper-turn-phases",
+        "title": "Разделить runHelperTask на подготовку, классификацию неуспеха и коммит результата",
+        "rationale": "Сделать исходы хода помощника обозримыми: подготовка, классификация неуспешных исходов и коммит результата становятся отдельными методами при неизменном порядке и атомарности коммитов. До: одна функция на 283 строки (цикломатика 49). После: runHelperTask — последовательность трёх фаз, сигналы pause/clarify и cleanup остаются в ней. Исход required-задачи остаётся входом барьера завершения root-стадии: терминальные коммиты идут через finishTask* с прежним afterFinish, а FSM-переходом по-прежнему владеет общий completion-путь (completeStageFenced); этап его не меняет.",
+        "effort": "medium",
+        "priority": {
+          "benefit": 3,
+          "ease": 3,
+          "reason": "Часто меняемый узел helpers; ease 3 из-за порядка сигналов pause/clarify, finalizedByOther и вариантов коммита."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "helper-turn-monolith",
+          "comment-history-debt"
+        ],
+        "node_ids": [
+          "run-helper-task",
+          "helpers"
+        ],
+        "steps": [
+          "Характеризация исходов runHelperTask (assistants_lifecycle.go:133-415) существующими и новыми тестами: shutdown рана, usage-limit, ошибка исполнения, interrupted/finalizedByOther, timeout, !ProcessOK с requeue по taskPausePending/taskClarifyPending, yield (parkYieldedTurn), protocol error, ошибка декодирования/repair, delegate, неподдерживаемый kind, pass при открытом required-ребёнке и четыре варианта коммита успеха. Для required-задачи зафиксировать влияние исхода на root-стадию: гейт закрывает только completed с вердиктом pass (или waiver), и EvComplete root-стадии случается, только если она уже в awaiting_assistants и других открытых required-задач текущего поколения нет; failed, delegate (waiting_children), yield (waiting_peer), requeue и отказ «pass при открытом required-ребёнке» гейт не закрывают и EvComplete не вызывают.",
+          "Выделить три метода без смены порядка: prepareHelperTurn (workspace, context.md, startTurn, очистка прежнего raw-ответа) → данные хода; classifyHelperFailure (ветки до успешного декодирования) → handled bool; commitHelperResult (хвост успеха с четырьмя вариантами коммита). defer CompareAndDelete(taskCancels) и порядок LoadAndDelete taskPausePending/taskClarifyPending остаются в runHelperTask.",
+          "Каждый вариант коммита остаётся одной операцией Store.ApplyRunOperation (через finishTaskTurnReplying и др.): статус задачи, ответы mesh и разрешение waits не делить на независимые коммиты. Post-commit хвост afterFinish (publishNotice → announceMessage → announceAndWakeEnded → tryResumeParent → releaseUnanswerableWaitsAfterFinish → maybeCompleteAfterAssistants → WakeEventLoop → notifyAndResumeWaits) не переносить и не дублировать. Новые методы не вызывают completeStage, maybeCompleteAfterAssistants и Trigger напрямую — только через finishTask*. Generation-aware RequiredBlocker и CAS EvComplete в completeStageFenced не трогать."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator -run 'Assistant|Task|Helper|Watch|Delegate|Waiver|Cascade|Pause|Quota|Yield|RunAgent|Shutdown|Turn|Barrier|Completion'.",
+          "Регрессии барьера завершения проходят без изменений: TestBarrier_AfterHookNotRunEarly, TestBarrier_VerifyStillIndependentGate, TestBarrier_SlotReleasedWhileWaiting, TestBarrier_RestoredAfterRestart, TestBarrier_GenerationAwareCas, TestCompletionGoesThroughCascade (assistants_barrier_test.go).",
+          "Критерий завершения этапа — полный go test -race ./pkg/orchestrator/... зелёный, а не только шаблон выше.",
+          "git diff --color-moved: переносы без переупорядочивания; scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Исход required-задачи — вход барьера завершения root-стадии. Ошибка классификации (коммит completed с вердиктом pass вместо failed, requeue, waiting_peer или waiting_children; потеря проверки finalizedByOther; перенос коммита из-под afterFinish) преждевременно вызовет EvComplete, after-hook, reflection и запуск зависимых стадий. Закрывается шагами 1 и 3 и Barrier/Completion-регрессиями.",
+          "Порядок сигналов pause/clarify и проверка finalizedByOther; семантика consumed turn.",
+          "Если по open question StopAndClarify будет удалён, ветка clarify упростится — решить до этого этапа или учесть в нём."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "run-helper-task",
+              "description": "Ход помощника как последовательность prepareHelperTurn → запуск → classifyHelperFailure → commitHelperResult; сигналы pause/clarify и cleanup остаются в runHelperTask; терминальные коммиты идут через finishTask* с прежним afterFinish, который пере-проверяет барьер завершения root-стадии."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "verify-pass-outcomes",
+        "title": "Собрать оформление исходов verify-шага в verificationPass",
+        "rationale": "Отделить протокол артефактов и уведомлений шага от control flow прохода и убрать 7 одинаковых копий хвоста отказа; 3 вариантных хвоста (гонка дедлайна и storage-сбой quota-парка) остаются явными. До: RunVerification владеет и исполнением шагов, и записью manifest/уведомлений. После: RunVerification — lease, resume, контекст и цикл шагов; verificationPass (verify_pass.go) — состояние прохода и оформление исхода шага в прежнем порядке. Нового пакета и сервиса нет.",
+        "effort": "medium",
+        "priority": {
+          "benefit": 3,
+          "ease": 3,
+          "reason": "Регулярная польза для часто меняемого verify; ease 3 из-за storage-ошибок, recovery и порядка событий."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "verify-pass-mixed",
+          "comment-history-debt"
+        ],
+        "node_ids": [
+          "run-verification",
+          "verify-pass",
+          "stagefiles",
+          "notices"
+        ],
+        "steps": [
+          "Характеризация per-outcome артефактов и порядка до правки: agent pass, needs_changes, inconclusive, protocol error, неизвестный verdict; shell pass и ненулевой exit; timeout шага; гонка дедлайна после успеха (verifyStepDeadlineRace); прерывание Pause/Revise; исчерпание транзиентных exec-ретраев; quota-парк и resume прохода (restoreVerifyPasses); storage-ошибка каждого критичного файла. Явно зафиксировать текущее: pass-уведомление шага публикуется до финального persistManifest (verify.go:387, 486 против 489), failure-ветки игнорируют ошибку записи manifest. Для трёх вариантных хвостов добавить точные проверки; существующие verify_deadline_race_test.go проверяют только strings.Contains. (а) Гонка дедлайна agent-шага (362-366; seam runVerifyAgent ждёт <-ctx.Done() и возвращает вердикт) и shell-шага (475-480; seam runVerifyShell ждёт <-ctx.Done() и возвращает nil): возвращается *VerifyExecError с Reason == verifyTimedOutReason (без двойного префикса), Step == idx, Transient == false; err.Error() == «verify execution failed at step N: » + verifyTimedOutReason; reason уведомления verify_result в notices.jsonl равен err.Error(), exec_error_kind = exec_failure; outcome шага в manifest = error. (б) Storage-сбой quota-парка (333-338; seam runVerifyAgent делает запись manifest невозможной, например заменяет manifest.json каталогом, и возвращает *executor.UsageLimitError): VerifyExecError с Reason «verify storage failure: …» и Step == idx, а не verifyLimitError; ровно одно уведомление verify_result с тем же reason; стадия не паркуется по квоте. Без сбоя quota-ветка по-прежнему возвращает verifyLimitError, а manifest содержит outcome quota_wait. Порядок «manifest до уведомления» проверить, читая manifest.json в обработчике live-уведомления verify_result, если доставка синхронна. Число записей manifest существующими seam'ами не наблюдаемо: production-seam ради него не добавлять, а сохранить эти ветки дословно (шаг 2).",
+          "Ввести private тип verificationPass в новом файле pkg/orchestrator/verify_pass.go: stage, stageDir, verID, phase, manifestSteps, passedSteps. Методы: persist() error (нынешнее замыкание persistManifest) и failStep(i, idx int, kind, command, reason string) error. failStep в текущем порядке ставит outcome = verifyOutcomeError, вызывает persist с игнорированием ошибки, публикует emitVerifyResult(exec_failure, reason) и возвращает &VerifyExecError{Reason: reason, Step: idx}. Заменить им только 7 одинаковых хвостов: verify.go:373, 380, 403, 429, 436, 452, 461. Остальные хвосты не переводить и сохранить дословно (в новых функциях шага). Гонка дедлайна (362-366, 475-480) публикует raceErr.Error() и возвращает тот же raceErr; второй helper ради двух мест не вводить. Storage-сбой quota-парка (333-338) проверяет ошибку единственной записи manifest и возвращает storage-ошибку вместо verifyLimitError. Typed error с enrichExecReason (342-357), inconclusive (394-398), interrupted (413-417, 441-446) и отказ через persistVerifyRejection тоже остаются отдельными.",
+          "Вынести тела шагов в runAgentVerifyStep и runShellVerifyStep (возвращают error; pass записывает outcome и строку passedSteps внутри), сохранив seam'ы runVerifyAgentStep/runVerifyShell, persistVerifyRejection, декодер verify и stagefiles-примитивы. stepCtx и cancelStep создавать в функции шага: отмена в конце шага, а не прохода — потребителей stepCtx после шага нет, подтвердить тестами verify_timeout и verify_deadline_race.",
+          "В RunVerification оставить lease-defer со swap-back только для VerifyRejectedError, verID и resume-курсор, чтение plan/summary/artifacts, цикл шагов, финальный persist и ClearActiveFeedback. verificationPass не завершает стадию и не трогает FSM."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator -run 'Verify' (31 файл verify_*) и go test -race ./pkg/orchestrator/stagefiles/... ./pkg/orchestrator/verify/....",
+          "Точные проверки шага 1 для гонки дедлайна agent/shell и storage-сбоя quota-парка (Reason, Step, Error(), identity ошибки, reason и exec_error_kind уведомления, outcome в manifest) совпадают до и после; git diff --color-moved показывает эти три хвоста перенесёнными без изменений.",
+          "verify_observability_test.go подтверждает прежний порядок событий; характеризация шага 1 совпадает.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Подстановка failStep в вариантные хвосты изменила бы поведение: для гонки дедлайна — либо reason уведомления, либо Reason ошибки (двойной префикс в причине EvVerifyFail); для quota-storage — перезапись outcome quota_wait и повторную запись manifest. Поэтому шаг 2 ограничен 7 одинаковыми хвостами, а шаг 1 фиксирует вариантные точными проверками.",
+          "Порядок persist → emit и fail-closed — контракт (pkg/orchestrator/AGENTS.md:53-54). Наблюдаемое отступление (pass-уведомление до manifest) сохраняется как есть; его исправление — отдельное решение (verify-manifest-order).",
+          "Перенос defer cancelStep в функцию шага меняет момент отмены stepCtx.",
+          "Отдельный verify-сервис или пакет не выделять — дороже и не обосновано (оба архитектора). Откат — revert; форматы артефактов и журналов не меняются."
+        ],
+        "changes": {
+          "add_nodes": [
+            {
+              "id": "verify-pass-step",
+              "label": "verificationPass (verify_pass.go)",
+              "kind": "file",
+              "parent": "turn",
+              "description": "Предлагаемый файл: состояние прохода verify и оформление исхода шага (manifest, уведомление, typed error) в прежнем порядке; метрики не измерены."
+            }
+          ],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "run-verification",
+              "description": "Один проход verify: lease, resume-курсор, контекст и цикл шагов; исполнение agent/shell шага и оформление исхода делегированы verificationPass."
+            }
+          ],
+          "add_edges": [
+            {
+              "id": "e-verification-pass",
+              "source": "run-verification",
+              "target": "verify-pass-step",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. RunVerification вызывает runAgentVerifyStep/runShellVerifyStep и failStep (7 одинаковых хвостов отказа)."
+            },
+            {
+              "id": "e-pass-stagefiles",
+              "source": "verify-pass-step",
+              "target": "stagefiles",
+              "kind": "persists",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. verificationPass.persist → stagefiles.WriteManifest."
+            },
+            {
+              "id": "e-pass-notices",
+              "source": "verify-pass-step",
+              "target": "notices",
+              "kind": "publishes",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. failStep, вариантные хвосты и pass шага → emitVerifyResult → publishNotice."
+            }
+          ],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "retry-success-branch",
+        "title": "Вынести ветку успешного выхода агента из runRetryLoop в метод решения",
+        "rationale": "Снизить когнитивную нагрузку самой меняемой функции ядра: ветку err == nil (retry.go:364-494, ~130 строк) вынести в метод, возвращающий решение «ход завершён» или «повторить с причиной», сохранив дословный порядок проверок. До: решение о выходе хода смешано с циклом попыток. После: цикл — подготовка попытки, запуск, ошибки exec и backoff; ветка успеха читается отдельно. Этап необязателен: «остановиться на retry-budget-decisions» — допустимый исход.",
+        "effort": "medium",
+        "priority": {
+          "benefit": 3,
+          "ease": 2,
+          "reason": "Основное упрощение runRetryLoop, но самый рискованный этап: фенсинг epoch, три места verifyResume.spend() и гонки Pause/Revise с выходом процесса."
+        },
+        "depends_on": [
+          "retry-budget-decisions"
+        ],
+        "conflicts_with": [],
+        "finding_ids": [
+          "retry-loop-overload"
+        ],
+        "node_ids": [
+          "run-retry-loop",
+          "retry",
+          "mesh-waits",
+          "quota",
+          "verify-pass"
+        ],
+        "steps": [
+          "Предусловие: тесты последовательностей из retry-budget-decisions зелёные. Добавить характеризацию порядка решений ветки успеха: потеря владения до и после completionCheck (handOffRevise), открытый вопрос при статусе ≠ и = awaiting_user_input, парк по peers (turnEpisode), verify-парк по verifyLimitError, ErrUserInterrupted из verify, stalemate, исчерпанный verify-бюджет → commitVerifyFailure, план-незавершёнка на attempt 0 и позже.",
+          "Выделить метод decideSucceededTurn, принимающий локальную структуру хода (s, phase, feedback, epoch, attempt, maxRetries, resumesVerify, waitsBefore, verifyResume, *verifyCorrection, completionCheck, onUserInterrupted) и возвращающий (retryReason string, retry bool): retry=false — ход завершён (как нынешний return), retry=true — continue с incompleteReason = retryReason.",
+          "Сохранить порядок: turnOwnsStage → deliverRenderedInbox → открытый вопрос → turnEpisode/parkForPeers → completionCheck → verifyResume.spend() → turnOwnsStage → completeAgent | ErrUserInterrupted | verifyLimitError → parkVerifyForQuota | IncompleteWork (stalemate → canRetry → verifyOutcomeGuardHook → verifyOutcomeStillOwned → счётчики → notice) | commitVerifyFailure или EvFail + failBlockedStages.",
+          "runRetryLoop после выделения: подготовка попытки, admission, agentFn, вызов decideSucceededTurn, ветка ошибок exec (ErrUserInterrupted, quota, классы, transportRetryDecision, backoff). Если после шага 1 метод требует больше одной структуры состояния, остановиться и не выполнять этап."
+        ],
+        "verification": [
+          "Характеризация шага 1 и go test -race ./pkg/orchestrator -run 'Retry|Verify|Quota|Peer|Yield|Stalemate|Completion|Pause|Revise|OpenQuestion|Interactive'.",
+          "git diff --color-moved: перенос без переупорядочивания операторов; make test.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Любое переупорядочивание фенсинга или spend меняет поведение при гонке Pause/Revise с выходом процесса.",
+          "Метод с большим набором параметров может оказаться не проще исходной ветки — тогда этап отменяется.",
+          "State machine или стратегии на интерфейсах отвергнуты обоими архитекторами."
+        ],
+        "changes": {
+          "add_nodes": [
+            {
+              "id": "turn-exit-decision",
+              "label": "decideSucceededTurn",
+              "kind": "symbol",
+              "parent": "retry",
+              "description": "Предлагаемый метод решения о выходе успешного хода; метрики не измерены."
+            }
+          ],
+          "remove_nodes": [],
+          "update_nodes": [],
+          "add_edges": [
+            {
+              "id": "e-retry-exit",
+              "source": "run-retry-loop",
+              "target": "turn-exit-decision",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. runRetryLoop делегирует ветку err == nil."
+            },
+            {
+              "id": "e-exit-meshwaits",
+              "source": "turn-exit-decision",
+              "target": "mesh-waits",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. turnEpisode → parkForPeers переезжают в метод решения."
+            },
+            {
+              "id": "e-exit-quota",
+              "source": "turn-exit-decision",
+              "target": "quota",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. parkVerifyForQuota переезжает в метод решения."
+            }
+          ],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "remove-capability-api",
+        "title": "Удалить мёртвый CapabilityFor с ложной документацией",
+        "rationale": "Сократить поверхность mesh-core и убрать документацию, противоречащую коду. До: экспортированный API, который «читают roster/UI и Send», но не вызывает никто. После: его нет. Остальные неиспользуемые API (FollowUp, StopAndClarify, RetryTask, CreateProposal) не трогаются до решения пользователя.",
+        "effort": "small",
+        "priority": {
+          "benefit": 2,
+          "ease": 5,
+          "reason": "Маленькое удаление, проверяемое сборкой; польза — честная поверхность API."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "unused-exported-api"
+        ],
+        "node_ids": [
+          "mesh-core"
+        ],
+        "steps": [
+          "Удалить pkg/orchestrator/agentcomm_capability.go (Capability, CapabilityFor) и agentcomm_capability_test.go: продакшн-вызовов нет (поиск по всему репозиторию без _test.go).",
+          "FollowUp, StopAndClarify (assistants_followup.go:60-107), RetryTask (assistants_cascade.go:67-104) и CreateProposal (proposal.go:96-145) в этом этапе не трогать — их судьба вынесена в open questions."
+        ],
+        "verification": [
+          "go build ./...; go vet ./pkg/orchestrator/...; make sdk-test (sdk — отдельный модуль).",
+          "go test -race ./pkg/orchestrator -run 'Mesh|Roster|AgentComm'; make lint."
+        ],
+        "risks": [
+          "Внешний потребитель вне репозитория не известен; API внутренний для бинаря afm. Откат — revert."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "mesh-core",
+              "description": "Service (agentcomm.go:28-49, единственная реализация — *Orchestrator): сообщения, attach, roster, inbox, токены, side/run-agent, team, spawn участников, RedactSecrets; без неиспользуемого CapabilityFor."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "shared-primitives-move",
+        "title": "Перенести общие примитивы к их владельцам (чистый перенос)",
+        "rationale": "Сделать путь запуска стадии и общие примитивы находимыми по имени файла. До: spawn-путь и отображение kind → раннер лежат в reviewpause.go, orchestrator.go и agents.go; runContext — в control_api.go; форматирование quota — в notices.go. После: stage_spawn.go владеет запуском агента стадии и отображением kind → раннер; runContext — рядом с Run; notices.go — только publishNotice. Логика не меняется; это подготовка к runner-kind-dispatch и упрощение навигации.",
+        "effort": "small",
+        "priority": {
+          "benefit": 2,
+          "ease": 5,
+          "reason": "Навигация и ложные ассоциации; переносы проверяются компиляцией и тестами. Влить быстро, чтобы не конфликтовать с параллельными ветками."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "shared-primitives-misplaced",
+          "comment-history-debt"
+        ],
+        "node_ids": [
+          "reviewpause",
+          "control",
+          "notices",
+          "core",
+          "scheduling",
+          "recovery",
+          "hooks",
+          "prompts-runners",
+          "quota"
+        ],
+        "steps": [
+          "Отдельный коммит только с переносами, без изменения тел: spawnAgentLeased, spawnKind, computeResumeKind, withFeedbackRunner, plainRunner (reviewpause.go:35-67, 244-270), kind-константы, kindOfPhase и turnRunner (orchestrator.go:466-470, 1153-1173), feedbackTurnRunner (agents.go:469-480) — в новый pkg/orchestrator/stage_spawn.go. В reviewpause.go остаётся только review pause (включая newOperationID, resumeOwner, runResumeTransaction).",
+          "runContext (control_api.go:104-111) перенести в orchestrator.go рядом с Run, который пишет runMu/runCtx.",
+          "Форматирование usage-limit (QuotaWaitMessage, StageQuota, StageQuotaMessage, quotaResetMessage, quotaNoticeData, publishQuotaNotice — notices.go:64-150) перенести в quota.go; в notices.go остаётся publishNotice и общие уведомления.",
+          "projectDir (verify_stalemate.go:85-93), stageDir (orchestrator.go:620-624) и stageDirFor (feedback_intent.go:391-394) собрать в pkg/orchestrator/paths.go с doc о различии абсолютного и относительного пути; inline filepath.Join(o.opts.RunDir, id) не заменять и пути не унифицировать. secretValues/RedactSecrets/redactAll/sameRedacted* (agentcomm.go:364-407) — в secret_redaction.go.",
+          "Обновить комментарии, ссылающиеся на файлы (например, assistants_declared.go:13-16 → reviewpause.go), и сжать перенесённые комментарии по правилу AGENTS.md."
+        ],
+        "verification": [
+          "go build ./... и go vet ./pkg/orchestrator/...; git diff --color-moved=dimmed-zebra показывает только перенос.",
+          "make test; scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Конфликты слияния с параллельными ветками, которые правят эти файлы; влить быстро отдельным PR.",
+          "Экспортированные QuotaWaitMessage/StageQuota/StageQuotaMessage остаются в том же пакете — API pkg/server не меняется."
+        ],
+        "changes": {
+          "add_nodes": [
+            {
+              "id": "stage-spawn",
+              "label": "Запуск стадии (stage_spawn.go)",
+              "kind": "file",
+              "parent": "engine",
+              "description": "Предлагаемый файл: обязательный путь запуска агента стадии (spawnKind, spawnAgentLeased) и отображение kind → раннер; метрики не измерены."
+            }
+          ],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "reviewpause",
+              "description": "Review pause: пауза флоу с заметками ревью, resumeOwner, runResumeTransaction; общих примитивов запуска здесь больше нет."
+            },
+            {
+              "id": "control",
+              "description": "Команды из HTTP: Approve/Revise/Retry/Pause/Continue/Button — durable-переход до запуска работы."
+            },
+            {
+              "id": "core",
+              "description": "Ядро: New, Run (порядок старта и LIFO-cleanup, runContext рядом с runMu/runCtx), handleEvent, triggerWithSeq (синхронная воронка FSM-перехода), completeStageFenced, setFatal."
+            },
+            {
+              "id": "notices",
+              "description": "publishNotice — общий live + notices.jsonl путь UI-уведомлений; форматирование quota перенесено в quota.go."
+            }
+          ],
+          "add_edges": [
+            {
+              "id": "e-scheduling-spawn",
+              "source": "scheduling",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. spawnKind/plainRunner."
+            },
+            {
+              "id": "e-recovery-spawn",
+              "source": "recovery",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. spawnKind, spawnAgentLeased, withFeedbackRunner, plainRunner, turnRunner."
+            },
+            {
+              "id": "e-recovery-reviewpause-txn",
+              "source": "recovery",
+              "target": "reviewpause",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. runResumeTransaction остаётся в review pause."
+            },
+            {
+              "id": "e-core-spawn",
+              "source": "core",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. spawnKind из onAgentCompleted."
+            },
+            {
+              "id": "e-control-spawn",
+              "source": "control",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. spawnKind из reviseAwaitingAssistants."
+            },
+            {
+              "id": "e-hooks-spawn",
+              "source": "hooks",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. plainRunner после before-hook."
+            },
+            {
+              "id": "e-prompts-spawn",
+              "source": "prompts-runners",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. spawnKind из раннеров фаз."
+            },
+            {
+              "id": "e-quota-spawn",
+              "source": "quota",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. computeResumeKind."
+            },
+            {
+              "id": "e-reviewpause-spawn",
+              "source": "reviewpause",
+              "target": "stage-spawn",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. resumeOwner → spawnAgentLeased, withFeedbackRunner, plainRunner."
+            },
+            {
+              "id": "e-spawn-concurrency",
+              "source": "stage-spawn",
+              "target": "concurrency",
+              "kind": "spawns",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. spawnAgentLeased → SpawnAgentLease."
+            },
+            {
+              "id": "e-spawn-prompts",
+              "source": "stage-spawn",
+              "target": "prompts-runners",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. отображение kind → раннер фазы."
+            },
+            {
+              "id": "e-helpers-core-runctx",
+              "source": "helpers",
+              "target": "core",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. runContext рядом с Run."
+            },
+            {
+              "id": "e-meshwaits-core-runctx",
+              "source": "mesh-waits",
+              "target": "core",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. runContext рядом с Run."
+            }
+          ],
+          "remove_edges": [
+            "e-scheduling-reviewpause",
+            "e-recovery-reviewpause",
+            "e-core-reviewpause",
+            "e-control-reviewpause",
+            "e-hooks-reviewpause",
+            "e-prompts-reviewpause",
+            "e-quota-reviewpause",
+            "e-reviewpause-concurrency",
+            "e-reviewpause-prompts",
+            "e-helpers-control",
+            "e-meshwaits-control"
+          ]
+        }
+      },
+      {
+        "id": "collab-entry-points",
+        "title": "Именованные входы collaboration-домена в Run",
+        "rationale": "Сделать владельцем порядка восстановления и запуска циклов collaboration сам домен. До: Run перечисляет шесть recover-вызовов и два цикла домена. После: Run вызывает recoverCollaboration и startCollaborationLoops в тех же точках; triggerWithSeq и handleEvent не меняются (синхронная воронка — контрдовод Codex). Польза — локальная ясность Run; «ничего не менять» — допустимый выбор.",
+        "effort": "small",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Локальная ясность Run и явный владелец порядка; правки переносятся, а не исчезают, поэтому 2."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "collab-entry-points-implicit"
+        ],
+        "node_ids": [
+          "core",
+          "collab",
+          "helpers",
+          "mesh-waits",
+          "proposals",
+          "loops"
+        ],
+        "steps": [
+          "Добавить в новый pkg/orchestrator/collaboration.go метод recoverCollaboration(ctx) — ровно текущая последовательность orchestrator.go:813-818 в том же порядке (recoverAssistants, recoverFeedbackIntents, recoverMeshWaits, recoverUnreadOfFinishedStages, releaseUnanswerableWaits(ctx, o.resumeWaiterAfterTerminalWaitAtStartup), recoverMeshWaitDeadlines); в Run вызывать его сразу после startPlanningForPending под тем же !poisoned.",
+          "Добавить startCollaborationLoops(ctx, poisoned bool) (stop func()): startWatchPoller при AssistantsEnabled и startLoopScheduler при AssistantsEnabled && !poisoned, stop — нынешний stopLoops или no-op. В Run вызывать после startQuestionPoller и оставить defer stop() в той же позиции (LIFO: стоп циклов раньше cancel и WaitAgents).",
+          "triggerWithSeq и handleEvent не менять: порядок пост-эффектов (waiters/unread/unanswerable до TryPublish, watchers и feedback intents после lifecycle) — осознанная единая воронка."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator -run 'Recover|Restart|Startup|Shutdown|Mesh|Unread|Unanswerable|Watch|Feedback|Loop|Peer|ReviewPause'.",
+          "Построчная сверка последовательности вызовов Run до и после (git diff --color-moved); scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Смена позиции defer stop() нарушит гарантию «тик не переживёт ран и не пишет в закрытый Store».",
+          "Отклонены: подпакет collaboration, реестр наблюдателей переходов, асинхронная шина."
+        ],
+        "changes": {
+          "add_nodes": [
+            {
+              "id": "collab-entry",
+              "label": "Входы домена (collaboration.go)",
+              "kind": "file",
+              "parent": "collab",
+              "description": "Предлагаемый файл: recoverCollaboration и startCollaborationLoops; метрики не измерены."
+            }
+          ],
+          "remove_nodes": [],
+          "update_nodes": [],
+          "add_edges": [
+            {
+              "id": "e-core-collabentry",
+              "source": "core",
+              "target": "collab-entry",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. Run вызывает recoverCollaboration и startCollaborationLoops."
+            },
+            {
+              "id": "e-collabentry-helpers",
+              "source": "collab-entry",
+              "target": "helpers",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. recoverAssistants, startWatchPoller."
+            },
+            {
+              "id": "e-collabentry-meshwaits",
+              "source": "collab-entry",
+              "target": "mesh-waits",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. recoverMeshWaits, recoverUnreadOfFinishedStages, releaseUnanswerableWaits, recoverMeshWaitDeadlines."
+            },
+            {
+              "id": "e-collabentry-proposals",
+              "source": "collab-entry",
+              "target": "proposals",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. recoverFeedbackIntents."
+            },
+            {
+              "id": "e-collabentry-loops",
+              "source": "collab-entry",
+              "target": "loops",
+              "kind": "calls",
+              "confidence": "inferred",
+              "evidence": "Предлагаемое изменение; не реализовано. startLoopScheduler."
+            }
+          ],
+          "remove_edges": [
+            "e-core-loops"
+          ]
+        }
+      },
+      {
+        "id": "dialog-poll-split",
+        "title": "Разделить pollQuestions на отбор, авто-ответ и показ пользователю",
+        "rationale": "Сделать цикл поллера читаемым: общий предикат активного статуса и две ветки как именованные методы. До: два дублированных switch и две длинные встроенные ветки. После: цикл отбора вызывает autoAnswerQuestion или surfaceQuestion; порядок операций прежний.",
+        "effort": "small",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Локальная ясность в одном файле с хорошим покрытием тестами dialog_*."
+        },
+        "depends_on": [],
+        "conflicts_with": [],
+        "finding_ids": [
+          "dialog-poll-mixed"
+        ],
+        "node_ids": [
+          "dialog"
+        ],
+        "steps": [
+          "Проверить характеризацию существующими dialog_* тестами: порядок question → auto_answered, O_EXCL-запись ответа до FSM, неудачная запись не помечается processed, seq перехода прикреплён к ask_user, preAskPhase; добавить недостающий сценарий, если какой-то из них не покрыт.",
+          "В dialog_poller.go выделить isDialogActive(status state.StageStatus) bool для двух циклов (71-74, 83-86), autoAnswerQuestion(...) — ветку авто-ответа и surfaceQuestion(...) — ветку показа пользователю (preAskPhase, EvAskUser с seq, EventAskUser). Порядок операций без изменений."
+        ],
+        "verification": [
+          "go test -race ./pkg/orchestrator -run 'Dialog|Poller|AutoAnswer|Question|Interactive|Malformed|Digest'.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Поллер не должен начать выводить завершение стадии из файлов (AGENTS.md: runWithRetry — канон)."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "dialog",
+              "description": "Поллер question.json: отбор активных стадий (isDialogActive), autoAnswerQuestion для non-interactive, surfaceQuestion для показа пользователю, repair битого JSON; дайджест диалога."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": []
+        }
+      },
+      {
+        "id": "runner-kind-dispatch",
+        "title": "Одна таблица kind → раннеры вместо трёх switch и двух ручных развилок",
+        "rationale": "Свести выбор раннера по kind к одному месту в stage_spawn.go. До: три switch и две ручные развилки autonomous/implementation. После: одна функция отображения; onAgentCompleted и reviseAwaitingAssistants используют withFeedbackRunner(kind).",
+        "effort": "small",
+        "priority": {
+          "benefit": 2,
+          "ease": 4,
+          "reason": "Меньше точек правки при новой фазе; проверяемо тестами revise/resume."
+        },
+        "depends_on": [
+          "shared-primitives-move"
+        ],
+        "conflicts_with": [],
+        "finding_ids": [
+          "runner-kind-dispatch-duplicated"
+        ],
+        "node_ids": [
+          "core",
+          "control",
+          "prompts-runners",
+          "reviewpause"
+        ],
+        "steps": [
+          "В stage_spawn.go (после shared-primitives-move) заменить три switch (withFeedbackRunner, plainRunner, feedbackTurnRunner) одной функцией runnersFor(kind) с полями fresh, withFeedback, feedbackTurn; обёртки сохраняют имена и сигнатуры для вызывающих.",
+          "orchestrator.go:983-993 (onAgentCompleted, revising) и control_api.go:200-206 (reviseAwaitingAssistants) заменить на o.spawnKind(ctx, *stage, kind, o.withFeedbackRunner(kind)), где kind — kindOfPhase(agentType) и executionKind(*stage) соответственно; эквивалентно, так как там возможны только autonomous и implementation.",
+          "Прямой SpawnAgent для planning-revise в reviseAwaitingApproval (control_api.go:228) не трогать: он намеренно без lease и auto-attach. Функции определения kind (executionKind, computeResumeKind, revisingKind, kindOfPhase) не объединять."
+        ],
+        "verification": [
+          "Тест эквивалентности: revising autonomous и implementation стадии после completion и после reviseAwaitingAssistants запускают тот же раннер, что до правки.",
+          "go test -race ./pkg/orchestrator -run 'Revise|Resume|Recover|Autonomous|Review|Planning|ReviewPause|Feedback'.",
+          "scripts/check-comments.sh <base> чист для диффа этапа; make lint без замечаний."
+        ],
+        "risks": [
+          "Неверный kind при замене ручной развилки запустит не тот раннер — закрывается тестом эквивалентности."
+        ],
+        "changes": {
+          "add_nodes": [],
+          "remove_nodes": [],
+          "update_nodes": [
+            {
+              "id": "stage-spawn",
+              "description": "Обязательный путь запуска агента стадии (spawnKind, spawnAgentLeased) и единственное отображение kind → раннеры (runnersFor)."
+            }
+          ],
+          "add_edges": [],
+          "remove_edges": [
+            "e-core-prompts",
+            "e-control-prompts-revise"
+          ]
+        }
+      }
+    ]
+  },
+  "selected": [
+    "registry-deep-copy",
+    "retry-budget-decisions",
+    "stage-executor-base",
+    "turn-prompt-base",
+    "helper-turn-phases",
+    "verify-pass-outcomes",
+    "retry-success-branch",
+    "remove-capability-api",
+    "shared-primitives-move",
+    "collab-entry-points",
+    "dialog-poll-split",
+    "runner-kind-dispatch"
+  ],
+  "events": [
+    {
+      "id": 1,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:14:18.296Z",
+      "proposal_id": "registry-deep-copy",
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:15:46.261Z",
+      "proposal_id": "registry-deep-copy",
+      "enabled": false
+    },
+    {
+      "id": 3,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:16:12.298Z",
+      "proposal_id": "retry-budget-decisions",
+      "enabled": true
+    },
+    {
+      "id": 4,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:16:18.340Z",
+      "proposal_id": "retry-budget-decisions",
+      "enabled": false
+    },
+    {
+      "id": 5,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:16:18.773Z",
+      "proposal_id": "retry-budget-decisions",
+      "enabled": true
+    },
+    {
+      "id": 6,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:01.599Z",
+      "proposal_id": "retry-budget-decisions",
+      "enabled": false
+    },
+    {
+      "id": 7,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:05.740Z",
+      "proposal_id": "stage-executor-base",
+      "enabled": true
+    },
+    {
+      "id": 8,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:42.999Z",
+      "proposal_id": "stage-executor-base",
+      "enabled": false
+    },
+    {
+      "id": 9,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:50.665Z",
+      "proposal_id": "turn-prompt-base",
+      "enabled": true
+    },
+    {
+      "id": 10,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:53.515Z",
+      "proposal_id": "turn-prompt-base",
+      "enabled": false
+    },
+    {
+      "id": 11,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:58.591Z",
+      "proposal_id": "helper-turn-phases",
+      "enabled": true
+    },
+    {
+      "id": 12,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:17:59.973Z",
+      "proposal_id": "helper-turn-phases",
+      "enabled": false
+    },
+    {
+      "id": 13,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:20:15.849Z",
+      "proposal_id": "verify-pass-outcomes",
+      "enabled": true
+    },
+    {
+      "id": 14,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:21:08.973Z",
+      "proposal_id": "verify-pass-outcomes",
+      "enabled": false
+    },
+    {
+      "id": 15,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:21:48.764Z",
+      "proposal_id": "remove-capability-api",
+      "enabled": true
+    },
+    {
+      "id": 16,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:21:50.930Z",
+      "proposal_id": "remove-capability-api",
+      "enabled": false
+    },
+    {
+      "id": 17,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:21:51.422Z",
+      "proposal_id": "remove-capability-api",
+      "enabled": true
+    },
+    {
+      "id": 18,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:22:49.472Z",
+      "proposal_id": "remove-capability-api",
+      "enabled": false
+    },
+    {
+      "id": 19,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:22:59.163Z",
+      "proposal_id": "shared-primitives-move",
+      "enabled": true
+    },
+    {
+      "id": 20,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:23:02.172Z",
+      "proposal_id": "shared-primitives-move",
+      "enabled": false
+    },
+    {
+      "id": 21,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:23:46.651Z",
+      "proposal_id": "collab-entry-points",
+      "enabled": true
+    },
+    {
+      "id": 22,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:23:47.634Z",
+      "proposal_id": "collab-entry-points",
+      "enabled": false
+    },
+    {
+      "id": 23,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:23:54.434Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": true
+    },
+    {
+      "id": 24,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:23:55.363Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": false
+    },
+    {
+      "id": 25,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:25:58.662Z",
+      "proposal_id": "registry-deep-copy",
+      "enabled": true
+    },
+    {
+      "id": 26,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:27:32.209Z",
+      "proposal_id": "registry-deep-copy",
+      "enabled": false
+    },
+    {
+      "id": 27,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T10:31:00.357Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": true
+    },
+    {
+      "id": 28,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-25T17:58:36.051Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "План 12",
+          "proposal_ids": [
+            "dialog-poll-split"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-25T18:01:43.100Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "dialog-poll-split"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T18:01:45.771Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": false
+    },
+    {
+      "id": 31,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T18:01:46.681Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": true
+    },
+    {
+      "id": 32,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-25T18:01:47.362Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": false
+    },
+    {
+      "id": 33,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:48:33.931Z",
+      "proposal_id": "registry-deep-copy",
+      "enabled": true
+    },
+    {
+      "id": 34,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:48:33.934Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:49:18.192Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": []
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:49:18.193Z",
+      "proposal_id": "retry-budget-decisions",
+      "enabled": true
+    },
+    {
+      "id": 37,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:49:18.194Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "retry-budget-decisions"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:49:24.586Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": []
+        }
+      ]
+    },
+    {
+      "id": 39,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:49:42.783Z",
+      "proposal_id": "stage-executor-base",
+      "enabled": true
+    },
+    {
+      "id": 40,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:49:42.783Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": []
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:50:03.936Z",
+      "proposal_id": "turn-prompt-base",
+      "enabled": true
+    },
+    {
+      "id": 42,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:50:03.937Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": []
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:50:47.718Z",
+      "proposal_id": "helper-turn-phases",
+      "enabled": true
+    },
+    {
+      "id": 44,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:50:47.719Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:50:54.935Z",
+      "proposal_id": "verify-pass-outcomes",
+      "enabled": true
+    },
+    {
+      "id": 46,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:50:54.936Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 47,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:13.781Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": []
+        }
+      ]
+    },
+    {
+      "id": 48,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:51:13.782Z",
+      "proposal_id": "retry-success-branch",
+      "enabled": true
+    },
+    {
+      "id": 49,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:13.783Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 50,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:51:19.232Z",
+      "proposal_id": "remove-capability-api",
+      "enabled": true
+    },
+    {
+      "id": 51,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:19.233Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base",
+            "remove-capability-api"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:51:26.568Z",
+      "proposal_id": "shared-primitives-move",
+      "enabled": true
+    },
+    {
+      "id": 53,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:26.570Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base",
+            "remove-capability-api",
+            "shared-primitives-move"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:51:33.787Z",
+      "proposal_id": "collab-entry-points",
+      "enabled": true
+    },
+    {
+      "id": 55,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:33.788Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base",
+            "remove-capability-api",
+            "shared-primitives-move"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes",
+            "collab-entry-points"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 56,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:51:42.684Z",
+      "proposal_id": "dialog-poll-split",
+      "enabled": true
+    },
+    {
+      "id": 57,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:42.684Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base",
+            "remove-capability-api",
+            "shared-primitives-move"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes",
+            "collab-entry-points",
+            "dialog-poll-split"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 58,
+      "kind": "selection",
+      "revision": 1,
+      "at": "2026-10-26T07:51:52.216Z",
+      "proposal_id": "runner-kind-dispatch",
+      "enabled": true
+    },
+    {
+      "id": 59,
+      "kind": "plans",
+      "revision": 1,
+      "at": "2026-10-26T07:51:52.216Z",
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base",
+            "remove-capability-api",
+            "shared-primitives-move"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes",
+            "collab-entry-points",
+            "dialog-poll-split",
+            "runner-kind-dispatch"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 60,
+      "kind": "approval",
+      "revision": 1,
+      "at": "2026-10-26T07:52:15.512Z",
+      "selected": [
+        "registry-deep-copy",
+        "retry-budget-decisions",
+        "stage-executor-base",
+        "turn-prompt-base",
+        "helper-turn-phases",
+        "verify-pass-outcomes",
+        "retry-success-branch",
+        "remove-capability-api",
+        "shared-primitives-move",
+        "collab-entry-points",
+        "dialog-poll-split",
+        "runner-kind-dispatch"
+      ],
+      "plan_groups": [
+        {
+          "id": "plan-1",
+          "title": "plan-one",
+          "proposal_ids": [
+            "registry-deep-copy",
+            "retry-budget-decisions",
+            "stage-executor-base",
+            "turn-prompt-base",
+            "remove-capability-api",
+            "shared-primitives-move"
+          ]
+        },
+        {
+          "id": "plan-2",
+          "title": "plan-two",
+          "proposal_ids": [
+            "helper-turn-phases",
+            "verify-pass-outcomes",
+            "collab-entry-points",
+            "dialog-poll-split",
+            "runner-kind-dispatch"
+          ]
+        },
+        {
+          "id": "plan-3",
+          "title": "plan-tree-hard",
+          "proposal_ids": [
+            "retry-success-branch"
+          ]
+        }
+      ]
+    }
+  ],
+  "acknowledged": 60,
+  "approval": {
+    "revision": 1,
+    "event_id": 60,
+    "selected": [
+      "registry-deep-copy",
+      "retry-budget-decisions",
+      "stage-executor-base",
+      "turn-prompt-base",
+      "helper-turn-phases",
+      "verify-pass-outcomes",
+      "retry-success-branch",
+      "remove-capability-api",
+      "shared-primitives-move",
+      "collab-entry-points",
+      "dialog-poll-split",
+      "runner-kind-dispatch"
+    ],
+    "plan_groups": [
+      {
+        "id": "plan-1",
+        "title": "plan-one",
+        "proposal_ids": [
+          "registry-deep-copy",
+          "retry-budget-decisions",
+          "stage-executor-base",
+          "turn-prompt-base",
+          "remove-capability-api",
+          "shared-primitives-move"
+        ]
+      },
+      {
+        "id": "plan-2",
+        "title": "plan-two",
+        "proposal_ids": [
+          "helper-turn-phases",
+          "verify-pass-outcomes",
+          "collab-entry-points",
+          "dialog-poll-split",
+          "runner-kind-dispatch"
+        ]
+      },
+      {
+        "id": "plan-3",
+        "title": "plan-tree-hard",
+        "proposal_ids": [
+          "retry-success-branch"
+        ]
+      }
+    ]
+  },
+  "sealed": true,
+  "plan_groups": [
+    {
+      "id": "plan-1",
+      "title": "plan-one",
+      "proposal_ids": [
+        "registry-deep-copy",
+        "retry-budget-decisions",
+        "stage-executor-base",
+        "turn-prompt-base",
+        "remove-capability-api",
+        "shared-primitives-move"
+      ]
+    },
+    {
+      "id": "plan-2",
+      "title": "plan-two",
+      "proposal_ids": [
+        "helper-turn-phases",
+        "verify-pass-outcomes",
+        "collab-entry-points",
+        "dialog-poll-split",
+        "runner-kind-dispatch"
+      ]
+    },
+    {
+      "id": "plan-3",
+      "title": "plan-tree-hard",
+      "proposal_ids": [
+        "retry-success-branch"
+      ]
+    }
+  ]
+}

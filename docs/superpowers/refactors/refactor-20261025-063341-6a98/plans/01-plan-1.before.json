@@ -1,0 +1,996 @@
+{
+  "nodes": [
+    {
+      "id": "orchestrator",
+      "label": "pkg/orchestrator",
+      "kind": "package",
+      "description": "Корневой пакет: фасад управления одним раном. Один тип-получатель *Orchestrator (526 методов, 91 поле, orchestrator.go:145-444) реализует и движок стадий, и collaboration-домен; HTTP видит его только через порты pkg/server, адаптированные в cmd/afm. Подкаталоги bus, concurrency, graph, stagefiles, verify — отдельные листовые Go-пакеты без циклов. Метрики — сигналы strictacode для корневого пакета, не вердикт.",
+      "metrics": {
+        "loc": 17736,
+        "rp": 54,
+        "op": 77
+      }
+    },
+    {
+      "id": "engine",
+      "label": "Движок стадий",
+      "kind": "subsystem",
+      "parent": "orchestrator",
+      "description": "Жизненный цикл рана и стадий: старт/завершение, FSM-переходы, планирование, команды управления, восстановление, review pause, хуки, вставка стадий, уведомления. Владеет единственной горутиной Run и порядком cleanup."
+    },
+    {
+      "id": "core",
+      "label": "Ядро рана (orchestrator.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "New собирает FSM, шины, concurrency и реестр; Run задаёт порядок старта (BeginRun → review pause → team → recovery → поллеры) и LIFO-cleanup (cancel → WaitAgents → closeMeshWaits → EndRun → lifecycle); handleEvent обрабатывает completion и peer-события из CriticalBus; triggerWithSeq — единая синхронная воронка FSM-перехода с пост-эффектами (UI, mesh waits, unread, lifecycle, watchers, feedback intents); completeStageFenced — барьер required helpers и каскад; setFatal — storage-fatal.",
+      "source": {
+        "file": "pkg/orchestrator/orchestrator.go",
+        "start": 1,
+        "end": 1223
+      },
+      "metrics": {
+        "loc": 1223
+      }
+    },
+    {
+      "id": "scheduling",
+      "label": "Планирование (scheduling.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "Активация pending/ready, CAS ready → running → spawn (startReadyStage), executionKind, failBlockedStages, решение о выходе (shouldExit, runStateAllowsExit для Store.FinalizeIf).",
+      "source": {
+        "file": "pkg/orchestrator/scheduling.go",
+        "start": 1,
+        "end": 376
+      },
+      "metrics": {
+        "loc": 376
+      }
+    },
+    {
+      "id": "control",
+      "label": "Control API (control_api.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "Команды из HTTP: Approve/Revise/Retry/Pause/Continue/Button — durable-переход до запуска работы. Здесь же объявлен runContext (104-111) — run-scoped контекст, который зовут ~12 подсистем.",
+      "source": {
+        "file": "pkg/orchestrator/control_api.go",
+        "start": 1,
+        "end": 370
+      },
+      "metrics": {
+        "loc": 370
+      }
+    },
+    {
+      "id": "recovery",
+      "label": "Восстановление (recovery.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "Диспетчеризация по статусу на старте (resumeStageAtStatus, общий с Continue), startPlanningForPending, загрузка review-pause маркера, восстановление hook/quota/verify-парков.",
+      "source": {
+        "file": "pkg/orchestrator/recovery.go",
+        "start": 1,
+        "end": 428
+      },
+      "metrics": {
+        "loc": 428
+      }
+    },
+    {
+      "id": "reviewpause",
+      "label": "Review pause (reviewpause.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "Пауза флоу с заметками ревью, resumeOwner, runResumeTransaction. Здесь же лежат общие примитивы запуска агента стадии (spawnAgentLeased 53-60, spawnKind 63-67, computeResumeKind 35-46, withFeedbackRunner/plainRunner 244-270), которыми пользуется весь движок.",
+      "source": {
+        "file": "pkg/orchestrator/reviewpause.go",
+        "start": 1,
+        "end": 725
+      },
+      "metrics": {
+        "loc": 725
+      }
+    },
+    {
+      "id": "hooks",
+      "label": "Script-хуки (hooks.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "script_before/script_after стадии с durable решением Retry/Skip и возобновлением после хука.",
+      "source": {
+        "file": "pkg/orchestrator/hooks.go",
+        "start": 1,
+        "end": 432
+      },
+      "metrics": {
+        "loc": 432
+      }
+    },
+    {
+      "id": "graph-mutate",
+      "label": "Вставка стадии (graph_mutate.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "Динамическое добавление стадии: preview и commit через Store.AddStageToGraph (revision, preconditions), затем публикация новой ревизии реестра; flow.yaml не переписывается.",
+      "source": {
+        "file": "pkg/orchestrator/graph_mutate.go",
+        "start": 1,
+        "end": 220
+      },
+      "metrics": {
+        "loc": 220
+      }
+    },
+    {
+      "id": "notices",
+      "label": "Уведомления (notices.go)",
+      "kind": "file",
+      "parent": "engine",
+      "description": "publishNotice (17-20) — общий live + notices.jsonl путь UI-уведомлений (best-effort, не замена events.jsonl); в том же файле — форматирование usage-limit сообщений (QuotaWaitMessage, StageQuota...).",
+      "source": {
+        "file": "pkg/orchestrator/notices.go",
+        "start": 1,
+        "end": 186
+      },
+      "metrics": {
+        "loc": 186
+      }
+    },
+    {
+      "id": "turn",
+      "label": "Ход стадии",
+      "kind": "subsystem",
+      "parent": "orchestrator",
+      "description": "Один ход агента стадии: сборка промпта, конфигурация executor, цикл попыток и каноническое решение о completion, quota-парк, AI-verify, файловый диалог, инъекция памяти."
+    },
+    {
+      "id": "prompts-runners",
+      "label": "Раннеры фаз (agents.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "Раннеры planning/implementation/review/autonomous в вариантах fresh, with-feedback и feedback-turn: пять сборок prompts.Inputs (176, 268, 327, 385, 434), file-probe и gateWithVerify как completionCheck.",
+      "source": {
+        "file": "pkg/orchestrator/agents.go",
+        "start": 1,
+        "end": 539
+      },
+      "metrics": {
+        "loc": 539
+      }
+    },
+    {
+      "id": "runner-factory",
+      "label": "Конфигурация executor (runner_factory.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "executor.Config стадии: runnerFor (interactive: сессия, resume, ResolveArgs) и nonInteractiveRunner — два почти одинаковых литерала (147-171, 194-217); отдельный runnerForVerify с урезанным набором capability.",
+      "source": {
+        "file": "pkg/orchestrator/runner_factory.go",
+        "start": 1,
+        "end": 272
+      },
+      "metrics": {
+        "loc": 272
+      }
+    },
+    {
+      "id": "retry",
+      "label": "Цикл попыток (retry.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "runWithRetry/runRetryLoop — каноническое решение о completion хода (AGENTS.md), parkForPeers, claimVerifyResume.",
+      "source": {
+        "file": "pkg/orchestrator/retry.go",
+        "start": 1,
+        "end": 584
+      },
+      "metrics": {
+        "loc": 584
+      }
+    },
+    {
+      "id": "run-retry-loop",
+      "label": "runRetryLoop",
+      "kind": "symbol",
+      "parent": "retry",
+      "description": "Попытки одного хода: бюджеты (attempt, unknownRetries, verifyFailures, stalemate), admission и quota-парк, доставка inbox, открытый вопрос, парк по peers, completion-check с классификацией исходов verify, epoch-фенсинг, backoff.",
+      "source": {
+        "file": "pkg/orchestrator/retry.go",
+        "start": 268,
+        "end": 584
+      },
+      "metrics": {
+        "loc": 317,
+        "complexity": 64
+      }
+    },
+    {
+      "id": "quota",
+      "label": "Quota-парк (quota.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "Durable парк и пробуждение по usage-limit провайдера для стадий, verify-шагов и задач helpers; verifyCounters переживают парк.",
+      "source": {
+        "file": "pkg/orchestrator/quota.go",
+        "start": 1,
+        "end": 422
+      },
+      "metrics": {
+        "loc": 422
+      }
+    },
+    {
+      "id": "verify-pass",
+      "label": "AI-verify (verify.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "Verify после успешного file-probe: lease swap, fail-fast по шагам, manifest/report/feedback, quota-resume прохода (restoreVerifyPasses); stalemate review_patience — в verify_stalemate.go.",
+      "source": {
+        "file": "pkg/orchestrator/verify.go",
+        "start": 1,
+        "end": 920
+      },
+      "metrics": {
+        "loc": 920
+      }
+    },
+    {
+      "id": "run-verification",
+      "label": "RunVerification",
+      "kind": "symbol",
+      "parent": "verify-pass",
+      "description": "Один проход verify: lease, resume-курсор, контекст, цикл agent/shell шагов с ретраями, парком и оформлением исхода каждого шага.",
+      "source": {
+        "file": "pkg/orchestrator/verify.go",
+        "start": 195,
+        "end": 494
+      },
+      "metrics": {
+        "loc": 300,
+        "complexity": 48
+      }
+    },
+    {
+      "id": "dialog",
+      "label": "Файловый диалог (dialog_poller.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "Поллер question.json: авто-ответ для non-interactive, показ пользователю (EvAskUser), repair битого JSON; дайджест диалога (dialog_digest.go). pollQuestions (65-228) — цикломатика 32.",
+      "source": {
+        "file": "pkg/orchestrator/dialog_poller.go",
+        "start": 1,
+        "end": 674
+      },
+      "metrics": {
+        "loc": 674
+      }
+    },
+    {
+      "id": "memory",
+      "label": "Память (memory_inject.go, reflection.go)",
+      "kind": "file",
+      "parent": "turn",
+      "description": "Инъекция среза памяти в промпт (memoryBlockForStage) и live reflection через pkg/memorypipeline; ошибка памяти не меняет FSM.",
+      "source": {
+        "file": "pkg/orchestrator/memory_inject.go",
+        "start": 1,
+        "end": 56
+      }
+    },
+    {
+      "id": "collab",
+      "label": "Collaboration-домен",
+      "kind": "subsystem",
+      "parent": "orchestrator",
+      "description": "Helpers и Agent Mesh (≈9.9k строк, ≈56% корневого пакета). Паттерн durable-first: спланировать effects → Store.ApplyRunOperation (preconditions, идемпотентный ID) → внешние эффекты (notice, пробуждение, spawn). Сообщение, receipt, изменение задачи и разрешение waits часто коммитятся ОДНОЙ операцией."
+    },
+    {
+      "id": "helpers",
+      "label": "Helpers (assistants*.go, watch_tasks.go)",
+      "kind": "subsystem",
+      "parent": "collab",
+      "description": "Жизненный цикл задач помощников: admission, queued → running CAS, ход (runHelperTask), результат и делегирование, waiver, каскад, watcher, required-барьер стадии.",
+      "source": {
+        "file": "pkg/orchestrator/assistants.go",
+        "start": 1,
+        "end": 709
+      }
+    },
+    {
+      "id": "run-helper-task",
+      "label": "runHelperTask",
+      "kind": "symbol",
+      "parent": "helpers",
+      "description": "Ход помощника: подготовка, запуск, ~12 исходов неуспеха и 4 варианта коммита успеха.",
+      "source": {
+        "file": "pkg/orchestrator/assistants_lifecycle.go",
+        "start": 133,
+        "end": 415
+      },
+      "metrics": {
+        "loc": 283,
+        "complexity": 49
+      }
+    },
+    {
+      "id": "mesh-core",
+      "label": "Mesh core (agentcomm.go и др.)",
+      "kind": "subsystem",
+      "parent": "collab",
+      "description": "Service (agentcomm.go:28-49, единственная реализация — *Orchestrator): сообщения, attach, roster, inbox, токены, side/run-agent, team, spawn участников, RedactSecrets.",
+      "source": {
+        "file": "pkg/orchestrator/agentcomm.go",
+        "start": 1,
+        "end": 435
+      }
+    },
+    {
+      "id": "mesh-waits",
+      "label": "Mesh waits (agentcomm_wait*.go, resume, unread)",
+      "kind": "subsystem",
+      "parent": "collab",
+      "description": "Ожидания и пробуждения: wait/wait-status, resume ожидающего (стадия или задача, live или startup), unread, unanswerable, turn reply.",
+      "source": {
+        "file": "pkg/orchestrator/agentcomm_wait.go",
+        "start": 1,
+        "end": 773
+      }
+    },
+    {
+      "id": "board",
+      "label": "Board (agentcomm_board*.go)",
+      "kind": "subsystem",
+      "parent": "collab",
+      "description": "Доска фактов и typed board tasks с версиями и назначениями.",
+      "source": {
+        "file": "pkg/orchestrator/agentcomm_board_tasks.go",
+        "start": 1,
+        "end": 667
+      }
+    },
+    {
+      "id": "loops",
+      "label": "Loops (agentcomm_loop*.go)",
+      "kind": "subsystem",
+      "parent": "collab",
+      "description": "Периодические подсказки (loop add/list/stop) и планировщик со stop/join до cancel рана.",
+      "source": {
+        "file": "pkg/orchestrator/agentcomm_loop_scheduler.go",
+        "start": 1,
+        "end": 390
+      }
+    },
+    {
+      "id": "proposals",
+      "label": "Предложения и обсуждения (proposal*.go, feedback_intent.go, discussion*.go)",
+      "kind": "subsystem",
+      "parent": "collab",
+      "description": "Предложения, отложенная доставка Revise (feedback intents), обсуждения. UI предложений удалён (cf300b96), backend оставлен.",
+      "source": {
+        "file": "pkg/orchestrator/feedback_intent.go",
+        "start": 1,
+        "end": 471
+      }
+    },
+    {
+      "id": "bus",
+      "label": "pkg/orchestrator/bus",
+      "kind": "package",
+      "parent": "orchestrator",
+      "description": "Правила FSM поверх state.Store (CAS по статусу/epoch/seq), CriticalBus (события в горутину Run) и UIBus (дашборд).",
+      "metrics": {
+        "rp": 16,
+        "op": 27
+      }
+    },
+    {
+      "id": "concurrency",
+      "label": "pkg/orchestrator/concurrency",
+      "kind": "package",
+      "parent": "orchestrator",
+      "description": "Командные семафоры, Lease (release-before-acquire для verify), owner-очереди SpawnOwned, SpawnDetached, учёт агентских горутин и WaitAgents.",
+      "metrics": {
+        "rp": 20,
+        "op": 29
+      }
+    },
+    {
+      "id": "graph",
+      "label": "pkg/orchestrator/graph",
+      "kind": "package",
+      "parent": "orchestrator",
+      "description": "Runtime-реестр стадий: версионные снимки Registry, atomic Store.Replace, динамическая вставка, persist. Обещает неизменяемость снимка, но копирует только DependsOn (см. находку registry-nested-alias).",
+      "metrics": {
+        "rp": 19,
+        "op": 17
+      }
+    },
+    {
+      "id": "stagefiles",
+      "label": "pkg/orchestrator/stagefiles",
+      "kind": "package",
+      "parent": "orchestrator",
+      "description": "Файловые контракты стадии: plan/completion, сессии, verify manifest/результаты/отчёты, notices.jsonl.",
+      "metrics": {
+        "loc": 1621
+      }
+    },
+    {
+      "id": "verify-types",
+      "label": "pkg/orchestrator/verify",
+      "kind": "package",
+      "parent": "orchestrator",
+      "description": "Строгий результат verify и классификация исходов (outcome.go, result.go).",
+      "metrics": {
+        "rp": 18,
+        "op": 16
+      }
+    },
+    {
+      "id": "ext",
+      "label": "Внешние границы (контекст)",
+      "kind": "subsystem",
+      "description": "Пакеты вне scope: показаны только чтобы объяснить, что пересекает границу pkg/orchestrator."
+    },
+    {
+      "id": "cmd-afm",
+      "label": "cmd/afm",
+      "kind": "package",
+      "parent": "ext",
+      "description": "Точка сборки рана (run.go: New → startDashboard → Run) и адаптеры портов pkg/server к *Orchestrator (run_collaboration.go, run_mesh.go, run_agent_mesh.go, run_side_agent*.go)."
+    },
+    {
+      "id": "server",
+      "label": "pkg/server",
+      "kind": "package",
+      "parent": "ext",
+      "description": "HTTP/WebSocket дашборда; объявляет узкие порты (actions.go: StageActions, AssistantActions, FlowActions, ...); корневой пакет импортирует только ради DTO и ошибок."
+    },
+    {
+      "id": "state",
+      "label": "pkg/state",
+      "kind": "package",
+      "parent": "ext",
+      "description": "events.jsonl — источник истины, state.json — кэш: Apply (CAS переходов), ApplyRunOperation (атомарные операции collaboration), AddStageToGraph, FinalizeIf."
+    },
+    {
+      "id": "executor",
+      "label": "pkg/executor",
+      "kind": "package",
+      "parent": "ext",
+      "description": "Subprocess агентов и verify; импортирует pkg/orchestrator/verify."
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-cmd-core",
+      "source": "cmd-afm",
+      "target": "core",
+      "kind": "constructs",
+      "confidence": "confirmed",
+      "evidence": "cmd/afm/run.go:314 orchestrator.New(orchOpts); run.go:389 orch.Run(ctx); дашборд стартует раньше Run (run.go:334 startDashboard)."
+    },
+    {
+      "id": "e-cmd-server",
+      "source": "cmd-afm",
+      "target": "server",
+      "kind": "adapts",
+      "confidence": "confirmed",
+      "evidence": "cmd/afm/run.go:334-349 server.Config{AssistantActions: collab.actions(orch), ProposalActions: ...}; cmd/afm/run_collaboration.go:251-267 — адаптер *orchestrator.Orchestrator → server.AssistantActions."
+    },
+    {
+      "id": "e-server-orch",
+      "source": "server",
+      "target": "orchestrator",
+      "kind": "imports",
+      "confidence": "confirmed",
+      "evidence": "pkg/server/graph.go:10, mesh.go:9, handlers.go:22, agent_mesh.go:13 и др. импортируют корневой пакет ради DTO и ошибок (LoopView, AddStageDraft, BoardTaskReceipt, ErrFlowPaused); вызовы идут через порты pkg/server/actions.go:11-64, реализованные адаптерами cmd/afm."
+    },
+    {
+      "id": "e-executor-verifytypes",
+      "source": "executor",
+      "target": "verify-types",
+      "kind": "imports",
+      "confidence": "confirmed",
+      "evidence": "pkg/executor/executor.go:22 импортирует pkg/orchestrator/verify: нижний слой зависит от подпакета оркестратора (вне scope, отмечено)."
+    },
+    {
+      "id": "e-core-bus",
+      "source": "core",
+      "target": "bus",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:672 triggerWithSeq → o.fsm.Apply; публикация o.ui.Publish (689) и o.critical.TryPublish (702)."
+    },
+    {
+      "id": "e-bus-state",
+      "source": "bus",
+      "target": "state",
+      "kind": "persists",
+      "confidence": "confirmed",
+      "evidence": "bus/fsm.go:218 f.store.Apply(tr) — CAS перехода."
+    },
+    {
+      "id": "e-concurrency-bus",
+      "source": "concurrency",
+      "target": "bus",
+      "kind": "imports",
+      "confidence": "confirmed",
+      "evidence": "concurrency/concurrency.go:11, 68, 124: Manager держит *bus.CriticalBus, через него завершения агентов возвращаются в горутину Run."
+    },
+    {
+      "id": "e-core-graph",
+      "source": "core",
+      "target": "graph",
+      "kind": "reads",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:641 reg() = o.graph.Load(): каждый вызов — снимок текущей ревизии."
+    },
+    {
+      "id": "e-graphmut-state",
+      "source": "graph-mutate",
+      "target": "state",
+      "kind": "persists",
+      "confidence": "confirmed",
+      "evidence": "graph_mutate.go:194 o.opts.Store.AddStageToGraph(op) — durable запись определения стадии."
+    },
+    {
+      "id": "e-graphmut-graph",
+      "source": "graph-mutate",
+      "target": "graph",
+      "kind": "publishes",
+      "confidence": "confirmed",
+      "evidence": "graph_mutate.go:211 o.graph.Replace(reg.WithPlan(plan).Stages()) — новая ревизия после durable commit."
+    },
+    {
+      "id": "e-core-scheduling",
+      "source": "core",
+      "target": "scheduling",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "Run/handleEvent → shouldExit, startReadyStages, failBlockedStages, tryActivatePrePlanned; orchestrator.go:861 Store.FinalizeIf(o.runStateAllowsExit)."
+    },
+    {
+      "id": "e-core-recovery",
+      "source": "core",
+      "target": "recovery",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "Run: loadReviewPause (orchestrator.go:793, recovery.go:41), resumeReviewPause (807), startPlanningForPending (812)."
+    },
+    {
+      "id": "e-control-core",
+      "source": "control",
+      "target": "core",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "control_api.go: Trigger/triggerWithSeq (например, 214 EvRevise с ExpectFrom=awaiting_approval), bumpPauseGen."
+    },
+    {
+      "id": "e-control-scheduling",
+      "source": "control",
+      "target": "scheduling",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "control_api.go:202 executionKind; retryStage, startReadyStages, failBlockedStages (8 различных функций по графу вызовов)."
+    },
+    {
+      "id": "e-recovery-scheduling",
+      "source": "recovery",
+      "target": "scheduling",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "recovery.go → activatePrePlannedStage, startReadyStages, executionKind, failBlockedStages, clearInteractiveSessions (12 различных функций)."
+    },
+    {
+      "id": "e-scheduling-reviewpause",
+      "source": "scheduling",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "scheduling.go:144, 189, 261 spawnKind / plainRunner — объявлены в reviewpause.go:63-67, 259-270."
+    },
+    {
+      "id": "e-recovery-reviewpause",
+      "source": "recovery",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "recovery.go → spawnKind, spawnAgentLeased, withFeedbackRunner, plainRunner (запуск стадии) и runResumeTransaction (сама review pause, reviewpause.go:451)."
+    },
+    {
+      "id": "e-core-reviewpause",
+      "source": "core",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:988-991 spawnKind; turnRunner (1168-1173) → plainRunner."
+    },
+    {
+      "id": "e-control-reviewpause",
+      "source": "control",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "control_api.go:202-205 spawnKind."
+    },
+    {
+      "id": "e-hooks-reviewpause",
+      "source": "hooks",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "hooks.go:374 o.plainRunner(o.executionKind(s))(ctx, s)."
+    },
+    {
+      "id": "e-prompts-reviewpause",
+      "source": "prompts-runners",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "agents.go:222, 359, 405, 455 o.spawnKind(...) — перезапуск с feedback из раннера."
+    },
+    {
+      "id": "e-quota-reviewpause",
+      "source": "quota",
+      "target": "reviewpause",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "quota.go:254 computeResumeKind (reviewpause.go:35-46)."
+    },
+    {
+      "id": "e-reviewpause-concurrency",
+      "source": "reviewpause",
+      "target": "concurrency",
+      "kind": "spawns",
+      "confidence": "confirmed",
+      "evidence": "reviewpause.go:53-60 spawnAgentLeased → o.concurrency.SpawnAgentLease; lease регистрируется в stageLeases для verify."
+    },
+    {
+      "id": "e-reviewpause-prompts",
+      "source": "reviewpause",
+      "target": "prompts-runners",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "reviewpause.go:244-270 withFeedbackRunner/plainRunner: switch по kind → runPlanningAgent, runImplementationWithFeedback и др. (agents.go)."
+    },
+    {
+      "id": "e-core-prompts",
+      "source": "core",
+      "target": "prompts-runners",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:983-993 вручную выбирает o.runAutonomousWithFeedback / o.runImplementationWithFeedback для revising-стадии."
+    },
+    {
+      "id": "e-control-prompts-revise",
+      "source": "control",
+      "target": "prompts-runners",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "control_api.go:202-205 reviseAwaitingAssistants вручную выбирает runAutonomousWithFeedback / runImplementationWithFeedback."
+    },
+    {
+      "id": "e-control-prompts-planning",
+      "source": "control",
+      "target": "prompts-runners",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "control_api.go:228 o.concurrency.SpawnAgent(..., o.runPlanningWithFeedback) — planning-revise намеренно без lease и auto-attach."
+    },
+    {
+      "id": "e-prompts-retry",
+      "source": "prompts-runners",
+      "target": "run-retry-loop",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "agents.go:175, 295 o.runRetryLoop(ctx, s, phase, feedback, agentFn, completionCheck, ...)."
+    },
+    {
+      "id": "e-prompts-runnerfactory",
+      "source": "prompts-runners",
+      "target": "runner-factory",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "agents.go:157, 201, 288 o.runnerFor(s, phase)."
+    },
+    {
+      "id": "e-prompts-verify",
+      "source": "prompts-runners",
+      "target": "verify-pass",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "agents.go:357, 403, 453 o.gateWithVerify(...) как completionCheck; verify.go:820-830 запускает RunVerification только после file-probe."
+    },
+    {
+      "id": "e-prompts-memory",
+      "source": "prompts-runners",
+      "target": "memory",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "agents.go:185, 277 MemoryBlock: o.memoryBlockForStage(s) (memory_inject.go:14)."
+    },
+    {
+      "id": "e-runnerfactory-executor",
+      "source": "runner-factory",
+      "target": "executor",
+      "kind": "configures",
+      "confidence": "confirmed",
+      "evidence": "runner_factory.go:147-174 и 194-221 — два литерала executor.Config → executor.New(cfg); runnerForVerify (236-256) — отдельный набор полей."
+    },
+    {
+      "id": "e-runnerfactory-meshcore",
+      "source": "runner-factory",
+      "target": "mesh-core",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "runner_factory.go:167-168 MeshClient: o.meshClientFor(meshStageParticipantID(s.ID)), OnDelivered: o.agentCommOnDeliveredForStage(s)."
+    },
+    {
+      "id": "e-retry-core",
+      "source": "run-retry-loop",
+      "target": "core",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "retry.go: Trigger(EvFail/EvAskUser/EvResumeAfterRetry), triggerWithSeq(EvScheduleRetry, «retries exhausted»), completeAgent."
+    },
+    {
+      "id": "e-retry-quota",
+      "source": "run-retry-loop",
+      "target": "quota",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "retry.go:354-355 admitStageTurn/parkForQuota; 438 parkVerifyForQuota с verifyCounters; 509 parkForQuota по UsageLimitError."
+    },
+    {
+      "id": "e-retry-meshwaits",
+      "source": "run-retry-loop",
+      "target": "mesh-waits",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "retry.go:359 meshWaitStatusesOf; 404-408 turnEpisode → parkForPeers."
+    },
+    {
+      "id": "e-verify-concurrency",
+      "source": "run-verification",
+      "target": "concurrency",
+      "kind": "uses",
+      "confidence": "confirmed",
+      "evidence": "verify.go:202-219 lease из stageLeases: Release() или SwapTo(s.Command) только для VerifyRejectedError."
+    },
+    {
+      "id": "e-verify-stagefiles",
+      "source": "verify-pass",
+      "target": "stagefiles",
+      "kind": "persists",
+      "confidence": "confirmed",
+      "evidence": "verify.go:241-250 stagefiles.WriteManifest; 370-383 SaveAcceptedResult/WriteReport; 489-493 финальный manifest и ClearActiveFeedback; persistVerifyRejection (680-705)."
+    },
+    {
+      "id": "e-verify-verifytypes",
+      "source": "verify-pass",
+      "target": "verify-types",
+      "kind": "uses",
+      "confidence": "confirmed",
+      "evidence": "verify.go:369-397 switch по verify.VerdictPass/NeedsChanges/Inconclusive результата ModelResult."
+    },
+    {
+      "id": "e-verify-notices",
+      "source": "verify-pass",
+      "target": "notices",
+      "kind": "publishes",
+      "confidence": "confirmed",
+      "evidence": "verify.go:103-121 emitVerifyResult → o.publishNotice(EventVerifyResult)."
+    },
+    {
+      "id": "e-dialog-core",
+      "source": "dialog",
+      "target": "core",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "dialog_poller.go → triggerWithSeq(EvAskUser) с прикреплением seq к ask_user; resumeAfterAnswer."
+    },
+    {
+      "id": "e-core-dialog",
+      "source": "core",
+      "target": "dialog",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:820 o.startQuestionPoller(ctx); hasOpenQuestion/popPreAskPhase из ядра и retry."
+    },
+    {
+      "id": "e-core-helpers",
+      "source": "core",
+      "target": "helpers",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:813 recoverAssistants, 822 startWatchPoller, 717 finalizeWatchersForStage (пост-эффект triggerWithSeq)."
+    },
+    {
+      "id": "e-core-meshwaits",
+      "source": "core",
+      "target": "mesh-waits",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:691-699 resumeWaitersAfterTransition, releaseUnreadAfterTransition, releaseUnanswerableWaitsAfterFinish; 815-818 recoverMeshWaits … recoverMeshWaitDeadlines; handleEvent (922-927) onPeerReplied/onPeerQuestion/onPeerWaitEnded."
+    },
+    {
+      "id": "e-core-proposals",
+      "source": "core",
+      "target": "proposals",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:698 noticeUnansweredHumanPosts, 724 redeliverPendingFeedbackIntents, 814 recoverFeedbackIntents."
+    },
+    {
+      "id": "e-core-loops",
+      "source": "core",
+      "target": "loops",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "orchestrator.go:827-828 stopLoops := o.startLoopScheduler(ctx); defer stopLoops()."
+    },
+    {
+      "id": "e-helpers-meshcore",
+      "source": "helpers",
+      "target": "mesh-core",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "Граф вызовов: 35 различных функций (agentCommBlockForTask, deliverRenderedInbox, meshClientFor, announceMessage, …)."
+    },
+    {
+      "id": "e-meshcore-helpers",
+      "source": "mesh-core",
+      "target": "helpers",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "17 различных функций (admitTopLevelTask, maybeScheduleTask, finishTaskFrom, idleRunAgent, …); AttachAndSend (agentcomm_attach.go:273-413) коммитит задачу, тред и сообщение одной операцией."
+    },
+    {
+      "id": "e-helpers-meshwaits",
+      "source": "helpers",
+      "target": "mesh-waits",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "20 различных функций (notifyAndResumeWaits, planTurnReplies, tryResumePeer, releaseUnanswerableWaitsAfterFinish, …)."
+    },
+    {
+      "id": "e-meshcore-meshwaits",
+      "source": "mesh-core",
+      "target": "mesh-waits",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "13 различных функций (notifyAndResumeWaits, announceAndWakeEnded, stageIDFromMeshParticipant, …)."
+    },
+    {
+      "id": "e-meshwaits-meshcore",
+      "source": "mesh-waits",
+      "target": "mesh-core",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "38 различных функций (planMessage, deriveMesh*ID, marshalEffect, meshParticipantForTask, …)."
+    },
+    {
+      "id": "e-board-meshcore",
+      "source": "board",
+      "target": "mesh-core",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "33 различные функции (deliverCommittedMessages, liveRoster, openThreadWithMembers, …)."
+    },
+    {
+      "id": "e-loops-meshcore",
+      "source": "loops",
+      "target": "mesh-core",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "32 различные функции (planMarkedMessage, deliverCommittedMessages, liveRoster, …)."
+    },
+    {
+      "id": "e-proposals-meshcore",
+      "source": "proposals",
+      "target": "mesh-core",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "21 различная функция (ensureParticipantEffects, wakeRecipients, resolveParticipant, …)."
+    },
+    {
+      "id": "e-helpers-quota",
+      "source": "helpers",
+      "target": "quota",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "23 различные функции (planQuotaWait, retryTaskAt, taskProviderHold, limitWarningSink, …): quota-парк задач помощников."
+    },
+    {
+      "id": "e-helpers-concurrency",
+      "source": "helpers",
+      "target": "concurrency",
+      "kind": "spawns",
+      "confidence": "confirmed",
+      "evidence": "assistants.go:479 o.concurrency.SpawnOwned(ctx, concurrency.TaskOwnerKey(taskID), cmd, nil, …): owner-очередь сериализует ходы одной задачи."
+    },
+    {
+      "id": "e-meshcore-state",
+      "source": "mesh-core",
+      "target": "state",
+      "kind": "persists",
+      "confidence": "confirmed",
+      "evidence": "agentcomm_messages.go:57, 169, 198, 293, 601 o.opts.Store.ApplyRunOperation(op, …)."
+    },
+    {
+      "id": "e-helpers-state",
+      "source": "helpers",
+      "target": "state",
+      "kind": "persists",
+      "confidence": "confirmed",
+      "evidence": "assistants.go:254, 284, 311; assistants_cascade.go:93, 127 Store.ApplyRunOperation."
+    },
+    {
+      "id": "e-helpers-executor",
+      "source": "helpers",
+      "target": "executor",
+      "kind": "configures",
+      "confidence": "confirmed",
+      "evidence": "assistants_lifecycle.go:35-53 helperExecutorConfig: свой набор (ScratchDir, Redact/Secrets, mesh участника), без BrowserMCP и StageDir стадии."
+    },
+    {
+      "id": "e-helpers-control",
+      "source": "helpers",
+      "target": "control",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "assistants.go:253, 309, 589; assistants_cascade.go:92 o.runContext(…) — объявлен в control_api.go:104-111."
+    },
+    {
+      "id": "e-helpers-core",
+      "source": "helpers",
+      "target": "core",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "assistants.go:591-598: после терминального коммита задачи afterFinish в finishTaskTurnReplying вызывает maybeCompleteAfterAssistants (orchestrator.go:1076-1080) → completeStage → completeStageFenced (1040-1068): generation-aware RequiredBlocker (pkg/state/assistants_barrier.go:71-87), CAS EvComplete, затем after-hook/reflection/каскад. Тот же вход — assistants_waiver.go:69. Исход required-задачи — вход барьера завершения стадии; FSM-переход выполняет completion-путь ядра, а не helper."
+    },
+    {
+      "id": "e-meshwaits-control",
+      "source": "mesh-waits",
+      "target": "control",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "agentcomm_resume.go:116, agentcomm_unread.go:86, agentcomm_unanswerable.go:37 o.runContext(context.Background())."
+    },
+    {
+      "id": "e-meshcore-notices",
+      "source": "mesh-core",
+      "target": "notices",
+      "kind": "publishes",
+      "confidence": "confirmed",
+      "evidence": "publishNotice из mesh core (13 вызовов по графу); всего его зовут 55 функций в 12 подсистемах."
+    },
+    {
+      "id": "e-recovery-hooks",
+      "source": "recovery",
+      "target": "hooks",
+      "kind": "calls",
+      "confidence": "confirmed",
+      "evidence": "recovery.go → readHookPending, resumeAfterHook, resumeHookFailedWait, withBeforeHook."
+    },
+    {
+      "id": "e-hooks-core",
+      "source": "hooks",
+      "target": "core",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "hooks.go → Trigger/triggerWithSeq (durable Retry/Skip)."
+    },
+    {
+      "id": "e-quota-core",
+      "source": "quota",
+      "target": "core",
+      "kind": "transitions",
+      "confidence": "confirmed",
+      "evidence": "quota.go → Trigger/triggerWithSeq, resumeStageForPhaseAs, armResumeContext."
+    }
+  ]
+}
