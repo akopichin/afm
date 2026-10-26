@@ -14,6 +14,11 @@ which afm
 
 ## Step 1: Gather Information
 
+If the user wants a ready-made workflow, check the AFM pipeline catalog through
+the bundled `afm-pipelines` skill before designing a new flow. Offer a matching
+package when one exists. Continue with a custom flow when that is the user's
+preference or no package fits; catalog access is not required for custom flows.
+
 Use AskUserQuestion to collect:
 1. Flow name (kebab-case)
 2. Flow description

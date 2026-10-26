@@ -94,6 +94,7 @@ func TestInstallSkillsLinksAllSkills(t *testing.T) {
 	for _, name := range embeddedSkillNames(t) {
 		assertSkillLinked(t, home, name)
 	}
+	assertSkillLinked(t, home, "afm-pipelines")
 	header := "afm skills: " + filepath.Join(home, ".afm", "skills") + " -> " +
 		filepath.Join(home, ".claude", "skills") + ", " + filepath.Join(home, ".codex", "skills") + "\n"
 	if !strings.HasPrefix(out, header) {

@@ -205,7 +205,18 @@ in Claude Code and Codex:
 - `/afm-run` — runs a flow, monitors it, and requests plan approvals right in the chat
 - `/afm-check` — shows the status of the current run
 - `/afm-init` — creates flow.yaml interactively
+- `/afm-pipelines` — finds and installs reusable workflows from the
+  [AFM Pipelines catalog](https://github.com/akopichin/afm-pipelines), with
+  project-specific model profiles, settings and optional skills
 - `/afm-retry` — retries a failed stage
 - `/afm-review` — view a stage plan with feedback/approval
 - `/afm-live-run` — exercise a change in the real running app via the managed Chrome browser
 - `/afm-mesh-driven-development` — execute a plan inside an afm run by delegating tasks to named team/mesh agents
+
+For example, ask the agent to "install the refactor pipeline in this project".
+The pipeline skill reads the catalog's manifests, offers role/model choices,
+and uses its installation scripts to prepare a concrete change plan, apply it
+with backups, and validate the flow. Packages are versioned independently of
+AFM. Installing this skill does not download pipelines or start paid agent runs.
+The first installer supports Claude/Codex Docker recipes; it reports provider
+login and runtime checks separately from configuration validation.

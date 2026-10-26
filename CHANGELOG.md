@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-25
+
+### Improvement: install reusable pipelines through a bundled skill
+
+The new `afm-pipelines` skill guides catalog discovery, project installation and
+per-role model configuration using the separately versioned AFM Pipelines
+repository. It ships through `afm install-skills` and the normal pre-run sync.
+`afm-init` can offer a matching ready-made workflow before creating a custom one.
+See [Skills for Claude Code and Codex](docs/getting-started.md#skills-for-claude-code-and-codex).
+
 ## 2026-10-24
 
 ### Improvement: repeat prompts to existing agents with /loop
