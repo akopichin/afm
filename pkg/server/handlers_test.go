@@ -262,7 +262,8 @@ func TestHandleStatus_HostTimeZoneNativeWinsOverTransport(t *testing.T) {
 func TestHandleStatus_HostTimeZoneFromTransportInContainer(t *testing.T) {
 	t.Setenv("AFM_IN_DOCKER", "1")
 	t.Setenv("TZ", "Asia/Tokyo") // зона контейнера не должна подменять зону хоста
-	t.Setenv("AFM_HOST_TIME_ZONE", "Europe/Berlin")
+	// Зона без DST делает проверку независимой от даты; transport-offset намеренно устарел.
+	t.Setenv("AFM_HOST_TIME_ZONE", "Asia/Shanghai")
 	t.Setenv("AFM_HOST_UTC_OFFSET_MINUTES", "120")
 	srv, _ := setupTestServer(t)
 
@@ -277,11 +278,11 @@ func TestHandleStatus_HostTimeZoneFromTransportInContainer(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.TimeZone != "Europe/Berlin" {
-		t.Errorf("time_zone = %q, want %q", resp.TimeZone, "Europe/Berlin")
+	if resp.TimeZone != "Asia/Shanghai" {
+		t.Errorf("time_zone = %q, want %q", resp.TimeZone, "Asia/Shanghai")
 	}
-	if resp.UTCOffsetMinutes != 120 {
-		t.Errorf("utc_offset_minutes = %d, want 120", resp.UTCOffsetMinutes)
+	if resp.UTCOffsetMinutes != 480 {
+		t.Errorf("utc_offset_minutes = %d, want 480", resp.UTCOffsetMinutes)
 	}
 }
 
