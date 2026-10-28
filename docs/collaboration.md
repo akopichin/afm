@@ -153,6 +153,8 @@ team:
     profile: rev-arch
     title: Architecture
     instruction: Review changes for simplicity and duplication when asked.
+    skills: code-audit
+    skills_dir: ./review-skills
   - id: qa
     profile: qa
     title: QA
@@ -165,11 +167,20 @@ writes to them, and they never keep the run open on their own. `id` names the
 declaration, not the agent: it is how a resumed run recognizes an agent it has
 already added.
 
+`skills` accepts one required skill name or a list; `skills_dir` selects one
+additional local library. Both apply to the member's own turns, including
+later messages, and use the same rules as
+[stage agent skills](flow-reference.md#agent-skills). A library alone gives the
+agent a catalog to choose from; it does not activate every skill. Team members
+do not inherit the skills assigned to a stage that contacts them. Dashboard
+**Add run agent** and temporary helpers do not inherit these declarations.
+
 On resume, afm reuses every agent the run already added and adds only members
 with a new `id`, so stopping with Ctrl+C and resuming never adds an agent twice.
-A member whose `title`, `instruction` or `profile` changed since keeps its saved
-version; afm logs a warning and writes a `team_warning` notice: *"changed in
-flow.yaml; using the saved version, the new one applies to a new run"*. A member
+A member whose `title`, `instruction`, `profile`, `skills`, or `skills_dir`
+changed since keeps its saved version; afm logs a warning and writes a
+`team_warning` notice: *"changed in flow.yaml or config; using the saved version,
+the new one applies to a new run"*. A member
 removed from `flow.yaml` keeps its agent until the run ends.
 
 With collaboration enabled, every member the run has not added yet needs a

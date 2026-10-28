@@ -22,6 +22,9 @@ type AddRunAgentRequest struct {
 	FirstMessage *string
 	Recipients   []agentcomm.ParticipantID
 	Actor        state.Actor
+	// Skills and SkillsDir are set only by the flow's team (initTeam).
+	Skills    []string
+	SkillsDir string
 }
 
 // AddRunAgent is a thin request-shaping wrapper over AttachAndSend — dev-plan.md's T6.2b "Done when" line is
@@ -38,5 +41,7 @@ func (o *Orchestrator) AddRunAgent(ctx context.Context, req AddRunAgentRequest) 
 		FirstMessage: req.FirstMessage,
 		Recipients:   req.Recipients,
 		Actor:        req.Actor,
+		Skills:       req.Skills,
+		SkillsDir:    req.SkillsDir,
 	})
 }

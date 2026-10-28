@@ -1391,6 +1391,63 @@ func TestReExec_ForwardsWorktreeEnv(t *testing.T) {
 	}
 }
 
+func TestReExec_ForwardsSkillLibraries(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:          "img",
+		ProjectDir:     "/work/afm",
+		SkillLibraries: []string{"/work/afm/skills", "/ext/lib"},
+		ExtraArgs:      []string{"run", "flow.yaml"},
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	want := docker.SkillLibrariesEnvVar + "=/work/afm/skills:/ext/lib"
+	if !strings.Contains(" "+strings.Join(capturedArgs, " ")+" ", " -e "+want+" ") {
+		t.Fatalf("want %q in args: %s", want, strings.Join(capturedArgs, " "))
+	}
+}
+
+func TestReExec_NoSkillLibrariesEnvWhenEmpty(t *testing.T) {
+	var capturedArgs []string
+	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+		capturedArgs = argv
+		return nil
+	})
+	defer docker.ResetExecFunc()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	err := docker.ReExec(docker.ReExecConfig{
+		Image:       "img",
+		ProjectDir:  "/p",
+		ExtraMounts: config.ExtraMounts{{Path: "/ext/lib"}},
+		ExtraArgs:   []string{"run", "flow.yaml"},
+	})
+	if err != nil {
+		t.Fatalf("ReExec: %v", err)
+	}
+	if strings.Contains(strings.Join(capturedArgs, " "), docker.SkillLibrariesEnvVar) {
+		t.Fatalf("no libraries were checked, so no %s is passed: %s", docker.SkillLibrariesEnvVar, strings.Join(capturedArgs, " "))
+	}
+}
+
 func TestReExec_NoWorktreeEnvWhenEmpty(t *testing.T) {
 	var capturedArgs []string
 	docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {

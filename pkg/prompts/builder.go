@@ -53,6 +53,8 @@ type Inputs struct {
 	// AgentCommInbox is the pre-rendered <inbox> block (T4.4) — built by AgentCommInboxBlock. Empty means no
 	// messages were already addressed to this participant; nothing is rendered.
 	AgentCommInbox string
+	// SkillLibrary is the extra skill library catalog for the stage's <skills> block; the zero value omits it.
+	SkillLibrary SkillLibrary
 }
 
 // BrowserRuntime describes the live managed-browser capability for the prompt.
@@ -190,9 +192,7 @@ func Build(in Inputs) string {
 	sb.WriteString("<description>\n")
 	sb.WriteString(escapeTags(in.Stage.Description))
 	sb.WriteString("\n</description>\n")
-	if len(in.Stage.Skills) > 0 {
-		fmt.Fprintf(&sb, "<skills>%s</skills>\n", strings.Join(in.Stage.Skills, ", "))
-	}
+	sb.WriteString(SkillsBlock(in.Stage.Skills, in.SkillLibrary))
 	sb.WriteString("</stage>\n")
 
 	// Explicit per-stage directive, escaped like Description.
@@ -256,6 +256,8 @@ var tagReplacer = strings.NewReplacer(
 	"<global_prompt>", "<\u200bglobal_prompt>",
 	"</project_memory>", "</\u200bproject_memory>",
 	"<project_memory>", "<\u200bproject_memory>",
+	"</skills>", "</\u200bskills>",
+	"<skills>", "<\u200bskills>",
 	"</inbox>", "</\u200binbox>",
 	"<inbox>", "<\u200binbox>",
 	"</your_requests>", "</\u200byour_requests>",

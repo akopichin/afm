@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 
@@ -242,6 +244,28 @@ func (l cycleLoop) checkContainerReload(prev, next *flow.Flow) error {
 	}
 	if !reflect.DeepEqual(prevProj, nextProj) {
 		return restartError("agent commands, docker recipes or Codex state changed, but the container mounts are fixed")
+	}
+	return l.checkSkillLibrariesChecked(next, project)
+}
+
+// checkSkillLibrariesChecked: a new cycle reads the declared libraries. Whether a path leads to the same library
+// here as on the host can only be judged on the host, so a library the host did not check at re-exec needs a
+// restart, which runs that check again.
+func (l cycleLoop) checkSkillLibrariesChecked(next *flow.Flow, project string) error {
+	base, err := effectiveRoot(project, l.worktreeDir, next)
+	if err != nil {
+		return err
+	}
+	return checkedByHost(skillLibraryDirs(plannedSkillRun(next, l.cfg, base, nil)))
+}
+
+// checkedByHost: inside the container a library is read only if the host checked that very path at re-exec.
+func checkedByHost(libs []string) error {
+	checked := filepath.SplitList(os.Getenv(docker.SkillLibrariesEnvVar))
+	for _, lib := range libs {
+		if !slices.Contains(checked, lib) {
+			return restartError("skill library %s was not checked when this container started", lib)
+		}
 	}
 	return nil
 }

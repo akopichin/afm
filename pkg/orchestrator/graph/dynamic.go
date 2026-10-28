@@ -17,6 +17,7 @@ import (
 // existing autonomous track (agents:[auto]) with a prompt and a command from this run's pre-prepared set —
 // never script/script_before/script_after/hooks/mounts/secrets (dev-plan's Этап 9 scope note). A UI
 // constructor for every flow.Stage field is explicitly out of scope for the first release.
+// A draft has no skills or skills_dir either: a dynamic stage does not inherit the flow's skill library.
 type StageDraft struct {
 	ID      string
 	Name    string

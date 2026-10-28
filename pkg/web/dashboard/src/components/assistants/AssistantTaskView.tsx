@@ -108,10 +108,8 @@ type AssistantTaskViewProps = {
   maxDepth?: number | null
 }
 
-// AssistantTaskView — the workspace body for the 'assistant' WorkspaceView (T3.10): one helper task's
-// current state. Three states, exactly as dev-plan.md's T3.10 tests enumerate: empty (no task selected, or
-// still running with nothing to show yet), error (failed/cancelled), and completed-with-result (rendered
-// through the SAME safe markdown renderer the plan panel uses — never a second dangerouslySetInnerHTML).
+// Workspace body for one helper task: empty, error, or completed result.
+// The result goes through the plan panel's safe markdown renderer, never a second dangerouslySetInnerHTML.
 export function AssistantTaskView({ task, allTasks, maxDepth = null }: AssistantTaskViewProps): ReactElement {
   const result = useTaskResult(task?.id ?? null)
 

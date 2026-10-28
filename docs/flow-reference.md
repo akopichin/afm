@@ -23,7 +23,7 @@ stages:
       What needs to be done — in detail.
       The AI will use this text as guidance during planning and implementation.
     agents: [planning, implementation, review]
-    skills:              # optional — Claude skills
+    skills:              # optional — required agent skills, in loading order
       - superpowers:test-driven-development
     command: claude      # optional — custom AI command for this stage
     max_parallel: 2      # optional — parallelism limit for this command
@@ -65,7 +65,8 @@ stages:
 | `agents` | conditional | Combination of `planning`, `implementation`, `review` — or `[auto]` for the [autonomous track](autonomous-track.md). A stage must have **one of**: an agent list, a `plan`, `interactive: true`, `agents: [auto]`, or `script:` (see the note below the table) |
 | `depends_on` | no | IDs of stages that must complete first |
 | `eager_planning` | no | `true` — planning starts immediately when the flow runs, without waiting for `depends_on` |
-| `skills` | no | Claude skills for the agent |
+| `skills` | no | One required skill name or a list of names, loaded in order before work; see [Agent skills](#agent-skills) |
+| `skills_dir` | no | One extra local skill library for this stage; overrides the flow and config values |
 | `plan` | no | Path to a ready-made plan file (skips planning); `./` looks in dependency stage directories, other relative paths start at the agents' project root |
 | `command` | no | AI command for this stage (overrides `client.command` from the config) |
 | `max_parallel` | no | Limit on parallel stages for this command |
@@ -128,7 +129,75 @@ completion gates and behavior when collaboration is disabled.
 directory; see below),
 `memory` ([agent-memory config](agent-memory.md)), `hooks`
 ([lifecycle hooks](lifecycle-hooks.md)), `side_agent`, `collaboration`,
-`team` (see below), `worktrees`, `repeat` (see below), `stages`.
+`team` (see below), `skills_dir` ([agent skills](#agent-skills)), `worktrees`,
+`repeat` (see below), `stages`.
+
+### Agent skills
+
+Use `skills` on a stage or a `team` member to require named skills. It accepts a
+single string or a list. The list order is the loading order; exact duplicates
+are removed without changing the spelling or order of the remaining names.
+Namespaced names such as `superpowers:test-driven-development` remain intact.
+Omitting `skills` or using `[]` requires none. Empty names, `null`, numbers,
+objects, and mixed lists are invalid.
+
+`skills_dir` selects one additional local library. Set it on a stage or team
+member, at the top of `flow.yaml`, or in `config.yaml`. The nearest setting wins
+as a whole: stage or member → flow → merged project/global config. Libraries
+are not combined. Its value must be a non-empty path string; `null` and a
+leading `~` are invalid. For a shared library in a global config, use an
+absolute path.
+
+Every relative `skills_dir`, regardless of where it is declared, starts at the
+effective project root: the run's worktree, otherwise `root_dir` (resolved from
+the afm root), otherwise the afm root selected by `--dir`, `AFM_DIR`, or the
+current directory. This path rule does not change an agent's CWD when
+`root_dir` is unset. For example:
+
+```yaml
+# flow.yaml — ./skills is under this run's effective project root
+skills_dir: ./skills
+team:
+  - id: reviewer
+    profile: reviewer
+    title: Reviewer
+    skills: code-audit
+stages:
+  - id: implement
+    agents: [auto]
+    skills: [superpowers:test-driven-development, code-audit]
+  - id: review
+    agents: [auto]
+    skills_dir: ./review-skills
+```
+
+Define `reviewer` in `collaboration.profiles` before using this example. Each
+library contains immediate child directories such as
+`skills/code-audit/SKILL.md`, optionally with `scripts/` and `references/`
+beside `SKILL.md`. afm catalogs each child skill's `name` and `description`
+from YAML frontmatter (falling back to its directory name and an empty
+description) and gives the agent the exact `SKILL.md` path. A child directory
+without `SKILL.md`, invalid metadata, duplicate names, or a symlink escaping
+the library fails preflight. Internal symlinks are allowed. The catalog is
+limited to 256 skills and 32 KiB; exceeding either limit is an error.
+
+The prompt tells the agent to load each required skill through its native skill
+mechanism first. If that name is unavailable there, it reads the exact match
+from this library. If neither source has it, the agent must say so before work,
+avoid substituting a similar skill, continue with available tools, and report
+the missing name in its final answer. With only `skills_dir`, the agent chooses
+skills relevant to its task; the whole library is not activated. These are
+prompt instructions to the model, not a programmatic guarantee that it invoked
+a skill loader. afm validates the local library but cannot determine whether a
+native skill is installed in the client's environment.
+
+The resolved settings are saved for stages and created team agents. Resume
+keeps those settings even if YAML or config changes; library file contents are
+read again and are not snapshotted. Old runs without these fields remain
+readable. Stages added through the dashboard do not inherit the flow's
+`skills_dir`. Skills do not grant extra permissions or change the stage
+completion contract; verify agents, helpers, delegated tasks and the dashboard
+Assistant do not inherit their author's skills.
 
 `side_agent: true|false` overrides the dashboard
 [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run) toggle for
@@ -169,8 +238,9 @@ stages, hooks, and `repeat` take effect in that pass; disabling repeat or
 lowering `max_cycles` to the completed count ends the loop. An invalid file
 stops with an error before creating another run. Changes to the flow name or
 effective worktree setup require restarting `afm run`. In Docker, changes that
-need different mounts or agent commands also require a restart, as do changes
-to the identity, order, or `env` references of hooks that declare `env`. A
+need different mounts (including a new external `skills_dir`) or agent commands
+also require a restart, as do changes to the identity, order, or `env`
+references of hooks that declare `env`. A
 changed `root_dir` can be applied if it leaves the worktree base and Docker
 mounts unchanged.
 
@@ -197,6 +267,7 @@ team:
     profile: rev-arch     # a profile from collaboration.profiles
     title: Architecture   # the @name is made from it: @architecture
     instruction: Review changes for simplicity and duplication when asked.
+    skills: code-audit  # same scalar/list syntax as a stage
 ```
 
 `id`, `profile` and `title` are required; `instruction` is optional. `id` must

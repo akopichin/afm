@@ -194,7 +194,10 @@ func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, sta
 		in.DependencyPlans = o.collectDependencyPlansNoticing(s)
 		in.Artifacts = o.collectArtifactsNoticing(s, artifactsWarnLabel)
 
-		prompt := prompts.Build(in)
+		prompt, err := buildStagePrompt(in)
+		if err != nil {
+			return err
+		}
 		outFile := filepath.Join(stageDir, "plan.md")
 		logFile := filepath.Join(stageDir, logFileName)
 
@@ -265,7 +268,7 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 	// T8/D6: review гейтится на .done (CheckCompletion), но до этой правки его промпт ни разу не упоминал ни
 	// .done, ни stage-директорию — гейт и инструкция теперь говорят об одном.
 	contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
-	reviewPrompt := prompts.Build(prompts.Inputs{
+	reviewPrompt, err := buildStagePrompt(prompts.Inputs{
 		Template:        o.opts.Prompts.Review,
 		Stage:           s,
 		PhaseAgent:      prompts.AgentReview,
@@ -280,6 +283,9 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 		AgentComm:       o.agentCommBlockFor(s),
 		AgentCommInbox:  o.agentCommInboxBlock(s),
 	})
+	if err != nil {
+		return err
+	}
 	reviewLog := filepath.Join(stageDir, flow.PhaseLogFile(flow.PhaseReview))
 	// Второй процесс хода: см. rePromptMissingSections.
 	if hold := o.admitStageTurn(s); hold != nil {
@@ -324,7 +330,7 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 		// T8/D5: обязательный блок завершения строит код по фактической фазе, не шаблон — доклеивается
 		// последним, чтобы prompts_dir не мог его подменить/стереть.
 		contract := prompts.CompletionContract(flow.PhaseImplementation, o.stageDir(s.ID))
-		prompt := prompts.Build(prompts.Inputs{
+		prompt, err := buildStagePrompt(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation,
 			Stage:           s,
 			PhaseAgent:      prompts.AgentImplementation,
@@ -340,6 +346,9 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 			AgentComm:       o.agentCommBlockFor(s),
 			AgentCommInbox:  o.agentCommInboxBlock(s),
 		})
+		if err != nil {
+			return err
+		}
 		logFile := filepath.Join(stageDir, logFileName)
 
 		r := o.runnerFor(s, phaseImplementation)
@@ -382,7 +391,7 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 		// T8/D6: standalone review (resume/revise/pause-recovery паths) гейтится на .done так же, как
 		// embedded review — промпт теперь тоже об этом говорит.
 		contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
-		reviewPrompt := prompts.Build(prompts.Inputs{
+		reviewPrompt, err := buildStagePrompt(prompts.Inputs{
 			Template:        o.opts.Prompts.Review,
 			Stage:           s,
 			PhaseAgent:      prompts.AgentReview,
@@ -397,6 +406,9 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 			AgentComm:       o.agentCommBlockFor(s),
 			AgentCommInbox:  o.agentCommInboxBlock(s),
 		})
+		if err != nil {
+			return err
+		}
 		reviewLog := filepath.Join(stageDir, logFileName)
 		rr := o.runnerFor(s, phaseReview)
 		return rr.RunAgent(ctx, phaseReview, s.Name, reviewPrompt, reviewLog)
@@ -431,7 +443,7 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 		// T8/D5: обязательный блок завершения строит код по фактической фазе (execution_summary.md для
 		// autonomous), не шаблон — доклеивается последним.
 		contract := prompts.CompletionContract(flow.PhaseAutonomous, o.stageDir(s.ID))
-		prompt := prompts.Build(prompts.Inputs{
+		prompt, err := buildStagePrompt(prompts.Inputs{
 			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
 			Autonomous:      o.opts.Prompts.Autonomous,
 			Stage:           s,
@@ -447,6 +459,9 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 			AgentComm:       o.agentCommBlockFor(s),
 			AgentCommInbox:  o.agentCommInboxBlock(s),
 		})
+		if err != nil {
+			return err
+		}
 		logFile := filepath.Join(stageDir, logFileName)
 		r := o.runnerFor(s, phaseAutonomous)
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)

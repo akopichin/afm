@@ -38,6 +38,7 @@ server:
 
 # theme: graphite           # dashboard theme: graphite | goga | novacorps (default: graphite; legacy "coffee" → graphite)
 # prompts_dir: .afm/prompts/  # custom prompt templates
+# skills_dir: /opt/team-skills  # default extra local skill library for runs
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
 # side_agent:
@@ -186,6 +187,13 @@ Highest to lowest:
 2. The project's `.afm/config.yaml`
 3. The global `~/.afm/config.yaml`
 4. Default values
+
+`skills_dir` follows the normal project-over-global config merge, then
+`flow.yaml` can override it at the flow, stage, or team-member level. The
+nearest setting selects one library; values from different levels are not
+combined. A relative path is resolved from the run's effective project root,
+not from the config file. See [Agent skills](flow-reference.md#agent-skills) for
+the path rules, library format, and loading behavior.
 
 ## Working directory
 

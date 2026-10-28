@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
@@ -66,6 +67,13 @@ func savedTeamAgent(store *state.Store, memberID string) (state.CommittedOperati
 		return op, true, errTeamIDTaken
 	}
 	return op, true, nil
+}
+
+// TeamMemberSaved reports whether the run in rs already created the agent of member memberID. The host reads
+// it from a journal replay, without the writer lock, to choose Docker mounts before the run starts.
+func TeamMemberSaved(rs state.RunState, memberID string) bool {
+	_, saved := rs.Assistants.OperationIndex[teamOperationID(memberID)]
+	return saved
 }
 
 // TeamMembersToCreate returns the members whose agent the run has not created yet — the only ones whose
@@ -137,6 +145,8 @@ func (o *Orchestrator) addTeamAgent(ctx context.Context, m flow.TeamMember) (age
 			ProfileID:   assistants.ProfileID(m.Profile),
 			Title:       m.Title,
 			Instruction: m.Instruction,
+			Skills:      m.Skills,
+			SkillsDir:   string(m.SkillsDir),
 			Actor:       teamActor,
 		})
 		var rejected *state.OperationRejectedError
@@ -172,10 +182,11 @@ func (o *Orchestrator) warnIfTeamMemberChanged(op state.CommittedOperation, m fl
 		o.teamWarning(m.ID, "cannot read the saved agent")
 		return
 	}
-	if saved.ProfileID == m.Profile && o.sameRedactedText(saved.Title, m.Title) && o.sameRedactedText(saved.Instruction, m.Instruction) {
+	if saved.ProfileID == m.Profile && o.sameRedactedText(saved.Title, m.Title) && o.sameRedactedText(saved.Instruction, m.Instruction) &&
+		slices.Equal(saved.Skills, m.Skills) && saved.SkillsDir == string(m.SkillsDir) {
 		return
 	}
-	o.teamWarning(m.ID, "changed in flow.yaml; using the saved version, the new one applies to a new run")
+	o.teamWarning(m.ID, "changed in flow.yaml or config; using the saved version, the new one applies to a new run")
 }
 
 // teamWarning reports a team: problem in the log and as a durable run-level notice.

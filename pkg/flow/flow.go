@@ -11,6 +11,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
+	"github.com/akopichin/afm/pkg/skills"
 	"gopkg.in/yaml.v3"
 )
 
@@ -135,8 +136,11 @@ type Stage struct {
 	Name        string      `yaml:"name"`
 	Description string      `yaml:"description,omitempty"`
 	Agents      []AgentType `yaml:"agents,omitempty,flow"`
-	Skills      []string    `yaml:"skills,omitempty,flow"`
-	DependsOn   []string    `yaml:"depends_on,omitempty,flow"`
+	// Skills are the skills the agent must load before work (a name or a list in YAML, exact repeats dropped).
+	Skills skills.Names `yaml:"skills,omitempty,flow"`
+	// SkillsDir is this stage's extra skill library; it wins over the flow's and the config's.
+	SkillsDir skills.Dir `yaml:"skills_dir,omitempty"`
+	DependsOn []string   `yaml:"depends_on,omitempty,flow"`
 	// EagerPlanning starts the planning agent immediately without waiting for depends_on stages to finish
 	// (the default before the planning-by-deps gate was introduced).
 	EagerPlanning bool `yaml:"eager_planning,omitempty"`
@@ -318,6 +322,8 @@ type Flow struct {
 	// относительные пути проекта (docs/arch и т.п.) в чужом корне.
 	RootDir string       `yaml:"root_dir,omitempty"`
 	Memory  MemoryConfig `yaml:"memory,omitempty"`
+	// SkillsDir is the flow's extra skill library, used by stages and team members that set none of their own.
+	SkillsDir skills.Dir `yaml:"skills_dir,omitempty"`
 	// Hooks — lifecycle-хуки флоу-слоя: получают события всех стадий.
 	Hooks []lifecyclehooks.Hook `yaml:"hooks,omitempty"`
 	// SideAgent, when set, overrides config/env for the dashboard side-agent
@@ -498,6 +504,9 @@ func ParseFile(path string) (*Flow, error) {
 		if err := rejectNullKey(root.Content[0], "repeat", errRepeatInvalid); err != nil {
 			return nil, err
 		}
+		if err := rejectNullSkillKeys(root.Content[0]); err != nil {
+			return nil, err
+		}
 	}
 	if err := f.validate(); err != nil {
 		return nil, err
@@ -521,6 +530,28 @@ func ParseFile(path string) (*Flow, error) {
 	warnDeprecatedSupervisorFields(data, path)
 	warnMemorySettingsWithoutPath(data, path)
 	return &f, nil
+}
+
+// rejectNullSkillKeys rejects a bare "skills:" / "skills_dir:" at the flow and stage level, where yaml.v3
+// would otherwise treat it as an absent key (team members check their own nodes).
+func rejectNullSkillKeys(doc *yaml.Node) error {
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+	if err := skills.RejectNullKeys(doc, keySkillsDir); err != nil {
+		return err
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if doc.Content[i].Value != "stages" || doc.Content[i+1].Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, stage := range doc.Content[i+1].Content {
+			if err := skills.RejectNullKeys(stage, keySkills, keySkillsDir); err != nil {
+				return fmt.Errorf("stage: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // memorySettingsProbe holds the flow-level memory.* keys as pointers so

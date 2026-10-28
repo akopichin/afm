@@ -463,6 +463,10 @@ type TaskCreatedPayload struct {
 	// parent").
 	ParentGenerationAtCreate uint64 `json:"parent_generation_at_create,omitempty"`
 	RootGenerationAtCreate   uint64 `json:"root_generation_at_create,omitempty"`
+	// Skills/SkillsDir freeze a team member's required skills and extra library (an absolute path); absent in
+	// older journals, which replay as "none".
+	Skills    []string `json:"skills,omitempty"`
+	SkillsDir string   `json:"skills_dir,omitempty"`
 }
 
 // TaskStatusChangedPayload is the task_status_changed control record's payload — decoded here by
@@ -676,6 +680,8 @@ func applyTaskCreated(as *AssistantsState, c *Control, dryRun bool) error {
 		Instruction:      p.Instruction,
 		Mode:             assistants.Mode(p.Mode),
 		Trigger:          assistants.Trigger(p.Trigger),
+		Skills:           slices.Clone(p.Skills),
+		SkillsDir:        p.SkillsDir,
 		Status:           assistants.StatusWaitingParent,
 		PolicyRev:        p.PolicyRev,
 		MaxDepthAtCreate: p.MaxDepthAtCreate,

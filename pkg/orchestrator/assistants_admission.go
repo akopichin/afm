@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/state"
@@ -23,6 +24,10 @@ type topLevelTaskRequest struct {
 	// kind is just "agent", so a task one creates names its origin explicitly.
 	Origin assistants.Origin
 	Actor  state.Actor
+	// Skills and SkillsDir are a flow team member's required skills and extra library (absolute); no other
+	// request sets them, so a helper or a delegated child never inherits its author's.
+	Skills    []string
+	SkillsDir string
 }
 
 // admittedTask is a top-level task that passed admission: the effects that create it, its initial status and
@@ -105,6 +110,7 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 		Mode: string(req.Mode), Trigger: string(req.Trigger), PolicyRev: rs.Assistants.Policy.Revision,
 		MaxDepthAtCreate: rs.Assistants.Policy.MaxDepth, CreatedBy: string(req.createdBy()),
 		RootGenerationAtCreate: rs.Assistants.RootGenerations[req.StageID],
+		Skills:                 slices.Clone(req.Skills), SkillsDir: req.SkillsDir,
 	}
 	if scope == assistants.ScopeRun {
 		payload.Scope = string(scope)
@@ -170,7 +176,8 @@ func (o *Orchestrator) replayedTopLevelTask(op state.CommittedOperation, req top
 	req = req.withDefaults(p.ProfileSnapshot.Title)
 	same := found && assistants.TaskID(target.TaskID) == deriveTaskID(req.OperationID) && target.StageID == req.StageID &&
 		p.ProfileID == string(req.ProfileID) && normalizeScope(assistants.Scope(p.Scope)) == normalizeScope(req.Scope) &&
-		o.sameRedactedText(p.Instruction, req.Instruction) && o.sameRedactedText(p.Title, req.Title) && p.Mode == string(req.Mode) && p.Trigger == string(req.Trigger)
+		o.sameRedactedText(p.Instruction, req.Instruction) && o.sameRedactedText(p.Title, req.Title) && p.Mode == string(req.Mode) && p.Trigger == string(req.Trigger) &&
+		slices.Equal(p.Skills, req.Skills) && p.SkillsDir == req.SkillsDir
 	if !same {
 		return "", state.OperationIDConflictError(req.OperationID)
 	}

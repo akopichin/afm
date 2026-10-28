@@ -19,6 +19,15 @@
       "enum": ["graphite", "goga", "novacorps", "coffee"],
       "description": "Dashboard theme. Default graphite. \"coffee\" is a legacy alias for graphite."
     },
+    "skills_dir": {
+      "type": "string",
+      "description": "Default extra local skill library for runs: a directory of <name>/SKILL.md folders. A flow, stage or team member skills_dir wins over it; libraries are never merged. A relative path is resolved from the effective project root, not from the config directory; use an absolute path for a shared library. Empty values, a leading ~ and control characters are rejected.",
+      "allOf": [
+        { "pattern": "\\S" },
+        { "pattern": "^[^~]" },
+        { "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$" }
+      ]
+    },
     "skin_dir": {
       "type": "string",
       "description": "A fully custom dashboard skin directory (containing index.css). Overrides `theme`."

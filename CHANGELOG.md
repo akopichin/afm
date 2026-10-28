@@ -3,6 +3,17 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-28
+
+### Improvement: assign skills and a local skill library to flow agents
+
+Stages and `team` members can require one skill or a list and can use an
+additional local `skills_dir`. Agents receive native-first loading instructions
+and a catalog for exact-name fallback or task-based selection. The library path
+resolves against the effective project root, survives resume, and can be
+mounted read-only in automatic Docker mode when authorized by config. See
+[Agent skills](docs/flow-reference.md#agent-skills).
+
 ## 2026-10-25
 
 ### Improvement: install reusable pipelines through a bundled skill

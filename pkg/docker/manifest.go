@@ -75,10 +75,10 @@ func BuildFileRootManifest(projectContainerPath string, mounts config.ExtraMount
 	return m, nil
 }
 
-// containerPathFor резолвит extra_mounts тем же resolveMountPath, что и ReExec, чтобы пути манифеста и
+// containerPathFor резолвит extra_mounts тем же ResolveMountPath, что и ReExec, чтобы пути манифеста и
 // mount совпадали.
 func containerPathFor(projectContainerPath, path string) string {
-	return resolveMountPath(projectContainerPath, path, containerHome)
+	return ResolveMountPath(projectContainerPath, path, containerHome)
 }
 
 // EncodeFileRootManifest сериализует манифест в JSON и кодирует его в base64 (без padding, URL-safe

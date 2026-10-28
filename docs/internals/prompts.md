@@ -36,6 +36,15 @@ The contents of `<description>`, `<prompt>`, `<plan>`, `<previous_plan>`,
 `<feedback>` and `<example_output>` pass through `escapeTags()` — XML tags are
 neutralized to prevent prompt injection.
 
+The `<skills>` block is included when a stage has required `skills` or a
+`skills_dir` catalog. Team agents receive the same loading rules on every
+turn. The block gives the required order, native-first lookup, exact-name
+library fallback, and instructions for a missing required skill. It lists
+catalog metadata and absolute `SKILL.md` paths, not the full skill bodies; user
+supplied names, descriptions, and paths are escaped. The catalog alone asks the
+agent to choose relevant skills. This is a prompt contract, not an enforced
+tool call. See [Agent skills](../flow-reference.md#agent-skills).
+
 For implementation and review, afm appends a completion contract requiring a
 non-empty `.done` file. For autonomous execution, it requires a non-empty
 `execution_summary.md`. This contract gives the exact absolute stage path and is
