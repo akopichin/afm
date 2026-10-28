@@ -46,6 +46,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		UsageHint:      o.usageHintFor(cmd),
 		Provider:       o.opts.Config.UsageLimitProvider(cmd),
 		OnLimitWarning: o.limitWarningSink("", taskID),
+		OnAction:       o.helperActivitySink(taskID),
 		Redact:         o.RedactSecrets,
 		Secrets:        o.secretValues,
 		MeshClient:     o.meshClientFor(participant),

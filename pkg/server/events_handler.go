@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -206,6 +207,9 @@ func reconstructNotices(runDir, stageID string) []feedEvent {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
+		if stagefiles.IsActivityLine(sc.Bytes()) {
+			continue // the activity API replays these; here they would evict real notices from the ring
+		}
 		var e struct {
 			Time    time.Time `json:"time"`
 			Type    string    `json:"type"`

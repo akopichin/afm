@@ -264,6 +264,44 @@ proposals are still recorded by the run. In the Assistant, type `@` to choose a
 configured helper role from the suggestion menu. Mentions name roles, not
 existing task instances.
 
+### Selected helper activity
+
+Select an attached helper in the stage rail to follow its messages and tool
+calls before it has a result. Recent actions usually appear live; an unsaved
+action that precedes the loaded history window may appear only after you use
+**Load older activity**. The view shows its last action and when it happened.
+A running helper with no actions yet shows **Waiting for
+the first message or tool call…**; a quiet helper shows how long it has gone
+without a new action. These observations do not indicate whether a tool
+succeeded or whether the helper is stuck.
+
+Each helper has its own activity history, including later watcher passes and
+turns after Continue. Actions are saved on a best-effort basis and restored on
+reload or reconnect. If live updates disconnect, the view keeps the activity
+already loaded and catches up from saved history when the connection returns.
+Activity does not change stage status or the required-helper gate. The existing
+result or failure card follows the history when the helper finishes; paused,
+cancelled, and failed tasks keep their earlier actions. Runs created before
+activity recording may show **No activity was recorded for this task**.
+
+The panel starts at the latest actions. Scroll up to read earlier ones, use
+**Load older activity** for another page, and use **Jump to latest** to resume
+following new actions. Long messages and tool details have **Show more**;
+saved text cut to the size limit is marked **Shortened by afm**. The panel keeps
+up to 2,000 saved actions loaded; additional live actions can temporarily bring
+the visible count above 2,000. Activity belongs to the selected helper, not
+the stage **Feed** or **Full feed**. Run-scoped tasks also record activity, but
+this first version of the dashboard selects helpers from the stage rail only.
+
+For API clients, `GET /api/assistants/{task_id}/activity` returns that task's
+saved actions in file order. With no cursor it returns the latest page;
+`before=<cursor>` loads older actions and `after=<cursor>` catches up. The
+response includes `entries`, `before`, `after`, `has_older`, and `has_more`.
+Each entry has a cursor; cursors are byte offsets in the run's notice journal,
+separate from task event sequence numbers. `limit` defaults to 100 and is capped
+at 200. Supply at most one cursor. Invalid cursors return HTTP 400; an unknown
+task or unavailable activity reader returns HTTP 404.
+
 ## Repeating prompts
 
 Use `/loop 5m @watcher Check the latest logs` in a stage's **Feed → Message**

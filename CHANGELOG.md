@@ -14,6 +14,15 @@ resolves against the effective project root, survives resume, and can be
 mounted read-only in automatic Docker mode when authorized by config. See
 [Agent skills](docs/flow-reference.md#agent-skills).
 
+### Improvement: follow a selected helper's activity
+
+Select a helper under its stage to see messages and tool calls while it works,
+with its latest action and the existing result card after completion. Saved
+activity returns after reload or reconnect; older actions load on demand.
+The activity panel remains separate from stage and Full feeds, and old runs
+without activity history show an empty state. See
+[Helpers and collaboration](docs/collaboration.md#selected-helper-activity).
+
 ## 2026-10-25
 
 ### Improvement: install reusable pipelines through a bundled skill

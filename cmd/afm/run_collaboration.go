@@ -10,6 +10,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -371,6 +372,10 @@ func (r collaborationReader) TaskEvents(taskID string, cursor uint64, limit int)
 		out = append(out, server.AssistantEventView{Seq: e.Seq, Type: e.Kind, Data: e.Payload})
 	}
 	return out, next, hasMore, nil
+}
+
+func (r collaborationReader) TaskActivity(taskID string, q stagefiles.ActivityQuery) (stagefiles.ActivityPage, error) {
+	return r.orch.TaskActivity(assistants.TaskID(taskID), q)
 }
 
 // discussionService/proposalActions (T6.7) — same nil-gated adapter pattern as actions()/reader() above, wired
