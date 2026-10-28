@@ -12,6 +12,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -87,6 +88,9 @@ type AssistantsReader interface {
 	// TaskEvents returns a bounded page of events for taskID strictly AFTER cursor, in stable (seq) order,
 	// plus the cursor to pass for the next page and whether more are available.
 	TaskEvents(taskID string, cursor uint64, limit int) (events []AssistantEventView, nextCursor uint64, hasMore bool, err error)
+	// TaskActivity returns a page of the task's saved helper activity (tail, before or after a byte cursor).
+	// An unknown task is a not_found rejection; a cursor off a line boundary is stagefiles.ErrInvalidCursor.
+	TaskActivity(taskID string, q stagefiles.ActivityQuery) (stagefiles.ActivityPage, error)
 }
 
 const defaultAssistantEventsLimit = 100
@@ -190,7 +194,7 @@ const (
 	taskActionWaive = "waive"
 )
 
-// routeAssistants handles /api/assistants/{id}/{pause|continue|cancel|events}.
+// routeAssistants handles /api/assistants/{id}/{pause|continue|cancel|waive|events|raw|activity}.
 func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/assistants/")
 	segs := strings.Split(path, "/")
@@ -207,6 +211,8 @@ func (s *Server) routeAssistants(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case action == "events" && r.Method == http.MethodGet:
 		s.handleAssistantEvents(w, r, taskID)
+	case action == "activity" && r.Method == http.MethodGet:
+		s.handleAssistantActivity(w, r, taskID)
 	case action == "raw" && r.Method == http.MethodGet:
 		s.handleAssistantRawResult(w, r, taskID)
 	case action == taskActionWaive && r.Method == http.MethodPost:

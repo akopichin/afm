@@ -3,6 +3,17 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-28
+
+### Improvement: follow a selected helper's activity
+
+Select a helper under its stage to see messages and tool calls while it works,
+with its latest action and the existing result card after completion. Saved
+activity returns after reload or reconnect; older actions load on demand.
+The activity panel remains separate from stage and Full feeds, and old runs
+without activity history show an empty state. See
+[Helpers and collaboration](docs/collaboration.md#selected-helper-activity).
+
 ## 2026-10-25
 
 ### Improvement: install reusable pipelines through a bundled skill

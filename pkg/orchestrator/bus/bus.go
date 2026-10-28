@@ -78,6 +78,9 @@ const (
 	// fence or surrounded by prose. Non-FSM, live + durable (notices.jsonl): the task's own verdict is
 	// unaffected, this is purely observational. Data: {"task_id": string}.
 	EventHelperResultRepaired EventType = "helper_result_repaired"
+	// EventAssistantActivity carries one parsed message or tool call of a running helper. Best-effort and non-FSM:
+	// live + notices.jsonl only, never in the event log, and it never changes a task, stage or gate.
+	EventAssistantActivity EventType = "assistant_activity"
 	// EventDiscussionMessage fires once a discussion_message control record is durably committed (T6.1).
 	// Never an FSM transition — a discussion message never changes the root stage's status
 	// (TestDiscussion_UserMessageIsNotAutoRevise).

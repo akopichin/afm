@@ -18,7 +18,12 @@ import {
   type AssistantResult,
   type AssistantTask,
 } from '../../types/assistant-task'
+import type { AssistantActivityEntry } from '../../types/assistant-activity'
+import { useAssistantActivity } from '../../hooks/use-assistant-activity'
 import { AssistantBreadcrumb } from './AssistantBreadcrumb'
+import { AssistantActivityEmpty } from './AssistantActivityEmpty'
+import { AssistantActivityFeed } from './AssistantActivityFeed'
+import { AssistantActivityStatus } from './AssistantActivityStatus'
 import { MarkdownRenderer } from '../plan-panel'
 import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 
@@ -106,14 +111,29 @@ type AssistantTaskViewProps = {
   // (resolved once per run). null = unknown/collaboration off — the breadcrumb still shows the chain and
   // current depth, just not "of N".
   maxDepth?: number | null
+  // runId, liveActivity, connected — the activity feed's scope: the run (keys history and drops late answers
+  // after a run switch), the run-wide live ring from useEventFeed, and whether its socket is up.
+  runId?: string
+  liveActivity?: AssistantActivityEntry[]
+  connected?: boolean
 }
 
-// AssistantTaskView — the workspace body for the 'assistant' WorkspaceView (T3.10): one helper task's
-// current state. Three states, exactly as dev-plan.md's T3.10 tests enumerate: empty (no task selected, or
-// still running with nothing to show yet), error (failed/cancelled), and completed-with-result (rendered
-// through the SAME safe markdown renderer the plan panel uses — never a second dangerouslySetInnerHTML).
-export function AssistantTaskView({ task, allTasks, maxDepth = null }: AssistantTaskViewProps): ReactElement {
+const NO_LIVE_ACTIVITY: AssistantActivityEntry[] = []
+
+// AssistantTaskView — the workspace body for one helper task: header and controls stay pinned, one scroll
+// region holds the activity history and, last, the outcome. The result goes through the shared safe Markdown
+// renderer, never a second dangerouslySetInnerHTML.
+export function AssistantTaskView({
+  task,
+  allTasks,
+  maxDepth = null,
+  runId = '',
+  liveActivity = NO_LIVE_ACTIVITY,
+  connected = true,
+}: AssistantTaskViewProps): ReactElement {
   const result = useTaskResult(task?.id ?? null)
+  const isTerminal = task !== null && ASSISTANT_TASK_TERMINAL.has(task.status)
+  const activity = useAssistantActivity(task?.id ?? null, runId, liveActivity, connected, isTerminal)
 
   if (task === null) {
     return (
@@ -125,7 +145,6 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
 
   const label = assistantTaskStatusLabel(task)
   const isError = task.status === 'failed' || task.status === 'cancelled'
-  const isTerminal = ASSISTANT_TASK_TERMINAL.has(task.status)
   const title = task.title !== '' ? task.title : task.profileId
   const chain = buildBreadcrumbChain(allTasks ?? [task], task.id)
   // isWatcher (T5.6) — a checkpoints/on_completion task is a standing OBSERVER of the stage's own main-agent
@@ -160,66 +179,84 @@ export function AssistantTaskView({ task, allTasks, maxDepth = null }: Assistant
         </div>
       )}
 
-      {isError ? (
-        <div className="assistant-task-view-error" role="alert">
-          <span className="assistant-task-view-error-icon" aria-hidden="true">⚠</span>
-          <div>
-            <span>
-              {task.statusReason !== ''
-                ? task.statusReason
-                : task.status === 'cancelled'
-                  ? 'This helper task was cancelled.'
-                  : 'This helper task failed.'}
-            </span>
-            {/* key={task.id}: AssistantTaskView itself is never remounted when the selected task changes
-                (the caller passes task={selectedTask} without a key) — without this key, this child's own
-                raw/loaded state would survive the prop change and keep showing the PREVIOUS task's raw
-                answer after switching to a different failed task. */}
-            {task.statusReason.includes('protocol_error') && <RawAnswerExpander key={task.id} taskId={task.id} />}
-          </div>
-        </div>
-      ) : result !== null ? (
-        <div className="assistant-task-result">
-          {/* Verdict is text + icon, never color alone — same rule as required/advisory above. */}
-          <div className="assistant-task-verdict" data-verdict={result.verdict}>
-            <span aria-hidden="true">{verdictGlyph(result.verdict)}</span>
-            <span>{verdictLabel(result.verdict)}</span>
-            {result.repaired && (
-              <span className="assistant-task-repaired" title="afm repaired this answer's syntax (markdown fence/surrounding prose); the verdict is unchanged">
-                repaired
-              </span>
-            )}
-          </div>
-          <MarkdownRenderer source={result.summary} />
-          {result.findings.length > 0 && (
-            <ul className="assistant-task-findings">
-              {result.findings.map((f) => (
-                <li key={f.id} className="assistant-task-finding" data-severity={f.severity}>
-                  <span className="assistant-task-finding-severity">{f.severity}</span>
-                  {f.path !== null && (
-                    <span className="assistant-task-finding-path">
-                      {f.path}
-                      {f.lineStart !== null ? `:${f.lineStart}` : ''}
-                    </span>
-                  )}
-                  <span className="assistant-task-finding-detail">{f.detail}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : isTerminal ? (
-        <div className="assistant-task-view-empty empty-hint">
-          {task.statusReason !== '' ? task.statusReason : 'Completed. No detailed result was reported.'}
-        </div>
-      ) : (
-        <div className="assistant-task-view-empty empty-hint">
-          <span className="assistant-task-view-spinner" aria-hidden="true" />
-          Waiting for the first result…
-        </div>
-      )}
+      <AssistantActivityStatus
+        last={activity.entries[activity.entries.length - 1] ?? null}
+        connected={connected}
+        refreshFailing={activity.refreshFailing}
+        running={task.status === 'running'}
+        terminal={isTerminal}
+        onRetry={activity.retry}
+      />
+      {/* key: the view is not remounted on a task switch, and the scroll position must not carry over. */}
+      <AssistantActivityFeed
+        key={`${runId}:${task.id}`}
+        activity={activity}
+        empty={<AssistantActivityEmpty status={activity.status} taskStatus={task.status} terminal={isTerminal} onRetry={activity.retry} />}
+      >
+        <TaskOutcome task={task} result={result} isError={isError} isTerminal={isTerminal} />
+      </AssistantActivityFeed>
     </div>
   )
+}
+
+// TaskOutcome — what the helper ended with, shown after its history: the failure reason, the structured result
+// or a calm note. A paused helper explains why; a running one has no outcome yet.
+function TaskOutcome({ task, result, isError, isTerminal }: { task: AssistantTask; result: AssistantResult | null; isError: boolean; isTerminal: boolean }): ReactElement | null {
+  return isError ? (
+    <div className="assistant-task-view-error" role="alert">
+      <span className="assistant-task-view-error-icon" aria-hidden="true">⚠</span>
+      <div>
+        <span>
+          {task.statusReason !== ''
+            ? task.statusReason
+            : task.status === 'cancelled'
+              ? 'This helper task was cancelled.'
+              : 'This helper task failed.'}
+        </span>
+        {/* key={task.id}: AssistantTaskView itself is never remounted when the selected task changes
+            (the caller passes task={selectedTask} without a key) — without this key, this child's own
+            raw/loaded state would survive the prop change and keep showing the PREVIOUS task's raw
+            answer after switching to a different failed task. */}
+        {task.statusReason.includes('protocol_error') && <RawAnswerExpander key={task.id} taskId={task.id} />}
+      </div>
+    </div>
+  ) : result !== null ? (
+    <div className="assistant-task-result">
+      {/* Verdict is text + icon, never color alone — same rule as required/advisory above. */}
+      <div className="assistant-task-verdict" data-verdict={result.verdict}>
+        <span aria-hidden="true">{verdictGlyph(result.verdict)}</span>
+        <span>{verdictLabel(result.verdict)}</span>
+        {result.repaired && (
+          <span className="assistant-task-repaired" title="afm repaired this answer's syntax (markdown fence/surrounding prose); the verdict is unchanged">
+            repaired
+          </span>
+        )}
+      </div>
+      <MarkdownRenderer source={result.summary} />
+      {result.findings.length > 0 && (
+        <ul className="assistant-task-findings">
+          {result.findings.map((f) => (
+            <li key={f.id} className="assistant-task-finding" data-severity={f.severity}>
+              <span className="assistant-task-finding-severity">{f.severity}</span>
+              {f.path !== null && (
+                <span className="assistant-task-finding-path">
+                  {f.path}
+                  {f.lineStart !== null ? `:${f.lineStart}` : ''}
+                </span>
+              )}
+              <span className="assistant-task-finding-detail">{f.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  ) : isTerminal ? (
+    <div className="assistant-task-view-empty empty-hint">
+      {task.statusReason !== '' ? task.statusReason : 'Completed. No detailed result was reported.'}
+    </div>
+  ) : task.status === 'paused' && task.statusReason !== '' ? (
+    <div className="assistant-task-view-empty empty-hint">{task.statusReason}</div>
+  ) : null
 }
 
 // RawAnswerExpander lets a human see the raw text behind a protocol_error failure — lazily: the fetch only

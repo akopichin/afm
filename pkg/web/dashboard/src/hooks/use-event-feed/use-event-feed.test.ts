@@ -107,6 +107,52 @@ describe('useEventFeed', () => {
     expect(result.current.events).toHaveLength(3)
   })
 
+  test('diverts assistant_activity into its own ring, never into the event feed', () => {
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
+    act(() => {
+      FakeWebSocket.last().emitOpen()
+    })
+    const data = { event_id: 'act-1', task_id: 't1', occurred_at: '2026-10-27T12:00:00Z', tool: 'Bash', detail: 'ls' }
+
+    act(() => {
+      FakeWebSocket.last().emitMessage({ type: 'assistant_activity', stage_id: '', data })
+      // The same content twice is two actions: no content dedupe.
+      FakeWebSocket.last().emitMessage({ type: 'assistant_activity', stage_id: '', data: { ...data, event_id: 'act-2' } })
+      FakeWebSocket.last().emitMessage({ type: 'assistant_activity', stage_id: '', data: { detail: 'no identity' } })
+    })
+
+    expect(result.current.events).toEqual([])
+    expect(result.current.activity.map((e) => e.eventId)).toEqual(['act-1', 'act-2'])
+  })
+
+  test('drops the live activity of the previous run when the run changes', () => {
+    const { result, rerender } = renderHook(({ runId }) => useEventFeed('/ws', runId), { initialProps: { runId: 'run-a' } })
+    act(() => {
+      FakeWebSocket.last().emitMessage({
+        type: 'assistant_activity',
+        data: { event_id: 'act-1', task_id: 't1', occurred_at: '2026-10-27T12:00:00Z', tool: 'Bash', detail: 'ls' },
+      })
+    })
+    expect(result.current.activity).toHaveLength(1)
+
+    rerender({ runId: 'run-b' })
+    expect(result.current.activity).toEqual([])
+  })
+
+  test('bounds the live activity ring', () => {
+    const { result } = renderHook(() => useEventFeed('/ws', 'run-a'))
+    act(() => {
+      for (let i = 0; i < 2005; i++) {
+        FakeWebSocket.last().emitMessage({
+          type: 'assistant_activity',
+          data: { event_id: `act-${i}`, task_id: 't1', occurred_at: '2026-10-27T12:00:00Z', tool: 'text', detail: '' },
+        })
+      }
+    })
+    expect(result.current.activity).toHaveLength(2000)
+    expect(result.current.activity[0]?.eventId).toBe('act-5')
+  })
+
   test('reconnects with exponential backoff', () => {
     vi.useFakeTimers()
     renderHook(() => useEventFeed('/ws', 'run-a'))
