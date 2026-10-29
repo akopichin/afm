@@ -799,29 +799,11 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	}
 	if !poisoned {
 		o.startPlanningForPending(ctx)
-		o.settleAssistantsAfterRestart()
-		o.recoverFeedbackIntents(ctx)
-		o.recoverMeshWaits(ctx)
-		o.recoverUnreadOfFinishedStages(ctx)
-		// Closes what idle agents left once the turns a crash cut short are queued again; a turn started earlier
-		// (a human's message, a stage) settles its own at its start (maybeScheduleTask).
-		if o.startupReleaseHook != nil {
-			o.startupReleaseHook()
-		}
-		o.releaseUnanswerableWaits(ctx, o.resumeWaiterAfterTerminalWaitAtStartup)
-		o.resumeAssistantsAfterRestart(ctx)
-		o.recoverMeshWaitDeadlines(ctx)
+		o.recoverCollaboration(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
-	if o.opts.AssistantsEnabled {
-		o.startWatchPoller(ctx) // Этап 5: checkpoints/on_completion watcher firing
-	}
-	if o.opts.AssistantsEnabled && !poisoned {
-		// Планировщик лупов останавливается и ожидается раньше cancel и WaitAgents (LIFO defer): тик не
-		// переживёт ран и не пишет в журнал после закрытия Store.
-		stopLoops := o.startLoopScheduler(ctx)
-		defer stopLoops()
-	}
+	stopCollaborationLoops := o.startCollaborationLoops(ctx, poisoned)
+	defer stopCollaborationLoops()
 
 	for {
 		select {

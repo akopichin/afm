@@ -73,34 +73,36 @@ func (o *Orchestrator) computeResumeKind(s flow.Stage, pausedFrom state.StageSta
 	return kindImplementation
 }
 
+// kindRunners are the three runner bodies of one kind: a fresh agent, the Revise feedback run (claims the
+// Revise), and the feedback turn of a parked Revise (does not claim it).
+type kindRunners struct {
+	fresh, withFeedback, feedbackTurn func(context.Context, flow.Stage)
+}
+
+// runnersFor is the single kind → runners mapping; an empty or unknown kind is implementation.
+func (o *Orchestrator) runnersFor(kind string) kindRunners {
+	switch kind {
+	case kindPlanning:
+		return kindRunners{o.runPlanningAgent, o.runPlanningWithFeedback, o.runPlanningFeedbackTurn}
+	case kindReview:
+		return kindRunners{o.runReviewAgent, o.runReviewWithFeedback, o.runReviewFeedbackTurn}
+	case kindAutonomous:
+		return kindRunners{o.runAutonomousAgent, o.runAutonomousWithFeedback, o.runAutonomousFeedbackTurn}
+	default:
+		return kindRunners{o.runImplementationAgent, o.runImplementationWithFeedback, o.runImplementationFeedbackTurn}
+	}
+}
+
 // withFeedbackRunner maps a resume_kind to the *WithFeedback variant of the matching runner — used by
 // resumeOwner when the resumed stage must see a feedback.md.
 func (o *Orchestrator) withFeedbackRunner(kind string) func(context.Context, flow.Stage) {
-	switch kind {
-	case kindPlanning:
-		return o.runPlanningWithFeedback
-	case kindReview:
-		return o.runReviewWithFeedback
-	case kindAutonomous:
-		return o.runAutonomousWithFeedback
-	default:
-		return o.runImplementationWithFeedback
-	}
+	return o.runnersFor(kind).withFeedback
 }
 
 // plainRunner maps a resume_kind to the plain (fresh, no feedback.md) variant of the matching runner —
 // used by resumeOwner for a non-target owner that wasn't paused mid-revising.
 func (o *Orchestrator) plainRunner(kind string) func(context.Context, flow.Stage) {
-	switch kind {
-	case kindPlanning:
-		return o.runPlanningAgent
-	case kindReview:
-		return o.runReviewAgent
-	case kindAutonomous:
-		return o.runAutonomousAgent
-	default:
-		return o.runImplementationAgent
-	}
+	return o.runnersFor(kind).fresh
 }
 
 // kindOfPhase is the runner kind that executes a phase (the inverse of executionPhases and phasePlanning).
@@ -129,16 +131,7 @@ func (o *Orchestrator) turnRunner(kind string, feedback bool) func(context.Conte
 // feedbackTurnRunner maps a resume_kind to the body of the feedback run of that kind WITHOUT claimRevise — what
 // the wake of a parked feedback turn runs: the stage is no longer revising, and the turn must see feedback.md.
 func (o *Orchestrator) feedbackTurnRunner(kind string) func(context.Context, flow.Stage) {
-	switch kind {
-	case kindPlanning:
-		return o.runPlanningFeedbackTurn
-	case kindReview:
-		return o.runReviewFeedbackTurn
-	case kindAutonomous:
-		return o.runAutonomousFeedbackTurn
-	default:
-		return o.runImplementationFeedbackTurn
-	}
+	return o.runnersFor(kind).feedbackTurn
 }
 
 // spawnFeedbackRun hands a Revise that overtook its turn's completion to the feedback run of kind: the run's claimRevise

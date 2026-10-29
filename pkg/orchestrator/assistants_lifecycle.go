@@ -159,71 +159,22 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.settleWatcherBinding(taskID)
 	}()
 
-	dir := o.taskDir(taskID)
-	if err := ensureTaskWorkspace(dir, o.taskScratchDir(taskID)); err != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: create task workspace: "+err.Error())
-		return
-	}
-	o.persistTaskCache(dir, task)
-
-	// A scope=run task (Agent Mesh T6.1/T6.2) has no RootStageID at all — a standing role is not rooted at any
-	// stage, so there is no stage to resolve or to fail on. buildTaskContext already degrades gracefully for a
-	// zero-value flow.Stage (empty stage.ID short-circuits CollectArtifacts/stageGeneration/plan.md reads to
-	// nothing, see its own callees) — this is the one place that previously assumed EVERY task has a real root
-	// stage and must be taught the ScopeRun exception, otherwise AttachAndSend's own "always starts queued"
-	// scope=run task (agentcomm_attach.go) would fail its very first turn before doing any work at all.
-	var stage flow.Stage
-	if task.RootStageID != "" {
-		st := o.reg().Stage(task.RootStageID)
-		if st == nil {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: root stage no longer exists")
-			return
-		}
-		stage = *st
-	}
-	tc, cerr := o.buildTaskContext(task, stage)
-	if cerr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: build context: "+cerr.Error())
-		return
-	}
-	if werr := memory.AtomicWrite(filepath.Join(dir, "context.md"), []byte(tc.Prompt)); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
-		return
-	}
-	turn, started := o.startTurn(taskID, tc.inboxIDs)
-	if !started {
+	turn, ok := o.prepareHelperTurn(taskID, task)
+	if !ok {
 		return
 	}
 
-	logFile := filepath.Join(dir, "agent.log")
-	resultFile := filepath.Join(dir, rawResultFileName)
-
-	// The path is per-task, but a watch/continuation task re-runs under the SAME id (fireWatcherTask ->
-	// maybeScheduleTask -> runHelperTask), and the executor only overwrites resultFile when the turn produced
-	// nonempty text (RunHelperAgent, pkg/executor/hardening.go). Without clearing it first, a textless turn
-	// would silently serve an EARLIER turn's answer as if it were this one's.
-	if rerr := os.Remove(resultFile); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: clear stale raw answer: "+rerr.Error())
-		return
-	}
-
-	waiter := o.taskMeshParticipant(taskID)
-	waitsBefore := o.meshWaitStatusesOf(waiter)
+	end := helperTurnEnd{waiter: o.taskMeshParticipant(taskID)}
+	end.waitsBefore = o.meshWaitStatusesOf(end.waiter)
 	beforeFP, beforeOK := o.fingerprintFn(o.projectDir())
-	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
-	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
-	// marks them at process start (OnDelivered); marking the same set here (idempotent per message) also covers
-	// a helperAgentRunner that never calls OnDelivered — otherwise a run agent would see them as unseen forever
-	// and restart itself after every turn. A process that never started leaves them accepted for the next turn.
-	// Only a turn that ran to its end consumed its input — and only together with the commit of its outcome
-	// (finishTaskTurn with consumed): a cut-short turn (run shutdown, Pause), or a crash before that commit,
-	// keeps the turn's inventory in the journal, so its retry is handed the same messages again.
-	var consumed uint64
-	if err == nil && outcome.ProcessOK {
-		if tc.markInboxDelivered != nil {
-			tc.markInboxDelivered()
+	end.outcome, end.err = o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, turn.ctx.Prompt, turn.logFile, turn.resultFile)
+	// Marking delivered here also covers a runner that never calls OnDelivered. Only a turn that ran to its end
+	// consumed its input (committed with its outcome); a cut-short turn is retried with the same messages.
+	if end.err == nil && end.outcome.ProcessOK {
+		if turn.ctx.markInboxDelivered != nil {
+			turn.ctx.markInboxDelivered()
 		}
-		consumed = turn
+		end.consumed = turn.number
 	}
 	if afterFP, afterOK := o.fingerprintFn(o.projectDir()); beforeOK && afterOK && beforeFP != afterFP {
 		// Observation only — never changes the task's verdict (mirrors verify_tree_modified). Not an accusation
@@ -238,26 +189,101 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		}})
 	}
 
-	// finalizedByOther is true when ANOTHER writer (CancelTask) has ALREADY committed a terminal status for
-	// this task while the agent call above was in flight. CancelTask cancels this exact task's runCtx (via
-	// o.taskCancels) and then, in the SAME goroutine with no intervening blocking call, immediately commits
-	// "cancelled" itself — so by the time this subprocess call notices ctx.Done(), unwinds, and reaches here,
-	// that commit has, in practice, already landed. Checking the task's CURRENT projected status (o.taskTerminal,
-	// rather than runCtx.Err()) is deliberate: runCtx is a CHILD of the whole run's ctx (o.runContext), so a
-	// plain "was runCtx cancelled" check cannot tell a targeted CancelTask apart from an unrelated whole-run
-	// shutdown — which has no other writer and MUST still let this goroutine commit the task's terminal
-	// status (see TestShutdown_NoWritesAfterStoreClose). Without this check, any outcome surfacing after a
-	// CancelTask (including a stale "success" from a subprocess that happened to finish right as it was
-	// killed) would either race a second, contradictory status onto "cancelled", or wrongly persist/attach a
-	// result.json + task_result event to a task the caller already told to stop.
-	finalizedByOther := o.taskTerminal(taskID)
+	// CancelTask commits "cancelled" right after cancelling runCtx. The projected status, not runCtx.Err(), tells
+	// that apart from a run shutdown, which has no other writer and must still commit its own terminal status.
+	end.finalizedByOther = o.taskTerminal(taskID)
+
+	// Both follow-ups use the run's ctx, not runCtx: they must outlive this task's own cancellation.
+	if o.classifyHelperFailure(ctx, taskID, task, end) {
+		return
+	}
+	o.commitHelperResult(ctx, taskID, task, turn, end)
+}
+
+// helperTurn is what a helper turn needs once its preparation succeeded.
+type helperTurn struct {
+	dir        string
+	ctx        TaskContext
+	number     uint64
+	logFile    string
+	resultFile string
+}
+
+// helperTurnEnd is what the entry method observed around the agent call; classification and commit read it.
+type helperTurnEnd struct {
+	outcome          executor.HelperOutcome
+	err              error
+	consumed         uint64 // the turn number when the turn ran to its end, else 0
+	finalizedByOther bool
+	waiter           agentcomm.ParticipantID
+	waitsBefore      map[agentcomm.WaitID]agentcomm.WaitStatus
+}
+
+// prepareHelperTurn creates the task's workspace and context and starts the turn. It reports false when the
+// turn must not run: the task already failed here (finishTaskFrom) or the turn did not start.
+func (o *Orchestrator) prepareHelperTurn(taskID assistants.TaskID, task assistants.Task) (helperTurn, bool) {
+	dir := o.taskDir(taskID)
+	if err := ensureTaskWorkspace(dir, o.taskScratchDir(taskID)); err != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: create task workspace: "+err.Error())
+		return helperTurn{}, false
+	}
+	o.persistTaskCache(dir, task)
+
+	// A scope=run task (Agent Mesh T6.1/T6.2) has no RootStageID at all — a standing role is not rooted at any
+	// stage, so there is no stage to resolve or to fail on. buildTaskContext already degrades gracefully for a
+	// zero-value flow.Stage (empty stage.ID short-circuits CollectArtifacts/stageGeneration/plan.md reads to
+	// nothing, see its own callees) — this is the one place that previously assumed EVERY task has a real root
+	// stage and must be taught the ScopeRun exception, otherwise AttachAndSend's own "always starts queued"
+	// scope=run task (agentcomm_attach.go) would fail its very first turn before doing any work at all.
+	var stage flow.Stage
+	if task.RootStageID != "" {
+		st := o.reg().Stage(task.RootStageID)
+		if st == nil {
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: root stage no longer exists")
+			return helperTurn{}, false
+		}
+		stage = *st
+	}
+	tc, cerr := o.buildTaskContext(task, stage)
+	if cerr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: build context: "+cerr.Error())
+		return helperTurn{}, false
+	}
+	if werr := memory.AtomicWrite(filepath.Join(dir, "context.md"), []byte(tc.Prompt)); werr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
+		return helperTurn{}, false
+	}
+	number, started := o.startTurn(taskID, tc.inboxIDs)
+	if !started {
+		return helperTurn{}, false
+	}
+
+	resultFile := filepath.Join(dir, rawResultFileName)
+	// The path is per-task, but a watch/continuation task re-runs under the SAME id (fireWatcherTask ->
+	// maybeScheduleTask -> runHelperTask), and the executor only overwrites resultFile when the turn produced
+	// nonempty text (RunHelperAgent, pkg/executor/hardening.go). Without clearing it first, a textless turn
+	// would silently serve an EARLIER turn's answer as if it were this one's.
+	if rerr := os.Remove(resultFile); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: clear stale raw answer: "+rerr.Error())
+		return helperTurn{}, false
+	}
+	return helperTurn{
+		dir: dir, ctx: tc, number: number,
+		logFile: filepath.Join(dir, "agent.log"), resultFile: resultFile,
+	}, true
+}
+
+// classifyHelperFailure ends, parks or hands over a turn without an acceptable answer and reports whether it did.
+// The order is the precedence; false means the turn has a plain answer for commitHelperResult.
+func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assistants.TaskID, task assistants.Task, end helperTurnEnd) bool {
+	outcome, err, consumed := end.outcome, end.err, end.consumed
 
 	// The run itself is shutting down (Ctrl+C): an invocation it cut short did not fail. The task stays
 	// running, exactly like an interrupted stage, and recoverAssistants re-queues it when the run is resumed.
 	// A turn that still finished with a result is recorded as usual below.
 	if ctx.Err() != nil && (err != nil || !outcome.ProcessOK) {
 		log.Printf("assistants: task %s interrupted by run shutdown — it is retried when the run resumes", taskID)
-		return
+		return true
 	}
 
 	// A provider usage limit is no failure: the task waits for the reset in queued (parkTaskForQuota) instead of
@@ -265,26 +291,26 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// limit as the error and as outcome.ProcessErr. The turn did not run to its end, so its input stays.
 	var limit *executor.UsageLimitError
 	if errors.As(err, &limit) || errors.As(outcome.ProcessErr, &limit) {
-		if !finalizedByOther {
+		if !end.finalizedByOther {
 			o.parkTaskForQuota(ctx, taskID, limit)
 		}
-		return
+		return true
 	}
 	if err != nil {
-		if finalizedByOther {
-			return
+		if end.finalizedByOther {
+			return true
 		}
 		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
-		return
+		return true
 	}
 	switch {
-	case outcome.Interrupted || finalizedByOther:
+	case outcome.Interrupted || end.finalizedByOther:
 		// PauseTask/CancelTask already recorded (or will record) their own status transition — a stopped
 		// subprocess reaching here must not clobber it with a second, contradictory status.
-		return
+		return true
 	case outcome.TimedOut:
 		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
-		return
+		return true
 	case !outcome.ProcessOK:
 		// A PauseTask (or StopAndClarify, T4.7) on an ALREADY-RUNNING task cancels runCtx directly (not via
 		// executor's InterruptCh), which RunHelperAgent's default branch (pkg/executor/hardening.go) surfaces
@@ -310,27 +336,34 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			if o.taskRequeuePreDeferHook != nil {
 				o.taskRequeuePreDeferHook(taskID)
 			}
-			return
+			return true
 		}
 		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
-		return
+		return true
 	}
 
 	// Agent Mesh Phase 5, T5.4: the subprocess registered a mesh Wait on a colleague (another helper, a
 	// stage, or the human) and exited cooperatively — mirrors retry.go's stage-level T5.2 branch. This is NOT a
 	// false completion and NOT a protocol error: a yielding agent prints no final answer, so the yield is
 	// classified BEFORE the executor's "no final answer" protocol error is looked at. This task's own
-	// concurrency lease is released simply by this function returning next.
-	if o.turnYielded(waiter, waitsBefore, outcome.RawText) {
-		o.parkYieldedTurn(ctx, taskID, consumed, waiter, waitsBefore)
-		return
+	// concurrency lease is released simply by runHelperTask returning next.
+	if o.turnYielded(end.waiter, end.waitsBefore, outcome.RawText) {
+		o.parkYieldedTurn(ctx, taskID, consumed, end.waiter, end.waitsBefore)
+		return true
 	}
 	if outcome.ProtocolErr != nil {
 		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error())
-		return
+		return true
 	}
+	return false
+}
 
-	env, repaired, decErr := assistants.DecodeResultWithRepair([]byte(outcome.RawText))
+// commitHelperResult decodes the turn's answer (once, with mechanical repair) and commits its outcome:
+// delegation, a result for a watcher, a run agent, a stage agent's helper or a plain one-shot task — each one
+// operation — or a failed answer.
+func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, end helperTurnEnd) {
+	consumed := end.consumed
+	env, repaired, decErr := assistants.DecodeResultWithRepair([]byte(end.outcome.RawText))
 	if decErr != nil {
 		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's
 		// §9.3 acceptance criterion), regardless of how plausible the raw text looks. Mechanical repair has
@@ -348,7 +381,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		// T4a.3: admit the requested children and move this task to waiting_children — never treated as a
 		// completed check (assistants.Envelope.ClosesRequiredGate is false for kind:"delegate" by
 		// construction, T4a.1).
-		o.handleDelegate(ctx, taskID, consumed, tc.Version, *env.Delegate)
+		o.handleDelegate(ctx, taskID, consumed, turn.ctx.Version, *env.Delegate)
 		return
 	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
@@ -367,9 +400,9 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// back — a result must always reference the actual context it was computed against, not a model's
 	// possibly-stale or fabricated claim about it.
 	result := o.redactResult(*env.Result)
-	result.ContextVersion = tc.Version
+	result.ContextVersion = turn.ctx.Version
 	result.Repaired = repaired
-	if werr := o.persistTaskResult(dir, result); werr != nil {
+	if werr := o.persistTaskResult(turn.dir, result); werr != nil {
 		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
 		return
 	}

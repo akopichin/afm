@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,6 +283,51 @@ func TestGateWithVerify_EmptyVerifyEmitsNoNotices(t *testing.T) {
 
 	if notices := readVerifyNotices(t, o.opts.RunDir); len(notices) != 0 {
 		t.Fatalf("expected zero notices for a stage without verify, got %d", len(notices))
+	}
+}
+
+func TestRunVerification_NonPassingVerdictObservations(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, noticeReason, outcome string
+		verdict                             verify.Verdict
+	}{
+		{"inconclusive", "verify inconclusive: uncertain", "uncertain", "inconclusive", verify.VerdictInconclusive},
+		{"unknown", `verify produced unknown verdict "unknown"`, `verify produced unknown verdict "unknown"`, verifyOutcomeError, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stage := flow.Stage{ID: verifyTestStageID, Verify: flow.VerifySpec{Steps: []flow.VerifyStep{
+				{Kind: flow.VerifyAgent, Command: "codex"},
+			}}}
+			o, stageDir := newVerifyTestOrchestrator(t, stage)
+			o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
+				return verify.RunOutcome{ProcessOK: true, Result: &verify.ModelResult{
+					SchemaVersion: verify.SupportedSchemaVersion, Verdict: tc.verdict, Summary: "uncertain",
+				}}, nil
+			}
+			err := o.RunVerification(context.Background(), stage, phaseImplementation)
+			var execErr *VerifyExecError
+			if !errors.As(err, &execErr) || execErr.Reason != tc.reason || execErr.Step != 1 || execErr.Transient {
+				t.Fatalf("verdict error = %v (%T), want %q at step 1", err, err, tc.reason)
+			}
+			notices := readVerifyNotices(t, o.opts.RunDir)
+			if len(notices) != 2 || notices[0].Type != string(bus.EventVerifyStarted) || notices[1].Type != string(bus.EventVerifyResult) {
+				t.Fatalf("verdict notices = %+v", notices)
+			}
+			d := notices[1].Data
+			if d[keyVerifyReason] != tc.noticeReason {
+				t.Errorf("notice reason = %v, want %q", d[keyVerifyReason], tc.noticeReason)
+			}
+			if tc.verdict == verify.VerdictInconclusive {
+				if d[keyVerdict] != string(tc.verdict) || d[keyExecErrorKind] != nil {
+					t.Errorf("inconclusive notice = %+v", d)
+				}
+			} else if d[keyVerdict] != nil || d[keyExecErrorKind] != execErrorKindExecFailure {
+				t.Errorf("unknown verdict notice = %+v", d)
+			}
+			if m := readManifest(t, stageDir, d[keyVerificationID].(string)); m.Steps[0].Outcome != tc.outcome {
+				t.Errorf("verdict manifest = %+v", m.Steps)
+			}
+		})
 	}
 }
 

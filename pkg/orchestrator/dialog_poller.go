@@ -68,10 +68,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 	// activeInteractiveCount считает interactive-стадии, активные прямо сейчас.
 	activeInteractiveCount := 0
 	for id, st := range snap.Stages {
-		switch st.Status {
-		case state.StatusPlanning, state.StatusRunning, state.StatusRevising,
-			state.StatusRetrying, state.StatusAwaitingUserInput:
-		default:
+		if !isDialogActive(st.Status) {
 			continue
 		}
 		if stage := o.reg().Stage(id); stage != nil && stage.Interactive {
@@ -80,10 +77,7 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 	}
 
 	for stageID, st := range snap.Stages {
-		switch st.Status {
-		case state.StatusPlanning, state.StatusRunning, state.StatusRevising,
-			state.StatusRetrying, state.StatusAwaitingUserInput:
-		default:
+		if !isDialogActive(st.Status) {
 			continue
 		}
 		stageDir := filepath.Join(o.opts.RunDir, stageID)
@@ -151,74 +145,14 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			// Non-interactive stage: afm answers the question itself instead of surfacing it to a human — the
 			// stage's FSM status is left untouched in the normal case where the agent is still polling.
 			if stage != nil && !stage.Interactive {
-				if o.reviewTxnActive() {
-					// Leave questions unanswered during review-pause; retry after the reviewer releases the flow.
-					continue
+				if o.autoAnswerQuestion(stageID, stageDir, q) {
+					processed[key] = true
 				}
-				// Гейт снимаем ДО WriteAnswer: паркинг-стадию покрывает FSM-путь — не-FSM пара ниже эмитится ТОЛЬКО
-				// когда стадия НЕ была запаркована, иначе stage_question_asked/answered задваивались бы.
-				parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
-				answer, fromOptions := mcp.PickAutoAnswer(q)
-				if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
-					log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
-					// НЕ помечаем processed: неудачная запись (диск / O_EXCL-гонка) должна ретраиться на следующем тике,
-					// иначе стадия зависнет в ожидании answer.json до idle-таймаута исполнителя (~30 мин).
-					continue
-				}
+				continue
+			}
+			if o.publishQuestionToUser(stageID, q) {
 				processed[key] = true
-				// Публикуем dialog_question ПЕРЕД auto_answered — лента должна показать и вопрос, и авто-ответ, оба
-				// навигируемыми в полный диалог, в правильном порядке.
-				o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
-				o.publishNotice(bus.Event{
-					Type:    bus.EventAutoAnswered,
-					StageID: stageID,
-					Data:    mcp.AutoAnsweredNotice(q.Phase, q.ID, answer, fromOptions, mcp.DialogSnippet(q.Question)),
-				})
-				if !parked {
-					o.emitLifecycle(lifecyclehooks.Event{
-						Type:      lifecyclehooks.EventStageQuestionAsked,
-						StageID:   stageID,
-						StageName: o.stageName(stageID),
-						Phase:     q.Phase,
-						Reason:    q.Question,
-						Key:       q.Phase + "/" + q.ID,
-					})
-					o.emitLifecycle(lifecyclehooks.Event{
-						Type:      lifecyclehooks.EventStageQuestionAnswered,
-						StageID:   stageID,
-						StageName: o.stageName(stageID),
-						Phase:     q.Phase,
-						Reason:    answer,
-						Key:       q.Phase + "/" + q.ID,
-					})
-				}
-				// Если агент уже вышел, оставив стадию запаркованной в awaiting_user_input, написать answer.json
-				// недостаточно — стадию надо вывести из этого статуса и перезапустить агента.
-				_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
-				continue
 			}
-			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию реальный seq этой transition — фронт
-			// дедуплицирует по нему live- событие с историческим двойником из /api/events.
-			seq, move := o.surfaceQuestion(stageID, q.Phase, q.ID)
-			if move == questionDeferred {
-				continue // not processed: a later scan asks it once the stage can be the user's
-			}
-			processed[key] = true
-			// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт, что уже гарантирует единственность
-			// EventAskUser.
-			o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
-			if move == questionAnswered {
-				continue
-			}
-			o.ui.Publish(bus.Event{
-				Type:    bus.EventAskUser,
-				StageID: stageID,
-				Data: map[string]any{
-					keyID: q.ID, keyPhase: q.Phase, "question": q.Question,
-					"options": q.Options, "allow_custom": q.AllowCustom,
-				},
-				Seq: seq,
-			})
 		}
 		// No open question in stageDir: if this is an interactive stage, check whether the agent wrote one
 		// elsewhere. Auto-relocate the misplaced file so the dialog becomes visible in the UI.
@@ -228,6 +162,88 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			}
 		}
 	}
+}
+
+func isDialogActive(status state.StageStatus) bool {
+	switch status {
+	case state.StatusPlanning, state.StatusRunning, state.StatusRevising,
+		state.StatusRetrying, state.StatusAwaitingUserInput:
+		return true
+	default:
+		return false
+	}
+}
+
+func (o *Orchestrator) autoAnswerQuestion(stageID, stageDir string, q mcp.QuestionFile) bool {
+	if o.reviewTxnActive() {
+		// Leave questions unanswered during review-pause; retry after the reviewer releases the flow.
+		return false
+	}
+	// Гейт снимаем ДО WriteAnswer: паркинг-стадию покрывает FSM-путь — не-FSM пара ниже эмитится ТОЛЬКО
+	// когда стадия НЕ была запаркована, иначе stage_question_asked/answered задваивались бы.
+	parked := o.currentStatus(stageID) == state.StatusAwaitingUserInput
+	answer, fromOptions := mcp.PickAutoAnswer(q)
+	if err := mcp.WriteAnswer(stageDir, q.Phase, q.ID, answer, fromOptions, true); err != nil {
+		log.Printf("WARN: auto-answer %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+		// НЕ помечаем processed: неудачная запись (диск / O_EXCL-гонка) должна ретраиться на следующем тике,
+		// иначе стадия зависнет в ожидании answer.json до idle-таймаута исполнителя (~30 мин).
+		return false
+	}
+	// Публикуем dialog_question ПЕРЕД auto_answered — лента должна показать и вопрос, и авто-ответ, оба
+	// навигируемыми в полный диалог, в правильном порядке.
+	o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
+	o.publishNotice(bus.Event{
+		Type:    bus.EventAutoAnswered,
+		StageID: stageID,
+		Data:    mcp.AutoAnsweredNotice(q.Phase, q.ID, answer, fromOptions, mcp.DialogSnippet(q.Question)),
+	})
+	if !parked {
+		o.emitLifecycle(lifecyclehooks.Event{
+			Type:      lifecyclehooks.EventStageQuestionAsked,
+			StageID:   stageID,
+			StageName: o.stageName(stageID),
+			Phase:     q.Phase,
+			Reason:    q.Question,
+			Key:       q.Phase + "/" + q.ID,
+		})
+		o.emitLifecycle(lifecyclehooks.Event{
+			Type:      lifecyclehooks.EventStageQuestionAnswered,
+			StageID:   stageID,
+			StageName: o.stageName(stageID),
+			Phase:     q.Phase,
+			Reason:    answer,
+			Key:       q.Phase + "/" + q.ID,
+		})
+	}
+	// Если агент уже вышел, оставив стадию запаркованной в awaiting_user_input, написать answer.json
+	// недостаточно — стадию надо вывести из этого статуса и перезапустить агента.
+	_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
+	return true
+}
+
+func (o *Orchestrator) publishQuestionToUser(stageID string, q mcp.QuestionFile) bool {
+	// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию реальный seq этой transition — фронт
+	// дедуплицирует по нему live- событие с историческим двойником из /api/events.
+	seq, move := o.surfaceQuestion(stageID, q.Phase, q.ID)
+	if move == questionDeferred {
+		return false // a later scan asks it once the stage can be the user's
+	}
+	// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт, что уже гарантирует единственность
+	// EventAskUser.
+	o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
+	if move == questionAnswered {
+		return true
+	}
+	o.ui.Publish(bus.Event{
+		Type:    bus.EventAskUser,
+		StageID: stageID,
+		Data: map[string]any{
+			keyID: q.ID, keyPhase: q.Phase, "question": q.Question,
+			"options": q.Options, "allow_custom": q.AllowCustom,
+		},
+		Seq: seq,
+	})
+	return true
 }
 
 // questionMove is what surfaceQuestion did with a question a scan found open.
