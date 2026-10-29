@@ -4,10 +4,12 @@
 package graph
 
 import (
+	"maps"
 	"slices"
 	"sync/atomic"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -34,13 +36,8 @@ func newRegistryAt(revision int64, stages []flow.Stage) *Registry {
 	byID := make(map[string]flow.Stage, len(stages))
 	deps := make(map[string][]string, len(stages))
 	for _, s := range stages {
+		s = cloneStage(s)
 		order = append(order, s.ID)
-		// DependsOn is cloned before storing: flow.Stage's assignment above only copies the slice header, so
-		// without this, a slice returned later by Stages()/Stage() would still alias the SAME backing array
-		// as the registry's own internal copy — mutating it through a caller's returned value would corrupt
-		// ReadyStages' dependency walk for every future reader.
-		s.DependsOn = slices.Clone(s.DependsOn)
-		s.Skills = slices.Clone(s.Skills)
 		byID[s.ID] = s
 		deps[s.ID] = slices.Clone(s.DependsOn)
 	}
@@ -56,13 +53,60 @@ func (r *Registry) Revision() int64 {
 	return r.revision
 }
 
-// cloneStage copies s AND re-clones its DependsOn and Skills slices: a plain struct copy only copies the
-// slice headers, which would still alias the registry's own stored backing arrays. Every accessor that hands
-// a flow.Stage (or a pointer to one) to a caller must go through this, not a bare struct copy.
+// cloneStage deep-copies every slice, map and pointer of s: a bare struct copy would let callers mutate the
+// registry's own data. nil stays nil, empty stays empty. A new reference field in flow.Stage must be
+// cloned here; TestRegistry_ClonesEveryReferenceField fails otherwise.
 func cloneStage(s flow.Stage) flow.Stage {
-	s.DependsOn = slices.Clone(s.DependsOn)
+	s.Agents = slices.Clone(s.Agents)
 	s.Skills = slices.Clone(s.Skills)
+	s.DependsOn = slices.Clone(s.DependsOn)
+	s.Artifacts = cloneArtifacts(s.Artifacts)
+	s.Inputs = slices.Clone(s.Inputs)
+	s.Verify = cloneVerify(s.Verify)
+	s.AutoRun = clonePtr(s.AutoRun)
+	s.Buttons = slices.Clone(s.Buttons)
+	s.Reflect = clonePtr(s.Reflect)
+	s.MemoryUse = clonePtr(s.MemoryUse)
+	s.Hooks = cloneHooks(s.Hooks)
+	s.Browser = clonePtr(s.Browser)
+	s.Assistants = slices.Clone(s.Assistants)
 	return s
+}
+
+func cloneArtifacts(artifacts []flow.Artifact) []flow.Artifact {
+	out := slices.Clone(artifacts)
+	for i := range out {
+		out[i].Inline = clonePtr(out[i].Inline)
+	}
+	return out
+}
+
+// cloneVerify keeps VerifySpec's unexported fields by copying the struct, then detaches its references.
+func cloneVerify(v flow.VerifySpec) flow.VerifySpec {
+	v.Steps = slices.Clone(v.Steps)
+	v.MaxFailures = clonePtr(v.MaxFailures)
+	v.ReviewPatience = clonePtr(v.ReviewPatience)
+	v.FreshCorrection = clonePtr(v.FreshCorrection)
+	return v
+}
+
+func cloneHooks(hooks []lifecyclehooks.Hook) []lifecyclehooks.Hook {
+	out := slices.Clone(hooks)
+	for i := range out {
+		out[i].Events.Events = slices.Clone(out[i].Events.Events)
+		out[i].SkipEvents = slices.Clone(out[i].SkipEvents)
+		out[i].Env = maps.Clone(out[i].Env)
+		out[i].ResolvedEnv = maps.Clone(out[i].ResolvedEnv)
+	}
+	return out
+}
+
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // Stages returns every stage, as a fresh copy, in the registry's stable order. nil-safe — a nil *Registry

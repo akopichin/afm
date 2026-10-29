@@ -114,6 +114,21 @@ func (o *Orchestrator) collectArtifactsNoticing(s flow.Stage, label string) stri
 	return artCtx
 }
 
+// baseStageInputs — поля prompts.Inputs, общие для всех фаз стадии; фаза дописывает свои. Вызывается внутри
+// попытки: inbox и память читаются на каждом ходу заново. interactive задаёт фаза: autonomous всегда true.
+func (o *Orchestrator) baseStageInputs(s flow.Stage, stageDir string, interactive bool) prompts.Inputs {
+	return prompts.Inputs{
+		Stage:          s,
+		StageDir:       stageDir,
+		Interactive:    interactive,
+		GlobalPrompt:   o.opts.GlobalPrompt,
+		MemoryBlock:    o.memoryBlockForStage(s),
+		BrowserRuntime: o.browserRuntimeFor(s),
+		AgentComm:      o.agentCommBlockFor(s),
+		AgentCommInbox: o.agentCommInboxBlock(s),
+	}
+}
+
 func (o *Orchestrator) runPlanningAgent(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindPlanning)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
@@ -173,20 +188,11 @@ func (o *Orchestrator) rePromptMissingSections(ctx context.Context, s flow.Stage
 // контекста на каждой попытке. feedback — попытка является feedback-запуском Revise (см. runRetryLoop).
 func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, stageDir, logFileName, artifactsWarnLabel string, feedback bool, fillInputs func(retryContext string, in *prompts.Inputs) error) {
 	o.runRetryLoop(ctx, s, phasePlanning, feedback, func(retryContext string) error {
-		in := prompts.Inputs{
-			Template:         o.opts.Prompts.Planning,
-			Stage:            s,
-			PhaseAgent:       prompts.AgentPlanning,
-			StageDir:         stageDir,
-			Interactive:      s.Interactive,
-			OutputContractMD: planningContract,
-			RetryContext:     retryContext,
-			GlobalPrompt:     o.opts.GlobalPrompt,
-			MemoryBlock:      o.memoryBlockForStage(s),
-			BrowserRuntime:   o.browserRuntimeFor(s),
-			AgentComm:        o.agentCommBlockFor(s),
-			AgentCommInbox:   o.agentCommInboxBlock(s),
-		}
+		in := o.baseStageInputs(s, stageDir, s.Interactive)
+		in.Template = o.opts.Prompts.Planning
+		in.PhaseAgent = prompts.AgentPlanning
+		in.OutputContractMD = planningContract
+		in.RetryContext = retryContext
 		if err := fillInputs(retryContext, &in); err != nil {
 			return err
 		}
@@ -269,21 +275,13 @@ func (o *Orchestrator) runEmbeddedReview(ctx context.Context, s flow.Stage, stag
 	// T8/D6: review гейтится на .done (CheckCompletion), но до этой правки его промпт ни разу не упоминал ни
 	// .done, ни stage-директорию — гейт и инструкция теперь говорят об одном.
 	contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
-	reviewPrompt, err := buildStagePrompt(prompts.Inputs{
-		Template:        o.opts.Prompts.Review,
-		Stage:           s,
-		PhaseAgent:      prompts.AgentReview,
-		DependencyPlans: depPlans,
-		Artifacts:       artCtx,
-		StageDir:        stageDir,
-		Interactive:     s.Interactive,
-		GlobalPrompt:    o.opts.GlobalPrompt,
-		MemoryBlock:     o.memoryBlockForStage(s),
-		RetryContext:    verifyNote + contract,
-		BrowserRuntime:  o.browserRuntimeFor(s),
-		AgentComm:       o.agentCommBlockFor(s),
-		AgentCommInbox:  o.agentCommInboxBlock(s),
-	})
+	in := o.baseStageInputs(s, stageDir, s.Interactive)
+	in.Template = o.opts.Prompts.Review
+	in.PhaseAgent = prompts.AgentReview
+	in.DependencyPlans = depPlans
+	in.Artifacts = artCtx
+	in.RetryContext = verifyNote + contract
+	reviewPrompt, err := buildStagePrompt(in)
 	if err != nil {
 		return err
 	}
@@ -331,22 +329,14 @@ func (o *Orchestrator) runImplementationAttempt(ctx context.Context, s flow.Stag
 		// T8/D5: обязательный блок завершения строит код по фактической фазе, не шаблон — доклеивается
 		// последним, чтобы prompts_dir не мог его подменить/стереть.
 		contract := prompts.CompletionContract(flow.PhaseImplementation, o.stageDir(s.ID))
-		prompt, err := buildStagePrompt(prompts.Inputs{
-			Template:        o.opts.Prompts.Implementation,
-			Stage:           s,
-			PhaseAgent:      prompts.AgentImplementation,
-			DependencyPlans: depPlans,
-			Artifacts:       artCtx,
-			Plan:            string(planData),
-			StageDir:        stageDir,
-			Interactive:     s.Interactive,
-			RetryContext:    retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + verifyCmdNote + contract,
-			GlobalPrompt:    o.opts.GlobalPrompt,
-			MemoryBlock:     o.memoryBlockForStage(s),
-			BrowserRuntime:  o.browserRuntimeFor(s),
-			AgentComm:       o.agentCommBlockFor(s),
-			AgentCommInbox:  o.agentCommInboxBlock(s),
-		})
+		in := o.baseStageInputs(s, stageDir, s.Interactive)
+		in.Template = o.opts.Prompts.Implementation
+		in.PhaseAgent = prompts.AgentImplementation
+		in.DependencyPlans = depPlans
+		in.Artifacts = artCtx
+		in.Plan = string(planData)
+		in.RetryContext = retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + verifyCmdNote + contract
+		prompt, err := buildStagePrompt(in)
 		if err != nil {
 			return err
 		}
@@ -392,21 +382,13 @@ func (o *Orchestrator) runReviewAttempt(ctx context.Context, s flow.Stage, stage
 		// T8/D6: standalone review (resume/revise/pause-recovery паths) гейтится на .done так же, как
 		// embedded review — промпт теперь тоже об этом говорит.
 		contract := prompts.CompletionContract(flow.PhaseReview, o.stageDir(s.ID))
-		reviewPrompt, err := buildStagePrompt(prompts.Inputs{
-			Template:        o.opts.Prompts.Review,
-			Stage:           s,
-			PhaseAgent:      prompts.AgentReview,
-			DependencyPlans: depPlans,
-			Artifacts:       artCtx,
-			StageDir:        stageDir,
-			Interactive:     s.Interactive,
-			RetryContext:    retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + contract,
-			GlobalPrompt:    o.opts.GlobalPrompt,
-			MemoryBlock:     o.memoryBlockForStage(s),
-			BrowserRuntime:  o.browserRuntimeFor(s),
-			AgentComm:       o.agentCommBlockFor(s),
-			AgentCommInbox:  o.agentCommInboxBlock(s),
-		})
+		in := o.baseStageInputs(s, stageDir, s.Interactive)
+		in.Template = o.opts.Prompts.Review
+		in.PhaseAgent = prompts.AgentReview
+		in.DependencyPlans = depPlans
+		in.Artifacts = artCtx
+		in.RetryContext = retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + contract
+		reviewPrompt, err := buildStagePrompt(in)
 		if err != nil {
 			return err
 		}
@@ -444,22 +426,15 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 		// T8/D5: обязательный блок завершения строит код по фактической фазе (execution_summary.md для
 		// autonomous), не шаблон — доклеивается последним.
 		contract := prompts.CompletionContract(flow.PhaseAutonomous, o.stageDir(s.ID))
-		prompt, err := buildStagePrompt(prompts.Inputs{
-			Template:        o.opts.Prompts.Implementation, // fallback, если Autonomous пустой
-			Autonomous:      o.opts.Prompts.Autonomous,
-			Stage:           s,
-			PhaseAgent:      prompts.AgentAutonomous,
-			Interactive:     true, // dialog protocol — autonomous-скилл может спрашивать пользователя
-			Artifacts:       artCtx,
-			DependencyPlans: depCtx,
-			StageDir:        stageDir,
-			GlobalPrompt:    o.opts.GlobalPrompt,
-			MemoryBlock:     o.memoryBlockForStage(s),
-			RetryContext:    retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + contract,
-			BrowserRuntime:  o.browserRuntimeFor(s),
-			AgentComm:       o.agentCommBlockFor(s),
-			AgentCommInbox:  o.agentCommInboxBlock(s),
-		})
+		// Interactive всегда true: dialog protocol — autonomous-скилл может спрашивать пользователя.
+		in := o.baseStageInputs(s, stageDir, true)
+		in.Template = o.opts.Prompts.Implementation // fallback, если Autonomous пустой
+		in.Autonomous = o.opts.Prompts.Autonomous
+		in.PhaseAgent = prompts.AgentAutonomous
+		in.Artifacts = artCtx
+		in.DependencyPlans = depCtx
+		in.RetryContext = retryContext + note + o.discussionQuestionNote(s.ID) + verifyNote + contract
+		prompt, err := buildStagePrompt(in)
 		if err != nil {
 			return err
 		}
@@ -478,21 +453,6 @@ func (o *Orchestrator) claimRevise(ctx context.Context, stageID string, ev bus.F
 	guard.ExpectFrom = state.StatusRevising
 	epoch, ok := o.grantTurn(stageID, ev, guard, "")
 	return withTurnEpoch(ctx, epoch), ok
-}
-
-// feedbackTurnRunner maps a resume_kind to the body of the feedback run of that kind WITHOUT claimRevise — what
-// the wake of a parked feedback turn runs: the stage is no longer revising, and the turn must see feedback.md.
-func (o *Orchestrator) feedbackTurnRunner(kind string) func(context.Context, flow.Stage) {
-	switch kind {
-	case kindPlanning:
-		return o.runPlanningFeedbackTurn
-	case kindReview:
-		return o.runReviewFeedbackTurn
-	case kindAutonomous:
-		return o.runAutonomousFeedbackTurn
-	default:
-		return o.runImplementationFeedbackTurn
-	}
 }
 
 // runImplementationWithFeedback перезапускает implementation-фазу с фидбеком пользователя — как

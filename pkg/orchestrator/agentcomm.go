@@ -15,10 +15,8 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
-	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/prompts"
-	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -362,55 +360,6 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
 		TypedBoardTasks: o.BoardTasksEnabled(), CanSelfLoop: true,
 	})
-}
-
-// secretValues is every secret value text afm writes or shows must not carry: afm's own transport secrets and
-// credentials from its environment (executor.SecretValuesForRedaction), the resolved secrets.env values the
-// run was started with (Options.SecretValues), and the mesh bearer tokens minted for live agent invocations —
-// those exist only in the descriptor file handed to a child, never in afm's own environment.
-func (o *Orchestrator) secretValues() []string {
-	vals := append(executor.SecretValuesForRedaction(), o.opts.SecretValues...)
-	return append(vals, o.meshTokens().values()...)
-}
-
-// RedactSecrets removes every secretValues value from text an agent or the human writes into the mesh (a
-// message body, a board status, a discussion post) or that afm passes on or logs (a task's context, a failure
-// reason, the HTTP layer's error log): it must never reach the durable journal, a recipient's inbox, a notice
-// or a log verbatim.
-func (o *Orchestrator) RedactSecrets(s string) string {
-	return redact.String(s, o.secretValues())
-}
-
-// redactAll is RedactSecrets for every element of ss (a list of artifact references, evidence lines, ...).
-func (o *Orchestrator) redactAll(ss []string) []string {
-	if ss == nil {
-		return nil
-	}
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = o.RedactSecrets(s)
-	}
-	return out
-}
-
-// sameRedactedList is sameRedactedText for lists: the same length and the same text at every position.
-func (o *Orchestrator) sameRedactedList(stored, requested []string) bool {
-	if len(stored) != len(requested) {
-		return false
-	}
-	for i := range stored {
-		if !o.sameRedactedText(stored[i], requested[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-// sameRedactedText reports whether stored — text redacted when its operation committed — is the text requested
-// in a retry of that operation. Both sides are redacted with the CURRENT secret set, so a secret added since
-// (a newly minted mesh token) does not turn a faithful retry into a conflict.
-func (o *Orchestrator) sameRedactedText(stored, requested string) bool {
-	return o.RedactSecrets(stored) == o.RedactSecrets(requested)
 }
 
 // Kinds of the operations a client retries under its own request id: each one is committed under its kind,

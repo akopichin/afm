@@ -484,35 +484,6 @@ func (o *Orchestrator) loadPauseGen(stageID string) uint64 {
 	return v.(*atomic.Uint64).Load()
 }
 
-// Значения runnerKind — какой из 8 раннеров (agents.go) сейчас/последним
-// активирован для стадии. См. комментарий у поля runnerKind.
-const (
-	kindPlanning       = "planning"
-	kindImplementation = "implementation"
-	kindReview         = "review"
-	kindAutonomous     = "autonomous"
-)
-
-// setRunnerKind фиксирует, каким раннером активирована стадия stageID.
-// Вызывается первой строкой в каждом из 8 run*Agent/run*WithFeedback.
-func (o *Orchestrator) setRunnerKind(stageID, kind string) {
-	o.runnerKind.Store(stageID, kind)
-}
-
-// clearRunnerKind удаляет текущий тип раннера при завершении, ошибке или ожидании пользователя.
-func (o *Orchestrator) clearRunnerKind(stageID string) {
-	o.runnerKind.Delete(stageID)
-}
-
-// runnerKindOf возвращает текущий runnerKind стадии либо "" если ни разу не
-// выставлялся (или уже снят).
-func (o *Orchestrator) runnerKindOf(stageID string) string {
-	if v, ok := o.runnerKind.Load(stageID); ok {
-		return v.(string)
-	}
-	return ""
-}
-
 // armResumeContext взводит однократный флаг resumeContextOnce для стадии stageID — следующий вызов
 // runWithRetry соберёт retry-контекст уже на attempt 0.
 func (o *Orchestrator) armResumeContext(stageID string) {
@@ -640,12 +611,6 @@ func New(opts Options) *Orchestrator {
 
 // UIBus returns the UIBus for external subscribers (server, WebSocket).
 func (o *Orchestrator) UIBus() *bus.UIBus { return o.ui }
-
-// stageDir — каталог стадии АБСОЛЮТНЫМ путём. Нужен там, где путь пересекает границу процесса: CWD
-// агента (root_dir/worktree) не совпадает с CWD afm, и относительный путь резолвился бы не туда.
-func (o *Orchestrator) stageDir(stageID string) string {
-	return filepath.Join(o.absRunDir, stageID)
-}
 
 // clk возвращает часы рана; nil (Orchestrator собран структурным литералом в тестах, в обход New) означает
 // реальные часы — тот же fail-open приём, что уже есть у o.fingerprintFn (verify.go). Все обращения к
@@ -1050,14 +1015,6 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 	return nil
 }
 
-// spawnFeedbackRun hands a Revise that overtook its turn's completion to the feedback run of kind: the run's claimRevise
-// lets only one hand-off of that Revise start an agent.
-func (o *Orchestrator) spawnFeedbackRun(ctx context.Context, stageID, kind string) {
-	if stage := o.reg().Stage(stageID); stage != nil {
-		o.spawnKind(ctx, *stage, kind, o.withFeedbackRunner(kind))
-	}
-}
-
 // handOffReviseAfterCompletion starts the feedback run when a Revise of the completing turn committed after the
 // completion read the stage status, so the fenced completion lost to it and nobody else runs the Revise.
 func (o *Orchestrator) handOffReviseAfterCompletion(ctx context.Context, stageID, agentType string, fence *uint64) {
@@ -1066,18 +1023,6 @@ func (o *Orchestrator) handOffReviseAfterCompletion(ctx context.Context, stageID
 		return
 	}
 	o.spawnFeedbackRun(ctx, stageID, feedbackKindOf(agentType))
-}
-
-// feedbackKindOf is the runner kind of the feedback run for a turn of agentType.
-func feedbackKindOf(agentType string) string {
-	switch agentType {
-	case phaseImplementation:
-		return kindImplementation
-	case phaseAutonomous:
-		return kindAutonomous
-	default:
-		return kindReview
-	}
 }
 
 // askIfStillOpen moves the stage to the user for an open question of phase, deciding under answerMu like an answer
@@ -1229,29 +1174,6 @@ func (o *Orchestrator) resumeStageForPhaseAs(ctx context.Context, stage flow.Sta
 	}
 	o.spawnKind(ctx, stage, kind, o.turnRunner(kind, feedback))
 	return nil
-}
-
-// kindOfPhase is the runner kind that executes a phase (the inverse of executionPhases and phasePlanning).
-func kindOfPhase(phase string) (string, bool) {
-	switch phase {
-	case phasePlanning:
-		return kindPlanning, true
-	case phaseImplementation:
-		return kindImplementation, true
-	case phaseReview:
-		return kindReview, true
-	case phaseAutonomous:
-		return kindAutonomous, true
-	}
-	return "", false
-}
-
-// turnRunner is the runner of a resumed turn: the feedback run of a Revise (feedbackTurnRunner) or a fresh agent.
-func (o *Orchestrator) turnRunner(kind string, feedback bool) func(context.Context, flow.Stage) {
-	if feedback {
-		return o.feedbackTurnRunner(kind)
-	}
-	return o.plainRunner(kind)
 }
 
 func (o *Orchestrator) currentStatus(id string) state.StageStatus {

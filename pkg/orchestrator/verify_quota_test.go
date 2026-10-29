@@ -209,6 +209,53 @@ func TestVerifyQuota_ParkKeepsVerifyCountersAndNeverSpendsTheBudget(t *testing.T
 	}
 }
 
+func TestVerifyQuota_ResumeKeepsCountersButResetsFingerprint(t *testing.T) {
+	runDir := t.TempDir()
+	clk := clock.NewFake(quotaStart)
+	author := authorOnce()
+	agent := &verifyAgentScript{script: func(call int) (verify.RunOutcome, error) {
+		switch call {
+		case 3, 4, 6:
+			return verify.RunOutcome{}, codexLimit(clk.Now().Add(2 * time.Minute))
+		default:
+			return verdictOutcome(verify.VerdictNeedsChanges, "not yet"), nil
+		}
+	}}
+	maxFailures, patience := 3, 2
+	spec := flow.VerifySpec{Steps: []flow.VerifyStep{codexVerifyStep}, MaxFailures: &maxFailures, ReviewPatience: &patience}
+	rig := startQuotaRig(t, runDir, verifyQuotaStages(spec), quotaConfig(), author, clk, true, agent.install, func(o *orchestrator.Orchestrator) {
+		orchestrator.SetFingerprintFnForTest(o, func(string) (string, bool) { return "same-tree", true })
+	})
+
+	q := rig.waitParked("s1")
+	if q.VerifyFailures != 2 || q.VerifyStalemates != 1 {
+		t.Fatalf("first park = %+v, want failures=2 stalemates=1", *q)
+	}
+	clk.Advance(5 * time.Minute)
+	q = rig.waitParkedAgain("s1", q.Until)
+	clk.BlockUntil(2)
+	if q.VerifyFailures != 2 || q.VerifyStalemates != 1 || author.callCount() != 3 {
+		t.Fatalf("repeated quota park = %+v, author calls = %d, want unchanged counters and 3 calls", *q, author.callCount())
+	}
+
+	// The first rejection after wake establishes a baseline even when the tree has not changed.
+	clk.Advance(5 * time.Minute)
+	q = rig.waitParkedAgain("s1", q.Until)
+	clk.BlockUntil(2)
+	if q.VerifyFailures != 3 || q.VerifyStalemates != 0 || author.callCount() != 4 {
+		t.Fatalf("park after correction = %+v, author calls = %d, want failures=3 stalemates=0 and 4 calls", *q, author.callCount())
+	}
+
+	clk.Advance(5 * time.Minute)
+	rig.waitStatus("s1", state.StatusFailed)
+	if author.callCount() != 4 || agent.callCount() != 7 {
+		t.Errorf("author/verify calls = %d/%d, want 4/7 (resumed verify budget exhausted)", author.callCount(), agent.callCount())
+	}
+	if got := countEvent(journalEvents(t, runDir), bus.EvVerifyFail); got != 1 {
+		t.Errorf("verify-fail transitions = %d, want 1", got)
+	}
+}
+
 func TestVerifyQuota_ReopenWaitsRemainderAndRepeatsOnlyTheStep(t *testing.T) {
 	runDir := t.TempDir()
 	clk := clock.NewFake(quotaStart)

@@ -527,28 +527,6 @@ func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore m
 	return false
 }
 
-// redactResult masks secrets in every free-text field of a helper's result before it is written to result.json
-// or the journal's task_result: summary, findings, evidence, suggested change and limitations.
-func (o *Orchestrator) redactResult(r assistants.Result) assistants.Result {
-	r.Summary = o.RedactSecrets(r.Summary)
-	r.Evidence = o.redactAll(r.Evidence)
-	r.SuggestedChange = o.RedactSecrets(r.SuggestedChange)
-	r.Limitations = o.RedactSecrets(r.Limitations)
-	findings := make([]assistants.Finding, len(r.Findings))
-	for i, f := range r.Findings {
-		f.ID, f.Severity, f.Detail = o.RedactSecrets(f.ID), o.RedactSecrets(f.Severity), o.RedactSecrets(f.Detail)
-		if f.Path != nil {
-			path := o.RedactSecrets(*f.Path)
-			f.Path = &path
-		}
-		findings[i] = f
-	}
-	if r.Findings != nil {
-		r.Findings = findings
-	}
-	return r
-}
-
 // maxFailureReasonLen (in characters, ellipsis included) keeps a failure reason short enough for the task list
 // and the event log.
 const maxFailureReasonLen = 300

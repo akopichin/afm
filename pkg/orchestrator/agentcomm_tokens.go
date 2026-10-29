@@ -138,7 +138,7 @@ func (o *Orchestrator) meshTokens() *meshTokenStore {
 }
 
 // MeshBaseURL returns the agent-facing mesh endpoint base, or "" when the dashboard HTTP server is disabled
-// (server.port: 0) — the capability-off signal T3.4's preflight and meshClientFor below both key off.
+// (server.port: 0) — the capability-off signal meshClientFor and the prompt's Available flag both key off.
 func (o *Orchestrator) MeshBaseURL() string {
 	if o.opts.DashboardURL == "" {
 		return ""

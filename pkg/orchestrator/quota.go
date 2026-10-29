@@ -2,10 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -419,4 +421,76 @@ func (o *Orchestrator) taskProviderHold(task assistants.Task) *executor.UsageLim
 // взводит его. Вызывать после того, как задача уже queued, иначе повтор увидит running и ничего не сделает.
 func (o *Orchestrator) retryTaskAt(ctx context.Context, taskID assistants.TaskID, at time.Time) {
 	o.afterOnRunContext(ctx, at, func(ctx context.Context) { o.maybeScheduleTask(ctx, taskID) })
+}
+
+// quotaTimeLayout renders a moment for people (hook reasons, notice messages): UTC is spelled out so the text
+// means the same to a reader in any zone.
+const quotaTimeLayout = "2006-01-02 15:04:05 UTC"
+
+// quotaClock formats t for people in UTC.
+func quotaClock(t time.Time) string { return t.UTC().Format(quotaTimeLayout) }
+
+// quotaSubject is "claude, five_hour": the provider and, when known, the limit window.
+func quotaSubject(provider, window string) string {
+	return strings.Join(nonEmpty(provider, window), ", ")
+}
+
+func nonEmpty(items ...string) []string {
+	var out []string
+	for _, s := range items {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// quotaPrefix is "Usage limit (claude, five_hour)" — "Usage limit" alone when nothing is known.
+func quotaPrefix(provider, window string) string {
+	if subject := quotaSubject(provider, window); subject != "" {
+		return "Usage limit (" + subject + ")"
+	}
+	return "Usage limit"
+}
+
+// QuotaWaitMessage keeps lifecycle hooks, feed notices and `afm check` consistent about waits and pauses.
+// Every time includes UTC so readers in different zones see the same deadline.
+func QuotaWaitMessage(q *state.QuotaWait) string {
+	if q == nil {
+		return quotaPrefix("", "")
+	}
+	prefix := quotaPrefix(q.Provider, q.Window)
+	switch {
+	case q.PauseReason == state.QuotaPauseExceedsMaxWait:
+		return fmt.Sprintf("%s: reset at %s is later than max_wait; paused", prefix, quotaClock(q.ResetAt))
+	case q.PauseReason == state.QuotaPauseNoReset:
+		return prefix + ": no reset time to wait for; paused"
+	case q.PauseReason == state.QuotaPauseMaxWaits:
+		return prefix + ": too many consecutive refusals; paused"
+	case q.Source == state.QuotaSourceProviderHold:
+		return fmt.Sprintf("%s: waiting for another agent's limit until %s", prefix, quotaClock(q.Until))
+	case q.Source == state.QuotaSourceProbe:
+		return fmt.Sprintf("%s: reset time unknown, next check at %s", prefix, quotaClock(q.Until))
+	default:
+		return fmt.Sprintf("%s: waiting until %s", prefix, quotaClock(q.Until))
+	}
+}
+
+// StageQuotaMessage is QuotaWaitMessage for what people see of a stage right now. A stage a human paused out of a
+// wait has no pause reason and keeps its old until, but it does not resume at that time: only Continue probes.
+func StageQuotaMessage(s state.StageState, q *state.QuotaWait) string {
+	if s.Status == state.StatusPaused && q.PauseReason == "" {
+		return quotaPrefix(q.Provider, q.Window) + ": paused while waiting; Continue probes now"
+	}
+	return QuotaWaitMessage(q)
+}
+
+// quotaResetMessage is the text of a wait that ended: the work resumes after the reset, or the one probe a
+// human's Continue asked for.
+func quotaResetMessage(q *state.QuotaWait) string {
+	prefix := quotaPrefix(q.Provider, q.Window)
+	if q.ManualProbe {
+		return prefix + ": probing after a manual continue"
+	}
+	return prefix + ": the wait is over, resuming"
 }

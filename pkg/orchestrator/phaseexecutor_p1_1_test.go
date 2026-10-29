@@ -5,17 +5,21 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -821,6 +825,258 @@ func TestP11_LogFileNames_PinnedPerVariant(t *testing.T) {
 				if gotBase != want {
 					t.Errorf("call %d: logFile base = %q, want %q (full: %q)", i, gotBase, want, calls[i].logFile)
 				}
+			}
+		})
+	}
+}
+
+// --- Общие prompts.Inputs стадийных фаз --------------------------------------
+
+// stagePromptCase — путь, строящий стадийный промпт. wantRules — выдаёт ли фаза <interactive_rules> для
+// не-интерактивной стадии; promptCall — индекс вызова runner, чей промпт проверяется.
+type stagePromptCase struct {
+	name       string
+	status     state.StageStatus
+	agents     []flow.AgentType
+	call       func(o *Orchestrator, s flow.Stage)
+	wantRules  bool
+	wantCalls  int
+	promptCall int
+}
+
+// stagePromptEntrypoints — fresh и feedback каждой фазы плюс встроенный review.
+func stagePromptEntrypoints() []stagePromptCase {
+	ctx := context.Background()
+	return []stagePromptCase{
+		{"planning", state.StatusPending, []flow.AgentType{flow.AgentPlanning}, func(o *Orchestrator, s flow.Stage) { o.runPlanningAgent(ctx, s) }, false, 1, 0},
+		{"planning feedback", state.StatusRevising, []flow.AgentType{flow.AgentPlanning}, func(o *Orchestrator, s flow.Stage) { o.runPlanningWithFeedback(ctx, s) }, false, 1, 0},
+		{"implementation", state.StatusPending, []flow.AgentType{flow.AgentImplementation}, func(o *Orchestrator, s flow.Stage) { o.runImplementationAgent(ctx, s) }, false, 1, 0},
+		{"implementation feedback", state.StatusRevising, []flow.AgentType{flow.AgentImplementation}, func(o *Orchestrator, s flow.Stage) { o.runImplementationWithFeedback(ctx, s) }, false, 1, 0},
+		{"embedded review", state.StatusPending, []flow.AgentType{flow.AgentImplementation, flow.AgentReview}, func(o *Orchestrator, s flow.Stage) { o.runImplementationAgent(ctx, s) }, false, 2, 1},
+		{"review", state.StatusPending, []flow.AgentType{flow.AgentReview}, func(o *Orchestrator, s flow.Stage) { o.runReviewAgent(ctx, s) }, false, 1, 0},
+		{"review feedback", state.StatusRevising, []flow.AgentType{flow.AgentReview}, func(o *Orchestrator, s flow.Stage) { o.runReviewWithFeedback(ctx, s) }, false, 1, 0},
+		{"autonomous", state.StatusPending, []flow.AgentType{flow.AgentAuto}, func(o *Orchestrator, s flow.Stage) { o.runAutonomousAgent(ctx, s) }, true, 1, 0},
+		{"autonomous feedback", state.StatusRevising, []flow.AgentType{flow.AgentAuto}, func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(ctx, s) }, true, 1, 0},
+	}
+}
+
+// Каждый стадийный промпт несёт общие поля: global prompt, память, browser, mesh-контракт. Диалоговый протокол
+// <interactive_rules> зависит от фазы: autonomous получает его всегда, остальные — только у интерактивной стадии.
+func TestP11_StagePrompts_CarryCommonInputs(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		for _, tc := range stagePromptEntrypoints() {
+			t.Run(fmt.Sprintf("%s/interactive=%t", tc.name, interactive), func(t *testing.T) {
+				stageID := "base"
+				runner := &p11CapturingRunner{}
+				o, runDir := newP11Orch(t, stageID, tc.status, runner)
+				stageDir := filepath.Join(runDir, stageID)
+				if err := os.MkdirAll(stageDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				memoryDir := t.TempDir()
+				projectMemory := memory.ProjectFile(memoryDir)
+				if err := os.WriteFile(projectMemory, []byte("# Rules\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				o.opts.GlobalPrompt = "GLOBAL-PROMPT-MARKER"
+				o.opts.MemoryDir = memoryDir
+				o.opts.Memory = flow.MemoryConfig{Mode: flow.ReflectModeRW, MemoryUse: true}
+				o.opts.BrowserDescriptor = &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"}
+				// Инъектированный runner подменяет только дефолтную команду; managed browser нужен claude.
+				o.opts.Config.Client.Command = "claude"
+
+				s := flow.Stage{ID: stageID, Agents: tc.agents, Interactive: interactive}
+				tc.call(o, s)
+
+				calls := runner.snapshot()
+				if len(calls) != tc.wantCalls {
+					t.Fatalf("runner calls = %d, want %d: %+v", len(calls), tc.wantCalls, calls)
+				}
+				prompt := calls[tc.promptCall].prompt
+				for _, want := range []string{"GLOBAL-PROMPT-MARKER", projectMemory, "<browser_tools>", "<agent_communication>"} {
+					if !strings.Contains(prompt, want) {
+						t.Errorf("prompt lacks %q:\n%s", want, prompt)
+					}
+				}
+				if got := strings.Contains(prompt, "<interactive_rules>"); got != (tc.wantRules || interactive) {
+					t.Errorf("<interactive_rules> present = %t, want %t", got, tc.wantRules || interactive)
+				}
+			})
+		}
+	}
+}
+
+// Уникальные маркеры входов, которые каждая фаза добавляет к общим полям промпта.
+const (
+	markerPlanningTemplate = "TEMPLATE-PLANNING-MARKER"
+	markerImplTemplate     = "TEMPLATE-IMPLEMENTATION-MARKER"
+	markerReviewTemplate   = "TEMPLATE-REVIEW-MARKER"
+	markerAutoTemplate     = "TEMPLATE-AUTONOMOUS-MARKER"
+	markerOwnPlan          = "OWN-PLAN-MARKER"
+	markerPreviousPlan     = "PREVIOUS-PLAN-MARKER"
+	markerDependencyPlan   = "DEPENDENCY-PLAN-MARKER"
+	markerInputArtifact    = "INPUT-ARTIFACT-MARKER"
+	markerOutputArtifact   = "OUTPUT-ARTIFACT-MARKER"
+	markerPreNote          = "PRE-NOTE-MARKER"
+	markerFeedbackNote     = "FEEDBACK-NOTE-MARKER"
+	markerVerifyFeedback   = "VERIFY-FEEDBACK-MARKER"
+	markerVerifyCommand    = "VERIFY-COMMAND-MARKER"
+)
+
+// newPhasePromptOrch готовит стадию с зависимостью, входным и выходным артефактом, plan.md, prenote, feedback и
+// verify-feedback. Стадия `up` лежит в реестре, чтобы входы собирались так же, как в рабочем ране.
+func newPhasePromptOrch(t *testing.T, tc stagePromptCase) (*Orchestrator, *p11CapturingRunner, flow.Stage) {
+	t.Helper()
+	stageID := "phase"
+	runner := &p11CapturingRunner{}
+	o, runDir := newP11Orch(t, stageID, tc.status, runner)
+	// absRunDir пуст: сессия интерактивной стадии не создаётся, и runnerFor отдаёт инжектированный runner.
+	o.opts.Prompts = Prompts{
+		Planning:       markerPlanningTemplate,
+		Implementation: markerImplTemplate,
+		Review:         markerReviewTemplate,
+		Autonomous:     markerAutoTemplate,
+	}
+
+	upDir := filepath.Join(runDir, "up")
+	stageDir := filepath.Join(runDir, stageID)
+	files := map[string]string{
+		filepath.Join(upDir, "plan.md"):                              markerDependencyPlan,
+		filepath.Join(upDir, "note.md"):                              markerInputArtifact,
+		filepath.Join(stageDir, "plan.md"):                           markerOwnPlan,
+		filepath.Join(stageDir, "plan.v1.md"):                        markerPreviousPlan,
+		filepath.Join(stageDir, "prenote.md"):                        markerPreNote,
+		filepath.Join(stageDir, "feedback.md"):                       markerFeedbackNote,
+		filepath.Join(stagefiles.VerifyDir(stageDir), "feedback.md"): markerVerifyFeedback,
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	up := flow.Stage{ID: "up", Artifacts: []flow.Artifact{{Name: "note", Path: "./note.md"}}}
+	s := flow.Stage{
+		ID:          stageID,
+		Agents:      tc.agents,
+		Interactive: true,
+		DependsOn:   []string{"up"},
+		Inputs:      []flow.Input{{Ref: "up.note"}},
+		Artifacts:   []flow.Artifact{{Name: markerOutputArtifact, Path: "./out.md"}},
+		Verify:      flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyShell, Run: markerVerifyCommand}}},
+	}
+	o.opts.Stages = []flow.Stage{up, s}
+	o.graph = graph.NewStore(graph.NewRegistry(o.opts.Stages))
+	return o, runner, s
+}
+
+// Каждая фаза кладёт в промпт свои входы: шаблон, план, контекст зависимостей, артефакты, заметки и контракт
+// завершения. Остальные маркеры в этом промпте отсутствуют, поэтому и лишний, и потерянный вход ловятся.
+func TestP11_StagePrompts_CarryPhaseInputs(t *testing.T) {
+	type wantPrompt struct {
+		phase   flow.Phase
+		present []string
+	}
+	const (
+		contractPlanning = "planning contract"
+		contractDone     = "done contract"
+		contractSummary  = "summary contract"
+	)
+	wants := map[string]wantPrompt{
+		"planning": {flow.PhasePlanning, []string{markerPlanningTemplate, markerDependencyPlan, markerInputArtifact, markerPreNote, contractPlanning}},
+		"planning feedback": {flow.PhasePlanning, []string{markerPlanningTemplate, markerDependencyPlan, markerInputArtifact,
+			markerPreviousPlan, markerFeedbackNote, contractPlanning}},
+		"implementation": {flow.PhaseImplementation, []string{markerImplTemplate, markerOwnPlan, markerDependencyPlan, markerInputArtifact,
+			markerOutputArtifact, markerPreNote, markerVerifyFeedback, markerVerifyCommand, contractDone}},
+		"implementation feedback": {flow.PhaseImplementation, []string{markerImplTemplate, markerOwnPlan, markerDependencyPlan, markerInputArtifact,
+			markerOutputArtifact, markerFeedbackNote, markerVerifyFeedback, markerVerifyCommand, contractDone}},
+		"embedded review": {flow.PhaseReview, []string{markerReviewTemplate, markerDependencyPlan, markerInputArtifact,
+			markerOutputArtifact, markerVerifyFeedback, contractDone}},
+		"review": {flow.PhaseReview, []string{markerReviewTemplate, markerDependencyPlan, markerInputArtifact,
+			markerPreNote, markerVerifyFeedback, contractDone}},
+		"review feedback": {flow.PhaseReview, []string{markerReviewTemplate, markerDependencyPlan, markerInputArtifact,
+			markerFeedbackNote, markerVerifyFeedback, contractDone}},
+		"autonomous": {flow.PhaseAutonomous, []string{markerAutoTemplate, markerDependencyPlan, markerInputArtifact,
+			markerPreNote, markerVerifyFeedback, contractSummary}},
+		"autonomous feedback": {flow.PhaseAutonomous, []string{markerAutoTemplate, markerDependencyPlan, markerInputArtifact,
+			markerFeedbackNote, markerVerifyFeedback, contractSummary}},
+	}
+
+	for _, tc := range stagePromptEntrypoints() {
+		t.Run(tc.name, func(t *testing.T) {
+			o, runner, s := newPhasePromptOrch(t, tc)
+			// Текст контрактов зависит от каталога стадии, остальные входы ищутся по самому маркеру.
+			texts := map[string]string{
+				contractPlanning: planningContract,
+				contractDone:     prompts.CompletionContract(flow.PhaseImplementation, o.stageDir(s.ID)),
+				contractSummary:  prompts.CompletionContract(flow.PhaseAutonomous, o.stageDir(s.ID)),
+			}
+			for _, marker := range []string{markerPlanningTemplate, markerImplTemplate, markerReviewTemplate, markerAutoTemplate,
+				markerOwnPlan, markerPreviousPlan, markerDependencyPlan, markerInputArtifact, markerOutputArtifact,
+				markerPreNote, markerFeedbackNote, markerVerifyFeedback, markerVerifyCommand} {
+				texts[marker] = marker
+			}
+
+			tc.call(o, s)
+
+			calls := runner.snapshot()
+			if len(calls) != tc.wantCalls {
+				t.Fatalf("runner calls = %d, want %d: %+v", len(calls), tc.wantCalls, calls)
+			}
+			prompt := calls[tc.promptCall].prompt
+			want := wants[tc.name]
+			present := make(map[string]bool, len(want.present))
+			for _, name := range want.present {
+				present[name] = true
+			}
+			for name, text := range texts {
+				if got := strings.Contains(prompt, text); got != present[name] {
+					t.Errorf("prompt contains %q = %t, want %t", name, got, present[name])
+				}
+			}
+			// Имя фазы видно только в префиксе файлов диалога: стадия интерактивна, блок есть в каждой фазе.
+			if dialogFile := string(want.phase) + ".q<N>.question.json"; !strings.Contains(prompt, dialogFile) {
+				t.Errorf("prompt lacks the dialog prefix %q", dialogFile)
+			}
+		})
+	}
+}
+
+// Без autonomous-шаблона автономная фаза берёт implementation-шаблон; с ним — только свой.
+func TestP11_AutonomousPrompt_FallsBackToImplementationTemplate(t *testing.T) {
+	var autonomous stagePromptCase
+	for _, tc := range stagePromptEntrypoints() {
+		if tc.name == "autonomous" {
+			autonomous = tc
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		autonomous   string
+		want, absent string
+	}{
+		{"own template", markerAutoTemplate, markerAutoTemplate, markerImplTemplate},
+		{"fallback", "", markerImplTemplate, markerAutoTemplate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, runner, s := newPhasePromptOrch(t, autonomous)
+			o.opts.Prompts.Autonomous = tc.autonomous
+
+			autonomous.call(o, s)
+
+			calls := runner.snapshot()
+			if len(calls) != 1 {
+				t.Fatalf("runner calls = %d, want 1: %+v", len(calls), calls)
+			}
+			prompt := calls[0].prompt
+			if !strings.Contains(prompt, tc.want) || strings.Contains(prompt, tc.absent) {
+				t.Errorf("want template %q without %q:\n%s", tc.want, tc.absent, prompt)
 			}
 		})
 	}

@@ -82,16 +82,6 @@ func workingTreeFingerprint(dir string) (string, bool) {
 	return hex.EncodeToString(h.Sum(nil)), true
 }
 
-// projectDir — корень проекта агентов (worktree рана или flow.root_dir), либо CWD afm, если root не задан.
-// Здесь shell-verify запускает проверки, а B1 (review_patience) и наблюдательный verify_tree_modified меряют
-// отпечаток рабочего дерева — все смотрят на одно и то же дерево.
-func (o *Orchestrator) projectDir() string {
-	if o.opts.RootDir != "" {
-		return o.opts.RootDir
-	}
-	return "."
-}
-
 // gitCapture запускает git -C dir <args> с общим таймаутом отпечатка.
 func gitCapture(parent context.Context, dir string, args ...string) (string, bool) {
 	ctx, cancel := context.WithCancel(parent)

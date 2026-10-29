@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/skills"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -236,10 +237,10 @@ func TestTeamAgent_EveryTurnCarriesSkills(t *testing.T) {
 	o.opts.Team = flow.Team{{ID: "dev", Profile: "reviewer", Title: "Developer", Skills: skills.Names{"tdd"}, SkillsDir: skills.Dir(lib)}}
 
 	var mu sync.Mutex
-	var prompts []string
+	var turnPrompts []string
 	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
 		mu.Lock()
-		prompts = append(prompts, prompt)
+		turnPrompts = append(turnPrompts, prompt)
 		mu.Unlock()
 		return passResultOutcome(), nil
 	}
@@ -257,7 +258,7 @@ func TestTeamAgent_EveryTurnCarriesSkills(t *testing.T) {
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			mu.Lock()
-			n := len(prompts)
+			n := len(turnPrompts)
 			mu.Unlock()
 			if n == i+1 {
 				break
@@ -269,10 +270,10 @@ func TestTeamAgent_EveryTurnCarriesSkills(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(prompts) != 2 {
-		t.Fatalf("turns = %d, want 2", len(prompts))
+	if len(turnPrompts) != 2 {
+		t.Fatalf("turns = %d, want 2", len(turnPrompts))
 	}
-	for i, p := range prompts {
+	for i, p := range turnPrompts {
 		if !strings.Contains(p, "Required skills, in this order: tdd.") || !strings.Contains(p, "- tdd: Test first") {
 			t.Errorf("turn %d lacks the skills block:\n%s", i+1, p)
 		}
@@ -407,5 +408,132 @@ func TestAddRunAgent_SameOperationWithOtherSkillsConflicts(t *testing.T) {
 	}
 	if got := len(store.Snapshot().Assistants.Tasks); got != 1 {
 		t.Errorf("tasks = %d, want the one created by the first call", got)
+	}
+}
+
+// resetOnFirstRunner записывает вызовы и обрывает первый транспортной ошибкой, чтобы цикл сделал повтор.
+type resetOnFirstRunner struct {
+	p11CapturingRunner
+	onFirst func()
+}
+
+func (r *resetOnFirstRunner) RunAgent(ctx context.Context, agentType, stageName, prompt, logFile string) error {
+	_ = r.p11CapturingRunner.RunAgent(ctx, agentType, stageName, prompt, logFile)
+	if len(r.snapshot()) == 1 {
+		r.onFirst()
+		return errors.New("connection reset by peer")
+	}
+	return nil
+}
+
+// Каталог skills читается на каждой попытке: правка SKILL.md между попытками видна в промпте повтора.
+func TestStagePrompt_SkillsReloadBetweenAttempts(t *testing.T) {
+	stageID := "reload"
+	runner := &resetOnFirstRunner{}
+	o, _ := setupHookOrch(t, stageID)
+	o.runner, o.opts.Runner = runner, runner
+	withRetryBudgets(o)
+	o.jitterFrac = 0
+	lib := t.TempDir()
+	writeSkillLibrary(t, lib, map[string]string{"tdd": "FIRST-DESCRIPTION"})
+	runner.onFirst = func() { writeSkillLibrary(t, lib, map[string]string{"tdd": "SECOND-DESCRIPTION"}) }
+
+	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentAuto}, Skills: skills.Names{"tdd"}, SkillsDir: skills.Dir(lib)}
+	o.runAutonomousAgent(context.Background(), s)
+
+	calls := runner.snapshot()
+	if len(calls) < 2 {
+		t.Fatalf("runner calls = %d, want a retry after the forced failure", len(calls))
+	}
+	if !strings.Contains(calls[0].prompt, "FIRST-DESCRIPTION") {
+		t.Errorf("first attempt lacks the original skill description:\n%s", calls[0].prompt)
+	}
+	if !strings.Contains(calls[1].prompt, "SECOND-DESCRIPTION") || strings.Contains(calls[1].prompt, "FIRST-DESCRIPTION") {
+		t.Errorf("retry must see the library as edited between attempts:\n%s", calls[1].prompt)
+	}
+}
+
+// Нечитаемая библиотека останавливает любую фазу до запуска агента, без повторов и fallback-промпта.
+func TestStagePrompt_BrokenSkillsLibraryStopsEveryPhaseBeforeTheAgent(t *testing.T) {
+	for _, tc := range stagePromptEntrypoints() {
+		// До встроенного review тест не доходит: библиотека уже сломана на implementation. Его проверяет
+		// TestStagePrompt_BrokenSkillsLibraryStopsEmbeddedReview.
+		if tc.name == "embedded review" {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			stageID := "broken"
+			runner := &p11CapturingRunner{}
+			o, runDir := newP11Orch(t, stageID, tc.status, runner)
+			withRetryBudgets(o)
+			stageDir := filepath.Join(runDir, stageID)
+			if err := os.MkdirAll(stageDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			s := flow.Stage{ID: stageID, Agents: tc.agents, SkillsDir: skills.Dir(filepath.Join(t.TempDir(), "missing"))}
+			tc.call(o, s)
+
+			if calls := runner.snapshot(); len(calls) != 0 {
+				t.Fatalf("the agent ran %d times despite an unreadable skills_dir: %+v", len(calls), calls)
+			}
+			if got := o.opts.Store.Get(stageID); got != state.StatusFailed {
+				t.Fatalf("status = %v, want failed at once", got)
+			}
+		})
+	}
+}
+
+// Библиотека ломается после implementation-хода: встроенный review не запускает агента и стадия падает.
+func TestStagePrompt_BrokenSkillsLibraryStopsEmbeddedReview(t *testing.T) {
+	stageID := "embedded"
+	runner := &p11CapturingRunner{}
+	o, runDir := newP11Orch(t, stageID, state.StatusPending, runner)
+	withRetryBudgets(o)
+	stageDir := filepath.Join(runDir, stageID)
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "plan.md"), []byte("# Plan\n- step\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	lib := t.TempDir()
+	writeSkillLibrary(t, lib, map[string]string{"tdd": "test first"})
+	runner.onCall = func(string) {
+		if err := os.RemoveAll(lib); err != nil {
+			t.Error(err)
+		}
+	}
+
+	s := flow.Stage{
+		ID:        stageID,
+		Agents:    []flow.AgentType{flow.AgentImplementation, flow.AgentReview},
+		Skills:    skills.Names{"tdd"},
+		SkillsDir: skills.Dir(lib),
+	}
+	o.runImplementationAgent(context.Background(), s)
+
+	calls := runner.snapshot()
+	if len(calls) != 1 || !strings.Contains(calls[0].prompt, "test first") {
+		t.Fatalf("want only the implementation turn, which saw the library; got %d calls: %+v", len(calls), calls)
+	}
+	if got := o.opts.Store.Get(stageID); got != state.StatusFailed {
+		t.Fatalf("status = %v, want failed at once", got)
+	}
+}
+
+// Verify-промпт строится без skills стадии-автора.
+func TestVerifyPrompt_DoesNotCarryStageSkills(t *testing.T) {
+	lib := t.TempDir()
+	writeSkillLibrary(t, lib, map[string]string{"tdd": "test first"})
+	stage := flow.Stage{ID: "s1", Skills: skills.Names{"tdd"}, SkillsDir: skills.Dir(lib)}
+
+	got := prompts.BuildVerify(prompts.VerifyInputs{Template: "verify rules", Stage: stage})
+
+	if strings.Contains(got, "Required skills") || strings.Contains(got, "<skills>") {
+		t.Fatalf("verify prompt carries the author's skills:\n%s", got)
 	}
 }

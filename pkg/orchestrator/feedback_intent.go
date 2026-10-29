@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -386,11 +385,6 @@ func (o *Orchestrator) consumeFeedbackIntent(intentID, status, reason string) {
 	if _, err := o.opts.Store.ApplyRunOperation(op, nil); err != nil {
 		o.handleTaskOperationErr(err)
 	}
-}
-
-// stageDirFor returns the on-disk directory for one stage's dialog/feedback files.
-func (o *Orchestrator) stageDirFor(stageID string) string {
-	return filepath.Join(o.opts.RunDir, stageID)
 }
 
 // feedbackDeliveryPlan classifies what attemptFeedbackDelivery should do for the stage's CURRENT status

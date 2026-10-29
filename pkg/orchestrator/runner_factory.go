@@ -130,8 +130,6 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		return o.nonInteractiveRunner(s, phase)
 	}
 
-	// Абсолютный путь (T6, D4): AFM_STAGE_DIR пересекает границу процесса (CWD агента = root_dir/worktree,
-	// может не совпадать с CWD afm) — относительный путь резолвился бы не туда.
 	stageDir := o.stageDir(s.ID)
 	resume := willResume(s, stageDir, phase)
 	sessionID, err := stagefiles.LoadOrCreateSession(stageDir, phase)
@@ -140,42 +138,12 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 		return o.runnerForFallback(s, phase)
 	}
 
-	cmd := s.Command
-	if cmd == "" {
-		cmd = o.opts.Config.Client.Command
-	}
+	cmd := o.stageCommand(s)
 	// Interactive stages always need the claude stream-json flags (incl. --verbose,
 	// afm bug #1.1). ResolveArgs prepends defaults and dedups user overrides.
-	extraArgs := executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
-	cfg := executor.Config{
-		Command:        cmd,
-		ExtraArgs:      extraArgs,
-		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
-		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
-		OnAction:       uiActionPublisher(o.ui, s.ID),
-		OnLimitWarning: o.limitWarningSink(s.ID, ""),
-		SessionID:      sessionID,
-		Resume:         resume,
-		StageDir:       stageDir,
-		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		Dir:            o.opts.RootDir,
-		Debug:          o.opts.Debug,
-		RunDir:         o.opts.RunDir,
-		StageID:        s.ID,
-		Phase:          phase,
-		UsageHint:      o.usageHintFor(cmd),
-		Provider:       o.opts.Config.UsageLimitProvider(cmd),
-		OnUsage:        o.recordUsage(s.ID, phase, ""),
-		BrowserMCP:     o.browserForStage(s, cmd),
-		MeshClient:     o.meshClientFor(meshStageParticipantID(s.ID)),
-		OnDelivered:    o.agentCommOnDeliveredForStage(s),
-		Reasoning:      o.opts.Config.Client.Reasoning,
-		RunID:          o.opts.RunID,
-		OnObservation:  o.observationSink(s.ID),
-	}
-	if ch, ok := o.interruptChans.Load(s.ID); ok {
-		cfg.InterruptCh = ch.(chan struct{})
-	}
+	cfg := o.baseStageExecutorConfig(s, phase, cmd, executor.ResolveArgs(o.opts.Config.Client.ExtraArgs))
+	cfg.SessionID = sessionID
+	cfg.Resume = resume
 	return executor.New(cfg)
 }
 
@@ -190,6 +158,13 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		cmd = o.opts.Config.Client.Command
 		extraArgs = o.opts.Config.Client.ExtraArgs
 	}
+	return executor.New(o.baseStageExecutorConfig(s, phase, cmd, extraArgs))
+}
+
+// baseStageExecutorConfig is the wiring shared by every author turn of a stage. Call it per attempt, never
+// cache the result: the interrupt channel is read now, and the mesh client mints its token and takes the
+// stage epoch only when the process starts. Verify and helper runs deliberately build their own configs.
+func (o *Orchestrator) baseStageExecutorConfig(s flow.Stage, phase, cmd string, extraArgs []string) executor.Config {
 	cfg := executor.Config{
 		Command:        cmd,
 		ExtraArgs:      extraArgs,
@@ -197,15 +172,15 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		OnAction:       uiActionPublisher(o.ui, s.ID),
 		OnLimitWarning: o.limitWarningSink(s.ID, ""),
-		WrapperDir:     executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		Dir:            o.opts.RootDir,
-		Debug:          o.opts.Debug,
-		RunDir:         o.opts.RunDir,
-		StageID:        s.ID,
-		// Every non-interactive stage gets AFM_STAGE_DIR too, so an agent or skill that uses the file-based
-		// dialog protocol always has somewhere to write question.json — the poller auto-answers it. Absolute
-		// (T6, D4): see the comment on the interactive branch above — same cross-process-boundary reasoning.
+		// Every stage gets AFM_STAGE_DIR, so an agent or skill that uses the file-based dialog protocol
+		// always has somewhere to write question.json. It is absolute: the agent's CWD (root_dir/worktree)
+		// may differ from afm's, and a relative path would resolve elsewhere.
 		StageDir:      o.stageDir(s.ID),
+		WrapperDir:    executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
+		Dir:           o.opts.RootDir,
+		Debug:         o.opts.Debug,
+		RunDir:        o.opts.RunDir,
+		StageID:       s.ID,
 		Phase:         phase,
 		UsageHint:     o.usageHintFor(cmd),
 		Provider:      o.opts.Config.UsageLimitProvider(cmd),
@@ -220,7 +195,7 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
 	}
-	return executor.New(cfg)
+	return cfg
 }
 
 func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Runner {

@@ -198,10 +198,3 @@ func normalizeScope(s assistants.Scope) assistants.Scope {
 	}
 	return s
 }
-
-// redactProfile masks secrets in the human-readable text of a profile before it is frozen into a task's
-// journaled snapshot: its title and instructions. The command is left as configured — it is what runs.
-func (o *Orchestrator) redactProfile(p assistants.Profile) assistants.Profile {
-	p.Title, p.Instructions = o.RedactSecrets(p.Title), o.RedactSecrets(p.Instructions)
-	return p
-}

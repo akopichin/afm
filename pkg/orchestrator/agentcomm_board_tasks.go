@@ -454,26 +454,6 @@ func (o *Orchestrator) boardTaskEdit(req BoardTaskRequest, resolve func(name str
 	return p, nil
 }
 
-// redactSet is the redacted text, or nil when it is not set.
-func (o *Orchestrator) redactSet(text *string) *string {
-	if text == nil {
-		return nil
-	}
-	return new(o.RedactSecrets(*text))
-}
-
-// redactRefs is the redacted artifact refs, or nil when they are not set; a set empty list stays an empty list.
-func (o *Orchestrator) redactRefs(refs *[]string) *[]string {
-	if refs == nil {
-		return nil
-	}
-	out := make([]string, len(*refs))
-	for i, ref := range *refs {
-		out[i] = o.RedactSecrets(ref)
-	}
-	return &out
-}
-
 // valueOf is *s, or "" when s is nil.
 func valueOf(s *string) string {
 	if s == nil {

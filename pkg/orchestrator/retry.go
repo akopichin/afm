@@ -143,6 +143,40 @@ func isRetryableError(err error) bool {
 	}
 }
 
+// Both retry budgets stop at the outer attempt limit, so exhaustion cannot leave the stage running.
+func transportRetryDecision(class Classification, attempt, unknownRetries, maxRetries, maxUnknownRetries int) (retryOK bool, budget, numerator, nextUnknownRetries int) {
+	budget = maxRetries
+	numerator = attempt + 1
+	nextUnknownRetries = unknownRetries
+	retryOK = attempt < maxRetries
+	if class == ClassRetryableUnknown {
+		nextUnknownRetries++
+		budget = maxUnknownRetries
+		numerator = nextUnknownRetries
+		retryOK = nextUnknownRetries <= maxUnknownRetries && attempt < maxRetries
+	}
+	return
+}
+
+type verifyCorrection struct {
+	failures        int
+	maxFailures     int
+	fresh           bool
+	patience        int
+	prevFingerprint string
+	unchanged       int
+}
+
+func (v verifyCorrection) canRetry(isVerifyReject bool, attempt, maxRetries int) bool {
+	return attempt < maxRetries &&
+		((isVerifyReject && v.failures < v.maxFailures) ||
+			(!isVerifyReject && attempt == 0))
+}
+
+func (v verifyCorrection) counters() verifyCounters {
+	return verifyCounters{Failures: v.failures, Stalemates: v.unchanged}
+}
+
 // verifyMaxFailures — бюджет отклонений verify для стадии: сколько коррекций автора разрешить, прежде чем
 // стадия провалится.
 func (o *Orchestrator) verifyMaxFailures(s flow.Stage) int {
@@ -352,29 +386,22 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 	retryBackoff := o.retryBackoff
 	maxUnknownRetries := o.maxUnknownRetries
 	retryBackoffMax := o.retryBackoffMax
-	// unknownRetries — счётчик ТОЛЬКО ClassRetryableUnknown-сбоев этой горутины (T5, D1): независим от attempt
-	// (который растит и backoff, и ClassRetryable-бюджет) и от verifyFailures (отдельная политика коррекции).
+	// Unknown transport failures have their own budget, independent of verify corrections.
 	unknownRetries := 0
-	// verifyFailures — счётчик verify-отклонений этой горутины; maxVerifyFailures — их бюджет. In-memory,
-	// сбрасывается на resume — как и прежнее однократное поведение.
-	verifyFailures := 0
 	// Пробуждение verify-парка продолжает цикл с теми же счётчиками: парк не тратит и не обнуляет бюджеты verify.
 	verifyResume, ok := o.claimVerifyResume(ctx, s.ID, onUserInterrupted)
 	if !ok {
 		return // приказ устарел: стадию забрали, пока ход ждал слот
 	}
-	if verifyResume != nil {
-		verifyFailures = verifyResume.quota.VerifyFailures
+	correction := verifyCorrection{
+		maxFailures: o.verifyMaxFailures(s),
+		fresh:       o.verifyFreshCorrection(s),
+		patience:    o.verifyReviewPatience(s),
 	}
-	maxVerifyFailures := o.verifyMaxFailures(s)
-	freshCorrection := o.verifyFreshCorrection(s)
-	// B1 stalemate: reviewPatience = 0 → выключено. prevFingerprint/unchangedRejections — in-memory состояние
-	// ЭТОЙ горутины: сколько verify-отклонений ПОДРЯД оставили рабочее дерево неизменным.
-	reviewPatience := o.verifyReviewPatience(s)
-	prevFingerprint := ""
-	unchangedRejections := 0
+	// Quota resume restores counters; the fingerprint stays local to this loop and starts empty.
 	if verifyResume != nil {
-		unchangedRejections = verifyResume.quota.VerifyStalemates
+		correction.failures = verifyResume.quota.VerifyFailures
+		correction.unchanged = verifyResume.quota.VerifyStalemates
 	}
 	fingerprintDir := o.projectDir()
 	// progressed — ход этой горутины уже успешно завершался: следующий usage-limit начинает серию отказов заново.
@@ -505,31 +532,27 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			// счётчиками, бюджеты коррекции и stalemate не тратятся.
 			var verifyLimit *verifyLimitError
 			if errors.As(checkErr, &verifyLimit) {
-				o.parkVerifyForQuota(ctx, s, phase, epoch, verifyLimit, verifyCounters{Failures: verifyFailures, Stalemates: unchangedRejections}, feedback, onUserInterrupted)
+				o.parkVerifyForQuota(ctx, s, phase, epoch, verifyLimit, correction.counters(), feedback, onUserInterrupted)
 				return
 			}
-			// Incomplete work — две НЕЗАВИСИМЫЕ политики коррекции без backoff. verifyFailures++ — только для
-			// verify-ветки, чтобы транспортные ретраи и план-коррекции его не расходовали.
+			// Only verify rejections spend the correction budget; transport and plan retries leave it intact.
 			if stagefiles.IsIncompleteWorkError(checkErr) {
 				var vre *VerifyRejectedError
 				isVerifyReject := errors.As(checkErr, &vre)
 				// B1 stalemate: если автор перестал менять рабочее дерево в ответ на повторные verify-отклонения —
 				// принять стадию как завершённую вместо очередной коррекции.
-				if isVerifyReject && reviewPatience > 0 {
+				if isVerifyReject && correction.patience > 0 {
 					var done bool
-					done, prevFingerprint, unchangedRejections = o.handleStalemate(
-						ctx, s, phase, vre, reviewPatience, fingerprintDir,
-						prevFingerprint, unchangedRejections, onUserInterrupted)
+					done, correction.prevFingerprint, correction.unchanged = o.handleStalemate(
+						ctx, s, phase, vre, correction.patience, fingerprintDir,
+						correction.prevFingerprint, correction.unchanged, onUserInterrupted)
 					if done {
 						return
 					}
 				}
 				// На последней попытке continue оставил бы стадию активной без следующей итерации; проверяем attempt <
 				// maxRetries.
-				retryIncomplete := attempt < maxRetries &&
-					((isVerifyReject && verifyFailures < maxVerifyFailures) ||
-						(!isVerifyReject && attempt == 0))
-				if retryIncomplete {
+				if correction.canRetry(isVerifyReject, attempt, maxRetries) {
 					// G2: повторная проверка ПРЯМО ПЕРЕД incompleteReason/continue — см. verifyOutcomeStillOwned.
 					if o.verifyOutcomeGuardHook != nil {
 						o.verifyOutcomeGuardHook(s.ID)
@@ -538,8 +561,8 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 						return
 					}
 					if isVerifyReject {
-						verifyFailures++
-						dropSessionForFreshCorrection(freshCorrection, stageDir, phase)
+						correction.failures++
+						dropSessionForFreshCorrection(correction.fresh, stageDir, phase)
 					}
 					incompleteReason = checkErr.Error()
 					// Раньше публиковалось как EventStageStatusChanged с Data- сообщением — фронт рисовал это пустым
@@ -590,27 +613,8 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		// next attempt starts a fresh Claude session.
 		_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 
-		// T5: два независимых бюджета (D1). ClassRetryable держит полный maxRetries — как и раньше, через общий
-		// attempt. ClassRetryableUnknown (процесс стартовал и упал с неузнанным текстом) — ограниченный
-		// maxUnknownRetries через отдельный unknownRetries, чтобы детерминированный сбой не жёг тот же бюджет,
-		// что настоящий транспортный сбой.
-		//
-		// `&& attempt < maxRetries` в обеих ветках — ОБЯЗАТЕЛЬНОЕ условие, не дублирующая подстраховка: внешний
-		// `for attempt <= maxRetries` выходит из цикла без публикации EvFail/EventRetryExhausted, как только
-		// attempt перестаёт удовлетворять своему условию. Без этого && неузнанный сбой на ПОСЛЕДНЕЙ разрешённой
-		// попытке (attempt == maxRetries), чей unknownRetries ещё не исчерпан, получил бы retryOK=true →
-		// EvResumeAfterRetry → цикл завершился бы по своему condition на следующей итерации МОЛЧА, без единого
-		// события о провале — стадия осталась бы висеть в running навсегда (найдено ревью, см. репродукцию в
-		// dev-plan.md).
-		budget := maxRetries
-		numerator := attempt + 1
-		retryOK := attempt < maxRetries
-		if class == ClassRetryableUnknown {
-			unknownRetries++
-			budget = maxUnknownRetries
-			numerator = unknownRetries
-			retryOK = unknownRetries <= maxUnknownRetries && attempt < maxRetries
-		}
+		retryOK, budget, numerator, nextUnknownRetries := transportRetryDecision(class, attempt, unknownRetries, maxRetries, maxUnknownRetries)
+		unknownRetries = nextUnknownRetries
 
 		if !retryOK {
 			if seq, ok := o.failTurn(s.ID, epoch, "retries exhausted", onUserInterrupted); ok {

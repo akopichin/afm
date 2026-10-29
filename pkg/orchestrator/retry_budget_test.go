@@ -16,6 +16,141 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+func TestTransportRetryDecision_BudgetBoundaries(t *testing.T) {
+	tests := []struct {
+		name               string
+		class              Classification
+		attempt            int
+		unknownRetries     int
+		maxRetries         int
+		maxUnknownRetries  int
+		wantRetry          bool
+		wantBudget         int
+		wantNumerator      int
+		wantUnknownRetries int
+	}{
+		{"known first", ClassRetryable, 0, 0, 5, 3, true, 5, 1, 0},
+		{"known before last", ClassRetryable, 4, 0, 5, 3, true, 5, 5, 0},
+		{"known last", ClassRetryable, 5, 0, 5, 3, false, 5, 6, 0},
+		{"known zero budget", ClassRetryable, 0, 0, 0, 3, false, 0, 1, 0},
+		{"known after unknown budget", ClassRetryable, 3, 3, 5, 3, true, 5, 4, 3},
+		{"unknown first", ClassRetryableUnknown, 0, 0, 5, 3, true, 3, 1, 1},
+		{"unknown at budget", ClassRetryableUnknown, 2, 2, 5, 3, true, 3, 3, 3},
+		{"unknown past budget", ClassRetryableUnknown, 3, 3, 5, 3, false, 3, 4, 4},
+		{"unknown before last", ClassRetryableUnknown, 4, 0, 5, 3, true, 3, 1, 1},
+		{"unknown last", ClassRetryableUnknown, 5, 0, 5, 3, false, 3, 1, 1},
+		{"unknown zero budget", ClassRetryableUnknown, 0, 0, 5, 0, false, 0, 1, 1},
+		{"unknown zero outer budget", ClassRetryableUnknown, 0, 0, 0, 3, false, 3, 1, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retry, budget, numerator, unknown := transportRetryDecision(tt.class, tt.attempt, tt.unknownRetries, tt.maxRetries, tt.maxUnknownRetries)
+			if retry != tt.wantRetry || budget != tt.wantBudget || numerator != tt.wantNumerator || unknown != tt.wantUnknownRetries {
+				t.Fatalf("decision = (%t, %d, %d, %d), want (%t, %d, %d, %d)",
+					retry, budget, numerator, unknown, tt.wantRetry, tt.wantBudget, tt.wantNumerator, tt.wantUnknownRetries)
+			}
+		})
+	}
+}
+
+func TestVerifyCorrection_RetryBudgetBoundaries(t *testing.T) {
+	tests := []struct {
+		name           string
+		isVerifyReject bool
+		attempt        int
+		maxRetries     int
+		failures       int
+		maxFailures    int
+		want           bool
+	}{
+		{"verify first", true, 0, 5, 0, 2, true},
+		{"verify last correction", true, 3, 5, 1, 2, true},
+		{"verify exhausted", true, 2, 5, 2, 2, false},
+		{"verify disabled", true, 0, 5, 0, 0, false},
+		{"verify last attempt", true, 5, 5, 0, 2, false},
+		{"verify zero outer budget", true, 0, 0, 0, 2, false},
+		{"incomplete first", false, 0, 5, 0, 2, true},
+		{"incomplete ignores verify budget", false, 0, 5, 2, 2, true},
+		{"incomplete subsequent", false, 1, 5, 0, 2, false},
+		{"incomplete last attempt", false, 5, 5, 0, 2, false},
+		{"incomplete zero outer budget", false, 0, 0, 0, 2, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			correction := verifyCorrection{failures: tt.failures, maxFailures: tt.maxFailures}
+			if got := correction.canRetry(tt.isVerifyReject, tt.attempt, tt.maxRetries); got != tt.want {
+				t.Fatalf("canRetry = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunWithRetry_VerifyCorrectionThenTransportPreservesBudgetAndPayload(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		msg  string
+	}{
+		{"known", errors.New("connection reset by peer"), "attempt 2/5 in 2ms"},
+		{"unknown", errors.New("exit status 1"), "attempt 1/3 in 2ms"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			o, runDir := setupHookOrch(t, "s1")
+			withRetryBudgets(o)
+			o.maxRetries, o.maxUnknownRetries = 5, 3
+			o.jitterFrac = 0
+			s := agentVerifyStage(0, 2, agentStep())
+			agentFn, calls := scriptedAgentFn(func(call int) error {
+				if call == 2 {
+					return tt.err
+				}
+				return nil
+			})
+			rejected := newVerifyRejected(1)
+			checks := 0
+			o.runWithRetry(context.Background(), s, phaseImplementation, agentFn, func() error {
+				checks++
+				return rejected
+			}, func() { t.Error("onUserInterrupted should not be called") })
+
+			if calls() != 4 || checks != 3 {
+				t.Fatalf("author calls = %d, checks = %d, want 4 and 3 (two corrections and one transport retry)", calls(), checks)
+			}
+			if got := o.opts.Store.Get(s.ID); got != state.StatusFailed {
+				t.Fatalf("status = %v, want failed after exhausting verify corrections", got)
+			}
+			if got := countRetryNotices(t, runDir); got != 2 {
+				t.Errorf("correction notices = %d, want 2", got)
+			}
+			history, err := o.opts.Store.History()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retries, resumes, verifyFails int
+			for _, tr := range history {
+				switch tr.Event {
+				case string(bus.EvScheduleRetry):
+					retries++
+					if tr.Reason != tt.msg {
+						t.Errorf("retry payload = %q, want %q", tr.Reason, tt.msg)
+					}
+				case string(bus.EvResumeAfterRetry):
+					resumes++
+				case string(bus.EvVerifyFail):
+					verifyFails++
+					if tr.Reason != rejected.Error() {
+						t.Errorf("verify failure reason = %q, want %q", tr.Reason, rejected.Error())
+					}
+				default:
+				}
+			}
+			if retries != 1 || resumes != 1 || verifyFails != 1 {
+				t.Errorf("retry/resume/verify-fail transitions = %d/%d/%d, want 1/1/1", retries, resumes, verifyFails)
+			}
+		})
+	}
+}
+
 // T5: два независимых бюджета ретраев в runWithRetry (D1) — ClassRetryable держит полный maxRetries,
 // ClassRetryableUnknown ограничен maxUnknownRetries. Тесты white-box (как остальные в retry_test.go):
 // runWithRetry принимает agentFn как голую функцию, поэтому фейковый executor.Runner не нужен — достаточно

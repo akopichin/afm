@@ -112,16 +112,6 @@ func (o *Orchestrator) approveStage(ctx context.Context, stageID string) {
 	o.tryActivatePrePlanned(ctx)
 }
 
-// runContext returns the long-lived run-scoped context for spawning agents from HTTP-initiated actions.
-func (o *Orchestrator) runContext(fallback context.Context) context.Context {
-	o.runMu.Lock()
-	defer o.runMu.Unlock()
-	if o.runCtx != nil {
-		return o.runCtx
-	}
-	return context.WithoutCancel(fallback)
-}
-
 // Approve approves a stage plan.
 func (o *Orchestrator) Approve(ctx context.Context, stageID string) error {
 	if err := o.rejectIfReviewPaused(); err != nil {
