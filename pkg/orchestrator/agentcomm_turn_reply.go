@@ -179,7 +179,7 @@ func (o *Orchestrator) splitDeliverable(rs state.RunState, replies []plannedMess
 // waiting for it would wait forever. The cancellations commit with the finish that drops the replies; reasons
 // maps each cancelled wait to its reason, for the notice.
 func undeliveredReplyWaitEffects(rs state.RunState, undelivered []undeliveredReply) ([]state.Effect, map[agentcomm.WaitID]string) {
-	var effects []state.Effect
+	var ids []agentcomm.WaitID
 	reasons := map[agentcomm.WaitID]string{}
 	for _, u := range undelivered {
 		r := u.reply
@@ -194,17 +194,11 @@ func undeliveredReplyWaitEffects(rs state.RunState, undelivered []undeliveredRep
 			if w.Status != agentcomm.WaitPending || w.Condition.Kind != agentcomm.WaitOnReplyTo || w.Condition.MessageID != m.ID {
 				continue
 			}
-			eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)},
-				state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: u.reason})
-			if err != nil {
-				log.Printf("WARN: assistants: cancel the wait %s for an undelivered turn reply: %v", id, err)
-				continue
-			}
-			effects = append(effects, eff)
+			ids = append(ids, id)
 			reasons[id] = u.reason
 		}
 	}
-	return effects, reasons
+	return cancelWaitEffects(ids, reasons), reasons
 }
 
 // turnReplyBody is the text of a turn reply: the result's summary, cut to fit the mesh's body limit, and a line

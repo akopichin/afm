@@ -3,6 +3,19 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-29
+
+### Fix: resume coordinators waiting for spawned helpers
+
+A helper can ask its coordinator a callback question while the coordinator
+waits for the helper's spawn reply. The callback wakes the coordinator for an
+answer; the same wait then remains pending until the helper finishes or cannot
+answer. Equivalent single pending waits reuse their original ID. A fresh
+completion marker during a pending wait now produces a durable diagnostic
+instead of completing or running verify. The run owner can list and cancel
+selected stage waits through a separate bearer-protected recovery API on a
+native run. See [helper wait migration](docs/agent-wait-migration.md).
+
 ## 2026-10-25
 
 ### Improvement: install reusable pipelines through a bundled skill

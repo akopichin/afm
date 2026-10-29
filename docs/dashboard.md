@@ -104,6 +104,16 @@ the stage waits again. A provider quota with no reset, a reset beyond
 stage with the reason. See [Stage lifecycle](stage-lifecycle.md#stage-lifecycle)
 and [Usage limits](config-reference.md#usage-limits).
 
+## Waiting for a colleague
+
+When a stage agent yields on a peer wait, its rail status is **Awaiting
+colleague**. If that turn also wrote a fresh completion marker, the Feed shows
+`completion_marker_pending_wait` as an event name. It does not display the
+pending waits or recovery message; those are in the durable notice payload in
+the run's `notices.jsonl`. There is no recovery button in the dashboard; the
+run owner can use the [authenticated wait list and cancel API](collaboration.md#duplicate-waits-and-owner-recovery)
+to inspect current waits before deciding which requests cannot be answered.
+
 ## Team workspace
 
 In `team` mode, Team appears when the dashboard's first Agent Mesh roster probe

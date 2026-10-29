@@ -224,7 +224,8 @@ func (o *Orchestrator) runPlanningAttempt(ctx context.Context, s flow.Stage, sta
 
 func (o *Orchestrator) runPlanningWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindPlanning)
-	if !o.claimRevise(s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s}) {
+	ctx, ok := o.claimRevise(ctx, s.ID, bus.EvStartPlanning, bus.GuardCtx{Stage: s})
+	if !ok {
 		return
 	}
 	o.runPlanningFeedbackTurn(ctx, s)
@@ -458,10 +459,10 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 // claimRevise makes a feedback run's first transition out of revising its claim on the Revise: it commits only
 // from revising, so of several hand-offs for one Revise (an exiting turn, the interrupted turn, the completion
 // event) exactly one runs its agent; the others return without one.
-func (o *Orchestrator) claimRevise(stageID string, ev bus.FSMEvent, guard bus.GuardCtx) bool {
+func (o *Orchestrator) claimRevise(ctx context.Context, stageID string, ev bus.FSMEvent, guard bus.GuardCtx) (context.Context, bool) {
 	guard.ExpectFrom = state.StatusRevising
-	_, ok := o.Trigger(stageID, ev, guard, "")
-	return ok
+	epoch, ok := o.grantTurn(stageID, ev, guard, "")
+	return withTurnEpoch(ctx, epoch), ok
 }
 
 // feedbackTurnRunner maps a resume_kind to the body of the feedback run of that kind WITHOUT claimRevise — what
@@ -485,7 +486,8 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	o.setRunnerKind(s.ID, kindImplementation)
 	// Возвращаемся в Running. Без этого onAgentCompleted и EvComplete не увидели бы подходящий статус, и
 	// стадия зависла бы в Revising даже после успешного завершения агента.
-	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
+	ctx, ok := o.claimRevise(ctx, s.ID, bus.EvStartRun, bus.GuardCtx{})
+	if !ok {
 		return
 	}
 	o.runImplementationFeedbackTurn(ctx, s)
@@ -503,7 +505,8 @@ func (o *Orchestrator) runImplementationFeedbackTurn(ctx context.Context, s flow
 func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindReview)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
+	ctx, ok := o.claimRevise(ctx, s.ID, bus.EvStartRun, bus.GuardCtx{})
+	if !ok {
 		return
 	}
 	o.runReviewFeedbackTurn(ctx, s)
@@ -524,7 +527,8 @@ func (o *Orchestrator) runReviewFeedbackTurn(ctx context.Context, s flow.Stage) 
 func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Stage) {
 	o.setRunnerKind(s.ID, kindAutonomous)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	if !o.claimRevise(s.ID, bus.EvStartRun, bus.GuardCtx{}) {
+	ctx, ok := o.claimRevise(ctx, s.ID, bus.EvStartRun, bus.GuardCtx{})
+	if !ok {
 		return
 	}
 	o.runAutonomousFeedbackTurn(ctx, s)

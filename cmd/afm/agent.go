@@ -231,7 +231,8 @@ func newAgentAckCmd() *cobra.Command {
 // newAgentWaitCmd registers `afm agent wait`. It ALWAYS returns promptly (the Service's Wait never blocks);
 // the "status" field tells the caller what to do next: "ready" means the condition already holds (no need
 // to end the turn), "yield" means the caller should end its turn now and let the next invocation pick up
-// the reply via the <inbox> block or a fresh `afm agent inbox` call.
+// the reply via the <inbox> block or a fresh `afm agent inbox` call. A repeat of a single wait that is still
+// pending adds "already_pending": true and the first wait's id — "yield" still means end the turn.
 //
 // --condition reply_to_all --message-ids a,b,c (also spelled --condition reply_to --message-ids a,b,c) is ONE
 // wait for the reply to every listed request: it answers with a batch_id and the outcome of each item, and the
@@ -279,7 +280,11 @@ func newAgentWaitCmd() *cobra.Command {
 				if batch {
 					return map[string]any{"status": cliStatus, "batch_id": out.BatchID, "items": out.Items}, nil
 				}
-				return map[string]string{"status": cliStatus, "wait_id": out.WaitID}, nil
+				single := map[string]any{"status": cliStatus, "wait_id": out.WaitID}
+				if out.AlreadyPending {
+					single["already_pending"] = true
+				}
+				return single, nil
 			})
 		},
 	}

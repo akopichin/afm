@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"net"
@@ -103,6 +104,8 @@ type Server struct {
 	graphActions      GraphActions                 // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
 	agentMesh         AgentMeshActions             // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
 	mesh              MeshActions                  // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
+	ownerWaits        OwnerWaitActions             // owner wait recovery; nil, or without ownerTokenDigest = its two routes 404
+	ownerTokenDigest  *[sha256.Size]byte           // SHA-256 of the run owner's bearer token; the token itself is not kept
 	redact            func(string) string          // removes the run's secret values from logged text; nil = environment secrets only
 	theme             string                       // "goga" или "" (default graphite)
 	version           string                       // версия afm-бинарника, отдаётся в /api/status для футера дашборда
@@ -216,6 +219,10 @@ type Config struct {
 	AgentMesh AgentMeshActions
 	// Mesh — Agent Mesh Phase 7 (T7.1) UI-facing adapter; nil = capability off (/api/mesh/* 404).
 	Mesh MeshActions
+	// OwnerWaits and OwnerToken enable the owner's wait recovery routes under /api/mesh/stages/{id}; both are
+	// required, and without the token the routes 404 rather than open to same-origin trust.
+	OwnerWaits OwnerWaitActions
+	OwnerToken string
 	// RedactSecrets removes the run's secret values (environment, secrets.env, live mesh tokens) from text
 	// the server logs; nil redacts only afm's environment secrets.
 	RedactSecrets func(string) string
@@ -272,6 +279,7 @@ func New(cfg Config) *Server {
 		graphActions:      cfg.GraphActions,
 		agentMesh:         cfg.AgentMesh,
 		mesh:              cfg.Mesh,
+		ownerWaits:        cfg.OwnerWaits,
 		redact:            cfg.RedactSecrets,
 		theme:             cfg.Theme,
 		version:           cfg.Version,
@@ -280,6 +288,11 @@ func New(cfg Config) *Server {
 		wsWriteWait:       writeWait,
 		fileServer:        http.FileServer(http.FS(web.FS)),
 		done:              make(chan struct{}),
+	}
+
+	if cfg.OwnerToken != "" {
+		digest := sha256.Sum256([]byte(cfg.OwnerToken))
+		s.ownerTokenDigest = &digest
 	}
 
 	skinName := s.builtinSkinName()

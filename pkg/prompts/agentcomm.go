@@ -133,8 +133,10 @@ const humanAlwaysAnsweredRule = "Answer every message from the human (sender `us
 const plainTextMessagesRule = "Message bodies you send with `afm agent send`/`afm agent reply` are plain, human-readable text. Never put your JSON result object (`schema_version`, `kind`, `verdict`, ...) into a message: that object is ONLY your final turn output, never a message body.\n"
 
 // turnResultReplyRule — a run agent's turn result is posted for it as a reply to the message that woke the
-// turn (pkg/orchestrator/agentcomm_turn_reply.go); that reply wakes nobody.
-const turnResultReplyRule = "Your result's `summary` is sent for you as a reply to the message that woke you (marked as a turn result; it does not wake its recipient), unless you already answered that message yourself. To keep a conversation going — ask a follow-up, write to someone else — write explicitly with `afm agent send`/`afm agent reply`.\n"
+// turn (pkg/orchestrator/agentcomm_turn_reply.go); that reply wakes nobody. Any other request of the turn — one
+// read in the middle of it, or a sibling of the waking message — gets no such reply, so the agent must answer it
+// itself.
+const turnResultReplyRule = "Your result's `summary` is sent for you as a reply to the message that woke you (marked as a turn result; it does not wake its recipient), unless you already answered that message yourself. To keep a conversation going — ask a follow-up, write to someone else — write explicitly with `afm agent send`/`afm agent reply`. Your result answers only the message that woke you: reply with `afm agent reply` to every other request you received this turn — in your <inbox> block or from `afm agent inbox` (a short \"done, see my result\" is enough); otherwise whoever waits for it is told you did not reply.\n"
 
 // AgentCommInboxMessage describes one message already addressed to a participant that belongs in its NEXT
 // turn's prompt package (T4.4). Injecting them here — rather than relying on the participant to call

@@ -14,7 +14,7 @@ func TestTurnYielded_ReadyWaitNeedsAnAbsentFinalText(t *testing.T) {
 	o, _ := setupHookOrch(t, "s1")
 	ctx := context.Background()
 	waiter := meshStageParticipantID("s1")
-	before := o.meshWaitIDsOf(waiter)
+	before := o.meshWaitStatusesOf(waiter)
 	th, err := o.OpenThread(ctx, OpenThreadRequest{OperationID: "op-th", Members: []agentcomm.ParticipantID{waiter, meshUserParticipantID}, Scope: agentcomm.ScopeStage})
 	if err != nil {
 		t.Fatal(err)
@@ -34,5 +34,10 @@ func TestTurnYielded_ReadyWaitNeedsAnAbsentFinalText(t *testing.T) {
 	}
 	if o.turnYielded(waiter, before, "{not json") {
 		t.Fatal("a non-empty malformed answer is a protocol error, not a yield")
+	}
+
+	// An empty exit after waits that all ended before the turn is a protocol error, not a rerun.
+	if o.turnYielded(waiter, o.meshWaitStatusesOf(waiter), "") {
+		t.Fatal("no final text after the waits already ended is not a yield")
 	}
 }

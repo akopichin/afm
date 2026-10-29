@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strconv"
 
@@ -444,6 +445,8 @@ func (o *Orchestrator) resumeTaskViaCAS(ctx context.Context, taskID assistants.T
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStageID, Data: map[string]any{
 			"task_id": string(taskID), "status": string(assistants.StatusQueued),
 		}})
+		// Idle again: what the waiting turn read and left is unanswerable, even if a hold keeps the next turn off.
+		o.releaseUnanswerableWaitsAfterFinish()
 		o.maybeScheduleTask(ctx, taskID)
 	})
 	o.handleTaskOperationErr(err)
@@ -486,34 +489,42 @@ func (o *Orchestrator) tryResumeParent(ctx context.Context, parentID assistants.
 // comment). Call sites that already hold a task (paused) are left untouched: holds survive the journal
 // unconditionally and ContinueTask remains the only way to clear one.
 func (o *Orchestrator) recoverAssistants(ctx context.Context) {
+	o.settleAssistantsAfterRestart()
+	o.resumeAssistantsAfterRestart(ctx)
+}
+
+// settleAssistantsAfterRestart is recoverAssistants' first half: it rebuilds the watcher bindings and puts the
+// turns a crash cut short back in the queue, and starts nothing: Run decides the waits for requests an idle agent
+// left between the halves, before a new turn makes it busy.
+func (o *Orchestrator) settleAssistantsAfterRestart() {
 	if !o.opts.AssistantsEnabled {
 		return
 	}
 	rs := o.opts.Store.Snapshot()
-	ids := make([]string, 0, len(rs.Assistants.Tasks))
-	for id := range rs.Assistants.Tasks {
-		ids = append(ids, string(id))
-	}
-	slices.Sort(ids) // deterministic order for reproducible tests; not a correctness requirement
-
-	for _, idStr := range ids {
-		id := assistants.TaskID(idStr)
-		t, ok := rs.Assistants.Tasks[id]
-		if !ok {
-			continue
-		}
+	for _, id := range slices.Sorted(maps.Keys(rs.Assistants.Tasks)) {
+		t := rs.Assistants.Tasks[id]
 		// Этап 5: rebuild the in-memory Collector/CheckpointStore binding for any non-terminal watcher task —
 		// the binding itself is never durable (see watcherBinding's doc comment, watch_tasks.go), so a fresh
 		// process must recreate it before the poller can ever fire this task again. A watcher in "watching"
-		// falls through the switch below unchanged (status recovery, not binding, is this switch's job) —
-		// binding it here is what lets a RESUMED watcher resume watching, instead of being stuck forever.
+		// needs nothing else: binding it is what lets a RESUMED watcher resume watching, instead of being stuck.
 		if !t.Status.Terminal() && isWatcherTrigger(t.Trigger) {
 			o.bindWatcher(id, t.Task)
 		}
-		switch t.Status {
-		case assistants.StatusRunning:
+		if t.Status == assistants.StatusRunning {
 			o.finishTaskFrom(id, assistants.StatusRunning, assistants.StatusQueued, "resumed after restart")
-			o.maybeScheduleTask(ctx, id)
+		}
+	}
+}
+
+// resumeAssistantsAfterRestart is recoverAssistants' second half: it starts what the restart left ready.
+func (o *Orchestrator) resumeAssistantsAfterRestart(ctx context.Context) {
+	if !o.opts.AssistantsEnabled {
+		return
+	}
+	rs := o.opts.Store.Snapshot()
+	for _, id := range slices.Sorted(maps.Keys(rs.Assistants.Tasks)) {
+		t := rs.Assistants.Tasks[id]
+		switch t.Status {
 		case assistants.StatusQueued:
 			o.maybeScheduleTask(ctx, id)
 		case assistants.StatusWaitingChildren:

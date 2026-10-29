@@ -148,7 +148,7 @@ func (a agentMeshActions) WaitStatus(_ context.Context, actor, id string) ([]ser
 
 // toMeshWaitReceipt is the HTTP form of a wait receipt: a single wait has no batch id and no items.
 func toMeshWaitReceipt(r orchestrator.WaitReceipt) server.MeshWaitReceipt {
-	out := server.MeshWaitReceipt{WaitID: string(r.WaitID), Status: string(r.Status), BatchID: r.BatchID}
+	out := server.MeshWaitReceipt{WaitID: string(r.WaitID), Status: string(r.Status), BatchID: r.BatchID, AlreadyPending: r.AlreadyPending}
 	for _, item := range r.Items {
 		out.Items = append(out.Items, server.MeshWaitItem{
 			MessageID: string(item.MessageID), WaitID: string(item.WaitID), Status: string(item.Status), Reason: item.Reason,

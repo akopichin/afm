@@ -425,18 +425,31 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	if err != nil {
 		return
 	}
+	// The start makes the agent busy, which hides the requests it left unanswered (leftUnanswered): the same
+	// commit ends the waits on them, so no turn ever starts with one still pending.
+	agent := meshParticipantForTask(rs, t.Task)
+	left, reasons := leftWaits(rs, agent)
+	if o.settlePlannedHook != nil {
+		o.settlePlannedHook()
+	}
 	op := state.Operation{
-		ID:      "task-start:" + string(taskID) + ":" + randomOpSuffix(),
-		Kind:    "start_task",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusQueued}},
-		Effects: []state.Effect{eff},
+		ID:   "task-start:" + string(taskID) + ":" + randomOpSuffix(),
+		Kind: "start_task",
+		Expect: state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusQueued}, Check: func(cur *state.RunState) error {
+			if now, _ := leftWaits(*cur, agent); !slices.Equal(now, left) {
+				return errLeftWaitsChanged
+			}
+			return nil
+		}},
+		Effects: append(cancelWaitEffects(left, reasons), eff),
 	}
 	task := t.Task
 	var parked *state.QuotaWait // the usage-limit wait this start ends, if any
 	if q := t.Quota; q != nil && (q.ManualProbe || !q.Until.IsZero()) {
 		parked = q
 	}
-	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
+	if _, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		o.wakeAfterSettledStart(res.EndedWaits, reasons)
 		o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: task.RootStageID, Data: map[string]any{
 			"task_id": string(taskID), "status": string(assistants.StatusRunning),
 		}})
@@ -444,7 +457,10 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 			o.publishQuotaNotice(eventQuotaReset, task.RootStageID, taskID, quotaNoticeData(parked, quotaResetMessage(parked)))
 		}
 		o.spawnTask(ctx, taskID, task)
-	}); err != nil {
+	}); errors.Is(err, errLeftWaitsChanged) {
+		o.maybeScheduleTask(ctx, taskID) // planned on a state that changed meanwhile: decide again
+		return
+	} else if err != nil {
 		// Lost the CAS race (already running/cancelled/held by the time we tried), or the task simply isn't
 		// queued anymore — not an error in the benign case: whoever actually won already spawned it, or it's
 		// no longer eligible. handleTaskOperationErr still classifies it — a genuine *state.StorageError here
@@ -588,13 +604,14 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 			if to.Terminal() && hasParent {
 				o.tryResumeParent(o.runContext(context.Background()), parentID)
 			}
+			// A finished task answers nobody any more, and one gone idle has read what it was handed: the waits only
+			// it could answer end now.
+			o.releaseUnanswerableWaitsAfterFinish()
 			// Этап 7 (T7.2): ANY task reaching a terminal status could be exactly what just closed its root stage's
 			// required-completion barrier (directly, or transitively once tryResumeParent above settles an
 			// ancestor) — re-attempt completion unconditionally; maybeCompleteAfterAssistants itself is a cheap
 			// no-op for a stage that isn't currently awaiting_assistants.
 			if to.Terminal() {
-				// A finished task answers nobody any more: waits only it could answer end now.
-				o.releaseUnanswerableWaitsAfterFinish()
 				o.maybeCompleteAfterAssistants(o.runContext(context.Background()), rootStage)
 				// Agent Mesh T6.3: this terminal transition may be exactly what the run-level completion barrier
 				// (state.AssistantsState.RunBlocker, consulted by shouldExit) was waiting on — in particular for a

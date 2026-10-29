@@ -56,3 +56,27 @@ func TestMesh_ResolveUnknownTokenFails(t *testing.T) {
 		t.Fatal("an empty token must never resolve")
 	}
 }
+
+// A token lives as long as its invocation: the ended invocations of a long run leave nothing behind.
+func TestMesh_EndedInvocationsLeaveNoTokens(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	o.opts.DashboardURL = "http://127.0.0.1:9876"
+	client := o.meshClientFor(meshStageParticipantID(assistantsTestStageID))
+	for range 1000 {
+		_, _, revoke := client.Mint()
+		revoke()
+	}
+	_, live, revokeLive := client.Mint()
+	defer revokeLive()
+
+	tokens := o.meshTokens()
+	tokens.mu.Lock()
+	n := len(tokens.tokens)
+	tokens.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("tokens kept = %d, want 1: only the live invocation's", n)
+	}
+	if _, ok := o.ResolveMeshToken(live); !ok {
+		t.Fatal("the live invocation's token must still resolve")
+	}
+}

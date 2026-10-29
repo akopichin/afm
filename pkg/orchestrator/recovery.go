@@ -120,6 +120,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			continue
 		}
 
+		// A Revise's bump belongs to the Revise, not to the status the stage has now (a Pause may have followed it).
+		if err := o.finishReviseInvalidation(s.ID); err != nil {
+			log.Printf("WARN: recover stage %q: invalidate the attempt its Revise replaced: %v", s.ID, err)
+		}
+
 		o.continueMu.Lock()
 		current := o.opts.Store.Get(s.ID)
 		_, continuedHere := o.continuedThisProcess.Load(s.ID)
@@ -155,6 +160,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		case state.StatusHookFailed:
 			o.spawnAgentLeased(ctx, s, o.resumeHookFailedWait)
 		case state.StatusRetrying:
+			// A turn that yielded before its retry was scheduled continues on its waits, as with the exit of a live turn.
+			if !s.IsScript() && o.parkInterruptedTurn(ctx, s, state.StatusRetrying) {
+				continue
+			}
 			if !s.NeedsPlanning() {
 				// Restart the execution path through ready, including its before-hook.
 				// A completion marker alone cannot bypass a configured verify gate OR the required-assistants
@@ -230,11 +239,10 @@ func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
 // executionPhases maps an execution kind to the phase its turn runs (the phase a park resumes into).
 var executionPhases = map[string]string{kindAutonomous: phaseAutonomous, kindImplementation: phaseImplementation, kindReview: phaseReview}
 
-// parkInterruptedTurn parks a running stage whose turn ended for waits but whose process stopped before its exit
-// parked it — Ctrl+C right after `afm agent wait` answered "yield", or a Pause that interrupted it then. Rerunning
-// the author would ask again; a completion marker it left must not finish the stage past the wait. The park is
-// what the exit would have committed (interruptedTurnEpisode), and its continuation is decided at once.
-func (o *Orchestrator) parkInterruptedTurn(ctx context.Context, s flow.Stage) bool {
+// parkInterruptedTurn parks a running or retrying stage whose turn yielded on waits but whose process stopped before
+// its exit parked it (Ctrl+C, a Pause). Rerunning the author would ask again, and a completion marker it left must
+// not finish the stage past the wait: the park is what the exit would have committed, continued at once if due.
+func (o *Orchestrator) parkInterruptedTurn(ctx context.Context, s flow.Stage, from state.StageStatus) bool {
 	rs := o.opts.Store.Snapshot()
 	episode := interruptedTurnEpisode(rs, s.ID)
 	if len(episode) == 0 {
@@ -247,7 +255,7 @@ func (o *Orchestrator) parkInterruptedTurn(ctx context.Context, s flow.Stage) bo
 	epoch := rs.Stages[s.ID].Epoch
 	o.prePeerPhase.Store(s.ID, phase)
 	saveMeshPeerWaitPhase(o.stageDir(s.ID), phase)
-	guard := bus.GuardCtx{Phase: phase, ExpectFrom: state.StatusRunning, ExpectEpoch: &epoch, PeerWaits: episode}
+	guard := bus.GuardCtx{Phase: phase, ExpectFrom: from, ExpectEpoch: &epoch, PeerWaits: episode}
 	if _, ok := o.Trigger(s.ID, bus.EvAwaitPeer, guard, "recovered: the turn had yielded on waits"); !ok {
 		o.prePeerPhase.CompareAndDelete(s.ID, phase)
 		return true // the stage moved on meanwhile; whoever moved it owns it
@@ -263,7 +271,7 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	case state.StatusPlanning:
 		o.resumePlanningStage(ctx, s)
 	case state.StatusRunning, state.StatusRetrying:
-		if status == state.StatusRunning && o.parkInterruptedTurn(ctx, s) {
+		if !s.IsScript() && o.parkInterruptedTurn(ctx, s, status) {
 			return
 		}
 		o.resumeExecutionStage(ctx, s, status)
@@ -274,6 +282,10 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 		// Continue of a quota pause records the manual-probe intent: the shared wake path starts the probe.
 		o.resumeQuotaWait(ctx, s)
 	case state.StatusRevising:
+		if err := o.finishReviseInvalidation(s.ID); err != nil {
+			log.Printf("WARN: recover revising stage %q: invalidate its previous attempt: %v", s.ID, err)
+			return
+		}
 		kind := o.revisingKind(s)
 		o.spawnKind(ctx, s, kind, o.withFeedbackRunner(kind))
 	case state.StatusAwaitingAssistants:
@@ -286,10 +298,48 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	}
 }
 
+// finishReviseInvalidation finishes the bump of a Revise from awaiting_assistants that a crash cut off after its
+// transition: without it the previous attempt's helpers and waits stay eligible. Keyed by the Revise's seq, so a
+// bump that already committed is not repeated; other Revise origins invalidate nothing.
+func (o *Orchestrator) finishReviseInvalidation(stageID string) error {
+	seq, ok, err := o.latestReviseFromAwaitingAssistants(stageID)
+	if err != nil || !ok {
+		return err
+	}
+	opID := reviseBumpOpID(stageID, seq)
+	_, committed, err := o.opts.Store.CommittedOperation(opID, opKindBumpRootGeneration)
+	if err != nil {
+		return err
+	}
+	if committed {
+		o.cancelSupersededTasks(stageID) // the crash may also have come before the tasks were cancelled
+		return nil
+	}
+	return o.bumpRootGenerationKeyed(stageID, opID)
+}
+
+// latestReviseFromAwaitingAssistants returns the seq of stageID's latest Revise when it was made from
+// awaiting_assistants.
+func (o *Orchestrator) latestReviseFromAwaitingAssistants(stageID string) (seq uint64, ok bool, err error) {
+	history, err := o.opts.Store.History()
+	if err != nil {
+		return 0, false, err
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if t := history[i]; t.StageID == stageID && t.Event == string(bus.EvRevise) {
+			return t.Seq, t.From == state.StatusAwaitingAssistants, nil
+		}
+	}
+	return 0, false, nil
+}
+
 // completeRecoveredStage completes a stage whose completion marker survived a restart — its agent finished the
-// turn before the process stopped. A colleague's unread message still earns it the extra turn onAgentCompleted
-// would have given (agentcomm_unread.go).
+// turn before the process stopped. A wait it left open parks it first, as the exit of the live turn would; a
+// colleague's unread message still earns it the extra turn onAgentCompleted would have given (agentcomm_unread.go).
 func (o *Orchestrator) completeRecoveredStage(ctx context.Context, s flow.Stage, from state.StageStatus, reason string) {
+	if !s.IsScript() && o.parkInterruptedTurn(ctx, s, from) {
+		return
+	}
 	phase := phaseImplementation
 	if o.executionKind(s) == kindAutonomous {
 		phase = phaseAutonomous
@@ -375,15 +425,21 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 
 	switch phase {
 	case phasePlanning:
-		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "resume interactive")
-		o.runPlanningAgent(ctx, s)
+		epoch, ok := o.grantTurn(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "resume interactive")
+		if !ok {
+			return // the answer resumed it first
+		}
+		o.runPlanningAgent(withTurnEpoch(ctx, epoch), s)
 	case phaseReview:
 		// Review runs after implementation completes; if we see review session open, the stage was paused inside
 		// review. Fall through to implementation agent which will re-trigger review at the end.
 		fallthrough
 	default:
-		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "resume interactive")
-		o.runImplementationAgent(ctx, s)
+		epoch, ok := o.grantTurn(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "resume interactive")
+		if !ok {
+			return // the answer resumed it first
+		}
+		o.runImplementationAgent(withTurnEpoch(ctx, epoch), s)
 	}
 }
 

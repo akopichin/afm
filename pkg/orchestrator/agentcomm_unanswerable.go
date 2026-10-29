@@ -5,20 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// A wait for an answer must end once nobody left can send it. Admission already refuses such a wait
-// (validateWaitAdmission); this is the same rule for a wait registered while its answerer could still reply,
-// whose answerer then finished — a helper or run agent that failed or was cancelled, a stage that finished after
-// reading the message without answering. Every pending reply_to or addressed_message wait whose possible
-// answerers have all finished is cancelled, and its waiter resumed as "wait ended" (a parked stage continues
-// through peerContinuation). The unread release (agentcomm_unread.go) covers messages a finished stage never
-// read; this covers everyone else.
+// A wait for an answer must end once nobody left can send it: its answerers all finished, gave the message up
+// unread, or went idle after reading it without replying (leftUnanswered). Admission refuses such a wait too.
 
 // errWaitStillAnswerable rejects a cancellation decided on a snapshot in which nobody could answer, when the
 // commit's state says otherwise (the wait was answered or resolved meanwhile).
@@ -35,42 +32,129 @@ func (o *Orchestrator) releaseUnanswerableWaitsAfterFinish() {
 		return
 	}
 	o.concurrency.SpawnDetached(o.runContext(context.Background()), func(ctx context.Context) {
+		if o.sweepGate != nil {
+			o.sweepGate()
+		}
 		o.releaseUnanswerableWaits(ctx, o.resumeWaiterAfterTerminalWait)
 	})
 }
 
-// releaseUnanswerableWaits cancels every pending wait nobody left can answer and wakes its waiter through wake —
-// only when this call's own commit ended the wait (resolveMeshWaitChecked), so a concurrent CancelWait or reply
-// that won is never announced or woken twice.
+// releaseUnanswerableWaits cancels, in one commit, every pending wait nobody left can answer and wakes each
+// waiter once through wake — only for the waits that commit ended, so a reply or another resolution that won
+// is never announced or woken twice.
 func (o *Orchestrator) releaseUnanswerableWaits(ctx context.Context, wake func(context.Context, agentcomm.ParticipantID)) {
 	if o.opts.Store == nil {
 		return
 	}
 	rs := o.opts.Store.Snapshot()
+	var ids []agentcomm.WaitID
+	reasons := map[agentcomm.WaitID]string{}
 	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
-		reason, ok := unanswerableWait(rs, id)
-		if !ok {
-			continue
+		if reason, ok := unanswerableWait(rs, id); ok {
+			ids = append(ids, id)
+			reasons[id] = reason
 		}
-		stillUnanswerable := func(cur *state.RunState) error {
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if o.settlePlannedHook != nil {
+		o.settlePlannedHook()
+	}
+	stillUnanswerable := func(cur *state.RunState) error {
+		for _, id := range ids {
 			if _, ok := unanswerableWait(*cur, id); !ok {
 				return errWaitStillAnswerable
 			}
-			return nil
 		}
-		waiter, changed, err := o.resolveMeshWaitChecked("mesh-unanswerable:"+string(id)+":"+randomOpSuffix(), id,
-			state.Actor{Kind: "system"}, agentcomm.WaitCancelled, reason, stillUnanswerable)
-		if err != nil {
-			if !errors.Is(err, errWaitStillAnswerable) {
-				log.Printf("WARN: mesh: release unanswerable wait %s: %v", id, err)
-			}
-			o.handleTaskOperationErr(err)
+		return nil
+	}
+	op := state.Operation{ID: "mesh-unanswerable:" + randomOpSuffix(), Kind: "mesh_resolve_wait", Actor: state.Actor{Kind: "system"},
+		Effects: cancelWaitEffects(ids, reasons), Expect: state.Preconditions{Check: stillUnanswerable}}
+	res, err := o.opts.Store.ApplyRunOperation(op, nil)
+	if errors.Is(err, errWaitStillAnswerable) {
+		o.releaseUnanswerableWaits(ctx, wake) // decided on a state that changed meanwhile: decide again
+		return
+	}
+	if err != nil {
+		log.Printf("WARN: mesh: release unanswerable waits: %v", err)
+		o.handleTaskOperationErr(err)
+		return
+	}
+	// Woken only after every wait is ended: a waiter resumed by the first of its waits could otherwise find
+	// another still pending, park again and be woken a second time.
+	for _, waiter := range o.announceEndedWaits(res.EndedWaits, reasons) {
+		wake(ctx, waiter)
+	}
+}
+
+// leftWaits are the pending waits nobody left can answer because task agent p, idle now, left their request
+// (leftUnanswered), with why, in id order: the waits p's next turn would hide by making it busy.
+func leftWaits(rs state.RunState, p agentcomm.ParticipantID) ([]agentcomm.WaitID, map[agentcomm.WaitID]string) {
+	var ids []agentcomm.WaitID
+	reasons := map[agentcomm.WaitID]string{}
+	for _, id := range sortedWaitIDs(rs.Assistants.Mesh.Waits) {
+		w := rs.Assistants.Mesh.Waits[id]
+		if w.Status != agentcomm.WaitPending || w.Condition.Kind != agentcomm.WaitOnReplyTo || !leftUnanswered(rs, w.Condition.MessageID, p) {
 			continue
 		}
-		if changed {
-			wake(ctx, waiter)
+		if reason, ok := unanswerableWait(rs, id); ok {
+			ids = append(ids, id)
+			reasons[id] = reason
 		}
 	}
+	return ids, reasons
+}
+
+// errLeftWaitsChanged rejects a turn start planned on a snapshot whose left waits (leftWaits) are not the
+// commit's any more.
+var errLeftWaitsChanged = errors.New("mesh: the waits a turn start settles changed")
+
+// cancelWaitEffects cancels each of ids with its reason.
+func cancelWaitEffects(ids []agentcomm.WaitID, reasons map[agentcomm.WaitID]string) []state.Effect {
+	effects := make([]state.Effect, 0, len(ids))
+	for _, id := range ids {
+		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)},
+			state.MeshWaitResolvedPayload{Status: string(agentcomm.WaitCancelled), Reason: reasons[id]})
+		if err != nil {
+			log.Printf("WARN: mesh: cancel the wait %s: %v", id, err)
+			continue
+		}
+		effects = append(effects, eff)
+	}
+	return effects
+}
+
+// announceEndedWaits announces each wait a commit ended (cancelled, with its reason) and returns their waiters,
+// each once.
+func (o *Orchestrator) announceEndedWaits(ended []agentcomm.WaitID, reasons map[agentcomm.WaitID]string) []agentcomm.ParticipantID {
+	rs := o.opts.Store.Snapshot()
+	var waiters []agentcomm.ParticipantID
+	for _, id := range ended {
+		w := rs.Assistants.Mesh.Waits[id]
+		if w == nil {
+			continue
+		}
+		o.announceEndedWait(id, w.Status, reasons[id])
+		if !slices.Contains(waiters, w.Waiter) {
+			waiters = append(waiters, w.Waiter)
+		}
+	}
+	return waiters
+}
+
+// wakeAfterSettledStart wakes, off the caller's goroutine, the waiters of the waits a turn start settled: the
+// start may run on the event loop, which a stage resume publishes to.
+func (o *Orchestrator) wakeAfterSettledStart(ended []agentcomm.WaitID, reasons map[agentcomm.WaitID]string) {
+	waiters := o.announceEndedWaits(ended, reasons)
+	if len(waiters) == 0 {
+		return
+	}
+	o.concurrency.SpawnDetached(o.runContext(context.Background()), func(ctx context.Context) {
+		for _, waiter := range waiters {
+			o.resumeWaiterAfterTerminalWait(ctx, waiter)
+		}
+	})
 }
 
 // anyUnanswerableWait reports whether some pending wait of rs is unanswerable.
@@ -83,8 +167,8 @@ func anyUnanswerableWait(rs state.RunState) bool {
 	return false
 }
 
-// unanswerableWait reports whether waitID is a pending wait for an answer that nobody left can send — every
-// participant who could send it (other than the waiter) has finished — and says why. Other kinds of waits end
+// unanswerableWait reports whether waitID is a pending wait for an answer that nobody left can send — none of the
+// participants who could send it (other than the waiter) can still answer it (canStillAnswer) — and says why. Other kinds of waits end
 // on their own: a task_result wait when its task finishes, a stage_status wait with its stage.
 func unanswerableWait(rs state.RunState, waitID agentcomm.WaitID) (string, bool) {
 	w := rs.Assistants.Mesh.Waits[waitID]
@@ -94,32 +178,82 @@ func unanswerableWait(rs state.RunState, waitID agentcomm.WaitID) (string, bool)
 	if w.Condition.Kind != agentcomm.WaitOnReplyTo && w.Condition.Kind != agentcomm.WaitOnAddressedMessage {
 		return "", false
 	}
-	var gone []string
-	for _, p := range meshWaitTargets(rs, w.Condition) {
-		if p == w.Waiter {
-			continue
-		}
-		if canStillAnswer(rs, w.Condition, p) {
-			return "", false
-		}
-		gone = append(gone, whyCannotAnswer(rs, p))
-	}
-	if len(gone) == 0 {
-		return "", false
-	}
-	// The reasons come from recorded (already sanitised) task status reasons; the joined text is bounded too.
-	return prompts.TruncateUTF8("nobody left can answer: "+strings.Join(gone, "; "), maxTaskReasonBytes, "…"), true
+	targets := slices.DeleteFunc(slices.Clone(meshWaitTargets(rs, w.Condition)), func(p agentcomm.ParticipantID) bool { return p == w.Waiter })
+	return nobodyLeft(rs, w.Condition, targets)
 }
 
-// whyCannotAnswer names p and why it can no longer answer.
-func whyCannotAnswer(rs state.RunState, p agentcomm.ParticipantID) string {
+// nobodyLeft reports whether none of targets can still answer cond, and says why. The reasons come from recorded
+// (already sanitised) task status reasons; the joined text is bounded too.
+func nobodyLeft(rs state.RunState, cond agentcomm.WaitCondition, targets []agentcomm.ParticipantID) (string, bool) {
+	if len(targets) == 0 || slices.ContainsFunc(targets, func(p agentcomm.ParticipantID) bool { return canStillAnswer(rs, cond, p) }) {
+		return "", false
+	}
+	why := make([]string, len(targets))
+	for i, p := range targets {
+		why[i] = whyCannotAnswer(rs, cond, p)
+	}
+	return prompts.TruncateUTF8("nobody left can answer: "+strings.Join(why, "; "), maxTaskReasonBytes, "…"), true
+}
+
+// whyCannotAnswer names p and why it can no longer answer cond.
+func whyCannotAnswer(rs state.RunState, cond agentcomm.WaitCondition, p agentcomm.ParticipantID) string {
 	participant, _ := resolveParticipant(rs, p)
 	name := participant.DisplayName
 	if name == "" {
 		name = string(p)
 	}
-	if participant.UnreachableReason == "" {
+	switch {
+	case cond.Kind == agentcomm.WaitOnReplyTo && leftUnanswered(rs, cond.MessageID, p):
+		why := name + " " + leftUnansweredReason
+		if request := rs.Assistants.Mesh.Messages[cond.MessageID]; request != nil {
+			if id := latestTurnResult(rs, p, request.Sender); id != "" {
+				why += " (its latest turn result: " + string(id) + ")"
+			}
+		}
+		return why
+	case participant.UnreachableReason == "":
 		return fmt.Sprintf("%s gave the message up unread", name)
+	default:
+		return fmt.Sprintf("%s — %s", name, participant.UnreachableReason)
 	}
-	return fmt.Sprintf("%s — %s", name, participant.UnreachableReason)
+}
+
+// leftUnansweredReason is why a task agent that read a request no longer answers it.
+const leftUnansweredReason = "read the message and its turn ended without a reply"
+
+// leftUnanswered reports whether task agent p read request id and is idle without having answered it: every
+// turn is a new session and its result answers only the waking message. A request still in the turn input, or
+// owed by an earlier turn that yielded, is not left; nor is any in a journal from before turns were recorded.
+func leftUnanswered(rs state.RunState, id agentcomm.MessageID, p agentcomm.ParticipantID) bool {
+	if r := rs.Assistants.Mesh.Receipts[id][p]; r != agentcomm.DeliveryDelivered && r != agentcomm.DeliveryAcknowledged {
+		return false
+	}
+	taskID, ok := participantTask(rs, p)
+	if !ok {
+		return false
+	}
+	t := rs.Assistants.Tasks[taskID]
+	if t == nil || t.Turn == 0 {
+		return false
+	}
+	switch t.Status {
+	case assistants.StatusRunning, assistants.StatusWaitingPeer, assistants.StatusWaitingChildren:
+		return false
+	}
+	return !t.Status.Terminal() && !slices.Contains(t.TurnInbox, id) && !slices.Contains(t.OpenRequests, id) &&
+		!rs.Assistants.Mesh.MessageAnsweredByRecipient(id)
+}
+
+// latestTurnResult is the newest turn result p posted to requester, "" if none: the only one requester can open.
+func latestTurnResult(rs state.RunState, p, requester agentcomm.ParticipantID) agentcomm.MessageID {
+	var latest *agentcomm.Message
+	for _, m := range rs.Assistants.Mesh.Messages {
+		if m.Sender == p && m.AutoResult && slices.Contains(m.Recipients, requester) && (latest == nil || m.Seq > latest.Seq) {
+			latest = m
+		}
+	}
+	if latest == nil {
+		return ""
+	}
+	return latest.ID
 }

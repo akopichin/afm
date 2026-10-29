@@ -312,14 +312,14 @@ func TestMesh_WaitCycleCheckRejectsChainLongerThanItsHops(t *testing.T) {
 	}
 	newWait := WaitRequest{Waiter: meshStageParticipantID("s0"), Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: "s1", Status: "done"}}
 
-	err := validateWaitAdmission(meshWaitCycleState(n, waits...), newWait)
+	err := validateWaitAdmission(meshWaitCycleState(n, waits...), newWait, nil)
 	var rej *state.OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != agentcomm.CodeWaitCycle {
 		t.Fatalf("a %d-hop cycle: err = %v, want wait_cycle", n-1, err)
 	}
 
 	short := waits[:4] // s1 -> ... -> s5, and s5 waits on nobody
-	if err := validateWaitAdmission(meshWaitCycleState(n, short...), newWait); err != nil {
+	if err := validateWaitAdmission(meshWaitCycleState(n, short...), newWait, nil); err != nil {
 		t.Fatalf("a chain that ends at a free participant is no cycle: %v", err)
 	}
 }
@@ -337,10 +337,10 @@ func TestMesh_WaitCycleCheckAnyGroupMemberMayAnswer(t *testing.T) {
 		return rs
 	}
 
-	if err := validateWaitAdmission(withGroup(stageStatusWait("s1", "s0")), groupWait); err != nil {
+	if err := validateWaitAdmission(withGroup(stageStatusWait("s1", "s0")), groupWait, nil); err != nil {
 		t.Fatalf("b waits on a, but c is free to answer: %v", err)
 	}
-	err := validateWaitAdmission(withGroup(stageStatusWait("s1", "s0"), stageStatusWait("s2", "s0")), groupWait)
+	err := validateWaitAdmission(withGroup(stageStatusWait("s1", "s0"), stageStatusWait("s2", "s0")), groupWait, nil)
 	var rej *state.OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != agentcomm.CodeWaitCycle {
 		t.Fatalf("every other member waits on a: err = %v, want wait_cycle", err)
@@ -412,7 +412,7 @@ func TestMesh_WaitCycleTaskRequiresAllPendingWaits(t *testing.T) {
 			}
 			rs := meshAllWaitsState(recipients, []assistants.TaskID{"c"}, tc.waitsOfA(tc.a)...)
 
-			err := validateWaitAdmission(rs, WaitRequest{Waiter: b, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m-ba"}})
+			err := validateWaitAdmission(rs, WaitRequest{Waiter: b, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: "m-ba"}}, nil)
 
 			var rej *state.OperationRejectedError
 			isCycle := errors.As(err, &rej) && rej.Code == agentcomm.CodeWaitCycle
@@ -461,7 +461,7 @@ func TestMesh_WaitAdmissionRejectsTerminallyImpossibleWaits(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateWaitAdmission(rs, WaitRequest{Waiter: tc.waiter, Condition: tc.cond, Deadline: tc.deadline})
+			err := validateWaitAdmission(rs, WaitRequest{Waiter: tc.waiter, Condition: tc.cond, Deadline: tc.deadline}, nil)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("admission: %v, want admitted", err)

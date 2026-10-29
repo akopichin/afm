@@ -52,14 +52,7 @@ func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOpti
 // resumeAfterAnswer drives a stage out of awaiting_user_input once answer.json is already on disk. If the
 // goroutine has exited, we publish to the critical bus so onUserAnswered restarts it.
 func (o *Orchestrator) resumeAfterAnswer(stageID, phase, qID, answer string, publishUI bool) error {
-	if o.concurrency.IsActive(stageID) {
-		guardPhase := o.popPreAskPhase(stageID, phase)
-		_, seq, _ := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase}, "")
-		if publishUI {
-			o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
-				keyID: qID, keyPhase: phase, keyAnswer: answer,
-			}, Seq: seq})
-		}
+	if o.answerToLiveAgent(stageID, phase, qID, answer, publishUI) {
 		return nil
 	}
 	return o.critical.Publish(context.Background(), bus.Event{
@@ -67,6 +60,25 @@ func (o *Orchestrator) resumeAfterAnswer(stageID, phase, qID, answer string, pub
 		StageID: stageID,
 		Data:    map[string]any{keyID: qID, keyPhase: phase, keyAnswer: answer},
 	})
+}
+
+// answerToLiveAgent resumes a stage whose agent will read the answer itself (liveAgents). A turn that has not started
+// its agent or has already decided its exit reads nothing: the answer must start the continuation. Decided under
+// answerMu, the lock of every dialog decision of a turn.
+func (o *Orchestrator) answerToLiveAgent(stageID, phase, qID, answer string, publishUI bool) bool {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	if _, live := o.liveAgents.Load(stageID); !live {
+		return false
+	}
+	guardPhase := o.popPreAskPhase(stageID, phase)
+	_, seq, _ := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase}, "")
+	if publishUI {
+		o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
+			keyID: qID, keyPhase: phase, keyAnswer: answer,
+		}, Seq: seq})
+	}
+	return true
 }
 
 // autoApproveIfConfigured honors auto_approve regardless of dashboard or --require-approval; returns
@@ -189,7 +201,7 @@ func (o *Orchestrator) reviseAwaitingAssistants(reqCtx context.Context, stageID,
 	if err := save(stageDir); err != nil {
 		return false, 0, fmt.Errorf("save feedback for %s: %w", stageID, err)
 	}
-	if err := o.BumpRootGeneration(stageID); err != nil {
+	if err := o.bumpRootGenerationKeyed(stageID, reviseBumpOpID(stageID, seq)); err != nil {
 		return false, 0, fmt.Errorf("invalidate stale assistant tree for %s: %w", stageID, err)
 	}
 
@@ -316,7 +328,7 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 		// Одна ручная проба: намерение пишется в сам переход, чтобы crash до spawn его не потерял.
 		guard.Quota = manualProbeQuota(o.opts.Store.Snapshot().Stages[stageID].Quota)
 	}
-	to, ok := o.Trigger(stageID, bus.EvContinue, guard, "")
+	to, epoch, ok := o.grantTurnTo(stageID, bus.EvContinue, guard, "")
 	if !ok {
 		o.continuedThisProcess.Delete(stageID)
 		o.continueMu.Unlock()
@@ -324,7 +336,7 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 	}
 	o.continueMu.Unlock()
 
-	ctx := o.runContext(reqCtx) // не reqCtx — иначе HTTP-хендлер убьёт агента при возврате ответа
+	ctx := withTurnEpoch(o.runContext(reqCtx), epoch) // не reqCtx — иначе HTTP-хендлер убьёт агента при возврате ответа
 	if pausedFrom == state.StatusPending {
 		o.tryActivatePrePlanned(ctx)
 		o.startPlanningForUnblocked(ctx)

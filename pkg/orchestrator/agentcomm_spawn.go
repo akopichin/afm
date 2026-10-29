@@ -92,6 +92,12 @@ func (o *Orchestrator) HelperResult(actor state.Actor, taskID assistants.TaskID)
 	return view, nil
 }
 
+// isStageSpawnedHelper reports whether t was spawned by the agent of stage stageID in the stage's current root
+// generation: a fresh attempt of the stage (Revise) invalidates the helpers of the old one.
+func isStageSpawnedHelper(rs state.RunState, stageID string, t *state.TaskState) bool {
+	return t.CreatedBy == assistants.OriginStageAgent && t.RootStageID == stageID && t.RootGeneration == rs.Assistants.RootGenerations[stageID]
+}
+
 // maxListedHelpers bounds the <your_helpers> block, which repeats on every turn of the stage.
 const maxListedHelpers = 20
 
@@ -99,10 +105,9 @@ const maxListedHelpers = 20
 // the durable tasks (id, title and status only) of the stage's CURRENT root generation: a fresh attempt of the
 // stage (Revise) invalidates the helpers of the old one. The newest ones are dropped when there are too many.
 func stageHelpersBlock(rs state.RunState, stageID string) string {
-	generation := rs.Assistants.RootGenerations[stageID]
 	var mine []*state.TaskState
 	for _, t := range rs.Assistants.Tasks {
-		if t.RootStageID == stageID && t.RootGeneration == generation && t.CreatedBy == assistants.OriginStageAgent {
+		if isStageSpawnedHelper(rs, stageID, t) {
 			mine = append(mine, t)
 		}
 	}

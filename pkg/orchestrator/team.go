@@ -24,8 +24,11 @@ var errTeamAliasContention = errors.New("its @name was taken by a concurrent att
 // only teamActor attaches under it (AttachAndSend), so a dashboard or API request cannot stand in for a member.
 const teamOperationPrefix = "team/"
 
+// actorKindSystem marks operations the orchestrator itself performs.
+const actorKindSystem = "system"
+
 // teamActor is who adds the flow's team agents.
-var teamActor = state.Actor{Kind: "system", ID: "flow"}
+var teamActor = state.Actor{Kind: actorKindSystem, ID: "flow"}
 
 // errTeamIDTaken: the member's request id was committed by something other than the flow's team.
 var errTeamIDTaken = errors.New("its request id was used by a request that is not this flow's team")
@@ -39,12 +42,15 @@ func teamOperationID(memberID string) string {
 // rejectReservedRequestID keeps caller-supplied IDs out of the flow-team and
 // side Mesh terminal operation namespaces shared by the run's operation index.
 func rejectReservedRequestID(opID string, actor state.Actor) error {
-	if actor.Kind != "system" {
+	if actor.Kind != actorKindSystem {
 		for _, prefix := range []string{"side-mesh-reply:", "side-mesh-unprocessed:", loopTickOperationPrefix} {
 			if strings.HasPrefix(opID, prefix) {
 				return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved", prefix)
 			}
 		}
+	}
+	if strings.HasPrefix(opID, ownerCancelOperationPrefix) && actor.Kind != actorKindUser && actor.Kind != actorKindSystem {
+		return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved for the run owner", ownerCancelOperationPrefix)
 	}
 	if strings.HasPrefix(opID, teamOperationPrefix) && actor != teamActor {
 		return attachRejected(assistants.CodeInvalidRequest, "request ids starting with %q are reserved for the flow's team", teamOperationPrefix)

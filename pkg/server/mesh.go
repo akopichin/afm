@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -53,6 +55,22 @@ type MeshActions interface {
 	// Loops lists every loop of the run; Loop adds or stops one as the human operator.
 	Loops(ctx context.Context) (orchestrator.LoopPage, error)
 	Loop(ctx context.Context, requestID string, cmd MeshLoopCommand) (orchestrator.LoopView, error)
+}
+
+// OwnerWaitActions is the run owner's recovery of a stage parked on peer waits. It is separate from MeshActions
+// because its routes need the owner's own credential (Config.OwnerToken), not the dashboard's same-origin trust.
+type OwnerWaitActions interface {
+	// StageWaits lists the waits of one stage's agent; it only reads.
+	StageWaits(ctx context.Context, stageID string) ([]orchestrator.StageWaitView, error)
+	// CancelStageWaits ends the listed waits of the stage in one operation keyed by requestID, as the run owner,
+	// and returns them as they stand afterwards — one that was answered first keeps that outcome.
+	CancelStageWaits(ctx context.Context, requestID, stageID string, req OwnerCancelWaitsRequest) ([]orchestrator.StageWaitView, error)
+}
+
+// OwnerCancelWaitsRequest is what POST /api/mesh/stages/{id}/waits/cancel carries besides request_id.
+type OwnerCancelWaitsRequest struct {
+	WaitIDs []string `json:"wait_ids"`
+	Reason  string   `json:"reason,omitempty"`
 }
 
 // MeshOpenThreadRequest is POST /api/mesh/threads' body (opening a NEW thread — orchestrator.OpenThread).
@@ -146,6 +164,8 @@ const (
 	meshSegThreadClose    = "close"
 	meshSegThreadTopic    = "topic"
 	meshSegStages         = "stages"
+	meshSegWaits          = "waits"
+	meshSegWaitsCancel    = "cancel"
 	meshSegLoops          = "loops"
 	meshSegLoop           = "loop"
 )
@@ -193,9 +213,92 @@ func (s *Server) routeMesh(w http.ResponseWriter, r *http.Request) {
 		s.handleMeshUpdateThreadTitle(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == meshSegStages && segs[2] == meshSegThreadMessages && r.Method == http.MethodGet:
 		s.handleMeshStageMessages(w, r, segs[1])
+	case len(segs) == 3 && segs[0] == meshSegStages && segs[2] == meshSegWaits && r.Method == http.MethodGet:
+		s.handleOwnerListWaits(w, r, segs[1])
+	case len(segs) == 4 && segs[0] == meshSegStages && segs[2] == meshSegWaits && segs[3] == meshSegWaitsCancel && r.Method == http.MethodPost:
+		s.handleOwnerCancelWaits(w, r, segs[1])
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// authenticateOwner admits only the run owner's bearer token, before any body or Service access: Origin, loopback
+// or mesh trust never stand in for it. Without a configured token the routes 404 — no unauthenticated mode.
+func (s *Server) authenticateOwner(w http.ResponseWriter, r *http.Request) bool {
+	if s.ownerWaits == nil || s.ownerTokenDigest == nil {
+		http.NotFound(w, r)
+		return false
+	}
+	scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	if found && strings.EqualFold(scheme, "Bearer") && token != "" {
+		// Compare digests so the check takes the same time whatever the length of what the caller sent.
+		digest := sha256.Sum256([]byte(token))
+		if subtle.ConstantTimeCompare(digest[:], s.ownerTokenDigest[:]) == 1 {
+			w.Header().Set("Cache-Control", "no-store")
+			return true
+		}
+	}
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	writeAssistantErrCode(w, http.StatusUnauthorized, "unauthorized")
+	return false
+}
+
+// ownerWaitsResponse is what both owner routes answer: the stage's waits, never null.
+func ownerWaitsResponse(stageID string, waits []orchestrator.StageWaitView) map[string]any {
+	if waits == nil {
+		waits = []orchestrator.StageWaitView{}
+	}
+	return map[string]any{"stage_id": stageID, "waits": waits}
+}
+
+// handleOwnerListWaits is GET /api/mesh/stages/{id}/waits: the stage's waits, read-only.
+func (s *Server) handleOwnerListWaits(w http.ResponseWriter, r *http.Request, stageID string) {
+	if !s.authenticateOwner(w, r) {
+		return
+	}
+	if !isValidStageID(stageID) {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_stage_id")
+		return
+	}
+	waits, err := s.ownerWaits.StageWaits(r.Context(), stageID)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, ownerWaitsResponse(stageID, waits))
+}
+
+// handleOwnerCancelWaits is POST /api/mesh/stages/{id}/waits/cancel: the owner ends the listed waits of the stage
+// in one operation. Same-origin and request_id rules as every other dashboard mutation, after authentication.
+func (s *Server) handleOwnerCancelWaits(w http.ResponseWriter, r *http.Request, stageID string) {
+	if !s.authenticateOwner(w, r) {
+		return
+	}
+	if !sameOriginOK(r) {
+		writeAssistantErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	if !isValidStageID(stageID) {
+		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_stage_id")
+		return
+	}
+	var body struct {
+		RequestID string `json:"request_id"`
+		OwnerCancelWaitsRequest
+	}
+	if !decodeAgentMeshBody(w, r, &body) {
+		return
+	}
+	if body.RequestID == "" || len(body.WaitIDs) == 0 {
+		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_and_wait_ids_required")
+		return
+	}
+	waits, err := s.ownerWaits.CancelStageWaits(r.Context(), body.RequestID, stageID, body.OwnerCancelWaitsRequest)
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
+	writeJSON(w, ownerWaitsResponse(stageID, waits))
 }
 
 func (s *Server) handleMeshParticipants(w http.ResponseWriter, r *http.Request) {

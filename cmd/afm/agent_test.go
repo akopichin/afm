@@ -504,7 +504,8 @@ func TestAgentCmd_HasWaitStatus(t *testing.T) {
 	}
 }
 
-// asParticipant is the real mesh adapter with one fixed token that resolves to one participant.
+// asParticipant is the real mesh adapter with one fixed token that resolves to one participant. It stands in for
+// participants without an invocation of their own; a stage agent's wait needs a live invocation token instead.
 type asParticipant struct {
 	agentMeshActions
 	token, participant string
@@ -517,7 +518,8 @@ func (a asParticipant) ResolveToken(token string) (string, bool) {
 // Through the real adapter and orchestrator: one reply_to_all registers the batch, wait-status shows each
 // item's outcome as the answers come in, and another participant can neither list nor open the batch.
 func TestAgentWait_BatchEndToEndOverTheRealService(t *testing.T) {
-	orch, _ := newSideMeshOrch(t)
+	agent := startLiveStageAgent(t)
+	orch := agent.orch
 	const stage, stranger = "stage:impl", "stage:other"
 	ctx := context.Background()
 	var requests []string
@@ -533,9 +535,13 @@ func TestAgentWait_BatchEndToEndOverTheRealService(t *testing.T) {
 		requests, thread = append(requests, string(sent.MessageID)), sent.ThreadID
 	}
 	cli := func(participant string, cmd *cobra.Command, args ...string) (map[string]any, map[string]any, error) {
-		httpSrv := httptest.NewServer(server.New(server.Config{AgentMesh: asParticipant{agentMeshActions{orch}, "tok", participant}}).Handler())
+		mesh, token := server.AgentMeshActions(asParticipant{agentMeshActions{orch}, "tok", participant}), "tok"
+		if participant == stage {
+			mesh, token = agentMeshActions{orch}, agent.token
+		}
+		httpSrv := httptest.NewServer(server.New(server.Config{AgentMesh: mesh}).Handler())
 		t.Cleanup(httpSrv.Close)
-		writeTestMeshDescriptor(t, httpSrv, "tok", participant)
+		writeTestMeshDescriptor(t, httpSrv, token, participant)
 		var out, errOut bytes.Buffer
 		cmd.SetOut(&out)
 		cmd.SetErr(&errOut)
@@ -576,6 +582,51 @@ func TestAgentWait_BatchEndToEndOverTheRealService(t *testing.T) {
 	_, refused, err := cli(stranger, newAgentWaitStatusCmd(), "--wait-id", batchID)
 	if err == nil || refused["error"] != "not_found" {
 		t.Fatalf("a stranger opening the batch: %v, %v, want not_found", refused, err)
+	}
+}
+
+// A second `afm agent wait` for the same pending condition (each call has its own request id) is answered with
+// the first wait: still a yield, with already_pending set and no second wait registered.
+func TestAgentWait_RepeatedSingleWaitReportsTheSameWaitAsAlreadyPending(t *testing.T) {
+	agent := startLiveStageAgent(t)
+	orch, store := agent.orch, agent.store
+	const stage = "stage:impl"
+	sent, err := orch.SendFromAgent(context.Background(), orchestrator.SendRequest{
+		OperationID: "op-ask", Sender: stage, Recipients: []agentcomm.ParticipantID{"user"},
+		Kind: agentcomm.MessageKindRequest, Body: "please review", Actor: state.Actor{Kind: "agent", ID: stage},
+	})
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
+	wait := func() map[string]any {
+		t.Helper()
+		httpSrv := httptest.NewServer(server.New(server.Config{AgentMesh: agentMeshActions{orch}}).Handler())
+		t.Cleanup(httpSrv.Close)
+		writeTestMeshDescriptor(t, httpSrv, agent.token, stage)
+		cmd := newAgentWaitCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs([]string{"--condition", "reply_to", "--message-id", string(sent.MessageID)})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+		var o map[string]any
+		if err := json.Unmarshal(out.Bytes(), &o); err != nil {
+			t.Fatalf("output must be one JSON object: %v", err)
+		}
+		return o
+	}
+
+	first, second := wait(), wait()
+	if first["status"] != agentWaitStatusYield || len(first) != 2 {
+		t.Fatalf("first = %v, want exactly status yield and wait_id", first)
+	}
+	alreadyPending, _ := second["already_pending"].(bool)
+	if second["status"] != agentWaitStatusYield || second["wait_id"] != first["wait_id"] || !alreadyPending {
+		t.Fatalf("second = %v, want a yield on wait %v with already_pending", second, first["wait_id"])
+	}
+	if n := len(store.Snapshot().Assistants.Mesh.Waits); n != 1 {
+		t.Fatalf("waits = %d, want 1", n)
 	}
 }
 

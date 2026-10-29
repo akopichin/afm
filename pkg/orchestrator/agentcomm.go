@@ -220,16 +220,20 @@ type WaitRequest struct {
 	Deadline         *time.Time
 	ContinuationNote string
 	Actor            state.Actor
+	// invocation is the token of the agent invocation the request came from (WithMeshInvocation), set by Wait.
+	invocation string
 }
 
 // WaitReceipt answers a single wait with its WaitID and Status. A batch answers with BatchID and one Item per
 // requested message, in request order; Status is then pending while any item is, else ready if one item was
-// answered, else expired (batchStatus, agentcomm_wait.go).
+// answered, else expired (batchStatus, agentcomm_wait.go). AlreadyPending marks a single wait that was not
+// registered because an equivalent one is still pending: WaitID is that earlier wait.
 type WaitReceipt struct {
-	WaitID  agentcomm.WaitID
-	Status  agentcomm.WaitStatus
-	BatchID string
-	Items   []WaitItemReceipt
+	WaitID         agentcomm.WaitID
+	Status         agentcomm.WaitStatus
+	BatchID        string
+	Items          []WaitItemReceipt
+	AlreadyPending bool
 }
 
 // WaitItemReceipt is the wait one message of a batch got, and how it stands.
@@ -240,11 +244,14 @@ type WaitItemReceipt struct {
 	Reason    string // why the wait ended without an answer (cancelled, expired); empty otherwise
 }
 
-// CancelWaitRequest cancels one wait (WaitID) or every still-pending wait of a batch (BatchID); set exactly one.
+// CancelWaitRequest cancels one wait (WaitID), every still-pending wait of a batch (BatchID) or an explicit list
+// of waits (WaitIDs); set exactly one. A list must name waits of one waiter — of StageID's agent when that is set.
 type CancelWaitRequest struct {
 	OperationID string
 	WaitID      agentcomm.WaitID
 	BatchID     string
+	WaitIDs     []agentcomm.WaitID
+	StageID     string
 	Reason      string
 	Actor       state.Actor
 }

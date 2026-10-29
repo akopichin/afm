@@ -18,7 +18,8 @@ import (
 // kindRootGenerationBumped's doc comments in record.go). At most one of TargetTaskID/TargetStageID is set,
 // naming which generation counter Generation was frozen from; if neither is set, Generation is meaningless
 // and the wait is never considered stale (e.g. a wait registered by the human or a run-scoped participant,
-// which has no generation to be superseded by).
+// which has no generation to be superseded by). The orchestrator stamps none of them: a Revise ends the stage's
+// pending waits in the record of its bump instead.
 type MeshWait struct {
 	agentcomm.Wait
 	TargetTaskID  string `json:"target_task_id,omitempty"`

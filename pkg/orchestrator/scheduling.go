@@ -171,9 +171,11 @@ func (o *Orchestrator) startReadyStage(ctx context.Context, s flow.Stage) bool {
 	if o.activationBlocked() || !o.depsDone(s) {
 		return false
 	}
-	if _, ok := o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
+	epoch, ok := o.grantTurn(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if !ok {
 		return false
 	}
+	ctx = withTurnEpoch(ctx, epoch)
 
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	switch {

@@ -771,6 +771,25 @@ and statuses in `<your_helpers>` (up to 20 from the current stage attempt), so
 it can pick up the same tasks after a restart. Only that stage agent can read
 its helper's result.
 
+To wait for a spawned helper, save the spawn receipt's `message_id` and register
+one `reply_to` wait for that request:
+
+```sh
+afm agent wait --condition reply_to --message-id <spawn_message_id>
+```
+
+If the command returns `status: yield`, end the turn. A helper can send a
+callback question and itself wait for your reply while your original wait stays
+pending. Answer that callback with `afm agent reply --in-reply-to <callback_message_id>
+--body "..."`, then end the turn again; do not register a new wait for the
+callback. The stage resumes when the helper answers the spawn
+request or that wait ends without an answer. Inspect `afm agent helper-result`
+before treating a helper as successful: a failed or cancelled helper can end the
+wait with a reason but does not supply a passing result. For several helpers,
+use the existing `reply_to_all` batch and inspect every outcome. See the
+[migration guide](agent-wait-migration.md) for updating external coordinator
+flows.
+
 ## Helper answers and protocol errors
 
 Helpers must return one JSON object with `schema_version: 1` and either
@@ -833,6 +852,58 @@ it if an answer is there (or keeps it parked). If afm stops after `afm agent
 wait` answered `yield` but before the stage was parked, the next `afm run` parks
 it on those waits instead of rerunning the agent or finishing the stage from a
 completion marker the turn left behind.
+
+### Duplicate waits and owner recovery
+
+Repeating an equivalent single pending wait returns the original `wait_id`,
+`status: yield`, and `already_pending: true`. It creates no second wait and does
+not extend the original deadline. End the turn as usual. This does not merge
+`reply_to_all` batches.
+
+If a turn writes a fresh `.done` or `execution_summary.md` while its peer waits
+are still pending, the stage remains **Awaiting colleague** (`awaiting_peer`).
+The stage Feed shows the `completion_marker_pending_wait` event name; it does
+not display the wait list or recovery message. Those details are in the durable
+notice payload in the run's `notices.jsonl`, and the owner wait-list API below
+shows the current waits. The notice survives reconnect; completion and verify
+have not run. Answer the requests normally when possible. The run owner can
+inspect and cancel selected waits when they cannot be answered. In the example,
+replace the host and port with the dashboard address, keeping POST `Origin`
+equal to `Host`:
+
+```http
+GET /api/mesh/stages/<stage_id>/waits
+Host: 127.0.0.1:<dashboard_port>
+Authorization: Bearer <owner_token>
+
+POST /api/mesh/stages/<stage_id>/waits/cancel
+Host: 127.0.0.1:<dashboard_port>
+Origin: http://127.0.0.1:<dashboard_port>
+Authorization: Bearer <owner_token>
+Content-Type: application/json
+
+{"request_id":"unique-recovery-id","wait_ids":["<wait_id>"],"reason":"Request cannot be answered"}
+```
+
+The GET response is `{"stage_id":"...","waits":[...]}`; each wait has a
+`wait_id`, `condition`, `status`, and, when applicable, a `reason` or `deadline`.
+GET only reads. POST accepts one or more wait IDs from that stage and returns
+the selected waits in the same shape. Use a unique `request_id` for one recovery
+decision; retrying that ID is idempotent. An answer that wins the race remains
+answered. Cancelling a wait resumes the stage through its normal lifecycle: it
+does not approve a helper, pass verification, or complete the stage by itself.
+
+These two routes require the **run owner token**, distinct from an agent mesh
+token. A native `afm run` shows the token once on its controlling terminal. For
+a headless native launch, the operator can pass the write end of a private pipe
+as the numeric `AFM_OWNER_TOKEN_FD`; afm writes the token to that descriptor and
+closes it before starting agents. Keep it out of URLs, command arguments, logs,
+and agent input. Without a usable delivery channel the routes are unavailable
+(404); a missing or incorrect token returns 401 when they are enabled. A new
+dashboard start issues a new token, including after restart. On a native host,
+an agent with unrestricted access under the same OS user is not sandboxed from
+the operator; afm does not pass this token or descriptor through its agent
+transport. Docker mode does not provide this recovery token channel.
 
 ## Add a stage during a run
 

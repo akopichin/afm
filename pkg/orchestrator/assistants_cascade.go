@@ -10,7 +10,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
@@ -103,6 +105,18 @@ func (o *Orchestrator) RetryTask(ctx context.Context, taskID assistants.TaskID) 
 	return nil
 }
 
+// opKindBumpRootGeneration is the operation kind of a root-generation bump.
+const opKindBumpRootGeneration = "bump_root_generation"
+
+// rootBumpOpID is the idempotency key of one bump of stageID's root generation; key tells bumps apart.
+func rootBumpOpID(stageID, key string) string { return "root-generation-bump:" + stageID + ":" + key }
+
+// reviseBumpOpID is the bump of the Revise recorded at reviseSeq: the same key live and in recovery, so a repeat
+// of it after a crash finds the bump already committed instead of advancing the generation a second time.
+func reviseBumpOpID(stageID string, reviseSeq uint64) string {
+	return rootBumpOpID(stageID, "revise-"+strconv.FormatUint(reviseSeq, 10))
+}
+
 // BumpRootGeneration invalidates a WHOLE root stage's task tree (T4a.6) — meant to be called whenever the
 // root STAGE itself gets a fresh attempt (a later integration task wires the actual call site into the
 // stage-level Revise/retry flow; see dev-plan.md's T4a.6 note on this deliberately-scoped boundary). Every
@@ -111,29 +125,47 @@ func (o *Orchestrator) RetryTask(ctx context.Context, taskID assistants.TaskID) 
 // advances durably FIRST, so a storage failure here is fail-closed (no cascade runs against a counter that
 // never actually committed).
 func (o *Orchestrator) BumpRootGeneration(stageID string) error {
+	return o.bumpRootGenerationKeyed(stageID, rootBumpOpID(stageID, randomOpSuffix()))
+}
+
+// bumpRootGenerationKeyed is BumpRootGeneration under the idempotency key opID.
+func (o *Orchestrator) bumpRootGenerationKeyed(stageID, opID string) error {
 	if stageID == "" {
 		return errors.New("assistants: stage id is required")
 	}
 	rs := o.opts.Store.Snapshot()
-	var topLevel []assistants.TaskID
-	for _, id := range rs.Assistants.ByRootStage[stageID] {
-		if t, ok := rs.Assistants.Tasks[id]; ok && t.ParentTaskID == nil {
-			topLevel = append(topLevel, id)
-		}
+	// The stage's open waits end in the SAME record as the bump: its new attempt must not continue on an answer to
+	// the old one, and one record reads the same live, on replay and after a restart.
+	superseded, err := meshWaitResolvedEffects(pendingWaitsOf(rs.Assistants.Mesh, meshStageParticipantID(stageID)), agentcomm.WaitCancelled, meshWaitSupersededReason)
+	if err != nil {
+		return err
 	}
-
 	eff := state.Effect{Kind: "root_generation_bumped", Target: state.Target{StageID: stageID}}
-	op := state.Operation{ID: "root-generation-bump:" + stageID + ":" + randomOpSuffix(), Kind: "bump_root_generation", Effects: []state.Effect{eff}}
-	if _, err := o.opts.Store.ApplyRunOperation(op, nil); err != nil {
+	op := state.Operation{ID: opID, Kind: opKindBumpRootGeneration, Effects: append([]state.Effect{eff}, superseded...)}
+	if _, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+		for _, id := range res.EndedWaits {
+			o.announceEndedWait(id, agentcomm.WaitCancelled, meshWaitSupersededReason)
+		}
+	}); err != nil {
 		o.handleTaskOperationErr(err)
 		return err
 	}
+	o.cancelSupersededTasks(stageID)
+	return nil
+}
 
-	for _, id := range topLevel {
-		o.cancelOneTask(id)
-		for _, cid := range o.descendantIDs(id) {
-			o.cancelOneTask(cid)
+// cancelSupersededTasks cancels every non-terminal task of an older root generation of stageID, with its
+// descendants. The generation filter makes it safe to repeat after the bump: tasks of the new attempt are never
+// touched.
+func (o *Orchestrator) cancelSupersededTasks(stageID string) {
+	rs := o.opts.Store.Snapshot()
+	current := rs.Assistants.RootGenerations[stageID]
+	for _, id := range rs.Assistants.ByRootStage[stageID] {
+		if t, ok := rs.Assistants.Tasks[id]; ok && t.ParentTaskID == nil && t.RootGeneration < current {
+			o.cancelOneTask(id)
+			for _, cid := range o.descendantIDs(id) {
+				o.cancelOneTask(cid)
+			}
 		}
 	}
-	return nil
 }

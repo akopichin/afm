@@ -51,6 +51,9 @@ func (o *Orchestrator) computeResumeKind(s flow.Stage, pausedFrom state.StageSta
 // Централизация обязательна: голый SpawnAgent мимо неё не регистрирует lease, и RunVerification молча
 // деградирует (slot не учтён в семафоре → реальное превышение max_parallel).
 func (o *Orchestrator) spawnAgentLeased(ctx context.Context, s flow.Stage, run func(context.Context, flow.Stage)) {
+	if _, ok := turnEpochFrom(ctx); !ok && o.opts.Store != nil {
+		ctx = withTurnEpoch(ctx, o.stageEpoch(s.ID)) // the spawn decided now, not when the slot frees
+	}
 	o.concurrency.SpawnAgentLease(ctx, s, func(ctx context.Context, s flow.Stage, lease *concurrency.Lease) {
 		o.stageLeases.Store(s.ID, lease)
 		// E3: CompareAndDelete, а не безусловный Delete — на Revise-прерывании раннер-замена может Store'ить

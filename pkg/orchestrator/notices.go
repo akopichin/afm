@@ -1,12 +1,19 @@
 package orchestrator
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
@@ -27,6 +34,113 @@ const (
 	eventQuotaReset   bus.EventType = "quota_reset"   // the wait ended, the work resumes
 	eventQuotaWarning bus.EventType = "quota_warning" // the provider says the limit is close; nothing stops
 )
+
+// eventCompletionMarkerPendingWait (live + notices.jsonl, non-FSM): a turn wrote its completion marker but ended
+// on a pending peer wait, so the stage parks instead of completing.
+const eventCompletionMarkerPendingWait bus.EventType = "completion_marker_pending_wait"
+
+// completionMarker is a marker file as a turn left it. valid is the completion probe's verdict; present, modTime
+// and digest identify the file itself, so an old marker is told from a written one without any clock and
+// whether the probe passes does not matter for that.
+type completionMarker struct {
+	file    string // the marker's file name; "" — the phase has no marker
+	valid   bool
+	present bool
+	modTime time.Time
+	digest  [sha256.Size]byte
+}
+
+// markerReadLimit caps how much of a marker is hashed: its identity does not need more.
+const markerReadLimit = 1 << 20
+
+// readCompletionMarker looks at the marker that ends phase's turns as complete: execution_summary.md on the
+// autonomous track, .done on implementation and review, none elsewhere.
+func (o *Orchestrator) readCompletionMarker(s flow.Stage, stageDir, phase string) completionMarker {
+	switch phase {
+	case phaseAutonomous:
+		return probeMarker(stageDir, "execution_summary.md", func() error { return stagefiles.CheckAutonomousCompletion(stageDir) })
+	case phaseImplementation, phaseReview:
+		return probeMarker(stageDir, ".done", func() error { return stagefiles.CheckCompletion(stageDir, o.projectDir(), s) })
+	default:
+		return completionMarker{}
+	}
+}
+
+// probeMarker describes the marker file in stageDir. The agent controls that path, so anything but a regular
+// file (a FIFO, a link to an endless device) counts as no marker and is neither probed nor read: the read runs
+// before every turn and must not block.
+func probeMarker(stageDir, file string, probe func() error) completionMarker {
+	m := completionMarker{file: file}
+	path := filepath.Join(stageDir, file)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return m
+	}
+	m.valid = probe() == nil
+	content, err := os.Open(path)
+	if err != nil {
+		return m
+	}
+	defer content.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(content, markerReadLimit)); err != nil {
+		return m
+	}
+	m.present, m.modTime = true, info.ModTime()
+	copy(m.digest[:], hash.Sum(nil))
+	return m
+}
+
+// freshSince reports a marker that is valid now and was written since before: it appeared, or its content or
+// mtime changed. Validity alone never makes an old marker fresh.
+func (m completionMarker) freshSince(before completionMarker) bool {
+	written := !before.present || !m.modTime.Equal(before.modTime) || m.digest != before.digest
+	return m.valid && m.present && written
+}
+
+// publishCompletionMarkerNotice reports a marker written while the turn ended on peer waits. One notice per set of
+// still-open waits of episode: claimed in process, remembered by notices.jsonl, live only after the durable write.
+func (o *Orchestrator) publishCompletionMarkerNotice(stageID, marker string, episode []agentcomm.WaitID) {
+	mesh := o.opts.Store.Snapshot().Assistants.Mesh
+	open := openBatches(mesh, meshStageParticipantID(stageID))
+	var pending []agentcomm.WaitID
+	ids := make([]string, 0, len(episode))
+	for _, id := range episode {
+		if w := mesh.Waits[id]; w != nil && stillOpen(w, open) {
+			pending = append(pending, id)
+			ids = append(ids, string(id))
+		}
+	}
+	if len(pending) == 0 {
+		return // every wait ended before the turn exited: nothing is left to report
+	}
+	episodeKey := strings.Join(ids, ",")
+	claim := stageID + "|" + episodeKey
+	if _, taken := o.markerNoticed.LoadOrStore(claim, struct{}{}); taken {
+		return
+	}
+	if stagefiles.HasNotice(o.opts.RunDir, stageID, string(eventCompletionMarkerPendingWait), "episode", episodeKey) {
+		return
+	}
+	if o.markerNoticeDecidedHook != nil {
+		o.markerNoticeDecidedHook(stageID)
+	}
+	ev := bus.Event{Type: eventCompletionMarkerPendingWait, StageID: stageID, Data: map[string]any{
+		"stage_id": stageID,
+		"marker":   marker,
+		"episode":  episodeKey,
+		"waits":    stageWaitViews(mesh, pending),
+		"message": fmt.Sprintf("%s was written while the stage still waits for peers, so the stage waits for them instead of completing: "+
+			"it is not completed and verify has not run. Answer the wait, or have the run owner cancel it "+
+			"(GET /api/mesh/stages/%s/waits, POST /api/mesh/stages/%s/waits/cancel).", marker, stageID, stageID),
+	}}
+	if err := stagefiles.WriteNotice(o.opts.RunDir, stageID, string(ev.Type), ev.Data); err != nil {
+		o.markerNoticed.Delete(claim) // the next turn with a fresh marker reports the episode again
+		log.Printf("WARN: completion-marker notice for stage %q not recorded: %v", stageID, err)
+		return
+	}
+	o.ui.Publish(ev)
+}
 
 // quotaTimeLayout renders a moment for people (hook reasons, notice messages): UTC is spelled out so the text
 // means the same to a reader in any zone.

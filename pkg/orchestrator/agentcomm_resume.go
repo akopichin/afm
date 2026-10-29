@@ -656,7 +656,7 @@ func (o *Orchestrator) turnEpisode(waiter agentcomm.ParticipantID, before map[ag
 			continue
 		}
 		prev, existed := before[id]
-		if w.Status == agentcomm.WaitPending || open[w.BatchID] || (prev == agentcomm.WaitPending || (!existed && w.Yielded)) && !answerRead(mesh, w) {
+		if stillOpen(w, open) || (prev == agentcomm.WaitPending || (!existed && w.Yielded)) && !answerRead(mesh, w) {
 			episode = append(episode, id)
 		}
 	}
@@ -674,6 +674,12 @@ func openBatches(mesh state.MeshState, waiter agentcomm.ParticipantID) map[strin
 		}
 	}
 	return open
+}
+
+// stillOpen reports a wait the stage has not finished with: pending itself, or an item of a batch (open, from
+// openBatches) that still has one pending.
+func stillOpen(w *state.MeshWait, open map[string]bool) bool {
+	return w.Status == agentcomm.WaitPending || open[w.BatchID]
 }
 
 // answerRead reports whether w is a satisfied reply_to wait whose every answer its waiter has already been handed
@@ -706,7 +712,7 @@ func interruptedTurnEpisode(rs state.RunState, stageID string) []agentcomm.WaitI
 	open := openBatches(rs.Assistants.Mesh, waiter)
 	var episode []agentcomm.WaitID
 	for id, w := range rs.Assistants.Mesh.Waits {
-		if w.Waiter == waiter && (w.Status == agentcomm.WaitPending || open[w.BatchID] || (w.Yielded && w.RegisteredSeq > since)) {
+		if w.Waiter == waiter && (stillOpen(w, open) || (w.Yielded && w.RegisteredSeq > since)) {
 			episode = append(episode, id)
 		}
 	}

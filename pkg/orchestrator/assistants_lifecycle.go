@@ -207,7 +207,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	}
 
 	waiter := o.taskMeshParticipant(taskID)
-	waitsBefore := o.meshWaitIDsOf(waiter)
+	waitsBefore := o.meshWaitStatusesOf(waiter)
 	beforeFP, beforeOK := o.fingerprintFn(o.projectDir())
 	outcome, err := o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, tc.Prompt, logFile, resultFile)
 	// The <inbox> messages of this turn's prompt are delivered once its process has run. The executor already
@@ -453,6 +453,8 @@ func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.T
 			"task_id": string(taskID), "status": string(assistants.StatusQueued), "reason": reason,
 		}})
 		o.publishQuotaNotice(eventQuotaWait, t.RootStageID, taskID, quotaNoticeData(&q, QuotaWaitMessage(&q)))
+		// Parked idle: the waits on what the cut-short turn read and left end now, not at the next start.
+		o.releaseUnanswerableWaitsAfterFinish()
 		if q.PauseReason == "" {
 			o.retryTaskAt(ctx, taskID, q.Until)
 		}
@@ -490,26 +492,15 @@ func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.T
 	o.maybeScheduleTask(ctx, taskID)
 }
 
-// meshWaitIDsOf returns the ids of every mesh wait waiter has registered so far, whatever their status.
-func (o *Orchestrator) meshWaitIDsOf(waiter agentcomm.ParticipantID) map[agentcomm.WaitID]bool {
-	ids := map[agentcomm.WaitID]bool{}
-	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
-		if w.Waiter == waiter {
-			ids[id] = true
-		}
-	}
-	return ids
-}
-
 // parkYieldedTurn parks a yielded task in waiting_peer — ending turn, which consumed its input — and closes the ready-before-park window: a reply (or a
 // counter-question) may have landed while the process was finishing, when the task was still running and the
 // resume Send attempted was a no-op. Nobody else will resume it now, so it re-checks through the same
 // CAS-protected resumes Send uses — a resume that already won makes them no-ops. A wait the run closed
 // (closeRemainingMeshWaits) never resumes anybody.
-func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, turn uint64, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool) {
+func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, turn uint64, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus) {
 	o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
 	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
-		if w.Waiter == waiter && !waitsBefore[id] && w.Status == agentcomm.WaitRunClosed {
+		if _, existed := waitsBefore[id]; w.Waiter == waiter && !existed && w.Status == agentcomm.WaitRunClosed {
 			return
 		}
 	}
@@ -517,20 +508,22 @@ func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.Ta
 	o.maybeResumeAwaitingPeerQuestion(ctx, waiter)
 }
 
-// turnYielded reports whether a helper turn that ran to its end yielded into a mesh wait instead of answering:
-// a wait of waiter is still pending, or the turn registered a new wait (one not in waitsBefore) and left no
-// final text — the awaited reply arrived before the turn could park, so that wait is already ready. A
-// non-empty answer is never taken for a yield on the strength of a ready wait: if it does not decode, it is a
-// protocol error, or the agent would be rerun on the same malformed output again and again.
-func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]bool, rawText string) bool {
+// turnYielded reports whether a helper turn yielded into a mesh wait: one of waiter is still pending, or the turn
+// left no final text after a wait ended that it registered or found pending (an already_pending receipt names
+// one). A non-empty answer is never a yield: if it does not decode it is a protocol error, not a rerun.
+func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus, rawText string) bool {
 	if o.hasOpenMeshWaitFor(waiter) {
 		return true
 	}
-	registered := false
-	for id := range o.meshWaitIDsOf(waiter) {
-		registered = registered || !waitsBefore[id]
+	if strings.TrimSpace(rawText) != "" {
+		return false
 	}
-	return registered && strings.TrimSpace(rawText) == ""
+	for id := range o.meshWaitStatusesOf(waiter) {
+		if before, existed := waitsBefore[id]; !existed || before == agentcomm.WaitPending {
+			return true
+		}
+	}
+	return false
 }
 
 // redactResult masks secrets in every free-text field of a helper's result before it is written to result.json

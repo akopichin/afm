@@ -408,7 +408,7 @@ func TestMesh_WaitCycleAfterReplayUsesAllPendingWaits(t *testing.T) {
 			t.Fatalf("replayed wait %s = %+v, want pending wait of %s", id, w, a)
 		}
 	}
-	err = validateWaitAdmission(replayed, WaitRequest{Waiter: b, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: toA.MessageID}})
+	err = validateWaitAdmission(replayed, WaitRequest{Waiter: b, Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: toA.MessageID}}, nil)
 	var rej *state.OperationRejectedError
 	if !errors.As(err, &rej) || rej.Code != agentcomm.CodeWaitCycle {
 		t.Fatalf("replayed state, B waits on A (A waits on B and C): err = %v, want wait_cycle", err)

@@ -144,7 +144,9 @@ func NewFSM(store *state.Store) *FSM {
 			// уже там, её владеет конкурентный Pause/Revise, а не устаревший verify-исход.
 			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusFailed)},
 			// EvAskUser must be reachable from any state the question poller scans.
-			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
+			// Not from revising: a question left open there belongs to the turn the Revise interrupted, and handing the
+			// stage to the user would take it from the Revise's feedback run.
+			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying}, To: to(state.StatusAwaitingUserInput)},
 			EvUserAnswered: {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
 			// EvAwaitPeer — T5.1: the peer twin of EvAskUser, reachable from the same set of live-executor
 			// statuses (the executor registers a mesh Wait and exits from whatever phase it was running).

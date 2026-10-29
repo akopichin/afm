@@ -1,9 +1,14 @@
 package orchestrator
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
+
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/state"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/executor"
@@ -17,11 +22,17 @@ import (
 // process is gone), and persisting it durably would be a second place a secret could leak from.
 type meshTokenStore struct {
 	mu     sync.Mutex
-	tokens map[string]agentcomm.ParticipantID
+	tokens map[string]meshToken
+}
+
+// meshToken is the token of a live invocation. stageEpoch is the epoch of the turn the invocation belongs to.
+type meshToken struct {
+	participant agentcomm.ParticipantID
+	stageEpoch  uint64
 }
 
 func newMeshTokenStore() *meshTokenStore {
-	return &meshTokenStore{tokens: map[string]agentcomm.ParticipantID{}}
+	return &meshTokenStore{tokens: map[string]meshToken{}}
 }
 
 func randomMeshToken() (string, error) {
@@ -34,13 +45,13 @@ func randomMeshToken() (string, error) {
 
 // mint stores a fresh random token bound to participant and returns it. A read error from crypto/rand is
 // never silently swallowed into an empty/predictable token — the caller gets no descriptor instead.
-func (s *meshTokenStore) mint(participant agentcomm.ParticipantID) (string, error) {
+func (s *meshTokenStore) mint(participant agentcomm.ParticipantID, stageEpoch uint64) (string, error) {
 	token, err := randomMeshToken()
 	if err != nil {
 		return "", err
 	}
 	s.mu.Lock()
-	s.tokens[token] = participant
+	s.tokens[token] = meshToken{participant: participant, stageEpoch: stageEpoch}
 	s.mu.Unlock()
 	return token, nil
 }
@@ -49,13 +60,16 @@ func (s *meshTokenStore) mint(participant agentcomm.ParticipantID) (string, erro
 // a request-supplied participant id — an unknown/expired token authenticates no one (mirrors
 // TestAttach_RejectsClientSuppliedCommand's "server resolves identity, the caller does not supply it").
 func (s *meshTokenStore) resolve(token string) (agentcomm.ParticipantID, bool) {
-	if token == "" {
-		return "", false
-	}
+	t, ok := s.live(token)
+	return t.participant, ok
+}
+
+// live returns token while its invocation runs; false once it has ended, or for a token never minted.
+func (s *meshTokenStore) live(token string) (meshToken, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.tokens[token]
-	return p, ok
+	t, ok := s.tokens[token]
+	return t, ok
 }
 
 // revoke invalidates token once its invocation has ended. Idempotent: revoking an already-revoked or
@@ -75,6 +89,41 @@ func (s *meshTokenStore) values() []string {
 		out = append(out, token)
 	}
 	return out
+}
+
+type meshInvocationKey struct{}
+
+// WithMeshInvocation returns ctx carrying the bearer token an agent request was authenticated with: Wait decides the
+// request against that invocation (still running, same attempt) under the Store lock.
+func WithMeshInvocation(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, meshInvocationKey{}, token)
+}
+
+// MeshInvocation is the token WithMeshInvocation put in ctx, "" outside an agent request.
+func MeshInvocation(ctx context.Context) string {
+	token, _ := ctx.Value(meshInvocationKey{}).(string)
+	return token
+}
+
+// checkInvocation refuses a stage agent's wait whose invocation has ended or belongs to an earlier attempt, under the
+// Store lock and after the revocation that precedes the turn's exit. Wait gets only tokens the server authenticated,
+// so a stage token that is no longer live is an ended invocation's.
+func (o *Orchestrator) checkInvocation(rs state.RunState, req WaitRequest) error {
+	stageID, isStage := stageIDFromMeshParticipant(req.Waiter)
+	if req.invocation == "" || !isStage {
+		return nil
+	}
+	live, ok := o.meshTokens().live(req.invocation)
+	if !ok {
+		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("the agent invocation of stage %s that sent this wait has ended: it was not registered", stageID)}
+	}
+	if live.participant != req.Waiter {
+		return nil
+	}
+	if rs.Stages[stageID].Epoch != live.stageEpoch {
+		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("stage %s was paused, continued or revised after this agent started: its wait belongs to a previous attempt and was not registered", stageID)}
+	}
+	return nil
 }
 
 // ResolveMeshToken implements the agent-facing HTTP layer's identity check (T3.1): the server never trusts a
@@ -97,6 +146,15 @@ func (o *Orchestrator) MeshBaseURL() string {
 	return o.opts.DashboardURL + "/api/agent-mesh"
 }
 
+// stageEpochOf is the current execution epoch of participant's stage, 0 for any other participant.
+func (o *Orchestrator) stageEpochOf(participant agentcomm.ParticipantID) uint64 {
+	stageID, isStage := stageIDFromMeshParticipant(participant)
+	if !isStage || o.opts.Store == nil {
+		return 0
+	}
+	return o.mintEpochOf(stageID)
+}
+
 // meshClientFor builds the executor.MeshClient for participant, or nil when mesh is unavailable (the
 // dashboard HTTP server is disabled — server.port: 0). Minting itself is deferred to Mint, called by
 // setupMeshDescriptor inside run() for EACH actual invocation, never here: this function may be called once
@@ -110,7 +168,7 @@ func (o *Orchestrator) meshClientFor(participant agentcomm.ParticipantID) *execu
 	return &executor.MeshClient{
 		ParticipantID: string(participant),
 		Mint: func() (string, string, func()) {
-			token, err := o.meshTokens().mint(participant)
+			token, err := o.meshTokens().mint(participant, o.stageEpochOf(participant))
 			if err != nil {
 				return "", "", nil
 			}

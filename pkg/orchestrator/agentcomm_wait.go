@@ -11,7 +11,9 @@ import (
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -20,6 +22,8 @@ import (
 const (
 	meshWaitExpiredReason   = "deadline exceeded"
 	meshWaitRunClosedReason = "the run closed while this wait was still pending"
+	// meshWaitSupersededReason ends the waits a stage left open when Revise starts its next attempt.
+	meshWaitSupersededReason = "the stage was revised: this wait belonged to its previous attempt"
 )
 
 // Agent Mesh Phase 2, T2.3: Wait/CancelWait and the cycle check. Registration and the "is this already
@@ -92,6 +96,7 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if req.Waiter == "" {
 		return WaitReceipt{}, errors.New("agentcomm: waiter is required")
 	}
+	req.invocation = MeshInvocation(ctx)
 	if len(req.MessageIDs) > 0 {
 		if req.Condition.Kind != agentcomm.WaitOnReplyTo || req.Condition.MessageID != "" {
 			return WaitReceipt{}, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "message ids go with a reply_to condition that has no message id"}
@@ -114,11 +119,71 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if err != nil {
 		return WaitReceipt{}, err
 	}
-	stored, err := o.registerWaits(req, []state.Effect{eff}, func(rs *state.RunState) error { return validateWaitAdmission(*rs, req) })
+	stages := o.reg().Stages()
+	stored, err := o.registerWaits(req, []state.Effect{eff}, func(rs *state.RunState) error {
+		id, found := equivalentPendingWait(*rs, req.Waiter, req.Condition, freshOnly, recipientOnly)
+		admitted := req
+		if found {
+			admitted.Deadline = rs.Assistants.Mesh.Waits[id].Deadline // the first wait's deadline stands for the repeat
+		}
+		if err := validateWaitAdmission(*rs, admitted, waitGraphStages(stages, *rs)); err != nil {
+			return err
+		}
+		if found {
+			return &alreadyPendingWait{id: id}
+		}
+		return nil
+	})
+	var duplicate *alreadyPendingWait
+	if errors.As(err, &duplicate) {
+		return WaitReceipt{WaitID: duplicate.id, Status: agentcomm.WaitPending, AlreadyPending: true}, nil
+	}
 	if err != nil {
 		return WaitReceipt{}, err
 	}
 	return WaitReceipt{WaitID: waitID, Status: stored[0].Status}, nil
+}
+
+// alreadyPendingWait ends a registration under the commit's lock without writing: an equivalent wait is still
+// pending. A retry of this operation id after that wait ended registers a new one — the accepted cost of no new event.
+type alreadyPendingWait struct{ id agentcomm.WaitID }
+
+func (e *alreadyPendingWait) Error() string {
+	return fmt.Sprintf("agentcomm: an equivalent wait %s is still pending", e.id)
+}
+
+// equivalentPendingWait finds the pending single wait of waiter for the same thing under the same rules. A batch
+// item never matches, and deadline and note stay the first registration's.
+func equivalentPendingWait(rs state.RunState, waiter agentcomm.ParticipantID, cond agentcomm.WaitCondition, freshOnly, recipientOnly bool) (agentcomm.WaitID, bool) {
+	for _, id := range rs.Assistants.Mesh.WaitOrder {
+		w := rs.Assistants.Mesh.Waits[id]
+		if w.Status == agentcomm.WaitPending && w.BatchID == "" && w.Waiter == waiter && sameWaitCondition(w.Condition, cond) &&
+			w.FreshResultOnly == freshOnly && w.RecipientReplyOnly == recipientOnly {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// sameWaitCondition compares only the fields of the condition's own kind: Valid lets a caller pass others along.
+func sameWaitCondition(a, b agentcomm.WaitCondition) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	switch a.Kind {
+	case agentcomm.WaitOnReplyTo:
+		return a.MessageID == b.MessageID
+	case agentcomm.WaitOnAddressedMessage:
+		return a.ThreadID == b.ThreadID
+	case agentcomm.WaitOnTaskResult:
+		return a.TaskID == b.TaskID
+	case agentcomm.WaitOnBoardKey:
+		return a.Key == b.Key && a.Status == b.Status
+	case agentcomm.WaitOnStageStatus:
+		return a.StageID == b.StageID && a.Status == b.Status
+	default:
+		return false
+	}
 }
 
 // waitBatch registers one reply_to wait per request of req.MessageIDs in ONE operation, all under one batch id:
@@ -139,7 +204,10 @@ func (o *Orchestrator) waitBatch(req WaitRequest) (WaitReceipt, error) {
 		}
 		effects[i] = eff
 	}
-	stored, err := o.registerWaits(req, effects, func(rs *state.RunState) error { return validateBatchAdmission(*rs, req) })
+	stages := o.reg().Stages()
+	stored, err := o.registerWaits(req, effects, func(rs *state.RunState) error {
+		return validateBatchAdmission(*rs, req, waitGraphStages(stages, *rs))
+	})
 	if err != nil {
 		return WaitReceipt{}, err
 	}
@@ -195,8 +263,14 @@ func validateBatchShape(ids []agentcomm.MessageID) error {
 func (o *Orchestrator) registerWaits(req WaitRequest, effects []state.Effect, check func(*state.RunState) error) ([]state.MeshWait, error) {
 	op := state.Operation{ID: req.OperationID, Kind: opKindMeshWait, Actor: req.Actor, Effects: effects, Expect: state.Preconditions{
 		// Decided under the commit's lock: two waits registered at the same time must not both pass the cycle
-		// check against a snapshot that has neither of them.
-		Check: check,
+		// check against a snapshot that has neither of them, and a Revise cannot slip between the attempt check
+		// and the registration.
+		Check: func(rs *state.RunState) error {
+			if err := o.checkInvocation(*rs, req); err != nil {
+				return err
+			}
+			return check(rs)
+		},
 	}}
 	if _, err := o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
 		for _, eff := range effects {
@@ -226,11 +300,30 @@ func (o *Orchestrator) registerWaits(req WaitRequest, effects []state.Effect, ch
 	return stored, nil
 }
 
+// waitGraphStages is the stage list as of rs: the registry read before the commit's lock plus every stage the journal
+// added since (its registry install may still be pending), so the cycle check sees each depends_on edge rs has.
+func waitGraphStages(read []flow.Stage, rs state.RunState) []flow.Stage {
+	known := make(map[string]bool, len(read))
+	for _, s := range read {
+		known[s.ID] = true
+	}
+	var added []state.DynamicStageAdded
+	for _, d := range rs.DynamicStages {
+		if !known[d.Stage.ID] {
+			added = append(added, d)
+		}
+	}
+	if len(added) == 0 {
+		return read
+	}
+	return graph.Materialize(read, added, rs.StageOrder)
+}
+
 // validateBatchAdmission admits a batch only if every one of its requests could be waited on alone by the
 // waiter, and it sent them all: one refused request refuses the set, and the error names it. A batch is blocked
 // until ALL its items end, so one item no one can answer — or one that closes a cycle — leaves the whole batch
 // unable to finish. Run under the commit's lock.
-func validateBatchAdmission(rs state.RunState, req WaitRequest) error {
+func validateBatchAdmission(rs state.RunState, req WaitRequest, stages []flow.Stage) error {
 	for _, id := range req.MessageIDs {
 		if m, ok := rs.Assistants.Mesh.Messages[id]; ok && m.Sender != req.Waiter {
 			return &state.OperationRejectedError{
@@ -239,7 +332,7 @@ func validateBatchAdmission(rs state.RunState, req WaitRequest) error {
 		}
 		item := req
 		item.Condition = agentcomm.WaitCondition{Kind: agentcomm.WaitOnReplyTo, MessageID: id}
-		if err := validateWaitAdmission(rs, item); err != nil {
+		if err := validateWaitAdmission(rs, item, stages); err != nil {
 			var rej *state.OperationRejectedError
 			if !errors.As(err, &rej) {
 				return err
@@ -255,10 +348,10 @@ func validateBatchAdmission(rs state.RunState, req WaitRequest) error {
 // validateWaitAdmission rejects a wait that could never end on its own: one on a message, task or stage that
 // does not exist, on a closed thread, on a stage already finished in another status, a speculative wait (a key
 // nobody has published, a thread not opened yet) without a deadline, a wait only the waiter itself could
-// satisfy, a wait for an answer nobody left can send (every recipient or thread member finished), or a wait that would close a cycle — every participant that could satisfy it already
-// (transitively) waits on the waiter. A condition that already holds is always admitted: it is ready at once.
-// Run under the commit's lock.
-func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
+// satisfy, a wait for an answer nobody left can send (canStillAnswer), or a wait that would close a cycle — every
+// participant that could satisfy it already (transitively) waits on the waiter. A condition that already holds is always admitted: it is ready at once.
+// stages is the run's runtime stage list: a stage blocked by an unfinished depends_on is waiting too. Run under the commit's lock.
+func validateWaitAdmission(rs state.RunState, req WaitRequest, stages []flow.Stage) error {
 	if err := validateWaitTarget(rs, req); err != nil {
 		return err
 	}
@@ -275,32 +368,28 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest) error {
 	if len(targets) == 0 {
 		return nil
 	}
-	if !slices.ContainsFunc(targets, func(p agentcomm.ParticipantID) bool { return canStillAnswer(rs, req.Condition, p) }) {
-		return &state.OperationRejectedError{
-			Code: assistants.CodeInvalidStatus, Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) has finished — nobody will answer", targets),
-		}
+	if reason, none := nobodyLeft(rs, req.Condition, targets); none {
+		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: reason}
 	}
-	graph := buildMeshWaitGraph(rs)
-	memo := map[agentcomm.ParticipantID]bool{}
-	for _, target := range targets {
-		if !graph.dependsOn(target, req.Waiter, 0, memo, map[agentcomm.ParticipantID]bool{}) {
-			return nil // this one can still act on its own
-		}
+	waitGraph := buildMeshWaitGraph(rs, &agentcomm.Wait{Waiter: req.Waiter, Condition: req.Condition}, stages)
+	edge := waitEdge(rs, req.Condition, targets, stages)
+	if !waitGraph.edgeDependsOn(edge, req.Waiter, 0, map[agentcomm.ParticipantID]bool{}, map[agentcomm.ParticipantID]bool{}) {
+		return nil // what it waits for can still happen on its own
 	}
 	return &state.OperationRejectedError{
 		Code:   agentcomm.CodeWaitCycle,
-		Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", targets, req.Waiter, agentcomm.MaxCausalHops),
+		Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", edge.targets, req.Waiter, agentcomm.MaxCausalHops),
 	}
 }
 
 // canStillAnswer reports whether participant p can still send the message a reply_to or addressed_message wait
 // cond is waiting for: p has not finished, and for reply_to its copy of the message was not given up as
-// undeliverable (agentcomm_unread.go). Other conditions are not decided here. An unknown participant is not
-// ruled out.
+// undeliverable (agentcomm_unread.go) nor read and left unanswered (leftUnanswered). Other conditions are not
+// decided here. An unknown participant is not ruled out.
 func canStillAnswer(rs state.RunState, cond agentcomm.WaitCondition, p agentcomm.ParticipantID) bool {
 	switch cond.Kind {
 	case agentcomm.WaitOnReplyTo:
-		if rs.Assistants.Mesh.Receipts[cond.MessageID][p] == agentcomm.DeliveryUndeliverable {
+		if rs.Assistants.Mesh.Receipts[cond.MessageID][p] == agentcomm.DeliveryUndeliverable || leftUnanswered(rs, cond.MessageID, p) {
 			return false
 		}
 	case agentcomm.WaitOnAddressedMessage:
@@ -391,6 +480,8 @@ func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
 // cancel it — otherwise one participant could permanently livelock another's awaiting_peer resume by
 // cancelling a WaitID it merely learned about (it is never exposed to callers other than the waiter today,
 // but ownership is still enforced at the single admission point, not by obscurity).
+// A list of WaitIDs (the run owner's recovery) is validated as a whole under the commit's lock and ends in one
+// operation: at most one wake, whatever the number of waits.
 //
 // T5.6: once the cancellation durably sticks (resolveMeshWaitDurable reports THIS call's resolution — not a
 // reply that raced in and won instead — is what the wait's status actually holds now), the waiter is woken
@@ -405,7 +496,17 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 		return err
 	}
 	waitIDs := []agentcomm.WaitID{req.WaitID}
-	if req.BatchID != "" {
+	var check func(*state.RunState) error
+	switch {
+	case len(req.WaitIDs) > 0:
+		if req.WaitID != "" || req.BatchID != "" {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "cancel one wait, a batch or a list of waits, not several"}
+		}
+		if err := validateWaitList(req.WaitIDs); err != nil {
+			return err
+		}
+		waitIDs, check = req.WaitIDs, func(rs *state.RunState) error { return checkWaitListOwnership(*rs, req) }
+	case req.BatchID != "":
 		if req.WaitID != "" {
 			return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "cancel a wait or a batch, not both"}
 		}
@@ -413,8 +514,9 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 		if len(waitIDs) == 0 {
 			return &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown batch %s", req.BatchID)}
 		}
+	default:
 	}
-	if req.Actor.Kind != actorKindUser {
+	if check == nil && req.Actor.Kind != actorKindUser {
 		rs := o.opts.Store.Snapshot()
 		for _, id := range waitIDs {
 			if w, ok := rs.Assistants.Mesh.Waits[id]; ok && string(w.Waiter) != req.Actor.ID {
@@ -426,7 +528,7 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 	if reason == "" {
 		reason = "cancelled"
 	}
-	waiter, changed, err := o.resolveMeshWaitsChecked(req.OperationID, waitIDs, req.Actor, agentcomm.WaitCancelled, reason, nil)
+	waiter, changed, err := o.resolveMeshWaitsChecked(req.OperationID, waitIDs, req.Actor, agentcomm.WaitCancelled, reason, check)
 	if err != nil {
 		return err
 	}
@@ -434,6 +536,86 @@ func (o *Orchestrator) CancelWait(ctx context.Context, req CancelWaitRequest) er
 		o.resumeWaiterAfterTerminalWait(o.runContext(ctx), waiter) // must not die with the HTTP request
 	}
 	return nil
+}
+
+// ownerCancelOperationPrefix keeps the run owner's cancellations apart from every other operation id of the run.
+const ownerCancelOperationPrefix = "owner-cancel-waits:"
+
+// OwnerCancelOperationID is the idempotency key of the owner's cancellation requestID for stageID. The stage is
+// part of it: a repeat of a request against another stage is a new operation that passes its own ownership check
+// instead of replaying the first one's result. Stage ids have no ':', so the pair is unambiguous.
+func OwnerCancelOperationID(stageID, requestID string) string {
+	return ownerCancelOperationPrefix + stageID + ":" + requestID
+}
+
+// validateWaitList rejects a list of wait ids that names an empty id or one twice, before anything is committed.
+func validateWaitList(ids []agentcomm.WaitID) error {
+	seen := make(map[agentcomm.WaitID]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "a list of waits takes distinct, non-empty wait ids"}
+		}
+		seen[id] = true
+	}
+	return nil
+}
+
+// checkWaitListOwnership runs under the commit's lock: every wait exists and belongs to one waiter (StageID's
+// agent when named) that req.Actor may cancel for, or nothing is committed.
+func checkWaitListOwnership(rs state.RunState, req CancelWaitRequest) error {
+	var waiter agentcomm.ParticipantID
+	for i, id := range req.WaitIDs {
+		w := rs.Assistants.Mesh.Waits[id]
+		if w == nil || (req.StageID != "" && w.Waiter != meshStageParticipantID(req.StageID)) {
+			return &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown wait %s", id)}
+		}
+		if i > 0 && w.Waiter != waiter {
+			return &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "the waits of one cancellation must belong to one waiter"}
+		}
+		waiter = w.Waiter
+	}
+	if req.Actor.Kind != actorKindUser && string(waiter) != req.Actor.ID {
+		return &state.OperationRejectedError{Code: assistants.CodeActorNotAllowed, Reason: "only the wait's own waiter or the human may cancel it"}
+	}
+	return nil
+}
+
+// StageWaitView is one peer wait of a stage as the run owner and the completion-marker notice show it.
+type StageWaitView struct {
+	WaitID    agentcomm.WaitID        `json:"wait_id"`
+	BatchID   string                  `json:"batch_id,omitempty"`
+	Condition agentcomm.WaitCondition `json:"condition"`
+	Status    agentcomm.WaitStatus    `json:"status"`
+	Reason    string                  `json:"reason,omitempty"`
+	Deadline  *time.Time              `json:"deadline,omitempty"`
+}
+
+// stageWaitViews shows the waits of ids that exist, in the order given.
+func stageWaitViews(mesh state.MeshState, ids []agentcomm.WaitID) []StageWaitView {
+	views := make([]StageWaitView, 0, len(ids))
+	for _, id := range ids {
+		if w := mesh.Waits[id]; w != nil {
+			views = append(views, StageWaitView{WaitID: id, BatchID: w.BatchID, Condition: w.Condition, Status: w.Status, Reason: w.Reason, Deadline: w.Deadline})
+		}
+	}
+	return views
+}
+
+// StageWaits lists the peer waits of stageID's agent in registration order, the ended ones with their reason. It
+// only reads: the run owner uses it to choose what to cancel.
+func (o *Orchestrator) StageWaits(stageID string) ([]StageWaitView, error) {
+	rs := o.opts.Store.Snapshot()
+	if _, ok := rs.Stages[stageID]; !ok {
+		return nil, &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown stage %s", stageID)}
+	}
+	waiter := meshStageParticipantID(stageID)
+	var ids []agentcomm.WaitID
+	for _, id := range rs.Assistants.Mesh.WaitOrder {
+		if w := rs.Assistants.Mesh.Waits[id]; w != nil && w.Waiter == waiter {
+			ids = append(ids, id)
+		}
+	}
+	return stageWaitViews(rs.Assistants.Mesh, ids), nil
 }
 
 // batchWaitIDs lists the waits of batch batchID in registration order.
@@ -473,17 +655,13 @@ func (o *Orchestrator) resolveMeshWaitChecked(opID string, waitID agentcomm.Wait
 // rejected check, none. changed reports whether this commit moved any of them out of pending; waiters woken for
 // it decide through peerContinuation whether the whole batch has ended.
 func (o *Orchestrator) resolveMeshWaitsChecked(opID string, waitIDs []agentcomm.WaitID, actor state.Actor, status agentcomm.WaitStatus, reason string, check func(*state.RunState) error) (agentcomm.ParticipantID, bool, error) {
-	effects := make([]state.Effect, len(waitIDs))
-	for i, id := range waitIDs {
-		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)}, state.MeshWaitResolvedPayload{Status: string(status), Reason: reason})
-		if err != nil {
-			return "", false, err
-		}
-		effects[i] = eff
+	effects, err := meshWaitResolvedEffects(waitIDs, status, reason)
+	if err != nil {
+		return "", false, err
 	}
 	op := state.Operation{ID: opID, Kind: "mesh_resolve_wait", Actor: actor, Effects: effects, Expect: state.Preconditions{Check: check}}
 	var changed bool
-	_, err := o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
+	_, err = o.opts.Store.ApplyRunOperation(op, func(res state.OperationResult) {
 		for _, id := range waitIDs {
 			if slices.Contains(res.EndedWaits, id) {
 				changed = true
@@ -499,6 +677,30 @@ func (o *Orchestrator) resolveMeshWaitsChecked(opID string, waitIDs []agentcomm.
 		waiter = w.Waiter
 	}
 	return waiter, changed, nil
+}
+
+// meshWaitResolvedEffects is one mesh_wait_resolved effect per wait, all ending in status with reason.
+func meshWaitResolvedEffects(waitIDs []agentcomm.WaitID, status agentcomm.WaitStatus, reason string) ([]state.Effect, error) {
+	effects := make([]state.Effect, len(waitIDs))
+	for i, id := range waitIDs {
+		eff, err := marshalEffect("mesh_wait_resolved", state.Target{WaitID: string(id)}, state.MeshWaitResolvedPayload{Status: string(status), Reason: reason})
+		if err != nil {
+			return nil, err
+		}
+		effects[i] = eff
+	}
+	return effects, nil
+}
+
+// pendingWaitsOf is the waits of waiter that are still pending, in registration order.
+func pendingWaitsOf(mesh state.MeshState, waiter agentcomm.ParticipantID) []agentcomm.WaitID {
+	var pending []agentcomm.WaitID
+	for _, id := range mesh.WaitOrder {
+		if w := mesh.Waits[id]; w.Waiter == waiter && w.Status == agentcomm.WaitPending {
+			pending = append(pending, id)
+		}
+	}
+	return pending
 }
 
 // armMeshWaitDeadline starts a background timer for waitID, riding o.clk() like hooks.go's retry backoff and
@@ -646,11 +848,10 @@ type meshWaitEdge struct {
 type meshWaitGraph map[agentcomm.ParticipantID][]meshWaitEdge
 
 // buildMeshWaitGraph returns every "X cannot proceed until Y acts" relationship currently known to the
-// projection: live (WaitPending) mesh waits plus assistants' own waiting_children links. This is deliberately
-// NOT the full scheduling graph — stage depends_on is static and already cycle-free by flow validation, so it
-// can never itself CLOSE a new cycle that a fresh mesh wait could complete; only the two dynamic relationships
-// below can.
-func buildMeshWaitGraph(rs state.RunState) meshWaitGraph {
+// projection: live (WaitPending) mesh waits, assistants' own waiting_children links, and the unfinished
+// depends_on of the stages that have not started or that a wait needs done (waitEdge). depends_on alone is
+// cycle-free by flow validation, but it closes a cycle together with a mesh wait of a dependency for its dependent stage.
+func buildMeshWaitGraph(rs state.RunState, candidate *agentcomm.Wait, stages []flow.Stage) meshWaitGraph {
 	g := meshWaitGraph{}
 	batchItems := map[string][]meshWaitEdge{} // the pending items of each batch
 	batchWaiter := map[string]agentcomm.ParticipantID{}
@@ -659,10 +860,10 @@ func buildMeshWaitGraph(rs state.RunState) meshWaitGraph {
 			continue
 		}
 		targets := slices.DeleteFunc(meshWaitTargets(rs, w.Condition), func(p agentcomm.ParticipantID) bool { return p == w.Waiter })
-		if len(targets) == 0 {
+		if len(targets) == 0 || stageWaitsOnlyForCallbackHelpers(rs, w.Waiter, targets, candidate) {
 			continue
 		}
-		edge := meshWaitEdge{targets: targets}
+		edge := waitEdge(rs, w.Condition, targets, stages)
 		if w.BatchID == "" {
 			g[w.Waiter] = append(g[w.Waiter], edge)
 		} else {
@@ -688,7 +889,95 @@ func buildMeshWaitGraph(rs state.RunState) meshWaitGraph {
 			g[parent] = append(g[parent], meshWaitEdge{targets: children, needsAll: true})
 		}
 	}
+	for _, s := range stages {
+		if edge, blocked := unfinishedDependencies(rs, s); blocked {
+			g[meshStageParticipantID(s.ID)] = append(g[meshStageParticipantID(s.ID)], edge)
+		}
+	}
 	return g
+}
+
+// unfinishedDependencies is the edge of a stage that has not started and still waits for dependencies to be done.
+func unfinishedDependencies(rs state.RunState, s flow.Stage) (meshWaitEdge, bool) {
+	if rs.Stages[s.ID].Status != state.StatusPending {
+		return meshWaitEdge{}, false
+	}
+	deps := dependenciesNotDone(rs, s)
+	return meshWaitEdge{targets: deps, needsAll: true}, len(deps) > 0
+}
+
+func dependenciesNotDone(rs state.RunState, s flow.Stage) []agentcomm.ParticipantID {
+	var deps []agentcomm.ParticipantID
+	for _, id := range s.DependsOn {
+		if rs.Stages[id].Status != state.StatusDone {
+			deps = append(deps, meshStageParticipantID(id))
+		}
+	}
+	return deps
+}
+
+// waitEdge is the edge a wait for cond gives its waiter, targets being who can satisfy it. A stage is done only after
+// its depends_on are, whatever it does before them (an eager-planning one plans and answers messages): a wait for that
+// needs them too. An eager planning-only stage is the exception: the approval of its plan finishes it (approveStage).
+func waitEdge(rs state.RunState, cond agentcomm.WaitCondition, targets []agentcomm.ParticipantID, stages []flow.Stage) meshWaitEdge {
+	if cond.Kind != agentcomm.WaitOnStageStatus || cond.Status != string(state.StatusDone) {
+		return meshWaitEdge{targets: targets}
+	}
+	i := slices.IndexFunc(stages, func(s flow.Stage) bool { return s.ID == cond.StageID })
+	if i < 0 || stages[i].EagerPlanning && stages[i].NeedsPlanning() && !stages[i].HasAgent(flow.AgentImplementation) {
+		return meshWaitEdge{targets: targets}
+	}
+	deps := dependenciesNotDone(rs, stages[i])
+	if len(deps) == 0 {
+		return meshWaitEdge{targets: targets}
+	}
+	return meshWaitEdge{targets: append(slices.Clone(targets), deps...), needsAll: true}
+}
+
+// stageWaitsOnlyForCallbackHelpers: a stage waiting only on its own helpers is woken by their callbacks, so a
+// helper waiting for the answer to one is no deadlock. Any other wait of the helper (the candidate included)
+// needs more than a callback turn, so the edge stays.
+func stageWaitsOnlyForCallbackHelpers(rs state.RunState, waiter agentcomm.ParticipantID, targets []agentcomm.ParticipantID, candidate *agentcomm.Wait) bool {
+	stageID, isStage := stageIDFromMeshParticipant(waiter)
+	if !isStage {
+		return false
+	}
+	for _, p := range targets {
+		if !isOwnOneShotHelper(rs, stageID, p) || !waitsOnlyForAnswersTo(rs, p, waiter, candidate) {
+			return false
+		}
+	}
+	return true
+}
+
+// isOwnOneShotHelper reports whether p is a helper of stage stageID's current root generation that runs one turn
+// rather than watching the stage.
+func isOwnOneShotHelper(rs state.RunState, stageID string, p agentcomm.ParticipantID) bool {
+	id, ok := strings.CutPrefix(string(p), meshHelperPrefix)
+	if !ok {
+		return false
+	}
+	t, found := rs.Assistants.Tasks[assistants.TaskID(id)]
+	return found && isStageSpawnedHelper(rs, stageID, t) && !isWatcherTrigger(t.Trigger)
+}
+
+// waitsOnlyForAnswersTo reports whether every pending wait of helper, and candidate if it is the helper's, is a
+// reply_to on a request addressed to stage. A helper waiting for its delegated children needs more than an answer.
+func waitsOnlyForAnswersTo(rs state.RunState, helper, stage agentcomm.ParticipantID, candidate *agentcomm.Wait) bool {
+	id, _ := strings.CutPrefix(string(helper), meshHelperPrefix)
+	if t, ok := rs.Assistants.Tasks[assistants.TaskID(id)]; ok && t.Status == assistants.StatusWaitingChildren {
+		return false
+	}
+	isAnswerToStage := func(cond agentcomm.WaitCondition) bool {
+		m, ok := rs.Assistants.Mesh.Messages[cond.MessageID]
+		return cond.Kind == agentcomm.WaitOnReplyTo && ok && slices.Contains(m.Recipients, stage)
+	}
+	for _, w := range rs.Assistants.Mesh.Waits {
+		if w.Waiter == helper && w.Status == agentcomm.WaitPending && !isAnswerToStage(w.Condition) {
+			return false
+		}
+	}
+	return candidate == nil || candidate.Waiter != helper || isAnswerToStage(candidate.Condition)
 }
 
 // dependsOn reports whether node cannot act until waiter does: node is the waiter, or its edges depend on the

@@ -178,7 +178,7 @@ func TestMesh_LegacyRunParentChildWaitCycleRejected(t *testing.T) {
 	err := validateWaitAdmission(rs, WaitRequest{
 		Waiter:    meshHelperParticipantID(childID),
 		Condition: agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: string(parentID)},
-	})
+	}, nil)
 	var rejected *state.OperationRejectedError
 	if !errors.As(err, &rejected) || rejected.Code != agentcomm.CodeWaitCycle {
 		t.Fatalf("child waiting on its waiting_children legacy run parent: err = %v, want a wait_cycle rejection", err)

@@ -308,7 +308,7 @@ func TestMesh_RedactsSecretsOutsideTheEnvironment(t *testing.T) {
 	activateStage(t, o, assistantsTestStageID)
 	const fromSecretsEnv = "secrets-env-value-1234567" //nolint:gosec // test fixture value, not a real credential
 	o.opts.SecretValues = []string{fromSecretsEnv}
-	token, err := o.meshTokens().mint(meshStageParticipantID(assistantsTestStageID))
+	token, err := o.meshTokens().mint(meshStageParticipantID(assistantsTestStageID), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

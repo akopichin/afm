@@ -587,6 +587,19 @@ func TestAgentMesh_Wait_SingleReceiptIsUnchanged(t *testing.T) {
 	}
 }
 
+// A wait the Service did not register again because an equivalent one is pending says so in the receipt.
+func TestAgentMesh_Wait_ReceiptCarriesAlreadyPending(t *testing.T) {
+	fake := newFakeAgentMeshActions()
+	fake.tokens["tok-A"] = "stage:s1"
+	fake.waitReceipt = MeshWaitReceipt{WaitID: "mw-1", Status: "pending", AlreadyPending: true}
+	srv := newTestServer(t, Config{AgentMesh: fake})
+
+	w := postAgentMesh(t, srv, "tok-A", "wait", map[string]any{"request_id": "req-2", "condition": map[string]any{"kind": "reply_to", "message_id": "m1"}})
+	if got, want := strings.TrimSpace(w.Body.String()), `{"wait_id":"mw-1","status":"pending","already_pending":true}`; got != want {
+		t.Fatalf("receipt = %s, want %s", got, want)
+	}
+}
+
 // GET wait-status reads for the token's participant only: the actor comes from the token, the batch id from
 // the query, and a refusal of the Service (a batch that is not the caller's) reaches the client as not found.
 func TestAgentMesh_WaitStatus_ReadsForTheTokenActorOnly(t *testing.T) {

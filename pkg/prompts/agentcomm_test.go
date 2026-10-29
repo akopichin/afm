@@ -256,6 +256,9 @@ func TestAgentComm_RunAgentTurnResultContract(t *testing.T) {
 	if !strings.Contains(run, turnResultReplyRule) {
 		t.Fatalf("a run agent's block must explain its turn reply:\n%s", run)
 	}
+	if !strings.Contains(run, "Your result answers only the message that woke you: reply with `afm agent reply` to every other request you received this turn") {
+		t.Fatalf("a run agent must be told to answer a request it read mid-turn itself:\n%s", run)
+	}
 	stage := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true})
 	if strings.Contains(stage, turnResultReplyRule) {
 		t.Fatal("only a run agent's summary is posted as a reply")

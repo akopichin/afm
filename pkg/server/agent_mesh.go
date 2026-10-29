@@ -89,12 +89,14 @@ type MeshWaitRequest struct {
 }
 
 // MeshWaitReceipt answers a single wait with WaitID, or a batch with BatchID and one Item per request. Status
-// is that of the wait, or of the batch as a whole.
+// is that of the wait, or of the batch as a whole. AlreadyPending says no new wait was registered: an equivalent
+// one is still pending and WaitID is that one.
 type MeshWaitReceipt struct {
-	WaitID  string         `json:"wait_id,omitempty"`
-	Status  string         `json:"status"`
-	BatchID string         `json:"batch_id,omitempty"`
-	Items   []MeshWaitItem `json:"items,omitempty"`
+	WaitID         string         `json:"wait_id,omitempty"`
+	Status         string         `json:"status"`
+	BatchID        string         `json:"batch_id,omitempty"`
+	Items          []MeshWaitItem `json:"items,omitempty"`
+	AlreadyPending bool           `json:"already_pending,omitempty"`
 }
 
 // MeshWaitItem is the wait of one request of a batch. Reason says why a wait ended without an answer.
@@ -269,9 +271,8 @@ func boardTasksForClient(tasks []agentcomm.BoardTaskView) []agentcomm.BoardTaskV
 // unknown token gets 401 and the handler returns before touching the Service — "changes nothing" by
 // construction, since nothing downstream of this check ever runs.
 func (s *Server) authenticateAgentMesh(w http.ResponseWriter, r *http.Request) (actor string, ok bool) {
-	auth := r.Header.Get("Authorization")
-	token, found := strings.CutPrefix(auth, "Bearer ")
-	if !found || token == "" {
+	token := bearerToken(r)
+	if token == "" {
 		writeAssistantErrCode(w, http.StatusUnauthorized, "unauthorized")
 		return "", false
 	}
@@ -281,6 +282,21 @@ func (s *Server) authenticateAgentMesh(w http.ResponseWriter, r *http.Request) (
 		return "", false
 	}
 	return participant, true
+}
+
+// bearerToken is the token of r's Authorization header, "" when there is none.
+func bearerToken(r *http.Request) string {
+	token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !found {
+		return ""
+	}
+	return token
+}
+
+// WithMeshToken returns ctx carrying the bearer token a request was authenticated with. The orchestrator decides a
+// wait against that invocation: the actor alone cannot tell two invocations of one stage apart.
+func WithMeshToken(ctx context.Context, token string) context.Context {
+	return orchestrator.WithMeshInvocation(ctx, token)
 }
 
 // routeAgentMesh deliberately does NOT check sameOriginOK, unlike every other mutating POST route in this
@@ -513,7 +529,7 @@ func (s *Server) handleAgentMeshWait(w http.ResponseWriter, r *http.Request, act
 		writeAssistantErrCode(w, http.StatusBadRequest, "request_id_required")
 		return
 	}
-	receipt, err := s.agentMesh.Wait(r.Context(), body.RequestID, actor, body.MeshWaitRequest)
+	receipt, err := s.agentMesh.Wait(WithMeshToken(r.Context(), bearerToken(r)), body.RequestID, actor, body.MeshWaitRequest)
 	if err != nil {
 		s.writeAssistantError(w, err)
 		return

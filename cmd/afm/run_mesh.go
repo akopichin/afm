@@ -228,3 +228,37 @@ func (a meshActions) Loops(ctx context.Context) (orchestrator.LoopPage, error) {
 func (a meshActions) Loop(ctx context.Context, requestID string, cmd server.MeshLoopCommand) (orchestrator.LoopView, error) {
 	return applyLoopCommand(ctx, a.orch, requestID, meshUIActor, cmd)
 }
+
+// ownerWaitActions adapts the orchestrator to server.OwnerWaitActions; the server has already authenticated the
+// run owner by token, so every call is the human, whatever the request says.
+type ownerWaitActions struct{ orch *orchestrator.Orchestrator }
+
+func (a ownerWaitActions) StageWaits(_ context.Context, stageID string) ([]orchestrator.StageWaitView, error) {
+	return a.orch.StageWaits(stageID)
+}
+
+// CancelStageWaits ends the listed waits in one operation, then reads them back: a wait answered first shows
+// that outcome, and a repeat of the request answers the same.
+func (a ownerWaitActions) CancelStageWaits(ctx context.Context, requestID, stageID string, req server.OwnerCancelWaitsRequest) ([]orchestrator.StageWaitView, error) {
+	waitIDs := make([]agentcomm.WaitID, len(req.WaitIDs))
+	for i, id := range req.WaitIDs {
+		waitIDs[i] = agentcomm.WaitID(id)
+	}
+	err := a.orch.CancelWait(ctx, orchestrator.CancelWaitRequest{
+		OperationID: orchestrator.OwnerCancelOperationID(stageID, requestID), WaitIDs: waitIDs, StageID: stageID, Reason: req.Reason, Actor: meshUIActor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	all, err := a.orch.StageWaits(stageID)
+	if err != nil {
+		return nil, err
+	}
+	var cancelled []orchestrator.StageWaitView
+	for _, w := range all {
+		if slices.Contains(waitIDs, w.WaitID) {
+			cancelled = append(cancelled, w)
+		}
+	}
+	return cancelled, nil
+}

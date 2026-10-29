@@ -341,6 +341,30 @@ type Orchestrator struct {
 	// на каждом ходе, а notice нужен один раз на окно. Память процесса: после рестарта лента заново получит один.
 	quotaWarned sync.Map
 
+	// answerMu serializes dialog decisions (EvAskUser, answer delivery) with their question-file reads; liveAgents are
+	// stages whose agent reads an answer itself, liveTurns the turn owning each running stage's epoch. dialogHook is a
+	// test seam before (left false) and after (left true) a turn's dialog decision.
+	answerMu   sync.Mutex
+	liveTurns  sync.Map
+	liveAgents sync.Map
+	dialogHook func(stageID string, left bool)
+	// completionStatusReadHook — тест-сейм onAgentCompleted: окно между чтением статуса и завершающим переходом.
+	completionStatusReadHook func(stageID string)
+
+	// markerNoticed — ключи (stage|открытые ожидания) уже занятых completion_marker_pending_wait: один издатель на
+	// эпизод. Память процесса; после рестарта эпизод помнит notices.jsonl.
+	markerNoticed sync.Map
+	// markerNoticeDecidedHook — тест-сейм publishCompletionMarkerNotice: вызывается после решения «публиковать» и
+	// до записи notice.
+	markerNoticeDecidedHook func(stageID string)
+
+	// sweepGate, startupReleaseHook — тест-сеймы: начало фоновой проверки неотвечаемых ожиданий и момент перед
+	// стартовой проверкой. settlePlannedHook — окно между планом отмены ожиданий (старт хода, проверка) и его
+	// коммитом: тест меняет состояние именно там.
+	sweepGate          func()
+	startupReleaseHook func()
+	settlePlannedHook  func()
+
 	// retryCASBarrier — тестовый хук между проверкой failed и CAS; проверяет, что проигравший retry не
 	// очищает данные победителя.
 	retryCASBarrier func(stageID string)
@@ -810,11 +834,17 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	}
 	if !poisoned {
 		o.startPlanningForPending(ctx)
-		o.recoverAssistants(ctx)
+		o.settleAssistantsAfterRestart()
 		o.recoverFeedbackIntents(ctx)
 		o.recoverMeshWaits(ctx)
 		o.recoverUnreadOfFinishedStages(ctx)
+		// Closes what idle agents left once the turns a crash cut short are queued again; a turn started earlier
+		// (a human's message, a stage) settles its own at its start (maybeScheduleTask).
+		if o.startupReleaseHook != nil {
+			o.startupReleaseHook()
+		}
 		o.releaseUnanswerableWaits(ctx, o.resumeWaiterAfterTerminalWaitAtStartup)
+		o.resumeAssistantsAfterRestart(ctx)
 		o.recoverMeshWaitDeadlines(ctx)
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
@@ -944,10 +974,14 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 	}
 
 	// Check all phases for fresh questions.
-	if current != state.StatusAwaitingUserInput && o.hasOpenQuestion(ev.StageID, agentType) {
-		o.preAskPhase.Store(ev.StageID, agentType)
-		o.Trigger(ev.StageID, bus.EvAskUser, bus.GuardCtx{Phase: agentType, ExpectEpoch: fence}, "")
-		return nil
+	if current != state.StatusAwaitingUserInput {
+		if o.askIfStillOpen(ev.StageID, agentType, fence) {
+			return nil
+		}
+		current = o.currentStatus(ev.StageID) // a Revise since the snapshot leaves the stage to its feedback run below
+	}
+	if o.completionStatusReadHook != nil {
+		o.completionStatusReadHook(ev.StageID)
 	}
 
 	switch agentType {
@@ -981,15 +1015,7 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// Revise мог опередить естественное завершение агента без SIGINT; перезапускаем revising-стадию с
 		// сохранённым feedback.
 		if current == state.StatusRevising {
-			stage := o.reg().Stage(ev.StageID)
-			if stage == nil {
-				return nil
-			}
-			if agentType == phaseAutonomous {
-				o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousWithFeedback)
-			} else {
-				o.spawnKind(ctx, *stage, kindImplementation, o.runImplementationWithFeedback)
-			}
+			o.spawnFeedbackRun(ctx, ev.StageID, feedbackKindOf(agentType))
 			return nil
 		}
 		// A teammate wrote while the agent was working: one more turn to answer instead of done.
@@ -999,23 +1025,76 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
 		o.completeStageFenced(ctx, ev.StageID, current, "", fence)
+		o.handOffReviseAfterCompletion(ctx, ev.StageID, agentType, fence)
 	case phaseScript:
 		// Script-стадия завершилась (runScriptStage): нет revising-гонки (interruptChans не регистрируется вне
 		// runWithRetry, Revise() на script-стадию не осмыслен) — просто done, как остальные фазы.
 		o.completeStageFenced(ctx, ev.StageID, current, "", fence)
 	case phaseReview:
 		// Standalone review публикует собственный completion; встроенный review завершается через implementation
-		// и сюда не попадает.
-		if current == state.StatusRunning || current == state.StatusRevising {
+		// и сюда не попадает. Revise, опередивший completion, — как у implementation выше.
+		if current == state.StatusRevising {
+			o.spawnFeedbackRun(ctx, ev.StageID, kindReview)
+			return nil
+		}
+		if current == state.StatusRunning {
 			if o.continueForUnreadMessages(ctx, ev.StageID, agentType, fence) {
 				return nil
 			}
 			o.completeStageFenced(ctx, ev.StageID, current, "review complete", fence)
+			o.handOffReviseAfterCompletion(ctx, ev.StageID, agentType, fence)
 		}
 	default:
 		// unknown agent type: no status change needed
 	}
 	return nil
+}
+
+// spawnFeedbackRun hands a Revise that overtook its turn's completion to the feedback run of kind: the run's claimRevise
+// lets only one hand-off of that Revise start an agent.
+func (o *Orchestrator) spawnFeedbackRun(ctx context.Context, stageID, kind string) {
+	if stage := o.reg().Stage(stageID); stage != nil {
+		o.spawnKind(ctx, *stage, kind, o.withFeedbackRunner(kind))
+	}
+}
+
+// handOffReviseAfterCompletion starts the feedback run when a Revise of the completing turn committed after the
+// completion read the stage status, so the fenced completion lost to it and nobody else runs the Revise.
+func (o *Orchestrator) handOffReviseAfterCompletion(ctx context.Context, stageID, agentType string, fence *uint64) {
+	st := o.opts.Store.Snapshot().Stages[stageID]
+	if st.Status != state.StatusRevising || (fence != nil && !reviseOfTurn(st, *fence)) {
+		return
+	}
+	o.spawnFeedbackRun(ctx, stageID, feedbackKindOf(agentType))
+}
+
+// feedbackKindOf is the runner kind of the feedback run for a turn of agentType.
+func feedbackKindOf(agentType string) string {
+	switch agentType {
+	case phaseImplementation:
+		return kindImplementation
+	case phaseAutonomous:
+		return kindAutonomous
+	default:
+		return kindReview
+	}
+}
+
+// askIfStillOpen moves the stage to the user for an open question of phase, deciding under answerMu like an answer
+// does: an answer already written is never left behind in awaiting_user_input. false: no open question, or the stage
+// cannot go to the user (a takeover, a Revise among them, since the completion).
+func (o *Orchestrator) askIfStillOpen(stageID, phase string, fence *uint64) bool {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	if !o.hasOpenQuestion(stageID, phase) {
+		return false
+	}
+	o.preAskPhase.Store(stageID, phase)
+	if _, ok := o.Trigger(stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase, ExpectEpoch: fence}, ""); !ok {
+		o.preAskPhase.CompareAndDelete(stageID, phase)
+		return false
+	}
+	return true
 }
 
 // completeStage finalizes a stage whose main executor reached done — UNLESS Этап 7's durable completion
@@ -1083,16 +1162,17 @@ func (o *Orchestrator) maybeCompleteAfterAssistants(ctx context.Context, stageID
 // onUserAnswered resumes a stage that was paused on awaiting_user_input. If the agent exited before the
 // user answered, we restart it here.
 func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
-	if o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
-		return nil
-	}
-
 	data, _ := ev.Data.(map[string]any)
 	rawPhase, _ := data[keyPhase].(string)
 	if rawPhase == "" {
 		return nil
 	}
-
+	// Decided under answerMu with the turn's own dialog decision (leaveWithUser): a live agent reads the answer itself.
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	if _, live := o.liveAgents.Load(ev.StageID); live || o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
+		return nil
+	}
 	if o.hasOpenQuestion(ev.StageID, rawPhase) {
 		return nil
 	}
@@ -1139,9 +1219,11 @@ func (o *Orchestrator) resumeStageForPhaseAs(ctx context.Context, stage flow.Sta
 		parked = o.opts.Store.Snapshot().Stages[stage.ID].Quota
 		reason = quotaResetMessage(parked)
 	}
-	if _, ok := o.Trigger(stage.ID, ev, bus.GuardCtx{Phase: phase, ExpectStageSeq: expectSeq}, reason); !ok {
+	epoch, ok := o.grantTurn(stage.ID, ev, bus.GuardCtx{Phase: phase, ExpectStageSeq: expectSeq}, reason)
+	if !ok {
 		return nil // another resume won the transition — or the stage left the status: nothing to spawn
 	}
+	ctx = withTurnEpoch(ctx, epoch)
 	if parked != nil {
 		o.publishQuotaNotice(eventQuotaReset, stage.ID, "", quotaNoticeData(parked, reason))
 	}

@@ -126,6 +126,7 @@ func newRunCmd() *cobra.Command {
 			syncSkillsForRun(home, os.Stderr)
 
 			if cfg.Docker.IsDockerEnabled() {
+				releaseOwnerTokenForDocker(os.Stdout)
 				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir)
 			}
 

@@ -62,6 +62,7 @@ nav:
       - Dashboard: dashboard.md
       - Telegram bot: telegram-bot.md
       - Helpers and collaboration: collaboration.md
+      - Migrating helper waits: agent-wait-migration.md
       - Repeating prompts: loops.md
       - Managed browser: browser.md
       - Docker mode: docker.md

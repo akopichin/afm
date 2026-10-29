@@ -32,22 +32,20 @@ func (o *Orchestrator) verifyOutcomeStillOwned(stageID string, onUserInterrupted
 	}
 }
 
-// commitVerifyFailure — H1: атомарная фиксация verify-driven fail.
-func (o *Orchestrator) commitVerifyFailure(stageID, reason string, onUserInterrupted func()) bool {
+// commitVerifyFailure — H1: атомарная фиксация verify-driven fail хода, начатого в epoch.
+func (o *Orchestrator) commitVerifyFailure(stageID string, epoch uint64, reason string, onUserInterrupted func()) bool {
 	if !o.verifyOutcomeStillOwned(stageID, onUserInterrupted) {
 		return false
 	}
 	if o.verifyOutcomeGuardHook != nil {
 		o.verifyOutcomeGuardHook(stageID)
 	}
-	if _, ok := o.Trigger(stageID, bus.EvVerifyFail, bus.GuardCtx{}, reason); ok {
+	if _, ok := o.Trigger(stageID, bus.EvVerifyFail, bus.GuardCtx{ExpectEpoch: &epoch}, reason); ok {
 		return true
 	}
-	// CAS проиграл гонку: конкурентный Pause/Revise успел закоммититься МЕЖДУ fast-path чтением выше и этим
-	// Trigger — сама FSM атомарно отбросила переход, стадия больше не наша.
-	if o.currentStatus(stageID) == state.StatusRevising {
-		onUserInterrupted()
-	}
+	// CAS проиграл гонку: конкурентный Pause/Continue/Revise успел закоммититься МЕЖДУ fast-path чтением выше и этим
+	// Trigger — стадия больше не наша.
+	o.handOffRevise(stageID, epoch, onUserInterrupted)
 	return false
 }
 
@@ -57,6 +55,59 @@ func (o *Orchestrator) commitVerifyFailure(stageID, reason string, onUserInterru
 func (o *Orchestrator) completeAgent(ctx context.Context, stageID, phase string, epoch *uint64) {
 	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAgentCompleted), phase)
 	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: stageID, Data: phase, Epoch: epoch})
+}
+
+// agentAnswers marks the turn's agent as the one an answer goes to (answerToLiveAgent) until the turn decides.
+func (o *Orchestrator) agentAnswers(stageID string) {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	o.liveAgents.Store(stageID, struct{}{})
+}
+
+// stopAnswering ends that without a dialog decision: an answer from now on starts its own continuation.
+func (o *Orchestrator) stopAnswering(stageID string) {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	o.liveAgents.Delete(stageID)
+}
+
+type dialogExit int
+
+const (
+	dialogNone      dialogExit = iota // no question left open: the turn goes on
+	dialogLeft                        // the stage waits for the user; the answer starts the continuation
+	dialogTakenOver                   // a Pause/Revise took the stage before the turn could leave it
+)
+
+// leaveWithUser is the turn's one dialog decision, under answerMu like every answer: the open question is read and the
+// stage handed to the user in the same critical section, so an answer is either seen here or starts its own continuation.
+func (o *Orchestrator) leaveWithUser(stageID, phase string, epoch uint64, dialog bool) dialogExit {
+	o.turnChecksDialog(stageID)
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	o.liveAgents.Delete(stageID)
+	if !dialog || !o.hasOpenQuestion(stageID, phase) {
+		return dialogNone
+	}
+	if o.currentStatus(stageID) == state.StatusAwaitingUserInput {
+		return dialogLeft
+	}
+	if _, ok := o.Trigger(stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase, ExpectEpoch: &epoch}, ""); !ok {
+		return dialogTakenOver
+	}
+	return dialogLeft
+}
+
+func (o *Orchestrator) turnChecksDialog(stageID string) {
+	if o.dialogHook != nil {
+		o.dialogHook(stageID, false)
+	}
+}
+
+func (o *Orchestrator) turnLeftForAnswer(stageID string) {
+	if o.dialogHook != nil {
+		o.dialogHook(stageID, true)
+	}
 }
 
 // turnOwnsStage reports whether the turn that started in epoch still owns the stage: nobody paused, continued
@@ -267,6 +318,13 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 // park of it records that (state.QuotaWait.Feedback), so the wake resumes the feedback run and not a fresh one.
 func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase string, feedback bool, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
 	// SpawnAgent checks pause after acquiring its slot; interruptChans handles pauses after the agent starts.
+	epoch, granted := turnEpochFrom(ctx)
+	if !granted {
+		epoch = o.stageEpoch(s.ID)
+	}
+	turn := &turnRecord{epoch: epoch}
+	o.liveTurns.Store(s.ID, turn)
+	defer o.liveTurns.CompareAndDelete(s.ID, turn)
 	interruptCh := make(chan struct{}, 1)
 	o.interruptChans.Store(s.ID, interruptCh)
 	// G3: CompareAndDelete, а не безусловный Delete — тот же приём, что E3 применил к stageLeases.
@@ -337,12 +395,14 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		}
 		resumeCtx = false // только самая первая попытка резюмируемого запуска получает его
 
-		if o.currentStatus(s.ID) == state.StatusPaused {
-			return // a pause landed in the shouldRun->register gap; do not start the subprocess
+		if cur := o.currentStatus(s.ID); cur == state.StatusPaused || cur == state.StatusDone || cur == state.StatusFailed {
+			return // paused in the shouldRun->register gap, or ended while queued: do not start the subprocess
 		}
-
-		// The turn's ownership and its waits as it starts: the exit decides on both (parkForPeers).
-		epoch := o.opts.Store.Snapshot().Stages[s.ID].Epoch
+		// A takeover since the grant (Pause, Continue, Revise — also while this runner waited for its slot) owns the stage.
+		if !o.turnOwnsStage(s.ID, epoch) {
+			o.handOffRevise(s.ID, epoch, onUserInterrupted)
+			return
+		}
 		// Пробуждение verify-парка: автор уже отработал, первая попытка идёт сразу в completionCheck, и verify
 		// продолжает припаркованный проход (RunVerification).
 		resumesVerify := attempt == 0 && verifyResume != nil
@@ -357,21 +417,27 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			}
 		}
 		waitsBefore := o.meshWaitStatusesOf(meshStageParticipantID(s.ID))
+		markerBefore := o.readCompletionMarker(s, stageDir, phase)
 		var err error
 		if !resumesVerify {
+			o.agentAnswers(s.ID)
 			err = agentFn(retryCtx)
+			if err != nil {
+				o.stopAnswering(s.ID)
+			}
+		}
+		// Everything below acts for this turn, whatever the agent returned: if Pause, Continue or Revise took the stage
+		// over while the process was exiting, the stage is another turn's now (or the Revise's feedback run's).
+		if !o.turnOwnsStage(s.ID, epoch) {
+			o.stopAnswering(s.ID)
+			if resumesVerify {
+				verifyResume.spend() // feedback-ход, который стартует следом, не продолжит этот проход
+			}
+			o.handOffRevise(s.ID, epoch, onUserInterrupted)
+			return
 		}
 		if err == nil {
 			progressed = true
-			// Everything below acts for this turn: if Pause, Continue or Revise took the stage over while the process
-			// was exiting, the stage is another turn's now (or the Revise's feedback run's).
-			if !o.turnOwnsStage(s.ID, epoch) {
-				if resumesVerify {
-					verifyResume.spend() // feedback-ход, который стартует следом, не продолжит этот проход
-				}
-				o.handOffRevise(s.ID, epoch, onUserInterrupted)
-				return
-			}
 			// The turn ran to its end, so its <inbox> messages were handed over. The executor marks them at
 			// process start (OnDelivered); repeating it here (idempotent) also covers a runner that never calls
 			// it — otherwise they would look unread and earn the stage an extra turn (agentcomm_unread.go).
@@ -379,19 +445,21 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 				o.deliverRenderedInbox(meshStageParticipantID(s.ID))()
 			}
 			// afm bug: интерактивный агент может завершиться, не дождавшись ответа пользователя — на диске остаётся
-			// question.json без answer.json.
-			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {
-				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingUserInput {
-					// Первое обнаружение этого открытого вопроса — стадия ещё не в awaiting_user_input, вопрос точно
-					// живой (только что написан этим же вызовом агента). Держим.
-					o.Trigger(s.ID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, "")
-					return
-				}
-				// Статус уже awaiting_user_input — независимый поллер вопросов успел перевести стадию туда, ПОКА агент
-				// ещё выполнялся, обогнав его собственный выход.
-				if completionCheck == nil || completionCheck() == nil {
-					o.completeAgent(ctx, s.ID, phase, &epoch)
-				}
+			// question.json без answer.json. Вопрос, который поллер уже показал, пока агент работал, агент бросил: если
+			// работа сделана и ход ни на кого не ждёт, стадия завершается.
+			dialog := s.Interactive || phase == phaseAutonomous
+			if dialog && o.currentStatus(s.ID) == state.StatusAwaitingUserInput && o.hasOpenQuestion(s.ID, phase) &&
+				len(o.turnEpisode(meshStageParticipantID(s.ID), waitsBefore)) == 0 && (completionCheck == nil || completionCheck() == nil) {
+				o.stopAnswering(s.ID)
+				o.completeAgent(ctx, s.ID, phase, &epoch)
+				return
+			}
+			switch o.leaveWithUser(s.ID, phase, epoch, dialog) {
+			case dialogLeft:
+				o.turnLeftForAnswer(s.ID)
+				return
+			case dialogTakenOver:
+				o.handOffRevise(s.ID, epoch, onUserInterrupted)
 				return
 			}
 			// Agent Mesh Phase 5, T5.2: the executor registered a mesh Wait on a colleague and exited
@@ -404,6 +472,8 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			if episode := o.turnEpisode(meshStageParticipantID(s.ID), waitsBefore); len(episode) > 0 {
 				if resumesVerify {
 					verifyResume.spend()
+				} else if marker := o.readCompletionMarker(s, stageDir, phase); marker.freshSince(markerBefore) {
+					o.publishCompletionMarkerNotice(s.ID, marker.file, episode)
 				}
 				o.parkForPeers(ctx, s.ID, phase, epoch, episode, onUserInterrupted)
 				return
@@ -483,13 +553,12 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			}
 			// Missing artifact or second incomplete attempt — fail. См. commitVerifyFailure.
 			if isVerifyDrivenError(checkErr) {
-				if !o.commitVerifyFailure(s.ID, checkErr.Error(), onUserInterrupted) {
-					return
+				if o.commitVerifyFailure(s.ID, epoch, checkErr.Error(), onUserInterrupted) {
+					o.failBlockedStages()
 				}
 			} else {
-				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, checkErr.Error())
+				o.failTurn(s.ID, epoch, checkErr.Error(), onUserInterrupted)
 			}
-			o.failBlockedStages()
 			return
 		}
 
@@ -513,8 +582,7 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			// Drop the session file so a later retry starts a fresh Claude session instead of resuming a
 			// conversation that was never created. Mirrors the retryable branch.
 			_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
-			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
-			o.failBlockedStages()
+			o.failTurn(s.ID, epoch, err.Error(), onUserInterrupted)
 			return
 		}
 
@@ -545,9 +613,9 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		}
 
 		if !retryOK {
-			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, "retries exhausted")
-			o.failBlockedStages()
-			o.publishCritical(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
+			if seq, ok := o.failTurn(s.ID, epoch, "retries exhausted", onUserInterrupted); ok {
+				o.publishCritical(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
+			}
 			// Бюджет исчерпан: unknownRetries может пройти это раньше, чем attempt достигнет maxRetries —
 			// явный return (в отличие от прежнего кода, где это совпадало с последней итерацией цикла).
 			return
@@ -558,7 +626,11 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		// показывает фактическую паузу, а не номинальный RetryBackoff.
 		delay := jittered(backoffFor(attempt, retryBackoff, retryBackoffMax), o.jitterFrac)
 		msg := fmt.Sprintf("attempt %d/%d in %v", numerator, budget, delay)
-		_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, msg)
+		_, seq, ok := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase, ExpectEpoch: &epoch}, msg)
+		if !ok {
+			o.handOffRevise(s.ID, epoch, onUserInterrupted)
+			return
+		}
 		o.ui.Publish(bus.Event{
 			Type:    bus.EventRetryScheduled,
 			StageID: s.ID,
@@ -570,15 +642,25 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		case <-interruptCh:
 			return // Pause() already transitioned to paused — nothing to resume here
 		case <-ctx.Done():
-			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "cancelled during retry")
-			o.failBlockedStages()
+			o.failTurn(s.ID, epoch, "cancelled during retry", onUserInterrupted)
 			return
 		}
-		switch phase {
-		case phasePlanning:
-			o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phasePlanning}, "")
-		default:
-			o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phaseImplementation}, "")
+		resumePhase := phaseImplementation
+		if phase == phasePlanning {
+			resumePhase = phasePlanning
 		}
+		o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: resumePhase, ExpectEpoch: &epoch}, "")
 	}
+}
+
+// failTurn fails the stage for the turn that started in epoch: a takeover since then owns the stage, and a Revise of
+// this turn gets its feedback run instead.
+func (o *Orchestrator) failTurn(stageID string, epoch uint64, reason string, onUserInterrupted func()) (seq uint64, ok bool) {
+	_, seq, ok = o.triggerWithSeq(stageID, bus.EvFail, bus.GuardCtx{ExpectEpoch: &epoch}, reason)
+	if !ok {
+		o.handOffRevise(stageID, epoch, onUserInterrupted)
+		return 0, false
+	}
+	o.failBlockedStages()
+	return seq, true
 }
