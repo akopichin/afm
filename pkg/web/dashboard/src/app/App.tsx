@@ -143,7 +143,7 @@ export function App(): ReactElement {
   }
 
   const wsUrl = buildWebSocketUrl()
-  const { events, connected } = useEventFeed(wsUrl, runId)
+  const { events, connected, activity: liveActivity } = useEventFeed(wsUrl, runId)
 
   // Единый workspace-view-редьюсер — источник истины для того, ЧТО показано справа от рейла: Feed,
   // контекстный attention или read-only просмотр истории плана/диалога.
@@ -803,7 +803,14 @@ export function App(): ReactElement {
                     )}
                   </div>
                 ) : wsState.view === 'assistant' ? (
-                  <AssistantTaskView task={selectedTask} allTasks={selectedTaskStageTasks} maxDepth={assistantMaxDepth} />
+                  <AssistantTaskView
+                    task={selectedTask}
+                    allTasks={selectedTaskStageTasks}
+                    maxDepth={assistantMaxDepth}
+                    runId={runId}
+                    liveActivity={liveActivity}
+                    connected={connected}
+                  />
                 ) : detailPanel === null ? (
                   <div className="detail-empty empty-hint">Nothing to show for this stage</div>
                 ) : (

@@ -40,6 +40,7 @@ func newRegistryAt(revision int64, stages []flow.Stage) *Registry {
 		// as the registry's own internal copy — mutating it through a caller's returned value would corrupt
 		// ReadyStages' dependency walk for every future reader.
 		s.DependsOn = slices.Clone(s.DependsOn)
+		s.Skills = slices.Clone(s.Skills)
 		byID[s.ID] = s
 		deps[s.ID] = slices.Clone(s.DependsOn)
 	}
@@ -55,11 +56,12 @@ func (r *Registry) Revision() int64 {
 	return r.revision
 }
 
-// cloneStage copies s AND re-clones its DependsOn slice: a plain struct copy only copies the slice header,
-// which would still alias the registry's own stored backing array. Every accessor that hands a flow.Stage
-// (or a pointer to one) to a caller must go through this, not a bare struct copy.
+// cloneStage copies s AND re-clones its DependsOn and Skills slices: a plain struct copy only copies the
+// slice headers, which would still alias the registry's own stored backing arrays. Every accessor that hands
+// a flow.Stage (or a pointer to one) to a caller must go through this, not a bare struct copy.
 func cloneStage(s flow.Stage) flow.Stage {
 	s.DependsOn = slices.Clone(s.DependsOn)
+	s.Skills = slices.Clone(s.Skills)
 	return s
 }
 

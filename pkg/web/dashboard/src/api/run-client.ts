@@ -1,4 +1,5 @@
 import type { ReviewNote } from '../types'
+import { parseAssistantActivityPage, type AssistantActivityPage } from '../types/assistant-activity'
 import { toAssistantProfile, type AssistantProfile, type AssistantProfileWire } from '../types/assistant-profile'
 
 // Мутирующие команды дашборда к afm-серверу. Вынесено из PlanPanel/DialogChannel/App, которые раньше
@@ -337,6 +338,27 @@ export async function getAssistantTaskEvents(
   }
   const body = (await response.json()) as { events?: AssistantEventWire[] | null; next_cursor?: number; has_more?: boolean }
   return { events: body.events ?? [], nextCursor: body.next_cursor ?? cursor, hasMore: body.has_more === true }
+}
+
+// ActivityQuery picks one page of a helper's saved activity: no cursor is the tail, `before` pages older and
+// `after` pages forward. The server rejects both at once.
+export type ActivityQuery = { limit?: number; before?: string; after?: string }
+
+// getAssistantActivity reads saved helper activity — GET /api/assistants/{id}/activity. Failures throw a
+// FlowApiError: 404 is "no activity available" (unknown task, reader off), 400 an invalid cursor.
+export async function getAssistantActivity(taskId: string, query: ActivityQuery): Promise<AssistantActivityPage> {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.before !== undefined) params.set('before', query.before)
+  if (query.after !== undefined) params.set('after', query.after)
+  const queryString = params.toString()
+  const suffix = queryString !== '' ? `?${queryString}` : ''
+  const url = `/api/assistants/${encodeURIComponent(taskId)}/activity${suffix}`
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw await flowApiError(url, response)
+  }
+  return parseAssistantActivityPage(await response.json())
 }
 
 // getAssistantTaskRaw reads the raw text a helper task's final turn produced — GET /api/assistants/{id}/raw.

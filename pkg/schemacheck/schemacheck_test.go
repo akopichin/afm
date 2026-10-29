@@ -343,6 +343,50 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"repeat fractional max_cycles", "name: f\nrepeat:\n  max_cycles: 1.5\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"repeat null", "name: f\nrepeat: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"repeat bare key", "name: f\nrepeat:\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"stage skills scalar", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: tdd\n", true},
+		{"stage skills list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: [tdd, verification, tdd]\n", true},
+		{"stage skills namespace", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: superpowers:test-driven-development\n", true},
+		{"stage skills empty list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: []\n", true},
+		{"stage skills empty name", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: \"\"\n", false},
+		{"stage skills control character", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: \"a\\tb\"\n", false},
+		{"stage skills control character in list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: [ok, \"a\\u0085b\"]\n", false},
+		{"stage skills blank name in list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: [a, \"  \"]\n", false},
+		{"stage skills null", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: null\n", false},
+		{"stage skills bare key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills:\n", false},
+		{"stage skills number", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: 5\n", false},
+		{"stage skills mixed list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: [a, 1]\n", false},
+		{"stage skills object", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: {a: b}\n", false},
+		{"stage skills nested list", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills: [[a]]\n", false},
+		{"stage skills_dir", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: ./skills\n", true},
+		{"stage skills_dir empty", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: \"\"\n", false},
+		{"stage skills_dir blank", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: \"  \"\n", false},
+		{"stage skills_dir null", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: null\n", false},
+		{"stage skills_dir bare key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir:\n", false},
+		{"stage skills_dir number", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: 5\n", false},
+		{"stage skills_dir tilde", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: ~/skills\n", false},
+		{"flow skills_dir", "name: f\nskills_dir: /opt/skills\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"flow skills_dir empty", "name: f\nskills_dir: \"\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"flow skills_dir null", "name: f\nskills_dir: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"flow skills_dir bare key", "name: f\nskills_dir:\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"flow skills_dir newline", "name: f\nskills_dir: \"a\\nb\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"stage skills_dir newline", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    skills_dir: \"a\\nb\"\n", false},
+		{"team skills_dir newline", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills_dir: \"a\\nb\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"flow skills_dir tilde", "name: f\nskills_dir: ~/skills\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"flow skills_dir list", "name: f\nskills_dir: [a]\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills scalar", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: tdd\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"team skills list and dir", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: [tdd, verification]\n    skills_dir: ./skills\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"team skills empty list", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: []\nstages:\n  - id: s\n    agents: [auto]\n", true},
+		{"team skills control character", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: \"a\\nb\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills empty name", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: \"\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills null", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills bare key", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills:\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills number", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: 5\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills mixed list", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: [a, 1]\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills object", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills: {a: b}\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills_dir empty", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills_dir: \"\"\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills_dir null", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills_dir: null\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills_dir number", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills_dir: 5\nstages:\n  - id: s\n    agents: [auto]\n", false},
+		{"team skills_dir tilde", "name: f\nteam:\n  - id: qa\n    profile: qa\n    title: QA\n    skills_dir: ~/skills\nstages:\n  - id: s\n    agents: [auto]\n", false},
 		{"assistants unknown object key", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: reviewer\n        triger: on_completion\n", false},
 	}
 
@@ -400,6 +444,42 @@ func TestRepositoryYAMLExamplesMatchSchemas(t *testing.T) {
 		if err := configSchema.Validate(jsonInstance(t, data)); err != nil {
 			t.Errorf("%s does not match config schema: %v", path, err)
 		}
+	}
+}
+
+func TestConfigSchemaMatchesSkillsDir(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"absolute path", "skills_dir: /opt/skills\n", true},
+		{"relative path", "skills_dir: ./skills\n", true},
+		{"empty string", "skills_dir: \"\"\n", false},
+		{"blank string", "skills_dir: \"  \"\n", false},
+		{"null", "skills_dir: null\n", false},
+		{"bare key", "skills_dir:\n", false},
+		{"number", "skills_dir: 5\n", false},
+		{"list", "skills_dir: [a]\n", false},
+		{"tilde", "skills_dir: ~/skills\n", false},
+		{"newline", "skills_dir: \"a\\nb\"\n", false},
+		{"c1 control character", "skills_dir: \"a\\u0085b\"\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaAcceptsYAML(t, sch, tt.body); got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(t.TempDir(), projectDir)
+			if runtimeAccepts := err == nil; runtimeAccepts != tt.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
 	}
 }
 

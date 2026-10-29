@@ -14,7 +14,10 @@ import (
 )
 
 type runEnvironment struct {
-	RootDir         string
+	RootDir string
+	// SkillsBase is where a relative skills_dir is resolved: the effective project root, else the afm root.
+	// Unlike RootDir it is never empty, because it does not decide where agents run.
+	SkillsBase      string
 	MemoryDir       string
 	WrapperDir      string
 	GeneratedAgents map[string]bool
@@ -46,6 +49,10 @@ func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, work
 		if err != nil {
 			return env, err
 		}
+	}
+	env.SkillsBase, err = effectiveRoot(afmRoot, worktreeDir, f)
+	if err != nil {
+		return env, err
 	}
 	env.MemoryDir, err = resolveMemoryDir(afmRoot, env.RootDir, f)
 	if err != nil {
@@ -90,7 +97,8 @@ func normalizeInteractiveStages(stages []flow.Stage, dashboardEnabled bool) []fl
 	return stages
 }
 
-func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string) error {
+// saved is the run this start would resume (nil for a new run): its frozen skill libraries need mounts too.
+func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string, saved *savedRun) error {
 	absDir, err := filepath.Abs(afmRoot)
 	if err != nil {
 		return fmt.Errorf("resolve project dir: %w", err)
@@ -99,6 +107,15 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		return err
 	}
 	proj, err := projectDocker(f, cfg)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
+	// Checked here, before docker -v could create a missing source as an empty root-owned directory.
+	skillMounts, skillLibraries, err := prepareSkillMounts(absDir, worktreeDir, home, f, cfg, saved)
 	if err != nil {
 		return err
 	}
@@ -131,7 +148,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		ProjectDir:    absDir,
 		Commands:      docker.ScanCommandsWithExtra(f, cfg.Client.Command, proj.Generated, proj.Extra),
 		DashboardPort: port,
-		ExtraMounts:   cfg.Docker.ExtraMounts,
+		ExtraMounts:   slices.Concat(cfg.Docker.ExtraMounts, skillMounts),
 		// The absolute, final --dir wins over a user's relative flag inside Docker.
 		ExtraArgs:          append(os.Args[1:], "--dir="+absDir),
 		ClientCommand:      cfg.Client.Command,
@@ -142,6 +159,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 		FileBrowserEnabled: browserEnabled,
 		FileRoots:          fileRoots,
 		WorktreeDir:        worktreeDir,
+		SkillLibraries:     skillLibraries,
 	}
 	if browserDesc != nil {
 		rc.BrowserEnabled = true

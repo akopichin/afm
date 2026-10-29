@@ -164,7 +164,7 @@ func Classify(err error) Classification {
 	// Типизированные сентинелы (T1/T2) тоже идут ДО скана по подстрокам: процесс, который не стартовал,
 	// детерминированно фатален независимо от текста; idle timeout — ограниченный бюджет, а не угаданный
 	// по подстроке.
-	if errors.Is(err, executor.ErrAgentStart) {
+	if errors.Is(err, executor.ErrAgentStart) || errors.Is(err, ErrSkillLibrary) {
 		return ClassFatal
 	}
 	if errors.Is(err, context.Canceled) {

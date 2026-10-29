@@ -16,6 +16,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -67,6 +68,12 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	prevResult = redact.String(prevResult, secrets)
 	followUp = redact.String(followUp, secrets)
 	childResults = redact.String(childResults, secrets)
+	// Read on every turn: a run agent's skills and catalog are part of each prompt, not only the first.
+	lib, err := readSkillLibrary(task.SkillsDir)
+	if err != nil {
+		return TaskContext{}, err
+	}
+	skillsBlock := redact.String(prompts.SkillsBlock(task.Skills, lib), secrets)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Your role\n\n%s\n\n", roleInstructions)
@@ -83,6 +90,10 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// refine the original instruction above. Followed by afm's own output contract (below), which the model
 	// reads last of all — a user-supplied follow-up can never override afm's answer format by recency.
 	writeFencedSection(&b, "Follow-up instruction from the user for this task", followUp)
+	// afm's own instruction, not data (like the output contract), so it is not fenced.
+	if skillsBlock != "" {
+		b.WriteString(skillsBlock + "\n")
+	}
 	b.WriteString(o.outputContractBlock(task))
 	// Agent Mesh Phase 4, T4.3: the SAME agent_communication source stage agents get (agentCommBlockFor),
 	// sitting with the output contract as afm's own instruction (unfenced) — unlike the sections above,
@@ -103,7 +114,11 @@ func (o *Orchestrator) buildTaskContext(task assistants.Task, stage flow.Stage) 
 	// same turn is reproducible") — the message TEXT changing (impossible — messages are immutable once
 	// sent) or which messages are pending (the only thing that actually varies between attempts) both show
 	// up as a different ContextVersion.
-	version := computeContextVersion(stage.ID, generation, roleInstructions, instruction, workspace, plan, artifacts, prevResult, childResults, followUp, inboxBlock)
+	parts := []string{stage.ID, generation, roleInstructions, instruction, workspace, plan, artifacts, prevResult, childResults, followUp, inboxBlock}
+	if skillsBlock != "" { // appended only when present, so a context without skills keeps its earlier version
+		parts = append(parts, skillsBlock)
+	}
+	version := computeContextVersion(parts...)
 	return TaskContext{Prompt: prompt, Version: version, markInboxDelivered: markInboxDelivered, inboxIDs: inboxIDs}, nil
 }
 

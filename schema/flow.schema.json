@@ -31,6 +31,7 @@
     "memory": {
       "$ref": "#/definitions/memory"
     },
+    "skills_dir": { "$ref": "#/definitions/skillsDir" },
     "hooks": {
       "type": "array",
       "description": "Lifecycle hooks: observer commands receiving event JSON on stdin (flow layer, gets all stages' events).",
@@ -115,6 +116,33 @@
     }
   ],
   "definitions": {
+    "skillNames": {
+      "description": "Skills the agent must load before the task: one name or a list. Exact repeats are dropped, order is kept, names (including namespaced ones like superpowers:test-driven-development) are used as written. An empty list means none.",
+      "oneOf": [
+        { "$ref": "#/definitions/skillName" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/skillName" }
+        }
+      ]
+    },
+    "skillName": {
+      "type": "string",
+      "description": "A skill name: not blank, no control characters.",
+      "allOf": [
+        { "pattern": "\\S" },
+        { "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$" }
+      ]
+    },
+    "skillsDir": {
+      "type": "string",
+      "description": "One extra local skill library: a directory of <name>/SKILL.md folders. The nearest level that sets it wins (stage or team member, then flow, then config skills_dir); libraries are never merged. A relative path is resolved from the effective project root (worktree, else root_dir from the afm root). Empty values, a leading ~ and control characters are rejected.",
+      "allOf": [
+        { "pattern": "\\S" },
+        { "pattern": "^[^~]" },
+        { "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$" }
+      ]
+    },
     "duration": {
       "type": "string",
       "description": "A Go duration string, e.g. \"30s\", \"5m\", \"1h30m\".",
@@ -249,11 +277,8 @@
             ]
           }
         },
-        "skills": {
-          "type": "array",
-          "description": "Claude skills made available to the agent.",
-          "items": { "type": "string" }
-        },
+        "skills": { "$ref": "#/definitions/skillNames" },
+        "skills_dir": { "$ref": "#/definitions/skillsDir" },
         "depends_on": {
           "type": "array",
           "description": "IDs of stages that must complete first.",
@@ -490,7 +515,9 @@
         },
         "profile": { "type": "string", "minLength": 1, "description": "Assistant profile id (a key under collaboration.profiles)." },
         "title": { "type": "string", "minLength": 1, "description": "Display name; the agent's @name is made from it (a taken name gets a -2, -3 suffix)." },
-        "instruction": { "type": "string", "description": "Instruction given to the agent, as in Add run agent." }
+        "instruction": { "type": "string", "description": "Instruction given to the agent, as in Add run agent." },
+        "skills": { "$ref": "#/definitions/skillNames" },
+        "skills_dir": { "$ref": "#/definitions/skillsDir" }
       }
     },
     "stageAssistant": {

@@ -31,6 +31,10 @@ const containerHome = "/home/afm"
 // создать worktree может только хост.
 const WorktreeEnvVar = "AFM_DOCKER_WORKTREE"
 
+// SkillLibrariesEnvVar — библиотеки скилов (через os.PathListSeparator), которые хост проверил перед стартом
+// контейнера. Только хост видит, ведёт ли путь к той же библиотеке, поэтому без рестарта годятся лишь они.
+const SkillLibrariesEnvVar = "AFM_DOCKER_SKILL_LIBRARIES"
+
 // CommandMount описывает нестандартный агент для монтирования в контейнер.
 type CommandMount struct {
 	HostPath      string
@@ -61,6 +65,9 @@ type ReExecConfig struct {
 	// лежит под ProjectDir (containment-гейт — обязанность вызывающего кода), поэтому отдельный bind-mount
 	// не нужен: ProjectDir уже смонтирован по идентичному пути.
 	WorktreeDir string
+
+	// SkillLibraries — библиотеки скилов, проверенные хостом; см. SkillLibrariesEnvVar.
+	SkillLibraries []string
 
 	// Hooks — итоговый список lifecycle-хуков, собранный ВЫЗЫВАЮЩИМ КОДОМ ДО этой докер-ветки.
 	Hooks []lifecyclehooks.RegisteredHook
@@ -360,8 +367,8 @@ func ReExec(cfg ReExecConfig) error {
 
 	// Доп. хост-директории кастомных агентов (токены/конфиги вне ~/.claude).
 	for _, m := range cfg.ExtraMounts {
-		hostPath := resolveMountPath(cfg.ProjectDir, m.Path, home)
-		containerPath := resolveMountPath(cfg.ProjectDir, m.Path, containerHome)
+		hostPath := ResolveMountPath(cfg.ProjectDir, m.Path, home)
+		containerPath := ResolveMountPath(cfg.ProjectDir, m.Path, containerHome)
 		args = append(args, "-v", hostPath+":"+containerPath+":ro")
 	}
 
@@ -418,6 +425,9 @@ func ReExec(cfg ReExecConfig) error {
 	// внутри контейнера знало, куда указывать CWD агентов, не повторяя git-работу хоста.
 	if cfg.WorktreeDir != "" {
 		args = append(args, "-e", WorktreeEnvVar+"="+cfg.WorktreeDir)
+	}
+	if len(cfg.SkillLibraries) > 0 {
+		args = append(args, "-e", SkillLibrariesEnvVar+"="+strings.Join(cfg.SkillLibraries, string(os.PathListSeparator)))
 	}
 	// Передаём секреты только в bare-форме `-e KEY`: docker-клиент наследует окружение afm и сам подставит
 	// значение.
@@ -524,14 +534,14 @@ func expandHome(p, home string) string {
 func ExtraMountContainerPaths(projectContainerPath string, mounts config.ExtraMounts) []string {
 	paths := make([]string, 0, len(mounts))
 	for _, m := range mounts {
-		paths = append(paths, resolveMountPath(projectContainerPath, m.Path, containerHome))
+		paths = append(paths, ResolveMountPath(projectContainerPath, m.Path, containerHome))
 	}
 	return paths
 }
 
-// resolveMountPath резолвит путь extra_mounts в абсолютный путь: "~..." — относительно home, уже
+// ResolveMountPath резолвит путь extra_mounts в абсолютный путь: "~..." — относительно home, уже
 // абсолютный — как есть, прочий относительный — относительно projectRoot.
-func resolveMountPath(projectRoot, path, home string) string {
+func ResolveMountPath(projectRoot, path, home string) string {
 	if strings.HasPrefix(path, "~") {
 		return expandHome(path, home)
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -221,6 +222,9 @@ type verifyNotice struct {
 	Data    map[string]any `json:"data"`
 }
 
+// verifyTypePrefix starts both verify notice types as a quoted JSON string value.
+var verifyTypePrefix = []byte(`"verify_`)
+
 // latestVerifyByStage scans all notices once, keeping one verify notice per stage by timestamp, then file
 // order on ties.
 func latestVerifyByStage(runDir string) map[string]*VerifyView {
@@ -234,6 +238,10 @@ func latestVerifyByStage(runDir string) map[string]*VerifyView {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
+		// Activity notices are high volume and polled every few seconds: decode only lines that can be verify ones.
+		if !bytes.Contains(sc.Bytes(), verifyTypePrefix) {
+			continue
+		}
 		var n verifyNotice
 		if json.Unmarshal(sc.Bytes(), &n) != nil {
 			continue

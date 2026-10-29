@@ -6,6 +6,7 @@ import {
   continueStage,
   deleteNote,
   FlowApiError,
+  getAssistantActivity,
   injectNotes,
   listNotes,
   pauseFlow,
@@ -248,5 +249,34 @@ describe('FlowApiError carries the server reason', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) } as Response)
     const err = await postStageDiscussionMessage('s1', 'req-1', { body: 'hi', mentions: [], interrupt: false }).catch((e: unknown) => e)
     expect((err as FlowApiError).message).toBe('/api/stages/s1/discussion -> 404 (not_found)')
+  })
+})
+
+describe('getAssistantActivity', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // Older browsers have no URLSearchParams.size; the cursor must still reach the server.
+  test('sends limit and cursors without relying on URLSearchParams.size', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ entries: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const sizeDescriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, 'size')
+    Object.defineProperty(URLSearchParams.prototype, 'size', { configurable: true, get: () => undefined })
+    try {
+      await getAssistantActivity('t-1', { limit: 100, before: '20' })
+      await getAssistantActivity('t-1', { after: '30' })
+    } finally {
+      if (sizeDescriptor !== undefined) Object.defineProperty(URLSearchParams.prototype, 'size', sizeDescriptor)
+    }
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/assistants/t-1/activity?limit=100&before=20',
+      '/api/assistants/t-1/activity?after=30',
+    ])
+  })
+
+  test('a plain tail request has no query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ entries: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    await getAssistantActivity('t-1', {})
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/assistants/t-1/activity')
   })
 })

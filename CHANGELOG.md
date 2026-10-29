@@ -16,6 +16,26 @@ instead of completing or running verify. The run owner can list and cancel
 selected stage waits through a separate bearer-protected recovery API on a
 native run. See [helper wait migration](docs/agent-wait-migration.md).
 
+## 2026-10-28
+
+### Improvement: assign skills and a local skill library to flow agents
+
+Stages and `team` members can require one skill or a list and can use an
+additional local `skills_dir`. Agents receive native-first loading instructions
+and a catalog for exact-name fallback or task-based selection. The library path
+resolves against the effective project root, survives resume, and can be
+mounted read-only in automatic Docker mode when authorized by config. See
+[Agent skills](docs/flow-reference.md#agent-skills).
+
+### Improvement: follow a selected helper's activity
+
+Select a helper under its stage to see messages and tool calls while it works,
+with its latest action and the existing result card after completion. Saved
+activity returns after reload or reconnect; older actions load on demand.
+The activity panel remains separate from stage and Full feeds, and old runs
+without activity history show an empty state. See
+[Helpers and collaboration](docs/collaboration.md#selected-helper-activity).
+
 ## 2026-10-25
 
 ### Improvement: install reusable pipelines through a bundled skill

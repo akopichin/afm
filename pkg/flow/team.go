@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/akopichin/afm/pkg/skills"
 )
 
 // YAML keys shared by the team: and assistants: object forms.
@@ -13,6 +15,8 @@ const (
 	keyTitle       = "title"
 	keyInstruction = "instruction"
 	keyMode        = "mode"
+	keySkills      = "skills"
+	keySkillsDir   = "skills_dir"
 )
 
 // TeamMember declares one run agent the flow adds before its stages start — the same agent the dashboard's
@@ -24,6 +28,9 @@ type TeamMember struct {
 	Profile     string `yaml:"profile"`
 	Title       string `yaml:"title"`
 	Instruction string `yaml:"instruction,omitempty"`
+	// Skills are the skills the agent must load before work; SkillsDir overrides the flow's library.
+	Skills    skills.Names `yaml:"skills,omitempty"`
+	SkillsDir skills.Dir   `yaml:"skills_dir,omitempty"`
 }
 
 // Team is the flow-level team: field, in declaration order (the order the agents are created in).
@@ -67,10 +74,29 @@ func (m *TeamMember) unmarshalMapping(value *yaml.Node) error {
 	if value.Kind != yaml.MappingNode {
 		return errors.New("team: each member must be an object with id, profile, title and instruction")
 	}
+	seen := make(map[string]bool, len(value.Content)/2)
 	for i := 0; i+1 < len(value.Content); i += 2 {
 		key := value.Content[i].Value
+		if seen[key] {
+			return fmt.Errorf("team: duplicate field %q", key)
+		}
+		seen[key] = true
 		var dst *string
 		switch key {
+		case keySkills:
+			names, err := skills.ParseNames(value.Content[i+1])
+			if err != nil {
+				return fmt.Errorf("team: %w", err)
+			}
+			m.Skills = names
+			continue
+		case keySkillsDir:
+			dir, err := skills.ParseDir(value.Content[i+1])
+			if err != nil {
+				return fmt.Errorf("team: %w", err)
+			}
+			m.SkillsDir = dir
+			continue
 		case "id":
 			dst = &m.ID
 		case keyProfile:
@@ -80,7 +106,7 @@ func (m *TeamMember) unmarshalMapping(value *yaml.Node) error {
 		case keyInstruction:
 			dst = &m.Instruction
 		default:
-			return fmt.Errorf("team: unknown field %q; use id, profile, title, instruction", key)
+			return fmt.Errorf("team: unknown field %q; use id, profile, title, instruction, skills, skills_dir", key)
 		}
 		if err := value.Content[i+1].Decode(dst); err != nil {
 			return fmt.Errorf("team: %s: %w", key, err)

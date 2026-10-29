@@ -58,6 +58,9 @@ type AttachAndSendRequest struct {
 	// (agentcomm.Thread.OriginStage). A stage helper's thread always belongs to its StageID.
 	OriginStage string
 	Actor       state.Actor
+	// Skills and SkillsDir — see topLevelTaskRequest; only the flow's team sets them.
+	Skills    []string
+	SkillsDir string
 }
 
 // attachOriginStage is the origin stage of an attach's first thread.
@@ -289,6 +292,7 @@ func (o *Orchestrator) AttachAndSend(ctx context.Context, req AttachAndSendReque
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: req.Scope, StageID: req.StageID,
 		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Origin: req.Origin, Actor: req.Actor,
+		Skills: req.Skills, SkillsDir: req.SkillsDir,
 	}
 	if op, committed, err := o.opts.Store.CommittedOperation(req.OperationID, opKindAttachAndSend); err != nil || committed {
 		if err != nil {

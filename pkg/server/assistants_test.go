@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -108,6 +109,16 @@ type fakeAssistantsReader struct {
 	events    []AssistantEventView
 	hasMore   bool
 	eventsErr error
+	// activity backs TaskActivity: the query the handler passed is recorded, the page or error returned.
+	activity      stagefiles.ActivityPage
+	activityErr   error
+	activityQuery stagefiles.ActivityQuery
+	activityTask  string
+}
+
+func (f *fakeAssistantsReader) TaskActivity(taskID string, q stagefiles.ActivityQuery) (stagefiles.ActivityPage, error) {
+	f.activityTask, f.activityQuery = taskID, q
+	return f.activity, f.activityErr
 }
 
 func (f *fakeAssistantsReader) TaskTree(stageID string) ([]AssistantTaskView, error) {

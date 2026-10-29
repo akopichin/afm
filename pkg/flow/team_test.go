@@ -1,6 +1,7 @@
 package flow_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,7 +35,7 @@ stages:
 		t.Fatalf("Team = %+v, want %+v", f.Team, want)
 	}
 	for i := range want {
-		if f.Team[i] != want[i] {
+		if !reflect.DeepEqual(f.Team[i], want[i]) {
 			t.Fatalf("Team[%d] = %+v, want %+v", i, f.Team[i], want[i])
 		}
 	}

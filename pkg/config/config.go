@@ -12,6 +12,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
+	"github.com/akopichin/afm/pkg/skills"
 )
 
 // envFlag reports whether an environment variable is truthy ("1" or "true").
@@ -551,6 +552,9 @@ type Config struct {
 	PromptsDir string         `yaml:"prompts_dir"`
 	Theme      string         `yaml:"theme"`
 	SkinDir    string         `yaml:"skin_dir"`
+	// SkillsDir is the default extra skill library for runs; a flow, stage or team member setting wins.
+	// A relative path is resolved from the effective project root, not from the config's directory.
+	SkillsDir skills.Dir `yaml:"skills_dir,omitempty"`
 	// AutoRecover controls whether failed stages are automatically reset to pending when a run
 	// starts/resumes. nil/true = enabled (default); explicit false disables.
 	AutoRecover *bool `yaml:"auto_recover"`
@@ -745,9 +749,18 @@ func mergeFile(dst *Config, path string, layer string) error {
 		}
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
-	var overlay Config
-	if err := yaml.Unmarshal(data, &overlay); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parse %s config %s: %w", layer, path, err)
+	}
+	var overlay Config
+	if len(doc.Content) > 0 {
+		if err := skills.RejectNullKeys(doc.Content[0], "skills_dir"); err != nil {
+			return fmt.Errorf("parse %s config %s: %w", layer, path, err)
+		}
+		if err := doc.Decode(&overlay); err != nil {
+			return fmt.Errorf("parse %s config %s: %w", layer, path, err)
+		}
 	}
 	if overlay.Client.Command != "" {
 		dst.Client.Command = overlay.Client.Command
@@ -778,6 +791,9 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	if overlay.SkinDir != "" {
 		dst.SkinDir = overlay.SkinDir
+	}
+	if overlay.SkillsDir != "" {
+		dst.SkillsDir = overlay.SkillsDir
 	}
 	if overlay.Server.Port != nil {
 		dst.Server.Port = overlay.Server.Port

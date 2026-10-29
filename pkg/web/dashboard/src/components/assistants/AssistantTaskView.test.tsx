@@ -32,6 +32,9 @@ const mockContinue = continueAssistantTask as unknown as ReturnType<typeof vi.fn
 const mockCancel = cancelAssistantTask as unknown as ReturnType<typeof vi.fn>
 const mockWaive = waiveAssistantTask as unknown as ReturnType<typeof vi.fn>
 
+// Lets the activity request, which every mounted view starts, publish its state inside act().
+const flushLoads = () => act(async () => { await Promise.resolve() })
+
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
     id: 't1', parentTaskId: null, profileId: 'reviewer', title: 'Reviewer', mode: 'advisory',
@@ -66,13 +69,13 @@ describe('AssistantTaskView', () => {
     expect(screen.getByText(/select a helper task/i)).toBeInTheDocument()
   })
 
-  test('empty state: task still running, no result reported yet', async () => {
+  test('empty state: task still running, no activity or result reported yet', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
     render(<AssistantTaskView task={makeTask({ status: 'running' })} />)
 
     expect(screen.getByText('Reviewer')).toBeInTheDocument()
     expect(screen.getByText('Running')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByText(/waiting for the first result/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/waiting for the first message or tool call/i)).toBeInTheDocument())
   })
 
   test('error state: a failed task shows its status reason', async () => {
@@ -199,8 +202,9 @@ describe('AssistantTaskView', () => {
     expect(screen.getByText('pkg/foo.go:42')).toBeInTheDocument()
   })
 
-  test('required vs advisory mode is shown as text, not only as a data attribute', () => {
+  test('required vs advisory mode is shown as text, not only as a data attribute', async () => {
     render(<AssistantTaskView task={makeTask({ mode: 'required' })} />)
+    await flushLoads()
     expect(screen.getByText('Required')).toBeInTheDocument()
   })
 
@@ -216,10 +220,12 @@ describe('AssistantTaskView', () => {
     expect(screen.getByText('Watches: checkpoints')).toBeInTheDocument()
     expect(screen.getByText('Passes: 3')).toBeInTheDocument()
     expect(screen.getByText('Last checkpoint: #42')).toBeInTheDocument()
+    await flushLoads()
   })
 
-  test('a plain one_shot task shows no watcher status line', () => {
+  test('a plain one_shot task shows no watcher status line', async () => {
     render(<AssistantTaskView task={makeTask({ trigger: 'one_shot' })} />)
+    await flushLoads()
     expect(screen.queryByText(/^Watches:/)).not.toBeInTheDocument()
   })
 
@@ -280,9 +286,10 @@ describe('AssistantTaskView', () => {
     await waitFor(() => expect(mockWaive).toHaveBeenCalledWith('t1', 'known risk, shipping anyway'))
   })
 
-  test('actions: a waived required task offers no actions', () => {
+  test('actions: a waived required task offers no actions', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
     render(<AssistantTaskView task={makeTask({ mode: 'required', status: 'completed', waived: true })} />)
+    await flushLoads()
     expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
     // Terminal + waived + advisory-less → the action bar renders nothing at all.
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
@@ -303,31 +310,34 @@ describe('AssistantTaskView', () => {
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    test('shows the reason instead of a countdown or "Resumes at"', () => {
+    test('shows the reason instead of a countdown or "Resumes at"', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
       const { container } = render(
         <MessageTimeZoneProvider timeZone="UTC" utcOffsetMinutes={0}><AssistantTaskView task={heldTask()} /></MessageTimeZoneProvider>,
       )
+      await flushLoads()
       expect(container.querySelector('.quota-countdown')).toBeNull()
       expect(container.textContent).not.toContain('Resumes')
       expect(container.querySelector('.quota-wait')).toHaveTextContent(/later than the maximum wait, so the task was paused/)
     })
 
-    test('no_reset and max_waits also offer Continue', () => {
+    test('no_reset and max_waits also offer Continue', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
       for (const pauseReason of ['no_reset', 'max_waits']) {
         const { unmount } = render(<AssistantTaskView task={makeTask({ status: 'queued', quota: parseStageQuota({ provider: 'codex', source: 'text', pause_reason: pauseReason }) })} />)
         expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
+        await flushLoads()
         unmount()
       }
     })
   })
 
-  test('a helper that simply waits for a limit (until set, no pause_reason) keeps countdown and Pause, no Continue', () => {
+  test('a helper that simply waits for a limit (until set, no pause_reason) keeps countdown and Pause, no Continue', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([]))
     const quota = parseStageQuota({ provider: 'claude', source: 'structured', until: '2099-01-01T00:00:00Z', reset_at: '2099-01-01T00:00:00Z' })
     const { container } = render(<AssistantTaskView task={makeTask({ status: 'queued', quota })} />)
+    await flushLoads()
     expect(container.querySelector('.quota-countdown')).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Pause' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()

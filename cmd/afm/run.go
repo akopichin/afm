@@ -126,8 +126,12 @@ func newRunCmd() *cobra.Command {
 			syncSkillsForRun(home, os.Stderr)
 
 			if cfg.Docker.IsDockerEnabled() {
+				saved, err := savedRunFor(mode, runsDir(), runNameFor(worktreeName, f.Name), f)
+				if err != nil {
+					return err
+				}
 				releaseOwnerTokenForDocker(os.Stdout)
-				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir)
+				return reexecFlow(absRootDir(), f, cfg, hooks, wtDir, saved)
 			}
 
 			// reasoning is never a hard error — warn on non-canonical/cursor values and proceed. Emitted
@@ -223,13 +227,14 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	// T8.6 recovery ordering: the stage registry itself must be settled — restored from this run's own
 	// durable graph_registry.json on resume, or persisted fresh on a first start — BEFORE any consumer
 	// (orchestrator.New, the dashboard's stage provider) is constructed below. A flow.yaml edited between
-	// runs must never silently replace a resumed run's graph (graph.RestoreOrPersist's whole point).
-	stages, err = graph.RestoreOrPersist(runDir, stages)
+	// runs must never silently replace a resumed run's graph (graph.RestoreOrPersist's whole point). The
+	// skill libraries are checked inside, before the registry is frozen.
+	runSnap := store.Snapshot()
+	stages, team, err := settleSkillRun(runDir, stages, f, cfg, env.SkillsBase, runSnap)
 	if err != nil {
-		return cycleResult{}, fmt.Errorf("restore stage registry: %w", err)
+		return cycleResult{}, err
 	}
 	runID := filepath.Base(runDir)
-	runSnap := store.Snapshot()
 	resumed, err := recordFreshRunProtocol(store)
 	if err != nil {
 		return cycleResult{}, err
@@ -251,7 +256,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if err := checkDeclaredAssistants(f, collab); err != nil {
 		return cycleResult{}, err
 	}
-	if err := checkFlowTeam(store, f.Team, collab); err != nil {
+	if err := checkFlowTeam(store, team, collab); err != nil {
 		return cycleResult{}, err
 	}
 
@@ -305,7 +310,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		AssistantsEnabled:  collab.policy.Enabled,
 		AssistantsRegistry: collab.registry,
 		AddStageDisabled:   !cfg.AddStage.IsEnabled(),
-		Team:               f.Team,
+		Team:               team,
 		SecretValues:       loadRedactionSecrets(absRootDir(), cfg, hooks),
 	}
 	if ws != nil {

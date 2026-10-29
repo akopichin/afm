@@ -73,9 +73,12 @@ right (there is no three-column layout or bottom progress bar).
   rail shows a quiet per-stage cost. All of it can be switched off — see
   [Cost tracking](#cost-tracking) below.
 - **Helpers** — attached helper tasks appear beneath their stage.
-  Select one to see its result and controls, including a **repaired** badge for an
-  answer whose JSON needed repair or the raw answer behind a protocol error when
-  available. With collaboration on, your conversation with a stage's agent lives
+  Select one to see its messages, tool calls, result and controls. Its
+  [activity history](collaboration.md#selected-helper-activity) is separate from
+  the stage Feed and stays available after the helper finishes. The view
+  includes a **repaired** badge for an answer whose JSON needed repair or the
+  raw answer behind a protocol error when available. With collaboration on,
+  your conversation with a stage's agent lives
   in its **Feed** (see [Message](#message) and
   [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
   can add a stage to a live run. See [Helpers and collaboration](collaboration.md).

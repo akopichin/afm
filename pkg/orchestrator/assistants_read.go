@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -90,4 +91,14 @@ func (o *Orchestrator) TaskEvents(taskID assistants.TaskID, cursor uint64, limit
 		next = page[len(page)-1].Seq
 	}
 	return page, next, hasMore, nil
+}
+
+// TaskActivity returns a page of taskID's helper activity from the run's notices.jsonl. Existence is checked in
+// the task projection, so a run-scoped task (no root stage) is found, while an id that only appears in the file
+// (another run) is not_found. Backs GET /api/assistants/{id}/activity.
+func (o *Orchestrator) TaskActivity(taskID assistants.TaskID, q stagefiles.ActivityQuery) (stagefiles.ActivityPage, error) {
+	if _, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; !ok {
+		return stagefiles.ActivityPage{}, &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown task %q", taskID)}
+	}
+	return stagefiles.ReadTaskActivity(o.opts.RunDir, string(taskID), q)
 }

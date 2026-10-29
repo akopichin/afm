@@ -75,6 +75,26 @@ The image includes claude CLI, Node 22, Python 3.12, Go 1.26, and git. The conta
 starts as root, but the entrypoint (`gosu`) immediately drops privileges to your host
 uid/gid — files in the mounted volumes belong to you, not root.
 
+### Additional skill libraries
+
+For [agent skills](flow-reference.md#agent-skills), a library inside the mounted
+project or an existing `docker.extra_mounts` path uses that mount. An external
+library may need its own read-only mount at the same absolute path, including
+its `SKILL.md`, `scripts/`, and `references/`. To authorize an external library
+requested in `flow.yaml`, set its path (or a containing directory) in the
+merged `config.yaml` as `skills_dir` or `docker.extra_mounts`. A flow cannot
+authorize a new external mount by itself. afm checks that the source exists and
+is readable before Docker starts; it rejects the filesystem root, the whole
+home directory, and parents of the project as skill mounts. Symlinks inside a
+library may stay within it, but a link that escapes the library is rejected.
+
+On resume, afm prepares mounts from the saved stage and team settings before
+starting the container. If a saved library is now unavailable, the run stops
+before an agent starts. A repeated flow reloads its declarations for the next
+run; if they require a new external mount, restart `afm run`. These Docker
+checks require a Docker-capable host to exercise; a build or a run inside an
+already running container does not verify the host re-exec mount behavior.
+
 ## Authentication in Docker mode
 
 The container is Linux — it has no access to the macOS Keychain where claude's OAuth

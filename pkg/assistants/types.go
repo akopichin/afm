@@ -197,6 +197,12 @@ type Task struct {
 	Mode        Mode
 	Trigger     Trigger
 
+	// Skills and SkillsDir are the skills the agent must load and its extra skill library (an absolute path),
+	// frozen at creation like the profile snapshot. Only a flow's team member carries them: a helper or a
+	// delegated child never inherits its author's.
+	Skills    []string
+	SkillsDir string
+
 	Status       TaskStatus
 	StatusReason string
 

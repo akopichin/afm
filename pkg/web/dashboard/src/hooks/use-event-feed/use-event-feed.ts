@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AfmEvent } from '../../types'
+import { parseAssistantActivity, type AssistantActivityEntry } from '../../types/assistant-activity'
 import { useRunEpoch } from '../use-run-epoch'
 
 // Подписка на WebSocket /ws с автопереконнектом и keepalive. Heartbeat от сервера в ленту событий НЕ
@@ -8,6 +9,10 @@ const INITIAL_RECONNECT_DELAY_MS = 1000
 const MAX_RECONNECT_DELAY_MS = 10000
 // Лента событий ограничена.
 const MAX_EVENTS = 10000
+// Живой хвост активности помощников — отдельное кольцо: объёмный поток не должен вытеснять события стадий и
+// не запускает обновление статуса. Полноту истории обеспечивает опрос /activity, а не сокет.
+const MAX_LIVE_ACTIVITY = 2000
+const ACTIVITY_EVENT_TYPE = 'assistant_activity'
 const WATCHDOG_INTERVAL_MS = 5000
 const WATCHDOG_SILENCE_MS = 75000
 // Типы, для которых onmessage дедупит по dedupeKey ПРИ ПРИЁМЕ. agent_action/script_output намеренно
@@ -16,14 +21,19 @@ const CONTENT_DEDUPE_ON_INGEST = new Set(['agent_note', 'script_failed'])
 
 // runId нужен, чтобы пережить авто-повтор флоу: при смене рана старый сокет закрывается, лента очищается и
 // история нового рана грузится заново (seq у каждого рана свой, поэтому смешивать нельзя).
-export function useEventFeed(url: string, runId: string): { events: AfmEvent[]; connected: boolean } {
+export function useEventFeed(
+  url: string,
+  runId: string,
+): { events: AfmEvent[]; connected: boolean; activity: AssistantActivityEntry[] } {
   const [events, setEvents] = useState<AfmEvent[]>([])
+  const [activity, setActivity] = useState<AssistantActivityEntry[]>([])
   const [connected, setConnected] = useState(false)
   const runEpoch = useRunEpoch(runId)
   const [feedEpoch, setFeedEpoch] = useState(runEpoch)
   if (feedEpoch !== runEpoch) {
     setFeedEpoch(runEpoch)
     setEvents([])
+    setActivity([])
     setConnected(false)
   }
 
@@ -88,6 +98,13 @@ export function useEventFeed(url: string, runId: string): { events: AfmEvent[]; 
         // Heartbeat обновляет lastMessageAt (keepalive), но в ленту не попадает.
         if (isHeartbeat(raw)) return
 
+        // Активность помощника не событие ленты: мимо кольца событий и дедупа, в своё ограниченное кольцо.
+        if (isActivityMessage(raw)) {
+          const entry = parseAssistantActivity(raw.data)
+          if (entry !== null) setActivity((prev) => [...prev, entry].slice(-MAX_LIVE_ACTIVITY))
+          return
+        }
+
         // Единственная точка приведения типа для данных входящего сообщения.
         const event = toEvent(raw)
         setEvents((prev) => {
@@ -128,11 +145,15 @@ export function useEventFeed(url: string, runId: string): { events: AfmEvent[]; 
     }
   }, [url, runEpoch])
 
-  return { events, connected }
+  return { events, connected, activity }
 }
 
 function isHeartbeat(raw: unknown): boolean {
   return typeof raw === 'object' && raw !== null && (raw as { type?: unknown }).type === 'heartbeat'
+}
+
+function isActivityMessage(raw: unknown): raw is { type: string; data?: unknown } {
+  return isRecord(raw) && raw.type === ACTIVITY_EVENT_TYPE
 }
 
 // Два события — это один и тот же переход статуса стадии (та же стадия, тот же

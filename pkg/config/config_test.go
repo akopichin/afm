@@ -875,6 +875,45 @@ func TestSkinDirEmptyDoesNotOverride(t *testing.T) {
 	}
 }
 
+func TestSkillsDir_NearestLayerWins(t *testing.T) {
+	global, project := t.TempDir(), t.TempDir()
+	writeYAML(t, global, "config.yaml", "skills_dir: /global/skills\n")
+	cfg, err := config.LoadFrom(global, project)
+	if err != nil || cfg.SkillsDir != "/global/skills" {
+		t.Fatalf("global only: %q, %v", cfg.SkillsDir, err)
+	}
+	writeYAML(t, project, "config.yaml", "skills_dir: ./project-skills\n")
+	cfg, err = config.LoadFrom(global, project)
+	if err != nil || cfg.SkillsDir != "./project-skills" {
+		t.Fatalf("project replaces global as a whole: %q, %v", cfg.SkillsDir, err)
+	}
+	writeYAML(t, project, "config.yaml", "theme: graphite\n")
+	cfg, err = config.LoadFrom(global, project)
+	if err != nil || cfg.SkillsDir != "/global/skills" {
+		t.Fatalf("absent project key keeps global: %q, %v", cfg.SkillsDir, err)
+	}
+}
+
+func TestSkillsDir_InvalidValuesRejected(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":    "skills_dir: \"\"\n",
+		"blank":    "skills_dir: \"  \"\n",
+		"null":     "skills_dir: null\n",
+		"bare key": "skills_dir:\n",
+		"number":   "skills_dir: 5\n",
+		"list":     "skills_dir: [a]\n",
+		"tilde":    "skills_dir: ~/skills\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeYAML(t, dir, "config.yaml", body)
+			if _, err := config.LoadFrom("", dir); err == nil || !strings.Contains(err.Error(), "skills_dir") {
+				t.Fatalf("error = %v, want one mentioning skills_dir", err)
+			}
+		})
+	}
+}
+
 func TestEffectiveTheme(t *testing.T) {
 	cases := []struct {
 		name  string
