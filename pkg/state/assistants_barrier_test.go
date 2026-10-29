@@ -274,3 +274,76 @@ func TestBackoff_StageSemanticsUnchanged(t *testing.T) {
 		t.Error("want idle=false — retrying alone is not idle, and s2's assistant is still working")
 	}
 }
+
+func TestExitOnFailDeadRequiredTask(t *testing.T) {
+	required := func(id assistants.TaskID, status assistants.TaskStatus) assistants.Task {
+		return assistants.Task{ID: id, RootStageID: "s1", Mode: assistants.ModeRequired, Status: status}
+	}
+	child := func(id, parent assistants.TaskID, mode assistants.Mode, status assistants.TaskStatus) assistants.Task {
+		p := parent
+		return assistants.Task{ID: id, RootStageID: "s1", ParentTaskID: &p, Mode: mode, Status: status}
+	}
+
+	t.Run("dead task behind an earlier live blocker", func(t *testing.T) {
+		f := newBarrierFixture()
+		f.addTask(required("live", assistants.StatusRunning))
+		f.addTask(required("dead", assistants.StatusFailed))
+		if blocker, _ := f.as.RequiredBlocker("s1"); blocker.ID != "live" {
+			t.Fatalf("fixture invariant: RequiredBlocker = %q, want the live task first", blocker.ID)
+		}
+		dead, ok := f.as.DeadRequiredTask("s1")
+		if !ok || dead.ID != "dead" {
+			t.Fatalf("DeadRequiredTask = (%q, %v), want (dead, true)", dead.ID, ok)
+		}
+	})
+
+	t.Run("cancelled counts as dead", func(t *testing.T) {
+		f := newBarrierFixture()
+		f.addTask(required("c", assistants.StatusCancelled))
+		if dead, ok := f.as.DeadRequiredTask("s1"); !ok || dead.ID != "c" {
+			t.Fatalf("DeadRequiredTask = (%q, %v), want (c, true)", dead.ID, ok)
+		}
+	})
+
+	t.Run("dead required child below a live required task", func(t *testing.T) {
+		f := newBarrierFixture()
+		f.addTask(required("parent", assistants.StatusWaitingChildren))
+		f.addTask(child("kid", "parent", assistants.ModeRequired, assistants.StatusFailed))
+		if dead, ok := f.as.DeadRequiredTask("s1"); !ok || dead.ID != "kid" {
+			t.Fatalf("DeadRequiredTask = (%q, %v), want (kid, true)", dead.ID, ok)
+		}
+	})
+
+	t.Run("waived dead task is skipped but its subtree is still checked", func(t *testing.T) {
+		f := newBarrierFixture()
+		f.addTask(required("w", assistants.StatusFailed))
+		f.as.Tasks["w"].Waived = true
+		if _, ok := f.as.DeadRequiredTask("s1"); ok {
+			t.Fatal("a waived task must not count as dead")
+		}
+		f.addTask(child("kid", "w", assistants.ModeRequired, assistants.StatusCancelled))
+		if dead, ok := f.as.DeadRequiredTask("s1"); !ok || dead.ID != "kid" {
+			t.Fatalf("DeadRequiredTask = (%q, %v), want (kid, true): a waiver covers only its own task", dead.ID, ok)
+		}
+	})
+
+	t.Run("advisory task and its subtree never count", func(t *testing.T) {
+		f := newBarrierFixture()
+		adv := required("adv", assistants.StatusFailed)
+		adv.Mode = assistants.ModeAdvisory
+		f.addTask(adv)
+		f.addTask(child("kid", "adv", assistants.ModeRequired, assistants.StatusFailed))
+		if dead, ok := f.as.DeadRequiredTask("s1"); ok {
+			t.Fatalf("DeadRequiredTask = %q, want none below advisory tasks", dead.ID)
+		}
+	})
+
+	t.Run("old root generation is invisible", func(t *testing.T) {
+		f := newBarrierFixture()
+		f.addTask(required("old", assistants.StatusFailed))
+		f.as.RootGenerations["s1"] = 1
+		if dead, ok := f.as.DeadRequiredTask("s1"); ok {
+			t.Fatalf("DeadRequiredTask = %q, want none: the superseded generation is history", dead.ID)
+		}
+	})
+}

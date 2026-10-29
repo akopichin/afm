@@ -41,6 +41,7 @@ type cycleLoop struct {
 	worktreeName    string
 	worktreeDir     string
 	requireApproval bool
+	exitOnFail      bool
 	forceNewRun     bool // clear-флаги: первый цикл не продолжает чужой ран
 }
 
@@ -52,6 +53,7 @@ type cycleLoop struct {
 func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks.RegisteredHook) (created []string, err error) {
 	opts := runOptions{
 		requireApproval: l.requireApproval,
+		exitOnFail:      l.exitOnFail,
 		worktreeDir:     l.worktreeDir,
 		forceNewRun:     l.forceNewRun,
 		runName:         runNameFor(l.worktreeName, f.Name),
@@ -95,7 +97,7 @@ func (l cycleLoop) run(ctx context.Context, f *flow.Flow, hooks []lifecyclehooks
 		// next может быть ранней оценкой из opts.afterRun, посчитанной до паузы dashboard: Ctrl+C во время
 		// самой паузы должен приводить к прерыванию, даже если next уже нёс err/stopReason до отмены.
 		case ctx.Err() != nil:
-			return created, runExitError(ctx, ctx.Err())
+			return created, runExitError(ctx, ctx.Err(), "")
 		case next.err != nil:
 			return created, next.err
 		case next.stopReason != "":

@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-29
 
+### Improvement: stop a run when a stage fails
+
+`afm run --exit-on-fail` (or `AFM_EXIT_ON_FAIL=1`) returns exit code 1 after a
+stage enters `failed`, without waiting for other stages or dashboard drain.
+The run journal remains resumable. An explicit `--exit-on-fail=false` overrides
+the environment value; without the option, existing behavior remains. Automatic
+Docker mode forwards the setting and container exit code. See
+[exit-on-fail configuration](docs/config-reference.md#exit-on-stage-failure).
+
 ### Fix: resume coordinators waiting for spawned helpers
 
 A helper can ask its coordinator a callback question while the coordinator

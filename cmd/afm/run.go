@@ -31,6 +31,7 @@ import (
 // runOptions carries per-invocation choices into executeFlow.
 type runOptions struct {
 	requireApproval bool
+	exitOnFail      bool
 	worktreeDir     string // "" = agents run in the main checkout
 	forceNewRun     bool   // set by the clear flags: never resume
 	runName         string // run directory prefix; f.Name when --worktree was not given
@@ -51,6 +52,7 @@ func newRunCmd() *cobra.Command {
 	var idleTimeout time.Duration
 	var port int
 	var requireApproval bool
+	var exitOnFail bool
 	var worktreeClear bool
 	var worktreeClearForce bool
 	var worktreeName string
@@ -59,6 +61,10 @@ func newRunCmd() *cobra.Command {
 		Use:   "run [flow.yaml]",
 		Short: "Run a flow (or resume the latest run)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedExitOnFail, err := resolveExitOnFail(exitOnFail, cmd.Flags().Changed("exit-on-fail"), os.Getenv("AFM_EXIT_ON_FAIL"))
+			if err != nil {
+				return err
+			}
 			home, _ := os.UserHomeDir()
 			cfg, err := config.LoadFrom(filepath.Join(home, config.AfmDir), fmDir())
 			if err != nil {
@@ -151,6 +157,7 @@ func newRunCmd() *cobra.Command {
 				worktreeName:    worktreeName,
 				worktreeDir:     wtDir,
 				requireApproval: requireApproval,
+				exitOnFail:      resolvedExitOnFail,
 				forceNewRun:     mode != worktree.ClearNone,
 			}.run(ctx, f, hooks)
 			return err
@@ -160,10 +167,22 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "agent idle timeout")
 	cmd.Flags().IntVar(&port, "port", 0, "dashboard port (0=use config)")
 	cmd.Flags().BoolVar(&requireApproval, "require-approval", false, "fail if a stage plan needs approval but no dashboard is running")
+	cmd.Flags().BoolVar(&exitOnFail, "exit-on-fail", false, "stop the run and exit 1 when a stage fails (env: AFM_EXIT_ON_FAIL)")
 	cmd.Flags().BoolVar(&worktreeClear, "worktree-clear", false, "recreate the flow worktree, discarding uncommitted changes but keeping its branch and commits; also starts a fresh run")
 	cmd.Flags().BoolVar(&worktreeClearForce, "worktree-clear-force", false, "recreate the flow worktree AND its branch from HEAD, discarding the branch's commits; also starts a fresh run")
 	cmd.Flags().StringVar(&worktreeName, "worktree", "", "worktree/branch name (default: flow name); implies worktrees are enabled and isolates this run under .afm/runs/<name>-…")
 	return cmd
+}
+
+func resolveExitOnFail(flagValue, flagSet bool, env string) (bool, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+	enabled, known := parseEnvBool(env)
+	if !known {
+		return false, errors.New("AFM_EXIT_ON_FAIL must be 1/true/yes/on or 0/false/no/off")
+	}
+	return enabled, nil
 }
 
 // executeFlow runs one pass of the flow under the caller's signal context and owns the run resources. Each
@@ -297,6 +316,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		GlobalPrompt:       f.Prompt,
 		RootDir:            env.RootDir,
 		RequireApproval:    opts.requireApproval,
+		ExitOnFail:         opts.exitOnFail,
 		Debug:              debugEnabled,
 		Memory:             f.Memory,
 		MemoryDir:          env.MemoryDir,
@@ -397,7 +417,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		// Аварийный выход (Ctrl+C / сбой): прерываем активный боковой ход и ждём
 		// его лишь ограниченное время; журнал закрываем только если дренирован.
 		sideDrained = side.shutdownEmergency(sideAgentEmergencyDrain)
-		return cycleResult{}, runExitError(ctx, runErr)
+		return cycleResult{RunID: runID, Resumed: resumed}, runExitError(ctx, runErr, runDir)
 	}
 	// orch.Run()==nil и для рана с failed-стадией; успех — только персистентный finished при всех done.
 	snap := store.Snapshot()

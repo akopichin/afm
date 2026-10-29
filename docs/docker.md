@@ -56,6 +56,15 @@ Notes on the flags:
 Automatic Docker mode (`docker.enabled: true`) sets all of this — the port mapping,
 `AFM_IN_DOCKER`, and the forwarded token — for you.
 
+For [`afm run --exit-on-fail`](config-reference.md#exit-on-stage-failure), automatic
+Docker mode forwards the CLI flag and passes an explicitly set host
+`AFM_EXIT_ON_FAIL` value into the container. The host returns the container's
+exit code, including 1 for a failed stage. If the host variable is unset, afm
+does not pass it: an `AFM_EXIT_ON_FAIL` value baked into the image can then set
+the in-container default. Use an explicit CLI value (`--exit-on-fail` or
+`--exit-on-fail=false`) when the outcome must be independent of the image's
+environment.
+
 When [per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) are enabled
 with automatic Docker mode, afm creates or reuses the worktree on the host and
 passes its path into the container. The effective project root (`root_dir`, or

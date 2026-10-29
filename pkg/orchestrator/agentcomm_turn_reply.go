@@ -231,13 +231,15 @@ func turnFailureBody(taskID assistants.TaskID, turn uint64, agent, reason string
 // protocolErrorPrefix starts the status reason of a turn whose answer broke the result protocol.
 const protocolErrorPrefix = "protocol_error: "
 
+const noReasonRecorded = "no reason recorded"
+
 // describeTaskFailure says in plain words why a task's turn failed: a protocol error is an invalid result.
 func describeTaskFailure(reason string) string {
 	if detail, ok := strings.CutPrefix(reason, protocolErrorPrefix); ok {
 		return "invalid result — " + detail
 	}
 	if reason == "" {
-		return "no reason recorded"
+		return noReasonRecorded
 	}
 	return reason
 }

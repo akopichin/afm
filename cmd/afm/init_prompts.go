@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const yesString = "yes"
+const (
+	yesString = "yes"
+	noString  = "no"
+)
 
 // promptLine prints label to w, reads one line from scanner, trims whitespace.
 func promptLine(scanner *bufio.Scanner, w io.Writer, label string) string {
@@ -47,7 +50,7 @@ func promptYesNo(scanner *bufio.Scanner, w io.Writer, label string, def bool) bo
 	switch raw {
 	case "y", yesString:
 		return true
-	case "n", "no":
+	case "n", noString:
 		return false
 	default:
 		return def

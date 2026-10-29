@@ -129,6 +129,8 @@ type Options struct {
 	// Orchestrator через New, не задают его явно и получают реальное время без дополнительных действий.
 	// Fake-часы инжектируют только тесты, которым нужно проматывать паузы вручную.
 	Clock clock.Clock
+	// ExitOnFail останавливает ран после первой закоммиченной стадии failed и возвращает *StageFailedError.
+	ExitOnFail bool
 }
 
 // ResolvedFile описывает файл review-ноты: путь, ссылку, текущий SHA и, для построчной ноты, текст строки
@@ -279,10 +281,18 @@ type Orchestrator struct {
 	// fake-часам, не имея другого способа наблюдать внутренний цикл startQuestionPoller.
 	pollTickHook func()
 
-	// fatalMu/fatalErr/cancelRun останавливают run только при StorageError; CAS-mismatch не фатален.
+	// fatalMu/fatalErr останавливают run только при StorageError; CAS-mismatch не фатален. cancelRun (под runMu)
+	// отменяет run-контекст — им же останавливает ран первая failed-стадия при ExitOnFail.
 	fatalMu   sync.Mutex
 	fatalErr  error
 	cancelRun context.CancelFunc
+	// exit — состояние политики ExitOnFail; остальные поля — тест-сеймы: окно после durable-коммита failed до
+	// записи причины, окно между снимком required-дерева и переходом, окно между решением о финализации и finalizing.
+	exit                       exitOnFail
+	exitOnFailCommittedHook    func(stageID string)
+	requiredFailureDecidedHook func(stageID string)
+	stageCompletingHook        func(stageID string) // тестовый шов: снимок гейта прочитан, EvComplete ещё не закоммичен
+	finalizeDecidedHook        func()
 
 	// pendingAfterHooks — счётчик живых script_after горутин. Обычный sync.WaitGroup не даёт прочитать
 	// текущий счётчик, поэтому отдельный atomic.
@@ -498,9 +508,7 @@ func (o *Orchestrator) setFatal(err error) {
 		o.fatalErr = err
 	}
 	o.fatalMu.Unlock()
-	if o.cancelRun != nil {
-		o.cancelRun()
-	}
+	o.cancelRunContext()
 }
 
 func (o *Orchestrator) loadFatal() error {
@@ -550,8 +558,12 @@ func New(opts Options) *Orchestrator {
 
 	// Семафоры на команду строятся из конфигурации стадий: per-stage MaxParallel имеет приоритет над
 	// глобальным дефолтом.
+	// Стадия, ждавшая семафор, не стартует ни после Pause, ни после первой failed-стадии при ExitOnFail.
+	var o *Orchestrator
 	conc := concurrency.New(critical, initialReg.Stages(), opts.Config.Client.Command, opts.Config.Executor.MaxParallel,
-		func(stageID string) bool { return opts.Store.Get(stageID) != state.StatusPaused })
+		func(stageID string) bool {
+			return o.exit.failure.Load() == nil && opts.Store.Get(stageID) != state.StatusPaused
+		})
 	// conc.Clock намеренно остаётся nil (реальные часы), а не opts.Clock: тесты подсовывают в Options.Clock
 	// быстро прокручиваемые fake-часы, чтобы пропустить ожидания hookRetryBackoff, и те же часы обогнали бы
 	// drain-таймаут WaitAgents (agentDrainTimeout, concurrency.go) ЗАДОЛГО до реального завершения agentWG,
@@ -565,7 +577,7 @@ func New(opts Options) *Orchestrator {
 		absRunDir = abs
 	}
 
-	o := &Orchestrator{
+	o = &Orchestrator{
 		opts:              opts,
 		absRunDir:         absRunDir,
 		graph:             gstore,
@@ -658,7 +670,7 @@ func (o *Orchestrator) Trigger(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx
 // site'ов Trigger в этом не нуждаются и не меняются.
 func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.GuardCtx, reason string) (state.StageStatus, uint64, bool) {
 	beforeReady, stageWaitsPending := o.stageStatusWaitsPending(stageID)
-	from, to, seq, ok, err := o.fsm.Apply(stageID, ev, ctx, reason)
+	from, to, seq, ok, err := o.applyTransition(stageID, ev, ctx, reason)
 	if err != nil {
 		var se *StorageError
 		if errors.As(err, &se) {
@@ -734,10 +746,7 @@ func (o *Orchestrator) flowStartEvent() lifecyclehooks.EventType {
 // Run starts the event-driven orchestrator loop.
 func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
-	o.cancelRun = cancel
-	o.runMu.Lock()
-	o.runCtx = ctx
-	o.runMu.Unlock()
+	o.installRunContext(ctx, cancel)
 	// Регистрируем finalizeLifecycle первым: LIFO выполнит terminal emit после cancel и WaitAgents, когда
 	// продюсеры уже остановлены.
 	defer o.finalizeLifecycle()
@@ -774,6 +783,11 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	}
 
 	o.emitLifecycle(lifecyclehooks.Event{Type: o.flowStartEvent()})
+	// Провал до старта (HTTP-переход или failed из прошлого процесса) останавливает ран до bootstrap.
+	if err := o.startupStop(); err != nil {
+		o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
+		return err
+	}
 
 	// Restore review-pause before scheduling. On a corrupt resuming marker, hold activation and keep the
 	// dashboard available for inspection.
@@ -808,9 +822,10 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	for {
 		select {
 		case <-ctx.Done():
-			if ferr := o.loadFatal(); ferr != nil {
+			o.awaitInFlightCommit()
+			if err := o.stopError(); err != nil {
 				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
-				return ferr
+				return err
 			}
 			if o.hasFailedStage() {
 				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
@@ -819,13 +834,15 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 			}
 			return ctx.Err()
 		case ev := <-o.critical.Recv():
-			if err := o.handleEvent(ctx, ev); err != nil {
+			herr := o.handleEvent(ctx, ev)
+			// Storage-fatal и первая failed-стадия важнее ошибки обработчика и естественного выхода ниже.
+			if err := o.stopError(); err != nil {
 				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
 				return err
 			}
-			if ferr := o.loadFatal(); ferr != nil {
+			if herr != nil {
 				o.setTerminalFlow(lifecyclehooks.EventFlowFailed)
-				return ferr
+				return herr
 			}
 			if o.shouldExit() {
 				// Serialize finalization with PauseFlow under flowPauseMu: either finalizing or the review transaction
@@ -835,8 +852,7 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 				// (FinalizeIf): a message, attach or dynamic stage (Этап 9, T9.3) committed a moment before
 				// keeps the run alive, and one arriving after is rejected run_finalizing — never accepted and
 				// then left without a turn.
-				if !o.reviewTxnActive() && o.opts.Store.FinalizeIf(o.runStateAllowsExit) {
-					o.finalizing.Store(true)
+				if !o.reviewTxnActive() && o.finalizeRun() {
 					o.flowPauseMu.Unlock()
 					o.runEndOfRunMemory(ctx)
 					snap := o.opts.Store.Snapshot()
@@ -860,12 +876,8 @@ func (o *Orchestrator) setTerminalFlow(ev lifecyclehooks.EventType) {
 
 // hasFailedStage — есть ли в снапшоте Failed-стадия.
 func (o *Orchestrator) hasFailedStage() bool {
-	for _, st := range o.opts.Store.Snapshot().Stages {
-		if st.Status == state.StatusFailed {
-			return true
-		}
-	}
-	return false
+	snap := o.opts.Store.Snapshot()
+	return anyStageFailed(&snap)
 }
 
 // finalizeLifecyclePollerWait — safety cap на ожидание завершения горутины question poller.
@@ -1048,13 +1060,20 @@ func (o *Orchestrator) completeStageFenced(ctx context.Context, stageID string, 
 		return
 	}
 	if blocker, open := o.opts.Store.Snapshot().Assistants.RequiredBlocker(stageID); open {
+		if o.failOnDeadRequiredAssistant(stageID, fence) {
+			return
+		}
 		if current != state.StatusAwaitingAssistants {
 			// First time the main executor finishes: commit the barrier durably. triggerWithSeq's own funnel
 			// (orchestrator.go) forces any orphaned checkpoints/on_completion watcher into its bounded final
 			// pass right after this commits — see finalizeWatchersForStage's EvAwaitAssistants case — so a
 			// required watcher can never be left "watching" forever once there is no more main-agent output to
 			// wait for.
-			o.Trigger(stageID, bus.EvAwaitAssistants, bus.GuardCtx{ExpectEpoch: fence}, "awaiting required assistant: "+string(blocker.ID))
+			if _, ok := o.Trigger(stageID, bus.EvAwaitAssistants, bus.GuardCtx{ExpectEpoch: fence}, "awaiting required assistant: "+string(blocker.ID)); ok {
+				// Waiver/результат/смерть помощника, закоммиченные после снимка, застали стадию ещё running и
+				// их хук ничего не сделал — перепроверяем гейт теперь, когда стадия уже ждёт.
+				o.maybeCompleteAfterAssistants(ctx, stageID)
+			}
 		}
 		// Already in awaiting_assistants and still open: nothing to do until the blocking task resolves — see
 		// maybeCompleteAfterAssistants, called from finishTaskFrom's terminal-transition hook.
@@ -1062,7 +1081,21 @@ func (o *Orchestrator) completeStageFenced(ctx context.Context, stageID string, 
 	}
 	// current — снимок статуса, прочитанный вызывающим ДО этого момента: между чтением и CAS сюда мог влезть
 	// Pause/Revise на другой горутине и увести стадию из running/retrying.
-	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{ExpectEpoch: fence}, reason); !ok {
+	// Attach required-задачи мог закоммититься после снимка выше (стадия ещё running это допускает): гейт
+	// проверяется заново в момент коммита, иначе стадия стала бы done с открытым required-помощником.
+	if o.stageCompletingHook != nil {
+		o.stageCompletingHook(stageID)
+	}
+	gateReopened := false
+	closedAtCommit := func(rs *state.RunState) bool {
+		_, open := rs.Assistants.RequiredBlocker(stageID)
+		gateReopened = open
+		return !open
+	}
+	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{ExpectEpoch: fence, Fence: closedAtCommit}, reason); !ok {
+		if gateReopened {
+			o.completeStageFenced(ctx, stageID, current, reason, fence)
+		}
 		return
 	}
 	// script_after runs first, and reflection only starts once it returns — so a stage's reflect capture

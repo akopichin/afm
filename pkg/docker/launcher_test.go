@@ -2,8 +2,10 @@ package docker_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +14,64 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 )
+
+func TestExitOnFailDockerTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		set         bool
+	}{
+		{name: "unset"},
+		{name: "empty", set: true},
+		{name: "enabled", value: "1", set: true},
+		{name: "disabled", value: "false", set: true},
+		{name: "normalized in container", value: " YeS ", set: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AFM_EXIT_ON_FAIL", tc.value)
+			if !tc.set {
+				if err := os.Unsetenv("AFM_EXIT_ON_FAIL"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			var argv []string
+			docker.SetExecFunc(func(_ string, args, _ []string) error {
+				argv = args
+				return &docker.SubprocessExitError{Code: 1}
+			})
+			t.Cleanup(docker.ResetExecFunc)
+			extra := []string{"run", "flow.yaml", "--exit-on-fail=false"}
+			err := docker.ReExec(docker.ReExecConfig{Image: "afm-test", ProjectDir: dir, ExtraArgs: extra})
+			var exitErr *docker.SubprocessExitError
+			if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+				t.Fatalf("container error = %v, want code 1", err)
+			}
+			var forwarded []string
+			for i, arg := range argv {
+				if strings.HasPrefix(arg, "AFM_EXIT_ON_FAIL") {
+					if i == 0 || argv[i-1] != "-e" {
+						t.Fatalf("env argument lacks -e: %v", argv)
+					}
+					forwarded = append(forwarded, arg)
+				}
+			}
+			var want []string
+			if tc.set {
+				want = []string{"AFM_EXIT_ON_FAIL=" + tc.value}
+			}
+			if !slices.Equal(forwarded, want) {
+				t.Errorf("forwarded env = %q, want %q", forwarded, want)
+			}
+			if len(argv) < len(extra) || !slices.Equal(argv[len(argv)-len(extra):], extra) {
+				t.Errorf("explicit false override lost: %v", argv)
+			}
+		})
+	}
+}
 
 func TestScanCommands_SkipsGenerated(t *testing.T) {
 	dir := t.TempDir()
