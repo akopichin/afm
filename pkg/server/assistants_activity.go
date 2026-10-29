@@ -10,6 +10,8 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 )
 
+const errCodeInvalidCursor = "invalid_cursor"
+
 // handleAssistantActivity serves GET /api/assistants/{id}/activity: a bounded page of the helper's saved
 // activity. The client names only the task, a cursor and a limit; the run's notices file is chosen server-side.
 func (s *Server) handleAssistantActivity(w http.ResponseWriter, r *http.Request, taskID string) {
@@ -25,7 +27,7 @@ func (s *Server) handleAssistantActivity(w http.ResponseWriter, r *http.Request,
 	}
 	page, err := s.assistantsReader.TaskActivity(taskID, query)
 	if errors.Is(err, stagefiles.ErrInvalidCursor) {
-		writeAssistantErrCode(w, http.StatusBadRequest, "invalid_cursor")
+		writeAssistantErrCode(w, http.StatusBadRequest, errCodeInvalidCursor)
 		return
 	}
 	if err != nil {
@@ -51,7 +53,7 @@ func parseActivityQuery(v url.Values) (stagefiles.ActivityQuery, string) {
 	q.After, afterOK = optionalUint(v, "after")
 	q.Before, beforeOK = optionalUint(v, "before")
 	if !afterOK || !beforeOK || (q.After != nil && q.Before != nil) {
-		return q, "invalid_cursor"
+		return q, errCodeInvalidCursor
 	}
 	return q, ""
 }
