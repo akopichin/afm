@@ -104,4 +104,31 @@ describe('CommentEditor', () => {
     const { container } = renderEditor({ quote: '' })
     expect(container.querySelector('.line-comment-quote')).toBeNull()
   })
+  test('a blank source line is still identified by its number: title, line attribute, no quote', () => {
+    const { container } = renderEditor({ title: 'Comment on line 12', line: 12, quote: '' })
+    expect(screen.getByText('Comment on line 12')).toBeInTheDocument()
+    expect(container.querySelector('.comment-editor')?.getAttribute('data-comment-line')).toBe('12')
+    expect(container.querySelector('.line-comment-quote')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Close comment on line 12' })).toBeInTheDocument()
+  })
+
+  test('one action row: hint, then Cancel, Delete and the primary save; Cancel folds and keeps the draft', () => {
+    const { props, container } = renderEditor({ saveLabel: 'Save comment', onDiscard: vi.fn(), discardLabel: 'Delete', draft: true })
+    const bar = container.querySelector('.pasteable-toolbar') as HTMLElement
+    expect(bar.querySelector('.comment-actions-hint')?.textContent).toBe('Save here · send when ready')
+    expect(Array.from(bar.querySelectorAll('.comment-actions button')).map((b) => b.textContent)).toEqual(['Cancel', 'Delete', 'Save comment'])
+    expect(screen.getByText('Draft')).toBeInTheDocument()
+    expect(container.querySelector('.comment-help')?.textContent).toContain('Esc to collapse and keep draft')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(props.onFold).toHaveBeenCalledTimes(1)
+    expect(props.onDiscard).not.toHaveBeenCalled()
+  })
+
+  test('the plain-textarea editor (files) has the same action row; review notes have no send hint', () => {
+    const file = renderEditor({ context: 'file', stageId: undefined })
+    expect(file.container.querySelector('.pasteable-toolbar .comment-actions-hint')).not.toBeNull()
+    file.unmount()
+    const review = renderEditor({ context: 'review', stageId: undefined })
+    expect(review.container.querySelector('.comment-actions-hint')).toBeNull()
+  })
 })

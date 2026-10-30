@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { Stage, StageQuota } from '../../types'
 import type { AccountingState, CostSummary } from '../../types/cost'
@@ -65,15 +65,18 @@ describe('StagesList', () => {
       { id: 's2', name: 'B', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} accounting={{ supported: false }} />)
-    expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
-    expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
+    expect(document.getElementById('progress-text')).toHaveTextContent('1 of 2 done')
+    // One segment per stage: the done stage is green, the running one amber.
+    const segments = Array.from(document.querySelectorAll('.rail-progress-seg'))
+    expect(segments.map((seg) => seg.getAttribute('data-state'))).toEqual(['done', 'active'])
+    expect(screen.getByRole('img', { name: '1 of 2 stages done' })).toBeInTheDocument()
   })
 
   // §14.1/TestProgress_AdvisoryDoesNotInflateDenominator: the rail's "N / M stages done" progress is computed
   // by the CALLER purely from the stages array (App.tsx: stages.filter(done).length / stages.length) — it
   // never reads useStageAssistants' summaries at all. Attaching any number of advisory (or required) helper
   // tasks to a stage must not change progressDone/progressTotal's rendered output, because the rail component
-  // itself has no code path from `assistants` to `progress-text`/`progress-fill`.
+  // itself has no code path from `assistants` to `progress-text`/the progress segments.
   test('TestProgress_AdvisoryDoesNotInflateDenominator', () => {
     const stages: Stage[] = [
       { id: 's1', name: 'A', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
@@ -90,8 +93,8 @@ describe('StagesList', () => {
     const { rerender } = render(
       <StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} progressDone={1} progressTotal={2} accounting={{ supported: false }} />,
     )
-    expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
-    expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
+    expect(document.getElementById('progress-text')).toHaveTextContent('1 of 2 done')
+    expect(document.querySelectorAll('.rail-progress-seg')).toHaveLength(2)
 
     rerender(
       <StagesList
@@ -106,8 +109,8 @@ describe('StagesList', () => {
     )
     // Same progressDone/progressTotal props in → identical rendered progress out, regardless of how many
     // helper tasks (of either mode) are attached to a stage.
-    expect(document.getElementById('progress-text')).toHaveTextContent('1 / 2')
-    expect(document.getElementById('progress-fill')).toHaveStyle({ width: '50%' })
+    expect(document.getElementById('progress-text')).toHaveTextContent('1 of 2 done')
+    expect(document.querySelectorAll('.rail-progress-seg')).toHaveLength(2)
   })
 
   test('omits rail progress when props are absent (0/0 stays safe)', () => {
@@ -219,6 +222,17 @@ describe('StagesList', () => {
     // Заголовок стадии всегда есть (макет показывает имя жирным); при пустом
     // name показываем id.
     expect(screen.getByRole('listitem').querySelector('.stage-name')).toHaveTextContent('s1')
+  })
+
+  test('a row shows the stage name as its title and the status word under it, not the id', () => {
+    const stages: Stage[] = [
+      { id: 'impl', name: 'Build the checkout', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
+    const row = screen.getByRole('listitem')
+    expect(row.querySelector('.stage-name')).toHaveTextContent('Build the checkout')
+    expect(row.querySelector('.stage-status')).toHaveTextContent('Running')
+    expect(row).not.toHaveTextContent('impl')
   })
 
   test('kebab shows for a pausable running stage; a bare awaiting_approval (no buttons) and a done stage have none', () => {
@@ -337,6 +351,31 @@ describe('StagesList', () => {
     expect(document.body.contains(menu)).toBe(true)
   })
 
+  test('keyboard: opening the kebab menu moves focus into it, Tab wraps inside, Escape closes it and returns focus to the kebab', () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} onPause={vi.fn()} accounting={{ supported: false }} />)
+    const kebab = screen.getByRole('button', { name: /more actions/i })
+
+    fireEvent.click(kebab)
+    const items = Array.from(document.querySelectorAll<HTMLElement>('.stage-kebab-menu button'))
+    const first = items[0] as HTMLElement
+    const last = items[items.length - 1] as HTMLElement
+    expect(items.length).toBeGreaterThan(1)
+    expect(document.activeElement).toBe(first)
+
+    last.focus()
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(last)
+
+    fireEvent.keyDown(last, { key: 'Escape' })
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(kebab)
+  })
+
   test('clicking outside the open kebab menu closes it', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
@@ -348,6 +387,27 @@ describe('StagesList', () => {
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByText('Pause')).not.toBeInTheDocument()
+  })
+
+  test('closing the menu by scroll or by clicking an inert area returns focus to the kebab, so Tab stays in the rail', async () => {
+    const stages: Stage[] = [
+      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
+    ]
+    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={vi.fn()} accounting={{ supported: false }} />)
+    const kebab = screen.getByRole('button', { name: /more actions/i })
+
+    fireEvent.click(kebab)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Pause' }))
+    fireEvent.scroll(document.querySelector('.stages-scroll')!)
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(kebab)
+
+    // Браузер после mousedown на нефокусируемой области роняет фокус на body.
+    fireEvent.click(kebab)
+    fireEvent.mouseDown(document.body)
+    ;(document.activeElement as HTMLElement).blur()
+    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
+    await waitFor(() => expect(document.activeElement).toBe(kebab))
   })
 
   test('scrolling the stages scroller closes the open kebab menu (the menu is anchored to a button inside it)', () => {
@@ -617,13 +677,30 @@ describe('StagesList', () => {
 
   // NOTE: jsdom does no layout, so this only proves the DOM ordering the pinning relies on. Actual
   // bottom-pinning + scroll-above behaviour is verified in a live run, not here.
-  test('version footer: is the LAST child of #stages-panel, after the scroll wrapper', () => {
+  test('version footer: sits in the bottom block, the last child of #stages-panel after the scroll wrapper', () => {
     render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} version="dev" />)
     const panel = document.getElementById('stages-panel')
     expect(panel).not.toBeNull()
     const last = panel!.lastElementChild
-    expect(last).toHaveClass('rail-foot')
+    expect(last).toHaveClass('rail-bottom')
+    expect(last!.lastElementChild).toHaveClass('rail-foot')
     expect(last).toHaveTextContent('afm dev')
+  })
+
+  test('the rail carries no Docker workspace label: the version is the only footer text', () => {
+    render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} version="v2.0.0" />)
+    const panel = document.getElementById('stages-panel')!
+    expect(panel).not.toHaveTextContent(/docker/i)
+    expect(document.querySelector('.rail-foot')).toHaveTextContent(/^afm v2\.0\.0$/)
+  })
+
+  test('a done stage draws its filled node with an SVG check, not a text glyph', () => {
+    const done: Stage = { id: 'a', name: 'Build', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] }
+    render(<StagesList stages={[done]} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
+    const check = document.querySelector('[data-stage-id="a"] .status-dot[data-status="done"] .dot-check')!
+    expect(check.querySelector('svg path')).not.toBeNull()
+    expect(check).toHaveAttribute('aria-hidden', 'true')
+    expect(check.textContent).toBe('')
   })
 
   describe('verify badge (V5b.2, now durable stage.verify — Task 7)', () => {
@@ -660,7 +737,7 @@ describe('StagesList', () => {
       expect(container.querySelector('.verify-badge')).toHaveAttribute('data-phase', 'needs_changes')
 
       // Стадия по-прежнему просто "running" — verify не подменяет статус.
-      expect(screen.getByRole('button', { name: /Build/i })).toHaveAttribute('title', 'Running')
+      expect(screen.getByRole('button', { name: /Build/i })).toHaveTextContent('Running')
     })
 
     test('accepted_stalemate (review_patience) renders a distinct data-phase badge with its own title', () => {
@@ -737,7 +814,7 @@ describe('StagesList', () => {
 
     test('TestStageRow_ShowsAwaitingAssistants', () => {
       const { container } = render(<StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-      expect(screen.getByRole('button', { name: /QA gate/i })).toHaveAttribute('title', 'Awaiting helpers')
+      expect(screen.getByRole('button', { name: /QA gate/i })).toHaveTextContent('Awaiting helpers')
       expect(container.querySelector('.status-dot[data-status="awaiting_assistants"]')).not.toBeNull()
     })
 
@@ -890,11 +967,10 @@ describe('StagesList — usage-limit wait (awaiting_quota)', () => {
     vi.useRealTimers()
   })
 
-  test('the row says "Usage limit" in its title and for screen readers, with a ticking countdown badge', () => {
+  test('the row says "Usage limit" in its status line and accessible name, with a ticking countdown badge', () => {
     vi.useFakeTimers({ now: NOW })
     const { container } = render(<StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-    expect(container.querySelector('.stage-row')).toHaveAttribute('title', 'Usage limit')
-    expect(container.querySelector('.stage-status-sr')).toHaveTextContent('Usage limit')
+    expect(container.querySelector('.stage-status')).toHaveTextContent('Usage limit')
     expect(container.querySelector('.stage-item')).toHaveAttribute('data-status', 'awaiting_quota')
     expect(container.querySelector('.quota-countdown')).toHaveTextContent('12m 06s')
     act(() => { vi.advanceTimersByTime(1000) })
@@ -966,7 +1042,7 @@ describe('StagesList — usage-limit wait (awaiting_quota)', () => {
   })
 })
 
-describe('StagesList: кнопка «+ Stage» зависит от capability add_stage', () => {
+describe('StagesList: кнопка «Add stage» зависит от capability add_stage', () => {
   function renderRail(props: { canAddStage?: boolean; onAddStage?: () => void }) {
     render(<StagesList stages={[]} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} {...props} />)
   }
@@ -976,13 +1052,13 @@ describe('StagesList: кнопка «+ Stage» зависит от capability ad
     ['canAddStage не передан', {}],
   ])('%s: кнопки нет', (_name, props) => {
     renderRail({ ...props, onAddStage: vi.fn() })
-    expect(screen.queryByRole('button', { name: '+ Stage' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add stage' })).not.toBeInTheDocument()
   })
 
   test('canAddStage=true: кнопка видна, клик вызывает onAddStage один раз', () => {
     const onAddStage = vi.fn()
     renderRail({ canAddStage: true, onAddStage })
-    fireEvent.click(screen.getByRole('button', { name: '+ Stage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add stage' }))
     expect(onAddStage).toHaveBeenCalledTimes(1)
   })
 })

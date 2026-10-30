@@ -20,6 +20,7 @@ import { useComments } from '../comments/CommentProvider'
 import { FileCommentSendDialog, FileCommentSendStatus } from '../comments/FileCommentSendDialog'
 import { fileKey, isSendableFileComment } from '../comments/file-comment-source'
 import { fileGroupKey } from './draft-comments'
+import { countInFolder } from './FileCommentCount'
 
 export type SelectedFile = { root: string; path: string; displayPath: string; reference: string }
 
@@ -108,6 +109,10 @@ export function FileBrowserModal({
   const commentsPerFile = new Map<string, number>()
   for (const entry of fileComments) commentsPerFile.set(fileKey(entry), (commentsPerFile.get(fileKey(entry)) ?? 0) + 1)
   const commentCountIn = (root: string) => (path: string) => commentsPerFile.get(fileGroupKey(root, path)) ?? 0
+  const folderCommentCountIn = (root: string) => {
+    const paths = fileComments.filter((entry) => entry.anchor.root === root).map((entry) => entry.anchor.path)
+    return (dir: string) => countInFolder(paths, dir)
+  }
 
   // Left-panel width (px) + drag state. bodyRef anchors clientX to the body's
   // left edge; draggingRef gates the document-level move/up listeners.
@@ -666,6 +671,7 @@ export function FileBrowserModal({
                     activePath={activeFile?.root === selectedRoot ? activeFile.entry.path : null}
                     showCheckboxes={mode === 'picker'}
                     commentCount={commentCountIn(selectedRoot)}
+                    folderCommentCount={folderCommentCountIn(selectedRoot)}
                   />
                 </div>
               </>
@@ -746,6 +752,11 @@ export function FileBrowserModal({
         {mode === 'browse' && (
           <footer className="file-browser-footer file-browser-send-footer">
             <FileCommentSendStatus />
+            {fileCommentCount > 0 && send.operation === null && send.accepted === null && (
+              <span className="file-browser-draft-count">
+                {fileCommentCount} draft {fileCommentCount === 1 ? 'comment' : 'comments'} · not sent
+              </span>
+            )}
             <button
               type="button"
               className="btn btn-approve"
@@ -753,6 +764,9 @@ export function FileBrowserModal({
               onClick={(event) => setSendDialog({ only: null, opener: event.currentTarget })}
             >
               Send all ({fileCommentCount})
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
+              </svg>
             </button>
           </footer>
         )}

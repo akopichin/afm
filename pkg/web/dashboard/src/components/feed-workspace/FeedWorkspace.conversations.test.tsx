@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { emptyComposerDraft, type ComposerDraft } from './FeedComposer'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
@@ -64,6 +66,18 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     stageLog([])
   })
   afterEach(() => vi.restoreAllMocks())
+
+  it('keeps the prototype filter row visible before the first conversation arrives', () => {
+    vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [], threads: [], next_cursor: 0, has_more: false })
+    render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps([{
+      id: 'impl', name: 'Implement', status: 'running', updatedAt: '', interactive: false, autonomous: false,
+      autoApprove: false, hasDialog: false, showPlan: false, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [],
+    }])} />)
+    expect(screen.getByRole('button', { name: /^All activity/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Stage 1 of 1 · claude')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Conversations/ }))
+    expect(screen.getByText('Nothing to show for this filter')).toBeInTheDocument()
+  })
 
   it('shows a linked side reply outcome beside the original post in the stage feed', async () => {
     const side: MeshParticipant = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'side', display_name: 'Side agent', reachable: true }
@@ -307,7 +321,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     render(<FeedWorkspace events={[]} stageId="impl" mesh={meshProps()} />)
     await waitFor(() => expect(row('r')).not.toBeNull())
     expect(row('q')).toHaveClass('from-you')
-    expect(within(row('q')).getByText('→ Implement, QA reviewer, gone')).toBeInTheDocument()
+    expect(within(row('q')).getByText('→ @impl, @qa, gone')).toBeInTheDocument()
     expect(within(row('a')).getByText('Implement')).toBeInTheDocument()
     expect(row('a').querySelector('.md h1')).toHaveTextContent('Found an issue')
     expect(row('a').querySelector('.md strong')).toHaveTextContent('retry loop')
@@ -327,7 +341,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     rerender(<FeedWorkspace {...props} mesh={mesh({ participantId: 'run:qa', seq: 1 })} stageId="impl" noteTarget="impl" />)
     fireEvent.change(screen.getByRole('combobox', { name: /message the mesh/i }), { target: { value: 'half-written' } })
     fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-    fireEvent.change(screen.getByPlaceholderText('Note to agent…'), { target: { value: 'a note' } })
+    fireEvent.change(screen.getByPlaceholderText('Describe what the agent should change…'), { target: { value: 'a note' } })
 
     rerender(<FeedWorkspace {...props} mesh={mesh({ participantId: 'run:qa', seq: 1 })} stageId="verify" noteTarget="verify" />)
     expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
@@ -335,7 +349,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
 
     rerender(<FeedWorkspace {...props} mesh={mesh({ participantId: 'run:qa', seq: 1 })} stageId="impl" noteTarget="impl" />)
     expect(screen.getByRole('tab', { name: 'Revise' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByPlaceholderText('Note to agent…')).toHaveValue('a note')
+    expect(screen.getByPlaceholderText('Describe what the agent should change…')).toHaveValue('a note')
     fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
     expect(screen.getByRole('combobox', { name: /message the mesh/i })).toHaveValue('half-written')
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
@@ -355,12 +369,117 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(await screen.findByText('@qa is working')).toBeInTheDocument()
   })
 
-  it('without the mesh (the Full feed) there are no conversations and no requests', () => {
+  it('without the mesh there are no conversations and no requests', () => {
     const spy = vi.spyOn(meshClient, 'getStageMessages')
     const log = vi.spyOn(runClient, 'listStageDiscussion')
     render(<FeedWorkspace events={events} stageId="impl" />)
     expect(spy).not.toHaveBeenCalled()
     expect(log).not.toHaveBeenCalled()
     expect(screen.queryByRole('group', { name: 'Show in the feed' })).toBeNull()
+  })
+})
+
+
+it('keeps a reply, attachment, picked recipients and independent mode drafts through stage and tab changes', async () => {
+  vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
+  vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages, threads: [withUser, legacy], next_cursor: 6, has_more: false })
+  vi.spyOn(runClient, 'uploadAttachment').mockResolvedValue({ path: '/attachments/screen.png' })
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:draft-image')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  function Harness() {
+    const [stage, setStage] = useState('impl')
+    const [visible, setVisible] = useState(true)
+    const [drafts, setDrafts] = useState(new Map<string, ComposerDraft>())
+    return <>
+      <button onClick={() => setStage(stage === 'impl' ? 'other' : 'impl')}>Switch stage</button>
+      <button onClick={() => setVisible(!visible)}>Toggle feed</button>
+      {visible && <FeedWorkspace stageId={stage} noteTarget={stage} events={events} mesh={meshProps()} onSendNote={vi.fn()}
+        composerDrafts={drafts} onComposerDraftChange={(id, patch) => setDrafts((prev) => new Map(prev).set(id, { ...(prev.get(id) ?? emptyComposerDraft()), ...patch }))} />}
+    </>
+  }
+  render(<Harness />)
+  await waitFor(() => expect(row('m3')).not.toBeNull())
+  fireEvent.change(screen.getByRole('combobox', { name: 'Message the mesh' }), { target: { value: '@qa ordinary draft' } })
+  fireEvent.click(within(row('m3')).getByRole('button', { name: /Reply in conversation/ }))
+  const composer = screen.getByRole('combobox', { name: 'Message the mesh' })
+  fireEvent.change(composer, { target: { value: 'reply draft' } })
+  fireEvent.paste(composer, { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => new File(['x'], 'screen.png', { type: 'image/png' }) }] } })
+  await waitFor(() => expect((composer as HTMLTextAreaElement).value).toContain('[Screenshot: /attachments/screen.png]'))
+  fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
+  fireEvent.change(screen.getByPlaceholderText('Describe what the agent should change…'), { target: { value: 'separate revision' } })
+  fireEvent.click(screen.getByText('Switch stage'))
+  expect(screen.getByRole('combobox', { name: 'Message the mesh' })).toHaveValue('')
+  fireEvent.click(screen.getByText('Switch stage'))
+  expect(screen.getByPlaceholderText('Describe what the agent should change…')).toHaveValue('separate revision')
+  fireEvent.click(screen.getByText('Toggle feed'))
+  fireEvent.click(screen.getByText('Toggle feed'))
+  fireEvent.click(screen.getByRole('tab', { name: 'Message' }))
+  expect((screen.getByRole('combobox', { name: 'Message the mesh' }) as HTMLTextAreaElement).value).toContain('reply draft')
+  expect(screen.getByAltText('Pasted screenshot')).toHaveAttribute('src', 'blob:draft-image')
+  expect(screen.getByRole('button', { name: 'Cancel reply in conversation' })).toBeInTheDocument()
+  await waitFor(() => expect(row('m1')).not.toBeNull())
+  fireEvent.click(within(row('m1')).getByRole('button', { name: /Reply in conversation/ }))
+  expect(screen.getByRole('combobox', { name: 'Message the mesh' })).toHaveValue('')
+  expect(screen.queryByAltText('Pasted screenshot')).toBeNull()
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:draft-image')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel reply in conversation' }))
+  expect(screen.getByRole('combobox', { name: 'Message the mesh' })).toHaveValue('@qa ordinary draft')
+})
+
+it('reports actionable replies from its existing poll and stops the work indicator on pause', async () => {
+  vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
+  vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [msg('question', 1, { kind: 'request', recipient_ids: ['user'] })], threads: [withUser], next_cursor: 1, has_more: false })
+  const report = vi.fn()
+  const { rerender } = render(<FeedWorkspace events={[]} stageId="impl" mesh={meshProps()} onReplyNeededChange={report} />)
+  await waitFor(() => expect(report).toHaveBeenLastCalledWith('impl', 1))
+  expect(screen.getByText(/@qa is working/)).toBeInTheDocument()
+  rerender(<FeedWorkspace events={[]} stageId="impl" mesh={meshProps()} onReplyNeededChange={report} paused />)
+  expect(screen.queryByText(/@qa is working/)).toBeNull()
+  expect(meshClient.getStageMessages).toHaveBeenCalledTimes(1)
+  expect(runClient.listStageDiscussion).toHaveBeenCalledTimes(1)
+})
+
+describe('conversation motion', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  it('animates only a newly arrived message, clears it on timeout and resets on navigation', async () => {
+    const hooks = await import('../../hooks/use-mesh')
+    const history = [msg('history', 1)]
+    const read = vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages: history, threads: { 'mt-1': withUser } })
+    vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
+    vi.useFakeTimers()
+    const props = { events: [], mesh: meshProps(), stageId: 'impl' }
+    const view = render(<FeedWorkspace {...props} />)
+    await act(async () => {})
+    expect(document.querySelector('.is-new-agent-message')).toBeNull()
+    const live = msg('live', 2)
+    read.mockReturnValue({ messages: [...history, live], threads: { 'mt-1': withUser } })
+    view.rerender(<FeedWorkspace {...props} />)
+    expect(document.querySelectorAll('.is-new-agent-message')).toHaveLength(1)
+    expect(row('live')).toHaveClass('is-new-agent-message')
+    act(() => vi.advanceTimersByTime(2399))
+    expect(row('live')).toHaveClass('is-new-agent-message')
+    act(() => vi.advanceTimersByTime(1))
+    expect(document.querySelector('.is-new-agent-message')).toBeNull()
+    read.mockReturnValue({ messages: [...history, live, msg('newer', 3)], threads: { 'mt-1': withUser } })
+    view.rerender(<FeedWorkspace {...props} />)
+    expect(row('newer')).toHaveClass('is-new-agent-message')
+    view.rerender(<FeedWorkspace {...props} stageId="other" />)
+    expect(document.querySelector('.is-new-agent-message')).toBeNull()
+    view.unmount()
+    await act(async () => { render(<FeedWorkspace {...props} />) })
+    expect(document.querySelector('.is-new-agent-message')).toBeNull()
+  })
+
+  it.each([false, true])('jumps to a quote respecting reduced motion=%s', async (reduced) => {
+    const hooks = await import('../../hooks/use-mesh')
+    vi.spyOn(hooks, 'useStageConversation').mockReturnValue({ messages, threads: { 'mt-1': withUser, 'mt-old': legacy } })
+    vi.spyOn(runClient, 'listStageDiscussion').mockResolvedValue({ messages: [], nextCursor: 0, hasMore: false })
+    vi.stubGlobal('matchMedia', () => ({ matches: reduced, addEventListener() {}, removeEventListener() {} }))
+    const scroll = vi.fn()
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(scroll)
+    await act(async () => { render(<FeedWorkspace events={[]} stageId="impl" mesh={meshProps()} />) })
+    fireEvent.click(within(row('m2')).getByRole('button', { name: /Replying to QA reviewer/ }))
+    expect(scroll).toHaveBeenCalledWith({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
   })
 })

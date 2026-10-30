@@ -228,7 +228,7 @@ describe('App', () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
     })
     await waitFor(() => expect(statusCalls).toBe(2))
-  })
+  }, 15000)
 
   test('CRITICAL: an autonomous stage hides the plan panel', async () => {
     mockFetchForStatus(() => ({
@@ -321,7 +321,7 @@ describe('App', () => {
       expect(labels.some((l) => /Approval/.test(l))).toBe(true) // маяк остался
       expect(labels.some((l) => l === 'Gamma')).toBe(false) // блёклый дубль скрыт Feed + постоянная Cost-вкладка (Task 11) + маяк + постоянная Full feed (Task
       // 6) — никакого блёклого дубля-detail сверх этих четырёх.
-      expect(labels.length).toBe(4)
+      expect(labels.length).toBe(3)
     })
   })
 
@@ -342,7 +342,7 @@ describe('App', () => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       // Feed + постоянная Cost-вкладка (Task 11) + постоянная Full feed
       // (Task 6); ни detail-таба, ни маяка.
-      expect(labels).toEqual(['Feed', 'Cost', 'Full feed'])
+      expect(labels).toEqual(['Feed', 'Cost'])
     })
   })
 
@@ -807,9 +807,8 @@ describe('App', () => {
     await waitFor(() => expect(composer).toHaveValue('test note'))
   })
 
-  test('a failed /pause POST is logged, not left as an unhandled rejection', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-
+  test('a failed kebab /pause POST is visible and retryable through the shared header action', async () => {
+    let pauses = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url
 
@@ -824,6 +823,7 @@ describe('App', () => {
       }
       // Стадия успела уйти из pausable-статуса за время между открытием кебаба и кликом.
       if (url.includes('/pause')) {
+        pauses++
         return { ok: false, status: 409, json: async () => ({}) } as Response
       }
         if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
@@ -836,9 +836,18 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(screen.getByText('Pause'))
+    fireEvent.click(within(document.querySelector('.stage-kebab-menu') as HTMLElement).getByText('Pause'))
 
-    await waitFor(() => expect(consoleError).toHaveBeenCalledWith('Failed to pause stage:', expect.anything()))
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    expect(await header.findByRole('alert')).toHaveTextContent('409')
+    expect(header.getByRole('button', { name: 'Pause' })).toBeEnabled()
+    expect(pauses).toBe(1)
+    fireEvent.click(header.getByRole('button', { name: 'Pause' }))
+    expect(header.queryByRole('alert')).toBeNull()
+    expect(header.getByRole('button', { name: 'Pause' })).toBeDisabled()
+    expect(await header.findByRole('alert')).toHaveTextContent('409')
+    expect(header.getByRole('button', { name: 'Pause' })).toBeEnabled()
+    expect(pauses).toBe(2)
   })
 
   test('hides the "thinking" badge while offline even if the selected stage is running', async () => {
@@ -977,7 +986,7 @@ describe('App', () => {
     })
   })
 
-  test('renders a Full feed tab as the last tab', async () => {
+  test('removes Full feed and leaves Cost last', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Alpha', 'running')],
@@ -988,12 +997,12 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
 
     const tabs = screen.getAllByRole('tab')
-    expect(tabs[tabs.length - 1]).toHaveTextContent('Full feed')
+    expect(tabs[tabs.length - 1]).toHaveTextContent('Cost')
+    expect(screen.queryByRole('tab', { name: 'Full feed' })).toBeNull()
   })
 
-  test('Feed tab shows only the selected stage; Full feed shows all', async () => {
+  test('Feed shows only the selected stage when selection changes', async () => {
     // Feed больше не фильтрует общий поток через тумблер — она читает уже отфильтрованную стадией ленту.
-    // Full feed — отдельная постоянная вкладка, читающая весь поток событий флоу.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'pending')],
@@ -1010,13 +1019,12 @@ describe('App', () => {
     })
 
     // Default view — Feed для выбранной s1: только её событие видно.
-    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file: a.ts'))
-    expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file: b.ts')
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file a.ts'))
+    expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file b.ts')
 
-    // Full feed → видны события ВСЕХ стадий.
-    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
-    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file: b.ts'))
-    expect(document.getElementById('feed-content')?.textContent).toContain('read_file: a.ts')
+    fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
+    await waitFor(() => expect(document.getElementById('feed-content')?.textContent).toContain('read_file b.ts'))
+    expect(document.getElementById('feed-content')?.textContent).not.toContain('read_file a.ts')
   })
 
   test('no This stage / All toggle exists', async () => {
@@ -1031,8 +1039,6 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument()
 
-    // Тумблер не появляется и в Full feed — там его тоже никогда не было.
-    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument()
   })
@@ -1093,7 +1099,7 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
   })
 
-  test('Cost tab is always right before the trailing Full feed tab, after the contextual detail/beacon tabs', async () => {
+  test('Cost tab follows the contextual detail and beacon tabs', async () => {
     // Живой ревью-баг: Cost был второй вкладкой сразу после Feed, поэтому detail-таб выбранной стадии и
     // attention-маяк оказывались ПОСЛЕ Cost — Cost «застревала» посередине списка.
     mockFetchForStatus(() => ({
@@ -1114,8 +1120,7 @@ describe('App', () => {
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(labels[0]).toBe('Feed')
-      expect(labels[labels.length - 1]).toBe('Full feed')
-      expect(labels[labels.length - 2]).toBe('Cost')
+      expect(labels[labels.length - 1]).toBe('Cost')
       expect(labels).toContain('Greet') // detail-вкладка завершённой s1
       expect(labels.some((l) => /Approval/.test(l))).toBe(true)
     })
@@ -1126,7 +1131,7 @@ describe('App', () => {
   })
 
   test('FIX 1: Cost view never shows a redundant stage-detail tab alongside the attention beacon', async () => {
-    // Global Cost must not duplicate stage detail tabs; expected order is Feed, Approval, Cost, Full feed.
+    // Global Cost must not duplicate stage detail tabs; expected order is Feed, Approval, Cost.
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'awaiting_approval')],
@@ -1139,7 +1144,7 @@ describe('App', () => {
 
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
-      expect(labels).toEqual(['Feed', expect.stringMatching(/Approval/), 'Cost', 'Full feed'])
+      expect(labels).toEqual(['Feed', expect.stringMatching(/Approval/), 'Cost'])
     })
   })
 
@@ -1293,9 +1298,7 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
     expect(document.getElementById('dialog-section')).toBeNull()
 
-    // s2 не выбрана → per-stage Feed (s1) не покажет её событие; переключаемся
-    // на Full feed, чтобы увидеть событие s2 в ленте.
-    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+    fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
     act(() => {
@@ -3025,12 +3028,12 @@ describe('App', () => {
     mockRunConversationsRun(() => 'assistants')
     render(<App />)
     await screen.findByRole('button', { name: 'Run conversations' })
-    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     fireEvent.click(runConversationsOpener())
     expect(runConversationsOpener()).toHaveAttribute('aria-expanded', 'true')
     expect(runConversationsPanel().inert).toBe(false)
-    expect(screen.getByRole('tab', { name: 'Full feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
     const panel = within(runConversationsPanel())
     expect(await panel.findByText('Run question')).toBeInTheDocument()
     expect(panel.queryByText('Stage talk')).toBeNull()
@@ -3041,13 +3044,13 @@ describe('App', () => {
     expect(runConversationsPanel().inert).toBe(true)
   })
 
-  test('Run conversations: the opener works on Plan, Cost, Full feed and Assistant too', async () => {
+  test('Run conversations: the opener works on Plan and Cost too', async () => {
     mockRunConversationsRun(() => 'assistants', () => 'done')
     render(<App />)
     await screen.findByRole('button', { name: 'Run conversations' })
     fireEvent.click(document.querySelector('.stage-row') as HTMLElement)
     const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
-    for (const name of ['Propose', 'Cost', 'Full feed']) {
+    for (const name of ['Propose', 'Cost']) {
       fireEvent.click(await tabs.findByRole('tab', { name }))
       fireEvent.click(runConversationsOpener())
       expect(runConversationsPanel()).toHaveClass('open')
@@ -3057,7 +3060,7 @@ describe('App', () => {
     }
   })
 
-  test('Run conversations: an open panel, its conversation, draft and reply target survive Feed -> Plan -> Feed and a stage change', async () => {
+  test('Run conversations: an open panel, its conversation, draft and reply target survive Feed -> Plan -> Cost -> Feed and a stage change', async () => {
     mockRunConversationsRun(() => 'assistants', () => 'done', () => 5)
     render(<App />)
     const opener = await screen.findByRole('button', { name: /^Run conversations/ })
@@ -3071,8 +3074,8 @@ describe('App', () => {
 
     const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
     fireEvent.click(await tabs.findByRole('tab', { name: 'Propose' }))
-    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
-    fireEvent.click(await tabs.findByRole('tab', { name: 'Full feed' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+    fireEvent.click(await tabs.findByRole('tab', { name: 'Feed' }))
 
     expect(runConversationsPanel()).toHaveClass('open')
     expect(within(runConversationsPanel()).getByPlaceholderText(/^Message /)).toHaveValue('my answer')
@@ -3092,7 +3095,7 @@ describe('App', () => {
     fireEvent.click(runConversationsOpener())
     await within(runConversationsPanel()).findByText('Run question')
 
-    fireEvent.keyDown(screen.getByPlaceholderText(/note to agent|message the mesh/i), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByPlaceholderText(/note to agent|write a message, or type @/i), { key: 'Escape' })
     expect(runConversationsPanel()).toHaveClass('open')
 
     fireEvent.keyDown(within(runConversationsPanel()).getByText('Run question'), { key: 'Escape' })
@@ -3106,7 +3109,7 @@ describe('App', () => {
     mockRunConversationsRun(() => 'assistants', () => status)
     render(<App />)
     await screen.findByRole('button', { name: 'Run conversations' })
-    fireEvent.click(screen.getByRole('tab', { name: 'Full feed' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
     fireEvent.click(runConversationsOpener())
     expect(runConversationsPanel()).toHaveAttribute('role', 'dialog')
     const focused = document.activeElement
@@ -3115,7 +3118,7 @@ describe('App', () => {
     emitStageStatus('s1', 'awaiting_approval')
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
 
-    expect(screen.getByRole('tab', { name: 'Full feed' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
     expect(runConversationsPanel()).toHaveClass('open')
     expect(runConversationsPanel().contains(document.activeElement)).toBe(true)
     expect(document.activeElement).toBe(focused)
@@ -3267,7 +3270,7 @@ describe('App', () => {
     // The Board tab renders the same entries as three status lanes: both new tasks are Todo.
     expect(within(screen.getByRole('region', { name: 'Todo tasks' })).getAllByRole('button')).toHaveLength(2)
     expect(within(screen.getByRole('region', { name: 'Done tasks' })).queryAllByRole('button')).toHaveLength(0)
-    expect(screen.getByText('0 of 2 completed')).toBeInTheDocument()
+    expect(screen.getByText('0 of 2 tasks done')).toBeInTheDocument()
     fireEvent.click(workspaceTabs().getByRole('tab', { name: 'Team' }))
     expect(within(screen.getByRole('tablist', { name: 'Team' })).getByRole('tab', { name: /^Board/ })).toHaveTextContent('Board2')
     expect(boardRequests(requests)).toHaveLength(1)

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnima
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
-import { toFeedItems, buildFeedTimeline, feedFilterCounts, isForYou, type FeedActor, type FeedFilter, type FeedGroup } from './feed-view-model'
+import { toFeedItems, buildFeedTimeline, feedFilterCounts, groupToolRuns, isForYou, toolCall, toolRunSummary, type FeedActor, type FeedFilter, type FeedGroup, type FeedItem } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
-import { FeedComposer, type ComposerDraft, type FeedComposerMeshProps, type MeshReplyTarget } from './FeedComposer'
+import { FeedComposer, emptyComposerDraft, type ComposerDraft, type FeedComposerMeshProps } from './FeedComposer'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
@@ -15,19 +15,15 @@ import { withStageDiscussion } from './stage-discussion-feed'
 import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
-import { canReplyInConversation } from '../../lib/mesh-reply'
-import { sideAgentOutcome } from './mesh-receipt'
+import { canReplyInConversation, isAgentMessageToUser } from '../../lib/mesh-reply'
+import { messageDelivered, sideAgentOutcome } from './mesh-receipt'
 import { MessageTime } from '../message-time/MessageTime'
+import { MeshAvatar } from '../team/MeshAvatar'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
-  // stageId больше НЕ фильтрует events. Список events решает вызывающая сторона (App.tsx): per-stage Feed
-  // — уже отфильтрованные useStageEvents, Full feed — весь events флоу.
+  // The caller supplies the events for this stage or read-only activity view.
   stageId: string | null
-  // scopeToken — пространство имён текущего скоупа ленты. Не задан → дефолт из stageId.
-  scopeToken?: string
-  // showStageBadges — показывать бейдж стадии в шапке группы.
-  showStageBadges?: boolean
   // emptyHint — текст пустого состояния, когда events пуст.
   emptyHint?: string
   // Клик по navigable-элементу ленты — открыть диалог соответствующей стадии на нужном вопросе. Сама
@@ -48,8 +44,6 @@ type FeedWorkspaceProps = {
   onComposerFocus?: () => void
   onComposerBlur?: (hasDraft: boolean) => void
   onComposerResumeNow?: () => void
-  // systemAuthorLabel — подпись пузыря системного автора. Дефолт 'Flow' — обычная лента стадий.
-  systemAuthorLabel?: string
   // imagePolicy — как трактовать маркеры [AFM image: …] в прозе агента. 'stage' (дефолт) — разбирать в
   // <FeedImage> с per-stage URL (лента стадий).
   imagePolicy?: 'stage' | 'none'
@@ -58,7 +52,10 @@ type FeedWorkspaceProps = {
   reviseAvailable?: boolean
   // composerDrafts — each stage's composer draft (ComposerDraft), owned by the caller so it outlives this view too
   // (the Team tab and back). Without it the drafts live as long as this FeedWorkspace.
-  composerDrafts?: Map<string, ComposerDraft>
+  composerDrafts?: ReadonlyMap<string, ComposerDraft>
+  onComposerDraftChange?: (stageId: string, patch: Partial<ComposerDraft>) => void
+  paused?: boolean
+  onReplyNeededChange?: (stageId: string | null, count: number) => void
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -66,6 +63,7 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
   user: 'You',
   system: 'Flow',
 }
+const STAGE_AGENT_ROLE = 'Stage agent'
 
 // FeedWorkspace — единый воркспейс ленты: мессенджер-презентация РЕАЛЬНЫХ событий.
 export function feedItemSignature(item: { stageId: string; kind: string; actor: string; text: string }): string {
@@ -75,8 +73,6 @@ export function feedItemSignature(item: { stageId: string; kind: string; actor: 
 export function FeedWorkspace({
   events,
   stageId,
-  scopeToken,
-  showStageBadges = false,
   emptyHint,
   onOpenDialog,
   noteTarget = null,
@@ -87,17 +83,33 @@ export function FeedWorkspace({
   onComposerFocus,
   onComposerBlur,
   onComposerResumeNow,
-  systemAuthorLabel = 'Flow',
   imagePolicy = 'stage',
   mesh,
   reviseAvailable = true,
   composerDrafts,
+  onComposerDraftChange,
+  paused = false,
+  onReplyNeededChange,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   // Drafts are per stage: switching stages (or the Feed following the run) remounts the composer for the new
   // stage, and coming back restores what was written and picked there.
-  const ownDrafts = useRef(new Map<string, ComposerDraft>())
-  const drafts = composerDrafts ?? ownDrafts.current
+  const draftsRef = useRef(composerDrafts ?? new Map<string, ComposerDraft>())
+  const receivedDrafts = useRef(composerDrafts)
+  if (receivedDrafts.current !== composerDrafts && composerDrafts !== undefined) draftsRef.current = composerDrafts
+  receivedDrafts.current = composerDrafts
+  const [, refreshDrafts] = useState(0)
+  const drafts = draftsRef.current
+  function updateDraft(id: string, patch: Partial<ComposerDraft>): void {
+    const previous = draftsRef.current.get(id) ?? emptyComposerDraft()
+    if ('replyAttachments' in patch) {
+      const kept = new Set(patch.replyAttachments?.map((a) => a.previewUrl))
+      previous.replyAttachments?.filter((a) => !kept.has(a.previewUrl)).forEach((a) => URL.revokeObjectURL(a.previewUrl))
+    }
+    draftsRef.current = new Map(draftsRef.current).set(id, { ...previous, ...patch })
+    if (onComposerDraftChange !== undefined) onComposerDraftChange(id, patch)
+    else if (Object.keys(patch).some((key) => !['revise', 'message', 'replyMessage'].includes(key))) refreshDrafts((n) => n + 1)
+  }
   const sectionRef = useRef<HTMLElement | null>(null)
 
   const items = useMemo(() => toFeedItems(events), [events])
@@ -128,7 +140,7 @@ export function FeedWorkspace({
     if (jump === null) return
     const el = [...(sectionRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])].find((x) => x.dataset.messageId === jump.id)
     if (el === undefined) return
-    el.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    el.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     el.classList.add('is-jump-target')
     const t = setTimeout(() => el.classList.remove('is-jump-target'), 1600)
     return () => clearTimeout(t)
@@ -139,47 +151,58 @@ export function FeedWorkspace({
   const lastItem = items[items.length - 1]
   const lastKey = lastItem?.key ?? null
   const lastSig = lastItem ? feedItemSignature(lastItem) : null
-  // Namespaced reset token so a stage legitimately named "full" can never collide
-  // with the Full-feed scope (stage-id validation allows "full"; pkg/flow/flow.go).
-  const resetToken = scopeToken ?? (stageId !== null ? `scope:stage:${stageId}` : 'scope:none')
+  const resetToken = stageId
   const { animate, onEntered } = useEnteringLast(lastSig, resetToken)
-  const enteringKey = animate ? lastKey : null
+  const enteringKey = animate && lastItem?.kind !== 'tool' ? lastKey : null
+  useEffect(() => {
+    if (!animate) return
+    const timer = window.setTimeout(onEntered, 2400)
+    return () => window.clearTimeout(timer)
+  }, [animate, onEntered, lastKey])
+  const newestMessage = conversationMessages.at(-1)
+  const messageEntrance = useEnteringLast(newestMessage?.id ?? null, resetToken)
+  useEffect(() => {
+    if (!messageEntrance.animate) return
+    const timer = window.setTimeout(messageEntrance.onEntered, 2400)
+    return () => window.clearTimeout(timer)
+  }, [messageEntrance.animate, messageEntrance.onEntered, newestMessage?.id])
 
-  // Ответ на мысль агента: цель хранится ВМЕСТЕ со стадией, чтобы асинхронная отправка/смена стадии не
-  // «протащили» чужую цитату.
-  const [replyTo, setReplyTo] = useState<{ stageId: string; key: string; text: string } | null>(null)
-  // Дерив: чип/выбор показываем только для стадии, на которой стоит композер —
-  // даже до срабатывания эффекта сброса кадр со stale-цитатой невозможен.
-  const activeReply = replyTo !== null && replyTo.stageId === noteTarget ? replyTo : null
+  const draft = noteTarget !== null ? drafts.get(noteTarget) : undefined
+  const activeReply = draft?.thoughtReply ?? null
   const activeReplyKey = activeReply?.key ?? null
-
-  // The one conversation message being answered ("↩ Reply in conversation", Message mode) — separate from the
-  // thought answered with Revise above, and stored with its stage the same way.
-  const [meshReplyTo, setMeshReplyTo] = useState<{ stageId: string; target: MeshReplyTarget } | null>(null)
-  // A reply whose conversation has since closed is over: nothing can be added to that thread any more.
-  const replyThreadClosed = meshReplyTo !== null && conversation.threads[meshReplyTo.target.threadId]?.status === 'closed'
-  const activeMeshReply = meshReplyTo !== null && meshReplyTo.stageId === noteTarget && !replyThreadClosed ? meshReplyTo.target : null
+  const storedMeshReply = draft?.meshReply ?? null
+  const replyThreadClosed = storedMeshReply !== null && conversation.threads[storedMeshReply.threadId]?.status === 'closed'
+  const activeMeshReply = replyThreadClosed ? null : storedMeshReply
   useEffect(() => {
-    if (replyThreadClosed) setMeshReplyTo(null)
-  }, [replyThreadClosed])
-
-  // Смена стадии — сбрасываем reply-таргеты (композер и так ремаунтится по key).
-  useEffect(() => {
-    setReplyTo(null)
-    setMeshReplyTo(null)
-  }, [noteTarget])
+    if (replyThreadClosed && noteTarget !== null) updateDraft(noteTarget, { meshReply: null, replyMessage: '', replyPicked: [] })
+  }, [replyThreadClosed, noteTarget])
+  const waitingForYou = new Set(conversationMessages.filter((m) => m.kind === 'request' && isAgentMessageToUser(m) && canReplyInConversation(m, conversation.threads[m.thread_id], participants) && !conversationMessages.some((answer) => m.recipient_ids.includes(answer.sender_id) && answer.in_reply_to === m.id)).map((m) => m.id))
+  const replyNeeded = waitingForYou.size
+  useEffect(() => { onReplyNeededChange?.(stageId, replyNeeded) }, [stageId, replyNeeded, onReplyNeededChange])
 
   const composerMounted = noteTarget !== null && onSendNote !== undefined
   // Reply in conversation needs the Message composer; a reply to a thought needs Revise.
   const canAnswerInConversation = composerMounted && mesh !== undefined
   const canAnswerThought = composerMounted && (mesh === undefined || reviseAvailable)
+  const stageIndex = mesh?.stages.findIndex((stage) => stage.id === stageId) ?? -1
+  const stageCommand = participants.find((person) => person.id === `stage:${stageId}`)?.command
+  // The stage agent's name: its roster name, else the stage's name, else the stage id.
+  function stageAgentName(id: string): string {
+    const displayName = participants.find((person) => person.id === `stage:${id}`)?.display_name
+    if (displayName !== undefined && displayName !== '') return displayName
+    return mesh?.stages.find((stage) => stage.id === id)?.name ?? id
+  }
+  const filterContext = stageIndex >= 0 ? `Stage ${stageIndex + 1} of ${mesh!.stages.length}${stageCommand ? ` · ${stageCommand}` : ''}` : stageCommand
 
   return (
     <section className="feed-workspace" aria-label="Feed" ref={sectionRef}>
-      {conversationMessages.length > 0 && (
-        <FeedFilterChips filter={filter} onChange={setFilter} counts={filterCounts} />
+      {(mesh !== undefined || conversationMessages.length > 0) && (
+        <div className="feed-filter-row">
+          <FeedFilterChips filter={filter} onChange={setFilter} counts={filterCounts} />
+          {filterContext && <span className="feed-filter-context">{filterContext}</span>}
+        </div>
       )}
-      <div id="feed-content" className="feed-scroll" ref={feed.ref}>
+      <div id="feed-content" className="feed-scroll" ref={feed.ref} onClickCapture={(event) => { if ((event.target as HTMLElement).closest('summary')) feed.release() }}>
         {timeline.length === 0 ? (
           <div className="empty-hint feed-empty">{items.length + conversationMessages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>
         ) : (
@@ -190,6 +213,10 @@ export function FeedWorkspace({
                   <ConversationMessage
                     key={m.id}
                     message={m}
+                    presentation="feed"
+                    delivery={messageDelivered(m, conversationMessages, mesh?.deliveries ?? EMPTY_DELIVERIES) ? 'Delivered' : undefined}
+                    waitingForYou={waitingForYou.has(m.id)}
+                    isNew={messageEntrance.animate && m.id === newestMessage?.id}
                     previousCreatedAt={entry.messages[index - 1]?.created_at}
                     participants={participants}
                     answered={m.in_reply_to !== undefined ? messageById.get(m.in_reply_to) : undefined}
@@ -203,9 +230,9 @@ export function FeedWorkspace({
                     onReply={
                       canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation.threads[m.thread_id], participants)
                         ? () =>
-                            setMeshReplyTo({
-                              stageId: noteTarget,
-                              target: {
+                            updateDraft(noteTarget, {
+                              ...(drafts.get(noteTarget)?.meshReply?.messageId === m.id ? {} : { replyMessage: '', replyPicked: [], replyAttachments: undefined }),
+                              meshReply: {
                                 messageId: m.id,
                                 threadId: m.thread_id,
                                 senderId: m.sender_id,
@@ -222,8 +249,8 @@ export function FeedWorkspace({
               <FeedGroupView
                 key={entry.key}
                 group={entry.group}
-                showStageBadges={showStageBadges}
-                systemAuthorLabel={systemAuthorLabel}
+                showStageBadges={false}
+                agentName={stageAgentName(entry.group.stageId)}
                 imagePolicy={imagePolicy}
                 enteringKey={enteringKey}
                 onEntered={onEntered}
@@ -232,7 +259,7 @@ export function FeedWorkspace({
                 // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
                 onReplyToThought={
                   canAnswerThought && noteTarget !== null
-                    ? (key, text) => setReplyTo({ stageId: noteTarget, key, text })
+                    ? (key, text) => updateDraft(noteTarget, { thoughtReply: { key, text } })
                     : undefined
                 }
                 activeReplyKey={activeReplyKey}
@@ -240,7 +267,7 @@ export function FeedWorkspace({
             ),
           )
         )}
-        {stageId !== null && <WorkingLine stageId={stageId} participants={participants} conversation={conversation} />}
+        {stageId !== null && !paused && <WorkingLine stageId={stageId} participants={participants} conversation={conversation} />}
         {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
       </div>
 
@@ -255,10 +282,10 @@ export function FeedWorkspace({
           onSend={(text) => onSendNote(noteTarget, text)}
           replyQuote={activeReply?.text ?? null}
           replyKey={activeReply?.key}
-          onCancelReply={() => setReplyTo(null)}
+          onCancelReply={() => updateDraft(noteTarget, { thoughtReply: null })}
           // Сброс только совпадающего ключа: если пользователь выбрал другую
           // мысль, пока шла отправка, свежая цель переживёт (race-safe).
-          onSent={(key) => setReplyTo((cur) => (cur?.key === key ? null : cur))}
+          onSent={(key) => { if (draftsRef.current.get(noteTarget)?.thoughtReply?.key === key) updateDraft(noteTarget, { thoughtReply: null }) }}
           pauseOnFocusEnabled={pauseOnFocusEnabled}
           onTogglePauseOnFocus={onTogglePauseOnFocus}
           paused={composerPaused}
@@ -269,11 +296,15 @@ export function FeedWorkspace({
           reviseAvailable={reviseAvailable}
           conversationMessages={conversationMessages}
           meshReply={activeMeshReply}
-          onCancelMeshReply={() => setMeshReplyTo(null)}
+          onCancelMeshReply={() => updateDraft(noteTarget, { meshReply: null, replyMessage: '', replyPicked: [], replyAttachments: undefined })}
           // Reset only if the same message is still being answered (another may have been picked meanwhile).
-          onMeshReplySent={(id) => setMeshReplyTo((cur) => (cur?.target.messageId === id ? null : cur))}
+          onMeshReplySent={(id) => { if (draftsRef.current.get(noteTarget)?.meshReply?.messageId === id) updateDraft(noteTarget, { meshReply: null, replyMessage: '', replyPicked: [], replyAttachments: undefined }) }}
           draft={drafts.get(noteTarget)}
-          onDraftChange={(d) => drafts.set(noteTarget, d)}
+          onDraftChange={(patch) => updateDraft(noteTarget, patch)}
+          onReplyAttachmentsChange={(replyId, attachments) => {
+            if (draftsRef.current.get(noteTarget)?.meshReply?.messageId === replyId) updateDraft(noteTarget, { replyAttachments: attachments })
+            else attachments.forEach((a) => URL.revokeObjectURL(a.previewUrl))
+          }}
         />
       )}
     </section>
@@ -281,8 +312,9 @@ export function FeedWorkspace({
 }
 
 const EMPTY_PARTICIPANTS: MeshParticipant[] = []
+const EMPTY_DELIVERIES: ReadonlySet<string> = new Set()
 
-const FILTER_LABEL: Record<FeedFilter, string> = { all: 'All', conversations: 'Conversations', author: "Author's work" }
+const FILTER_LABEL: Record<FeedFilter, string> = { all: 'All activity', conversations: 'Conversations', author: "Author's work" }
 
 // FeedFilterChips — «All / Conversations / Author's work» with counts. Messages addressed to you stay visible
 // under every filter.
@@ -323,10 +355,9 @@ function WorkingLine({ stageId, participants, conversation }: { stageId: string;
 
 type FeedGroupViewProps = {
   group: FeedGroup
-  // showStageBadges — см. FeedWorkspaceProps: пробрасывается явно с единственной
-  // точки вызова в FeedWorkspace (codex #4 — было безусловным рендером бейджа).
+  // Assistant history can label the source stage of a group.
   showStageBadges: boolean
-  // systemAuthorLabel/imagePolicy — см. FeedWorkspaceProps.
+  // systemAuthorLabel — подпись системного автора в карточке истории (messageCard); imagePolicy — см. FeedWorkspaceProps.
   systemAuthorLabel?: string
   imagePolicy?: 'stage' | 'none'
   onOpenDialog?: (stageId: string, phase: string, id: string) => void
@@ -338,21 +369,45 @@ type FeedGroupViewProps = {
   // enteringKey — the feed key of the single newest row that should play the entrance animation.
   enteringKey?: string | null
   onEntered?: () => void
+  messageCard?: boolean
+  // agentName — the stage agent's name in the author row of its messages; defaults to the stage id.
+  agentName?: string
 }
 
-// FeedGroupView — один пузырь: шапка + стопка item-строк.
-export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered }: FeedGroupViewProps): ReactElement {
+// FeedGroupView — одна группа: стейдж-агент — строка автора и тело без рамки, события флоу — тихие строки,
+// пользователь и карточки истории — пузырь с шапкой.
+export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered, messageCard = false, agentName }: FeedGroupViewProps): ReactElement {
   // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
   // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
-  const authorLabel = group.authorLabel ?? (group.actor === 'system' ? systemAuthorLabel : ACTOR_LABEL[group.actor])
-  return (
-    <div className={`feed-group feed-${group.side}`} data-actor={group.actor}>
-      <div className="feed-group-head">
-        {showStageBadges && group.stageId !== '' && <span className="feed-stage-badge">{group.stageId}</span>}
-        <span className="feed-actor">{authorLabel}</span>
-      </div>
-      <div className="feed-bubble">
-        {group.items.map((item) => {
+  const authorLabel = group.authorLabel ?? (group.actor === 'system' || (messageCard && group.actor === 'agent') ? systemAuthorLabel : ACTOR_LABEL[group.actor])
+  const firstItem = group.items[0]
+  const isStageAgent = !messageCard && group.actor === 'agent'
+  const isFlow = !messageCard && group.actor === 'system'
+  // The first row's time sits in the author row, so that row does not repeat it.
+  const timeInHead = messageCard || isStageAgent
+  const framed = messageCard || group.actor === 'user'
+  const stageAgentName = agentName ?? group.stageId
+  const firstTime = firstItem && <MessageTime timestamp={firstItem.ts} gap={firstItem.gap} firstEvent={firstItem.firstEvent} focusable />
+  const head = isFlow ? null : isStageAgent ? (
+    <div className="feed-group-head feed-author-row">
+      <strong className="feed-actor">{stageAgentName}</strong>
+      <span className="feed-role">{STAGE_AGENT_ROLE}</span>
+      {firstTime}
+    </div>
+  ) : (
+    <div className="feed-group-head">
+      {showStageBadges && group.stageId !== '' && <span className="feed-stage-badge">{group.stageId}</span>}
+      <span className="feed-actor">{authorLabel}</span>
+      {messageCard && firstTime}
+    </div>
+  )
+  const content = (
+    <>
+      {head}
+      <div className={framed ? 'feed-bubble' : 'feed-rows'}>
+        {groupToolRuns(group.items).map((row) => {
+          if (row.kind === 'tools') return <ToolRun key={row.key} items={row.items} />
+          const item = row.item
           const isMd = item.markdown === true
           const isThought = item.kind === 'message' && isMd
           const isInteractiveRow = (item.navigable === true && onOpenDialog !== undefined) || (isThought && onReplyToThought !== undefined)
@@ -393,7 +448,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
               ) : (
                 <span className="feed-item-text">{item.text}</span>
               )}
-              <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable={!isInteractiveRow} />
+              {(!timeInHead || item !== firstItem) && <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable={!isInteractiveRow} />}
             </>
           )
           if (item.navigable === true && onOpenDialog) {
@@ -448,7 +503,45 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
           )
         })}
       </div>
+    </>
+  )
+  return (
+    <div className={`feed-group feed-${group.side}${messageCard ? ' feed-history-message' : ''}${isStageAgent ? ' feed-authored' : ''}${isFlow ? ' feed-flow' : ''}`} data-actor={group.actor}>
+      {messageCard ? <>
+        <MeshAvatar name={authorLabel} kind={group.actor === 'user' ? 'user' : 'side_agent'} />
+        <div className="feed-history-card">{content}</div>
+      </> : isStageAgent ? <>
+        <MeshAvatar name={stageAgentName} kind="stage_agent" />
+        <div className="feed-authored-body">{content}</div>
+      </> : content}
     </div>
+  )
+}
+
+// ToolRun — подряд идущие вызовы инструментов агента: одна свёрнутая полоса вместо строки на каждый вызов.
+function ToolRun({ items }: { items: FeedItem[] }): ReactElement {
+  const { count, names } = toolRunSummary(items)
+  return (
+    <details className="feed-tool-group">
+      <summary>
+        <strong>{count}</strong>
+        {names !== '' && <span className="feed-tool-names"> · {names}</span>}
+      </summary>
+      <div className="feed-tool-rows">
+        {items.map((item) => {
+          const { name, detail } = toolCall(item)
+          return (
+            <div key={item.key} className="feed-item feed-kind-tool tone-neutral mono">
+              <span className="feed-item-text">
+                <span className="feed-tool-name">{name}</span>
+                {detail !== '' && ` ${detail}`}
+              </span>
+              <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable />
+            </div>
+          )
+        })}
+      </div>
+    </details>
   )
 }
 

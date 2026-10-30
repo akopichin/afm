@@ -27,10 +27,41 @@ describe('DiffViewer', () => {
     expect(container.querySelectorAll('.diff-line-del')).toHaveLength(1)
     expect(container.querySelectorAll('.diff-line-hunk')).toHaveLength(1)
     expect(container.querySelectorAll('.diff-line-header')).toHaveLength(2)
-    expect(screen.getByText('+new')).toBeInTheDocument()
-    expect(screen.getByText('-old')).toBeInTheDocument()
+    expect(container.querySelector('.diff-line-add .diff-text')?.textContent).toBe('new')
+    expect(container.querySelector('.diff-line-add .diff-gutter')?.textContent).toBe('+')
+    expect(container.querySelector('.diff-line-del .diff-text')?.textContent).toBe('old')
+    expect(container.querySelector('.diff-line-del .diff-gutter')?.textContent).toBe('−')
     // no dangerouslySetInnerHTML anywhere in this tree
     expect(container.innerHTML).not.toContain('<script')
+  })
+
+  test('context lines are numbered from the hunk start in the new file, without the leading space', () => {
+    const diff = makeDiff({ diff: '@@ -10,3 +20,3 @@\n one\n-two\n+three\n four\n' })
+    const { container } = render(<DiffViewer diff={diff} loading={false} error={null} />)
+    const rows = Array.from(container.querySelectorAll('.diff-line')).map((row) => [
+      row.querySelector('.diff-gutter')?.textContent,
+      row.querySelector('.diff-text')?.textContent,
+    ])
+    expect(rows).toEqual([
+      ['', '@@ -10,3 +20,3 @@'],
+      ['20', 'one'],
+      ['−', 'two'],
+      ['+', 'three'],
+      ['22', 'four'],
+    ])
+  })
+
+  function gutters(diff: string): Array<string | null | undefined> {
+    const { container } = render(<DiffViewer diff={makeDiff({ diff })} loading={false} error={null} />)
+    return Array.from(container.querySelectorAll('.diff-line')).map((row) => row.querySelector('.diff-gutter')?.textContent)
+  }
+
+  test('consecutive additions each advance the new-file line counter', () => {
+    expect(gutters('@@ -5,1 +5,4 @@\n+a\n+b\n+c\n tail\n')).toEqual(['', '+', '+', '+', '8'])
+  })
+
+  test('deletions alone do not advance the new-file line counter', () => {
+    expect(gutters('@@ -5,4 +5,1 @@\n-a\n-b\n-c\n tail\n')).toEqual(['', '−', '−', '−', '5'])
   })
 
   test('a diff line containing HTML-looking text is never parsed as markup', () => {
@@ -38,7 +69,7 @@ describe('DiffViewer', () => {
       <DiffViewer diff={makeDiff({ diff: '+<img src=x onerror="window.__pwned=1">\n' })} loading={false} error={null} />,
     )
     expect(container.querySelector('img')).toBeNull()
-    expect(screen.getByText('+<img src=x onerror="window.__pwned=1">')).toBeInTheDocument()
+    expect(screen.getByText('<img src=x onerror="window.__pwned=1">')).toBeInTheDocument()
   })
 
   test('shows a banner and skips lines for a binary file', () => {
@@ -49,7 +80,7 @@ describe('DiffViewer', () => {
   test('shows a truncated banner above the (partial) diff lines', () => {
     render(<DiffViewer diff={makeDiff({ truncated: true })} loading={false} error={null} />)
     expect(screen.getByText(/truncated/i)).toBeInTheDocument()
-    expect(screen.getByText('+new')).toBeInTheDocument()
+    expect(screen.getByText('new')).toBeInTheDocument()
   })
 
   test('shows "no changes" for a clean status with an empty body', () => {

@@ -12,6 +12,30 @@ export function visibleFocusables(root: HTMLElement): HTMLElement[] {
   return all.filter((el) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : true))
 }
 
+// trapTab замыкает Tab/Shift+Tab внутри root: с последнего элемента — на первый и обратно. Фокус на самом
+// root или на нефокусируемом потомке уходит на край, пустой root фокус не отпускает.
+export function trapTab(e: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'preventDefault'>, root: HTMLElement): void {
+  if (e.key !== 'Tab') return
+  const items = visibleFocusables(root)
+  const first = items[0]
+  const last = items[items.length - 1]
+  if (first === undefined || last === undefined) {
+    e.preventDefault()
+    return
+  }
+  const active = document.activeElement
+  if (active instanceof HTMLElement && root.contains(active) && !items.includes(active)) {
+    e.preventDefault()
+    ;(e.shiftKey ? last : first).focus()
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
+
 // DialogOpenContext — куда диалог сообщает «открыт/закрыт». App считает открытые диалоги и добавляет их к
 // anyModalOpen: attention не уводит воркспейс из-под открытой формы, даже когда фокус на checkbox или кнопке.
 // Сообщение идёт из layout-эффекта диалога: он выполняется раньше layout-синка attention в App того же

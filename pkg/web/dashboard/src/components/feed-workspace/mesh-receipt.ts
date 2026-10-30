@@ -68,6 +68,14 @@ export function deliveryKey(messageId: string, participantId: string): string {
   return `${messageId}|${participantId}`
 }
 
+// Seeing a persisted message is not proof an agent received it; each recipient needs its own evidence.
+export function messageDelivered(message: MeshMessage, messages: readonly MeshMessage[], deliveries: ReadonlySet<string>): boolean {
+  return message.recipient_ids.length > 0 && message.recipient_ids.every((id) =>
+    id === 'user' || deliveries.has(deliveryKey(message.id, id)) ||
+    messages.some((reply) => reply.in_reply_to === message.id && reply.sender_id === id),
+  )
+}
+
 // meshDeliveries — the (message, recipient) pairs the run's mesh_receipt events say were delivered or
 // acknowledged (either means the recipient got it).
 export function meshDeliveries(events: readonly AfmEvent[]): ReadonlySet<string> {

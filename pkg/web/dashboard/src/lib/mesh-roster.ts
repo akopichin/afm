@@ -121,6 +121,13 @@ export function boardNotifyCandidates(
   })
 }
 
+// participantMentionNote — вторая строка пункта меню упоминаний: «роль · охват» (Run agent · Whole run).
+export function participantMentionNote(p: MeshParticipant): string {
+  const role = p.kind === 'stage_agent' ? 'Stage agent' : participantRole(p.kind)
+  const scope = p.activity === 'done' ? 'Finished · history only' : p.scope === 'run' ? 'Whole run' : p.stage_id ?? 'This stage'
+  return `${role} · ${scope}`
+}
+
 // participantRole — подпись роли по kind участника.
 export function participantRole(kind: string): string {
   switch (kind) {
@@ -180,10 +187,21 @@ export function directPeer(thread: MeshThread, participants: MeshParticipant[]):
   return participants.find((p) => p.id === other)
 }
 
-// threadMembersLine — who is in a conversation, by initials ("QA · DO · FE"), for its row in the roster.
-export function threadMembersLine(thread: MeshThread, participants: MeshParticipant[]): string {
+// participantHandle — how a person is addressed ("@qa"); one without an alias shows by name.
+export function participantHandle(p: MeshParticipant): string {
+  return p.alias !== undefined && p.alias !== '' ? `@${p.alias}` : participantLabel(p)
+}
+
+// memberHandle — participantHandle for a thread member id; a member the roster does not know yet shows by name.
+function memberHandle(memberId: string, participants: MeshParticipant[]): string {
+  const person = participants.find((x) => x.id === memberId)
+  return person !== undefined ? participantHandle(person) : senderLabel(memberId, participants)
+}
+
+// threadHandlesLine — who is in a conversation besides you, by handle ("@a11y, @impl").
+export function threadHandlesLine(thread: MeshThread, participants: MeshParticipant[]): string {
   return thread.members
     .filter((m) => m !== USER_ID)
-    .map((m) => participantInitials(senderLabel(m, participants)))
-    .join(' · ')
+    .map((m) => memberHandle(m, participants))
+    .join(', ')
 }

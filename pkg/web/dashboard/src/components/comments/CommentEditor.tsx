@@ -18,14 +18,19 @@ export type CommentEditorProps = {
   onDiscard?: () => void
   saveLabel: string
   discardLabel?: string
+  // draft — в заголовке бейдж Draft: введён текст, которого ещё нет среди сохранённых.
+  draft?: boolean
   saveDisabled?: boolean
   error?: string | null
   allowAttachments?: boolean
   placeholder?: string
 }
 
-// CommentEditor — единый редактор комментария. Escape/крестик только сворачивают (текст остаётся у владельца),
-// удаление — явная кнопка.
+// Подсказка под полем ввода: Enter сохраняет, Shift+Enter — новая строка, Escape сворачивает без потери текста.
+const EDITOR_HELP = 'Enter to save · Shift+Enter for a new line · Esc to collapse and keep draft'
+
+// CommentEditor — единый редактор комментария. Escape/крестик/Cancel только сворачивают (текст остаётся у
+// владельца), удаление — явная кнопка.
 export function CommentEditor({
   context,
   stageId,
@@ -40,6 +45,7 @@ export function CommentEditor({
   onDiscard,
   saveLabel,
   discardLabel = 'Discard',
+  draft = false,
   saveDisabled = false,
   error = null,
   allowAttachments = true,
@@ -65,6 +71,25 @@ export function CommentEditor({
     }
   }
 
+  const toolbar = (
+    <>
+      {context !== 'review' && <span className="comment-actions-hint">Save here · send when ready</span>}
+      <div className="comment-actions">
+        <button className="btn btn-quiet" type="button" onClick={onFold}>
+          Cancel
+        </button>
+        {onDiscard !== undefined && (
+          <button className="btn btn-cancel" type="button" onClick={onDiscard}>
+            {discardLabel}
+          </button>
+        )}
+        <button className="btn btn-send" type="button" disabled={saveDisabled} onClick={onSave}>
+          {saveLabel}
+        </button>
+      </div>
+    </>
+  )
+
   return (
     <div
       className="line-comment-form comment-editor"
@@ -75,6 +100,7 @@ export function CommentEditor({
     >
       <div className="comment-display-header">
         <span className="comment-title">{title}</span>
+        {draft && <span className="comment-draft-badge">Draft</span>}
         <button type="button" className="comment-remove" aria-label={`Close ${subject}`} title="Close" onClick={onFold}>
           ✕
         </button>
@@ -90,34 +116,29 @@ export function CommentEditor({
           allowFileReferences
           onSubmit={submit}
           onKeyDown={handleKeyDown}
+          toolbar={toolbar}
         />
       ) : (
-        <textarea
-          value={value}
-          placeholder={placeholder}
-          autoFocus
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (submit !== undefined && handleTextareaSubmit(event, submit)) return
-            handleKeyDown(event)
-          }}
-        />
+        <>
+          <textarea
+            value={value}
+            placeholder={placeholder}
+            autoFocus
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (submit !== undefined && handleTextareaSubmit(event, submit)) return
+              handleKeyDown(event)
+            }}
+          />
+          <div className="pasteable-toolbar">{toolbar}</div>
+        </>
       )}
       {error !== null && (
         <p className="comment-error" role="alert">
           {error}
         </p>
       )}
-      <div className="comment-actions">
-        <button className="btn btn-send" type="button" disabled={saveDisabled} onClick={onSave}>
-          {saveLabel}
-        </button>
-        {onDiscard !== undefined && (
-          <button className="btn btn-cancel" type="button" onClick={onDiscard}>
-            {discardLabel}
-          </button>
-        )}
-      </div>
+      <p className="comment-help">{EDITOR_HELP}</p>
     </div>
   )
 }

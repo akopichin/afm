@@ -130,6 +130,21 @@ describe('DialogChannel', () => {
     expect(textarea).not.toBeDisabled()
   })
 
+  test('the answer bar puts its hint before Cancel stage and the primary Send answer', async () => {
+    const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
+
+    const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
+
+    await screen.findByRole('button', { name: 'Send answer →' })
+    const bar = container.querySelector('.dialog-actions') as HTMLElement
+    expect(bar.children).toHaveLength(3)
+    expect(bar.children[0]).toHaveClass('dialog-hint')
+    expect(bar.children[0]?.textContent).toBe('The agent is waiting for your answer.')
+    expect(bar.children[1]).toHaveAccessibleName('CANCEL STAGE')
+    expect(bar.children[2]).toHaveAccessibleName('Send answer →')
+  })
+
   test('collapses answered dialog history while an active question is visible', async () => {
     const entries = [
       { id: 'q0', phase: 'p1', question: 'Earlier question', answer: 'Earlier answer' },
@@ -208,7 +223,7 @@ describe('DialogChannel', () => {
 
     await screen.findByRole('button', { name: 'Alpha' })
     fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
-    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
 
     await waitFor(() => {
       expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true)
@@ -224,11 +239,11 @@ describe('DialogChannel', () => {
     })
   })
 
-  test('▸ SEND без выбора не показывает success-морф (нет класса ok)', async () => {
+  test('Send answer → без выбора не показывает success-морф (нет класса ok)', async () => {
     const pending = { id: 'q1', phase: 'p1', question: 'Pick', answer: null, options: ['A'], allow_custom: true }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
     renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    const send = await screen.findByRole('button', { name: '▸ SEND' })
+    const send = await screen.findByRole('button', { name: 'Send answer →' })
     fireEvent.click(send)
     expect(send.className).not.toContain('ok')
   })
@@ -261,7 +276,7 @@ describe('DialogChannel', () => {
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'my own answer' } })
 
-    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
 
     await waitFor(() => {
       expect(calls.some((c) => c.url.endsWith('/dialog/answer'))).toBe(true)
@@ -390,7 +405,7 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
     expect(container.querySelector('.line-comment-form')).toBeNull()
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
@@ -411,7 +426,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     // M3: поле кастомного ответа тоже имеет скрепку, поэтому до открытия
     // line-комментария она уже одна.
@@ -435,7 +450,7 @@ describe('DialogChannel', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />, false)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
 
@@ -496,7 +511,7 @@ describe('DialogChannel', () => {
     })
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
@@ -553,7 +568,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
     const line2 = container.querySelector('[data-line="3"]') as HTMLElement
@@ -575,7 +590,7 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.line-comment-display[data-comment-line="1"] .comment-text')?.textContent).toBe('in progress')
   })
 
-  test('▸ SEND is disabled while a draft comment is open but unsaved; folding keeps the text as Send feedback (1), discarding restores SEND', async () => {
+  test('Send answer → is disabled while a draft comment is open but unsaved; folding keeps the text as Send feedback (1), discarding restores SEND', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -587,9 +602,9 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
-    const sendBtn = screen.getByRole('button', { name: '▸ SEND' })
+    const sendBtn = screen.getByRole('button', { name: 'Send answer →' })
     expect(sendBtn).not.toBeDisabled()
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -600,11 +615,11 @@ describe('DialogChannel', () => {
     expect(sendBtn).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close comment on line 1' }))
-    expect(screen.queryByRole('button', { name: '▸ SEND' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send answer →' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Send feedback (1)' })).not.toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove comment on line 1' }))
-    expect(screen.getByRole('button', { name: '▸ SEND' })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send answer →' })).not.toBeDisabled()
   })
 
   test('an empty draft still lets a row click switch to a different question line', async () => {
@@ -619,7 +634,7 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     expect(container.querySelector('.line-comment-form[data-comment-line="1"]')).not.toBeNull()
@@ -642,18 +657,18 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
     expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
     expect(container.querySelector('textarea.dialog-custom')).not.toBeNull()
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
     fireEvent.change(commentTextarea, { target: { value: 'please clarify' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     expect(screen.queryByRole('button', { name: 'Alpha' })).toBeNull()
     expect(container.querySelector('textarea.dialog-custom')).toBeNull()
-    expect(screen.queryByRole('button', { name: '▸ SEND' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send answer →' })).toBeNull()
     const sendFeedbackBtn = screen.getByRole('button', { name: 'Send feedback (1)' })
     expect(sendFeedbackBtn).toBeInTheDocument()
 
@@ -677,13 +692,13 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: 'please clarify' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     expect(container.querySelector('.line-comment-display')).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
@@ -693,9 +708,9 @@ describe('DialogChannel', () => {
     expect(container.querySelector('.line-comment-display')).toBeNull()
     expect(container.querySelector('.line-comment-form')).toBeNull()
     // Removing the last comment flips the action back from "Send feedback" to
-    // the normal answer UI: options + the ▸ SEND button reappear.
+    // the normal answer UI: options + the Send answer → button reappear.
     expect(screen.queryByRole('button', { name: /Send feedback/ })).toBeNull()
-    expect(screen.getByRole('button', { name: '▸ SEND' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send answer →' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
     expect(container.querySelector('textarea.dialog-custom')).not.toBeNull()
   })
@@ -722,12 +737,12 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     fireEvent.click(container.querySelector('[data-line="3"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
     fireEvent.change(commentTextarea, { target: { value: 'please clarify this' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Send feedback (1)' }))
 
@@ -765,7 +780,7 @@ describe('DialogChannel', () => {
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
 
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const commentTextarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
@@ -778,7 +793,7 @@ describe('DialogChannel', () => {
 
   // Task 2: opening a comment form — regardless of whether the draft text is empty — must gate answer
   // SEND/Send feedback via doc.activeCommentLine, not just doc.hasOpenDraft.
-  test('▸ SEND is disabled while an empty comment form is open, and re-enables once closed', async () => {
+  test('Send answer → is disabled while an empty comment form is open, and re-enables once closed', async () => {
     const pending: RawDialogEntry = {
       id: 'q1',
       phase: 'p1',
@@ -790,9 +805,9 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
-    const sendBtn = screen.getByRole('button', { name: '▸ SEND' })
+    const sendBtn = screen.getByRole('button', { name: 'Send answer →' })
     expect(sendBtn).not.toBeDisabled()
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -816,14 +831,14 @@ describe('DialogChannel', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([pending]))
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     // Save one comment on line 1 — the answer UI switches to "Send feedback".
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: 'please clarify' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     const feedbackBtn = screen.getByRole('button', { name: 'Send feedback (1)' })
     expect(feedbackBtn).not.toBeDisabled()
@@ -860,7 +875,7 @@ describe('DialogChannel', () => {
     })
 
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+    await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
     // Open an (empty) comment form — nothing saved yet, so the options/free-text
     // answer UI stays mounted alongside it.
@@ -1163,7 +1178,7 @@ describe('DialogChannel', () => {
     // Send the answer: answerDialog POST resolves, then reload() issues call #3
     // and applies q2. Flush the microtask chain (fetch → .json() → reload()).
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
       for (let i = 0; i < 10; i++) {
         await Promise.resolve()
       }
@@ -1211,7 +1226,7 @@ describe('DialogChannel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
       for (let i = 0; i < 10; i++) {
         await Promise.resolve()
       }
@@ -1257,7 +1272,7 @@ describe('DialogChannel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'AlphaA' }))
     // Fires answerDialog('A', ...) → POST /api/stages/A/dialog/answer, awaiting
     // answerAPromise (not yet resolved) inside sendAnswer's still-pending await.
-    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
 
     // The user switches the panel to stage B BEFORE A's POST resolves.
     rerenderChannel(<DialogChannel stage={stageB} />)
@@ -1361,7 +1376,7 @@ describe('DialogChannel', () => {
     const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
     await screen.findByRole('button', { name: 'Alpha' })
     fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
-    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
 
     await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
     // reload() re-fetched /dialog and reset selectedOption — the stale "Alpha"
@@ -1385,7 +1400,7 @@ describe('DialogChannel', () => {
     await screen.findByRole('button', { name: 'Alpha' })
     const textarea = container.querySelector('textarea.dialog-custom') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'my draft answer' } })
-    fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
 
     await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
     // reload() was NOT called — it would have cleared customText to ''.
@@ -1456,7 +1471,7 @@ describe('DialogChannel', () => {
       const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
       await screen.findByRole('button', { name: 'Alpha' })
       fireEvent.change(custom(container), { target: { value: 'keep this' } })
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
       await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
 
       rerenderChannel(<div />)
@@ -1473,12 +1488,12 @@ describe('DialogChannel', () => {
       const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
       await screen.findByRole('button', { name: 'Alpha' })
       fireEvent.change(custom(container), { target: { value: 'sent text' } })
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
 
       fireEvent.change(custom(container), { target: { value: 'sent text and more' } })
       await act(async () => acceptAnswer())
 
-      await waitFor(() => expect(screen.getByRole('button', { name: '▸ SEND' })).not.toBeDisabled())
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send answer →' })).not.toBeDisabled())
       expect(custom(container).value).toBe('sent text and more')
     })
 
@@ -1489,7 +1504,7 @@ describe('DialogChannel', () => {
       const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
       await screen.findByRole('button', { name: 'Alpha' })
       fireEvent.change(custom(container), { target: { value: 'sent text' } })
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
       await act(async () => acceptAnswer())
 
       await waitFor(() => expect(custom(container).value).toBe(''))
@@ -1498,14 +1513,14 @@ describe('DialogChannel', () => {
     test('line comments survive unmount: saved card and folded draft come back', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
       const { container, rerenderChannel } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
       fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
       fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'line one note' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       rerenderChannel(<div />)
       rerenderChannel(<DialogChannel stage={makeStage()} />)
-      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
 
       expect(container.querySelector('.line-comment-display[data-comment-line="1"] .comment-text')?.textContent).toBe('line one note')
       expect(screen.getByRole('button', { name: 'Send feedback (1)' })).toBeInTheDocument()
@@ -1516,11 +1531,11 @@ describe('DialogChannel', () => {
       vi.mocked(answerDialog).mockImplementationOnce(() => new Promise<void>((resolve) => { acceptAnswer = resolve }))
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([q1]))
       const { container } = renderDialogChannel(<DialogChannel stage={makeStage()} />)
-      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
+      await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(3))
       for (const [line, text] of [[1, 'one'], [3, 'three']] as const) {
         fireEvent.click(container.querySelector(`[data-line="${line}"]`) as HTMLElement)
         fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: text } })
-        fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
       }
 
       fireEvent.click(screen.getByRole('button', { name: 'Send feedback (2)' }))
@@ -1575,7 +1590,7 @@ describe('DialogChannel', () => {
 
       fireEvent.change(custom(container), { target: { value: 'my own answer, edited' } })
       expect(screen.getByRole('button', { name: 'Alpha' })).toHaveAttribute('aria-pressed', 'false')
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
       await waitFor(() => expect(answerDialog).toHaveBeenCalledWith('s1', 'p1', 'q1', 'my own answer, edited', false))
     })
 
@@ -1586,7 +1601,7 @@ describe('DialogChannel', () => {
       await screen.findByRole('button', { name: 'Alpha' })
       fireEvent.change(custom(container), { target: { value: 'keep me' } })
       fireEvent.click(screen.getByRole('button', { name: 'Alpha' }))
-      fireEvent.click(screen.getByRole('button', { name: '▸ SEND' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer →' }))
       await waitFor(() => expect(container.querySelector('.dialog-error')).not.toBeNull())
 
       expect(answerDialog).toHaveBeenLastCalledWith('s1', 'p1', 'q1', 'Alpha', true)

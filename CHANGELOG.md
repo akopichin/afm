@@ -3,6 +3,19 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-30
+
+### Improvement: refresh the dashboard workspace
+
+The dashboard now has a denser stage rail and header, resizable panels, and
+responsive Feed, People and Team views. Feed follows the selected stage without
+a visible Full feed tab. The Message and Revise composer keeps separate stage
+drafts, including reply and attachment context, as you move between views.
+Plan comments attach to exact source lines, including blank lines, table rows
+and code fences; Files shows comment counts on collapsed folders. Board,
+Assistant and the existing actions use the updated layout. See
+[Dashboard](docs/dashboard.md).
+
 ## 2026-10-29
 
 ### Fix: resume coordinators waiting for spawned helpers

@@ -126,7 +126,7 @@ describe('FileBrowserModal', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: /^diff$/i }))
 
-    expect(await screen.findByText('+new')).toBeInTheDocument()
+    expect(await screen.findByText('new')).toBeInTheDocument()
   })
 
   test('shows a dedicated banner when the diff is unavailable (409)', async () => {
@@ -693,7 +693,7 @@ describe('FileBrowserModal', () => {
       fireEvent.click(await screen.findByText('a.go'))
       fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 2' }))
       fireEvent.change(screen.getByPlaceholderText('Comment on line 2...'), { target: { value: 'local note' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       expect(screen.getByText('local note')).toBeInTheDocument()
       const urls = (api.fetchMock?.mock.calls ?? []).map(([input]) => String(input))
@@ -740,6 +740,55 @@ describe('FileBrowserModal', () => {
       expect(within(rowOf('b.go')).queryByText(/●/)).toBeNull()
     })
 
+    test('collapsed folders count their subtree comments by exact path prefix', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.setTree('project', '.', [
+        { name: 'foo', path: 'foo', kind: 'directory' },
+        { name: 'foobar', path: 'foobar', kind: 'directory' },
+      ])
+      api.setTree('project', 'foo', [{ name: 'a.go', path: 'foo/a.go', kind: 'file', language: 'go' }])
+      api.setContent('project', 'foo/a.go', { language: 'go', content: 'line one' })
+      api.install()
+      renderModal()
+
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      fireEvent.click(await screen.findByText('foo'))
+      await commentOn('a.go', 1, 'in foo')
+      const rowOf = (name: string) => screen.getByText(name).closest('[role="treeitem"]') as HTMLElement
+      expect(within(rowOf('a.go')).getByLabelText('1 comment')).toBeInTheDocument()
+
+      fireEvent.click(rowOf('foo'))
+      expect(within(rowOf('foo')).getByLabelText('1 comment')).toHaveTextContent('● 1')
+      expect(within(rowOf('foobar')).queryByText(/●/)).toBeNull()
+    })
+
+    test('a comment under foobar/ or in foo.go does not mark the collapsed foo/', async () => {
+      const api = new FilesApiMock()
+      api.setRoots([{ id: 'project', label: 'afm' }])
+      api.setTree('project', '.', [
+        { name: 'foo', path: 'foo', kind: 'directory' },
+        { name: 'foobar', path: 'foobar', kind: 'directory' },
+        { name: 'foo.go', path: 'foo.go', kind: 'file', language: 'go' },
+      ])
+      api.setTree('project', 'foo', [{ name: 'a.go', path: 'foo/a.go', kind: 'file', language: 'go' }])
+      api.setTree('project', 'foobar', [{ name: 'c.go', path: 'foobar/c.go', kind: 'file', language: 'go' }])
+      api.setContent('project', 'foo.go', { language: 'go', content: 'root file' })
+      api.setContent('project', 'foobar/c.go', { language: 'go', content: 'sibling file' })
+      api.install()
+      renderModal()
+
+      fireEvent.click(await screen.findByRole('button', { name: 'afm' }))
+      fireEvent.click(await screen.findByText('foobar'))
+      await commentOn('c.go', 1, 'in foobar')
+      await commentOn('foo.go', 1, 'in foo.go')
+      const rowOf = (name: string) => screen.getByText(name).closest('[role="treeitem"]') as HTMLElement
+
+      fireEvent.click(rowOf('foobar'))
+      expect(within(rowOf('foobar')).getByLabelText('1 comment')).toHaveTextContent('● 1')
+      expect(within(rowOf('foo')).queryByText(/●/)).toBeNull()
+    })
+
     test('Escape folds the comment editor while Files stays open', async () => {
       installTwoFiles()
       const onClose = vi.fn()
@@ -762,7 +811,7 @@ describe('FileBrowserModal', () => {
       fireEvent.click(await screen.findByText(file))
       fireEvent.click(await screen.findByRole('button', { name: `Comment on line ${line}` }))
       fireEvent.change(screen.getByPlaceholderText(`Comment on line ${line}...`), { target: { value: text } })
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     }
 
     test('the Comments switch lists saved comments and a row opens its file and scrolls to the line', async () => {
@@ -850,7 +899,7 @@ describe('FileBrowserModal', () => {
       fireEvent.click(await screen.findByText('a.go'))
       fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1' }))
       fireEvent.change(screen.getByPlaceholderText('Comment on line 1...'), { target: { value: 'mobile note' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     }
 
     test('header Comments (N) opens the drawer on the list; picking a row closes it and returns focus to that button', async () => {

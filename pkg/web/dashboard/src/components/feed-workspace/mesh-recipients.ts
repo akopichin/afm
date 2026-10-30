@@ -4,7 +4,7 @@
 
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { mentionHandles, participantLabel } from '../../lib/mesh-roster'
+import { mentionHandles, participantLabel, participantMentionNote } from '../../lib/mesh-roster'
 import type { MentionGroup, MentionItem } from '../assistants/AssistantMentionMenu'
 
 // MeshMentionTarget — what a selected feed-composer mention resolves to for Send: either an EXISTING mesh
@@ -24,6 +24,8 @@ function toParticipantItem(p: MeshParticipant, handle: string): MeshMentionItem 
     id: p.id,
     handle,
     title: participantLabel(p),
+    kind: p.kind,
+    description: participantMentionNote(p),
     unavailable: !p.reachable,
     unavailableReason: p.unreachable_reason,
     target: { kind: 'participant', id: p.id, scope: p.scope === 'run' ? 'run' : 'stage' },
@@ -49,7 +51,7 @@ export function buildMeshMentionGroups(
   const otherStages = participants.filter((p) => p.scope === 'stage' && p.stage_id !== stageId).map(item)
   const attach: MeshMentionItem[] = profiles
     .filter((p) => p.available)
-    .map((p) => ({ id: p.id, title: p.title, target: { kind: 'profile', profileId: p.id } }))
+    .map((p) => ({ id: p.id, title: p.title, description: 'Helper · Attach to stage', kind: 'helper', target: { kind: 'profile', profileId: p.id } }))
 
   return [
     { label: 'This run', items: thisRun },

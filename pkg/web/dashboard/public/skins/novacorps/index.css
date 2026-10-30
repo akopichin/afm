@@ -30,10 +30,7 @@
   /* text */
   --ink:       #cfeeea;
   --ink-hi:    #e7faf7;
-  --ink-dim:   #4a8a85;
-  /* --ink-dim на surface-tool здесь 4.36:1 (<AA для 12.5px) — команды в ленте
-     берут чуть более контрастный muted-тон (4.61:1). */
-  --feed-command: #4f8e89;
+  --ink-dim:   #55948f;
 
   /* accents */
   --mint:      #6fd4cc;
@@ -60,6 +57,15 @@
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
      одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
+  /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
+  --accent-primary-rgb: 229, 212, 66;
+  --attention-rgb:      229, 212, 66;
+  --success-rgb:        111, 212, 204;
+  --danger-rgb:         255, 107, 90;
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #3d7a75;
+  --control-border: #3d7a75;
+  --focus-ring:     #6fd4cc;
 
   /* legacy aliases used by inline styles */
   --text:    var(--ink);
@@ -75,16 +81,13 @@
   /* text */
   --ink:       #16302c;
   --ink-hi:    #08201c;
-  --ink-dim:   #5c8f88;
-  /* --ink-dim на белом здесь 3.66:1 — команды в ленте берут более тёмный
-     muted-тон (4.70:1). */
-  --feed-command: #4e7c76;
+  --ink-dim:   #46756e;
 
   /* accents — сдвинуты темнее относительно dark-варианта для контраста на светлом фоне */
-  --mint:      #1f8f86;
+  --mint:      #17766e;
   --mint-soft: rgba(31, 143, 134, 0.18);
   --grid:      rgba(31, 143, 134, 0.05);
-  --amber:     #a6790a;
+  --amber:     #8a6208;
   --violet:    #7c3aed;
   --coral:     #c2410c;
 
@@ -98,13 +101,22 @@
   --cost-warning:     #8d6100;
 
   /* dialog accents — переподобраны под светлый фон */
-  --qa-answer:              #0f766e;
+  --qa-answer:              #0e6a63;
   --dialog-option-text:     #6d28d9;
   --btn-cancel-dialog-text: #b91c1c;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
   --overlay-scrim-rgb: 0, 0, 0;
+  /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
+  --accent-primary-rgb: 138, 98, 8;
+  --attention-rgb:      138, 98, 8;
+  --success-rgb:        23, 118, 110;
+  --danger-rgb:         194, 65, 12;
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #729590;
+  --control-border: #729590;
+  --focus-ring:     #1f8f86;
 
   /* legacy aliases used by inline styles */
   --text:    var(--ink);

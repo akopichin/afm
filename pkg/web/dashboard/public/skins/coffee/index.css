@@ -29,7 +29,7 @@
   /* text */
   --ink:       #f0e2c6;
   --ink-hi:    #fff3d6;
-  --ink-dim:   #a07d4f;
+  --ink-dim:   #a27f52;
 
   /* accents */
   --mint:      #e8b25e;   /* карамель — done (единственный зелёный/успешный статус) */
@@ -47,6 +47,15 @@
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
      одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
+  /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
+  --accent-primary-rgb: 255, 154, 52;
+  --attention-rgb:      255, 154, 52;
+  --success-rgb:        232, 178, 94;
+  --danger-rgb:         232, 90, 40;
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #7a5f3c;
+  --control-border: #7a5f3c;
+  --focus-ring:     #ff9a34;
 
   /* legacy aliases */
   --text:     var(--ink);
@@ -62,27 +71,33 @@
   /* text */
   --ink:       #3c2c20;
   --ink-hi:    #241812;
-  --ink-dim:   #937b63;
-  /* --ink-dim на кремовом здесь 3.69:1 — команды в ленте берут более тёмный
-     muted-тон (4.63:1). */
-  --feed-command: #826b56;
+  --ink-dim:   #775c46;
 
   /* accents */
-  --mint:      #a4682a;
+  --mint:      #6b4310;
   --mint-soft: rgba(60, 44, 32, 0.14);
   --grid:      rgba(60, 44, 32, 0.03);
-  --amber:     #c07f24;
-  --violet:    #5e7f3c;   /* тёмная матча — читаема на кремовом */
-  --coral:     #bf4a24;
+  --amber:     #8a5614;
+  --violet:    #4f6e30;   /* тёмная матча — читаема на кремовом */
+  --coral:     #a83f1b;
 
   /* dialog accents */
-  --qa-answer:              #7a5320;
-  --dialog-option-text:     #5e7f3c;
+  --qa-answer:              #75501f;
+  --dialog-option-text:     #465e2c;
   --btn-cancel-dialog-text: #b23a1a;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
   --overlay-scrim-rgb: 0, 0, 0;
+  /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
+  --accent-primary-rgb: 138, 86, 20;
+  --attention-rgb:      138, 86, 20;
+  --success-rgb:        107, 67, 16;
+  --danger-rgb:         168, 63, 27;
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #94806b;
+  --control-border: #94806b;
+  --focus-ring:     #8a5614;
 
   /* legacy aliases */
   --text:     var(--ink);
@@ -104,42 +119,32 @@
   background-color: var(--bg);
 }
 
-/* base/layout.css: прогресс-бар, jump-latest, icon-btn, attention-пульс */
-.progress-bar { background: rgba(255, 154, 52, 0.12); }
+/* base/layout.css: прогресс-бар, jump-latest, icon-btn */
+.progress-bar { background: rgba(var(--attention-rgb), 0.12); }
 .progress-fill {
   background: linear-gradient(90deg, rgba(232, 178, 94, 0.35), var(--amber));
   box-shadow: 0 0 10px rgba(255, 154, 52, 0.45);
 }
 .icon-btn { border-color: rgba(232, 178, 94, 0.4); }
-@keyframes attentionPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 154, 52, 0); }
-  50%      { box-shadow: 0 0 12px 2px rgba(255, 154, 52, 0.65); }
-}
 
 /* base/stages-list.css */
 .stage-item { border-bottom-color: rgba(232, 178, 94, 0.08); }
-.stage-item:hover { background: rgba(255, 154, 52, 0.06); }
-.stage-item.active { background: linear-gradient(90deg, rgba(255, 154, 52, 0.08), transparent); }
+.stage-item:hover { background: rgba(var(--attention-rgb), 0.06); --text-muted: var(--text-secondary); }
+.stage-item.active { background: linear-gradient(90deg, rgba(var(--attention-rgb), 0.08), transparent); --text-muted: var(--text-secondary); }
 .stage-item.active::after { background: linear-gradient(90deg, transparent, rgba(255, 154, 52, 0.7), transparent); }
 
-/* base/plan-panel.css (перекраска только захардкоженных bg; border-left уже на токенах) */
-.line-commented [data-line].is-hover { background: rgba(255, 154, 52, 0.06); }
-.line-commented [data-line].has-comment { background: rgba(232, 178, 94, 0.09); }
-.line-commented [data-line].has-comment.is-hover { background: rgba(232, 178, 94, 0.14); }
-.plan-section-wrapper { background: rgba(255, 154, 52, 0.04); }
-.plan-section-wrapper.plan-section-assumptions { background: rgba(255, 154, 52, 0.06); }
-.plan-section-wrapper.plan-section-criteria { background: rgba(166, 193, 136, 0.06); }
+/* base/plan-panel.css: тёплая подсветка строки вместо серого hover; has-comment и секции берут тона base. Заливки
+   идут через -rgb токены, чтобы в light они следовали палитре, а не тёмному янтарю. */
+.line-commented [data-line].is-hover { background: rgba(var(--attention-rgb), 0.06); --text-muted: var(--text-secondary); }
+.line-commented [data-line].has-comment.is-hover { background: rgba(var(--attention-rgb), 0.14); --text-muted: var(--text-secondary); }
+.plan-section-wrapper { background: rgba(var(--attention-rgb), 0.04); }
 
 /* base/dialog-channel.css — teal/violet-акценты → матча/янтарь */
-#dialog-section {
-  border-color: rgba(166, 193, 136, 0.35);
-  background: radial-gradient(circle at top right, rgba(166, 193, 136, 0.08), transparent 60%);
-}
+#dialog-section { border-color: rgba(166, 193, 136, 0.35); }
 #dialog-section h3 { border-bottom-color: rgba(166, 193, 136, 0.25); }
 .dialog-history .qa { border-left-color: rgba(232, 178, 94, 0.2); }
 .dialog-history .agent-msg { border-left-color: rgba(232, 178, 94, 0.25); }
 .phase-divider { border-bottom-color: rgba(232, 178, 94, 0.12); }
-.dialog-pending .dialog-custom { border-color: rgba(232, 178, 94, 0.2); }
 .dialog-pending .dialog-options button { border-color: rgba(166, 193, 136, 0.55); }
 @keyframes pendingBreathe {
   0%, 100% { box-shadow: inset 0 0 18px rgba(166, 193, 136, 0.08), 0 0 12px rgba(166, 193, 136, 0.10); }
@@ -150,17 +155,13 @@
   40%  { box-shadow: 0 0 0 1px rgba(166, 193, 136, 0.6), 0 0 30px rgba(166, 193, 136, 0.5), inset 0 0 20px rgba(166, 193, 136, 0.15); }
   100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent, inset 0 0 0 transparent; }
 }
-/* base/dialog-channel.css — доп. */
-.dialog-pending { background: linear-gradient(180deg, rgba(166, 193, 136, 0.10), rgba(166, 193, 136, 0.02)); }
+/* base/dialog-channel.css — доп.: заливки диалога base берёт из --violet (матча). */
 .dialog-pending .dialog-options button:hover { box-shadow: 0 0 8px rgba(166, 193, 136, 0.45); }
-.dialog-pending .dialog-options button.selected {
-  background: rgba(166, 193, 136, 0.18);
-  box-shadow: 0 0 12px rgba(166, 193, 136, 0.5);
-}
+.dialog-pending .dialog-options button.selected { box-shadow: 0 0 12px rgba(166, 193, 136, 0.5); }
 
 /* base/event-feed.css */
 .feed-entry { border-bottom-color: rgba(232, 178, 94, 0.05); }
-.feed-entry:hover { background: rgba(255, 154, 52, 0.05); }
+.feed-entry:hover { background: rgba(var(--attention-rgb), 0.05); --text-muted: var(--text-secondary); }
 
 /* base/layout.css — .resize-handle не входит в grep-список брифа, но использует
    чистый rgba(183,135,255,X) (не var), поэтому перекрашиваем в матчу. */

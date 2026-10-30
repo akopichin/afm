@@ -33,6 +33,7 @@ type Deps = {
   pauseStage: (id: string) => Promise<unknown>
   continueStage: (id: string) => Promise<void>
   reviseStage: (id: string, t: string) => Promise<void>
+  runEpoch?: number
 }
 
 function readStored(): boolean {
@@ -43,7 +44,7 @@ function readStored(): boolean {
   }
 }
 
-export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps): PauseOnFocusApi {
+export function usePauseOnFocus({ pauseStage, continueStage, reviseStage, runEpoch = 0 }: Deps): PauseOnFocusApi {
   const [enabled, setEnabledState] = useState<boolean>(readStored)
 
   // Всё per-стадийное состояние — refs (синхронный доступ, без гонок с React-
@@ -56,6 +57,18 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
   // resumedRef — стадии, для которых continue в ТЕКУЩЕМ эпизоде владения уже прошёл успешно. Сбрасывается
   // в clearOp (конец эпизода) и onFocus (новый эпизод).
   const resumedRef = useRef<Set<string>>(new Set())
+  const epochRef = useRef(runEpoch)
+  // A repeated stage id in another run must neither inherit ownership nor receive old request tails.
+  if (epochRef.current !== runEpoch) {
+    epochRef.current = runEpoch
+    opsRef.current.clear()
+    pendingRef.current.clear()
+    resumingRef.current.clear()
+    sawPausedRef.current.clear()
+    genRef.current.clear()
+    resumedRef.current.clear()
+  }
+  const isCurrentRun = useCallback(() => epochRef.current === runEpoch, [runEpoch])
 
   const [, setVersion] = useState(0)
   const bump = useCallback((): void => setVersion((v) => v + 1), [])
@@ -111,15 +124,17 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
       if (existing !== undefined) return existing
       const p = continueStage(stageId)
         .then(() => {
+          if (!isCurrentRun()) return
           resumedRef.current.add(stageId) // эпизод снят с паузы — второй continue не нужен
         })
         .finally(() => {
+          if (!isCurrentRun()) return
           resumingRef.current.delete(stageId)
         })
       resumingRef.current.set(stageId, p)
       return p
     },
-    [continueStage],
+    [continueStage, isCurrentRun],
   )
 
   // resume — снять НАШУ паузу (отмена без отправки). Новая интенция (nextGen) лочит любой конкурентный
@@ -127,6 +142,7 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
   const resume = useCallback(
     async (stageId: string): Promise<void> => {
       await awaitPending(stageId)
+      if (!isCurrentRun()) return
       if (!opsRef.current.has(stageId)) return
       const g = nextGen(stageId)
       setOp(stageId, 'resuming')
@@ -138,15 +154,17 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
       }
       try {
         await continueOnce(stageId)
+        if (!isCurrentRun()) return
         if (curGen(stageId) === g) clearOp(stageId)
       } catch (err: unknown) {
+        if (!isCurrentRun()) return
         // Continue не удался (стадия всё ещё paused) — откат в 'owned' для повтора,
         // только если интенция всё ещё наша.
         if (curGen(stageId) === g && opsRef.current.get(stageId) === 'resuming') setOp(stageId, 'owned')
         console.error('Failed to resume stage on pause-on-focus:', err)
       }
     },
-    [awaitPending, nextGen, continueOnce, curGen, setOp, clearOp],
+    [awaitPending, nextGen, continueOnce, curGen, setOp, clearOp, isCurrentRun],
   )
 
   const setEnabled = useCallback(
@@ -170,6 +188,7 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
 
   const onFocus = useCallback(
     (stageId: string, status: string): void => {
+      if (!isCurrentRun()) return
       if (!enabled || status !== 'running') return
       if (opsRef.current.has(stageId)) return // уже есть операция — не дублируем
       sawPausedRef.current.delete(stageId)
@@ -179,17 +198,19 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
       const p = pauseStage(stageId)
       pendingRef.current.set(stageId, p)
       p.then(() => {
+        if (!isCurrentRun()) return
         pendingRef.current.delete(stageId)
         // Промоутим в owned только если это ВСЁ ЕЩЁ тот же эпизод и он всё ещё
         // pausing (Send/blur мог увести в resuming, новый onFocus — сменить gen).
         if (curGen(stageId) === g && opsRef.current.get(stageId) === 'pausing') setOp(stageId, 'owned')
       }).catch((err: unknown) => {
+        if (!isCurrentRun()) return
         pendingRef.current.delete(stageId)
         if (curGen(stageId) === g && opsRef.current.get(stageId) === 'pausing') clearOp(stageId)
         console.error('Failed to pause stage on focus:', err)
       })
     },
-    [enabled, pauseStage, nextGen, curGen, setOp, clearOp],
+    [enabled, pauseStage, nextGen, curGen, setOp, clearOp, isCurrentRun],
   )
 
   const onBlur = useCallback(
@@ -236,6 +257,7 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
     async (stageId: string, text: string): Promise<void> => {
       // High #1: дождаться ещё не завершившейся паузы, иначе continue/revise обгонят её.
       await awaitPending(stageId)
+      if (!isCurrentRun()) return
       if (!opsRef.current.has(stageId)) {
         // Владения нет — обычная доставка заметки живому агенту.
         await reviseStage(stageId, text)
@@ -252,12 +274,15 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
           await continueOnce(stageId)
           continued = true
         } catch (err: unknown) {
+          if (!isCurrentRun()) return
           console.error('Failed to resume stage on send:', err)
         }
       }
+      if (!isCurrentRun()) return
       try {
         await reviseStage(stageId, text)
       } catch (err: unknown) {
+        if (!isCurrentRun()) return
         // Доставка не удалась.
         if (curGen(stageId) === g) {
           if (continued) clearOp(stageId)
@@ -267,9 +292,9 @@ export function usePauseOnFocus({ pauseStage, continueStage, reviseStage }: Deps
       }
       // Успех: заметка доставлена, стадия снята с паузы. Снимаем владение СРАЗУ
       // (драйвится промисом, не polling) — если интенция ещё наша.
-      if (curGen(stageId) === g) clearOp(stageId)
+      if (isCurrentRun() && curGen(stageId) === g) clearOp(stageId)
     },
-    [awaitPending, nextGen, continueOnce, reviseStage, curGen, setOp, clearOp],
+    [awaitPending, nextGen, continueOnce, reviseStage, curGen, setOp, clearOp, isCurrentRun],
   )
 
   return {

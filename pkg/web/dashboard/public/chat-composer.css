@@ -12,14 +12,14 @@
   gap: 2px;
   padding: 3px 5px;
   background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
+  border: 1px solid var(--control-border);
   /* Фикс px (не %/pill): при росте поля радиус углов НЕ меняется — иначе 999px/50% превращает высокое
      поле в «капсулу» с растущими полукружиями. */
-  border-radius: 22px;
+  border-radius: 12px;
 }
 .chat-composer-row:focus-within {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.28);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 /* Стадия на паузе: янтарная рамка вместо акцентной. */
 .chat-composer-row.paused {
@@ -44,7 +44,7 @@
   border: 0;
   border-radius: 0;
 }
-.chat-composer-input::placeholder { color: var(--text-muted); }
+.chat-composer-input::placeholder { color: var(--text-placeholder); opacity: 1; }
 .chat-composer-input:focus,
 .chat-composer-input:focus-visible {
   outline: none;
@@ -74,9 +74,151 @@
 .chat-send.paused { background: var(--attention); }
 .chat-send:hover:not(:disabled),
 .chat-stop:hover { filter: brightness(1.06); }
-.chat-send:disabled { opacity: 0.4; cursor: default; }
+.chat-send:disabled { opacity: 1; background: var(--surface-hover); color: var(--text-disabled); cursor: default; }
 .chat-send:focus-visible,
 .chat-stop:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Opt-in card layout keeps existing inline composers unchanged. */
+.chat-composer-row.chat-composer-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+  padding: 8px 12px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-lg);
+}
+.chat-composer-card .pasteable-textarea-wrap { width: 100%; min-width: 0; }
+.chat-composer-card .chat-composer-input {
+  display: block;
+  min-height: 64px;
+  padding: 10px 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.chat-composer-card .pasteable-toolbar,
+.chat-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-composer-card .pasteable-attach { align-self: center; }
+.chat-composer-card .pasteable-attach-btn,
+.chat-composer-mention {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 20px;
+  cursor: pointer;
+}
+.chat-composer-card .pasteable-attach-btn svg { width: 20px; height: 20px; }
+.chat-composer-card .pasteable-attach-label { display: none; }
+.chat-composer-card .pasteable-attach-btn:hover,
+.chat-composer-mention:hover { color: var(--text-primary); background: var(--surface-hover); box-shadow: none; }
+.chat-composer-mention:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.chat-send.chat-send--labelled {
+  width: auto;
+  height: 32px;
+  gap: 7px;
+  padding: 5px 11px;
+  margin-left: auto;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+.chat-send--labelled svg { width: 16px; height: 16px; }
+.chat-composer-card .chat-send.paused { background: var(--accent-primary); }
+.chat-composer-card .chat-send:disabled { background: var(--surface-hover); }
+.chat-composer-card .chat-composer-recipients {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  min-height: 24px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.chat-composer-card .chat-composer-recipient {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--accent-primary-rgb), 0.16);
+  color: var(--accent-text);
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* Variants repeat the card prefix: they must outrank the base chip rule above, not rely on source order. */
+.chat-composer-card .chat-composer-recipient.is-default {
+  padding: 1px 6px;
+  border: 1px dashed var(--separator-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+}
+.chat-composer-card .chat-composer-recipient.has-problem {
+  border-color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.08);
+  color: var(--danger-text);
+}
+.chat-composer-recipient-remove,
+.chat-composer-card .chat-composer-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-composer-recipient-remove { width: 16px; height: 16px; padding: 0; }
+.chat-composer-card .chat-composer-add { width: auto; height: auto; min-height: 24px; padding: 3px 5px; }
+.chat-composer-add > span { font-size: 18px; line-height: 1; }
+.chat-composer-recipient-remove:hover,
+.chat-composer-card .chat-composer-add:hover { color: var(--text-primary); background: var(--surface-hover); }
+.chat-composer-recipient-remove:focus-visible,
+.chat-composer-add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.chat-composer-hint {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.chat-composer-hint > span:last-child { margin-left: auto; }
+
+@media (max-width: 600px) {
+  .chat-composer-card .chat-composer-input { font-size: 14px; min-height: 54px; }
+  .chat-composer-card .pasteable-attach-btn,
+  .chat-composer-mention { width: 44px; height: 44px; }
+  .chat-send.chat-send--labelled { min-height: 44px; }
+  .chat-composer-hint { font-size: 9px; }
+  .chat-composer-hint > span:last-child { display: none; }
+}
 
 /* Stop (боковой агент, пока идёт turn) — тот же круг, но нейтральный. */
 .chat-stop {
@@ -84,16 +226,16 @@
   color: var(--text-primary);
 }
 
-/* The @-mention menu floats ABOVE the composer row, from its left edge (the row is position: relative).
-   Without this it became a flex item of the row, stretched the input and ran into the send button. Its
-   max-height is capped at runtime to the room left above the row (MentionMenu). */
+/* MentionMenu anchors to the composer and clamps its fixed coordinates to the viewport. */
 .assistant-mention-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  z-index: 20;
-  width: min(360px, 100%);
-  max-height: 280px;
+  /* Ширину и позицию задаёт AssistantMentionMenu.tsx (по якорю и вьюпорту). */
+  position: fixed;
+  z-index: 200;
+  max-height: 380px;
   overflow-y: auto;
   box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-send, .chat-stop { transition: none; }
 }

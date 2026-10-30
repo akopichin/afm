@@ -228,4 +228,38 @@ describe('FileTree', () => {
     fireEvent.keyDown(secondRow, { key: 'Enter' })
     expect(onOpenFile).toHaveBeenCalledWith(expect.objectContaining({ path: 'b.go' }))
   })
+  test('a collapsed folder shows the comment count of its subtree; an expanded one leaves it to the files', async () => {
+    const api = new FilesApiMock()
+    api.setTree('project', '.', [
+      { name: 'foo', path: 'foo', kind: 'directory' },
+      { name: 'foobar', path: 'foobar', kind: 'directory' },
+    ])
+    api.setTree('project', 'foo', [{ name: 'a.go', path: 'foo/a.go', kind: 'file', language: 'go' }])
+    api.install()
+    const folderCommentCount = (dir: string) => (dir === 'foo' ? 2 : 0)
+
+    render(
+      <FileTree
+        root="project"
+        onOpenFile={vi.fn()}
+        onToggleSelect={vi.fn()}
+        isSelected={() => false}
+        activePath={null}
+        commentCount={(path) => (path === 'foo/a.go' ? 2 : 0)}
+        folderCommentCount={folderCommentCount}
+      />,
+    )
+
+    const rowOf = async (name: string) => (await screen.findByText(name)).closest('[role="treeitem"]') as HTMLElement
+    expect(within(await rowOf('foo')).getByLabelText('2 comments')).toHaveTextContent('● 2')
+    expect(within(await rowOf('foobar')).queryByText(/●/)).toBeNull()
+
+    fireEvent.click(await rowOf('foo'))
+    expect(await screen.findByText('a.go')).toBeInTheDocument()
+    expect(within(await rowOf('foo')).queryByText(/●/)).toBeNull()
+    expect(within(await rowOf('a.go')).getByLabelText('2 comments')).toBeInTheDocument()
+
+    fireEvent.click(await rowOf('foo'))
+    expect(within(await rowOf('foo')).getByLabelText('2 comments')).toBeInTheDocument()
+  })
 })

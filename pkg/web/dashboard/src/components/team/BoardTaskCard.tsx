@@ -26,8 +26,9 @@ export function isTypedTask(task: BoardTask): boolean {
 function StatusIcon({ status }: { status: BoardTaskStatus }): ReactElement {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="8" cy="8" r="6" strokeDasharray={status === 'todo' ? '2.4 2.4' : undefined} />
-      {status === 'in_progress' && <path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" />}
+      {status !== 'done' && <circle cx="8" cy="8" r="6" />}
+      {status === 'todo' && <path d="M8 5v3m0 3h.01" />}
+      {status === 'in_progress' && <path d="M8 4v4l2 1" />}
       {status === 'done' && <path d="m5.2 8.2 1.9 1.9 3.7-3.9" />}
     </svg>
   )
@@ -71,6 +72,7 @@ export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps
       data-task-key={task.key}
       data-status={task.status}
       aria-label={`${title}, ${BOARD_STATUS_LABEL[task.status]}`}
+      aria-haspopup="dialog"
       onClick={() => onOpen(task)}
     >
       <span className="board-task-key-row">
@@ -91,10 +93,11 @@ export function BoardTaskCard({ task, participants, onOpen }: BoardTaskCardProps
         ) : (
           task.assignees.map((a) => {
             const name = senderLabel(a.id, participants)
+            const person = participants.find((p) => p.id === a.id)
             return (
               <span key={a.id} className="board-task-assignee">
-                <MeshAvatar name={name} kind={participants.find((p) => p.id === a.id)?.kind ?? 'run_agent'} size="small" />
-                <span className="board-task-assignee-name">{name}</span>
+                <MeshAvatar name={name} kind={person?.kind ?? 'run_agent'} size="small" />
+                <span className="board-task-assignee-name" title={name}>{person?.alias ? `@${person.alias}` : name}</span>
                 {typed && <span className="board-task-assignee-state">{ASSIGNEE_STATE_LABEL[a.state]}</span>}
               </span>
             )

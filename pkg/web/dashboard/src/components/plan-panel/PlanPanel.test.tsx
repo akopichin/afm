@@ -79,8 +79,9 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
     const line1 = container.querySelector('[data-line="1"]') as HTMLElement
-    // No number gutter anymore; the "Line N" affordance is the anchor's title.
-    expect(line1.getAttribute('title')).toBe('Comment on line 1')
+    // The visible number plate names the line; there is no native tooltip that could get stuck on screen.
+    expect(line1.getAttribute('title')).toBeNull()
+    expect(line1.getAttribute('aria-description')).toBe('Press Enter to comment on line 1')
     expect(container.querySelector('.line-comment-form')).toBeNull()
 
     fireEvent.click(line1)
@@ -93,42 +94,51 @@ describe('PlanPanel', () => {
     expect(line1.classList.contains('is-active')).toBe(true)
   })
 
-  test('awaiting_approval: a special section plus a list renders both correctly, and each stays commentable (block segmentation)', async () => {
-    // Список внутри спецсекции и после неё рендерятся целыми <ul>-блоками, а КАЖДЫЙ пункт <li> заякорен на
-    // своей строке.
+  test('awaiting_approval: an Assumptions heading is a plain heading row, and the list after it stays commentable per item', async () => {
+    // Plan headings are ordinary rows (no collapsible coloured wrapper); each list item is anchored on its own line.
     const plan = ['## Assumptions', '- risk one', '- risk two', '## Next', '- item a', '- item b'].join('\n')
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(plan))
 
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
-    await waitFor(() => expect(container.querySelector('.plan-section-wrapper.plan-section-assumptions')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('[data-line="2"]')).not.toBeNull())
 
-    // Секция Assumptions: заголовок — настоящая кнопка; список внутри — целый
-    // <ul>; первый пункт заякорен на строке 2 (сам <li>, а не <ul>).
-    const section = container.querySelector('.plan-section-wrapper.plan-section-assumptions') as HTMLElement
-    expect(section.querySelector('button.section-header')?.textContent).toContain('Assumptions')
-    expect(section.querySelector('.md ul')).not.toBeNull()
-    const sectionLine = section.querySelector('[data-line="2"]') as HTMLElement
-    expect(sectionLine).not.toBeNull()
-    expect(sectionLine.tagName).toBe('LI')
-    expect(sectionLine.textContent).toContain('risk one')
-    expect(section.querySelector('[data-line="3"]')?.textContent).toContain('risk two')
+    expect(container.querySelector('.plan-section-wrapper')).toBeNull()
+    expect(container.querySelector('button.section-header')).toBeNull()
+    expect(container.querySelector('h2[data-line="1"]')?.textContent).toBe('Assumptions')
+    const line2 = container.querySelector('[data-line="2"]') as HTMLElement
+    expect(line2.tagName).toBe('LI')
+    expect(line2.textContent).toContain('risk one')
+    expect(container.querySelector('[data-line="3"]')?.textContent).toContain('risk two')
 
-    // Список внутри секции остаётся комментируемым: форма — sibling внутри
-    // тела секции, помеченный data-comment-line.
-    fireEvent.click(sectionLine)
-    expect(section.querySelector('.line-comment-form[data-comment-line="2"]')).not.toBeNull()
+    fireEvent.click(line2)
+    expect(container.querySelector('.line-comment-form[data-comment-line="2"]')).not.toBeNull()
 
-    // Список ПОСЛЕ секции (## Next закрывает Assumptions) — отдельный блок вне
-    // обёртки; первый пункт заякорен на строке 5.
     const outsideLine = container.querySelector('[data-line="5"]') as HTMLElement
-    expect(outsideLine).not.toBeNull()
-    expect(outsideLine.closest('.plan-section-wrapper')).toBeNull()
     expect(outsideLine.tagName).toBe('LI')
     expect(outsideLine.textContent).toContain('item a')
 
     fireEvent.click(outsideLine)
     expect(container.querySelector('.line-comment-form[data-comment-line="5"]')).not.toBeNull()
+  })
+
+  test('awaiting_approval: the hint row sits above the document and the action bar puts its hint before the buttons', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# First line'))
+
+    const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} banner={<div className="attention-banner" />} />)
+
+    await waitFor(() => expect(container.querySelector('[data-line="1"]')).not.toBeNull())
+    const section = container.querySelector('#plan-section') as HTMLElement
+    const childClasses = Array.from(section.children).map((child) => child.id || child.className)
+    expect(childClasses.slice(0, 3)).toEqual(['attention-banner', 'plan-hint-row', 'plan-content'])
+    expect(container.querySelector('.plan-hint-row')?.textContent).toBe('Click any line to commentImages can be pasted into a comment')
+
+    const bar = container.querySelector('#actions-section .actions-bar') as HTMLElement
+    expect(Array.from(bar.children).map((child) => child.id || child.className)).toEqual(['comment-hint', 'actions-row'])
+    expect(Array.from(bar.querySelectorAll('button')).map((button) => button.textContent?.replace(/✓.*$/, ''))).toEqual([
+      'Request changes',
+      'Approve plan',
+    ])
   })
 
   test('approve(): posts to the approve endpoint and disables the button while in flight', async () => {
@@ -149,7 +159,7 @@ describe('PlanPanel', () => {
 
     renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
-    const approveBtn = await screen.findByRole('button', { name: 'Approve' })
+    const approveBtn = await screen.findByRole('button', { name: 'Approve plan' })
     expect(approveBtn).not.toBeDisabled()
 
     fireEvent.click(approveBtn)
@@ -175,7 +185,7 @@ describe('PlanPanel', () => {
     renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
     // Approve появляется после оседания неудачного fetch плана.
-    const approveBtn = await screen.findByRole('button', { name: 'Approve' })
+    const approveBtn = await screen.findByRole('button', { name: 'Approve plan' })
     expect(approveBtn).not.toBeDisabled()
     fireEvent.click(approveBtn)
     await waitFor(() => expect(calls.some((c) => c.endsWith('/approve'))).toBe(true))
@@ -187,14 +197,14 @@ describe('PlanPanel', () => {
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
-    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    const approveBtn = screen.getByRole('button', { name: 'Approve plan' })
     expect(approveBtn).not.toBeDisabled()
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: 'please fix' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     expect(approveBtn).toBeDisabled()
 
@@ -209,7 +219,7 @@ describe('PlanPanel', () => {
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
-    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    const approveBtn = screen.getByRole('button', { name: 'Approve plan' })
     expect(approveBtn).not.toBeDisabled()
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -225,7 +235,7 @@ describe('PlanPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove comment on line 1' }))
     expect(approveBtn).not.toBeDisabled()
-    expect(container.querySelector('#comment-hint')?.textContent).toBe('Click a plan line to comment')
+    expect(container.querySelector('#comment-hint')?.textContent).toBe('Comment on any line, then send a revision.')
   })
 
   test('Send revision is disabled while a new, empty comment form is open (even with an already-submitted comment), and re-enables once it is closed', async () => {
@@ -241,7 +251,7 @@ describe('PlanPanel', () => {
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: 'please fix' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     const reviseBtn = screen.getByRole('button', { name: 'Send revision (1)' })
     expect(reviseBtn).not.toBeDisabled()
@@ -264,7 +274,7 @@ describe('PlanPanel', () => {
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
-    const approveBtn = screen.getByRole('button', { name: 'Approve' })
+    const approveBtn = screen.getByRole('button', { name: 'Approve plan' })
     expect(approveBtn).not.toBeDisabled()
 
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
@@ -290,7 +300,7 @@ describe('PlanPanel', () => {
     const { container } = renderPlanPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
     await waitFor(() => expect(container.querySelectorAll('[data-line]').length).toBe(2))
 
-    const reviseBtn = screen.getByRole('button', { name: 'Send revision' })
+    const reviseBtn = screen.getByRole('button', { name: 'Request changes' })
     expect(reviseBtn).toBeDisabled()
 
     // A disabled button does not dispatch a click in jsdom, so this exercises the no-op path.
@@ -300,7 +310,7 @@ describe('PlanPanel', () => {
     fireEvent.click(container.querySelector('[data-line="1"]') as HTMLElement)
     const textarea = container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'please fix' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     const reviseBtnWithComment = screen.getByRole('button', { name: 'Send revision (1)' })
     expect(reviseBtnWithComment).not.toBeDisabled()
@@ -312,7 +322,7 @@ describe('PlanPanel', () => {
     expect(JSON.parse(reviseCall?.body ?? '{}')).toEqual({ feedback: 'Line 1: please fix' })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled()
     })
   })
 
@@ -327,7 +337,7 @@ describe('PlanPanel', () => {
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: 'please fix' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     // The comment is saved: display bubble present, revise button counts it.
     expect(container.querySelector('.line-comment-display')).not.toBeNull()
@@ -337,7 +347,7 @@ describe('PlanPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove comment on line 1' }))
     expect(container.querySelector('.line-comment-display')).toBeNull()
     expect(container.querySelector('.line-comment-form')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled()
   })
 
   test('a non-empty draft ignores clicks on other lines and on itself; × folds it into a Draft card', async () => {
@@ -409,6 +419,19 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(calls.some((c) => c.endsWith('/retry'))).toBe(true))
   })
 
+  test('retry(): a rejected request shows the reason and leaves Retry available', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      return url.endsWith('/retry') ? ({ ok: false, status: 500 } as Response) : textResponse('')
+    })
+
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'failed' })} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('/api/stages/s1/retry -> 500')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).not.toBeDisabled())
+  })
+
   test('shows Retry and Skip buttons when the stage is hook_failed', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
 
@@ -452,6 +475,42 @@ describe('PlanPanel', () => {
     await waitFor(() => expect(calls.some((c) => c.endsWith('/retry-hook'))).toBe(true))
   })
 
+  test('hook_failed: Skip and Retry stay disabled through success until a new episode', async () => {
+    let finishRetry: (response: Response) => void = () => undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (!url.endsWith('/retry-hook')) return textResponse('')
+      return new Promise<Response>((resolve) => {
+        finishRetry = resolve
+      })
+    })
+
+    const old = makeStage({ status: 'hook_failed', updatedAt: '2026-10-29T10:00:00Z' })
+    const { rerenderPanel } = renderPlanPanel(<PlanPanel stage={old} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeDisabled())
+    await act(async () => finishRetry(textResponse('')))
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled()
+    rerenderPanel(<PlanPanel stage={{ ...old, updatedAt: '2026-10-29T10:01:00Z' }} />)
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+  })
+
+  test('hook_failed: a rejected retry-hook shows the reason and leaves Retry available', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      return url.endsWith('/retry-hook') ? ({ ok: false, status: 500 } as Response) : textResponse('')
+    })
+
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'hook_failed' })} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('/api/stages/s1/retry-hook -> 500')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).not.toBeDisabled())
+  })
+
   test('stage.status done: renders the plan with all checkboxes checked', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('- [ ] item one\n- [ ] item two'))
 
@@ -468,7 +527,7 @@ describe('PlanPanel', () => {
 
     await waitFor(() => expect(container.querySelector('.auto-approved-badge')).not.toBeNull())
     expect(container.querySelector('#actions-section')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve plan' })).not.toBeInTheDocument()
   })
 
   test('autoApprove: false keeps the normal Approve/Revise actions (no badge)', async () => {
@@ -532,7 +591,7 @@ describe('PlanPanel', () => {
     test('Plan → Feed → Plan restores the saved card and the open editor text', async () => {
       const { container, rerenderPanel } = await renderAwaiting()
       type(container, 1, 'saved one')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
       type(container, 2, 'typing two')
 
       rerenderPanel(<div />)
@@ -548,11 +607,11 @@ describe('PlanPanel', () => {
     test('a stage switch keeps each stage drafts independent', async () => {
       const { container, rerenderPanel } = await renderAwaiting()
       type(container, 1, 'for s1')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       rerenderPanel(<PlanPanel stage={makeStage({ id: 's2', status: 'awaiting_approval' })} />)
       await waitFor(() => expect(container.querySelector('.line-comment-display')).toBeNull())
-      expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled()
 
       rerenderPanel(<PlanPanel stage={makeStage({ id: 's1', status: 'awaiting_approval' })} />)
       await waitFor(() => expect(container.querySelector('.line-comment-display[data-comment-line="1"]')).not.toBeNull())
@@ -561,7 +620,7 @@ describe('PlanPanel', () => {
     test('a new plan text shows old comments as a previous-version notice, not attached to the new text', async () => {
       const { container, rerenderPanel } = await renderAwaiting()
       type(container, 1, 'old note')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Rewritten\n# Second line'))
       rerenderPanel(<PlanPanel stage={makeStage({ status: 'revising' })} />)
@@ -570,7 +629,7 @@ describe('PlanPanel', () => {
 
       expect(container.querySelector('.line-comment-display')).toBeNull()
       expect(screen.getByText('1 comment from previous version')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Approve' })).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Approve plan' })).not.toBeDisabled()
 
       fireEvent.click(screen.getByRole('button', { name: 'Show' }))
       expect(screen.getByText('old note')).toBeInTheDocument()
@@ -581,7 +640,7 @@ describe('PlanPanel', () => {
     test('no previous-version notice while the plan reloads after a remount', async () => {
       const { container, rerenderPanel } = await renderAwaiting()
       type(container, 1, 'live note')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       rerenderPanel(<div />)
       vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise<Response>(() => {}))
@@ -593,14 +652,14 @@ describe('PlanPanel', () => {
     test('a failed plan fetch shows the live comments as unsent, not as a previous version, until they are discarded', async () => {
       const { container, rerenderPanel } = await renderAwaiting()
       type(container, 1, 'unsent feedback')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       rerenderPanel(<div />)
       vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404 } as Response)
       rerenderPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
 
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled())
-      expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled()
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Approve plan' })).toBeDisabled())
+      expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled()
       expect(screen.queryByText(/previous version/)).toBeNull()
       expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
       expect(screen.getByText('1 unsent comment - the plan could not be loaded')).toBeInTheDocument()
@@ -608,13 +667,13 @@ describe('PlanPanel', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
       expect(screen.queryByText(/unsent comment/)).toBeNull()
-      expect(screen.getByRole('button', { name: 'Approve' })).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Approve plan' })).not.toBeDisabled()
     })
 
     test('a network error on the plan fetch also uses the unsent label', async () => {
       const { container, rerenderPanel } = await renderAwaiting()
       type(container, 1, 'one')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       rerenderPanel(<div />)
       vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network down'))
@@ -651,6 +710,44 @@ describe('PlanPanel', () => {
       expect((container.querySelector('#plan-section') as HTMLElement).scrollTop).toBe(0)
     })
 
+    test('comments on a blank line and a paragraph continuation are sent with their own line numbers', async () => {
+      const plan = '# Title\n\nfirst line\nsecond line'
+      const calls: { url: string; body?: string }[] = []
+      const { container } = await renderAwaiting(plan)
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        calls.push({ url, body: init?.body as string | undefined })
+        return url.endsWith('/revise') ? ({ ok: true } as Response) : textResponse(plan)
+      })
+      for (const [line, text] of [[4, 'tighten this'], [2, 'add a summary']] as const) {
+        type(container, line, text)
+        fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+      }
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send revision (2)' }))
+
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith('/revise'))).toBe(true))
+      expect(JSON.parse(calls.find((c) => c.url.endsWith('/revise'))?.body ?? '{}')).toEqual({
+        feedback: 'Line 2: add a summary\n\nLine 4: tighten this',
+      })
+    })
+
+    test('a comment on a blank line stays bound to the old version when the plan text changes', async () => {
+      const { container, rerenderPanel } = await renderAwaiting('# Title\n\nbody')
+      type(container, 2, 'blank-line note')
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse('# Title\n\nrewritten body'))
+      rerenderPanel(<PlanPanel stage={makeStage({ status: 'revising' })} />)
+      rerenderPanel(<PlanPanel stage={makeStage({ status: 'awaiting_approval' })} />)
+      await waitFor(() => expect(container.textContent).toContain('rewritten body'))
+
+      expect(container.querySelector('.line-comment-display')).toBeNull()
+      expect(container.querySelector('[data-line="2"]')?.classList.contains('has-comment')).toBe(false)
+      expect(screen.getByText('1 comment from previous version')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled()
+    })
+
     test('Send revision uses the latest text of a folded unsaved draft', async () => {
       const calls: { url: string; body?: string }[] = []
       const { container } = await renderAwaiting()
@@ -675,7 +772,7 @@ describe('PlanPanel', () => {
         return url.endsWith('/revise') ? ({ ok: false, status: 500 } as Response) : textResponse(PLAN)
       })
       type(container, 1, 'keep me')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       fireEvent.click(screen.getByRole('button', { name: 'Send revision (1)' }))
       expect(await screen.findByRole('alert')).toHaveTextContent('Failed to send revision')
@@ -693,14 +790,14 @@ describe('PlanPanel', () => {
         return Promise.resolve(textResponse(PLAN))
       })
       type(container, 1, 'for s1')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
       fireEvent.click(screen.getByRole('button', { name: 'Send revision (1)' }))
 
       rerenderPanel(<PlanPanel stage={makeStage({ id: 's2', status: 'awaiting_approval' })} />)
       await waitFor(() => expect(container.querySelector('[data-line]')).not.toBeNull())
       rejectRevise({ ok: false, status: 500 } as Response)
 
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled())
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Request changes' })).toBeDisabled())
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(screen.queryByRole('alert')).toBeNull()
     })
@@ -714,9 +811,9 @@ describe('PlanPanel', () => {
         return Promise.resolve(textResponse(PLAN))
       })
       type(container, 1, 'first')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
       type(container, 2, 'second')
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
       fireEvent.click(screen.getByRole('button', { name: 'Send revision (2)' }))
       fireEvent.click(screen.getByRole('button', { name: 'Edit comment on line 2' }))
@@ -787,6 +884,37 @@ describe('PlanPanel', () => {
     fireEvent.click(continueBtn)
 
     await waitFor(() => expect(calls.some((c) => c.endsWith('/continue'))).toBe(true))
+  })
+
+  test('Continue: uses the Hold owner when supplied instead of issuing a direct request', async () => {
+    const api = await import('../../api/run-client')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+    const direct = vi.spyOn(api, 'continueStage').mockResolvedValue(undefined)
+    const heldContinue = vi.fn()
+    renderPlanPanel(<PlanPanel stage={makeStage({ status: 'paused' })} onContinue={heldContinue} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    expect(heldContinue).toHaveBeenCalledOnce()
+    expect(direct).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    ['paused', 'Continue', 'continueStage'],
+    ['hook_failed', 'Skip', 'skipHookStage'],
+  ] as const)('%s: %s exposes rejection and allows retry, then locks through success', async (status, label, endpoint) => {
+    const api = await import('../../api/run-client')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(textResponse(''))
+    const request = vi.spyOn(api, endpoint).mockRejectedValueOnce(new Error('Action refused')).mockResolvedValue(undefined)
+    const old = makeStage({ status, updatedAt: '2026-10-29T10:00:00Z' })
+    const { rerenderPanel } = renderPlanPanel(<PlanPanel stage={old} />)
+    fireEvent.click(await screen.findByRole('button', { name: label }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Action refused')
+    expect(screen.getByRole('button', { name: label })).toBeEnabled()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: label })) })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: label })).toBeDisabled()
+    expect(request).toHaveBeenCalledTimes(2)
+    rerenderPanel(<PlanPanel stage={{ ...old, updatedAt: '2026-10-29T10:01:00Z' }} />)
+    expect(screen.getByRole('button', { name: label })).toBeEnabled()
   })
 
   describe('usage-limit wait and quota pauses', () => {

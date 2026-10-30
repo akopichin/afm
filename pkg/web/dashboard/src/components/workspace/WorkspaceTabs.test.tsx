@@ -18,7 +18,8 @@ describe('WorkspaceTabs', () => {
     const attn = screen.getByRole('tab', { name: /Approval/ })
     expect(attn).toHaveAttribute('data-kind', 'approval')
     expect(attn.className).toContain('glow')
-    expect(attn).toHaveTextContent('· 2')
+    expect(attn.querySelector('.workspace-tab-count')).toHaveTextContent('2')
+    expect(attn.querySelector('.attn-glyph')).toBeNull()
     // Feed активна, attention — нет.
     expect(attn).toHaveAttribute('aria-selected', 'false')
   })
@@ -41,6 +42,6 @@ describe('WorkspaceTabs', () => {
 
   it('hides the count when it is zero', () => {
     render(<WorkspaceTabs tabs={[FEED, { ...APPROVAL, count: 0 }]} activeId="feed" onSelect={vi.fn()} />)
-    expect(screen.getByRole('tab', { name: /Approval/ })).not.toHaveTextContent('·')
+    expect(screen.getByRole('tab', { name: /Approval/ })).not.toHaveTextContent('0')
   })
 })

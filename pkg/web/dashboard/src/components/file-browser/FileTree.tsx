@@ -15,6 +15,8 @@ type FileTreeProps = {
   showCheckboxes?: boolean
   // Число комментариев к файлу по пути — маркер «● N» в строке.
   commentCount?: (path: string) => number
+  // Число комментариев внутри каталога — маркер на свёрнутой папке, чтобы комментарии не прятались в ветке.
+  folderCommentCount?: (path: string) => number
 }
 
 // Состояние одной раскрытой директории: то, что реально пришло с бэкенда — страницы конкатенируются по
@@ -28,7 +30,7 @@ type DirState = {
 
 // Ленивое дерево файлов проекта: верхний уровень грузится сразу при монтировании/смене root; поддиректории
 // — только по клику на раскрытие, и только один раз.
-export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true, commentCount = noComments }: FileTreeProps): ReactElement {
+export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activePath, showCheckboxes = true, commentCount = noComments, folderCommentCount = noComments }: FileTreeProps): ReactElement {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['.']))
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
@@ -189,6 +191,7 @@ export function FileTree({ root, onOpenFile, onToggleSelect, isSelected, activeP
           </span>
           <span className="file-tree-name">{entry.name}</span>
           {entry.kind === 'file' && <FileCommentCount count={commentCount(entry.path)} />}
+          {entry.kind === 'directory' && !isExpanded && <FileCommentCount count={folderCommentCount(entry.path)} />}
         </div>
 
         {entry.kind === 'directory' && isExpanded && (

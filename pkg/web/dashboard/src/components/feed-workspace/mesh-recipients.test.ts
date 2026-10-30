@@ -55,7 +55,7 @@ describe('buildMeshMentionGroups', () => {
     const groups = buildMeshMentionGroups([], profiles, 's1')
     const attach = groups.find((g) => g.label === 'Attach to stage')
     expect(attach?.items).toEqual([
-      { id: 'frontendDeveloper', title: 'Frontend reviewer', target: { kind: 'profile', profileId: 'frontendDeveloper' } },
+      { id: 'frontendDeveloper', title: 'Frontend reviewer', description: 'Helper · Attach to stage', kind: 'helper', target: { kind: 'profile', profileId: 'frontendDeveloper' } },
     ])
   })
 

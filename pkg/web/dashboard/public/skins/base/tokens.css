@@ -16,9 +16,11 @@
   --text-primary:   var(--ink-hi);
   --text-secondary: var(--ink);
   --text-muted:     var(--ink-dim);
-  /* Текст строк-команд в ленте — приглушённее «голоса» агента, но обязан оставаться читаемым. По умолчанию
-     = --text-muted (AA-safe в graphite/goga на surface-tool). */
-  --feed-command:   var(--text-muted);
+  /* Placeholder stays AA text; disabled text and form/control borders are dimmer but keep the 3:1 floor for
+     glyphs and UI boundaries. Each skin overrides --text-disabled and --control-border per mode. */
+  --text-placeholder: var(--text-muted);
+  --text-disabled:    var(--text-muted);
+  --control-border:   var(--text-muted);
 
   /* accents (semantic) */
   --accent-primary:     var(--amber);
@@ -29,6 +31,20 @@
   --success-rgb:        73, 201, 145;
   --danger:             var(--coral);
   --danger-rgb:         240, 107, 120;
+
+  /* Small text in a tone colour over a tint of that same tone: the tone is pulled toward --text-primary so
+     it keeps AA (4.5:1) in every skin and mode while the hue stays recognisable. Fills and icons keep the
+     pure tone. */
+  --tone-text-mix:  50%;
+  --accent-text:    color-mix(in srgb, var(--accent-primary) var(--tone-text-mix), var(--text-primary));
+  --attention-text: color-mix(in srgb, var(--attention) var(--tone-text-mix), var(--text-primary));
+  --success-text:   color-mix(in srgb, var(--success) var(--tone-text-mix), var(--text-primary));
+  --danger-text:    color-mix(in srgb, var(--danger) var(--tone-text-mix), var(--text-primary));
+
+  /* Hover fill of a filled button: the fill moves toward --text-primary, away from the canvas-coloured label, so
+     label contrast grows. A brightness filter would shift the label with the fill and can drop it under AA. */
+  --accent-primary-hover: color-mix(in srgb, var(--accent-primary) 88%, var(--text-primary));
+  --success-hover:        color-mix(in srgb, var(--success) 88%, var(--text-primary));
 
   /* status map — single source of truth for the stage-rail dot color (was copy-pasted in all 4 skins).
      Resolves against each skin's raw palette (--mint/--amber/…) at use-time, so skins only supply the

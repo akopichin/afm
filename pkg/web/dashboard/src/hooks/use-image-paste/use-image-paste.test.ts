@@ -276,3 +276,40 @@ describe('useImagePaste', () => {
     expect(value).toBe('initial[Screenshot: /x/paste-1.png]\n caption')
   })
 })
+
+it('preserves a failed attachment across unmount and retries the original file', async () => {
+  mockUpload.mockReset().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ path: '/saved.png' })
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:persisted')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  let saved: import('./use-image-paste').ImagePasteDraft = []
+  const report = (next: typeof saved) => { saved = next }
+  const first = renderHook(() => useImagePaste('s1', '', vi.fn(), saved, report))
+  await act(async () => { await first.result.current.uploadFiles([new File(['x'], 'screen.png', { type: 'image/png' })]) })
+  const file = saved[0]!.file
+  expect(saved[0]?.failed).toBe(true)
+  first.unmount()
+  const change = vi.fn()
+  const second = renderHook(() => useImagePaste('s1', '', change, saved, report))
+  expect(second.result.current.attachments[0]?.previewUrl).toBe('blob:persisted')
+  await act(async () => { second.result.current.retryAttachment(saved[0]!.id) })
+  expect(mockUpload).toHaveBeenLastCalledWith('s1', file)
+  expect(change).toHaveBeenCalledWith('[Screenshot: /saved.png]\n')
+  expect(saved[0]?.failed).toBe(false)
+})
+
+it('marks an interrupted upload retryable and fences its late result after unmount', async () => {
+  let resolve!: (result: { path: string }) => void
+  mockUpload.mockReset().mockReturnValue(new Promise((done) => { resolve = done }))
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pending')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  let saved: import('./use-image-paste').ImagePasteDraft = []
+  const change = vi.fn()
+  const view = renderHook(() => useImagePaste('s1', '', change, saved, (next) => { saved = next }))
+  let pending!: Promise<void>
+  act(() => { pending = view.result.current.uploadFiles([new File(['x'], 'screen.png', { type: 'image/png' })]) })
+  view.unmount()
+  expect(saved[0]).toMatchObject({ uploading: false, failed: true })
+  await act(async () => { resolve({ path: '/late.png' }); await pending })
+  expect(change).not.toHaveBeenCalled()
+  expect(saved[0]?.failed).toBe(true)
+})

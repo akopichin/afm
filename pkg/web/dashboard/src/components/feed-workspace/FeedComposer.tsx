@@ -1,9 +1,10 @@
 import { handleTextareaSubmit } from '../../lib/textarea-submit'
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import { PasteableTextarea } from '../pasteable-textarea'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { ComposerCard, ComposerHint, ComposerRecipients } from '../chat-composer/ComposerCard'
 import { buildReplyBody } from '../../lib/quote'
-import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import type { MeshRoster } from '../../hooks/use-mesh'
 import { removeSubmittedText, useRetryableSubmit } from '../../hooks/use-retryable-submit'
@@ -12,7 +13,6 @@ import { filterMentionGroups } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { AttachAssistantDialog } from '../assistants'
 import { TabList, tabPanelProps } from '../tab-list'
-import { MeshAvatar } from '../team/MeshAvatar'
 import { addMeshLoop, listMeshLoops, sendMeshMessageTo, stopMeshLoop, type MeshAttachAndSendResult, type MeshMessage, type MeshParticipant } from '../../api/mesh-client'
 import { buildLoopMentionGroups, buildMeshMentionGroups, type MeshMentionItem } from './mesh-recipients'
 import { isLoopCommandDraft, LOOP_INTERVAL_EXAMPLES, LOOP_SYNTAX, loopIntervalSlot, loopSubcommand, parseLoopCommand, resolveLoopTarget, type IntervalSlot, type LoopCommand, type LoopTarget } from './loop-command'
@@ -23,6 +23,7 @@ import { mentionHandles, participantLabel } from '../../lib/mesh-roster'
 import { computeReceiptPhase, deliveryKey, sideAgentOutcome, RECEIPT_LABEL } from './mesh-receipt'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
+import type { ImagePasteDraft, AttachmentActions } from '../../hooks/use-image-paste'
 
 // FeedComposerMeshProps — when provided (the stage Feed with the mesh and collaboration on), the composer gains
 // a Message/Revise mode toggle; Message writes to the shared mesh, a DIFFERENT delivery path from the Revise
@@ -52,11 +53,23 @@ export type MeshReplyTarget = { messageId: string; threadId: string; senderId: s
 
 type ComposerMode = 'message' | 'revise'
 
-// ComposerDraft — what one stage's composer holds that must outlive the composer itself (switching stages, the
-// Feed following the run to the next stage, leaving the Feed tab): the mode and whether the human chose it, the
-// Revise note, and the Message text and picked recipients. Kept in memory per stage (FeedWorkspace), never across
-// a page reload. Replies are not kept: their target is reset on a stage change anyway.
-export type ComposerDraft = { mode: ComposerMode; modeChosen: boolean; revise: string; message: string; picked: string[] }
+// Drafts belong to the run, so navigation never discards a reply or an uploaded image.
+export type ComposerDraft = {
+  mode: ComposerMode
+  modeChosen: boolean
+  revise: string
+  message: string
+  picked: string[]
+  thoughtReply?: { key: string; text: string } | null
+  meshReply?: MeshReplyTarget | null
+  replyMessage?: string
+  replyPicked?: string[]
+  reviseAttachments?: ImagePasteDraft
+  messageAttachments?: ImagePasteDraft
+  replyAttachments?: ImagePasteDraft
+}
+
+export const emptyComposerDraft = (): ComposerDraft => ({ mode: 'message', modeChosen: false, revise: '', message: '', picked: [] })
 
 type FeedComposerProps = {
   // Стадия, живому агенту которой уйдёт заметка.
@@ -102,7 +115,8 @@ type FeedComposerProps = {
   onMeshReplySent?: (messageId: string) => void
   // draft — this stage's saved draft to start from; onDraftChange — every change of it, to save (see ComposerDraft).
   draft?: ComposerDraft
-  onDraftChange?: (draft: ComposerDraft) => void
+  onDraftChange?: (patch: Partial<ComposerDraft>) => void
+  onReplyAttachmentsChange?: (replyId: string, attachments: ImagePasteDraft) => void
 }
 
 // FeedComposer — messenger-поле ввода внизу ленты. Без mesh — ровно прежнее поведение: заметка живому агенту
@@ -129,6 +143,7 @@ export function FeedComposer({
   onMeshReplySent,
   draft,
   onDraftChange,
+  onReplyAttachmentsChange,
 }: FeedComposerProps): ReactElement {
   const [mode, setModeState] = useState<ComposerMode>(draft?.mode ?? (mesh !== undefined ? 'message' : 'revise'))
   // modeChosen — the human (or an action of theirs: a pick, a reply) chose the mode; a late mesh never overrides it.
@@ -141,6 +156,7 @@ export function FeedComposer({
   const shownMode: ComposerMode = mesh !== undefined && !reviseAvailable ? 'message' : mode
   const [value, setValue] = useState(draft?.revise ?? '')
   const [sending, setSending] = useState(false)
+  const reviseAttachments = useRef<AttachmentActions | null>(null)
 
   // The mesh can arrive after the composer mounted (the roster probe answers after the first render): its first
   // activation opens Message, the default with the mesh — unless the human already chose a mode or is writing a
@@ -153,16 +169,16 @@ export function FeedComposer({
   }, [meshActive, value])
 
   // The saved draft: every change is reported, merged with the Message part MeshMessageComposer reports.
-  const savedDraft = useRef<ComposerDraft>(draft ?? { mode, modeChosen: false, revise: value, message: '', picked: [] })
   const reportDraft = useRef(onDraftChange)
   reportDraft.current = onDraftChange
   const updateDraft = useCallback((patch: Partial<ComposerDraft>): void => {
-    savedDraft.current = { ...savedDraft.current, ...patch }
-    reportDraft.current?.(savedDraft.current)
+    reportDraft.current?.(patch)
   }, [])
-  useEffect(() => updateDraft({ mode, modeChosen: modeChosen.current, revise: value }), [mode, value, updateDraft])
+  useEffect(() => updateDraft({ mode, modeChosen: modeChosen.current }), [mode, updateDraft])
+  useEffect(() => updateDraft({ revise: value }), [value, updateDraft])
   const revisePanelRef = useRef<HTMLDivElement | null>(null)
   const tabsId = useId()
+  const [modeOptions, setModeOptions] = useState<HTMLDivElement | null>(null)
 
   // A people-panel pick and a Reply in conversation are Message's; a reply to a thought is Revise's.
   const pickSeq = mesh?.pick?.seq
@@ -173,8 +189,10 @@ export function FeedComposer({
     setMode('message')
   }, [pickSeq])
   const meshReplyId = meshReply?.messageId
+  const previousMeshReply = useRef(draft?.meshReply?.messageId)
   useEffect(() => {
-    if (meshReplyId !== undefined) setMode('message')
+    if (meshReplyId !== undefined && meshReplyId !== previousMeshReply.current) setMode('message')
+    previousMeshReply.current = meshReplyId
   }, [meshReplyId])
 
   const empty = value.trim() === ''
@@ -183,8 +201,10 @@ export function FeedComposer({
 
   // Выбор мысли — это ответ через Revise: показываем его поле и переводим туда фокус, чтобы Enter
   // сразу отправлял ответ. Фокус — после того, как поле стало видимым (с mesh оно могло быть скрыто за Message).
+  const previousThoughtReply = useRef(draft?.thoughtReply?.key)
   useEffect(() => {
-    if (replyKey !== undefined) setMode('revise')
+    if (replyKey !== undefined && replyKey !== previousThoughtReply.current) setMode('revise')
+    previousThoughtReply.current = replyKey
   }, [replyKey])
   useEffect(() => {
     if (replyKey === undefined || shownMode !== 'revise') return
@@ -195,12 +215,13 @@ export function FeedComposer({
     if (empty || sending || slashInRevise) return
     const submitted = value // снимок на момент отправки
     const body = buildReplyBody(replyQuote, submitted)
+    const attachmentActions = reviseAttachments.current
+    const sentAttachments = submittedAttachments(attachmentActions, submitted)
     setSending(true)
     try {
       await onSend(body)
-      // Очищаем ТОЛЬКО если пользователь не набрал новый текст поверх, пока шла отправка — иначе затрём
-      // свежий черновик. Снимок сравниваем с сырым value (submitted), не с body.
-      setValue((cur) => (cur === submitted ? '' : cur))
+      attachmentActions?.discard(sentAttachments)
+      setValue((cur) => removeSubmittedText(cur, submitted))
       // Сообщаем родителю ключ отправленной мысли — он сбросит reply-таргет
       // только если цель всё ещё та же (race-safe, см. FeedWorkspace).
       if (replyKey !== undefined) onSent?.(replyKey)
@@ -213,7 +234,26 @@ export function FeedComposer({
     }
   }
 
-  // reviseComposer — the note-to-agent field: the whole composer without mesh, the Revise tab with it.
+  const pauseOption = onTogglePauseOnFocus !== undefined && (
+    <label className={`switch${mesh !== undefined ? ' feed-composer-mode-option' : ''}`}>
+      <input type="checkbox" checked={pauseOnFocusEnabled} onChange={(e) => onTogglePauseOnFocus(e.target.checked)} />
+      {mesh === undefined && <span className="track" aria-hidden="true" />}
+      <span className="switch-label">Hold the agent while you type</span>
+    </label>
+  )
+  const reviseAgent = mesh?.roster.participants.find((p) => p.kind === 'stage_agent' && p.stage_id === stageId)
+  const reviseSend = (
+    <ChatSendButton
+      label={mesh !== undefined ? 'Send revision' : 'Send note to agent'}
+      visibleLabel={mesh !== undefined ? 'Send revision' : undefined}
+      disabled={empty || slashInRevise}
+      sending={sending}
+      paused={paused}
+      onClick={() => void submit()}
+    />
+  )
+
+  // The legacy note keeps its inline controls; mesh modes share the card and toolbar layout.
   const reviseComposer = (
     <>
       {/* Quote-чип ответа на мысль агента — над строкой ввода, в стиле
@@ -233,20 +273,7 @@ export function FeedComposer({
           </button>
         </div>
       )}
-      {/* Полоса опций над строкой ввода: тумблер с подписью, прижат вправо. */}
-      {onTogglePauseOnFocus !== undefined && (
-        <div className="composer-opts">
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={pauseOnFocusEnabled}
-              onChange={(e) => onTogglePauseOnFocus(e.target.checked)}
-            />
-            <span className="track" aria-hidden="true" />
-            <span className="switch-label">Hold the agent while you type</span>
-          </label>
-        </div>
-      )}
+      {mesh === undefined && pauseOption && <div className="composer-opts">{pauseOption}</div>}
       {/* Янтарный баннер: стадия на паузе, снимется на отправке (или «Resume now»). */}
       {paused && (
         <div className="pause-banner" role="status">
@@ -257,29 +284,36 @@ export function FeedComposer({
           </button>
         </div>
       )}
-      <div className={`chat-composer-row${paused ? ' paused' : ''}`}>
+      <ComposerCard card={mesh !== undefined} paused={paused}>
+        {mesh !== undefined && (
+          <ComposerRecipients>
+            {reviseAgent !== undefined ? (
+              <RecipientChip recipient={loopTargetChip(reviseAgent, mesh.roster.participants)} participants={mesh.roster.participants} />
+            ) : <span className="mesh-recipient-chip chat-composer-recipient">@{stageId}</span>}
+          </ComposerRecipients>
+        )}
         <PasteableTextarea
           stageId={stageId}
+          attachmentDraft={draft?.reviseAttachments}
+          attachmentActionsRef={reviseAttachments}
+          onAttachmentDraftChange={(reviseAttachments) => updateDraft({ reviseAttachments })}
           className="chat-composer-input"
           value={value}
           onChange={setValue}
-          placeholder="Note to agent…"
+          placeholder={mesh !== undefined ? 'Describe what the agent should change…' : 'Note to agent…'}
+          textareaProps={mesh !== undefined ? { 'aria-label': 'Revision instructions' } : undefined}
           allowFileReferences
           attachInline
+          toolbar={mesh !== undefined ? reviseSend : undefined}
           rows={1}
           onSubmit={() => void submit()}
           onFocus={onFocus}
           onBlur={() => onBlur?.(value.trim() !== '')}
           maxHeight={200}
         />
-        <ChatSendButton
-          label={mesh !== undefined ? 'Apply Revise' : 'Send note to agent'}
-          disabled={empty || slashInRevise}
-          sending={sending}
-          paused={paused}
-          onClick={() => void submit()}
-        />
-      </div>
+        {mesh === undefined && reviseSend}
+      </ComposerCard>
+      {mesh !== undefined && <ComposerHint note={COMPOSER_HINT.revise} />}
       {slashInRevise && (
         <div className="mesh-message-error" role="alert">
           {SLASH_IN_REVISE}
@@ -298,22 +332,29 @@ export function FeedComposer({
 
   // Both panels stay mounted (the hidden one keeps its draft and recipients); only the shown one is visible.
   return (
-    <div className="feed-composer">
-      <TabList
-        idPrefix={tabsId}
-        ariaLabel="Composer mode"
-        className="feed-composer-modes"
-        tabClassName="feed-composer-mode"
-        selected={shownMode}
-        onSelect={setMode}
-        tabs={[{ id: 'message', label: 'Message' }, ...(reviseAvailable ? [{ id: 'revise' as const, label: 'Revise' }] : [])]}
-      />
+    <div className="feed-composer feed-composer--mesh">
+      <div className="feed-composer-header">
+        <TabList
+          idPrefix={tabsId}
+          ariaLabel="Composer mode"
+          className="feed-composer-modes"
+          tabClassName="feed-composer-mode"
+          selected={shownMode}
+          onSelect={setMode}
+          tabs={[{ id: 'message', label: <><ComposerModeIcon mode="message" />Message</> }, ...(reviseAvailable ? [{ id: 'revise' as const, label: <><ComposerModeIcon mode="revise" />Revise</> }] : [])]}
+        />
+        <div className="composer-opts" ref={setModeOptions}>
+          {shownMode === 'revise' && pauseOption}
+        </div>
+      </div>
       <div className="feed-composer-panel" {...tabPanelProps(tabsId, 'message')} hidden={shownMode !== 'message'}>
         <MeshMessageComposer
           stageId={stageId}
           mesh={mesh}
           initialMessage={draft?.message ?? ''}
           initialPicked={draft?.picked ?? NO_PICKS}
+          savedDraft={draft}
+          onReplyAttachmentsChange={onReplyAttachmentsChange}
           onDraftChange={updateDraft}
           conversationMessages={conversationMessages}
           reply={meshReply}
@@ -321,6 +362,7 @@ export function FeedComposer({
           onReplySent={onMeshReplySent}
           onUseRevise={reviseAvailable ? () => setMode('revise') : undefined}
           shown={shownMode === 'message'}
+          modeOptions={modeOptions}
         />
       </div>
       {reviseAvailable && (
@@ -330,6 +372,21 @@ export function FeedComposer({
       )}
     </div>
   )
+}
+
+function ComposerModeIcon({ mode }: { mode: ComposerMode }): ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {mode === 'message' ? <path d="M4 4h16v12H9l-5 4V4Z" /> : (
+        <><path d="M20 10a8 8 0 0 0-14-5L3 8m0-5v5h5" /><path d="M4 14a8 8 0 0 0 14 5l3-3m0 5v-5h-5" /></>
+      )}
+    </svg>
+  )
+}
+
+const COMPOSER_HINT: Record<ComposerMode, string> = {
+  message: 'Only the recipients above receive this message.',
+  revise: 'The executor starts a revision with your instructions.',
 }
 
 const SLASH_IN_REVISE = 'Slash commands run in Message'
@@ -349,10 +406,13 @@ type MeshMessageComposerProps = {
   onUseRevise?: () => void
   // shown — the Message panel is visible (a hidden one cannot take the focus yet).
   shown: boolean
+  modeOptions: HTMLDivElement | null
   // initialMessage/initialPicked — the stage's saved Message draft; onDraftChange — report its changes.
   initialMessage: string
   initialPicked: string[]
-  onDraftChange: (patch: { message: string; picked: string[] }) => void
+  savedDraft?: ComposerDraft
+  onReplyAttachmentsChange?: (replyId: string, attachments: ImagePasteDraft) => void
+  onDraftChange: (patch: Partial<ComposerDraft>) => void
 }
 
 // LoopPayload — a /loop command as the intent a retry is recognised by: plain JSON data, with the target already
@@ -395,25 +455,36 @@ function MeshMessageComposer({
   onReplySent,
   onUseRevise,
   shown,
+  modeOptions,
   initialMessage,
   initialPicked,
+  savedDraft,
+  onReplyAttachmentsChange,
   onDraftChange,
 }: MeshMessageComposerProps): ReactElement {
   const participants = mesh.roster.participants
   // A reply has its own draft (like its own picks below): what was being written to others neither becomes the
   // reply's text and @recipients nor is lost — it comes back when the reply ends.
   const [ordinaryDraft, setOrdinaryDraft] = useState(initialMessage)
-  const [replyDraft, setReplyDraft] = useState('')
+  const [replyDraft, setReplyDraft] = useState(savedDraft?.replyMessage ?? '')
   // picked — people added from the People panel. While a message is answered they go to replyPicked instead:
   // the reply is addressed to that conversation's people only, and its additions end with it.
   const [picked, setPicked] = useState<string[]>(initialPicked)
-  useEffect(() => onDraftChange({ message: ordinaryDraft, picked }), [ordinaryDraft, picked, onDraftChange])
-  const [replyPicked, setReplyPicked] = useState<string[]>([])
+  useEffect(() => onDraftChange({ message: ordinaryDraft }), [ordinaryDraft, onDraftChange])
+  useEffect(() => onDraftChange({ picked }), [picked, onDraftChange])
+  const [replyPicked, setReplyPicked] = useState<string[]>(savedDraft?.replyPicked ?? [])
   const replyId = reply?.messageId
+  const activeReplyId = useRef(replyId)
+  activeReplyId.current = replyId
+  const previousReply = useRef(replyId)
   useEffect(() => {
+    if (previousReply.current === replyId) return
+    previousReply.current = replyId
     setReplyPicked([])
     setReplyDraft('')
   }, [replyId])
+  useEffect(() => onDraftChange({ replyMessage: replyDraft }), [replyDraft, onDraftChange])
+  useEffect(() => onDraftChange({ replyPicked }), [replyPicked, onDraftChange])
   const activePicked = reply !== null ? replyPicked : picked
   const setActivePicked = reply !== null ? setReplyPicked : setPicked
   const draft = reply !== null ? replyDraft : ordinaryDraft
@@ -421,7 +492,7 @@ function MeshMessageComposer({
   const [attaching, setAttaching] = useState<Attaching | null>(null)
   // attachPreview — an "Attach to stage" pick is never sent straight away: Send opens this preview, and only
   // the dialog's own "Attach and send" click calls attachAndSendMesh. Cancel keeps the draft.
-  const [attachPreview, setAttachPreview] = useState<{ profileId: string; instruction: string } | null>(null)
+  const [attachPreview, setAttachPreview] = useState<{ profileId: string; instruction: string; submitted: string; actions: AttachmentActions | null; attachments: ImagePasteDraft } | null>(null)
   const [lastSend, setLastSend] = useState<LastSend | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   // interrupt — "Interrupt agent": the running stage agent stops its turn to answer this post, then continues.
@@ -461,16 +532,17 @@ function MeshMessageComposer({
   const [loopOutcome, setLoopOutcome] = useState<LoopOutcome | null>(null)
   const loopSubmitter = useRetryableSubmit<LoopPayload>('mesh-feed-loop', stageId)
 
-  const autoGrowRef = useAutoGrowTextarea(draft, MAX_MESSAGE_TEXTAREA_HEIGHT)
+  const messageAttachments = useRef<AttachmentActions | null>(null)
+  const latestDraft = useRef(draft)
+  latestDraft.current = draft
   const { nodeRef: caretNodeRef, replaceRange } = useCaretInsert(draft, setDraft)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const setRefs = useCallback(
     (node: HTMLTextAreaElement | null) => {
       textareaRef.current = node
       caretNodeRef.current = node
-      autoGrowRef(node)
     },
-    [autoGrowRef, caretNodeRef],
+    [caretNodeRef],
   )
 
   const messageGroups = useMemo(() => buildMeshMentionGroups(participants, mesh.profiles, stageId), [participants, mesh.profiles, stageId])
@@ -479,6 +551,7 @@ function MeshMessageComposer({
   // A person picked with @ stays in the text as @handle (a typed recipient); a profile to attach becomes a chip.
   const mention = useMentionMenu<MeshMentionItem>({
     matchesFor: (query) => filterMentionGroups(groups, query).flatMap((g) => g.items),
+    showEmpty: true,
     textFor: (item) => (item.target.kind === 'profile' ? null : mentionText(item)),
     replaceRange,
     onPicked: (item) => {
@@ -533,12 +606,11 @@ function MeshMessageComposer({
     el?.focus()
   }
 
-  function handleChange(e: ChangeEvent<HTMLTextAreaElement>): void {
-    const v = e.target.value
+  function handleChange(v: string): void {
     setDraft(v)
     setLocalError(null)
     setLoopOutcome(null)
-    mention.onInput(v, e.target.selectionStart ?? v.length)
+    mention.onInput(v, textareaRef.current?.selectionStart ?? v.length)
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
@@ -594,11 +666,13 @@ function MeshMessageComposer({
         setLocalError('An attached helper gets the text alone — remove the other recipients or the helper')
         return
       }
-      setAttachPreview({ profileId: attaching.profileId, instruction: text })
+      setAttachPreview({ profileId: attaching.profileId, instruction: text, submitted, actions: messageAttachments.current, attachments: submittedAttachments(messageAttachments.current, submitted) })
       return
     }
     if (recipientIds.length === 0 || problems.length > 0) return
     const submittedReply = reply
+    const attachmentActions = messageAttachments.current
+    const sentAttachments = submittedAttachments(attachmentActions, submitted)
     submitter.submit(
       { recipientIds, inReplyTo: reply?.messageId, body: text, route, interrupt: offerInterrupt && interrupt },
       (p, requestId) =>
@@ -609,11 +683,12 @@ function MeshMessageComposer({
             })),
       {
         onSuccess: (receipt) => {
+          attachmentActions?.discard(sentAttachments)
           setLastSend({ messageId: receipt.messageId, recipientIds })
           // Interrupting is chosen per send: it does not carry over to the next message (a failure keeps it for the retry).
           setInterrupt(false)
-          setDraft((cur) => removeSubmittedText(cur, submitted))
-          if (submittedReply !== null) onReplySent?.(submittedReply.messageId)
+          if (submittedReply === null || activeReplyId.current === submittedReply.messageId) setDraft((cur) => removeSubmittedText(cur, submitted))
+          if (submittedReply !== null && activeReplyId.current === submittedReply.messageId && removeSubmittedText(latestDraft.current, submitted).trim() === '' && (attachmentActions?.snapshot().length ?? 0) === 0) onReplySent?.(submittedReply.messageId)
         },
         onFailure: () => setLastSend(null),
       },
@@ -623,10 +698,13 @@ function MeshMessageComposer({
   // handleAttachConfirmed — the attach preview's "Attach and send" resolved: the only place its result is
   // applied, so nothing optimistic shows before a real success.
   function handleAttachConfirmed(result: MeshAttachAndSendResult): void {
+    if (attachPreview !== null) {
+      attachPreview.actions?.discard(attachPreview.attachments)
+      setDraft((current) => removeSubmittedText(current, attachPreview.submitted))
+    }
     setAttachPreview(null)
     setAttaching(null)
     setLastSend({ messageId: result.message_id ?? null, recipientIds: [result.participant_id] })
-    setDraft('')
   }
 
   const stageStatus = (id: string | undefined): string | undefined => mesh.stages.find((s) => s.id === id)?.status
@@ -655,6 +733,13 @@ function MeshMessageComposer({
 
   return (
     <div className="mesh-message-composer">
+      {shown && offerInterrupt && modeOptions !== null && createPortal(
+        <label className="feed-composer-mode-option" title="The agent stops its current turn, answers this message, then continues its work">
+          <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
+          <span>Interrupt agent</span>
+        </label>,
+        modeOptions,
+      )}
       {attachPreview !== null && (
         <AttachAssistantDialog
           profileId={attachPreview.profileId}
@@ -677,69 +762,82 @@ function MeshMessageComposer({
         </div>
       )}
 
-      {loopMode && (
-        <div className="mesh-recipients mesh-loop-target" role="group" aria-label="Loop target">
-          <span className="mesh-recipients-label">Loop</span>
-          {loopTarget !== null && 'participant' in loopTarget ? (
-            <RecipientChip recipient={loopTargetChip(loopTarget.participant, participants)} participants={participants} />
-          ) : loopCommand !== null && loopCommand.kind !== 'add' ? (
-            <span className="mesh-recipients-empty">Runs for the whole run — no recipient</span>
-          ) : (
-            <span className="mesh-recipients-empty">Name one target with @agent</span>
-          )}
-        </div>
-      )}
+      <ComposerCard>
+        {loopMode && (
+          <ComposerRecipients label="Loop" ariaLabel="Loop target" className="mesh-loop-target">
+            {loopTarget !== null && 'participant' in loopTarget ? (
+              <RecipientChip recipient={loopTargetChip(loopTarget.participant, participants)} participants={participants} />
+            ) : loopCommand !== null && loopCommand.kind !== 'add' ? (
+              <span className="mesh-recipients-empty">Runs for the whole run — no recipient</span>
+            ) : (
+              <span className="mesh-recipients-empty">Name one target with @agent</span>
+            )}
+          </ComposerRecipients>
+        )}
 
-      {!loopMode && (
-        <div className="mesh-recipients" role="group" aria-label="Recipients">
-          <span className="mesh-recipients-label">To</span>
-          {recipients.map((r) => (
-            <RecipientChip
-              key={r.key}
-              recipient={r}
-              participants={participants}
-              // The stage agent by default and the sender of the message answered (cancel the reply) have no ×.
-              onRemove={r.source === 'default' || r.source === 'reply' ? undefined : () => removeRecipient(r)}
-            />
-          ))}
-          {attaching !== null && (
-            <span className="mesh-recipient-chip is-attach" title="A new helper of this stage; the text is its assignment">
-              Attach helper: {attaching.title}
-              <button type="button" className="mesh-recipient-remove" aria-label={`Don't attach ${attaching.title}`} onClick={() => setAttaching(null)}>
-                ×
-              </button>
-            </span>
-          )}
-          {recipients.length === 0 && attaching === null && <span className="mesh-recipients-empty">{defaultProblem ?? 'Pick someone to write to'}</span>}
-          <button type="button" className="mesh-recipients-add" aria-label="Add recipient" title="Add recipient (@)" onClick={openPicker}>
-            +
-          </button>
-          {offerRevise && (
-            <button type="button" className="mesh-recipients-use-revise" onClick={onUseRevise}>
-              Use Revise
+        {!loopMode && (
+          <ComposerRecipients>
+            {recipients.map((r) => (
+              <RecipientChip
+                key={r.key}
+                recipient={r}
+                participants={participants}
+                // The stage agent by default and the sender of the message answered (cancel the reply) have no ×.
+                onRemove={r.source === 'default' || r.source === 'reply' ? undefined : () => removeRecipient(r)}
+              />
+            ))}
+            {attaching !== null && (
+              <span className="mesh-recipient-chip chat-composer-recipient is-attach" title="A new helper of this stage; the text is its assignment">
+                Attach helper: {attaching.title}
+                <button type="button" className="mesh-recipient-remove chat-composer-recipient-remove" aria-label={`Don't attach ${attaching.title}`} onClick={() => setAttaching(null)}>
+                  ×
+                </button>
+              </span>
+            )}
+            {recipients.length === 0 && attaching === null && <span className="mesh-recipients-empty">{defaultProblem ?? 'Pick someone to write to'}</span>}
+            <button type="button" className="mesh-recipients-add chat-composer-add" aria-label="Add recipient" title="Add recipient (@)" onClick={openPicker}>
+              <span aria-hidden="true">+</span> Add recipient
             </button>
-          )}
-          {offerInterrupt && (
-            <label className="switch mesh-recipients-interrupt" title="The agent stops its current turn, answers this message, then continues its work">
-              <input type="checkbox" checked={interrupt} onChange={(e) => setInterrupt(e.target.checked)} />
-              <span className="track" aria-hidden="true" />
-              <span className="switch-label">Interrupt agent</span>
-            </label>
-          )}
-        </div>
-      )}
+            {offerRevise && (
+              <button type="button" className="mesh-recipients-use-revise" onClick={onUseRevise}>
+                Use Revise
+              </button>
+            )}
+          </ComposerRecipients>
+        )}
 
-      <div className="chat-composer-row">
-        <textarea
-          {...mention.inputAria}
-          ref={setRefs}
+        <PasteableTextarea
+          key={reply?.messageId ?? 'ordinary'}
+          stageId={stageId}
+          maxHeight={MAX_MESSAGE_TEXTAREA_HEIGHT}
+          attachmentActionsRef={messageAttachments}
+          attachmentDraft={reply !== null ? savedDraft?.replyAttachments : savedDraft?.messageAttachments}
+          onAttachmentDraftChange={(attachments) => {
+            if (replyId === undefined) onDraftChange({ messageAttachments: attachments })
+            else if (onReplyAttachmentsChange !== undefined) onReplyAttachmentsChange(replyId, attachments)
+            else if (activeReplyId.current === replyId) onDraftChange({ replyAttachments: attachments })
+          }}
+          textareaProps={{ ...mention.inputAria, 'aria-label': 'Message the mesh', 'aria-describedby': loopMode ? loopHintId : undefined }}
+          textareaRef={setRefs}
+          allowFileReferences
+          attachInline
+          toolbar={(
+            <>
+              <button type="button" className="chat-composer-mention" aria-label="Mention someone" title="Mention someone (@)" onClick={openPicker}>@</button>
+              <ChatSendButton
+                label={loopMode ? loopSendLabel(loopSubcommand(draft)) : 'Send message'}
+                visibleLabel={loopMode ? loopSendLabel(loopSubcommand(draft)) : 'Send'}
+                disabled={!canSend}
+                sending={loopMode ? loopSubmitter.pending : submitter.pending}
+                onClick={submit}
+              />
+            </>
+          )}
           className="chat-composer-input"
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
-          placeholder="Message… (@ to add someone)"
-          aria-label="Message the mesh"
-          aria-describedby={loopMode ? loopHintId : undefined}
+          placeholder="Write a message, or type @ to bring someone in…"
           rows={1}
         />
         {mention.open && (
@@ -750,10 +848,13 @@ function MeshMessageComposer({
             onHover={mention.setHighlightIndex}
             onSelect={mention.pick}
             ariaLabel="Mention a mesh participant or profile"
+            heading="Mention a participant"
+            emptyMessage="No matching participant. Try a name or @alias."
+            showGroupLabels={false}
           />
         )}
-        <ChatSendButton label={loopMode ? loopSendLabel(loopSubcommand(draft)) : 'Send message'} disabled={!canSend} sending={loopMode ? loopSubmitter.pending : submitter.pending} onClick={submit} />
-      </div>
+      </ComposerCard>
+      {!loopMode && <ComposerHint note={COMPOSER_HINT.message} />}
       {loopMode && (
         <div id={loopHintId} className="mesh-loop-hint">
           {LOOP_SYNTAX}
@@ -766,11 +867,6 @@ function MeshMessageComposer({
               {example}
             </button>
           ))}
-        </div>
-      )}
-      {draft.trim() !== '' && (
-        <div className="composer-send-hint">
-          Enter to send · Shift+Enter adds a line
         </div>
       )}
 
@@ -834,24 +930,28 @@ function loopTargetChip(p: MeshParticipant, participants: MeshParticipant[]): Co
   return { key: p.id, handle, participantId: p.id, source: 'typed', picked: false, typedTokens: [], problem: null, note: null }
 }
 
-// RecipientChip — one "To" chip: avatar and @handle; the stage agent chosen by default says so; a recipient
+// RecipientChip — one "To" chip: @handle; the stage agent chosen by default says so; a recipient
 // with a problem is marked (the problem is listed under the input).
 function RecipientChip({ recipient, participants, onRemove }: { recipient: ComposerRecipient; participants: MeshParticipant[]; onRemove?: () => void }): ReactElement {
   const p = participants.find((x) => x.id === recipient.participantId)
   const name = p !== undefined ? participantLabel(p) : recipient.handle
   return (
     <span
-      className={`mesh-recipient-chip${recipient.problem !== null ? ' has-problem' : ''}${recipient.source === 'default' ? ' is-default' : ''}`}
+      className={`mesh-recipient-chip chat-composer-recipient${recipient.problem !== null ? ' has-problem' : ''}${recipient.source === 'default' ? ' is-default' : ''}`}
       title={recipient.problem ?? (recipient.source === 'default' ? 'Nobody named — the stage agent gets it' : name)}
     >
-      {p !== undefined && <MeshAvatar name={name} kind={p.kind} size="small" />}@{recipient.handle}
+      <span className="mesh-recipient-handle">@{recipient.handle}</span>
       {recipient.source === 'default' && <span className="mesh-recipient-note">stage agent</span>}
       {recipient.note !== null && <span className="mesh-recipient-note">{recipient.note}</span>}
       {onRemove !== undefined && (
-        <button type="button" className="mesh-recipient-remove" aria-label={`Remove @${recipient.handle}`} onClick={onRemove}>
+        <button type="button" className="mesh-recipient-remove chat-composer-recipient-remove" aria-label={`Remove @${recipient.handle}`} onClick={onRemove}>
           ×
         </button>
       )}
     </span>
   )
+}
+
+function submittedAttachments(actions: AttachmentActions | null, text: string): ImagePasteDraft {
+  return actions?.snapshot().filter((a) => a.insertedText !== null && text.includes(a.insertedText)) ?? []
 }

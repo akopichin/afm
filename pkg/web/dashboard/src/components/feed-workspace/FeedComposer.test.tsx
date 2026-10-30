@@ -10,8 +10,49 @@ import type { AssistantProfile } from '../../types/assistant-profile'
 import type { Stage } from '../../types'
 import { meshDeliveries, sideAgentFailures } from './mesh-receipt'
 import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
+import { PasteableTextarea } from '../pasteable-textarea'
+import { ChatSendButton } from '../chat-composer/ChatSendButton'
 
 describe('FeedComposer', () => {
+  it.each([false, true])('preserves the shared textarea markup without a toolbar (attachInline=%s)', (attachInline) => {
+    const { container } = render(<PasteableTextarea stageId="s1" value="" onChange={vi.fn()} allowFileReferences attachInline={attachInline} />)
+    const wrap = container.firstElementChild!
+    const textarea = screen.getByRole('textbox')
+    const attach = screen.getByRole('button', { name: 'Attach' })
+    expect(wrap).toHaveClass('pasteable-textarea-wrap')
+    expect(container.querySelector('.pasteable-toolbar')).toBeNull()
+    expect(container.querySelectorAll('input[type="file"]')).toHaveLength(1)
+    if (attachInline) {
+      expect(wrap.children).toHaveLength(1)
+      expect(textarea.parentElement).toHaveClass('pasteable-input-row')
+      expect(textarea.parentElement).toContainElement(attach)
+      expect(container.querySelector('.pasteable-attachments')).toBeNull()
+    } else {
+      expect(wrap.children).toHaveLength(2)
+      expect(textarea.parentElement).toBe(wrap)
+      expect(wrap.firstElementChild).toHaveClass('pasteable-attachments')
+      expect(wrap.firstElementChild).toContainElement(attach)
+    }
+  })
+
+  it('keeps the shared send button icon-only unless its visible label is requested', () => {
+    const onClick = vi.fn()
+    const { rerender } = render(<ChatSendButton label="Send" disabled={false} onClick={onClick} />)
+    const button = screen.getByRole('button', { name: 'Send' })
+    expect(button.textContent).toBe('')
+    expect(button).not.toHaveClass('chat-send--labelled')
+    expect(button.querySelectorAll('svg path')).toHaveLength(2)
+    fireEvent.click(button)
+    expect(onClick).toHaveBeenCalledOnce()
+    rerender(<ChatSendButton label="Send revision" visibleLabel="Send revision" disabled={false} sending onClick={onClick} />)
+    expect(button).toHaveTextContent('Sending…')
+    expect(button).toHaveAccessibleName('Sending…')
+    expect(button).toHaveAttribute('aria-busy', 'true')
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(onClick).toHaveBeenCalledOnce()
+  })
+
   it('sends the trimmed text and clears on success', async () => {
     const onSend = vi.fn().mockResolvedValue(undefined)
     render(<FeedComposer stageId="s1" onSend={onSend} />)
@@ -51,7 +92,7 @@ describe('FeedComposer', () => {
 
     await waitFor(() => expect(onSend).toHaveBeenCalledWith('first'))
     // Свежий черновик НЕ затёрт очисткой после успешной отправки прежнего текста.
-    expect(textarea.value).toBe('first and more')
+    expect(textarea.value).toBe('and more')
   })
 
   it('disables send while empty and does not call onSend on empty submit', () => {
@@ -293,13 +334,137 @@ describe('FeedComposer', () => {
       expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
     })
 
-    it('starts in Message, addressed to the stage agent by default; Revise is a tab with "Apply Revise"', () => {
+    it('keeps recipients, textarea and labelled toolbar inside one Message card', () => {
+      const { container } = renderComposer()
+      const card = input().closest('.chat-composer-row')!
+      expect(card).toContainElement(recipients())
+      expect(within(recipients()).getByRole('button', { name: 'Add recipient' })).toHaveTextContent('Add recipient')
+      expect(input()).toHaveAttribute('placeholder', 'Write a message, or type @ to bring someone in…')
+      const toolbar = card.querySelector<HTMLElement>('.pasteable-toolbar')!
+      expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Attach' }))
+      expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Mention someone' }))
+      expect(within(toolbar).getByRole('button', { name: 'Send message' })).toHaveTextContent('Send')
+      const header = container.querySelector('.feed-composer-header')!
+      expect(header).toContainElement(screen.getByRole('tablist', { name: 'Composer mode' }))
+      expect(header).toContainElement(screen.getByRole('checkbox', { name: 'Interrupt agent' }))
+      for (const name of ['Message', 'Revise']) {
+        expect(screen.getByRole('tab', { name }).querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+      }
+      const panel = screen.getByRole('tabpanel', { name: 'Message' })
+      expect(within(panel).getByText('Only the recipients above receive this message.')).toBeVisible()
+      expect(within(panel).getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
+    })
+
+    it('puts the Revise option beside the tabs and its recipient inside the card below the pause banner', () => {
+      const onResumeNow = vi.fn()
+      const onTogglePauseOnFocus = vi.fn()
+      const { container } = renderComposer(meshProps(), { paused: true, pauseOnFocusEnabled: true, onTogglePauseOnFocus, onResumeNow })
+      fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
+      const panel = screen.getByRole('tabpanel', { name: 'Revise' })
+      const card = within(panel).getByPlaceholderText('Describe what the agent should change…').closest('.chat-composer-row')!
+      expect(card).toContainElement(recipients())
+      expect(within(recipients()).getByText('@s1')).toBeVisible()
+      const option = screen.getByRole('checkbox', { name: 'Hold the agent while you type' })
+      expect(container.querySelector('.feed-composer-header')).toContainElement(option)
+      expect(screen.queryByRole('checkbox', { name: 'Interrupt agent' })).toBeNull()
+      expect(option).toBeChecked()
+      fireEvent.click(option)
+      expect(onTogglePauseOnFocus).toHaveBeenCalledWith(false)
+      const banner = within(panel).getByRole('status')
+      expect(card).not.toContainElement(banner)
+      expect(banner.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+      fireEvent.click(within(banner).getByRole('button', { name: 'Resume now' }))
+      expect(onResumeNow).toHaveBeenCalledOnce()
+      const toolbar = card.querySelector<HTMLElement>('.pasteable-toolbar')!
+      expect(within(toolbar).getByRole('button', { name: 'Attach' })).toBeVisible()
+      expect(within(toolbar).getByRole('button', { name: 'Send revision' })).toHaveTextContent('Send revision')
+      expect(within(panel).getByText('The executor starts a revision with your instructions.')).toBeVisible()
+      expect(within(panel).getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
+    })
+
+    it('opens the existing keyboard mention picker from the toolbar without replacing the textarea or draft', () => {
+      renderComposer()
+      const textarea = input()
+      type('Please check ')
+      fireEvent.click(screen.getByRole('button', { name: 'Mention someone' }))
+      expect(input()).toBe(textarea)
+      expect(input()).toHaveFocus()
+      expect(input()).toHaveValue('Please check @')
+      expect(screen.getByRole('listbox')).toBeVisible()
+      fireEvent.keyDown(input(), { key: 'ArrowDown' })
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(screen.queryByRole('listbox')).toBeNull()
+      expect(input().value).toMatch(/^Please check @\S+ /)
+      expect(input()).toBe(textarea)
+    })
+
+    it('keeps an empty mention menu open without sending and Escape preserves the draft', () => {
+      const { onSend } = renderComposer()
+      type('@nobody-matches')
+      expect(screen.getByRole('listbox')).toHaveTextContent('No matching participant.')
+      expect(input()).not.toHaveAttribute('aria-activedescendant')
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(onSend).not.toHaveBeenCalled()
+      expect(input()).toHaveValue('@nobody-matches')
+      fireEvent.keyDown(input(), { key: 'Escape' })
+      expect(screen.queryByRole('listbox')).toBeNull()
+      expect(input()).toHaveValue('@nobody-matches')
+    })
+
+    it('disables finished mention options for click and keyboard selection', () => {
+      renderComposer()
+      type('@old')
+      const old = screen.getByRole('listbox').querySelector('button')!
+      expect(old).toBeDisabled()
+      fireEvent.click(old)
+      fireEvent.keyDown(input(), { key: 'Enter' })
+      expect(input()).toHaveValue('@old')
+      expect(input()).not.toHaveAttribute('aria-activedescendant')
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    it('Tab selects an available mention and keeps focus in the composer', () => {
+      renderComposer()
+      type('@qa')
+      input().focus()
+      fireEvent.keyDown(input(), { key: 'Tab' })
+      expect(input()).toHaveValue('@qa ')
+      expect(input()).toHaveFocus()
+      expect(screen.queryByRole('listbox')).toBeNull()
+      expect(within(recipients()).getByText('@qa')).toBeInTheDocument()
+    })
+
+    it('Tab does not pick a mention while an IME composition is active', () => {
+      renderComposer()
+      type('@qa')
+      input().focus()
+      fireEvent.keyDown(input(), { key: 'Tab', isComposing: true })
+      fireEvent.keyDown(input(), { key: 'Tab', keyCode: 229 })
+      expect(input()).toHaveValue('@qa')
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    it('arrow navigation wraps over available mention options and skips finished people', () => {
+      renderComposer(meshProps({ roster: roster({ participants: [finished, runAgent, docsAgent] }) }))
+      type('@')
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('@qa')
+      fireEvent.keyDown(input(), { key: 'ArrowDown' })
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('@docs')
+      fireEvent.keyDown(input(), { key: 'ArrowUp' })
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('@qa')
+      fireEvent.keyDown(input(), { key: 'ArrowUp' })
+      expect(screen.getByRole('option', { selected: true })).toHaveTextContent('@frontendDeveloper')
+      expect(input()).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { selected: true }).id)
+    })
+
+    it('starts in Message, addressed to the stage agent by default; Revise is a tab with "Send revision"', () => {
       renderComposer()
       expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
       expect(within(recipients()).getByText('@s1')).toBeInTheDocument()
       expect(within(recipients()).getByText('stage agent')).toBeInTheDocument()
+      expect(within(recipients()).getByText('@s1').closest('.chat-composer-recipient')).toHaveClass('is-default')
       fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-      expect(screen.getByRole('button', { name: 'Apply Revise' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Send revision' })).toBeInTheDocument()
     })
 
     it('without Revise there is only the Message tab', () => {
@@ -419,7 +584,7 @@ describe('FeedComposer', () => {
       fireEvent.change(screen.getByPlaceholderText('Note to agent…'), { target: { value: 'tighten tests' } })
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} />)
       expect(screen.getByRole('tab', { name: 'Revise' })).toHaveAttribute('aria-selected', 'true')
-      expect(screen.getByPlaceholderText('Note to agent…')).toHaveValue('tighten tests')
+      expect(screen.getByPlaceholderText('Describe what the agent should change…')).toHaveValue('tighten tests')
     })
 
     it('Enter sends to two picked people; Shift+Enter adds a line, as the hint says', async () => {
@@ -428,7 +593,7 @@ describe('FeedComposer', () => {
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-1', seq: 1 } })} />)
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps({ pick: { participantId: 'run:t-2', seq: 2 } })} />)
       type('please both review')
-      expect(screen.getByText('Enter to send · Shift+Enter adds a line')).toBeInTheDocument()
+      expect(within(screen.getByRole('tabpanel', { name: 'Message' })).getByText('Enter to send · Shift+Enter for a new line')).toBeVisible()
       expect(fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })).toBe(true)
       expect(send).not.toHaveBeenCalled()
       fireEvent.keyDown(input(), { key: 'Enter' })
@@ -450,7 +615,7 @@ describe('FeedComposer', () => {
       const other: MeshParticipant = { id: 'stage:docs', kind: 'stage_agent', scope: 'stage', stage_id: 'docs', alias: 'docs-stage', display_name: 'Docs stage', reachable: true }
       renderComposer(meshProps({ roster: roster({ participants: [runAgent, stageAgent, other] }) }))
       type('@')
-      expect(screen.getByText('Other stages')).toBeInTheDocument()
+      expect(screen.getByText('Stage agent · docs')).toBeInTheDocument()
       fireEvent.click(screen.getByText('@docs-stage'))
       expect(input().value).toBe('@docs-stage ')
       expect(within(recipients()).getByText('@docs-stage')).toBeInTheDocument()
@@ -502,6 +667,7 @@ describe('FeedComposer', () => {
       type('@nobody @old hi')
       expect(screen.getByRole('alert')).toHaveTextContent('No one is called @nobody in this run')
       expect(screen.getByRole('alert')).toHaveTextContent("@old can't receive messages: task t-3 has reached a terminal status")
+      expect(within(recipients()).getByText('@old').closest('.chat-composer-recipient')).toHaveClass('has-problem')
       expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
       fireEvent.keyDown(input(), { key: 'Enter' })
       expect(send).not.toHaveBeenCalled()
@@ -540,7 +706,7 @@ describe('FeedComposer', () => {
       type('hello')
       fireEvent.click(screen.getByRole('button', { name: 'Add recipient' }))
       expect(input().value).toBe('hello @')
-      expect(screen.getByText('This run')).toBeInTheDocument()
+      expect(within(screen.getByRole('listbox')).getByText('@qa')).toBeInTheDocument()
     })
 
     it('answering a conversation message adds its sender and sends in_reply_to; ✕ cancels', async () => {
@@ -733,7 +899,7 @@ describe('FeedComposer', () => {
       const { rerender } = renderComposer()
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={meshProps()} replyQuote="a thought" replyKey="k1" />)
       expect(screen.getByRole('tab', { name: 'Revise' })).toHaveAttribute('aria-selected', 'true')
-      expect(screen.getByPlaceholderText('Note to agent…')).toHaveFocus()
+      expect(screen.getByPlaceholderText('Describe what the agent should change…')).toHaveFocus()
     })
 
     describe('"Attach to stage" opens a preview before anything is created', () => {
@@ -1232,16 +1398,16 @@ describe('FeedComposer', () => {
       it('a /loop note in Revise says slash commands run in Message and cannot be applied', () => {
         const { onSend } = renderComposer(loopMesh())
         fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-        const note = screen.getByPlaceholderText('Note to agent…')
+        const note = screen.getByPlaceholderText('Describe what the agent should change…')
         fireEvent.change(note, { target: { value: '/loop 5m @qa check' } })
         expect(screen.getByText('Slash commands run in Message')).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'Apply Revise' })).toBeDisabled()
+        expect(screen.getByRole('button', { name: 'Send revision' })).toBeDisabled()
         fireEvent.keyDown(note, { key: 'Enter', metaKey: true })
         expect(onSend).not.toHaveBeenCalled()
         expect(note).toHaveValue('/loop 5m @qa check')
         fireEvent.change(note, { target: { value: '/loops are fine here' } })
         expect(screen.queryByText('Slash commands run in Message')).toBeNull()
-        expect(screen.getByRole('button', { name: 'Apply Revise' })).toBeEnabled()
+        expect(screen.getByRole('button', { name: 'Send revision' })).toBeEnabled()
       })
     })
   })

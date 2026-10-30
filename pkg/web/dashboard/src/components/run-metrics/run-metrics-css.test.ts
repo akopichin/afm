@@ -52,3 +52,39 @@ describe('run-metrics.css narrow-viewport contract (T7.6)', () => {
     expect(medium).toMatch(/display:\s*none/)
   })
 })
+
+// F7: on a phone the header keeps one compact metrics row (Elapsed/Idle/tokens/cost); Started and
+// Backoff fold behind the "⋯" popover, which still lists every metric.
+describe('run-metrics.css phone contract (F7)', () => {
+  const phone = extractMediaBlock(runMetricsCss, 'max-width: 600px')
+
+  it('has a phone (600px) block', () => {
+    expect(phone).not.toBe('')
+  })
+
+  it('keeps one row instead of wrapping', () => {
+    expect(phone).toMatch(/flex-wrap:\s*nowrap/)
+  })
+
+  it('folds only Started and Backoff', () => {
+    expect(phone).toMatch(/data-metric="started"\][^{]*,\s*\n?\s*\.run-metrics\s*>\s*\.metric\[data-metric="backoff"\]\s*\{\s*display:\s*none/)
+    expect(phone).not.toMatch(/data-metric="(elapsed|idle|tokens|cost)"[^{]*\{[^}]*display:\s*none/)
+  })
+
+  it('centers the tiles so the 44px tappable ones share a line with Elapsed/Idle', () => {
+    expect(phone).toMatch(/\.run-metrics > \.metric \{[^}]*align-items:\s*center/)
+    expect(phone).not.toMatch(/\.run-metrics > \.metric \{[^}]*align-items:\s*baseline/)
+  })
+
+  it('shows the "⋯" button as a borderless 44px touch target', () => {
+    expect(phone).toMatch(/\.metrics-more\s*\{[^}]*border-color:\s*transparent/)
+    expect(phone).toMatch(/\.metrics-more\s*\{[^}]*display:\s*inline-flex[^}]*width:\s*44px[^}]*height:\s*44px/)
+  })
+})
+
+// Without icons the label is the only name a metric has, so it stays visible at every width.
+describe('run-metrics.css labels', () => {
+  it('never hides the metric labels in the medium tier', () => {
+    expect(extractMediaBlock(runMetricsCss, 'max-width: 1279px')).not.toMatch(/\.metric-label\s*\{[^}]*display:\s*none/)
+  })
+})

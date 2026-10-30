@@ -52,11 +52,10 @@ describe('side-agent.css visibility contract', () => {
   })
 })
 
-// T7.6: the Side agent header button must stay a visible text button ("Side agent" label) at
-// every viewport width, including the app's narrow breakpoint — never collapsed to an icon-only
-// square the way .gh-files-btn is allowed to (Side agent is not in scope for that collapse).
-describe('side-agent.css narrow-viewport contract (T7.6)', () => {
-  it('never hides the "Side agent" label behind display:none at any breakpoint', () => {
+// The Assistant header button keeps its text label at the app's narrow breakpoint (900px); only the phone
+// layout in header.css (≤600px) collapses it to an icon, so side-agent.css itself never hides the label.
+describe('side-agent.css narrow-viewport contract', () => {
+  it('never hides the label behind display:none in this file', () => {
     expect(sideAgentCss).not.toMatch(/\.gh-side-agent-label\s*\{[^}]*display:\s*none/)
   })
 
@@ -88,7 +87,8 @@ describe('side-agent.css quote chip contract', () => {
     const computed = getComputedStyle(body)
     expect(computed.overflowY).toBe('auto')
     expect(computed.maxHeight).not.toBe('none')
-    expect(parseFloat(computed.maxHeight)).toBeGreaterThan(0)
+    // jsdom preserves CSS math instead of resolving viewport units into pixels.
+    expect(computed.maxHeight).toBe('min(120px, 15dvh)')
   })
 
   it('puts the chip on its own full-width line above the input instead of beside it', () => {

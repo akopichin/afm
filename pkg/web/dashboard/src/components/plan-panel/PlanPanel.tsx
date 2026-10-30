@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode, type UIEvent } from 'react'
 import { approveStage, continueStage, retryHookStage, retryStage, reviseStage, skipHookStage } from '../../api/run-client'
+import { useStageAction } from '../../hooks/use-stage-retry'
 import { useMessageTimeZone } from '../../lib/message-time-zone'
 import { quotaTitle, type Stage } from '../../types'
 import { useComments } from '../comments/CommentProvider'
@@ -34,10 +35,11 @@ type PlanPanelProps = {
   banner?: ReactNode
   // statusAvailable — свежесть /api/status из useStatus: пока он устарел, счётчик ожидания лимита замирает.
   statusAvailable?: boolean
+  onContinue?: () => void
 }
 
 // Панель плана стадии: загрузка markdown, рендер, действия Approve/Send revision/Retry.
-export function PlanPanel({ stage, attention = false, banner, statusAvailable = true }: PlanPanelProps): ReactElement {
+export function PlanPanel({ stage, attention = false, banner, statusAvailable = true, onContinue }: PlanPanelProps): ReactElement {
   const stageId = stage?.id ?? ''
   const { comments: allComments, acknowledge, scroll } = useComments()
   const hostZone = useMessageTimeZone()
@@ -50,7 +52,8 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
   const [busy, setBusy] = useState(false)
   // stageId — чей отказ: ответ на запрос прошлой стадии может прийти уже после переключения.
   const [reviseError, setReviseError] = useState<{ stageId: string; message: string } | null>(null)
-  const [clicked, setClicked] = useState<'approve' | 'revise' | 'retry' | 'continue' | null>(null)
+  const [clicked, setClicked] = useState<'approve' | 'revise' | null>(null)
+  const action = useStageAction(stage)
 
   const isReview = stage?.status === 'awaiting_approval'
   // commentable — построчные комментарии + Approve/Send revision. Только когда
@@ -81,7 +84,7 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
     if (planLoaded && !planEmpty && top !== undefined && sectionRef.current !== null) sectionRef.current.scrollTop = top
   }, [planLoaded, planEmpty, scrollKey, scroll])
 
-  function flashButton(which: 'approve' | 'revise' | 'retry' | 'continue') {
+  function flashButton(which: 'approve' | 'revise') {
     setClicked(which)
     window.setTimeout(() => setClicked(null), 1200)
   }
@@ -164,95 +167,69 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
     }
   }
 
-  async function retry() {
-    if (stage === null) return
-    flashButton('retry')
-    setBusy(true)
-    try {
-      await retryStage(stage.id)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function doContinue() {
-    if (stage === null) return
-    flashButton('continue')
-    setBusy(true)
-    try {
-      await continueStage(stage.id)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function retryHook() {
-    if (stage === null) return
-    flashButton('retry')
-    setBusy(true)
-    try {
-      await retryHookStage(stage.id)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function skipHook() {
-    if (stage === null) return
-    flashButton('revise') // reuse the 'revise'-style flash slot; no dedicated 'skip' clicked-state needed
-    setBusy(true)
-    try {
-      await skipHookStage(stage.id)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const retry = () => action.send(retryStage)
+  const retryHook = () => action.send(retryHookStage)
+  const doContinue = () => onContinue !== undefined ? onContinue() : action.send(continueStage)
+  const skipHook = () => action.send(skipHookStage)
 
   function rememberScroll(event: UIEvent<HTMLDivElement>): void {
     scroll.set(scrollKey, event.currentTarget.scrollTop)
   }
 
+  const actionError =
+    action.error === null ? null : (
+      <p className="comment-error" role="alert">
+        {action.error}
+      </p>
+    )
   const emptyHint = <div id="plan-empty" className={`empty-hint${!planEmpty ? ' hidden' : ''}`}>No plan yet</div>
 
   function renderActions(doc: LineCommentDocumentApi): ReactNode {
     return (
       <div id="actions-section" className="section">
-        <div className="actions-row">
-          <button
-            id="btn-approve"
-            className={`btn btn-approve${clicked === 'approve' ? ' ok' : ''}`}
-            type="button"
-            disabled={busy || doc.commentCount > 0 || doc.activeCommentLine !== null}
-            aria-describedby="comment-hint"
-            onClick={approve}
-          >
-            <span className="btn-ripple" aria-hidden="true" />
-            <span className="btn-label">Approve</span>
-            <span className="btn-done" aria-hidden="true">✓ Approved</span>
-          </button>
-          <button
-            id="btn-revise"
-            className={`btn btn-revise${clicked === 'revise' ? ' ok' : ''}`}
-            type="button"
-            disabled={busy || doc.comments.length === 0 || doc.activeCommentLine !== null}
-            onClick={() => void sendRevision(doc.comments)}
-          >
-            <span className="btn-ripple" aria-hidden="true" />
-            <span className="btn-label">{doc.comments.length > 0 ? `Send revision (${doc.comments.length})` : 'Send revision'}</span>
-            <span className="btn-done" aria-hidden="true">✓ Sent</span>
-          </button>
-        </div>
         {reviseError !== null && reviseError.stageId === stage?.id && (
           <p className="comment-error" role="alert">
             {`Failed to send revision: ${reviseError.message}. Try again.`}
           </p>
         )}
-        <div id="comment-hint" className="comment-hint">
-          {doc.comments.length === 0 && doc.commentCount > 0
-            ? `${doc.commentCount} unsent ${doc.commentCount === 1 ? 'comment' : 'comments'}${planEmpty ? '' : ' from an earlier plan version'}: ${planEmpty ? 'discard' : 'dismiss'} ${doc.commentCount === 1 ? 'it' : 'them'} to approve`
-            : doc.commentCount > 0
-            ? `${doc.commentCount} unsent ${doc.commentCount === 1 ? 'comment' : 'comments'}: send a revision or delete ${doc.commentCount === 1 ? 'it' : 'them'} to approve`
-            : 'Click a plan line to comment'}
+        <div className="actions-bar">
+          <div id="comment-hint" className="comment-hint" data-unsent={doc.commentCount > 0 ? '' : undefined}>
+            {doc.comments.length === 0 && doc.commentCount > 0
+              ? `${doc.commentCount} unsent ${doc.commentCount === 1 ? 'comment' : 'comments'}${planEmpty ? '' : ' from an earlier plan version'}: ${planEmpty ? 'discard' : 'dismiss'} ${doc.commentCount === 1 ? 'it' : 'them'} to approve`
+              : doc.commentCount > 0
+              ? `${doc.commentCount} unsent ${doc.commentCount === 1 ? 'comment' : 'comments'}: send a revision or delete ${doc.commentCount === 1 ? 'it' : 'them'} to approve`
+              : 'Comment on any line, then send a revision.'}
+          </div>
+          <div className="actions-row">
+            <button
+              id="btn-revise"
+              className={`btn btn-revise${clicked === 'revise' ? ' ok' : ''}`}
+              type="button"
+              disabled={busy || doc.comments.length === 0 || doc.activeCommentLine !== null}
+              onClick={() => void sendRevision(doc.comments)}
+            >
+              <span className="btn-ripple" aria-hidden="true" />
+              <span className="btn-label">{doc.comments.length > 0 ? `Send revision (${doc.comments.length})` : 'Request changes'}</span>
+              <span className="btn-done" aria-hidden="true">✓ Sent</span>
+            </button>
+            <button
+              id="btn-approve"
+              className={`btn btn-approve${clicked === 'approve' ? ' ok' : ''}`}
+              type="button"
+              disabled={busy || doc.commentCount > 0 || doc.activeCommentLine !== null}
+              aria-describedby="comment-hint"
+              onClick={approve}
+            >
+              <span className="btn-ripple" aria-hidden="true" />
+              <span className="btn-label">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m3.5 8.5 3 3 6-7" />
+                </svg>
+                Approve plan
+              </span>
+              <span className="btn-done" aria-hidden="true">✓ Approved</span>
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -265,7 +242,7 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
           <LineCommentedDocument
             key={`${stageId}:${planMarkdown}`}
             text={planMarkdown}
-            specialSections
+            specialSections={false}
             stageId={stageId}
             scope={{ kind: 'plan', version }}
             bodyId="plan-content"
@@ -276,6 +253,10 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
                 <div id="plan-section" className="section" ref={sectionRef} onScroll={rememberScroll}>
                   {banner}
                   {staleNotice}
+                  <div className="plan-hint-row">
+                    <span>Click any line to comment</span>
+                    <span>Images can be pasted into a comment</span>
+                  </div>
                   {doc.body}
                   {emptyHint}
                 </div>
@@ -311,12 +292,13 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
             {showRetry && (
               <div id="retry-section" className="section">
                 <div className="actions-row">
-                  <button id="btn-retry" className={`btn btn-retry${clicked === 'retry' ? ' ok' : ''}`} type="button" disabled={busy} onClick={retry}>
+                  <button id="btn-retry" className="btn btn-retry" type="button" disabled={action.locked} onClick={retry}>
                     <span className="btn-ripple" aria-hidden="true" />
                     <span className="btn-label">Retry</span>
                     <span className="btn-done" aria-hidden="true">✓</span>
                   </button>
                 </div>
+                {actionError}
               </div>
             )}
 
@@ -340,29 +322,31 @@ export function PlanPanel({ stage, attention = false, banner, statusAvailable = 
                   <p className="quota-hint">Continue tries once, right now, with a fresh session; if the limit is still active, the stage waits again.</p>
                 )}
                 <div className="actions-row">
-                  <button id="btn-continue" className={`btn btn-approve${clicked === 'continue' ? ' ok' : ''}`} type="button" disabled={busy} onClick={doContinue}>
+                  <button id="btn-continue" className="btn btn-approve" type="button" disabled={action.locked} onClick={doContinue}>
                     <span className="btn-ripple" aria-hidden="true" />
                     <span className="btn-label">Continue</span>
                     <span className="btn-done" aria-hidden="true">✓</span>
                   </button>
                 </div>
+                {actionError}
               </div>
             )}
 
             {showHookFailed && (
               <div id="hook-failed-section" className="section">
                 <div className="actions-row">
-                  <button id="btn-retry-hook" className="btn btn-retry" type="button" disabled={busy} onClick={retryHook}>
+                  <button id="btn-retry-hook" className="btn btn-retry" type="button" disabled={action.locked} onClick={retryHook}>
                     <span className="btn-ripple" aria-hidden="true" />
                     <span className="btn-label">Retry</span>
                     <span className="btn-done" aria-hidden="true">✓</span>
                   </button>
-                  <button id="btn-skip-hook" className="btn btn-revise" type="button" disabled={busy} onClick={skipHook}>
+                  <button id="btn-skip-hook" className="btn btn-revise" type="button" disabled={action.locked} onClick={skipHook}>
                     <span className="btn-ripple" aria-hidden="true" />
                     <span className="btn-label">Skip</span>
                     <span className="btn-done" aria-hidden="true">✓</span>
                   </button>
                 </div>
+                {actionError}
               </div>
             )}
           </>

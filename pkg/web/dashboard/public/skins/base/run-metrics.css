@@ -4,48 +4,37 @@
   position: relative; /* anchor for the overflow popover */
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 25px;
   min-width: 0;
 }
 
+/* A metric is a label over its value, no icon. */
 .metric {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.metric-icon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-.metric-icon svg {
-  display: block;
-}
-
-.metric-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.25;
-  min-width: 0;
+  align-items: flex-start;
+  min-width: 52px;
+  line-height: 1.4;
 }
 
 /* Смешанный регистр как в макете (Started/Elapsed/…), не капслок. */
 .metric-label {
+  margin-bottom: 4px;
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
   color: var(--text-muted);
 }
 
 .metric-value {
-  font-size: 15px;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
+.metric-value svg { flex-shrink: 0; }
+button.metric:hover .metric-value { color: var(--accent-text); }
 
 /* Est. cost / Est. */
 .metric-cost,
@@ -163,8 +152,8 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-overlay);
 }
-/* Labels always show inside the popover — it exists precisely to name the values. */
-.metrics-popover .metric-label { display: block; }
+.metrics-popover .metric { flex-direction: row; align-items: baseline; gap: 12px; }
+.metrics-popover .metric-label { margin: 0; min-width: 72px; }
 
 /* Responsive contract: collapse order keeps Started + Elapsed inline longest, folding the rest behind the
    "⋯" popover in this order: Idle + Backoff first, then Est. cost/tokens — down to the app's narrow-viewport
@@ -173,8 +162,7 @@
    bar wraps onto more lines instead (T7.6: "stay visible, wrapping not disappearing") and the now-redundant
    "⋯" button goes away again. */
 @media (max-width: 1279px) {
-  .run-metrics { gap: 16px; }
-  .run-metrics > .metric .metric-label { display: none; }
+  .run-metrics { gap: 18px; }
   .run-metrics > .metric[data-metric="idle"],
   .run-metrics > .metric[data-metric="backoff"] { display: none; }
   .metrics-more { display: inline-flex; }
@@ -185,10 +173,38 @@
 }
 @media (max-width: 900px) {
   .run-metrics { flex-wrap: wrap; justify-content: center; row-gap: 4px; }
-  .run-metrics > .metric .metric-label { display: block; }
   .run-metrics > .metric[data-metric="idle"],
   .run-metrics > .metric[data-metric="backoff"],
   .run-metrics > .metric[data-metric="tokens"],
-  .run-metrics > .metric[data-metric="cost"] { display: inline-flex; }
+  .run-metrics > .metric[data-metric="cost"] { display: flex; }
   .metrics-more { display: none; }
+}
+
+/* Phone: one row with Elapsed / Idle / Est. tokens / Est. cost; Started and Backoff stay reachable in the
+   "⋯" popover, which lists every metric. Label and value share a row to save height; tappable tiles keep a
+   44px target. */
+@media (max-width: 600px) {
+  .run-metrics {
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+  }
+  .run-metrics > .metric[data-metric="started"],
+  .run-metrics > .metric[data-metric="backoff"] { display: none; }
+  /* Centered, not baseline: the 44px tappable tiles would otherwise pin their text to the top of the box and
+     sit above Elapsed/Idle. */
+  .run-metrics > .metric { flex-direction: row; align-items: center; gap: 7px; min-width: 0; }
+  .run-metrics > .metric .metric-label { margin: 0; font-size: 10px; }
+  .run-metrics > .metric .metric-value { font-size: 11px; }
+  .metric-cost,
+  .metric-tokens { min-height: 44px; }
+  /* Borderless: the 44px target stays, without a large empty box next to the metrics. */
+  .metrics-more {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    border-color: transparent;
+  }
+  .metrics-popover { max-width: calc(100vw - 24px); }
 }

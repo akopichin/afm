@@ -484,18 +484,18 @@ describe('workspaceReducer — cost view + returnView contract', () => {
     expect(resolved.view).toBe('cost')
   })
 
-  it('openFullFeed switches to full-feed and records it as returnView', () => {
-    const s = workspaceReducer(initialWorkspaceState, { type: 'openFullFeed' })
-    expect(s.view).toBe('full-feed')
-    expect(s.returnView).toBe('full-feed')
+  it('openFeed switches to feed and records it as returnView', () => {
+    const s = workspaceReducer(initialWorkspaceState, { type: 'openFeed' })
+    expect(s.view).toBe('feed')
+    expect(s.returnView).toBe('feed')
   })
 
-  it('attention opened over full-feed returns to full-feed when the queue drains', () => {
-    let s = workspaceReducer(initialWorkspaceState, { type: 'openFullFeed' })
+  it('attention opened over feed returns to feed when the queue drains', () => {
+    let s = workspaceReducer(initialWorkspaceState, { type: 'openFeed' })
     s = sync(s, [item('s1', 'question')]) // auto-open attention
     expect(s.view).toBe('attention')
     s = sync(s, []) // drains
-    expect(s.view).toBe('full-feed')
+    expect(s.view).toBe('feed')
   })
 })
 
@@ -552,7 +552,7 @@ describe("workspaceReducer — 'assistant' view (T3.10)", () => {
     expect(s.activeStageId).toBe('b')
   })
 
-  it('returnView after attention is handled falls back to feed, exactly like other non-cost/full-feed views', () => {
+  it('returnView after attention is handled falls back to feed, exactly like other non-cost/feed views', () => {
     const assistant = workspaceReducer(initialWorkspaceState, { type: 'openAssistant' })
     const opened = sync(assistant, [item('b', 'approval')])
     expect(opened.view).toBe('attention')

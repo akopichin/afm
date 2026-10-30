@@ -22,7 +22,7 @@ type RunMetricsProps = {
   onOpenCost: (fromPopover: boolean) => void
 }
 
-type Metric = { key: string; label: string; value: string; icon: ReactElement }
+type Metric = { key: string; label: string; value: string }
 
 // hasCostMarker — единственное место, где решается «показывать amber-маркер или нет»: пробел покрытия ИЛИ
 // недоступность хранилища.
@@ -43,10 +43,10 @@ export function RunMetrics({
 }: RunMetricsProps): ReactElement {
   const hasStarted = startedAt !== ''
   const metrics: Metric[] = [
-    { key: 'started', label: 'Started', value: formatClock(startedAt), icon: iconPlay() },
-    { key: 'elapsed', label: 'Elapsed', value: hasStarted ? formatDuration(elapsedMs) : '--', icon: iconTimer() },
-    { key: 'idle', label: 'Idle', value: hasStarted ? formatDuration(idleMs) : '--', icon: iconPause() },
-    { key: 'backoff', label: 'Backoff', value: hasStarted ? formatDuration(backoffMs) : '--', icon: iconPulse() },
+    { key: 'started', label: 'Started', value: formatClock(startedAt) },
+    { key: 'elapsed', label: 'Elapsed', value: hasStarted ? formatDuration(elapsedMs) : '--' },
+    { key: 'idle', label: 'Idle', value: hasStarted ? formatDuration(idleMs) : '--' },
+    { key: 'backoff', label: 'Backoff', value: hasStarted ? formatDuration(backoffMs) : '--' },
   ]
 
   // Тайл Est. tokens показываем, как только accounting поддержан бэкендом — токены видны всегда,
@@ -109,11 +109,8 @@ export function RunMetrics({
   function renderMetric(m: Metric, withId: boolean): ReactElement {
     return (
       <div className="metric" data-metric={m.key} key={m.key}>
-        <span className="metric-icon" aria-hidden="true">{m.icon}</span>
-        <span className="metric-text">
-          <span className="metric-label">{m.label}</span>
-          <span id={withId ? (m.key === 'started' ? 'started-at' : m.key) : undefined} className="metric-value">{m.value}</span>
-        </span>
+        <span className="metric-label">{m.label}</span>
+        <span id={withId ? (m.key === 'started' ? 'started-at' : m.key) : undefined} className="metric-value">{m.value}</span>
       </div>
     )
   }
@@ -131,11 +128,8 @@ export function RunMetrics({
         data-tooltip={costMarker ? costReasonText : undefined}
       >
         {costMarker && <span className="metric-marker" aria-hidden="true" />}
-        <span className="metric-icon" aria-hidden="true">{iconCoin()}</span>
-        <span className="metric-text">
-          <span className="metric-label">Est. cost</span>
-          <span id={fromPopover ? undefined : 'cost'} className="metric-value">{costValue}</span>
-        </span>
+        <span className="metric-label">Est. cost</span>
+        <span id={fromPopover ? undefined : 'cost'} className="metric-value">{costValue}{chevron()}</span>
       </button>
     )
   }
@@ -150,11 +144,8 @@ export function RunMetrics({
         key="tokens"
         onClick={() => handleCostActivate(fromPopover)}
       >
-        <span className="metric-icon" aria-hidden="true">{iconLayers()}</span>
-        <span className="metric-text">
-          <span className="metric-label">Est. tokens</span>
-          <span id={fromPopover ? undefined : 'est-tokens'} className="metric-value">{tokensValue}</span>
-        </span>
+        <span className="metric-label">Est. tokens</span>
+        <span id={fromPopover ? undefined : 'est-tokens'} className="metric-value">{tokensValue}{chevron()}</span>
       </button>
     )
   }
@@ -211,31 +202,11 @@ function pad(value: number): string {
   return value < 10 ? `0${value}` : String(value)
 }
 
-// Иконки — инлайновый SVG на currentColor (наследует --text-secondary/--accent),
-// stroke-based, 16×16, чтобы совпадать с остальным набором в шапке.
-function svg(children: ReactElement): ReactElement {
+// Шеврон справа от значения — подсказка, что плитка открывает вкладку Cost.
+function chevron(): ReactElement {
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      {children}
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m9 5 7 7-7 7" />
     </svg>
   )
-}
-function iconPlay(): ReactElement {
-  return svg(<><circle cx="12" cy="12" r="9" /><path d="M10 8.5 L16 12 L10 15.5 Z" fill="currentColor" stroke="none" /></>)
-}
-function iconTimer(): ReactElement {
-  return svg(<><circle cx="12" cy="13" r="8" /><path d="M12 13 V8.5" /><path d="M9 2.5 h6" /></>)
-}
-function iconPause(): ReactElement {
-  return svg(<><circle cx="12" cy="12" r="9" /><path d="M10 9 V15 M14 9 V15" /></>)
-}
-function iconPulse(): ReactElement {
-  return svg(<path d="M3 12 h4 l2 -5 l3 10 l2 -5 h7" />)
-}
-function iconCoin(): ReactElement {
-  return svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7 V17 M9.5 9.3 a2.5 1.6 0 0 1 5 0 c0 2 -5 1.4 -5 3.4 a2.5 1.6 0 0 0 5 0" /></>)
-}
-// Стопка слоёв — глиф для Est. tokens, визуально отличается от монеты.
-function iconLayers(): ReactElement {
-  return svg(<><path d="M12 3 L21 8 L12 13 L3 8 Z" /><path d="M3 12 L12 17 L21 12" /><path d="M3 16 L12 21 L21 16" /></>)
 }

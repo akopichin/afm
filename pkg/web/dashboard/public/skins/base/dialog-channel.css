@@ -6,7 +6,8 @@
   border: 1px solid rgba(183, 135, 255, 0.3);
   padding: 14px;
   background:
-    radial-gradient(circle at top right, rgba(183, 135, 255, 0.08), transparent 60%);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--violet) 8%, transparent), transparent 60%);
+  --text-muted: var(--text-secondary);
 }
 #dialog-section::before,
 #dialog-section::after {
@@ -40,7 +41,7 @@
 }
 .dialog-history .qa .q::before {
   content: "Q \00b7 ";
-  color: var(--mint);
+  color: var(--success-text);
   font-weight: 600;
   letter-spacing: 0.2em;
 }
@@ -52,7 +53,7 @@
 }
 .dialog-history .qa .a::before {
   content: "A \00b7 ";
-  color: var(--amber);
+  color: var(--attention-text);
   font-weight: 600;
   letter-spacing: 0.2em;
   margin-right: 2px;
@@ -74,7 +75,7 @@
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.22em;
-  color: var(--ink-dim);
+  color: var(--text-muted);
   border-bottom: 1px dashed rgba(111, 212, 204, 0.12);
   padding-bottom: 4px;
   margin: 8px 0;
@@ -86,9 +87,10 @@
   border: 1px solid var(--violet);
   padding: 14px 16px;
   margin-bottom: 12px;
-  background: linear-gradient(180deg, rgba(183, 135, 255, 0.10), rgba(183, 135, 255, 0.02));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--violet) 10%, transparent), color-mix(in srgb, var(--violet) 2%, transparent));
   overflow: hidden;
   animation: pendingBreathe 3.4s ease-in-out infinite;
+  --text-muted: var(--text-secondary);
 }
 
 @keyframes pendingBreathe {
@@ -159,9 +161,15 @@
   transition: all 0.15s;
   animation: dialogOptionAppear 240ms ease-out backwards;
 }
+/* Once an option is picked the others stay clickable, so they stay readable: a quieter colour and border, never a
+   fade. Declared before :hover and .selected (equal specificity) so those still win. */
+.dialog-pending .dialog-options.dimmed button {
+  color: var(--text-muted);
+  border-color: var(--separator-subtle);
+}
 .dialog-pending .dialog-options button::before {
   content: counter(opt, upper-alpha) " ";
-  color: var(--amber);
+  color: var(--attention-text);
   margin-right: 6px;
   font-weight: 700;
 }
@@ -171,13 +179,11 @@
   box-shadow: 0 0 8px rgba(183, 135, 255, 0.45);
 }
 .dialog-pending .dialog-options button.selected {
-  background: rgba(183, 135, 255, 0.18);
+  background: color-mix(in srgb, var(--violet) 18%, transparent);
   border-color: var(--violet);
   color: var(--ink-hi);
   box-shadow: 0 0 12px rgba(183, 135, 255, 0.5);
-}
-.dialog-pending .dialog-options.dimmed button:not(.selected) {
-  opacity: 0.4;
+  --text-muted: var(--text-secondary);
 }
 
 @keyframes dialogOptionAppear {
@@ -185,29 +191,33 @@
   to   { transform: translateY(0); opacity: 1; }
 }
 
-/* === Custom textarea === */
+/* === Custom textarea === The answer field is in the Feed composer's family: raised surface, rounded corners,
+   control border, plain placeholder and the shared focus ring. */
 .dialog-pending .dialog-custom {
   width: 100%;
-  min-height: 60px;
+  min-height: 64px;
   overflow-y: auto;
-  background: var(--panel-bg);
-  border: 1px solid rgba(111, 212, 204, 0.2);
-  color: var(--ink);
-  padding: 8px 10px;
-  font-family: inherit;
-  font-size: 11px;
+  background: var(--surface-raised);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.6;
   resize: vertical;
 }
 .dialog-pending .dialog-custom::placeholder {
-  color: var(--ink-dim);
-  letter-spacing: 0.05em;
+  color: var(--text-placeholder);
+  opacity: 1;
 }
 .dialog-pending .dialog-custom:focus {
-  outline: 1px solid var(--violet);
-  border-color: var(--violet);
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 .dialog-pending .dialog-custom:disabled {
-  opacity: 0.4;
+  color: var(--text-disabled);
   cursor: not-allowed;
 }
 
@@ -221,7 +231,7 @@
 .dialog-pending .btn-cancel-dialog {
   background: transparent;
   border: 1px solid rgba(var(--danger-rgb), 0.5);
-  color: var(--danger);
+  color: var(--danger-text);
   padding: 10px 20px;
   font-family: var(--font-ui);
   font-size: 13px;
@@ -238,31 +248,11 @@
   box-shadow: none;
 }
 
-/* === "Agent is waiting" indicator === */
-.typing-indicator {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 9px;
-  letter-spacing: 0.25em;
-  color: var(--violet);
-  text-transform: uppercase;
-}
-.typing-indicator .blink {
-  display: inline-block;
-  width: 6px;
-  height: 11px;
-  background: var(--violet);
-  animation: caret 1s steps(1) infinite;
-}
-@keyframes caret { 50% { opacity: 0; } }
-
 /* === Toggle button === */
 .dialog-toggle {
   background: transparent;
   border: none;
-  color: var(--ink-dim);
+  color: var(--text-muted);
   font-family: inherit;
   font-size: 10px;
   letter-spacing: 0.2em;
@@ -271,7 +261,7 @@
   padding: 4px 0;
   margin-top: 4px;
 }
-.dialog-toggle:hover { color: var(--mint); }
+.dialog-toggle:hover { color: var(--success-text); }
 
 /* Override dialog-pending hidden */
 .dialog-pending.hidden { display: none !important; }
@@ -296,11 +286,13 @@
   min-height: 0;
   overflow-y: auto;
   width: 100%;
-  /* На всю ширину воркспейса (симметрично плану) — без центрирующей меры. */
-  max-width: none;
-  margin-inline: 0;
-  padding: 8px clamp(16px, 3vw, 40px) 0;
+  padding: 8px 0 0;
 }
+/* Banner, history and the question take the full width inside the same side gutter as the plan. */
+.workspace-body #dialog-scroll > :is(.attention-banner, .dialog-history, .stale-comments, .dialog-pending) {
+  margin-inline: var(--doc-gutter);
+}
+.workspace-body #dialog-scroll > .attention-banner { margin-bottom: 18px; }
 /* Not an overflow container in document mode, so the sticky answer bar sticks
    to #dialog-scroll (its scrolling ancestor) rather than to this box. */
 .workspace-body .dialog-pending {
@@ -312,7 +304,7 @@
 .workspace-body .dialog-question .md {
   font-family: var(--font-ui);
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 24px; /* matches --row-h of the line-commented rows, so the number plates sit on the text */
   color: var(--text-primary);
 }
 .workspace-body .dialog-question .md code,
@@ -368,6 +360,7 @@
   border-color: var(--accent-primary);
   background: rgba(var(--accent-primary-rgb), 0.10);
   box-shadow: none;
+  --text-muted: var(--text-secondary);
 }
 /* Радиокнопка слева. */
 .dialog-option-radio {
@@ -392,31 +385,33 @@
 .dialog-option-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .dialog-option-title { font-size: 14.5px; font-weight: 600; color: var(--text-primary); }
 .dialog-option-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
-/* Кастомный ответ — тоже UI-шрифт. */
-.workspace-body .dialog-pending .dialog-custom {
-  font-family: var(--font-ui);
-  font-size: 14px;
-}
-
-/* Custom answer textarea → full width, roomier auto-growing look. */
-.workspace-body .dialog-pending .dialog-custom {
-  width: 100%;
-  min-height: 64px;
-  background: var(--surface-canvas);
-}
-
-/* Answer actions → sticky bottom bar within the scroll. */
+/* Answer actions → sticky bottom bar within the scroll: the hint on the left, the buttons on the right; on a
+   narrow screen the hint takes its own line above the buttons. */
 .workspace-body .dialog-pending .dialog-actions {
   position: sticky;
   bottom: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px 12px;
   margin-top: 12px;
-  padding: 12px clamp(16px, 4vw, 48px);
-  background: var(--surface-raised);
+  padding: 14px 0;
+  background: var(--surface-canvas);
   border-top: 1px solid var(--separator-subtle);
 }
+.workspace-body .dialog-actions .dialog-hint {
+  flex: 1 1 240px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
 
-/* History-collapse toggle stays legible and doesn't get flex-stretched. */
+/* History-collapse toggle: a quiet sentence-case line below the answer, not flex-stretched. */
 .workspace-body .dialog-toggle {
   flex: none;
   align-self: center;
+  padding: 10px 0;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-muted);
 }

@@ -61,6 +61,37 @@ describe('BoardTaskDetails', () => {
     expect(within(dialog).queryByRole('list', { name: 'Artifacts' })).not.toBeInTheDocument()
   })
 
+  test('legacy reports expose their own artifact references as escaped text', () => {
+    const reported = task([base, {
+      ...entry('run:t-1', 'task/csv-export/qa', 'done: checked', 2),
+      artifact_refs: ['reports/qa.md', '<img src=x onerror=alert(1)>'],
+    }])
+    render(<BoardTaskDetails task={reported} participants={participants} onClose={() => {}} />)
+    const reports = screen.getByRole('list', { name: 'Reports' })
+    const artifacts = within(reports).getByRole('list', { name: 'QA report artifacts' })
+    expect(artifacts).toHaveTextContent('reports/qa.md')
+    expect(artifacts).toHaveTextContent('<img src=x onerror=alert(1)>')
+    expect(artifacts.querySelector('img')).toBeNull()
+  })
+
+  test('the keyboard can focus the scrolling information while Close remains outside it', () => {
+    const onClose = vi.fn()
+    render(<BoardTaskDetails task={twoClaimants} participants={participants} onClose={onClose} />)
+    const info = screen.getByRole('region', { name: 'Task information' })
+    const close = screen.getByRole('button', { name: 'Close task details' })
+    expect(info).toHaveAttribute('tabindex', '0')
+    expect(info).not.toContainElement(close)
+    expect(close).not.toHaveClass('btn-cancel')
+    expect(info).toContainElement(screen.getByRole('list', { name: 'Reports' }))
+    info.focus()
+    fireEvent.keyDown(info, { key: 'Tab' })
+    expect(close).toHaveFocus()
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+    expect(info).toHaveFocus()
+    fireEvent.keyDown(info, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   test('shows status, key, text, author, every claimant and each agent\'s current report', () => {
     render(<BoardTaskDetails task={twoClaimants} participants={participants} onClose={() => {}} />)
     const dialog = screen.getByRole('dialog', { name: 'Task details' })
@@ -72,7 +103,7 @@ describe('BoardTaskDetails', () => {
 
     const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
     expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('Done')
-    expect(within(assignees).getByText('QA').closest('li')).toHaveTextContent('In progress')
+    expect(within(assignees).getByText('QA', { selector: '.board-task-details-assignee-name' }).closest('li')).toHaveTextContent('In progress')
 
     const reports = within(dialog).getByRole('list', { name: 'Reports' })
     expect(within(reports).getByText('done: endpoint added')).toBeInTheDocument()
@@ -156,7 +187,7 @@ describe('BoardTaskDetails', () => {
       expect(within(dialog).getByText('v4')).toBeInTheDocument()
       const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
       expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('In progress')
-      expect(within(assignees).getByText('QA').closest('li')).toHaveTextContent('Assigned')
+      expect(within(assignees).getByText('QA', { selector: '.board-task-details-assignee-name' }).closest('li')).toHaveTextContent('Assigned')
       expect(within(assignees).getByText('gone').closest('li')).toHaveTextContent('Done')
     })
 
@@ -273,7 +304,7 @@ describe('BoardTaskDetails', () => {
       )
       const { dialog } = renderTyped(ended)
       const history = within(dialog).getByRole('list', { name: 'History' })
-      expect(within(history).getByText('QA').closest('li')).toHaveTextContent('half the columns')
+      expect(within(history).getByText('QA', { selector: '.board-task-details-assignee-name' }).closest('li')).toHaveTextContent('half the columns')
       expect(within(history).getByText('API').closest('li')).toHaveTextContent('parser drafted')
     })
 

@@ -25,6 +25,30 @@ function renderMessage(props: Partial<Parameters<typeof ConversationMessage>[0]>
 describe('ConversationMessage', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  test('feed cards put role, handles and the quote inside the card, with reply and delivery below', () => {
+    const onReply = vi.fn()
+    renderMessage({ message: { ...answer, recipient_ids: ['stage:impl'] }, participants: [...participants,
+      { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', alias: 'impl', display_name: 'Executor', reachable: true },
+    ], presentation: 'feed', delivery: 'Delivered', onReply })
+    const card = document.querySelector('.feed-message-card')
+    expect(card).toContainElement(screen.getByText('Run agent'))
+    expect(card).toContainElement(screen.getByText('→ @impl'))
+    expect(card).toContainElement(screen.getByText('Replying to You'))
+    expect(card).not.toContainElement(screen.getByText('Delivered'))
+    expect(card).not.toContainElement(screen.getByRole('button', { name: '↩ Reply in conversation' }))
+    fireEvent.click(screen.getByRole('button', { name: '↩ Reply in conversation' }))
+    expect(onReply).toHaveBeenCalledOnce()
+  })
+
+  test('feed cards only mark a request as waiting when the caller confirms it is unanswered', () => {
+    const { rerender } = renderMessage({ presentation: 'feed', waitingForYou: true })
+    expect(document.querySelector('.feed-message')).toHaveClass('is-waiting-for-you')
+    expect(screen.getByText('Waiting for you')).toBeInTheDocument()
+    rerender(<ul><ConversationMessage message={answer} participants={participants} presentation="feed" /></ul>)
+    expect(screen.queryByText('Waiting for you')).toBeNull()
+    expect(screen.queryByText('Delivered')).toBeNull()
+  })
+
   test('shows the author, the command it runs, the recipients and the quoted message', () => {
     renderMessage()
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()

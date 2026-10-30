@@ -11,6 +11,8 @@ export type UseMentionMenuOptions<T> = {
   replaceRange: (start: number, end: number, text: string) => void
   // onPicked — called after an item was inserted, e.g. to remember the chosen recipient.
   onPicked?: (item: T) => void
+  isUnavailable?: (item: T) => boolean
+  showEmpty?: boolean
 }
 
 export type UseMentionMenuResult<T> = {
@@ -45,15 +47,21 @@ export function mentionOptionId(listboxId: string, index: number): string {
 
 // useMentionMenu — the one `@`-mention state machine for every composer (feed, Team conversation, side
 // agent): detects the trigger at the caret, tracks the highlighted match and inserts the picked item.
-export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked }: UseMentionMenuOptions<T>): UseMentionMenuResult<T> {
+export function useMentionMenu<T>({
+  matchesFor, textFor, replaceRange, onPicked,
+  isUnavailable = (item) => typeof item === 'object' && item !== null && 'unavailable' in item && item.unavailable === true,
+  showEmpty = false,
+}: UseMentionMenuOptions<T>): UseMentionMenuResult<T> {
   const [mention, setMention] = useState<MentionTrigger | null>(null)
   const [highlightIndex, setHighlightIndex] = useState(0)
   const matches = mention !== null ? matchesFor(mention.query) : []
-  const open = matches.length > 0
+  const open = mention !== null && (showEmpty || matches.length > 0)
+  const availableIndices = matches.flatMap((item, index) => isUnavailable(item) ? [] : [index])
+  const activeIndex = availableIndices.includes(highlightIndex) ? highlightIndex : (availableIndices[0] ?? -1)
   const listboxId = useId()
 
   function pick(item: T): void {
-    if (mention === null) return
+    if (mention === null || isUnavailable(item)) return
     const text = textFor(item)
     replaceRange(mention.start, mention.start + 1 + mention.query.length, text === null ? '' : `@${text} `)
     setMention(null)
@@ -70,12 +78,20 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        setHighlightIndex((highlightIndex + 1) % matches.length)
+        setHighlightIndex(availableIndices[(availableIndices.indexOf(activeIndex) + 1) % availableIndices.length] ?? -1)
         return true
       case 'ArrowUp':
         e.preventDefault()
-        setHighlightIndex((highlightIndex - 1 + matches.length) % matches.length)
+        setHighlightIndex(availableIndices[(availableIndices.indexOf(activeIndex) - 1 + availableIndices.length) % availableIndices.length] ?? -1)
         return true
+      case 'Tab': {
+        if (e.shiftKey || activeIndex < 0 || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return false
+        e.preventDefault()
+        e.stopPropagation()
+        const item = matches[activeIndex]
+        if (item !== undefined) pick(item)
+        return true
+      }
       case 'Enter': {
         if (e.shiftKey || e.altKey || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return false
         if (e.repeat) {
@@ -83,7 +99,7 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
           return true
         }
         e.preventDefault()
-        const item = matches[highlightIndex]
+        const item = matches[activeIndex]
         if (item !== undefined) pick(item)
         return true
       }
@@ -103,7 +119,7 @@ export function useMentionMenu<T>({ matchesFor, textFor, replaceRange, onPicked 
     'aria-autocomplete': 'list' as const,
     'aria-expanded': open,
     'aria-controls': open ? listboxId : undefined,
-    'aria-activedescendant': open ? mentionOptionId(listboxId, highlightIndex) : undefined,
+    'aria-activedescendant': open && activeIndex >= 0 ? mentionOptionId(listboxId, activeIndex) : undefined,
   }
-  return { query: mention?.query ?? null, matches, open, highlightIndex, setHighlightIndex, onInput, onKeyDown, pick, listboxId, inputAria }
+  return { query: mention?.query ?? null, matches, open, highlightIndex: activeIndex, setHighlightIndex, onInput, onKeyDown, pick, listboxId, inputAria }
 }

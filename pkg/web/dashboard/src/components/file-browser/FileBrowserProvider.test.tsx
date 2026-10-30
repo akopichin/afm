@@ -66,7 +66,7 @@ async function openBrowseFile(name: string): Promise<void> {
 async function commentOnLine(line: number, text: string): Promise<void> {
   fireEvent.click(await screen.findByRole('button', { name: `Comment on line ${line}` }))
   fireEvent.change(screen.getByPlaceholderText(`Comment on line ${line}...`), { target: { value: text } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 }
 
 async function openFiles(): Promise<void> {

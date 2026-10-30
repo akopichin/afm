@@ -25,6 +25,10 @@ describe('SideAgentHistory', () => {
     expect(groups).toHaveLength(2)
     expect(groups[0]).toHaveClass('feed-right')
     expect(groups[1]).toHaveClass('feed-left')
+    expect(groups[0]?.querySelector('.feed-history-card')).toHaveTextContent('what is 2+2?')
+    expect(groups[1]?.querySelector('.feed-actor')).toHaveTextContent('Assistant')
+    expect(groups[1]?.querySelector('.mesh-avatar')).toHaveTextContent('AS')
+    expect(groups[1]?.querySelector('.feed-group-head time')).not.toBeNull()
     // agent markdown rendered as a heading, not raw text
     expect(container.querySelector('h2')?.textContent).toContain('It is 4')
   })

@@ -410,6 +410,10 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
         )}
 
         <div className="dialog-actions">
+          <span className="dialog-hint">The agent is waiting for your answer.</span>
+          <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
+            CANCEL STAGE
+          </button>
           {doc.commentCount === 0 ? (
             <button
               className={`btn btn-send${clickedSend ? ' ok' : ''}`}
@@ -418,7 +422,7 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               onClick={sendAnswer}
             >
               <span className="btn-ripple" aria-hidden="true" />
-              <span className="btn-label">▸ SEND</span>
+              <span className="btn-label">Send answer →</span>
               <span className="btn-done" aria-hidden="true">✓ Sent</span>
             </button>
           ) : (
@@ -433,12 +437,6 @@ export function DialogChannel({ stage, attention = false, banner, scrollTarget =
               <span className="btn-done" aria-hidden="true">✓ Sent</span>
             </button>
           )}
-          <button className="btn btn-cancel-dialog" type="button" onClick={cancel}>
-            CANCEL STAGE
-          </button>
-          <span className="typing-indicator">
-            AGENT IS WAITING <span className="blink" />
-          </span>
         </div>
         {submitError !== null && (
           <div className="dialog-error" role="alert">

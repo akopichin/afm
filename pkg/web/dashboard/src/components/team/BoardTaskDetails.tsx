@@ -6,6 +6,7 @@ import { useModalDialog } from '../../lib/focus-trap'
 import { boardNotifyCandidates, participantLabel, senderLabel } from '../../lib/mesh-roster'
 import { ASSIGNEE_STATE_LABEL, BoardTaskStatusBadge, findTaskCard, isTypedTask } from './BoardTaskCard'
 import type { RunTeamListStage } from './RunTeamList'
+import { MeshAvatar } from './MeshAvatar'
 
 // TASK_CHANGED — what the operator sees when someone changed the task after the dialog last showed it.
 const TASK_CHANGED = 'Task changed, reloaded'
@@ -23,9 +24,7 @@ export type BoardTaskDetailsProps = {
   active?: boolean
 }
 
-// BoardTaskDetails — the dialog behind a task card, the same in Team and the Board tab: status, who works on the
-// task, its text and author. A legacy task is read-only (agents own its status through their reports); a typed
-// task lets the operator assign, release and reopen it.
+// Team and Board share these details; only typed tasks expose assignment actions.
 export function BoardTaskDetails({ task, participants, stages = [], onChanged = () => {}, onClose, active = true }: BoardTaskDetailsProps): ReactElement {
   const modalRef = useRef<HTMLDivElement | null>(null)
   const typed = isTypedTask(task)
@@ -37,24 +36,26 @@ export function BoardTaskDetails({ task, participants, stages = [], onChanged = 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Task details">
       <div className="modal-content board-task-details" data-status={task.status} ref={modalRef}>
-        <div className="board-task-details-top">
-          <BoardTaskStatusBadge status={task.status} />
-          <span className="board-task-key">{task.key}</span>
-          <button type="button" className="btn btn-cancel board-task-details-close" aria-label="Close task details" onClick={onClose}>
+        <header className="board-task-details-top">
+          <h2 className="board-task-details-title">{title}</h2>
+          <button type="button" className="btn btn-quiet board-task-details-close" aria-label="Close task details" onClick={onClose}>
             ×
           </button>
+        </header>
+        <div className="board-task-details-body" role="region" aria-label="Task information" tabIndex={0}>
+          <div className="board-task-details-meta">
+            <BoardTaskStatusBadge status={task.status} />
+            <span className="board-task-key">{task.key}</span>
+            <span className="team-board-entry-version">v{task.version}</span>
+            <p className="board-task-details-author">Posted by <span>{senderLabel(task.author, participants)}</span></p>
+          </div>
+          {description !== '' && <p className="board-task-details-description">{description}</p>}
+          {typed ? (
+            <TypedTaskBody task={task} participants={participants} stages={stages} onChanged={onChanged} />
+          ) : (
+            <LegacyTaskBody task={task} participants={participants} />
+          )}
         </div>
-        <h2 className="board-task-details-title">{title}</h2>
-        {description !== '' && <p className="board-task-details-description">{description}</p>}
-        <p className="board-task-details-author">
-          Posted by <span>{senderLabel(task.author, participants)}</span>{' '}
-          <span className="team-board-entry-version">v{task.version}</span>
-        </p>
-        {typed ? (
-          <TypedTaskBody task={task} participants={participants} stages={stages} onChanged={onChanged} />
-        ) : (
-          <LegacyTaskBody task={task} participants={participants} />
-        )}
       </div>
     </div>
   )
@@ -75,6 +76,7 @@ function LegacyTaskBody({ task, participants }: BodyProps): ReactElement {
         <ul className="board-task-details-assignees" aria-label="Assignees">
           {task.assignees.map((a) => (
             <li key={a.id}>
+              <MeshAvatar name={senderLabel(a.id, participants)} kind={participants.find((p) => p.id === a.id)?.kind ?? ''} />
               <span className="board-task-details-assignee-name">{senderLabel(a.id, participants)}</span>
               <span className="board-task-details-assignee-state">{ASSIGNEE_STATE_LABEL[a.state]}</span>
             </li>
@@ -91,6 +93,7 @@ function LegacyTaskBody({ task, participants }: BodyProps): ReactElement {
             <li key={r.entry.key} className="team-board-report">
               <span className="team-board-report-author">{senderLabel(r.entry.author_id, participants)}</span>
               <span className="team-board-report-status">{r.entry.status}</span>
+              <ArtifactRefs refs={r.entry.artifact_refs} label={`${senderLabel(r.entry.author_id, participants)} report artifacts`} />
             </li>
           ))}
         </ul>
@@ -208,6 +211,7 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
             const text = assignmentText(a)
             return (
               <li key={a.id}>
+                <MeshAvatar name={name} kind={participants.find((p) => p.id === a.participant_id)?.kind ?? ''} />
                 <div className="board-task-details-assignee-name">
                   {name}
                   {text !== undefined && <span className="board-task-details-assignee-text">{text}</span>}
@@ -242,6 +246,7 @@ function TypedTaskBody({ task, participants, stages, onChanged }: BodyProps & { 
               const text = assignmentText(a)
               return (
                 <li key={a.id}>
+                  <MeshAvatar name={name} kind={participants.find((p) => p.id === a.participant_id)?.kind ?? ''} />
                   <div className="board-task-details-assignee-name">
                     {name}
                     {text !== undefined && <span className="board-task-details-assignee-text">{text}</span>}

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
-import { AssistantMentionMenu } from './AssistantMentionMenu'
+import { AssistantMentionMenu, MentionMenu } from './AssistantMentionMenu'
+import { buildMeshMentionGroups } from '../feed-workspace/mesh-recipients'
 import type { AssistantProfile } from '../../types/assistant-profile'
 
 const PROFILES: AssistantProfile[] = [
@@ -9,6 +10,38 @@ const PROFILES: AssistantProfile[] = [
 ]
 
 describe('AssistantMentionMenu', () => {
+  it('shows participant initials, role, scope and finished history beside its handle', () => {
+    const groups = buildMeshMentionGroups([
+      { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
+      { id: 'helper:old', kind: 'helper', scope: 'stage', stage_id: 'impl', alias: 'old', display_name: 'Old helper', reachable: false, activity: 'done' },
+    ], [], 'impl')
+    render(<MentionMenu groups={groups} highlightIndex={0} onHover={vi.fn()} onSelect={vi.fn()} ariaLabel="Mention a participant" />)
+    expect(screen.getByText('Mention a participant · ↑ ↓ to choose · Enter to add')).toBeInTheDocument()
+    expect(screen.getByText('Run agent · Whole run')).toBeInTheDocument()
+    expect(screen.getByText('Helper · Finished · history only')).toBeInTheDocument()
+    expect(screen.getByText('@qa').closest('button')?.querySelector('.mesh-avatar')).toHaveTextContent('QA')
+    expect(screen.getByText('@old').closest('[role="option"]')).toHaveClass('is-unavailable')
+    expect(screen.getByText('@old').closest('button')).toBeDisabled()
+  })
+
+  it('anchors above the composer and stays inside the viewport after resize', () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 600, left: 300, width: 500, height: this.matches('[role="listbox"]') ? 200 : 100 } as DOMRect
+    })
+    render(<div className="chat-composer-row"><AssistantMentionMenu profiles={PROFILES} highlightIndex={0} onHover={vi.fn()} onSelect={vi.fn()} /></div>)
+    const menu = screen.getByRole('listbox')
+    expect(menu.style.top).toBe('391px')
+    expect(menu.style.left).toBe('300px')
+    expect(menu.style.width).toBe('360px')
+    const oldWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { value: 320, configurable: true })
+    fireEvent(window, new Event('resize'))
+    expect(menu.style.width).toBe('296px')
+    expect(menu.style.left).toBe('12px')
+    Object.defineProperty(window, 'innerWidth', { value: oldWidth, configurable: true })
+    bounds.mockRestore()
+  })
+
   it('renders nothing for an empty profile list', () => {
     const { container } = render(
       <AssistantMentionMenu profiles={[]} highlightIndex={0} onHover={vi.fn()} onSelect={vi.fn()} />,

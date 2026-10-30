@@ -12,11 +12,13 @@ import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
 import { FeedWorkspace, meshDeliveries, type ComposerDraft, type MeshPick } from '../components/feed-workspace'
+import { emptyComposerDraft } from '../components/feed-workspace/FeedComposer'
 import { sideAgentFailures } from '../components/feed-workspace/mesh-receipt'
 import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
+import { createStageActions, sendStageAction, StageActionsContext } from '../hooks/use-stage-retry'
 import { CommentProvider } from '../components/comments/CommentProvider'
 import { CommentRecipientsContext } from '../components/comments/comment-recipients'
 import { FileBrowserProvider } from '../components/file-browser'
@@ -89,6 +91,8 @@ export function App(): ReactElement {
     runOverheadCost, coverageIssues, accounting, statusAvailable, refresh, runStatus,
     timeZone, utcOffsetMinutes,
   } = useStatus()
+  const runEpoch = useRunEpoch(runId)
+  const stageActions = useMemo(createStageActions, [runEpoch])
 
   // Модалка ревью-раунда — открывается по клику ReviewBanner's "Send notes".
   const [reviewModalOpen, setReviewModalOpen] = useState(false)
@@ -112,13 +116,12 @@ export function App(): ReactElement {
 
   // «Pause on focus» — при включённом toggle фокус поля заметки ставит running- стадию на паузу, а
   // отправка сперва снимает паузу, затем доставляет заметку.
-  const pauseOnFocus = usePauseOnFocus({ pauseStage, continueStage, reviseStage })
+  const pauseOnFocus = usePauseOnFocus({ pauseStage, continueStage, reviseStage, runEpoch })
 
   function handlePause(stageId: string): void {
-    // onPause вызывается без await из onClick; catch нужен для ошибок сети и сменившегося статуса стадии.
-    pauseStage(stageId).catch((err: unknown) => {
-      console.error('Failed to pause stage:', err)
-    })
+    const stage = stages.find((candidate) => candidate.id === stageId)
+    if (stage === undefined || pauseOnFocus.hasActiveOp(stageId)) return
+    void sendStageAction(stageActions, stage, pauseStage)
   }
 
   function handleButton(stageId: string, name: string): void {
@@ -171,7 +174,7 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openFullFeed, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs, dialogOpenNow)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs, dialogOpenNow)
 
   // meshRoster (Agent Mesh, T7.3) — the ONE useMeshRoster poll for the whole dashboard; there is no
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
@@ -204,6 +207,8 @@ export function App(): ReactElement {
   // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
   // composer (seq makes a second click on the same person a new pick).
   const [peopleOpen, setPeopleOpen] = useState(false)
+  const [feedReplies, setFeedReplies] = useState<{ stageId: string | null; count: number }>({ stageId: null, count: 0 })
+  const reportFeedReplies = useCallback((stageId: string | null, count: number) => setFeedReplies({ stageId, count }), [])
   const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
   const closePeople = useCallback(() => setPeopleOpen(false), [])
   // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
@@ -314,8 +319,18 @@ export function App(): ReactElement {
   const workspaceStageId = wsState.view === 'attention' && attnItem !== null ? attnItem.stageId : selectedStageId
   const workspaceStage = stages.find((stage) => stage.id === workspaceStageId) ?? null
 
-  // stageEvents — лента вкладки Feed: только события ТЕКУЩЕЙ стадии воркспейса, а не весь событийный поток
-  // флоу. Full feed (глобальный вид) продолжает читать сырые `events` напрямую.
+  // Keep Hold's resume route until polling leaves the paused episode, even after its request settles.
+  const heldPauseEpisodes = useMemo(() => new Map<string, string>(), [runId])
+  for (const stage of stages) {
+    if (stage.status !== 'paused') heldPauseEpisodes.delete(stage.id)
+    else if (pauseOnFocus.hasActiveOp(stage.id)) heldPauseEpisodes.set(stage.id, stage.updatedAt)
+  }
+  const heldWorkspacePause = workspaceStage !== null && (pauseOnFocus.hasActiveOp(workspaceStage.id) ||
+    (workspaceStage.status === 'paused' && heldPauseEpisodes.get(workspaceStage.id) === workspaceStage.updatedAt))
+
+  const heldContinue = heldWorkspacePause && workspaceStage !== null ? () => pauseOnFocus.resumeNow(workspaceStage.id) : undefined
+
+  // Feed follows the selected stage, using its replayed events as well as live updates.
   const stageEvents = useStageEvents(workspaceStage?.id ?? null, events, runId)
 
   // Клик по стадии в рейле: выбираем её и открываем подходящий вид — attention, если стадия ждёт действия;
@@ -332,7 +347,7 @@ export function App(): ReactElement {
       return
     }
     // Нет ожидающего действия.
-    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team' || wsState.view === 'board') return
+    if (wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'team' || wsState.view === 'board') return
     if (stage?.status === 'done' || stage?.status === 'pending') openFeed()
     else if (stage?.showDialog === true) openHistory('dialog-history')
     else if (stage?.showPlan === true) openHistory('plan-history')
@@ -405,9 +420,22 @@ export function App(): ReactElement {
   // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
   // composerDrafts — every stage's Feed composer draft for this page session (FeedWorkspace's composerDrafts).
   // A new run starts without them: the same stage ID in the next run is another conversation.
-  const runEpoch = useRunEpoch(runId)
-  const [composerDrafts, setComposerDrafts] = useState({ runEpoch, drafts: new Map<string, ComposerDraft>() })
-  if (composerDrafts.runEpoch !== runEpoch) setComposerDrafts({ runEpoch, drafts: new Map() })
+  const composerDrafts = useRef({ runEpoch, drafts: new Map<string, ComposerDraft>() })
+  const [, refreshComposerDrafts] = useState(0)
+  if (composerDrafts.current.runEpoch !== runEpoch) composerDrafts.current = { runEpoch, drafts: new Map() }
+  const draftPreviews = useMemo(() => new Set<string>(), [runEpoch])
+  useEffect(() => () => { draftPreviews.forEach((url) => URL.revokeObjectURL(url)) }, [draftPreviews])
+  const updateComposerDraft = useCallback((stageId: string, patch: Partial<ComposerDraft>) => {
+    for (const attachments of [patch.reviseAttachments, patch.messageAttachments, patch.replyAttachments]) {
+      attachments?.forEach((attachment) => draftPreviews.add(attachment.previewUrl))
+    }
+    if (composerDrafts.current.runEpoch !== runEpoch) return
+    const previous = composerDrafts.current.drafts.get(stageId) ?? emptyComposerDraft()
+    if (Object.entries(patch).every(([key, value]) => previous[key as keyof ComposerDraft] === value)) return
+    composerDrafts.current = { runEpoch, drafts: new Map(composerDrafts.current.drafts).set(stageId, { ...previous, ...patch }) }
+    // Text is rendered locally; saving it must not repaint the feed on every keystroke.
+    if (Object.keys(patch).some((key) => !['revise', 'message', 'replyMessage'].includes(key))) refreshComposerDrafts((n) => n + 1)
+  }, [runEpoch, draftPreviews])
   const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   const meshSideFailures = useMemo(() => (stageMesh ? sideAgentFailures(events) : NO_DELIVERIES), [stageMesh, events])
   // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
@@ -479,7 +507,7 @@ export function App(): ReactElement {
     : null
 
   // Вкладки: Feed + контекстная detail-вкладка + отдельный маяк ожидания.
-  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'full-feed' || wsState.view === 'team' || wsState.view === 'board'
+  const isGlobalView = wsState.view === 'feed' || wsState.view === 'cost' || wsState.view === 'team' || wsState.view === 'board'
   // В глобальном виде detail-таб выбранной стадии дублирует glow-маяк, если оба ведут в ОДНО и то же
   // ожидание — т.е. у стадии есть своё ожидание и маяк указывает на неё же.
   const duplicatesBeacon =
@@ -533,14 +561,10 @@ export function App(): ReactElement {
   if (accounting.supported) {
     tabs.push({ id: 'cost', label: 'Cost' })
   }
-  // Full feed — постоянная ГЛОБАЛЬНАЯ вкладка, читает весь событийный поток флоу. Всегда ПОСЛЕДНЯЯ в
-  // списке — правее Cost, а не второй сразу после Feed (тот же порядок, что и у Cost выше).
-  tabs.push({ id: 'full-feed', label: 'Full feed' })
-  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'full-feed' ? 'full-feed' : wsState.view === 'team' ? 'team' : wsState.view === 'board' ? 'board' : 'detail'
+  const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'team' ? 'team' : wsState.view === 'board' ? 'board' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
     if (id === 'cost') { openCost(); return }
-    if (id === 'full-feed') { openFullFeed(); return }
     if (id === 'team') { openTeam(); return }
     if (id === 'board') { openBoard(); return }
     if (id === 'beacon') {
@@ -568,15 +592,15 @@ export function App(): ReactElement {
     if (wsState.view === 'attention') {
       detailPanel = contextKind === 'question'
         ? <DialogChannel key="dialog" stage={workspaceStage} attention banner={attentionBanner} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
-        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} statusAvailable={statusAvailable} />
+        : <PlanPanel key="plan" stage={workspaceStage} attention={contextKind === 'approval'} banner={attentionBanner} statusAvailable={statusAvailable} onContinue={heldContinue} />
     } else if (wsState.view === 'plan-history') {
       detailPanel = showPlan
-        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} />
+        ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} onContinue={heldContinue} />
         : showDialog ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} /> : null
     } else if (wsState.view === 'dialog-history') {
       detailPanel = showDialog
         ? <DialogChannel key="dialog" stage={workspaceStage} attention={false} scrollTarget={scrollToDialogTarget} onTargetConsumed={handleDialogTargetConsumed} />
-        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} /> : null
+        : showPlan ? <PlanPanel key="plan" stage={workspaceStage} attention={false} statusAvailable={statusAvailable} onContinue={heldContinue} /> : null
     }
   }
 
@@ -601,6 +625,7 @@ export function App(): ReactElement {
     >
       {/* CommentProvider выше FileBrowserProvider, PlanPanel и DialogChannel: черновики и отправка
           живут весь ран и переживают размонтирование Files. */}
+      <StageActionsContext.Provider value={stageActions}>
       <CommentProvider runId={runId}>
       <CommentRecipientsContext.Provider value={commentRoster}>
       <FileBrowserProvider flowName={flowName} startedAt={startedAt} enabled={capabilities.fileBrowser} onOpenChange={setFilesOpen} attentionShortcut={attentionShortcut}>
@@ -691,11 +716,15 @@ export function App(): ReactElement {
                     лентой). Cost/Team — глобальные виды, не привязанные к стадии:
                     оставлять над ними имя/статус последней выбранной стадии
                     подразумевало бы несуществующий пер-стейдж фильтр. */}
-                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'full-feed' && wsState.view !== 'team' && wsState.view !== 'board' && (
+                {workspaceStage !== null && wsState.view !== 'cost' && wsState.view !== 'team' && wsState.view !== 'board' && (
                   <WorkspaceHeader
                     stage={workspaceStage}
                     connected={connected}
                     statusAvailable={statusAvailable}
+                    showControls={wsState.view === 'feed' && selection?.kind === 'stage'}
+                    controlsEnabled={flowPauseState === 'none' && (!pauseOnFocus.hasActiveOp(workspaceStage.id) || (workspaceStage.status === 'paused' && pauseOnFocus.isOwned(workspaceStage.id)))}
+                    onContinue={heldContinue}
+                    replyNeeded={wsState.view === 'feed' && feedReplies.stageId === workspaceStage.id ? feedReplies.count : 0}
                     attentionNav={
                       inAttention && attnIndex >= 0 && attnItems.length > 1
                         ? { pos: attnIndex + 1, total: attnItems.length, onPrev: () => goAttention(-1), onNext: () => goAttention(1) }
@@ -712,7 +741,10 @@ export function App(): ReactElement {
                           aria-expanded={peopleOpen}
                           onClick={() => setPeopleOpen((v) => !v)}
                         >
-                          <span aria-hidden="true">👥</span>
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <circle cx="9" cy="8" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 5" />
+                          </svg>
+                          <span>People</span>
                         </button>
                       ) : undefined
                     }
@@ -726,18 +758,8 @@ export function App(): ReactElement {
                     coverageIssues={coverageIssues}
                     accounting={accounting}
                   />
-                ) : wsState.view === 'full-feed' ? (
-                  <FeedWorkspace
-                    key={runId}
-                    events={events}
-                    stageId={null}
-                    scopeToken="scope:full"
-                    showStageBadges
-                    onOpenDialog={handleOpenDialogFromFeed}
-                    emptyHint="No events yet"
-                  />
                 ) : wsState.view === 'team' ? (
-                  // Team (T7.3) — global, like Cost/Full feed above: must be checked BEFORE the
+                  // Team is global, like Cost: must be checked BEFORE the
                   // `workspaceStage === null` Feed fallback below, since Team has no selected-stage
                   // dependency at all (a never-selected stage must still show Team, not Feed).
                   // Rendered below, outside this chain: Team stays mounted once opened (see teamOpenedRun).
@@ -754,12 +776,11 @@ export function App(): ReactElement {
                       key={runId}
                       events={stageEvents}
                       stageId={workspaceStage?.id ?? null}
-                      // scopeToken не нужен: дефолт FeedWorkspace из stageId даёт ровно `scope:stage:<id>` / `scope:none`.
-                      // Явный токен нужен только Full-feed-сайту (scope:full), который переопределяет дефолт.
                       emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                       onOpenDialog={handleOpenDialogFromFeed}
                       noteTarget={noteTarget}
-                      composerDrafts={composerDrafts.drafts}
+                      composerDrafts={composerDrafts.current.drafts}
+                      onComposerDraftChange={updateComposerDraft}
                       onSendNote={pauseOnFocus.handleSend}
                       pauseOnFocusEnabled={pauseOnFocus.enabled}
                       onTogglePauseOnFocus={pauseOnFocus.setEnabled}
@@ -782,10 +803,13 @@ export function App(): ReactElement {
                       // and the plain note-to-agent composer (no Message/Revise tabs).
                       mesh={stageMesh ? { roster: mergedRoster, profiles: assistantProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts, sideFailures: meshSideFailures } : undefined}
                       reviseAvailable={reviseAvailable}
+                      paused={workspaceStage?.status === 'paused' || flowPauseState !== 'none'}
+                      onReplyNeededChange={reportFeedReplies}
                     />
                     {showPeople && workspaceStage !== null && (
                       <StagePeoplePanel
                         stageId={workspaceStage.id}
+                        helperTasks={Object.values(assistantsByStage).flatMap((entry) => entry.tasks)}
                         participants={meshParticipants}
                         stages={stages}
                         profiles={assistantProfiles}
@@ -914,6 +938,7 @@ export function App(): ReactElement {
       </FileBrowserProvider>
       </CommentRecipientsContext.Provider>
       </CommentProvider>
+      </StageActionsContext.Provider>
     </SideAgentProvider>
     </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>

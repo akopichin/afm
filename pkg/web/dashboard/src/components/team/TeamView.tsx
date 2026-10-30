@@ -9,7 +9,7 @@ import { directPeer, findExistingDirectThread, mergeById, participantLabel, part
 import { orderInboxThreads } from '../../lib/team-inbox'
 import { advanceTeamSeen, baselineTeamUnread, isTeamUnread } from '../../lib/team-unread'
 import { RunTeamList, teamStagesOf } from './RunTeamList'
-import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget } from './ThreadConversation'
+import { conversationSubtitle, conversationTitle, targetKey, ThreadConversation, type ThreadConversationTarget, type ConversationSession } from './ThreadConversation'
 import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
 import { BoardPanel } from './BoardPanel'
 import { BoardLoadState } from './BoardLoadState'
@@ -120,6 +120,8 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
   // drafts — each conversation's unsent text by targetKey. Kept here, above the keyed <ThreadConversation>,
   // because a direct conversation's first send remounts it under its new thread's key (handleThreadOpened
   // moves the draft along), and text typed while that send was in flight must not be lost.
+  const sessions = useRef<Record<string, ConversationSession>>({})
+  const [, refreshReplyTarget] = useState(0)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const activeKey = targetKey(activeConversation)
 
@@ -319,6 +321,10 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
   function handleThreadOpened(thread: MeshThread): void {
     const threadKey = targetKey({ kind: 'thread', thread })
     setDrafts(({ [activeKey]: carried = '', ...rest }) => ({ ...rest, [threadKey]: carried }))
+    if (sessions.current[activeKey] !== undefined) {
+      sessions.current[threadKey] = sessions.current[activeKey]!
+      delete sessions.current[activeKey]
+    }
     openThread(thread)
   }
 
@@ -502,6 +508,10 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
             onClick={() => { returnToListFocusRef.current = true; setTab('messages'); setMobileDetail(false) }}>
             <span aria-hidden="true">←</span> Back to {listView === 'people' ? 'people' : 'conversations'}
           </button>}
+          <div className="team-page-heading">
+            <h2>Team</h2>
+            <p>Conversations with the people in this run</p>
+          </div>
           <TabList
             idPrefix={tabsId}
             ariaLabel="Team"
@@ -530,13 +540,13 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
           <div className="team-conversation-header">
             <ConversationSymbol target={createOpen ? null : selectedConversation} participants={participants} />
             <div className="team-conversation-heading">
-              <h3>{createOpen ? 'New conversation' : selectedConversation === null ? 'Team' : conversationTitle(selectedConversation, participants)}</h3>
+              <h3>{createOpen ? 'New conversation' : selectedConversation === null ? 'No conversation selected' : conversationTitle(selectedConversation, participants)}</h3>
               <p>{createOpen ? 'Choose a topic and participants' : selectedConversation === null ? 'Select a person or a conversation' : conversationSubtitle(selectedConversation, participants)}</p>
             </div>
             {!createOpen && selectedConversation?.kind === 'thread' && editingThreadId !== selectedConversation.thread.id && (
               <button ref={editTopicButtonRef} type="button" className="team-icon-btn team-topic-edit-button"
                 aria-label="Edit topic" title="Edit topic" onClick={() => setEditingThreadId(selectedConversation.thread.id)}>
-                Edit
+                <PencilIcon />
               </button>
             )}
           </div>
@@ -605,6 +615,11 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
               <ThreadConversation
                 key={activeKey}
                 target={selectedConversation}
+                session={sessions.current[activeKey] ?? {}}
+                onSessionChange={(patch) => {
+                  sessions.current[activeKey] = { ...sessions.current[activeKey], ...patch }
+                  if ('replyTargetId' in patch) refreshReplyTarget((n) => n + 1)
+                }}
                 draft={drafts[activeKey] ?? ''}
                 onDraftChange={setActiveDraft}
                 participants={participants}
@@ -662,6 +677,15 @@ export function TeamView({ runId, active = true, roster, onParticipantAdded, boa
         />
       )}
     </div>
+  )
+}
+
+function PencilIcon(): ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 20h4L19 9a2.1 2.1 0 0 0-4-4L4 16Z" />
+      <path d="m13.5 6.5 4 4" />
+    </svg>
   )
 }
 

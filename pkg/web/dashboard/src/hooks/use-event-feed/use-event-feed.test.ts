@@ -373,12 +373,12 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'stage_status_changed', stage_id: 's1', data: 'done', seq: 2 })
     })
 
+    // seq=2 уже есть от live-сообщения, поэтому ждём итоговое состояние: история (seq=1) влилась.
     await waitFor(() => {
+      expect(result.current.events.some((e) => e.seq === 1 && e.payload === 'running')).toBe(true)
       expect(result.current.events.filter((e) => e.seq === 2)).toHaveLength(1)
     })
-    // История (running, seq=1) должна присутствовать — не потеряна, т.к. это
-    // другое логическое событие (другой seq), а не дубликат.
-    expect(result.current.events.some((e) => e.seq === 1 && e.payload === 'running')).toBe(true)
+    // История (running, seq=1) не потеряна — это другое логическое событие (другой seq), а не дубликат.
     // Timestamp из истории — реальный, не "сейчас".
     const historic = result.current.events.find((e) => e.seq === 1)
     expect(historic?.timestamp).toBe('2026-07-27T10:00:00.000Z')
@@ -407,9 +407,11 @@ describe('useEventFeed', () => {
       FakeWebSocket.last().emitMessage({ type: 'agent_action', stage_id: 's1', data: { tool: 'Bash', detail: 'pwd' } })
     })
 
+    // Live-копия уже в ленте, поэтому ждём, пока история заменит её (реальный timestamp), и только потом считаем.
     await waitFor(() => {
-      expect(result.current.events.filter((e) => e.type === 'agent_action')).toHaveLength(1)
+      expect(result.current.events.some((e) => e.timestamp === '2026-07-27T10:00:00.000Z')).toBe(true)
     })
+    expect(result.current.events.filter((e) => e.type === 'agent_action')).toHaveLength(1)
   })
 
   // History остаётся хронологической базой; только live-only события дописываются в конец.

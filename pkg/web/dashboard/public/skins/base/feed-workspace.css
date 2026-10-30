@@ -50,12 +50,33 @@
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.02em;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   background: rgba(var(--accent-primary-rgb), 0.12);
   border-radius: var(--radius-sm);
   padding: 1px 6px;
 }
 .feed-actor { color: var(--text-muted); }
+
+/* Stage agent: square avatar, then the author row (name, role, time) over the unframed rows. */
+.feed-authored {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  max-width: 100%;
+}
+.feed-authored > .mesh-avatar { width: 30px; height: 30px; border-radius: 8px; }
+.feed-authored-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.feed-author-row { gap: 8px; min-height: 25px; padding: 0; font-size: 12.5px; }
+.feed-author-row .feed-actor { color: var(--text-primary); font-weight: 650; font-size: 14px; }
+.feed-role { color: var(--text-muted); font-size: 11px; }
+.feed-author-row .message-time { margin-left: auto; }
+.feed-rows { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; }
+
+/* Flow lines (status changes, hooks): quiet one-line rows without a label or frame. */
+.feed-flow { max-width: 100%; }
+.feed-flow .feed-rows { gap: 0; }
+.feed-flow .feed-item { font-size: 12.5px; }
+.feed-authored .feed-item { padding-left: 0; }
 
 .feed-bubble {
   display: flex;
@@ -119,7 +140,7 @@
 .feed-item.mono .feed-item-text {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  color: var(--feed-command);
+  color: var(--text-muted);
 }
 .feed-item.mono {
   background: var(--surface-tool);
@@ -127,15 +148,11 @@
 }
 
 /* Нарратив агента — «голос» агента: он должен выделяться от механических mono-строк команд. Ярче (полная
-   text-primary), средний вес, чуть крупнее и тонкая accent-полоса слева. */
+   text-primary), средний вес и чуть крупнее. */
 .feed-group[data-actor="agent"] .feed-item.feed-kind-message {
   font-weight: 500;
   font-size: 15px;
   color: var(--text-primary);
-  /* Сплошной per-skin акцент, а НЕ rgba: последний переопределён только в graphite, в остальных скинах
-     откатился бы к дефолтному синему и не совпал бы с их палитрой. */
-  border-left: 2px solid var(--accent-primary);
-  padding-left: 10px;
 }
 
 /* Нарратив агента, отрендеренный как markdown. .feed-scroll имеет overflow-x:hidden, поэтому широкая
@@ -151,10 +168,10 @@
 
 /* Семантические тона: тонкая цветная метка слева + тинт текста.
    Нейтральный тон метки не рисует. */
-.feed-item.tone-success { color: var(--success); }
-.feed-item.tone-danger { color: var(--danger); }
-.feed-item.tone-warning { color: var(--attention); }
-.feed-item.tone-accent .feed-item-text { color: var(--accent-primary); }
+.feed-item.tone-success { color: var(--success-text); }
+.feed-item.tone-danger { color: var(--danger-text); }
+.feed-item.tone-warning { color: var(--attention-text); }
+.feed-item.tone-accent .feed-item-text { color: var(--accent-text); }
 
 /* Статусные переходы (→ running и т.п.) — приглушённее основного текста. */
 .feed-item.feed-kind-status:not(.tone-danger):not(.tone-warning) .feed-item-text {
@@ -163,15 +180,16 @@
 /* Успешное завершение — заметная success-поверхность с галочкой. */
 .feed-item.feed-kind-success {
   background: rgba(var(--success-rgb), 0.12);
-  color: var(--success);
+  color: var(--success-text);
   padding: 6px 10px;
+  --text-muted: var(--text-secondary);
 }
 .feed-item.feed-kind-success .feed-item-text::before {
   content: "✓ ";
   font-weight: 700;
 }
 /* Ошибка/провал — danger-поверхность. */
-.feed-item.tone-danger { background: rgba(var(--danger-rgb), 0.10); padding: 6px 10px; }
+.feed-item.tone-danger { background: rgba(var(--danger-rgb), 0.10); padding: 6px 10px; --text-muted: var(--text-secondary); }
 
 /* navigable-элемент (dialog_question/dialog_answer, клик → открыть диалог стадии, см.
    FeedWorkspace/onOpenDialog) — рендерится <button>, subtle affordance поверх обычных стилей .feed-item. */
@@ -186,7 +204,7 @@
   text-align: inherit;
   font: inherit;
 }
-.feed-item-navigable:hover { background: rgba(var(--accent-primary-rgb), 0.08); }
+.feed-item-navigable:hover { background: rgba(var(--accent-primary-rgb), 0.08); --text-muted: var(--text-secondary); }
 .feed-item-navigable:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
@@ -204,6 +222,7 @@
 .feed-item-thought.is-reply-target {
   background: rgba(var(--accent-primary-rgb), 0.10);
   box-shadow: inset 2px 0 0 var(--accent-primary);
+  --text-muted: var(--text-secondary);
 }
 /* Кнопка ответа — скрыта, пока ряд не под hover/focus (и когда сама в фокусе). */
 .feed-thought-reply {
@@ -219,7 +238,7 @@
   border: 1px solid var(--separator-subtle);
   border-radius: 50%;
   background: var(--surface-raised);
-  color: var(--accent-primary);
+  color: var(--accent-text);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -240,7 +259,7 @@
 .verify-report-toggle {
   border: none;
   background: transparent;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   font: inherit;
   font-size: 12.5px;
   cursor: pointer;
@@ -250,7 +269,7 @@
 .verify-report-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .verify-report-loading,
 .verify-report-error { color: var(--text-muted); font-size: 12.5px; margin-top: 2px; }
-.verify-report-error { color: var(--danger); }
+.verify-report-error { color: var(--danger-text); }
 .verify-report-body {
   margin-top: 4px;
   padding: 8px 10px;
@@ -298,7 +317,7 @@
   flex-shrink: 0;
   font-size: 11.5px;
   font-weight: 600;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   display: inline-block;
   animation: quoteMarkPop var(--motion-slow) var(--ease-spring) backwards;
   transform-origin: left center;
@@ -348,7 +367,7 @@
   border: 0;
   padding: 6px;
   border-radius: 50%;
-  color: var(--mint);
+  color: var(--success-text);
 }
 .feed-composer .pasteable-attach-btn svg {
   width: 26px;
@@ -429,6 +448,7 @@
   background: rgba(var(--attention-rgb), 0.10);
   font-size: 13px;
   color: var(--text-primary);
+  --text-muted: var(--text-secondary);
 }
 .pause-banner-icon {
   flex-shrink: 0;
@@ -442,7 +462,7 @@
   border: 1px solid var(--attention);
   border-radius: 999px;
   background: transparent;
-  color: var(--attention);
+  color: var(--attention-text);
   font-size: 12px;
   font-family: var(--font-mono);
   cursor: pointer;
@@ -460,11 +480,55 @@
   flex-direction: column;
   gap: 8px;
 }
+.feed-composer-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.feed-composer-header .composer-opts { margin-left: auto; }
+.feed-composer-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  cursor: pointer;
+}
+.feed-composer-mode-option input {
+  position: static;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  opacity: 1;
+  accent-color: var(--accent-primary);
+}
+.feed-composer-mode-option input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.feed-composer--mesh .pause-banner {
+  padding: 7px 9px;
+  border: 1px solid rgba(var(--attention-rgb), 0.55);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+.feed-composer--mesh .pause-banner-resume {
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+}
+.feed-composer--mesh .pause-banner-resume:hover { text-decoration: underline; }
 .feed-composer-modes {
   display: flex;
   gap: 4px;
 }
 .feed-composer-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 0;
   background: transparent;
   color: var(--text-muted);
@@ -475,7 +539,7 @@
   cursor: pointer;
 }
 .feed-composer-mode:hover { background: var(--surface-hover); color: var(--text-secondary); }
-.feed-composer-mode.active { background: var(--surface-hover); color: var(--text-primary); font-weight: 600; }
+.feed-composer-mode.active { background: rgba(var(--accent-primary-rgb), 0.16); color: var(--accent-text); font-weight: 600; }
 .feed-composer-mode:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 .mesh-message-composer {
@@ -484,7 +548,7 @@
   gap: 8px;
 }
 
-.mesh-message-error { color: var(--danger); font-size: 12px; }
+.mesh-message-error { color: var(--danger-text); font-size: 12px; }
 .mesh-recipient-problems { margin: 0; padding-left: 16px; }
 .mesh-message-receipt { color: var(--text-muted); font-size: 11px; }
 .mesh-message-receipts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
@@ -493,35 +557,9 @@
 /* Both composer panels stay mounted (each keeps its draft); the hidden one must not take space. */
 .feed-composer-panel[hidden] { display: none; }
 
-/* "To" row: who the message goes to — chips, then "+" (opens the @ list). */
-.mesh-recipients {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  font-size: 12px;
-}
+/* "To" row: the chips and the "+" button are styled by chat-composer.css; these are the leftovers. */
 .mesh-recipients-label { color: var(--text-muted); font-weight: 600; margin-right: 2px; }
 .mesh-recipients-empty { color: var(--text-muted); }
-.mesh-recipient-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 4px 1px 2px;
-  border: 1px solid var(--separator-subtle);
-  border-radius: 999px;
-  background: var(--surface-hover);
-  color: var(--text-primary);
-  white-space: nowrap;
-}
-.mesh-recipient-chip.is-attach { padding-left: 8px; }
-/* The stage agent chosen because nobody is named: present, but quieter than a chosen recipient. */
-.mesh-recipient-chip.is-default { background: transparent; border-style: dashed; color: var(--text-secondary); padding-right: 8px; }
-.mesh-recipient-chip.has-problem {
-  border-color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.08);
-  color: var(--danger);
-}
 .mesh-recipient-note { color: var(--text-muted); font-size: 11px; }
 .mesh-recipient-remove,
 .mesh-recipients-add,
@@ -567,26 +605,35 @@
 /* Answering a conversation message (Message mode) is told apart from answering a thought (Revise, accent):
    its chip and the message it answers use the success hue. */
 .feed-reply-chip--conversation { border-left-color: var(--success); }
-.feed-reply-chip--conversation .feed-reply-chip-label { color: var(--success); }
+.feed-reply-chip--conversation .feed-reply-chip-label { color: var(--success-text); }
 .feed-conversation .team-conversation-message.is-reply-target .team-conversation-message-body {
   box-shadow: inset 2px 0 0 var(--success);
   background: rgba(var(--success-rgb), 0.08);
+  --text-muted: var(--text-secondary);
 }
 
 /* --- Беседы стадии в ленте: фильтр, сообщения, «@x is working» --- */
+.feed-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--separator-subtle);
+}
 .feed-filter-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 8px 10px 2px;
+  gap: 4px;
 }
 .feed-filter-chip {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--separator-subtle);
+  padding: 5px 9px;
+  border-radius: 5px;
+  border: 0;
   background: none;
   font: inherit;
   font-size: 12px;
@@ -596,18 +643,54 @@
 .feed-filter-chip:hover { background: var(--surface-hover); }
 .feed-filter-chip[aria-pressed="true"] {
   border-color: transparent;
-  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  background: var(--surface-hover);
   color: var(--text-primary);
 }
 .feed-filter-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .feed-filter-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
+.feed-filter-context { color: var(--text-muted); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
 
 .feed-conversation {
-  width: min(760px, 100%);
+  width: 100%;
+  flex-shrink: 0;
 }
+.feed-conversation .feed-message { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; }
+.feed-message > .mesh-avatar { width: 30px; height: 30px; border-radius: 8px; font-size: 10px; }
+.feed-message-card { min-width: 0; padding: 10px 13px; background: var(--surface-raised); border: 1px solid var(--separator-subtle); border-radius: var(--radius-lg); }
+.feed-message.from-you .feed-message-card { background: var(--surface-user-message); border-color: transparent; }
+.feed-message.is-waiting-for-you .feed-message-card { border-color: color-mix(in srgb, var(--attention) 40%, var(--separator-subtle)); }
+.feed-message .team-conversation-message-header { gap: 4px 8px; min-height: 25px; margin-bottom: 0; }
+.feed-message .team-conversation-message-route { order: 1; flex-basis: 100%; font-size: 11px; }
+.feed-message .conversation-role-chip { padding: 0; border: 0; background: none; font-size: 10px; color: var(--text-muted); }
+.feed-message .conversation-command-chip { font-size: 10px; }
+.feed-conversation .feed-message .team-conversation-message-body,
+.feed-conversation .feed-message.from-you .team-conversation-message-body {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.65;
+}
+.feed-message .team-conversation-message-body .md { font: inherit; }
+.feed-message .team-conversation-reply-quote { margin: 0 0 8px; padding: 8px 10px; border: 0; border-radius: 5px; background: var(--surface-canvas); }
+.feed-message .team-conversation-reply-quote-author,
+.feed-message .team-conversation-reply-quote-text { display: inline; font-size: 11px; font-weight: 400; }
+.feed-message .team-conversation-reply-quote-author::after { content: ' · '; }
+.feed-message .conversation-quote-jump { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-message .conversation-message-actions { display: flex; align-items: center; gap: 11px; margin-top: 9px; font-size: 10px; color: var(--text-muted); }
+.feed-message .conversation-reply-link { padding: 3px 0; font-size: 11px; color: var(--text-muted); }
+.feed-message .conversation-reply-link:hover { color: var(--accent-text); }
+.feed-message-delivery { margin-left: auto; }
+.message-mention { color: var(--accent-text); background: rgba(var(--accent-primary-rgb), 0.16); border-radius: 4px; padding: 1px 4px; font-weight: 550; font-size: .92em; }
 /* A message the reader jumped to from a quote flashes once. */
 .feed-conversation .team-conversation-message.is-jump-target .team-conversation-message-body {
   outline: 2px solid var(--accent-primary);
@@ -639,4 +722,41 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .feed-working-dots i { animation: none; }
+}
+
+.feed-workspace { min-width: 0; }
+.feed-scroll { padding: 14px 8px 20px; gap: 18px; overflow-anchor: auto; }
+.feed-group { width: 100%; max-width: 100%; flex-shrink: 0; }
+.feed-bubble { border-radius: var(--radius-lg); padding: 10px 12px; }
+.feed-composer { margin-top: 0; padding: 8px; gap: 6px; }
+.feed-composer .chat-composer-row { border-radius: 12px; min-height: 76px; }
+.feed-composer .chat-composer-input { min-height: 64px; }
+.feed-composer-modes { gap: 4px; }
+.feed-composer-mode { min-height: 30px; padding: 5px 10px; }
+.feed-tool-group { background: var(--surface-tool); border-radius: var(--radius-md); color: var(--text-muted); font-size: 12px; }
+.feed-tool-group > summary { display: flex; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer; list-style: none; border-radius: var(--radius-md); }
+.feed-tool-group > summary::-webkit-details-marker { display: none; }
+.feed-tool-group > summary::before { content: ''; flex: none; width: 0; height: 0; margin-right: 3px; border-left: 5px solid currentColor; border-block: 4px solid transparent; transition: transform var(--motion-base) var(--ease-out); }
+.feed-tool-group[open] > summary::before { transform: rotate(90deg); }
+.feed-tool-group > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.feed-tool-group > summary strong { color: var(--text-secondary); font-weight: 500; }
+.feed-tool-names { min-width: 0; overflow-wrap: anywhere; }
+.feed-tool-rows .feed-item { border-top: 1px solid var(--separator-subtle); border-radius: 0; padding: 8px 14px; white-space: pre-wrap; }
+.feed-tool-name { color: var(--text-secondary); }
+@media (max-width: 600px) {
+  .feed-scroll { padding: 10px 0 16px; }
+  .feed-composer { padding: 8px 0; }
+  .feed-filter-row { padding-inline: 0; }
+  .feed-filter-chip { min-height: 44px; padding: 5px 7px; font-size: 11px; }
+  .feed-filter-context { display: none; }
+  .feed-conversation .feed-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
+  .feed-message > .mesh-avatar { width: 25px; height: 25px; border-radius: 7px; font-size: 9px; }
+  .feed-message-card { padding: 10px 12px; }
+  .feed-message .team-conversation-message-header { gap: 4px 5px; }
+  .feed-message .conversation-role-chip, .feed-message .team-conversation-message-header time { font-size: 9px; }
+  .feed-conversation .feed-message .team-conversation-message-body { font-size: 13px; }
+  .feed-message .conversation-reply-link { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .feed-workspace *, .feed-workspace *::before, .feed-workspace *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

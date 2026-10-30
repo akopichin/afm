@@ -7,7 +7,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--ink-dim);
+  color: var(--text-muted);
   font-size: 13px;
   letter-spacing: 0.15em;
   text-transform: uppercase;
@@ -48,51 +48,6 @@
   height: 100%;
 }
 
-/* === Status badges === */
-.status-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border: 1px solid currentColor;
-  background: transparent;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
-}
-
-.status-badge[data-status="pending"]              { color: var(--c-pending); }
-.status-badge[data-status="planning"]             { color: var(--c-planning); }
-.status-badge[data-status="awaiting_approval"]    { color: var(--c-awaiting); }
-.status-badge[data-status="revising"]             { color: var(--c-revising); }
-.status-badge[data-status="ready"]                { color: var(--c-ready); }
-.status-badge[data-status="running"]              { color: var(--c-running); }
-.status-badge[data-status="done"]                 { color: var(--c-done); }
-.status-badge[data-status="failed"]               { color: var(--c-failed); }
-.status-badge[data-status="retrying"]             { color: var(--c-retrying); }
-.status-badge[data-status="awaiting_user_input"]  { color: var(--c-awaiting-user); }
-.status-badge[data-status="hook_failed"]          { color: var(--c-hook-failed); }
-.status-badge[data-status="paused"]               { color: var(--c-paused); }
-.status-badge[data-status="awaiting_assistants"]  { color: var(--c-awaiting-assistants); }
-.status-badge[data-status="awaiting_quota"]       { color: var(--c-awaiting-quota); }
-/* Blocked (T7.9) — same escalation as the rail's status-dot: a required gate needing a human decision reads
-   as attention/failed, overriding the amber rule above via the extra [data-blocked] attribute. */
-.status-badge[data-status="awaiting_assistants"][data-blocked="true"] { color: var(--c-failed); }
-
-/* Pulsing badges for "running" states */
-.status-badge[data-status="running"],
-.status-badge[data-status="planning"],
-.status-badge[data-status="revising"],
-.status-badge[data-status="retrying"],
-.status-badge[data-status="awaiting_user_input"],
-.status-badge[data-status="awaiting_assistants"] {
-  animation: badgePulse 2.2s ease-in-out infinite;
-}
-
-@keyframes badgePulse {
-  0%, 100% { box-shadow: inset 0 0 0 0 rgba(255, 255, 255, 0); }
-  50%      { box-shadow: inset 0 0 0 1px currentColor; }
-}
-
 /* === Sections inside detail === */
 .section {
   margin-bottom: 18px;
@@ -107,34 +62,37 @@
 }
 
 .empty-hint {
-  color: var(--ink-dim);
+  color: var(--text-muted);
   font-size: 11px;
   font-style: italic;
   letter-spacing: 0.05em;
 }
 
-/* === Plan block === */
+/* === Plan block === Sentence-case sans headings and a 14px reading size, shared by the read-only plan and the
+   line-by-line approval document. */
 .markdown-body {
-  background: var(--bg-elev);
-  border: 1px solid var(--mint-soft);
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
   padding: 12px 14px;
   max-height: 420px;
   overflow-y: auto;
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.7;
 }
 
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3 {
-  margin-top: 12px;
+  margin-top: 16px;
   margin-bottom: 6px;
-  color: var(--ink-hi);
-  letter-spacing: 0.08em;
+  color: var(--text-primary);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  text-transform: none;
 }
-.markdown-body h1 { font-size: 14px; }
-.markdown-body h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.15em; }
-.markdown-body h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--mint); }
+.markdown-body h1 { font-size: 21px; line-height: 1.3; }
+.markdown-body h2 { font-size: 17px; line-height: 1.3; }
+.markdown-body h3 { font-size: 15px; line-height: 1.4; font-weight: 600; }
 
 .markdown-body p { margin-bottom: 6px; }
 
@@ -143,20 +101,22 @@
   margin-left: 20px;
   margin-bottom: 6px;
 }
-.markdown-body li::marker { color: var(--ink-dim); }
+.markdown-body li::marker { color: var(--text-muted); }
 
 .markdown-body code {
-  background: var(--bg);
-  border: 1px solid var(--mint-soft);
-  padding: 0 4px;
-  font-family: inherit;
-  font-size: 10.5px;
-  color: var(--mint);
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .markdown-body pre {
-  background: var(--bg);
-  border: 1px solid var(--mint-soft);
+  background: var(--surface-canvas);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   margin-bottom: 8px;
   overflow-x: auto;
@@ -165,35 +125,37 @@
   background: transparent;
   border: none;
   padding: 0;
-  color: var(--ink);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
 }
 
 .markdown-body strong {
-  color: var(--ink-hi);
+  color: var(--text-primary);
   font-weight: 600;
 }
 
-/* Checkboxes in markdown */
+/* Checkboxes in markdown: an outlined square, a filled one with a tick when done. */
 .cb {
   display: inline-block;
+  box-sizing: border-box;
   width: 12px;
   height: 12px;
+  margin-right: 9px;
+  border-radius: 2px;
   text-align: center;
-  font-size: 10px;
-  line-height: 12px;
-  margin-right: 4px;
-  vertical-align: middle;
+  font-size: 9px;
+  line-height: 10px;
+  vertical-align: -1px;
   font-family: inherit;
 }
 .cb-done {
-  background: var(--mint);
-  color: var(--bg);
-  border: 1px solid var(--mint);
+  background: var(--success);
+  color: var(--surface-canvas);
+  border: 1px solid var(--success);
 }
 .cb-open {
   background: transparent;
-  border: 1px solid var(--ink-dim);
+  border: 1px solid var(--text-muted);
   color: transparent;
 }
 
@@ -208,9 +170,9 @@
 
 /* === Plan line-by-line review === */
 #plan-content {
-  background: var(--bg-elev);
-  border: 1px solid var(--mint-soft);
-  padding: 10px 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--separator-subtle);
+  padding: 10px 34px 10px 44px;
   max-height: 420px;
   overflow-y: auto;
 }
@@ -224,30 +186,228 @@
 }
 
 /* === Построчные комментарии поверх блочного markdown === Якорь — под-элемент внутри .md-блока, помеченный
-   data-line. */
+   data-line: блок, строка продолжения абзаца, строка кода или строка-заглушка.
 
-/* Отступы между отдельными .md-блоками: каждый .md обнуляет собственные first/last-child края
-   (markdown.css), поэтому вертикальный ритм задаём на самой обёртке блока. */
-.line-commented .md { margin: 8px 0; }
-.line-commented .md:first-child { margin-top: 0; }
+   Каждая исходная строка — своя строка документа: высота текста --row-h плюс --row-pad сверху и снизу, поэтому
+   номер (плашка слева) и значок комментария (справа) всегда стоят на первой строке своего блока. Перенос строки
+   абзаца внутри исходника — настоящий перенос на экране (.md-first-line / .md-cont-line — блоки). */
+.line-commented {
+  --row-h: 24px;
+  --row-pad: 4px;
+  position: relative;
+  /* Левое поле — колонка номеров (см. ::before ниже), правое — колонка значков комментариев: у плана и у вопроса
+     диалога одна геометрия. */
+  padding-inline: 44px 34px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: var(--row-h);
+  color: var(--text-secondary);
+}
+.line-commented .md { margin: 0; }
+.line-commented .md.md-gap { margin: 0; }
+.line-commented .md :is(p, ul, ol, blockquote, hr, table, pre) { margin: 0; }
+.line-commented .md ul ul,
+.line-commented .md ol ol,
+.line-commented .md ul ol,
+.line-commented .md ol ul { margin: 0; }
+.line-commented .md :is(p, li, h1, h2, h3, h4, h5, h6, blockquote)[data-line] { padding-block: var(--row-pad); }
+.line-commented .md-first-line,
+.line-commented .md-cont-line { display: block; border-radius: var(--radius-sm); }
+.line-commented .md-cont-line { padding-top: calc(2 * var(--row-pad)); }
+.line-commented .md strong { color: var(--text-primary); }
+
+/* Заголовки — обычная sans-проза в нижнем регистре, как в макете; плашка стоит по центру своей строки. */
+.line-commented .md :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  text-transform: none;
+}
+.line-commented .md h1[data-line] { --row-h: 30px; font-size: 21px; line-height: 30px; padding-top: 6px; }
+.line-commented .md h2[data-line] { --row-h: 26px; font-size: 17px; line-height: 26px; padding-top: 6px; }
+.line-commented .md :is(h3, h4, h5, h6) { font-size: 15px; font-weight: 600; }
+
+.line-commented .md ul,
+.line-commented .md ol { padding-left: 22px; }
+.line-commented .md li::marker { color: var(--text-muted); }
+/* Пункты-чекбоксы: вместо маркера — квадрат, текст на одном уровне с абзацами. */
+.line-commented .md li:has(> .cb) { list-style: none; margin-left: -22px; }
+/* Пункт с вложенным списком: расстояние до вложенных строк даёт его первая строка, а не нижний отступ. */
+.line-commented .md li[data-line]:has(> :is(ul, ol)) { padding-bottom: 0; }
+.line-commented .md li:has(> :is(ul, ol)) > .md-first-line { padding-bottom: var(--row-pad); }
+
+.line-commented .md blockquote {
+  padding-inline: 14px;
+  border-left: 2px solid var(--success);
+  color: var(--text-muted);
+}
+/* Строка цитаты наследует color, уже вычисленный на цитате, до подмены muted на secondary в своём подсвеченном
+   состоянии: поэтому цвет задаётся на самой строке. */
+.line-commented .md blockquote [data-line] { color: var(--text-muted); }
+.line-commented .md hr { border: 0; border-top: 1px solid var(--separator-subtle); }
+
+/* Инлайн-код — чип, как file-tag в макете. */
+.line-commented .md code {
+  padding: 1px 6px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-tool);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Таблица: заголовок обычным регистром; строка-разделитель (|---|) — тонкая полоска без рамок. Широкая таблица
+   скроллится внутри себя, а не распирает документ; номера и значки висят на .line-commented и остаются на месте. */
+.line-commented .md table { display: block; max-width: 100%; margin: 4px 0; overflow-x: auto; }
+.line-commented .md img { max-width: 100%; height: auto; }
+.line-commented .md th,
+.line-commented .md td { padding: 4px 12px; }
+.line-commented .md th {
+  background: var(--surface-tool);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.line-commented .md tr.md-table-rule > td {
+  height: 2px;
+  padding: 0;
+  border-block: 0;
+  background: transparent;
+  line-height: 0;
+}
+
+/* Код: рамка вокруг блока, внутри — своя строка на каждую строку исходника (включая строки ```). */
+.line-commented .md pre {
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-canvas);
+  overflow-x: auto;
+}
+.line-commented .md pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12.5px;
+}
+.line-commented .md-code-line {
+  --row-h: 20px;
+  display: block;
+  min-height: 20px;
+  line-height: 20px;
+}
+.line-commented .md-fence-line { color: var(--text-muted); }
+
+/* Номер строки — видимая «плашка» в левом поле документа на КАЖДОЙ строке: клик по ней идёт в тот же якорь.
+   Плашка позиционируется от контейнера (не от элемента), поэтому колонка ровная при любой вложенности списков.
+   Все типы строк делят одно правило; различается только --row-h (высота первой строки), от неё плашка и значок
+   центрируются. Табличная строка рисует плашку на первой ячейке (data-row-line): у <td> нет data-line родителя <tr>. */
+.line-commented [data-line]:not(tr)::before {
+  content: attr(data-line);
+}
+.line-commented .md :is(th, td)[data-row-line]::before {
+  content: attr(data-row-line);
+}
+.line-commented [data-line]:not(tr)::before,
+.line-commented .md :is(th, td)[data-row-line]::before {
+  position: absolute;
+  left: 4px;
+  box-sizing: border-box;
+  min-width: 30px;
+  margin-top: calc((var(--row-h) - 16px) / 2);
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: 10px/16px var(--font-mono);
+  text-align: center;
+  color: var(--text-muted);
+  transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+.line-commented [data-line]:is(.is-hover, :focus-visible):not(tr)::before,
+.line-commented .md tr:is(.is-hover, :focus-visible) > [data-row-line]::before {
+  border-color: var(--accent-primary);
+  color: var(--accent-text);
+}
+.line-commented [data-line].has-comment:not(tr)::before,
+.line-commented .md tr.has-comment > [data-row-line]::before {
+  border-color: var(--attention);
+  background: var(--attention);
+  color: var(--surface-canvas);
+}
+.line-commented [data-line].is-active:not(tr)::before,
+.line-commented .md tr.is-active > [data-row-line]::before {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: var(--surface-canvas);
+}
+
+/* Значок комментария у правого края каждой строки. Он стоит на строке, где заканчивается текст элемента, поэтому
+   у блоков с вложенными блоками (списки, цитаты, код) значок рисует обёртка первой строки .md-first-line. */
+.line-commented :where(h1, h2, h3, h4, h5, h6, hr, p, li, blockquote, .md-cont-line, .md-code-line, .md-line-row)[data-line]:where(:not(:has(> :is(.md-first-line, ul, ol, blockquote, p, pre))))::after,
+.line-commented .md tr[data-line] > :last-child::after,
+.line-commented .md-first-line::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  margin-top: calc((var(--row-h) - 14px) / 2);
+  background: var(--text-muted);
+  opacity: 0.55;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z'/%3E%3C/svg%3E") center / contain no-repeat;
+  pointer-events: none;
+  transition: background var(--motion-fast), opacity var(--motion-fast);
+}
+/* Разделитель таблицы — полоска 2px: плашка того же размера центрируется на ней через --row-h; значка нет,
+   он делил бы место со значками соседних строк. */
+.line-commented .md tr.md-table-rule { --row-h: 2px; }
+.line-commented .md tr.md-table-rule > td::after { display: none; }
+.line-commented [data-line]:is(.is-hover, :focus-visible)::after,
+.line-commented [data-line].is-hover > .md-first-line::after,
+.line-commented [data-line].is-hover > p > .md-first-line::after,
+.line-commented .md tr.is-hover > :last-child::after {
+  background: var(--accent-primary);
+  opacity: 1;
+}
+.line-commented [data-line].has-comment::after,
+.line-commented [data-line].has-comment > .md-first-line::after,
+.line-commented [data-line].has-comment > p > .md-first-line::after,
+.line-commented .md tr.has-comment > :last-child::after {
+  background: var(--attention);
+  opacity: 1;
+}
+.line-commented [data-line].is-active::after,
+.line-commented [data-line].is-active > .md-first-line::after,
+.line-commented [data-line].is-active > p > .md-first-line::after,
+.line-commented .md tr.is-active > :last-child::after {
+  background: var(--accent-primary);
+  opacity: 1;
+}
 
 .line-commented [data-line] {
   cursor: pointer;
-  transition: background 0.1s, box-shadow 0.15s;
+  transition: background var(--motion-fast), box-shadow var(--motion-fast);
   scroll-margin: 8px;
 }
-/* Порядок has-comment → is-hover → is-active: равная специфичность, позже выигрывает. Фон-подсветка (без
-   ::after-иконки — псевдоэлемент ломается на tr/hr). */
+/* Порядок has-comment → is-hover → is-active: равная специфичность, позже выигрывает. Подсветка строки — фон
+   и полоска слева; значок рисуется отдельно (псевдоэлемент ломается на tr/hr). */
 .line-commented [data-line].has-comment {
-  background: rgba(229, 212, 66, 0.07);
-  box-shadow: inset 2px 0 0 var(--amber);
+  background: color-mix(in srgb, var(--attention) 9%, transparent);
+  box-shadow: inset 2px 0 0 var(--attention);
+  --text-muted: var(--text-secondary);
 }
 .line-commented [data-line].is-hover {
-  background: rgba(111, 212, 204, 0.08);
+  background: var(--surface-hover);
 }
 .line-commented [data-line].is-active {
   background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   box-shadow: inset 3px 0 0 var(--accent-primary);
+  --text-muted: var(--text-secondary);
 }
 .line-commented [data-line]:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -256,11 +416,12 @@
 
 /* Табличные состояния — СТРОГО выше zebra: ancestor-класс .line-commented поднимает специфичность до.
    Покрываем и header-th, и чётную data-row. */
-.line-commented .md tr.has-comment > :is(th, td) { background: rgba(229, 212, 66, 0.12); }
-.line-commented .md tr.is-hover > :is(th, td) { background: rgba(111, 212, 204, 0.10); }
+.line-commented .md tr.has-comment > :is(th, td) { background: color-mix(in srgb, var(--attention) 14%, transparent); --text-muted: var(--text-secondary); }
+.line-commented .md tr.is-hover > :is(th, td) { background: var(--surface-hover); }
 .line-commented .md tr.is-active { box-shadow: none; }
 .line-commented .md tr.is-active > :is(th, td) {
   background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  --text-muted: var(--text-secondary);
 }
 
 /* hr как цель: <hr> почти нулевой высоты — даём реальную область попадания и
@@ -269,24 +430,44 @@
   padding: 6px 0;
   box-sizing: content-box;
 }
-.line-commented hr[data-line].is-hover { box-shadow: 0 0 0 1px var(--mint-soft); }
-.line-commented hr[data-line].has-comment { box-shadow: inset 2px 0 0 var(--amber); }
+/* Плашка и значок стоят по центру тонкой линии, а не под ней. */
+.line-commented hr[data-line] { --row-h: 2px; }
+.line-commented hr[data-line].is-hover { box-shadow: 0 0 0 1px var(--separator-subtle); }
+.line-commented hr[data-line].has-comment { box-shadow: inset 2px 0 0 var(--attention); }
 .line-commented hr[data-line].is-active { box-shadow: inset 3px 0 0 var(--accent-primary); }
+
+/* Строка без своего элемента — пустая, определение ссылки, подчёркивание setext: показываем исходный текст
+   рядом с обычной плашкой номера. Пустая строка — компактная полоска ровно по высоте плашки (16px). */
+.line-commented .md-line-row {
+  --row-h: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 4px;
+  font: 11.5px/18px var(--font-mono);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.line-commented .md-line-blank { --row-h: 16px; min-height: 16px; line-height: 16px; }
 
 /* === Special plan sections === */
 .plan-section-wrapper {
   margin: 8px 0;
   padding: 8px 0 8px 12px;
-  border-left: 3px solid var(--mint);
-  background: rgba(111, 212, 204, 0.04);
+  border-left: 3px solid var(--success);
+  background: color-mix(in srgb, var(--success) 5%, transparent);
+  --text-muted: var(--text-secondary);
 }
 .plan-section-wrapper.plan-section-assumptions {
-  border-left-color: var(--amber);
-  background: rgba(229, 212, 66, 0.05);
+  border-left-color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 6%, transparent);
+  --text-muted: var(--text-secondary);
 }
 .plan-section-wrapper.plan-section-criteria {
-  border-left-color: var(--mint);
-  background: rgba(111, 212, 204, 0.05);
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 6%, transparent);
+  --text-muted: var(--text-secondary);
 }
 
 .plan-section-wrapper .section-header {
@@ -312,8 +493,8 @@
   font-family: inherit;
   font-weight: 600;
 }
-.plan-section-wrapper.plan-section-assumptions .section-header { color: var(--amber); }
-.plan-section-wrapper.plan-section-criteria    .section-header { color: var(--mint); }
+.plan-section-wrapper.plan-section-assumptions .section-header { color: var(--attention-text); }
+.plan-section-wrapper.plan-section-criteria    .section-header { color: var(--success-text); }
 
 .plan-section-wrapper .section-header .toggle {
   font-size: 11px;
@@ -325,136 +506,188 @@
 }
 .plan-section-wrapper.collapsed .plan-section-body { display: none; }
 
-/* === Inline comment form === */
+/* === Inline comment editor and saved comment card === Compact card under the commented row: title line, quoted
+   source strip, textarea, one action row (attach, hint, Cancel / Delete / Save) and a help line. */
 .line-comment-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 8px 0 10px 0;
-  padding: 14px 16px;
+  gap: 8px;
+  margin: 8px 0 12px 36px;
+  padding: 12px 14px;
   background: var(--surface-raised);
   border: 1px solid var(--separator-subtle);
+  border-left: 2px solid var(--accent-primary);
   border-radius: var(--radius-lg);
+  font-family: var(--font-ui);
 }
 
 .line-comment-form textarea {
   background: var(--surface-canvas);
-  border: 1px solid var(--separator-subtle);
+  border: 1px solid var(--control-border);
   color: var(--text-primary);
-  padding: 11px 13px;
+  padding: 9px 11px;
   font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
-  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.6;
+  border-radius: var(--radius-sm);
   resize: vertical;
-  min-height: 72px;
+  min-height: 88px;
   overflow-y: auto;
 }
+.line-comment-form textarea::placeholder { color: var(--text-placeholder); }
 .line-comment-form textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
 }
 
-.line-comment-form .comment-actions {
-  display: flex;
-  gap: 8px;
-}
-
-/* Quote preview above the textarea — messenger-style, big faint accent glyph. */
-.line-comment-quote {
-  position: relative;
-  padding: 4px 10px 4px 40px;
-  margin-bottom: 8px;
-  min-height: 26px;
+/* Action row: attach icon and the hint on the left, buttons on the right. */
+.comment-editor .pasteable-toolbar {
   display: flex;
   align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.comment-editor .pasteable-attach-btn {
+  width: 28px;
+  height: 28px;
+  justify-content: center;
+  padding: 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+.comment-editor .pasteable-attach-btn:hover { color: var(--text-primary); background: var(--surface-hover); }
+.comment-editor .pasteable-attach-btn svg { width: 16px; height: 16px; }
+.comment-editor .pasteable-attach-label { display: none; }
+.comment-actions-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.line-comment-form .comment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+.line-comment-form .comment-actions .btn {
+  min-height: 28px;
+  padding: 4px 10px;
+  border-color: transparent;
+  font-size: 12px;
+}
+.line-comment-form .comment-actions .btn-send { border-color: var(--accent-primary); }
+.line-comment-form .comment-actions .btn-quiet { color: var(--text-primary); }
+.line-comment-form .comment-actions .btn-cancel { color: var(--danger-text); }
+.line-comment-form .comment-actions .btn-quiet:hover:not(:disabled),
+.line-comment-form .comment-actions .btn-cancel:hover:not(:disabled),
+.line-comment-form .comment-actions .btn-edit:hover:not(:disabled) { border-color: transparent; background: var(--surface-hover); }
+.comment-help {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Phone: the card takes the whole text column (no gutter indent); the action row stacks as attach icon, hint,
+   then Cancel / Save on one line so no label wraps. */
+@media (max-width: 600px) {
+  .line-comment-form { margin-left: 0; }
+  .comment-editor .pasteable-toolbar { flex-wrap: wrap; }
+  .comment-actions-hint,
+  .comment-help { line-height: 1.4; }
+  .comment-actions-hint { flex: 1 1 100%; }
+  .line-comment-form .comment-actions { flex-wrap: nowrap; flex: 1 1 100%; gap: 8px; }
+  .line-comment-form .comment-actions .btn { white-space: nowrap; }
+}
+
+/* Quote of the commented source line: a quiet tinted strip, no decoration. */
+.line-comment-quote {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-tool);
   animation: quoteChipIn var(--motion-base) var(--ease-out) backwards;
 }
-.line-comment-quote::before {
-  content: "\201C";                 /* " */
-  position: absolute;
-  left: 6px;
-  top: -6px;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 44px;
-  line-height: 1;
-  color: var(--accent-primary);
-  opacity: 0.30;                    /* faint, per approved mockup */
-  pointer-events: none;
-  animation: quoteMarkPop var(--motion-slow) var(--ease-spring) backwards;
-  transform-origin: left top;
-}
 .line-comment-quote-src {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;            /* clamp long lines to 2 lines */
   -webkit-box-orient: vertical;
   overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
 }
 
+/* A saved comment is more compact than the editor: less air, same card. */
 .line-comment-display {
-  border-color: var(--mint-soft);
-  background: var(--bg-elev);
-  /* Сохранённый коммент компактнее формы: меньше вертикального воздуха, чтобы
-     карточки не занимали столько места (форма редактирования — прежняя). */
-  gap: 2px;
-  padding: 7px 14px 8px;
+  gap: 4px;
+  padding: 9px 14px 10px;
 }
 .line-comment-display .comment-display-header { margin-bottom: 0; }
-.line-comment-display .line-comment-quote {
-  min-height: 0;
-  margin-bottom: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-}
 
 .comment-display-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 4px;
+  min-height: 20px;
 }
 .comment-title {
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--accent-primary);
+  color: var(--text-primary);
+}
+.comment-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* Title, then its Draft / status label next to it; only the close button is pushed to the right edge. */
+.line-comment-form .comment-display-header .comment-title { margin-right: 0; }
+.line-comment-form .comment-draft-badge {
+  padding: 0;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
 }
 
-/* Удаление комментария без открытия редактора. */
+/* Закрыть/удалить комментарий без открытия редактора. */
 .comment-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
   background: transparent;
-  border: 1px solid var(--separator-subtle);
+  border: 0;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  transition: color 0.12s, background 0.12s;
 }
 .comment-remove:hover {
-  border-color: var(--danger);
-  color: var(--danger);
+  color: var(--danger-text);
   background: rgba(var(--danger-rgb), 0.08);
 }
 
 .comment-hint {
   margin-top: 8px;
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--amber);
-  text-transform: uppercase;
+  font-size: 13px;
+  color: var(--text-muted);
   font-style: normal;
 }
+.comment-hint[data-unsent] { color: var(--attention-text); }
 
 /* === Action buttons — скруглённые, воздушные, sans; общий стиль === */
 .btn {
@@ -463,7 +696,7 @@
   justify-content: center;
   gap: 6px;
   background: transparent;
-  border: 1px solid var(--separator-subtle);
+  border: 1px solid var(--control-border);
   color: var(--text-secondary);
   padding: 10px 20px;
   font-family: var(--font-ui);
@@ -477,7 +710,7 @@
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .btn:hover:not(:disabled) {
-  border-color: var(--text-muted);
+  border-color: var(--text-secondary);
   background: var(--surface-hover);
   box-shadow: none;
 }
@@ -494,35 +727,58 @@
   border-color: var(--success);
 }
 .btn-approve:hover:not(:disabled) {
-  filter: brightness(1.08);
-  background: var(--success);
-  border-color: var(--success);
+  background: var(--success-hover);
+  border-color: var(--success-hover);
   color: var(--surface-canvas);
 }
 
 .btn-send {
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--surface-canvas);
   border-color: var(--accent-primary);
 }
 .btn-send:hover:not(:disabled) {
-  filter: brightness(1.08);
-  background: var(--accent-primary);
-  border-color: var(--accent-primary);
-  color: #fff;
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+  color: var(--surface-canvas);
 }
 
 /* Контурные (secondary) кнопки — тонированные под смысл действия. */
-.btn-revise { border-color: rgba(var(--attention-rgb), 0.5); color: var(--attention); }
+.btn-revise { border-color: rgba(var(--attention-rgb), 0.5); color: var(--attention-text); }
 .btn-revise:hover:not(:disabled) { border-color: var(--attention); background: rgba(var(--attention-rgb), 0.08); }
 
-.btn-retry { border-color: rgba(var(--danger-rgb), 0.5); color: var(--danger); }
+.btn-retry { border-color: rgba(var(--danger-rgb), 0.5); color: var(--danger-text); }
 .btn-retry:hover:not(:disabled) { border-color: var(--danger); background: rgba(var(--danger-rgb), 0.08); }
 
 .btn-cancel,
-.btn-cancel-dialog { border-color: rgba(var(--danger-rgb), 0.5); color: var(--danger); }
+.btn-cancel-dialog { border-color: rgba(var(--danger-rgb), 0.5); color: var(--danger-text); }
 .btn-cancel:hover:not(:disabled),
 .btn-cancel-dialog:hover:not(:disabled) { border-color: var(--danger); background: rgba(var(--danger-rgb), 0.08); }
+
+/* Approval bar: whichever action is currently possible is the filled accent button, the other one is a quiet
+   outline. Without comments that is Approve plan; with comments it is Send revision. */
+#actions-section .btn { gap: 8px; }
+#actions-section .btn-label { display: inline-flex; align-items: center; gap: 8px; }
+#actions-section .btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+#btn-approve:not(:disabled),
+#btn-revise:not(:disabled) {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--surface-canvas);
+}
+#btn-approve:hover:not(:disabled),
+#btn-revise:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+  color: var(--surface-canvas);
+}
+#btn-approve:disabled,
+#btn-revise:disabled {
+  background: transparent;
+  border-color: var(--control-border);
+  color: var(--text-primary);
+  opacity: 0.6;
+}
 
 .actions-row {
   display: flex;
@@ -536,7 +792,7 @@
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--c-done);
+  color: color-mix(in srgb, var(--c-done) var(--tone-text-mix), var(--text-primary));
   border: 1px solid var(--c-done);
 }
 
@@ -575,23 +831,37 @@
   to { transform: translate(-50%, -50%) scale(30); opacity: 0; }
 }
 
-/* === Workspace document mode: Approval = wide document + bottom action bar === Scoped under
-   .workspace-body so the boxed detail-panel styling above is left untouched in every other context. */
+/* === Workspace document mode: Approval = full-width document + bottom action bar === Scoped under
+   .workspace-body so the boxed detail-panel styling above is left untouched in every other context.
+   --doc-gutter is the side padding of the work area, the same 8px as the Feed. */
+.workspace-body :is(#plan-section, #dialog-scroll) {
+  --doc-gutter: 8px;
+}
 .workspace-body #plan-section {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   margin-bottom: 0;
 }
-/* A comfortable readable measure, centered, with horizontal gutters. Drop the boxed
-   border/background/inner scroll — the section itself scrolls now. */
+/* Banner, hint and document share the work area's full width and its side gutter. */
+.workspace-body #plan-section > :is(.attention-banner, .stale-comments, .plan-hint-row, #plan-content, #plan-empty) {
+  margin-inline: var(--doc-gutter);
+}
+.workspace-body #plan-section > .attention-banner { margin-bottom: 18px; }
+.plan-hint-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* The section scrolls itself, so the boxed border/background of the standalone panel goes. The left padding is
+   the line-number gutter (see .line-commented [data-line]::before). */
 .workspace-body #plan-section .markdown-body,
 .workspace-body #plan-section #plan-content {
-  /* На всю ширину воркспейса (было max-width:820px по центру — слева оставался большой пустой блок).
-     Читаемость держат горизонтальные gutters, а не узкая мера. */
-  max-width: none;
-  margin-inline: 0;
-  padding: 8px clamp(16px, 3vw, 40px) 24px;
+  padding: 8px 34px 24px 44px;
   max-height: none;
   overflow-y: visible;
   border: 0;
@@ -599,7 +869,7 @@
 }
 
 /* Action blocks → fixed bottom bar. Always visible because the document above
-   scrolls, so no position:sticky needed. Buttons grouped to the right. */
+   scrolls, so no position:sticky needed. The bar is full-width; its content lines up with the document's side gutter. */
 .workspace-body #actions-section,
 .workspace-body #retry-section,
 .workspace-body #paused-section,
@@ -610,9 +880,8 @@
   margin-bottom: 0;
   border-top: 1px solid var(--separator-subtle);
   background: var(--surface-raised);
-  padding: 14px clamp(16px, 4vw, 48px);
+  padding: 14px var(--doc-gutter, 8px);
 }
-.workspace-body #actions-section .actions-row,
 .workspace-body #retry-section .actions-row,
 .workspace-body #paused-section .actions-row,
 .workspace-body #hook-failed-section .actions-row,
@@ -624,22 +893,16 @@
   gap: 10px;
   margin-bottom: 0;
 }
-
-/* C2 — индикатор «агент думает» (в шапке детали при running) */
-.thinking {
-  display: inline-flex;
+/* Hint on the left, buttons on the right; on a narrow screen the hint takes its own line above the buttons. */
+.actions-bar {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  margin-left: 8px;
-  font-size: 9px;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--amber);
+  justify-content: space-between;
+  gap: 10px 16px;
 }
-.thinking .td { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: thinkBlink 1s infinite; }
-.thinking .td:nth-child(2) { animation-delay: 0.15s; }
-.thinking .td:nth-child(3) { animation-delay: 0.3s; }
-@keyframes thinkBlink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+.actions-bar .actions-row { margin-bottom: 0; flex-wrap: wrap; justify-content: flex-end; }
+.actions-bar .comment-hint { flex: 1 1 240px; margin-top: 0; }
 
 /* === Usage-limit wait (awaiting_quota) and quota pauses === */
 .quota-wait-head {
@@ -651,7 +914,7 @@
 .quota-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--c-awaiting-quota);
+  color: color-mix(in srgb, var(--c-awaiting-quota) var(--tone-text-mix), var(--text-primary));
 }
 .quota-detail {
   font-family: var(--font-mono);
@@ -670,7 +933,7 @@
 .quota-countdown {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--c-awaiting-quota);
+  color: color-mix(in srgb, var(--c-awaiting-quota) var(--tone-text-mix), var(--text-primary));
 }
 .quota-hint {
   margin: 6px 0 0;
