@@ -3,6 +3,15 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-30
+
+### Improvement: maintain independent 1.x and 2.x release lines
+
+`make release-patch v1.x` and `make release-minor v1.x` publish the pushed
+maintenance branch commit. Stable 1.x releases update the `afm@1` Homebrew cask
+(command `afm-1`) and Docker `1`, while the main cask, Docker `latest`, and GitHub
+Latest remain on the current major. See [release commands](docs/releases.md).
+
 ## 2026-10-29
 
 ### Improvement: stop a run when a stage fails
