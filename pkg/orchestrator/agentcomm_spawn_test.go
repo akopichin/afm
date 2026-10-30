@@ -615,3 +615,67 @@ func TestAgentCommBlockFor_AdvertisesSpawnOnlyWhenCollaborationIsEnabled(t *test
 		t.Fatalf("collaboration off: the stage block must not name spawn:\n%s", block)
 	}
 }
+
+// unformattableHelperRaw is a finding's detail as an object: no local repair takes it, so it reaches the formatter.
+const unformattableHelperRaw = `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"Eleven minutes of review",` +
+	`"findings":[{"id":"f1","severity":"major","detail":{"text":"Keep the stage note"}}]}`
+
+// A helper whose answer could not be accepted still failed, but the stage that waits for it gets a reply with the
+// reason and the unvalidated answer: the work is not lost behind a cancelled wait.
+func TestSpawnHelper_InvalidAnswerFailsButRepliesWithTheRawAnswer(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	gates := installGatedHelpers(o, func(string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessOK: true, RawText: unformattableHelperRaw}, nil
+	})
+	o.runOutputFormat = func(context.Context, executor.Config, string, string, string) ([]byte, error) {
+		return nil, context.DeadlineExceeded
+	}
+	h := mustSpawn(t, o, "op-invalid", "review the plan")
+	gates.release(h.TaskID)
+	tk := waitForTaskStatus(t, store, h.TaskID, assistants.StatusFailed, 2*time.Second)
+	o.concurrency.WaitAgents()
+
+	if !strings.HasPrefix(tk.StatusReason, protocolErrorPrefix) || !strings.Contains(tk.StatusReason, "detail") ||
+		strings.Contains(tk.StatusReason, "helper execution failed") {
+		t.Fatalf("reason = %q, want the rejected answer's protocol error, not an execution failure", tk.StatusReason)
+	}
+	replies := repliesTo(store, *h.MessageID)
+	if len(replies) != 1 {
+		t.Fatalf("replies = %d, want 1", len(replies))
+	}
+	r := replies[0]
+	if !r.AutoResult || r.Sender != h.ParticipantID || len(r.Recipients) != 1 || r.Recipients[0] != spawnStage {
+		t.Fatalf("reply = %+v, want a passive reply from the helper to the stage", r)
+	}
+	rawPath := filepath.Join(o.taskDir(h.TaskID), "turn-1-output.raw.json")
+	for _, want := range []string{"could not produce a valid result", "Keep the stage note", "Eleven minutes of review", rawPath, "task failed"} {
+		if !strings.Contains(r.Body, want) {
+			t.Fatalf("reply body %q lacks %q", r.Body, want)
+		}
+	}
+	if strings.Contains(r.Body, "write again") {
+		t.Fatalf("reply body %q invites a retry of a one-shot helper", r.Body)
+	}
+}
+
+// A usage limit the formatter hits parks the helper as before: waiting for the reset is no answer failure.
+func TestSpawnHelper_FormatterUsageLimitStillParks(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	gates := installGatedHelpers(o, func(string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessOK: true, RawText: unformattableHelperRaw}, nil
+	})
+	o.runOutputFormat = func(context.Context, executor.Config, string, string, string) ([]byte, error) {
+		return nil, &executor.UsageLimitError{Provider: "anthropic", ResetAt: time.Now().Add(time.Hour)}
+	}
+	h := mustSpawn(t, o, "op-quota", "review the plan")
+	gates.release(h.TaskID)
+	waitUntil(t, "the helper parks for the limit", func() bool {
+		tk := store.Snapshot().Assistants.Tasks[h.TaskID]
+		return tk.Status == assistants.StatusQueued && tk.Quota != nil
+	})
+	if n := len(repliesTo(store, *h.MessageID)); n != 0 {
+		t.Fatalf("replies = %d, want none while the helper waits for its limit", n)
+	}
+}

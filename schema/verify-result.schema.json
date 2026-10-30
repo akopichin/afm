@@ -21,8 +21,23 @@
       ]
     },
     "summary": {
-      "type": "string",
-      "pattern": "[^\\s\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+      "description": "Free text: one string, or a list of strings (lines) that afm joins; it must not be blank.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "[^\\s\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "contains": {
+            "type": "string",
+            "pattern": "[^\\s\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+          }
+        }
+      ]
     },
     "findings": {
       "type": [
@@ -43,9 +58,19 @@
             ]
           },
           "title": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ]
           },
           "path": {
@@ -67,21 +92,51 @@
             ]
           },
           "requirement": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ]
           },
           "evidence": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ]
           },
           "minimal_fix": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ]
           }
         }

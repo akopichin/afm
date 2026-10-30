@@ -45,6 +45,7 @@ Rules:
 - `inconclusive` means you could not evaluate the requirement (missing files, ambiguous scope, corrupted input) — the `summary` MUST explain exactly why. This is a diagnosable problem with the verification itself, not a code defect.
 - `path`/`line_start`/`line_end` may be `null` when the problem is the absence of something (a missing artifact, a missing test) rather than a specific spot in an existing file. Never invent a line number you did not actually observe.
 - Every finding needs `requirement`, `evidence`, and `minimal_fix` — a finding without concrete evidence is not admissible.
+- `summary`, `title`, `requirement`, `evidence`, and `minimal_fix` accept a string or a list of strings.
 
 # THE BLOCKER RULE
 

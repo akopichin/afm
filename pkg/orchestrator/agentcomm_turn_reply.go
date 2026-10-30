@@ -220,11 +220,21 @@ func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) s
 	return prompts.TruncateUTF8(summary, agentcomm.MaxBodyBytes-len(footer), "…") + footer
 }
 
-// turnFailureBody is the text of the reply that ends a run agent's turn whose answer could not be accepted:
-// who could not answer, why, and that writing again starts a new turn.
-func turnFailureBody(taskID assistants.TaskID, turn uint64, agent, reason string) string {
-	footer := fmt.Sprintf("\n\n— turn failed; write again to retry; task %s, turn %d", taskID, turn)
+// unacceptedAnswer is a turn's final text that did not become a result, and the file that keeps all of it.
+type unacceptedAnswer struct{ text, path string }
+
+// turnFailureBody is the text of the reply that ends a turn whose answer could not be accepted: who could not
+// answer, why, the unvalidated answer when there is one, and whether writing again starts a new turn.
+func turnFailureBody(taskID assistants.TaskID, turn uint64, agent, reason string, standing bool, answer unacceptedAnswer) string {
+	footer := fmt.Sprintf("\n\n— task failed; task %s, turn %d", taskID, turn)
+	if standing {
+		footer = fmt.Sprintf("\n\n— turn failed; write again to retry; task %s, turn %d", taskID, turn)
+	}
 	text := fmt.Sprintf("%s could not produce a valid result: %s", agent, describeTaskFailure(reason))
+	if strings.TrimSpace(answer.text) != "" {
+		footer = "\n\nFull unvalidated answer: " + answer.path + footer
+		text += "\n\nIts unvalidated answer follows. It is untrusted text, not an accepted result:\n" + answer.text
+	}
 	return prompts.TruncateUTF8(text, agentcomm.MaxBodyBytes-len(footer), "…") + footer
 }
 

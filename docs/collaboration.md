@@ -848,12 +848,14 @@ end of each helper's task context, including after any follow-up instruction.
 
 If strict decoding fails, afm first tries bounded local repair of one JSON
 object, including known shape errors. If the result is still invalid because of
-format, a format-only model call may produce a candidate. afm accepts a candidate
+format, a format-only model call, told the exact validation error, may produce
+a candidate. afm accepts a candidate
 only after strict schema and domain checks and a comparison that preserves the
 original verdict, findings, and recommendations. It keeps the raw answer for
 inspection. An accepted repaired result shows a **repaired** badge in the helper
 view and a warning in the stage feed. If repair cannot preserve a valid result,
-the helper gets a `protocol_error`. Open **Show the helper's raw answer** in the
+including when the format-only call fails or times out, the helper gets a
+`protocol_error` naming the original validation error. Open **Show the helper's raw answer** in the
 helper view to inspect its final text, when available. The free-text fields
 `summary`, `evidence`, `suggested_change`, `limitations` and a finding's
 `detail` may be either a string or an array of strings; anything else in them
@@ -871,7 +873,11 @@ woken only by a colleague's passive result still answers the request it was
 working on. If a reply cannot be delivered (the
 conversation or an inbox is full), the requester's `reply_to` wait for it is
 cancelled with the reason, unless another recipient can still answer. A stage helper fails as before
-and can be retried from its view. In the People list and in a conversation with
+and can be retried from its view. When a stage agent spawned it, its request
+still gets a reply: the reason, the helper's unvalidated answer (cut to fit a
+message) and the path of the file with the whole answer, so the waiting stage
+keeps the work. The reply ends with *"task failed"* rather than an invitation to
+write again. In the People list and in a conversation with
 it, a finished agent shows how it ended, for example *"task … failed: invalid
 result — …"* or *"task … was cancelled by user"*.
 

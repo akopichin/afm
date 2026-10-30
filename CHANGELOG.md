@@ -3,6 +3,22 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-31
+
+### Fix: keep helper and verifier reviews when their answer has a format error
+
+A helper whose finding `detail` came as a list of lines lost its whole answer:
+the format repair could not finish in time, and the task failed with
+`helper execution failed: context deadline exceeded`. A finding's `detail` now
+accepts a string or a list of strings, like the other free-text fields; so do
+a verifier's `summary` and its findings' `title`, `requirement`, `evidence` and
+`minimal_fix`. The format-only repair call is told the exact validation error.
+If repair still fails, the helper fails with the original `protocol_error`, and
+the stage agent that spawned it gets a reply with the unvalidated answer and the
+path to the full answer. See
+[Helpers and collaboration](docs/collaboration.md#helper-answers-and-protocol-errors)
+and [Verify](docs/verify.md#outcome-semantics).
+
 ## 2026-10-30
 
 ### Fix: the Feed follows new events again after a tool call series is collapsed

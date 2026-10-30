@@ -4,7 +4,8 @@
 // content, reject duplicate keys at any depth, and repair the one narrow raw-newline-inside-a-string
 // mistake real models make. None of these know anything about a DOMAIN schema (verdict/findings vs
 // kind/children) — that stays in each caller. This is NOT a general json-repair library: RepairRawNewlines
-// fixes exactly one narrow mistake and nothing else (see its doc comment).
+// fixes exactly one narrow mistake and nothing else (see its doc comment). StringOrList accepts the two shapes
+// models use for prose (one string or a list of lines) and nothing else.
 package jsonstrict
 
 import (
