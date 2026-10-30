@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
@@ -192,6 +192,16 @@ export function FeedWorkspace({
     if (displayName !== undefined && displayName !== '') return displayName
     return mesh?.stages.find((stage) => stage.id === id)?.name ?? id
   }
+  const unseen = useUnseenCount(feed.stick, items.length + conversationMessages.length, stageId)
+
+  // Раскрытая группа — режим чтения: новые события не уводят её из вида. Свернули — снова решаем по позиции,
+  // иначе раскрытая у низа и свёрнутая группа навсегда отпускает ленту.
+  function onSummaryClick(event: ReactMouseEvent): void {
+    const details = (event.target as HTMLElement).closest('summary')?.parentElement
+    if (!(details instanceof HTMLDetailsElement)) return
+    if (details.open) details.addEventListener('toggle', feed.recheck, { once: true })
+    else feed.release()
+  }
   const filterContext = stageIndex >= 0 ? `Stage ${stageIndex + 1} of ${mesh!.stages.length}${stageCommand ? ` · ${stageCommand}` : ''}` : stageCommand
 
   return (
@@ -202,7 +212,7 @@ export function FeedWorkspace({
           {filterContext && <span className="feed-filter-context">{filterContext}</span>}
         </div>
       )}
-      <div id="feed-content" className="feed-scroll" ref={feed.ref} onClickCapture={(event) => { if ((event.target as HTMLElement).closest('summary')) feed.release() }}>
+      <div id="feed-content" className="feed-scroll" ref={feed.ref} onClickCapture={onSummaryClick}>
         {timeline.length === 0 ? (
           <div className="empty-hint feed-empty">{items.length + conversationMessages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>
         ) : (
@@ -269,7 +279,7 @@ export function FeedWorkspace({
           )
         )}
         {stageId !== null && !paused && <WorkingLine stageId={stageId} participants={participants} conversation={conversation} />}
-        {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}
+        {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} unseen={unseen} />}
       </div>
 
       {/* Messenger-поле заметки живому агенту — прибито к низу ленты, только когда
@@ -310,6 +320,21 @@ export function FeedWorkspace({
       )}
     </section>
   )
+}
+
+// useUnseenCount — сколько событий пришло, пока лента отпущена от низа: без счётчика она выглядит замершей.
+// Отсчёт начинается заново при отпускании и при смене стадии.
+function useUnseenCount(stick: boolean, total: number, stageId: string | null): number {
+  const [base, setBase] = useState<{ stageId: string | null; total: number } | null>(null)
+  if (stick) {
+    if (base !== null) setBase(null)
+    return 0
+  }
+  if (base === null || base.stageId !== stageId) {
+    setBase({ stageId, total })
+    return 0
+  }
+  return Math.max(0, total - base.total)
 }
 
 const EMPTY_PARTICIPANTS: MeshParticipant[] = []

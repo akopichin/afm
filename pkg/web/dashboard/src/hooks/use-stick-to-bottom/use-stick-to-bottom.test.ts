@@ -56,6 +56,43 @@ describe('useStickToBottom', () => {
     expect(el.scrollTop).toBe(120)
   })
 
+  // Content shrinking (a collapsed <details>) moves no scrollbar, so no scroll event re-decides stick.
+  describe('recheck()', () => {
+    function released(scrollTop: number): { el: HTMLDivElement; hook: { current: ReturnType<typeof useStickToBottom<HTMLDivElement>> } } {
+      const { result } = renderHook(() => useStickToBottom<HTMLDivElement>())
+      const el = document.createElement('div')
+      Object.defineProperty(el, 'scrollHeight', { value: 500, configurable: true })
+      Object.defineProperty(el, 'clientHeight', { value: 100, configurable: true })
+      act(() => result.current.ref(el))
+      act(() => {
+        el.scrollTop = scrollTop
+        result.current.release()
+      })
+      return { el, hook: result }
+    }
+
+    it('sticks again and pins to the bottom when the reader is near it', async () => {
+      const { el, hook } = released(380)
+      act(() => hook.current.recheck())
+      expect(hook.current.stick).toBe(true)
+      expect(el.scrollTop).toBe(500)
+
+      await act(async () => {
+        Object.defineProperty(el, 'scrollHeight', { value: 900, configurable: true })
+        el.appendChild(document.createElement('div'))
+        await Promise.resolve()
+      })
+      expect(el.scrollTop).toBe(900)
+    })
+
+    it('stays released when the reader is far from the bottom', () => {
+      const { el, hook } = released(120)
+      act(() => hook.current.recheck())
+      expect(hook.current.stick).toBe(false)
+      expect(el.scrollTop).toBe(120)
+    })
+  })
+
   it('re-attaching to a new node (e.g. after the container remounts) tracks the new node, not the old one', () => {
     const { result } = renderHook(() => useStickToBottom<HTMLDivElement>())
 

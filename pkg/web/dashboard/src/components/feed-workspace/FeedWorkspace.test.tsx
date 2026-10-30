@@ -897,3 +897,70 @@ it('never gives a closed tool result a delayed entrance animation', () => {
     expect(details.querySelector('.feed-item--enter')).toBeNull()
   } finally { vi.useRealTimers() }
 })
+
+describe('reading position around an expanded tool group', () => {
+  // atScroll — the feed scroller with a fixed layout (jsdom has none), scrolled to scrollTop.
+  function atScroll(container: HTMLElement, scrollTop: number): HTMLElement {
+    const scroll = container.querySelector('.feed-scroll') as HTMLElement
+    Object.defineProperties(scroll, { scrollHeight: { value: 1000, configurable: true }, clientHeight: { value: 200, configurable: true } })
+    scroll.scrollTop = scrollTop
+    fireEvent.scroll(scroll)
+    return scroll
+  }
+
+  // toggle — a summary click, plus the toggle event the browser fires after it.
+  async function toggle(details: HTMLDetailsElement): Promise<void> {
+    fireEvent.click(details.querySelector('summary') as HTMLElement)
+    await act(async () => {
+      details.dispatchEvent(new Event('toggle'))
+    })
+  }
+
+  const call = (detail: string, second: number): AfmEvent =>
+    ev('agent_action', { tool: 'Bash', detail }, 's1', `2026-01-01T00:00:0${second}Z`)
+
+  it('follows new events again after the group is collapsed at the bottom', async () => {
+    const events = [call('step 1', 0)]
+    const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
+    const scroll = atScroll(container, 800)
+    const details = container.querySelector('details') as HTMLDetailsElement
+
+    await toggle(details)
+    expect(details.open).toBe(true)
+    await toggle(details)
+    expect(details.open).toBe(false)
+
+    rerender(<FeedWorkspace events={[...events, call('step 2', 1)]} stageId="s1" />)
+    await waitFor(() => expect(scroll.scrollTop).toBe(1000))
+    expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
+  })
+
+  it('keeps the reading position when the group is collapsed away from the bottom', async () => {
+    const events = [call('step 1', 0)]
+    const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
+    const scroll = atScroll(container, 300)
+    const details = container.querySelector('details') as HTMLDetailsElement
+
+    await toggle(details)
+    await toggle(details)
+
+    rerender(<FeedWorkspace events={[...events, call('step 2', 1)]} stageId="s1" />)
+    await act(async () => { await Promise.resolve() })
+    expect(scroll.scrollTop).toBe(300)
+  })
+
+  it('counts the events that arrived below a released feed on the jump button', async () => {
+    const events = [call('step 1', 0)]
+    const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
+    atScroll(container, 800)
+    await toggle(container.querySelector('details') as HTMLDetailsElement)
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeTruthy()
+
+    rerender(<FeedWorkspace events={[...events, call('step 2', 1), call('step 3', 2)]} stageId="s1" />)
+    const jump = screen.getByRole('button', { name: 'Jump to latest, 2 new' })
+    expect(jump.textContent).toBe('2')
+
+    fireEvent.click(jump)
+    expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
+  })
+})

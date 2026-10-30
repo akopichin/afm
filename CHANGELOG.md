@@ -5,6 +5,14 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-30
 
+### Fix: the Feed follows new events again after a tool call series is collapsed
+
+Expanding an `N tool calls` series at the bottom of the Feed stopped it from
+following the agent until a page reload, even after the series was collapsed.
+Collapsing it near the bottom now follows new events again, and **Jump to latest**
+shows how many events arrived while you were reading. See
+[Dashboard](docs/dashboard.md).
+
 ### Fix: People button shows and hides the stage People panel
 
 The **People** button in the stage header toggles the People panel on any screen

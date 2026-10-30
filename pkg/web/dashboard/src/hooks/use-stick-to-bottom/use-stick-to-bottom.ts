@@ -2,6 +2,10 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 const STICK_THRESHOLD_PX = 40
 
+function isNearBottom(node: HTMLElement): boolean {
+  return node.scrollHeight - node.scrollTop - node.clientHeight < STICK_THRESHOLD_PX
+}
+
 // Держит скролл-контейнер прижатым к низу, пока пользователь сам не уехал вверх. stick=true →
 // MutationObserver докручивает вниз при росте контента.
 export function useStickToBottom<T extends HTMLElement>(): {
@@ -9,6 +13,7 @@ export function useStickToBottom<T extends HTMLElement>(): {
   stick: boolean
   jumpToBottom: () => void
   release: () => void
+  recheck: () => void
 } {
   const [node, setNode] = useState<T | null>(null)
   const [stick, setStick] = useState(true)
@@ -28,6 +33,16 @@ export function useStickToBottom<T extends HTMLElement>(): {
     setStick(false)
   }, [])
 
+  // recheck — заново решает «прилипание» по фактической позиции. Нужен, когда контент сжался без события
+  // scroll (свернули <details>): иначе отпущенная у самого низа лента так и не вернётся к новым событиям.
+  const recheck = useCallback(() => {
+    if (node === null || node.clientHeight === 0) return
+    const near = isNearBottom(node)
+    stickRef.current = near
+    setStick(near)
+    if (near) node.scrollTop = node.scrollHeight
+  }, [node])
+
   // useLayoutEffect: начальную позицию скролла выставляем ДО отрисовки кадра. Наблюдатели ниже — тоже
   // здесь, разницы нет.
   useLayoutEffect(() => {
@@ -44,8 +59,7 @@ export function useStickToBottom<T extends HTMLElement>(): {
     const onScroll = () => {
       if (node.clientHeight === 0) return
       lastTop = node.scrollTop
-      const near = node.scrollHeight - node.scrollTop - node.clientHeight < STICK_THRESHOLD_PX
-      setStick(near)
+      setStick(isNearBottom(node))
     }
     const obs = new MutationObserver(() => {
       if (stickRef.current) node.scrollTop = node.scrollHeight
@@ -70,5 +84,5 @@ export function useStickToBottom<T extends HTMLElement>(): {
     }
   }, [node])
 
-  return { ref: setNode, stick, jumpToBottom, release }
+  return { ref: setNode, stick, jumpToBottom, release, recheck }
 }

@@ -61,6 +61,11 @@ right. The selected stage's Feed can also show a People panel on wide screens.
   as it's still current. It is never silently dropped. Merely focusing a checkbox
   (such as the **Hold the agent while you type** toggle) does not count as typing,
   so a question arriving then opens right away.
+- **Following the Feed** — the Feed stays at the newest event while you are at
+  the bottom. Expanding an `N tool calls` series or scrolling up keeps your
+  reading position, and the **Jump to latest** button shows how many events
+  arrived below. Collapsing the series near the bottom, scrolling back down or
+  pressing **Jump to latest** follows new events again.
 - **Stage header** — a compact row above the selected stage's view shows its name
   and current status. When applicable it shows a reply count, **People**,
   **Retry** for a failed stage, and **Pause** or **Continue**. **People** shows

@@ -610,6 +610,24 @@
 /* В диалоге снизу залипает action-бар — приподнимаем иконку над ним, чтобы не садилась на строку
    SEND/«AGENT IS WAITING». В ленте/логе такого бара нет (raised не ставится). */
 .jump-latest-raised { bottom: 74px; }
+/* Сколько событий пришло ниже, пока лента отпущена от низа. */
+.jump-latest-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--accent-text);
+  font-size: 10px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .jump-latest { transition: none; }
