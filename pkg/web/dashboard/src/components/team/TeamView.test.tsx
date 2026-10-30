@@ -128,6 +128,28 @@ describe('TeamView', () => {
     document.body.style.userSelect = ''
   })
 
+  test('restores the chosen reply and reading position after visiting another conversation', async () => {
+    const first: meshClient.MeshThread = { id: 'keep-reply', title: 'First topic', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+    const second: meshClient.MeshThread = { ...first, id: 'other-topic', title: 'Second topic' }
+    const question: meshClient.MeshMessage = { id: 'question', thread_id: first.id, sender_id: 'run:qa', recipient_ids: ['user'], kind: 'message', body: 'Keep this reply target', seq: 1, created_at: '' }
+    vi.spyOn(meshClient, 'getMeshThread').mockImplementation(async (id) => ({ messages: id === first.id ? [question] : [], next_cursor: 1 }))
+    vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
+    renderTeamView([makeStage()], [], enabledRoster({ threads: [first, second] }))
+    fireEvent.click(screen.getByRole('button', { name: /First topic/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Reply in conversation/ }))
+    fireEvent.change(screen.getByPlaceholderText('Message First topic…'), { target: { value: 'unsent reply' } })
+    const log = screen.getByRole('log', { name: 'Messages' })
+    Object.defineProperties(log, { clientHeight: { value: 200, configurable: true }, scrollHeight: { value: 1000, configurable: true } })
+    log.scrollTop = 125
+    fireEvent.scroll(log)
+    fireEvent.click(screen.getByRole('button', { name: /Second topic/ }))
+    expect(screen.queryByRole('button', { name: 'Cancel reply in conversation' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /First topic/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel reply in conversation' })).toBeInTheDocument())
+    expect(screen.getByPlaceholderText('Message First topic…')).toHaveValue('unsent reply')
+    expect(screen.getByRole('log', { name: 'Messages' }).scrollTop).toBe(125)
+  })
+
   test('Board and People keep a new marker until Messages shows the rendered incoming message', async () => {
     const thread: meshClient.MeshThread = { id: 'mt-unread-board', title: 'QA hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
     const summary = (seq: number): meshClient.MeshThreadSummary => ({ last_other_message_seq: seq, title_seq: 0 })
@@ -596,7 +618,7 @@ describe('TeamView', () => {
     const pending = renderTeamView([makeStage()], [], enabledRoster({ probed: false }))
     fireEvent.click(screen.getByRole('tab', { name: 'People' }))
     pending.rerender(<TeamViewWithBoard runId="test-existing" roster={enabledRoster({ threads: [thread] })} stages={[makeStage()]} events={[]} profiles={profiles} />)
-    expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No conversation selected' })).toBeInTheDocument()
     pending.unmount()
 
     mockTeamWidth(341)
@@ -917,7 +939,7 @@ describe('TeamView', () => {
     fireEvent.click(screen.getByRole('tab', { name: /People/ }))
     const peopleSearch = screen.getByRole('searchbox', { name: 'Search people' })
     fireEvent.change(peopleSearch, { target: { value: 'reviewer' } })
-    expect(screen.getByText('@reviewer')).toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('@reviewer')).toBeInTheDocument()
     expect(screen.queryByText('Implement agent')).toBeNull()
   })
 
@@ -1022,27 +1044,27 @@ describe('TeamView', () => {
   test('the conversation header names the selected person and what they are', async () => {
     mockThreadAndBoardFetches()
     renderTeamView()
-    expect(screen.getByRole('heading', { name: 'Team' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No conversation selected' })).toBeInTheDocument()
     pickRunPerson(/^QA reviewer/)
     expect(await screen.findByRole('heading', { name: 'QA reviewer' })).toBeInTheDocument()
-    expect(screen.getByText('Direct conversation · Run agent')).toBeInTheDocument()
+    expect(screen.getByText('QA reviewer · Run agent')).toBeInTheDocument()
   })
 
-  test('a thread header counts its participants', () => {
+  test('a thread header lists its members and their roles', () => {
     mockThreadAndBoardFetches()
     const thread: meshClient.MeshThread = { id: 'mt-9', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Hand-off'))
     expect(screen.getByRole('heading', { name: 'Hand-off' })).toBeInTheDocument()
-    expect(screen.getByText('3 participants · you and 2 agents · QA reviewer, Implement agent')).toBeInTheDocument()
+    expect(screen.getByText('QA reviewer, Implement agent · Run agent / Stage executor')).toBeInTheDocument()
   })
 
-  test('a conversation agents started between themselves does not count you in it', () => {
+  test('a conversation agents started between themselves lists only the agents', () => {
     mockThreadAndBoardFetches()
     const thread: meshClient.MeshThread = { id: 'mt-8', title: 'Pairing', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Pairing'))
-    expect(screen.getByText('2 participants · 2 agents · QA reviewer, Implement agent')).toBeInTheDocument()
+    expect(screen.getByText('QA reviewer, Implement agent · Run agent / Stage executor')).toBeInTheDocument()
   })
 
   test('tabs are "Messages", "Board", "Activity"', () => {
@@ -1052,6 +1074,22 @@ describe('TeamView', () => {
     expect(within(tablist).getByRole('tab', { name: 'Messages' })).toBeInTheDocument()
     expect(within(tablist).getByRole('tab', { name: 'Board' })).toBeInTheDocument()
     expect(within(tablist).getByRole('tab', { name: 'Activity' })).toBeInTheDocument()
+  })
+
+  test('the page heading names the Team and sits above the Messages / Board / Activity tabs', () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+    const header = screen.getByRole('heading', { level: 2, name: 'Team' }).closest('.team-header') as HTMLElement
+    expect(within(header).getByText('Conversations with the people in this run')).toBeInTheDocument()
+    expect(within(header).getByRole('tablist', { name: 'Team' })).toBeInTheDocument()
+  })
+
+  test('the roster offers "+ New conversation" as a link under the search, not an icon beside a title', () => {
+    mockThreadAndBoardFetches()
+    renderTeamView()
+    const roster = screen.getByRole('navigation', { name: 'Team roster' })
+    expect(within(roster).getByRole('button', { name: 'New conversation' })).toHaveClass('team-roster-action')
+    expect(within(roster).getByRole('searchbox', { name: 'Search conversations' })).toHaveAttribute('placeholder', 'Search conversations…')
   })
 
   test('the Board tab counts the tasks on the board, not the reports filed under them or facts', async () => {
@@ -1957,7 +1995,7 @@ describe('TeamView', () => {
     expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Hand-off')).toBeInTheDocument()
   })
 
-  test('text typed while the first direct message is sending stays in the composer of the opened thread', async () => {
+  test('draft and reading position move to the opened thread after the first direct send', async () => {
     mockThreadAndBoardFetches()
     vi.spyOn(meshClient, 'openMeshThread').mockResolvedValue({ id: 'mt-9', title: '', scope: 'run', members: ['user', 'run:qa'], status: 'open' })
     let resolveSend!: (v: { message_id: string; seq: number }) => void
@@ -1971,9 +2009,15 @@ describe('TeamView', () => {
     await waitFor(() => expect(meshClient.sendMeshMessage).toHaveBeenCalled())
     fireEvent.change(composer, { target: { value: 'please review\nand the tests too' } })
 
+    const oldLog = screen.getByRole('log', { name: 'Messages' })
+    Object.defineProperties(oldLog, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 200 } })
+    oldLog.scrollTop = 135
+    fireEvent.scroll(oldLog)
+    vi.mocked(meshClient.getMeshThread).mockResolvedValue({ messages: [{ id: 'm1', thread_id: 'mt-9', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message', body: 'please review', seq: 1, created_at: '2026-10-29T10:00:00Z' }], next_cursor: 1 })
     await act(async () => resolveSend({ message_id: 'm1', seq: 1 }))
     await waitFor(() => expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('QA reviewer')).toBeInTheDocument())
     expect((screen.getByPlaceholderText('Message QA reviewer…') as HTMLTextAreaElement).value).toBe('and the tests too')
+    await waitFor(() => expect(screen.getByRole('log', { name: 'Messages' }).scrollTop).toBe(135))
   })
 
   test('a draft stays with its conversation when the user switches away and back', () => {
@@ -2038,4 +2082,23 @@ describe('TeamView', () => {
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(2))
     expect(openSpy.mock.calls[1]?.[0].requestId).toBe(openSpy.mock.calls[0]?.[0].requestId)
   })
+})
+
+test('scrolling a conversation does not repaint the Team conversation list', async () => {
+  const threadList = await import('./ThreadList')
+  const renders = vi.spyOn(threadList, 'ThreadList')
+  mockThreadAndBoardFetches()
+  const thread: meshClient.MeshThread = { id: 'scroll-ref', title: 'Release', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
+  const view = renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
+  await waitFor(() => expect(meshClient.getMeshThread).toHaveBeenCalled())
+  const log = screen.getByRole('log', { name: 'Messages' })
+  Object.defineProperties(log, { scrollHeight: { configurable: true, value: 1500 }, clientHeight: { configurable: true, value: 200 } })
+  const count = renders.mock.calls.length
+  for (const top of [100, 200, 300]) {
+    log.scrollTop = top
+    fireEvent.scroll(log)
+  }
+  expect(renders).toHaveBeenCalledTimes(count)
+  view.unmount()
+  vi.restoreAllMocks()
 })

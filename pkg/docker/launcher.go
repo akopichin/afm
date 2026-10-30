@@ -414,6 +414,9 @@ func ReExec(cfg ReExecConfig) error {
 			args = append(args, "-e", name+"="+value)
 		}
 	}
+	if value, set := os.LookupEnv("AFM_EXIT_ON_FAIL"); set {
+		args = append(args, "-e", "AFM_EXIT_ON_FAIL="+value)
+	}
 	// File browser: манифест корней (не секрет) передаём значением — контейнер
 	// читает его один раз при старте, чтобы знать, какие пути показывать в UI.
 	if cfg.FileBrowserEnabled && len(cfg.FileRoots.Roots) > 0 {

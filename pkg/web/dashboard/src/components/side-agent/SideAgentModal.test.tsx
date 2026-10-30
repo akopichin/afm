@@ -2,6 +2,8 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { SideAgentModal } from './SideAgentModal'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
+import { useState } from 'react'
+import { useSideAgentShortcut } from '../../hooks/use-side-agent-shortcut'
 
 function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
   return {
@@ -31,7 +33,7 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
 
 describe('SideAgentModal', () => {
   beforeEach(() => vi.useFakeTimers())
-  afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers() })
+  afterEach(() => { act(() => vi.runOnlyPendingTimers()); vi.useRealTimers(); vi.restoreAllMocks() })
 
   function renderModal(over: Partial<SideAgentApi> = {}) {
     let utils!: ReturnType<typeof render>
@@ -67,6 +69,45 @@ describe('SideAgentModal', () => {
     renderModal({ isOpen: true, close })
     fireEvent.click(screen.getByRole('button', { name: /hide assistant/i }))
     expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('Escape closes once with the global shortcut installed and never interrupts the turn', () => {
+    const api = fakeApi({ requestState: 'running', activeSource: { kind: 'modal' } })
+    function Harness() {
+      useSideAgentShortcut({ isOpen: true, onToggle: vi.fn(), onClose: api.close })
+      return <SideAgentModal api={api} />
+    }
+    render(<Harness />)
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' })
+    expect(api.close).toHaveBeenCalledTimes(1)
+    expect(api.interrupt).not.toHaveBeenCalled()
+  })
+
+  it('the first Escape dismisses helper mentions and the next hides the assistant', () => {
+    const close = vi.fn()
+    function Harness() {
+      const [draft, setDraft] = useState('')
+      return <SideAgentModal api={fakeApi({ draft, setDraft, close })} assistantProfiles={[
+        { id: 'qa', title: 'QA', command: 'claude', available: true, unavailableReason: '' },
+      ]} />
+    }
+    render(<Harness />)
+    const input = screen.getByRole('combobox')
+    fireEvent.change(input, { target: { value: '@qa', selectionStart: 3 } })
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(close).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores Escape during IME composition', () => {
+    const close = vi.fn()
+    renderModal({ close })
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape', isComposing: true })
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape', keyCode: 229 })
+    expect(close).not.toHaveBeenCalled()
   })
 
   it('closes on a scrim press that both starts and ends on the scrim', () => {
@@ -107,7 +148,7 @@ describe('SideAgentModal', () => {
     spy.mockRestore()
   })
 
-  it('restores focus to the opener after it fully closes', () => {
+  it('restores focus as soon as the closing dialog becomes inert', () => {
     const opener = document.createElement('button')
     document.body.appendChild(opener)
     opener.focus()
@@ -116,9 +157,56 @@ describe('SideAgentModal', () => {
     act(() => {}) // flush open effects (steals focus to textarea)
     expect(document.activeElement).not.toBe(opener)
     act(() => { rerender(<SideAgentModal api={{ ...api, isOpen: false }} />) })
+    expect(document.activeElement).toBe(opener)
     act(() => { vi.advanceTimersByTime(300) }) // close animation window elapses
     expect(document.activeElement).toBe(opener)
     opener.remove()
+  })
+
+  it('does not take focus back from a destination opened by the attention shortcut', () => {
+    const api = fakeApi()
+    const { rerender } = render(<SideAgentModal api={api} />)
+    const destination = document.createElement('button')
+    document.body.appendChild(destination)
+    destination.focus()
+    rerender(<SideAgentModal api={{ ...api, isOpen: false }} />)
+    act(() => vi.advanceTimersByTime(300))
+    expect(destination).toHaveFocus()
+    destination.remove()
+  })
+
+  it('closes immediately and restores focus without a timer when reduced motion is requested', () => {
+    const originalMatchMedia = window.matchMedia
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({ ...originalMatchMedia(query), matches: query.includes('prefers-reduced-motion') }))
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+    opener.focus()
+    const api = fakeApi()
+    const { rerender } = render(<SideAgentModal api={api} />)
+    rerender(<SideAgentModal api={{ ...api, isOpen: false }} />)
+    expect(document.querySelector('.side-agent-overlay')).toHaveAttribute('hidden')
+    expect(opener).toHaveFocus()
+    opener.remove()
+  })
+
+  it('removes closing content from accessibility immediately while retaining the draft and history nodes', () => {
+    const api = fakeApi({ draft: 'Next question', quote: 'File notes' })
+    const { rerender } = render(<SideAgentModal api={api} />)
+    const input = screen.getByRole('combobox')
+    const history = screen.getByRole('region', { name: 'Assistant history' })
+    expect(history).toHaveAttribute('tabindex', '0')
+    expect(history).not.toContainElement(input)
+    rerender(<SideAgentModal api={{ ...api, isOpen: false }} />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const overlay = document.querySelector('.side-agent-overlay') as HTMLElement
+    expect(overlay).toHaveClass('side-agent-closing')
+    expect(overlay.inert).toBe(true)
+    act(() => vi.advanceTimersByTime(300))
+    rerender(<SideAgentModal api={api} />)
+    expect(screen.getByRole('combobox')).toBe(input)
+    expect(input).toHaveValue('Next question')
+    expect(screen.getByRole('region', { name: 'Assistant history' })).toBe(history)
+    expect(screen.getByText('File notes')).toBeInTheDocument()
   })
 
   it('reopening during the close animation keeps the dialog open (fast toggle)', () => {
@@ -145,6 +233,18 @@ describe('SideAgentModal', () => {
     first.focus()
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(last)
+  })
+
+  it('keeps focus in the dialog when the draft is empty and Send is disabled', () => {
+    renderModal()
+    const input = screen.getByRole('combobox')
+    const close = screen.getByRole('button', { name: 'Hide assistant' })
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    input.focus()
+    fireEvent.keyDown(input, { key: 'Tab' })
+    expect(close).toHaveFocus()
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+    expect(input).toHaveFocus()
   })
 
   it('Stop button interrupts the active turn', () => {

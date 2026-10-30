@@ -4,8 +4,7 @@ import { FeedWorkspace } from '../feed-workspace'
 
 export type ActivityPanelProps = {
   // events — the SAME run-wide WebSocket feed App.tsx already holds (useEventFeed); this panel filters it
-  // down to mesh_* rather than reading its own stream, the same "one feed, many views" rule Full feed/stage
-  // Feed already follow.
+  // down to mesh_* so Activity shares the existing stream with the stage Feed.
   events: AfmEvent[]
 }
 
@@ -19,7 +18,6 @@ export function ActivityPanel({ events }: ActivityPanelProps): ReactElement {
     <FeedWorkspace
       events={meshEvents}
       stageId={null}
-      scopeToken="scope:mesh-activity"
       emptyHint="No mesh activity yet"
     />
   )

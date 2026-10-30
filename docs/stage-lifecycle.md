@@ -68,6 +68,29 @@ running → awaiting_quota → running
   [Dashboard → Pausing a stage](dashboard.md#pausing-a-stage-before-it-starts).
 - `done` / `failed` — complete
 
+## Exit on stage failure
+
+With [`afm run --exit-on-fail`](config-reference.md#exit-on-stage-failure), the
+first stage committed as `failed` stops the run and makes the command exit 1.
+Automatic retries do not stop it while the stage is still `retrying`. A failed
+required helper that has not been waived also fails its stage after the main
+agent finishes; advisory helpers do not. The error names the stage and reason,
+and includes the run directory. The event log remains available for resume.
+
+afm cancels active work and waits for its agents to stop, without waiting for
+other stages to finish normally or for the dashboard's usual exit grace period.
+An active neighboring stage may itself become `failed` during cancellation.
+A `script_before` failure in `hook_failed` and a `script_after` failure on an
+already `done` stage do not trigger this option, because neither moves the
+stage to `failed`.
+
+On the next `afm run`, `auto_recover: true` (the default) resets failed stages
+for another attempt in the same run. With `auto_recover: false`, a resumed
+`--exit-on-fail` run returns 1 for an already failed stage before starting
+agents. A manual stage **Retry** after a failed required-helper gate starts a
+new generation of its required helper tasks. Without this option, the existing
+run completion and exit behavior remains in effect.
+
 ## Resume on restart
 
 When you invoke `afm run` again, the tool automatically:

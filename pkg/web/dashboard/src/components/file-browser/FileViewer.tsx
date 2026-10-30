@@ -127,7 +127,8 @@ export function FileViewer({ content, loading, error, root, focus = null, onFocu
           onSave={() => saveLine(entry, line)}
           onFold={() => foldLine(entry, line)}
           onDiscard={entry.saved !== '' ? () => removeLine(entry, line) : undefined}
-          saveLabel={entry.saved !== '' ? 'Update' : 'Save'}
+          draft={isDraft(entry)}
+          saveLabel={entry.saved !== '' ? 'Update comment' : 'Save comment'}
           discardLabel="Delete"
         />
       )
@@ -141,6 +142,7 @@ export function FileViewer({ content, loading, error, root, focus = null, onFocu
         quote={entry.quote}
         text={entry.text}
         draft={isDraft(entry)}
+        status="Saved · not sent"
         caption={drift === null ? undefined : describeDrift(line, drift)}
         onEdit={() => toggleLine(line)}
         onRemove={() => removeLine(entry, line)}

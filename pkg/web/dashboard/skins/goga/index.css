@@ -60,6 +60,15 @@
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
      одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
+  /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
+  --accent-primary-rgb: 56, 130, 246;
+  --attention-rgb:      56, 130, 246;
+  --success-rgb:        32, 212, 191;
+  --danger-rgb:         255, 107, 90;
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #64748b;
+  --control-border: #64748b;
+  --focus-ring:     #3882f6;
 
   /* legacy aliases */
   --text:     var(--ink);
@@ -77,15 +86,15 @@
   /* text */
   --ink:       #0F172A;
   --ink-hi:    #000000;
-  --ink-dim:   #64748B;
+  --ink-dim:   #566478;
 
   /* accents: teal primary, blue secondary — сдвинуты темнее для контраста на белом */
-  --mint:      #0E9488;
+  --mint:      #0b7d73;
   --mint-soft: rgba(15, 23, 42, 0.06);
   --grid:      rgba(15, 23, 42, 0.03);
   --amber:     #2563EB;
   --violet:    #2563EB;
-  --coral:     #E11D48;
+  --coral:     #d0123b;
 
   /* cost-ui increment2 (task-12): darkened for AA on white. */
   --cost-cachewrite: #9333ea;
@@ -96,13 +105,22 @@
   --cost-warning:     #2563EB;
 
   /* dialog accents — переподобраны под светлый фон */
-  --qa-answer:              #0f766e;
-  --dialog-option-text:     #2563eb;
+  --qa-answer:              #0e6d65;
+  --dialog-option-text:     #2157cf;
   --btn-cancel-dialog-text: #b91c1c;
 
   /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
   --overlay-scrim-rgb: 0, 0, 0;
+  /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
+  --accent-primary-rgb: 37, 99, 235;
+  --attention-rgb:      37, 99, 235;
+  --success-rgb:        11, 125, 115;
+  --danger-rgb:         208, 18, 59;
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #8491a4;
+  --control-border: #8491a4;
+  --focus-ring:     #2563eb;
 
   /* legacy aliases */
   --text:     var(--ink);
@@ -163,7 +181,7 @@
 #progress-text,
 #started-at,
 #elapsed {
-  color: var(--mint);
+  color: var(--success-text);
 }
 
 /* === Перекраска хардкодных novacorps low-alpha заливок под goga-палитру. Nova Corps: rgba(111,212,204,X)
@@ -171,39 +189,34 @@
 
 ::selection { background: rgba(56, 130, 246, 0.35); }
 
-/* base/layout.css: footer progress bar, jump-latest, icon-btn, attention */
-.progress-bar { background: rgba(32, 212, 191, 0.12); }
+/* base/layout.css: footer progress bar, jump-latest, icon-btn */
+.progress-bar { background: rgba(var(--success-rgb), 0.12); }
 .progress-fill { background: linear-gradient(90deg, rgba(56, 130, 246, 0.15), var(--amber)); }
 .icon-btn { border-color: rgba(32, 212, 191, 0.4); }
-@keyframes attentionPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 130, 246, 0); }
-  50%      { box-shadow: 0 0 12px 2px rgba(56, 130, 246, 0.65); }
-}
 
 /* base/stages-list.css */
 .stage-item { border-bottom-color: rgba(32, 212, 191, 0.06); }
-.stage-item:hover { background: rgba(32, 212, 191, 0.06); }
+.stage-item:hover { background: rgba(var(--success-rgb), 0.06); --text-muted: var(--text-secondary); }
 .stage-item.active {
-  background: linear-gradient(90deg, rgba(56, 130, 246, 0.06), transparent);
+  background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.06), transparent);
+  --text-muted: var(--text-secondary);
 }
 .stage-item.active::after {
   background: linear-gradient(90deg, transparent, rgba(56, 130, 246, 0.7), transparent);
 }
 
 /* base/plan-panel.css */
-.line-commented [data-line].is-hover { background: rgba(32, 212, 191, 0.06); }
-.line-commented [data-line].has-comment { background: rgba(56, 130, 246, 0.07); }
-.line-commented [data-line].has-comment.is-hover { background: rgba(56, 130, 246, 0.12); }
-.plan-section-wrapper { background: rgba(32, 212, 191, 0.04); }
-.plan-section-wrapper.plan-section-assumptions { background: rgba(56, 130, 246, 0.05); }
-.plan-section-wrapper.plan-section-criteria { background: rgba(32, 212, 191, 0.05); }
+.line-commented [data-line].is-hover { background: rgba(var(--success-rgb), 0.06); --text-muted: var(--text-secondary); }
+.line-commented [data-line].has-comment { background: rgba(var(--attention-rgb), 0.07); --text-muted: var(--text-secondary); }
+.line-commented [data-line].has-comment.is-hover { background: rgba(var(--attention-rgb), 0.12); --text-muted: var(--text-secondary); }
+.plan-section-wrapper { background: rgba(var(--success-rgb), 0.04); }
+.plan-section-wrapper.plan-section-assumptions { background: rgba(var(--attention-rgb), 0.05); --text-muted: var(--text-secondary); }
+.plan-section-wrapper.plan-section-criteria { background: rgba(var(--success-rgb), 0.05); --text-muted: var(--text-secondary); }
 
-/* base/dialog-channel.css — .dialog-pending .dialog-custom's *background* is already goga-correct via
-   --panel-bg: var, only its hardcoded border-color still needs recoloring. */
+/* base/dialog-channel.css */
 .dialog-history .qa { border-left-color: rgba(32, 212, 191, 0.2); }
 .phase-divider { border-bottom-color: rgba(32, 212, 191, 0.12); }
-.dialog-pending .dialog-custom { border-color: rgba(32, 212, 191, 0.2); }
 
 /* base/event-feed.css */
 .feed-entry { border-bottom-color: rgba(32, 212, 191, 0.05); }
-.feed-entry:hover { background: rgba(32, 212, 191, 0.05); }
+.feed-entry:hover { background: rgba(var(--success-rgb), 0.05); --text-muted: var(--text-secondary); }

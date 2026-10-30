@@ -101,7 +101,7 @@ func (o *Orchestrator) autoRecoverFailedStages() {
 		if s.Interactive {
 			clearInteractiveSessions(filepath.Join(o.opts.RunDir, s.ID))
 		}
-		if _, ok := o.Trigger(s.ID, bus.EvManualRetry, bus.GuardCtx{}, "auto_recover"); ok {
+		if _, ok := o.Trigger(s.ID, bus.EvManualRetry, bus.GuardCtx{Fence: o.runAliveFence()}, "auto_recover"); ok {
 			log.Printf("auto_recover: stage %q failed -> pending", s.ID)
 		}
 	}
@@ -123,6 +123,11 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		// A Revise's bump belongs to the Revise, not to the status the stage has now (a Pause may have followed it).
 		if err := o.finishReviseInvalidation(s.ID); err != nil {
 			log.Printf("WARN: recover stage %q: invalidate the attempt its Revise replaced: %v", s.ID, err)
+		}
+
+		// A stage retried after a dead required helper starts a new generation of the helper tree.
+		if err := o.finishBarrierFailureBump(s.ID); err != nil {
+			log.Printf("WARN: recover stage %q: start a new generation of its required helpers: %v", s.ID, err)
 		}
 
 		o.continueMu.Lock()

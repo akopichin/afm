@@ -11,9 +11,10 @@ import { draftMentions, filterMentionProfiles } from '../assistants/mention-matc
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import { canReplyInConversation, isAgentMessageToUser, latestUnansweredRequest } from '../../lib/mesh-reply'
 import { messageText } from '../../lib/agent-result'
-import { directPeer, findExistingDirectThread, mentionHandles, participantLabel, participantRole, senderLabel, threadLabel } from '../../lib/mesh-roster'
+import { directPeer, findExistingDirectThread, mentionHandles, participantHandle, participantLabel, participantMentionNote, participantRole, senderLabel, threadHandlesLine, threadLabel } from '../../lib/mesh-roster'
 import { ConversationMessage } from './ConversationMessage'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { ComposerCard, ComposerHint, ComposerRecipients } from '../chat-composer/ComposerCard'
 import { sideAgentOutcome } from '../feed-workspace/mesh-receipt'
 
 // ThreadConversationTarget — what the Messages pane is currently pointed at: an ALREADY open thread (picked
@@ -38,7 +39,11 @@ export type RunConversationMode = {
   onReplyTargetChange: (id: string | null | undefined) => void
 }
 
+export type ConversationSession = { replyTargetId?: string | null; scrollTop?: number; stick?: boolean }
+
 export type ThreadConversationProps = {
+  session?: ConversationSession
+  onSessionChange?: (patch: Partial<ConversationSession>) => void
   target: ThreadConversationTarget | null
   // onThreadOpened — fired once a "direct" target's first message lazily opens a real thread, so the parent
   // (TeamView) can fold this conversation into the roster's "Conversations" group instead of treating the NEXT
@@ -95,22 +100,15 @@ export function conversationTitle(target: ThreadConversationTarget, participants
   return target.kind === 'direct' ? participantLabel(target.participant) : threadLabel(target.thread, participants)
 }
 
-// conversationSubtitle — the line under the title: who this is for a direct target, the head count for a thread.
+// conversationSubtitle — the line under the title: the people's handles and their roles ("@a11y, @impl · Helper / Stage executor").
 export function conversationSubtitle(target: ThreadConversationTarget, participants: MeshParticipant[]): string {
-  if (target.kind === 'direct') return `Direct conversation · ${participantRole(target.participant.kind)}`
+  if (target.kind === 'direct') return `${participantHandle(target.participant)} · ${participantRole(target.participant.kind)}`
   const peer = directPeer(target.thread, participants)
-  if (peer !== undefined) {
-    const member = target.thread.title ? `${participantLabel(peer)} · ` : ''
-    return `Direct conversation · ${member}${participantRole(peer.kind)}`
-  }
-  const agents = target.thread.members.filter((m) => m !== 'user').length
-  const agentsText = `${agents} ${agents === 1 ? 'agent' : 'agents'}`
-  // A conversation agents started between themselves does not include you.
-  const who = target.thread.members.includes('user') ? `you and ${agentsText}` : agentsText
-  const names = target.thread.title
-    ? ` · ${target.thread.members.filter((id) => id !== 'user').map((id) => senderLabel(id, participants)).join(', ')}`
-    : ''
-  return `${target.thread.members.length} participants · ${who}${names}`
+  if (peer !== undefined) return `${target.thread.title ? participantLabel(peer) : participantHandle(peer)} · ${participantRole(peer.kind)}`
+  const handles = threadHandlesLine(target.thread, participants)
+  const known = target.thread.members.map((id) => participants.find((p) => p.id === id)).filter((p): p is MeshParticipant => p !== undefined && p.kind !== 'user')
+  const roles = [...new Set(known.map((p) => participantRole(p.kind)))].join(' / ')
+  return roles === '' ? handles : `${handles} · ${roles}`
 }
 
 // otherMemberIds — every OTHER member of the conversation: a direct target has exactly one (the person
@@ -149,7 +147,7 @@ function skippedNote(finished: MeshParticipant[]): string {
   return `${names} ${finished.length === 1 ? 'has' : 'have'} finished and won't get this message`
 }
 
-type MemberMention = { id: string; handle: string; title: string; unavailable: boolean }
+type MemberMention = { id: string; handle: string; title: string; kind: string; description: string; unavailable: boolean }
 
 // otherMembers — everyone in the conversation except the operator, as roster participants.
 function otherMembers(target: ThreadConversationTarget, opened: MeshThread | null, participants: MeshParticipant[]): MeshParticipant[] {
@@ -157,14 +155,6 @@ function otherMembers(target: ThreadConversationTarget, opened: MeshThread | nul
   return otherMemberIds(target, opened)
     .map((id) => participants.find((p) => p.id === id))
     .filter((p): p is MeshParticipant => p !== undefined)
-}
-
-// routeAll — the default recipient line: the person in a direct conversation, everyone still here in a thread.
-function routeAll(target: ThreadConversationTarget, label: string, participants: MeshParticipant[]): string {
-  if (target.kind === 'direct') return label
-  const names = target.thread.members.filter((id) => id !== 'user').map((id) => senderLabel(id, participants))
-  if (names.length === 1) return names[0]!
-  return target.thread.title ? `Everyone in this conversation · ${names.join(', ')}` : 'Everyone in this conversation'
 }
 
 export function ThreadConversation(props: ThreadConversationProps): ReactElement {
@@ -211,7 +201,7 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   const mention = useMentionMenu<MemberMention>({
     matchesFor: (query) =>
       filterMentionProfiles(
-        members.map((p) => ({ id: p.id, handle: handleOf(p), title: participantLabel(p), unavailable: !p.reachable })),
+        members.map((p) => ({ id: p.id, handle: handleOf(p), title: participantLabel(p), kind: p.kind, description: participantMentionNote(p), unavailable: !p.reachable })),
         query,
       ),
     textFor: (item) => item.handle,
@@ -245,12 +235,21 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   // justAnswered — requests answered a moment ago that the polled list does not show yet: without it the answered
   // question would be preselected again right after the send.
   const [justAnswered, setJustAnswered] = useState<ReadonlySet<string>>(NO_IDS)
+  const savedScroll = useRef(props.session)
+  const restoredScroll = useRef(false)
+  useLayoutEffect(() => {
+    if (restoredScroll.current || savedScroll.current?.stick !== false) return
+    log.release()
+    if (messages.length === 0 || logNodeRef.current === null) return
+    logNodeRef.current.scrollTop = savedScroll.current.scrollTop ?? 0
+    restoredScroll.current = true
+  }, [messages, log.release])
   const replyThread = liveThread ?? undefined
   const preselected = latestUnansweredRequest(messages, replyThread, participants, justAnswered)
   const draftEmpty = draft.trim() === ''
   const [ownReplyTargetId, setOwnReplyTargetId] = useState<string | null | undefined>(undefined)
-  const replyTargetId = run === undefined ? ownReplyTargetId : run.replyTargetId
-  const onReplyTargetChange = run === undefined ? setOwnReplyTargetId : run.onReplyTargetChange
+  const replyTargetId = run !== undefined ? run.replyTargetId : props.session !== undefined ? props.session.replyTargetId : ownReplyTargetId
+  const onReplyTargetChange = run !== undefined ? run.onReplyTargetChange : props.onSessionChange !== undefined ? (replyTargetId: string | null | undefined) => props.onSessionChange?.({ replyTargetId }) : setOwnReplyTargetId
   // The live choice, for a send that resolves later: by then the human may have pointed at another question.
   const replyTargetRef = useRef(replyTargetId)
   replyTargetRef.current = replyTargetId
@@ -342,6 +341,12 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
   // A reply always reaches the author of the question, whoever else is @mentioned.
   const recipientIds = replyTo !== null && !addressed.includes(replyTo.sender_id) ? [replyTo.sender_id, ...addressed] : addressed
   const canSend = draft.trim() !== '' && recipientIds.length > 0 && !closed
+  // The chips name the recipients the way they are addressed: by their unique @handle, else by name.
+  const recipientChips = recipientIds.map((id) => {
+    const person = participants.find((p) => p.id === id)
+    if (person === undefined) return { id, text: senderLabel(id, participants) }
+    return { id, text: person.alias !== undefined && person.alias !== '' ? `@${handleOf(person)}` : participantLabel(person) }
+  })
   // readOnly — a conversation agents started between themselves: you can read along, but only members may
   // write into it (the server refuses anyone else).
   const readOnly = target.kind === 'thread' && !target.thread.members.includes('user')
@@ -410,6 +415,17 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
     )
   }
 
+  // openPicker — "+ Add recipient" and "@" open the same member list at the caret, as typing "@" does.
+  function openPicker(): void {
+    const el = caretNodeRef.current
+    const caret = el?.selectionStart ?? draft.length
+    const before = draft.slice(0, caret)
+    const insert = before !== '' && !/\s$/.test(before) ? ' @' : '@'
+    replaceRange(caret, caret, insert)
+    mention.onInput(before + insert + draft.slice(caret), caret + insert.length)
+    el?.focus()
+  }
+
   function toggleReplyTarget(id: string): void {
     onReplyTargetChange(replyTo?.id === id ? null : id)
     if (replyTo?.id !== id) caretNodeRef.current?.focus()
@@ -419,7 +435,11 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
     <div className="team-conversation">
       {/* One messages area in both states: the empty hint takes the same flex slot the list does, so the
           composer stays pinned to the bottom instead of jumping down after the first message. */}
-      <div className="team-conversation-messages" role="log" aria-label="Messages" ref={setLogNode}>
+      <div className="team-conversation-messages" role="log" aria-label="Messages" ref={setLogNode} onScroll={(event) => {
+        const node = event.currentTarget
+        if (node.clientHeight === 0) return
+        props.onSessionChange?.({ scrollTop: node.scrollTop, stick: node.scrollHeight - node.scrollTop - node.clientHeight < 40 })
+      }}>
         {messages.length === 0 ? (
           <p className="team-conversation-empty-messages empty-hint">No messages yet</p>
         ) : (
@@ -461,34 +481,46 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
             </button>
           </div>
         )}
-        <div className="team-conversation-route">
-          <span>From you →</span>
-          <strong>{mentioned.length > 0 ? recipientIds.map((id) => senderLabel(id, participants)).join(', ') : routeAll(target, label, participants)}</strong>
+        <div className="team-composer-head">
+          <strong>Message {recipientChips.map((chip) => chip.text).join(', ')}</strong>
           {mentioned.length === 0 && notice === null && reachability.finished.length > 0 && (
             <span className="team-conversation-route-skipped">{skippedNote(reachability.finished)}</span>
           )}
-          <span className="team-conversation-route-hint">@ to address someone</span>
         </div>
-        <div className="chat-composer-row">
-          <textarea
-            {...mention.inputAria}
-            ref={setInputRef}
-            className="chat-composer-input"
-            placeholder={`Message ${label}…`}
-            disabled={closed}
-            value={draft}
-            onFocus={() => { composerWasFocusedRef.current = true }}
-            onBlur={(event) => { if (!event.currentTarget.disabled) composerWasFocusedRef.current = false }}
-            onChange={(e) => {
-              setDraft(e.target.value)
-              mention.onInput(e.target.value, e.target.selectionStart ?? e.target.value.length)
-            }}
-            onKeyDown={(e) => {
-              if (mention.onKeyDown(e)) return
-              handleTextareaSubmit(e, send, canSend && !submitter.pending)
-            }}
-            rows={1}
-          />
+        <ComposerCard>
+          <ComposerRecipients>
+            {recipientChips.map((chip) => (
+              <span key={chip.id} className="mesh-recipient-chip chat-composer-recipient">{chip.text}</span>
+            ))}
+            <button type="button" className="mesh-recipients-add chat-composer-add" aria-label="Add recipient" title="Add recipient (@)" disabled={closed} onClick={openPicker}>
+              <span aria-hidden="true">+</span> Add recipient
+            </button>
+          </ComposerRecipients>
+          <div className="pasteable-textarea-wrap">
+            <textarea
+              {...mention.inputAria}
+              ref={setInputRef}
+              className="chat-composer-input"
+              placeholder={`Message ${label}…`}
+              disabled={closed}
+              value={draft}
+              onFocus={() => { composerWasFocusedRef.current = true }}
+              onBlur={(event) => { if (!event.currentTarget.disabled) composerWasFocusedRef.current = false }}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                mention.onInput(e.target.value, e.target.selectionStart ?? e.target.value.length)
+              }}
+              onKeyDown={(e) => {
+                if (mention.onKeyDown(e)) return
+                handleTextareaSubmit(e, send, canSend && !submitter.pending)
+              }}
+              rows={1}
+            />
+            <div className="pasteable-toolbar">
+              <button type="button" className="chat-composer-mention" aria-label="Mention someone" title="Mention someone (@)" disabled={closed} onClick={openPicker}>@</button>
+              <ChatSendButton label="Send" visibleLabel="Send" disabled={!canSend} sending={submitter.pending} onClick={send} />
+            </div>
+          </div>
           {mention.open && (
             <MentionMenu
               id={mention.listboxId}
@@ -497,10 +529,11 @@ export function ThreadConversation(props: ThreadConversationProps): ReactElement
               onHover={mention.setHighlightIndex}
               onSelect={mention.pick}
               ariaLabel="Mention someone in this conversation"
+              heading="Mention a participant"
             />
           )}
-          <ChatSendButton label="Send" disabled={!canSend} sending={submitter.pending} onClick={send} />
-        </div>
+        </ComposerCard>
+        <ComposerHint note="Only the recipients above receive this message." />
         {submitter.error !== null && <div className="team-conversation-error" role="alert">{submitter.error}</div>}
         </>
       )}

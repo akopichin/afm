@@ -8,6 +8,11 @@ import type { MeshMessage, MeshParticipant, MeshSendReceipt, MeshThread } from '
 const qa: MeshParticipant = { id: 'run:qa', kind: 'run_agent', scope: 'run', display_name: 'QA reviewer', reachable: true }
 const thread: MeshThread = { id: 'mt-1', title: 'Hand-off', scope: 'run', members: ['user', 'run:qa'], status: 'open' }
 
+// recipientChips — the "To" row of the composer card.
+function recipientChips(): string[] {
+  return Array.from(within(screen.getByRole('group', { name: 'Recipients' })).queryAllByText(/./, { selector: '.chat-composer-recipient' }), (chip) => chip.textContent ?? '')
+}
+
 describe('ThreadConversation', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -44,12 +49,21 @@ describe('ThreadConversation', () => {
     expect(conversationSubtitle({ kind: 'thread', thread: group }, [qa])).toContain('QA reviewer')
   })
 
+  test('the subtitle gives handles and roles: "@alias · Role" for a person, a joined line for a group', () => {
+    const aliased: MeshParticipant = { ...qa, alias: 'qa' }
+    const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', display_name: 'API reviewer', alias: 'api', reachable: true }
+    expect(conversationSubtitle({ kind: 'direct', participant: aliased }, [aliased])).toBe('@qa · Run agent')
+    const group: MeshThread = { ...thread, members: ['user', aliased.id, api.id] }
+    expect(conversationSubtitle({ kind: 'thread', thread: group }, [aliased, api])).toBe('@qa, @api · Run agent / Stage executor')
+  })
+
   test('the composer names members under a titled discussion', () => {
     vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
     const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', display_name: 'API reviewer', reachable: true }
     const group: MeshThread = { ...thread, members: ['user', qa.id, api.id] }
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
-    expect(screen.getByText(/Everyone in this conversation · QA reviewer, API reviewer/)).toBeInTheDocument()
+    expect(recipientChips()).toEqual(['QA reviewer', 'API reviewer'])
+    expect(screen.getByText('Message QA reviewer, API reviewer')).toBeInTheDocument()
   })
 
   test('the empty state sits in the same messages area as messages do, so the composer never jumps', () => {
@@ -288,18 +302,22 @@ describe('ThreadConversation', () => {
     const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API: due dates', stage_id: 'api', reachable: true }
     const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
-    expect(screen.getByText('Everyone in this conversation · QA reviewer, API: due dates')).toBeInTheDocument()
+    expect(recipientChips()).toEqual(['QA reviewer', '@api'])
 
     const input = screen.getByPlaceholderText('Message Due dates…') as HTMLTextAreaElement
     fireEvent.change(input, { target: { value: '@', selectionStart: 1 } })
     const menu = screen.getByRole('listbox', { name: 'Mention someone in this conversation' })
     expect(menu).toHaveTextContent('@api')
     expect(menu).toHaveTextContent('QA reviewer')
+    // Same shape as the Feed picker: one-line heading, then "role · scope" under each name.
+    expect(within(menu).getByText('Mention a participant · ↑ ↓ to choose · Enter to add')).toBeInTheDocument()
+    expect(within(menu).getByText('Stage agent · api')).toBeInTheDocument()
+    expect(within(menu).getByText('Run agent · Whole run')).toBeInTheDocument()
 
     fireEvent.change(input, { target: { value: '@ap', selectionStart: 3 } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(input.value).toBe('@api '))
-    expect(screen.getByText('API: due dates')).toBeInTheDocument()
+    expect(recipientChips()).toEqual(['@api'])
 
     fireEvent.change(input, { target: { value: '@api what does a bad dueDate return?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -314,9 +332,9 @@ describe('ThreadConversation', () => {
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
     const input = screen.getByPlaceholderText('Message Due dates…') as HTMLTextAreaElement
     fireEvent.change(input, { target: { value: '@api please check' } })
-    expect(screen.getByText('API')).toBeInTheDocument()
+    expect(recipientChips()).toEqual(['@api'])
     fireEvent.change(input, { target: { value: 'please check' } })
-    expect(screen.getByText('Everyone in this conversation · QA reviewer, API')).toBeInTheDocument()
+    expect(recipientChips()).toEqual(['QA reviewer', '@api'])
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['run:qa', 'stage:api'] })))
   })
@@ -539,7 +557,7 @@ describe('ThreadConversation', () => {
     const group: MeshThread = { id: 'mt-g', title: 'Review', scope: 'run', members: ['user', 'run:t-1', 'run:t-2'], status: 'open' }
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa1, qa2]} />)
     fireEvent.change(screen.getByPlaceholderText('Message Review…'), { target: { value: '@qa hi' } })
-    expect(screen.getByText('Everyone in this conversation · QA one, QA two')).toBeInTheDocument()
+    expect(recipientChips()).toEqual(['@run:t-1', '@run:t-2'])
   })
 })
 
@@ -1023,5 +1041,30 @@ describe('ThreadConversation in Run conversations mode', () => {
         expect(accented()).toEqual([])
       })
     })
+  })
+})
+
+describe('ThreadConversation composer card', () => {
+  const api: MeshParticipant = { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true }
+  const group: MeshThread = { id: 'mt-g', title: 'Due dates', scope: 'run', members: ['user', 'run:qa', 'stage:api'], status: 'open' }
+
+  test('is one bordered card: recipients row, input and a toolbar with @ and a labelled Send, then the hint', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    const { container } = render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
+    const card = container.querySelector('.chat-composer-card') as HTMLElement
+    expect(within(card).getByRole('group', { name: 'Recipients' })).toBeInTheDocument()
+    expect(within(card).getByPlaceholderText('Message Due dates…')).toBeInTheDocument()
+    const toolbar = card.querySelector('.pasteable-toolbar') as HTMLElement
+    expect(within(toolbar).getByRole('button', { name: 'Mention someone' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: 'Send' })).toHaveTextContent('Send')
+    expect(container.querySelector('.chat-composer-hint')).toHaveTextContent('Enter to send · Shift+Enter for a new line')
+  })
+
+  test('"Add recipient" and "@" open the member list at the caret', () => {
+    vi.spyOn(meshClient, 'getMeshThread').mockResolvedValue({ messages: [], next_cursor: 0 })
+    render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, api]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add recipient' }))
+    expect(screen.getByRole('listbox', { name: 'Mention someone in this conversation' })).toHaveTextContent('@api')
+    expect(screen.getByPlaceholderText('Message Due dates…')).toHaveValue('@')
   })
 })

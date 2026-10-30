@@ -28,12 +28,12 @@
   margin: 8px 0;
   padding: 2px 12px;
   border-left: 2px solid var(--mint);
-  color: var(--ink-dim);
+  color: var(--text-muted);
 }
 
 .md em { color: var(--ink-hi); font-style: italic; }
 
-.md a { color: var(--mint); text-decoration: underline; }
+.md a { color: var(--success-text); text-decoration: underline; }
 .md a:hover { color: var(--ink-hi); }
 
 .md ul, .md ol { margin: 4px 0; padding-left: 22px; }

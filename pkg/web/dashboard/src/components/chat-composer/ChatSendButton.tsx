@@ -3,6 +3,8 @@ import type { ReactElement } from 'react'
 export type ChatSendButtonProps = {
   // label — доступное имя и подсказка; на самой кнопке только иконка.
   label: string
+  // Opt into the labelled arrow button while existing inline composers keep the icon-only variant.
+  visibleLabel?: string
   disabled: boolean
   onClick: () => void
   // paused — стадия на паузе: кнопка янтарная, как и рамка строки ввода.
@@ -13,21 +15,23 @@ export type ChatSendButtonProps = {
 
 // ChatSendButton — круглая кнопка отправки с самолётиком. Одна на все чат-композеры (лента, обсуждение,
 // Team, боковой агент) и живёт внутри строки ввода .chat-composer-row.
-export function ChatSendButton({ label, disabled, onClick, paused = false, sending = false }: ChatSendButtonProps): ReactElement {
+export function ChatSendButton({ label, visibleLabel, disabled, onClick, paused = false, sending = false }: ChatSendButtonProps): ReactElement {
   const name = sending ? 'Sending…' : label
   return (
     <button
       type="button"
-      className={`chat-send${paused ? ' paused' : ''}`}
+      className={`chat-send${visibleLabel !== undefined ? ' chat-send--labelled' : ''}${paused ? ' paused' : ''}`}
       aria-label={name}
       aria-busy={sending}
       title={name}
       disabled={disabled || sending}
       onClick={onClick}
     >
+      {visibleLabel !== undefined && <span>{sending ? 'Sending…' : visibleLabel}</span>}
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M22 2 11 13" />
-        <path d="M22 2 15 22l-4-9-9-4 20-7Z" />
+        {visibleLabel !== undefined ? <path d="M12 20V4m-7 7 7-7 7 7" /> : (
+          <><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4 20-7Z" /></>
+        )}
       </svg>
     </button>
   )

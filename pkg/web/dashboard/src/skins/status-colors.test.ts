@@ -9,7 +9,7 @@ import graphiteCss from '../../skins/graphite/index.css?raw'
 import novacorpsCss from '../../skins/novacorps/index.css?raw'
 import assistantsCss from '../../skins/base/assistants.css?raw'
 import stagesListCss from '../../skins/base/stages-list.css?raw'
-import planPanelCss from '../../skins/base/plan-panel.css?raw'
+import layoutCss from '../../skins/base/layout.css?raw'
 
 // decl reads the LAST declared value of a custom property in a stylesheet string (cascade order).
 const decl = (css: string, name: string): string | undefined => {
@@ -59,7 +59,7 @@ describe('awaiting_quota uses a real amber token in the rail, the header badge a
   })
   it('rail dot and workspace badge both read --c-awaiting-quota', () => {
     expect(declInRule(stagesListCss, '.status-dot[data-status="awaiting_quota"]', 'color')).toBe('var(--c-awaiting-quota)')
-    expect(declInRule(planPanelCss, '.status-badge[data-status="awaiting_quota"]', 'color')).toBe('var(--c-awaiting-quota)')
+    expect(declInRule(layoutCss, '.status-badge[data-status="awaiting_quota"]', '--status-tone')).toBe('var(--c-awaiting-quota)')
   })
   it('a quota-parked helper dot uses --attention, not a new --c-* token', () => {
     expect(declInRule(assistantsCss, '.assistant-task-status-dot[data-quota="true"]', 'background')).toBe('var(--attention)')

@@ -1,5 +1,5 @@
-/* pkg/web/dashboard/skins/base/layout.css Dashboard body shell: a non-resizable two-column grid — stage
-   rail and a single tabbed workspace. Semantic tokens only. */
+/* pkg/web/dashboard/skins/base/layout.css Dashboard body shell: a two-column grid — stage rail (resizable
+   by its divider) and a single tabbed workspace. Semantic tokens only. */
 
 /* Верхний уровень — flex-колонка на всю высоту вьюпорта: шапка и review-баннер занимают натуральную
    высоту, #main забирает остаток. */
@@ -24,7 +24,8 @@
 .dashboard-body {
   position: relative;
   display: grid;
-  grid-template-columns: var(--rail-width, 300px) 1fr;
+  /* minmax(0, …): a wide child must shrink the workspace, never add a horizontal scrollbar. */
+  grid-template-columns: var(--rail-width, 300px) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
@@ -35,6 +36,9 @@
   min-height: 0;
   height: 100%;
 }
+
+/* Запасная цель фокуса шторки, пока в рейле нет стадий: сама по себе не интерактивна. */
+.rail-slot:focus-visible { outline: none; }
 
 /* Делитель: тонкая полоса-хит-эриа на всю высоту, центрирована на границе. */
 .rail-resizer {
@@ -53,11 +57,8 @@
   border: 0;
   padding: 0;
 }
-.rail-resizer:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
-}
+/* Фокус показывает только короткая ручка (кольцо вокруг неё), а не рамка на всю высоту делителя. */
+.rail-resizer:focus-visible { outline: none; }
 /* Видимая ручка — маленькая вертикальная полоска ПО ЦЕНТРУ. Едва заметна в покое (чтобы её можно было
    найти), подсвечивается акцентом и вырастает при наведении/перетаскивании. */
 .rail-resizer-grip {
@@ -73,6 +74,9 @@
   opacity: 1;
   background: var(--accent-primary);
   height: 60px;
+}
+.rail-resizer:focus-visible .rail-resizer-grip {
+  box-shadow: 0 0 0 2px var(--surface-canvas), 0 0 0 4px var(--focus-ring);
 }
 @media (prefers-reduced-motion: reduce) {
   .rail-resizer-grip { transition: none; }
@@ -164,13 +168,14 @@
   cursor: pointer;
 }
 
-/* Tab strip: a bottom-border track the active tab underlines. */
+/* Tab strip: plain underline tabs; the selected one gets a 2px accent underline. */
 .workspace-tabs {
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  gap: 24px;
   flex-shrink: 0;
-  padding: 0 12px;
+  min-height: 40px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--separator-subtle);
   background: var(--surface-raised);
 }
@@ -179,165 +184,91 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 15px 18px;
+  gap: 7px;
+  padding: 10px 0;
   background: transparent;
   border: 0;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px; /* overlap the track border */
   color: var(--text-muted);
   font-family: var(--font-ui);
-  font-size: 14.5px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: 13px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color 0.15s ease;
 }
-.workspace-tab:hover {
-  color: var(--text-secondary);
-  background: var(--surface-hover);
-}
+.workspace-tab:hover { color: var(--text-primary); }
 .workspace-tab.active {
   color: var(--text-primary);
-  border-bottom-color: var(--accent-primary);
+  font-weight: 650;
+}
+.workspace-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px; /* sit on the strip's own border */
+  height: 2px;
+  background: var(--accent-primary);
 }
 .workspace-tab:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .workspace-tab-label {
   white-space: nowrap;
 }
 
-/* Full feed is pushed to the far RIGHT edge of the tab strip; every other tab stays left-packed. */
-.workspace-tab[data-tab-id="full-feed"] {
-  margin-left: auto;
-}
-
-.attn-count {
-  color: var(--text-muted);
+/* Square count badge ("Approval 1"); an attention tab tints it and the label with its tone, nothing glows. */
+.workspace-tab-count {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
-
-/* Attention tab glyph — a filled badge (circle) with a kind glyph (?, ✎, …),
-   colored by kind. Larger than a plain dot to read as the "beacon" in the mock. */
-.attn-glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--text-secondary);
-  color: var(--surface-canvas);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-  flex-shrink: 0;
+.workspace-tab.workspace-tab-attention { color: var(--attention-text); }
+.workspace-tab-attention .workspace-tab-count {
+  background: rgba(var(--attention-rgb), 0.16);
+  color: var(--attention-text);
 }
-.workspace-tab-attention[data-kind="question"] .attn-glyph::before,
-.workspace-tab-attention[data-kind="approval"] .attn-glyph::before { content: "?"; }
-.workspace-tab-attention[data-kind="paused"] .attn-glyph::before { content: "❙❙"; font-size: 8px; letter-spacing: -1px; }
-.workspace-tab-attention[data-kind="failed"] .attn-glyph::before,
-.workspace-tab-attention[data-kind="hook_failed"] .attn-glyph::before { content: "!"; }
-.workspace-tab-attention[data-kind="approval"] .attn-glyph,
-.workspace-tab-attention[data-kind="question"] .attn-glyph { background: var(--attention); }
-.workspace-tab-attention[data-kind="failed"] .attn-glyph,
-.workspace-tab-attention[data-kind="hook_failed"] .attn-glyph { background: var(--danger); }
-.workspace-tab-attention[data-kind="paused"] .attn-glyph { background: var(--text-secondary); }
-
-/* .glow — the most prominent motion in the app: a low-frequency halo pulse on the attention tab, themed by
-   kind. The concentric halo is a pseudo-element. */
-.workspace-tab.glow {
-  --glow-rgb: var(--attention-rgb);
-}
-.workspace-tab.glow[data-kind="failed"],
-.workspace-tab.glow[data-kind="hook_failed"] {
-  --glow-rgb: var(--danger-rgb);
-}
-.workspace-tab.glow .attn-glyph {
-  box-shadow: 0 0 0 4px rgba(var(--glow-rgb), 0.20), 0 0 0 9px rgba(var(--glow-rgb), 0.08);
-  animation: tabGlyphGlow 2.2s ease-in-out infinite;
-}
-/* Активный attention-таб: жёлтый glow-бар вместо синего .active-underline
-   (иначе синий просвечивает по краям — «двойная граница»). */
-.workspace-tab.glow.active {
-  border-bottom-color: transparent;
-}
-.workspace-tab.glow::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 3px;
-  border-radius: 3px 3px 0 0;
-  background: rgba(var(--glow-rgb), 0.95);
-  box-shadow: 0 0 10px 1px rgba(var(--glow-rgb), 0.5);
-  animation: tabHaloGlow 2.2s ease-in-out infinite;
-}
-@keyframes tabGlyphGlow {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18), 0 0 0 7px rgba(var(--glow-rgb), 0.08); }
-  50%      { box-shadow: 0 0 0 5px rgba(var(--glow-rgb), 0.34), 0 0 0 11px rgba(var(--glow-rgb), 0.14); }
-}
-@keyframes tabHaloGlow {
-  0%, 100% { box-shadow: 0 0 6px 0 rgba(var(--glow-rgb), 0.35); opacity: 0.8; }
-  50%      { box-shadow: 0 0 16px 2px rgba(var(--glow-rgb), 0.65); opacity: 1; }
+.workspace-tab.workspace-tab-attention[data-kind="failed"],
+.workspace-tab.workspace-tab-attention[data-kind="hook_failed"] { color: var(--danger-text); }
+.workspace-tab-attention[data-kind="failed"] .workspace-tab-count,
+.workspace-tab-attention[data-kind="hook_failed"] .workspace-tab-count {
+  background: rgba(var(--danger-rgb), 0.16);
+  color: var(--danger-text);
 }
 
-/* === Attention banner — шапка внутри контекстной вкладки === */
+/* === Attention banner — a quiet bordered card; the tone colours only the icon and a thin border === */
 .attention-banner {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
   flex: none;
-  padding: 18px 22px;
+  padding: 16px 18px;
   margin: 0 clamp(16px, 3vw, 40px) 8px;
   border-radius: var(--radius-lg);
-  background: rgba(var(--attention-rgb), 0.06);
-  border: 1px solid rgba(var(--attention-rgb), 0.18);
+  background: var(--surface-raised);
+  border: 1px solid rgba(var(--attention-rgb), 0.32);
 }
-.attention-banner[data-tone="danger"] {
-  background: rgba(var(--danger-rgb), 0.06);
-  border-color: rgba(var(--danger-rgb), 0.18);
-}
+.attention-banner[data-tone="danger"] { border-color: rgba(var(--danger-rgb), 0.32); }
 .attention-banner-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
   flex: none;
-  border-radius: 50%;
-  border: 2px solid var(--attention);
   color: var(--attention);
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
-  box-shadow: 0 0 0 5px rgba(var(--attention-rgb), 0.10), 0 0 0 11px rgba(var(--attention-rgb), 0.05);
-  animation: bannerIconGlow 2.4s ease-in-out infinite;
 }
-.attention-banner[data-tone="danger"] .attention-banner-icon {
-  border-color: var(--danger);
-  color: var(--danger);
-  box-shadow: 0 0 0 5px rgba(var(--danger-rgb), 0.10), 0 0 0 11px rgba(var(--danger-rgb), 0.05);
-}
-@keyframes bannerIconGlow {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0.12), 0 0 0 9px rgba(var(--attention-rgb), 0.05); }
-  50%      { box-shadow: 0 0 0 6px rgba(var(--attention-rgb), 0.20), 0 0 0 13px rgba(var(--attention-rgb), 0.09); }
-}
+.attention-banner[data-tone="danger"] .attention-banner-icon { color: var(--danger); }
 .attention-banner-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .attention-banner-title {
   font-family: var(--font-ui);
-  font-size: 17px;
+  font-size: 13px;
   font-weight: 700;
-  color: var(--attention);
+  color: var(--text-primary);
 }
-.attention-banner[data-tone="danger"] .attention-banner-title { color: var(--danger); }
 .attention-banner-subtitle {
-  font-size: 13.5px;
+  font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.5;
 }
@@ -392,24 +323,27 @@
 }
 .history-switch-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
-/* Stage context bar above the feed / detail panels. */
+/* Stage context bar above the feed / detail panels: title + status chip, then the stage actions. */
 .workspace-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  min-height: 44px;
+  gap: 9px;
   flex-shrink: 0;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--separator-subtle);
+  padding: 6px 8px;
+  position: relative;
 }
-/* The view's own buttons (the Feed's people toggle) sit at the header's right end. */
 .workspace-header-actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
 }
 .workspace-title {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: -0.025em;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -422,6 +356,107 @@
   gap: 10px;
   flex-shrink: 0;
 }
+
+/* Status chip: sentence case, a dot and the status word, tinted by the status colour. */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  --status-tone: var(--text-secondary);
+  background: color-mix(in srgb, var(--status-tone) 9%, var(--surface-canvas));
+  color: color-mix(in srgb, var(--status-tone) var(--tone-text-mix), var(--text-primary));
+  font-size: 10px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.status-badge::before {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-tone);
+}
+.status-badge[data-status="pending"]              { --status-tone: var(--c-pending); }
+.status-badge[data-status="planning"]             { --status-tone: var(--c-planning); }
+.status-badge[data-status="awaiting_approval"]    { --status-tone: var(--c-awaiting); }
+.status-badge[data-status="revising"]             { --status-tone: var(--c-revising); }
+.status-badge[data-status="ready"]                { --status-tone: var(--c-ready); }
+.status-badge[data-status="running"]              { --status-tone: var(--c-running); }
+.status-badge[data-status="done"]                 { --status-tone: var(--c-done); }
+.status-badge[data-status="failed"]               { --status-tone: var(--c-failed); }
+.status-badge[data-status="retrying"]             { --status-tone: var(--c-retrying); }
+.status-badge[data-status="awaiting_user_input"]  { --status-tone: var(--c-awaiting-user); }
+.status-badge[data-status="hook_failed"]          { --status-tone: var(--c-hook-failed); }
+.status-badge[data-status="paused"]               { --status-tone: var(--c-paused); }
+.status-badge[data-status="awaiting_assistants"]  { --status-tone: var(--c-awaiting-assistants); }
+.status-badge[data-status="awaiting_quota"]       { --status-tone: var(--c-awaiting-quota); }
+/* Blocked — a required helper gate that needs a human decision reads as failed, like the rail node. */
+.status-badge[data-status="awaiting_assistants"][data-blocked="true"] { --status-tone: var(--c-failed); }
+
+/* "Agent is working" dots inside the running chip; the word itself is for screen readers only. */
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0;
+}
+.thinking .td {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: thinkBlink 1.2s ease-in-out infinite;
+}
+.thinking .td:nth-child(2) { animation-delay: 0.15s; }
+.thinking .td:nth-child(3) { animation-delay: 0.3s; }
+@keyframes thinkBlink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .thinking .td { animation: none; }
+}
+
+/* Stage actions: quiet text/icon buttons; Retry is the one filled call to action. */
+.workspace-action,
+.workspace-header .stage-people-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  height: 28px;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.workspace-action svg,
+.workspace-header .stage-people-toggle svg { width: 15px; height: 15px; flex-shrink: 0; }
+.workspace-action-icon { width: 28px; }
+.workspace-action:hover:not(:disabled),
+.workspace-header .stage-people-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
+.workspace-action:focus-visible,
+.workspace-header .stage-people-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.workspace-action:disabled { color: var(--text-disabled); cursor: default; }
+.workspace-action-retry { padding: 4px 9px; background: var(--accent-primary); color: var(--surface-canvas); }
+.workspace-action-retry:hover:not(:disabled) { background: var(--accent-primary-hover); color: var(--surface-canvas); }
+.workspace-action-retry:disabled { background: var(--surface-hover); }
+.workspace-reply-needed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--attention-text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.workspace-reply-needed svg { width: 14px; height: 14px; }
+.workspace-action-error { color: var(--danger-text); font-size: 12px; overflow-wrap: anywhere; }
 
 /* Column of stacked detail panels (plan / dialog). */
 .detail-panels {
@@ -556,7 +591,7 @@
   background: var(--surface-raised);
   border: 1px solid var(--accent-primary);
   border-radius: 50%;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.30);
   cursor: pointer;
   transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
@@ -604,27 +639,13 @@
   outline-offset: 1px;
 }
 .icon-btn:disabled {
-  opacity: 0.4;
+  color: var(--text-disabled);
+  border-color: var(--separator-subtle);
   cursor: not-allowed;
 }
 .icon-btn-on {
   border-color: var(--accent-primary);
-  color: var(--accent-primary);
-}
-
-/* === Attention signal === When a stage needs the user (awaiting_user_input / awaiting_approval) we
-   highlight it in the rail row and the relevant panel frame. */
-@keyframes attentionPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0); }
-  50%      { box-shadow: 0 0 12px 2px rgba(var(--attention-rgb), 0.55); }
-}
-
-.panel-frame.attention {
-  border-color: var(--attention);
-  animation: attentionPulse 1.8s ease-in-out infinite;
-}
-.stages-list [data-attention='true'] {
-  animation: attentionPulse 1.8s ease-in-out infinite;
+  color: var(--accent-text);
 }
 
 /* C1 — smooth cross-fade on theme change over the large surfaces. */
@@ -644,10 +665,6 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-}
-.workspace-body .panel-frame.attention {
-  border-top: 1px solid var(--attention);
-  animation: none;
 }
 .workspace-body .panel-frame-header {
   display: none;
@@ -696,7 +713,7 @@
   background: var(--surface-hover);
 }
 .attention-nav-btn:disabled {
-  opacity: 0.4;
+  color: var(--text-disabled);
   cursor: not-allowed;
 }
 .attention-nav-btn:focus-visible {
@@ -714,7 +731,8 @@
 /* === Narrow viewports: the stage rail becomes a slide-over drawer === Below 900px the two-column grid
    collapses to one; the rail leaves the flow and slides over the workspace on demand. */
 @media (max-width: 900px) {
-  .dashboard-body { grid-template-columns: 1fr; }
+  .dashboard-body { grid-template-columns: minmax(0, 1fr); }
+  .workspace-tabs { gap: 20px; padding: 0 12px; }
 
   /* Делитель не нужен, пока рейл — слайд-овер фиксированной ширины. */
   .rail-resizer { display: none; }
@@ -738,6 +756,16 @@
   }
   .dashboard-body.rail-open .rail-slot { transform: none; }
   .dashboard-body.rail-open .rail-scrim { display: block; }
+}
+
+/* Phone: the header wraps, so title and actions stay readable on a narrow row. */
+@media (max-width: 600px) {
+  .workspace-header { flex-wrap: wrap; padding: 5px 0; }
+  .workspace-header-actions { flex-wrap: wrap; }
+  .workspace-title { max-width: 44%; }
+  .workspace-reply-needed { font-size: 10px; }
+  .workspace-action, .workspace-header .stage-people-toggle { height: 32px; }
+  .workspace-action-icon { width: 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

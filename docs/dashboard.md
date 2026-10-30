@@ -18,10 +18,11 @@ and unsent stage drafts from the previous run are cleared. With
 `server.open_browser: true`, afm opens a tab only for the first cycle.
 
 The layout is a **stage rail** on the left plus one **tabbed workspace** on the
-right (there is no three-column layout or bottom progress bar).
+right. The selected stage's Feed can also show a People panel on wide screens.
 
-- **Stage rail** — a vertical timeline of the run: numbered status nodes, each
-  stage's `name` (or `id`), a human-readable status line, and, in the rail head, the
+- **Stage rail** — a compact vertical timeline of the run: status nodes (filled
+  for completed stages), each stage's `name` (or `id`), a human-readable status
+  line, and, in the rail head, the
   run progress (`done / total`). Attached helper tasks appear beneath their stage;
   **+ Stage** is available when a live stage can be added. A stage using
   [AI-verify](verify.md) shows a small
@@ -31,21 +32,20 @@ right (there is no three-column layout or bottom progress bar).
   exists, regardless of how much other event activity has happened since. (One
   exception: a stale `running` verify badge is hidden once the stage itself is
   terminal — `done`/`failed` — so it can't pulse beside a finished dot.) On narrow
-  viewports the rail
-  collapses into a slide-over drawer (open with the ☰ toggle next to the tabs).
-  Run metrics (Started / Elapsed / Idle / Backoff) live in the header, center.
+  viewports the rail collapses into a slide-over drawer (open with the ☰ toggle
+  next to the tabs). On wider screens, drag the rail divider, use Left/Right while
+  it is focused, or double-click it to restore its default width. The width is
+  saved in the browser. Run metrics (Started / Elapsed / Idle / Backoff) live in
+  the header, center; the afm version appears at the bottom of the rail.
 - **Workspace** — a permanent **Feed** tab (a messenger-style view of the
   *selected stage's own* event history, capped at its last 2,000 events) plus one
   contextual tab for the selected stage — live/actionable, or completed with a
   plan or Q&A history to reopen. In `team` mode, when Agent Mesh is available,
   run-wide **Team** and **Board** tabs appear beside each other. Team opens the
   participant roster and conversations; Board groups tasks by status (see
-  [Board tasks](collaboration.md#board-tasks)). The workspace also has a permanent
-  **Full feed** tab pinned to the far right of the tab row, showing the whole
-  flow's last 10,000 events across every stage. Feed always reflects whichever
-  stage is selected — including an old, already-completed one, which used to
-  show up empty once enough later activity had pushed it out of a single
-  flow-wide window. Clicking a `pending` or `done` stage stays on Feed; read-only
+  [Board tasks](collaboration.md#board-tasks)). There is no visible **Full feed**
+  tab. Feed always reflects whichever stage is selected, including an old,
+  already-completed one. Clicking a `pending` or `done` stage stays on Feed; read-only
   history is not opened automatically. A completed stage that has a plan or an
   answered-question history still exposes that contextual detail tab, so its
   **Plan | Dialog** history is always one click away — you just have to click the
@@ -61,6 +61,10 @@ right (there is no three-column layout or bottom progress bar).
   as it's still current. It is never silently dropped. Merely focusing a checkbox
   (such as the **Hold the agent while you type** toggle) does not count as typing,
   so a question arriving then opens right away.
+- **Stage header** — a compact row above the selected stage's view shows its name
+  and current status. When applicable it shows a reply count, **People**,
+  **Retry** for a failed stage, and **Pause** or **Continue**. The latter two are
+  icon buttons with accessible labels.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
   with a fixed bottom action bar.
@@ -156,7 +160,7 @@ opens a right-hand panel for conversations that include you and have no stage
 origin or stage participant. This includes conversations started by run agents;
 conversations involving a stage agent or stage helper stay in the stage Feed.
 The panel starts closed and never opens itself. It is available across Feed,
-Plan, Cost, Full feed, and Assistant views when Agent Mesh is available; changing
+Plan, Cost, and Assistant views when Agent Mesh is available; changing
 views keeps the selected conversation and draft. There are no People, agent
 creation, or board task controls in this panel.
 
@@ -230,7 +234,7 @@ cards stay visible with an out-of-date warning.
 
 ## Message times
 
-Event rows in the stage **Feed**, **Full feed**, and Assistant history, and message
+Event rows in the stage **Feed** and Assistant history, and message
 bubbles in **Team**, Run conversations, and stage Feed conversations, show the message time as `HH:MM`
 in the host's 24-hour clock. Hover over the time, or focus its label or enclosing
 interactive row with a keyboard, to see the elapsed gap (`+7s`, `+2m`, etc.). The
@@ -377,8 +381,9 @@ full model (token semantics, `pricing:` overrides, coverage, and the display swi
 
 When a stage is in `awaiting_approval`:
 
-1. Hover the plan — each commentable element (a list item, a table row, a heading,
-   a paragraph, a code block) highlights. Click it — a comment form opens right there.
+1. Hover the plan — each source line, including an empty line, table line or
+   code fence, has a comment target. Click its line number or text to open a
+   comment form at that line.
 2. Write a remark — the target stays highlighted and shows a saved-comment indicator.
 3. Click "Send revision (N)" — all comments are sent to the agent, each tagged with
    its source line (`Line N: …`).
@@ -391,12 +396,13 @@ new run. **Approve** stays disabled while the plan has unsent comments. Comments
 an older plan version can be shown, copied or dismissed; they are not sent with a
 new version. Question answers and free-text drafts are likewise retained until sent.
 
-The plan renders as proper markdown (lists, tables, blockquotes and code stay intact),
-and comments anchor to the **sub-element** you clicked — an individual `<li>` or table
-row, not just the whole block. Keyboard: the plan body is navigable (↑/↓ move between
-commentable elements, Enter opens the form); the `## Assumptions` / `## Acceptance
-Criteria` sections are collapsible. The same per-element commenting works on an agent's
-**question** in the Communication channel.
+The plan renders as markdown (lists, tables, blockquotes and code stay intact),
+while comments anchor to the exact source line, even inside a paragraph, list
+item or table row. A wide table scrolls within the plan on a narrow screen.
+Keyboard: the plan body is navigable (↑/↓ move between commentable lines, Enter
+opens the form). The `## Assumptions` and `## Acceptance Criteria` headings stay
+in the document without separate collapse controls. The same line commenting
+works on an agent's **question** in the Communication channel.
 
 ## Writing to a stage from its Feed
 
@@ -414,7 +420,8 @@ Revise. With Agent Mesh and collaboration on it has two modes:
   `awaiting_assistants`, and not during a review pause.
 
 Each mode keeps its own draft when you switch between them. Drafts — both modes'
-text, the chosen mode and the people picked as recipients — are kept per stage:
+text, reply target and attachment, the chosen mode and the people picked as
+recipients — are kept per stage:
 switching to another stage, the Feed following the run to the next stage, or
 opening another tab and coming back restores them. They are not kept across a
 page reload. When Agent Mesh becomes available only after the composer appeared,
@@ -724,7 +731,8 @@ Use **Files / Comments (N)** to see the full text, file and line for every local
 file comment and open its source. On narrow screens, **Comments (N)** opens this
 list in a drawer. The file preview also keeps comments under
 their lines, and files with comments show **● N** in the file tree, search results
-and changed-files list. Comments survive switching files and **FILE / DIFF** tabs.
+and changed-files list. A collapsed folder also shows the total number of comments
+in files beneath it. Comments survive switching files and **FILE / DIFF** tabs.
 Leaving a file — another file, **DIFF** or closing Files — folds its open editor
 into a card; unsaved text shows **Draft**. Closing and
 reopening Files also restores the selected file, tab and scroll position in this run.

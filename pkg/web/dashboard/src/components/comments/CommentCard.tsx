@@ -25,6 +25,8 @@ export type CommentCardProps = {
   quote: string
   text: string
   draft?: boolean
+  // status — подпись сохранённого комментария рядом с заголовком («Saved · not sent»); у черновика её заменяет Draft.
+  status?: string
   onEdit?: () => void
   // onRemove — ✕ в шапке; без него (как у серверных review-заметок) удаление идёт только явной кнопкой в actions.
   onRemove?: () => void
@@ -40,6 +42,7 @@ export function CommentCard({
   quote,
   text,
   draft = false,
+  status,
   onEdit,
   onRemove,
   actions,
@@ -49,7 +52,7 @@ export function CommentCard({
     <div className="line-comment-form line-comment-display comment-card" data-comment-ui="" data-comment-line={line}>
       <div className="comment-display-header">
         <span className="comment-title">{title}</span>
-        {draft && <span className="comment-draft-badge">Draft</span>}
+        {draft ? <span className="comment-draft-badge">Draft</span> : status !== undefined && <span className="comment-status">{status}</span>}
         {onRemove !== undefined && (
           <button type="button" className="comment-remove" aria-label={`Remove ${subject}`} title="Remove comment" onClick={onRemove}>
             ✕

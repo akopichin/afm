@@ -38,8 +38,7 @@ function matchesAssignee(task: BoardTask, assignee: string): boolean {
   return task.assignees.some((a) => a.id === assignee)
 }
 
-// BoardView — the run-wide Board tab: the same tasks as Team's mixed board, grouped into Todo / In progress / Done
-// by what the agents reported. Read-only on purpose: there is no way to move a card, agents own the status.
+// Lanes follow the live task projection; assignment actions stay in the shared details dialog.
 export function BoardView({ board, participants, stages }: BoardViewProps): ReactElement {
   const [search, setSearch] = useState('')
   const [assignee, setAssignee] = useState(ALL_ASSIGNEES)
@@ -82,10 +81,8 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
           <h2 className="board-view-title">Board</h2>
           <p className="board-view-completion">
             {filtering && <span>{`${shown.length} shown`}</span>}
-            <span>{`${doneCount} of ${tasks.length} completed`}</span>
-            <span className="board-view-progress" aria-hidden="true">
-              <span style={{ width: tasks.length === 0 ? '0%' : `${(doneCount / tasks.length) * 100}%` }} />
-            </span>
+            <span>{`${doneCount} of ${tasks.length} tasks done`}</span>
+            <span>· whole run</span>
           </p>
         </div>
         <button
@@ -93,7 +90,7 @@ export function BoardView({ board, participants, stages }: BoardViewProps): Reac
           className="btn btn-send"
           onClick={openNewTask}
         >
-          New task
+          <span aria-hidden="true">＋</span> New task
         </button>
       </header>
 
@@ -181,7 +178,7 @@ function NewTaskDialog({ participants, stages, mode, onPosted, onClose }: NewTas
         <h2 className="board-new-task-title">New task</h2>
         <BoardTaskForm participants={participants} stages={stages} mode={mode} onPosted={onPosted} />
         <div className="modal-actions">
-          <button type="button" className="btn btn-cancel" onClick={onClose}>
+          <button type="button" className="btn btn-quiet" onClick={onClose}>
             Cancel
           </button>
         </div>

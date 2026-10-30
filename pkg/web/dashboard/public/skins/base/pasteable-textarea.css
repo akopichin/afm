@@ -50,7 +50,7 @@
 /* Visible failure reason (touch has no title tooltip; screen readers get role=alert). */
 .pasteable-attachment-reason {
   max-width: 96px;
-  color: var(--coral);
+  color: var(--danger-text);
   font-size: 10px;
   line-height: 1.2;
   text-align: center;
@@ -85,7 +85,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(var(--overlay-scrim-rgb), 0.6);
+  background: var(--surface-raised);
   border: none;
   border-radius: 50%;
   color: var(--ink-hi);
@@ -93,8 +93,7 @@
   font-size: 9px;
   line-height: 1;
   padding: 0;
-  opacity: 0.6;
-  transition: opacity 0.15s ease;
+  transition: color 0.15s ease;
 }
 .pasteable-attachment-remove { right: 2px; }
 /* Retry sits bottom-center on a failed chip so it doesn't overlap Remove. */
@@ -109,8 +108,8 @@
   border-radius: 8px;
   font-size: 11px;
 }
-.pasteable-attachment-remove:hover { opacity: 1; color: var(--coral); }
-.pasteable-attachment-retry:hover { opacity: 1; color: var(--mint); }
+.pasteable-attachment-remove:hover { color: var(--danger-text); }
+.pasteable-attachment-retry:hover { color: var(--success-text); }
 
 /* «Attach project file» — кнопка пикера файлов проекта. Контурный стиль как у .comment-remove в
    plan-panel.css, но акцент mint — действие не деструктивное. */
@@ -126,7 +125,7 @@
   background: transparent;
   border: 1px solid rgba(111, 212, 204, 0.4);
   border-radius: var(--radius-sm);
-  color: var(--mint);
+  color: var(--success-text);
   cursor: pointer;
   font-size: 10px;
   letter-spacing: 0.05em;

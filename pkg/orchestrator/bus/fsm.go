@@ -95,6 +95,8 @@ type GuardCtx struct {
 	// ExpectStageSeq, when set, fences the transition to the stage's latest transition (state.Transition.
 	// ExpectStageSeq): a resume decided for one park cannot move a later park.
 	ExpectStageSeq *uint64
+	// Fence is state.Transition.Fence: a predicate the store evaluates atomically with the commit.
+	Fence func(rs *state.RunState) bool
 	// Quota is recorded by EvAwaitQuota, and by EvContinue back into a park (the one-shot manual probe).
 	Quota *state.QuotaWait
 	// SummaryStep is recorded by the transition that reserves a correction of a missing execution_summary.md:
@@ -226,6 +228,7 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 		SummaryStep:    ctx.SummaryStep,
 		ExpectEpoch:    ctx.ExpectEpoch,
 		ExpectStageSeq: ctx.ExpectStageSeq,
+		Fence:          ctx.Fence,
 	}
 	if err := f.store.Apply(tr); err != nil {
 		if errors.Is(err, state.ErrConcurrentChange) {

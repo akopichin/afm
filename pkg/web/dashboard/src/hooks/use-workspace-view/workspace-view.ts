@@ -6,7 +6,7 @@ import type { Stage } from '../../types'
 // 'team' (Agent Mesh, T7.3) — the Team view: run-wide roster (participants + conversations), gated behind
 // the mesh capability. Same manual posture as 'assistant': entered only via openTeam, never
 // part of the attention auto-open queue. 'board' — the run-wide Board tab beside Team, same posture and gate.
-export type WorkspaceView = 'feed' | 'cost' | 'full-feed' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'team' | 'board'
+export type WorkspaceView = 'feed' | 'cost' | 'attention' | 'plan-history' | 'dialog-history' | 'assistant' | 'team' | 'board'
 
 // AttentionKind — вид элемента, требующего действия пользователя. 'assistants' (Этап 7, T7.9) — стадия в
 // awaiting_assistants, чей required-гейт требует решения человека (см. attentionKindForStatus ниже). NB: это
@@ -65,7 +65,7 @@ export interface WorkspaceState {
   // элемент больше сам фокус не крадёт» (rule 9).
   handledSignatures: string[]
   // returnView — куда вернуться, когда закроется/разрешится attention.
-  returnView: 'feed' | 'cost' | 'full-feed'
+  returnView: 'feed' | 'cost'
 }
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -86,8 +86,6 @@ export type WorkspaceAction =
   | { type: 'openFeed' }
   // openCost — пользователь открыл постоянный вид учёта стоимости (increment 2).
   | { type: 'openCost' }
-  // openFullFeed — пользователь открыл ленту всего флоу целиком.
-  | { type: 'openFullFeed' }
   // openHistory — read-only просмотр плана/диалога завершённой стадии (rule 13).
   | { type: 'openHistory'; view: 'plan-history' | 'dialog-history' }
   // openAssistant — пользователь выбрал в рейле задачу помощника (какую именно — хранит Selection на
@@ -115,8 +113,8 @@ export function countByKind(items: AttentionItem[], kind: AttentionKind): number
 }
 
 // globalReturnView — маппинг текущего вида на returnView при входе в attention.
-function globalReturnView(view: WorkspaceView): 'feed' | 'cost' | 'full-feed' {
-  return view === 'cost' || view === 'full-feed' ? view : 'feed'
+function globalReturnView(view: WorkspaceView): 'feed' | 'cost' {
+  return view === 'cost' ? view : 'feed'
 }
 
 // retainSigs оставляет из набора подписей только те, чей элемент ещё в очереди. Разрешённые/исчезнувшие
@@ -217,8 +215,6 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: 'feed', returnView: 'feed' }
     case 'openCost':
       return { ...state, view: 'cost', returnView: 'cost' }
-    case 'openFullFeed':
-      return { ...state, view: 'full-feed', returnView: 'full-feed' }
     case 'openHistory':
       return { ...state, view: action.view }
     case 'openAssistant':

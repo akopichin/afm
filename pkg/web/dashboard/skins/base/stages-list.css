@@ -1,5 +1,5 @@
-/* pkg/web/dashboard/skins/base/stages-list.css Stage rail: a calm vertical timeline. Status is never
-   signaled by color alone — the dot shape/fill/icon plus the status text carry it too. */
+/* pkg/web/dashboard/skins/base/stages-list.css Stage rail: a calm list of stage rows. Status is never
+   signaled by color alone — the node shape/fill/check plus the status word carry it too. */
 
 /* === Rail container === */
 #stages-panel {
@@ -10,7 +10,7 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
-  padding: 14px 12px;
+  padding: 27px 14px 14px;
   background: var(--surface-raised);
   border-right: 1px solid var(--separator-subtle);
   /* The panel no longer scrolls — it's the fixed flex-column FRAME. */
@@ -25,44 +25,42 @@
   overflow-x: hidden;       /* also prevents the 1px active-marker sub-pixel h-scrollbar */
   /* Extend scrolling to the rail edge; matching padding preserves row gutters and room for attention
      halos. */
-  margin: 0 -12px;
-  padding: 4px 12px;
+  margin: 0 -14px;
+  padding: 4px 14px;
 }
 
-/* === Pinned footer: afm version. The flex:1 scroll region above pushes it down. === */
-.rail-foot {
+/* === Pinned footer: "+ Add stage" and the afm version. The flex:1 scroll region above pushes it down. === */
+.rail-bottom {
   flex-shrink: 0;
-  padding: 10px 8px 0;
+  display: grid;
+  gap: 14px;
+  padding: 12px 8px 0;
+}
+.rail-foot {
+  padding-top: 14px;
   border-top: 1px solid var(--separator-subtle);
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
+  font-size: 10px;
+  line-height: 1.4;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-/* === Rail head: title + progress === */
-.rail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-shrink: 0;
-  margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--separator-subtle);
-}
 .rail-add-stage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
   font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--separator-subtle);
-  background: var(--surface-raised);
+  font-size: 13px;
+  font-weight: 550;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
@@ -71,44 +69,41 @@
   background: var(--surface-hover);
   color: var(--text-primary);
 }
-#stages-panel h2 {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
+.rail-add-stage:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-.rail-progress {
+/* === Rail head: title + "N of M done", then one progress segment per stage === */
+.rail-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 0 11px;
+}
+#stages-panel h2 {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
 }
 .rail-progress-text {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+  font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
 }
-.rail-progress-bar {
-  position: relative;
-  width: 56px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(var(--accent-primary-rgb), 0.14);
-  overflow: hidden;
+.rail-progress {
+  display: flex;
+  gap: 4px;
   flex-shrink: 0;
+  padding: 14px 11px 18px;
 }
-.rail-progress-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 0%;
-  border-radius: 999px;
-  background: var(--accent-primary);
-  transition: width 0.4s ease;
+.rail-progress-seg {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--separator-subtle);
 }
+.rail-progress-seg[data-state="done"] { background: var(--success); }
+.rail-progress-seg[data-state="active"] { background: var(--attention); }
 
 /* === Stage list === */
 #stages-list {
@@ -137,10 +132,10 @@
   flex: 1 1 auto;
   min-width: 0;
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 26px 1fr;
   align-items: start;
   gap: 12px;
-  padding: 10px 4px 10px 10px;
+  padding: 15px 4px 15px 10px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -154,34 +149,34 @@
   border-radius: var(--radius-md);
 }
 
-/* Middle cell: stage id (bold, primary) → long name (muted, secondary). Статус здесь текстом не
-   дублируется — его несёт нода-точка (цвет/анимация/ галочка) плюс бейджи 💬/📋 в трейлинг-слоте. */
+/* Middle cell: stage name (bold) → status word (muted, amber while active, red when failed). */
 .stage-label {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
   min-width: 0;
-  padding-top: 1px;
+  /* A single line is centred on the node. */
+  min-height: 26px;
 }
 .stage-name {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 580;
   color: var(--text-primary);
-  line-height: 1.25;
+  line-height: 1.45;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.stage-subname {
-  font-size: 11.5px;
+.stage-status {
+  font-size: 11px;
   color: var(--text-muted);
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.2;
 }
-/* Только для скринридеров: .stage-status-sr попадает в accessible name кнопки строки; .stage-cost-sr —
-   полное предложение про стоимость, на которое указывает aria-describedby строки; .quota-sr — статичная
-   подпись ожидания лимита (<time dateTime>), тикающий текст рядом помечен aria-hidden. */
-.stage-status-sr,
+.stage-status:not([data-status="pending"]):not([data-status="ready"]):not([data-status="done"]) { color: var(--attention-text); }
+.stage-status[data-status="failed"],
+.stage-status[data-status="hook_failed"] { color: var(--danger-text); }
+/* Только для скринридеров: .stage-cost-sr — полное предложение про стоимость, на которое указывает
+   aria-describedby строки; .quota-sr — статичная подпись ожидания лимита (<time dateTime>), тикающий текст
+   рядом помечен aria-hidden. */
 .stage-cost-sr,
 .quota-sr {
   position: absolute;
@@ -195,7 +190,7 @@
   border: 0;
 }
 
-/* === Status dot — a bigger numbered timeline node === */
+/* === Status dot — a numbered ring; only a done stage is filled === */
 .status-dot {
   width: 26px;
   height: 26px;
@@ -205,16 +200,17 @@
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  background: var(--surface-raised);
+  background: transparent;
   color: var(--c-pending);
-  z-index: 1; /* sit above the connector line */
 }
 /* The number is the default node content; the check replaces it once done. */
 .dot-num {
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: currentColor;
+  /* The dot carries the pure status tone as currentColor; the number is small text, so it is pulled toward the text colour. */
+  color: color-mix(in srgb, currentColor var(--tone-text-mix), var(--text-primary));
 }
 
 .status-dot[data-status="pending"]              { color: var(--c-pending);       border-color: var(--c-pending); }
@@ -240,26 +236,14 @@
 
 .status-dot[data-status="awaiting_quota"]       { color: var(--c-awaiting-quota); border-color: var(--c-awaiting-quota); }
 
-/* Filled node for every active/attention/terminal status; the number is punched out in the canvas colour
-   so it reads on the bright fill. Pending/ready stay as hollow rings with a muted number. */
-.status-dot:not([data-status="pending"]):not([data-status="ready"]) {
-  background: currentColor;
-  border-color: currentColor;
-}
-.status-dot:not([data-status="pending"]):not([data-status="ready"]) .dot-num {
-  color: var(--surface-canvas);
-}
-
-/* Done → green fill + white check, no number. */
+/* Done → filled success circle with a heavy check, no number. */
+.status-dot[data-status="done"] { background: currentColor; }
 .status-dot[data-status="done"] .dot-num { display: none; }
 .status-dot[data-status="done"] .dot-check {
   opacity: 1;
   transform: none;
   color: var(--surface-canvas);
 }
-
-/* Connector below a done stage is success-coloured (that segment is complete). */
-.stage-item[data-status="done"] .stage-connector { background: var(--success); }
 
 /* Active statuses breathe gently (low amplitude); frozen under reduced-motion by
    the global gate. awaiting_assistants breathes the same way UNLESS its gate is blocked (T7.9) — a blocked
@@ -290,15 +274,19 @@
   align-items: center;
   gap: 4px;
   flex: none;
-  padding: 10px 8px 0 0;
+  /* Level with the node, whose top sits 15px below the row top. */
+  align-self: flex-start;
+  height: 26px;
+  margin-top: 15px;
+  padding: 0 8px 0 0;
 }
 .dialog-badge {
   font-size: 11px;
-  color: var(--c-awaiting-user);
+  color: color-mix(in srgb, var(--c-awaiting-user) var(--tone-text-mix), var(--text-primary));
 }
 .approval-badge {
   display: inline-flex;
-  color: var(--c-awaiting);
+  color: color-mix(in srgb, var(--c-awaiting) var(--tone-text-mix), var(--text-primary));
   animation: approvalPulse 1.8s ease-in-out infinite;
 }
 @keyframes approvalPulse {
@@ -314,7 +302,7 @@
 .assistants-blocked-badge {
   display: inline-flex;
   font-size: 11px;
-  color: var(--c-failed);
+  color: color-mix(in srgb, var(--c-failed) var(--tone-text-mix), var(--text-primary));
   animation: approvalPulse 1.8s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -322,7 +310,6 @@
 }
 .prenote-badge {
   font-size: 11px;
-  opacity: 0.75;
 }
 
 /* AI-verify компактный индикатор — один нейтральный глиф, цвет несёт data-phase. 'running' пульсирует как
@@ -332,16 +319,16 @@
   color: var(--text-muted);
 }
 .verify-badge[data-phase="running"] {
-  color: var(--c-awaiting);
+  color: color-mix(in srgb, var(--c-awaiting) var(--tone-text-mix), var(--text-primary));
   animation: approvalPulse 1.8s ease-in-out infinite;
 }
-.verify-badge[data-phase="pass"] { color: var(--success); }
+.verify-badge[data-phase="pass"] { color: var(--success-text); }
 /* accepted_stalemate — терминальный ПРИНЯТЫЙ исход (review_patience), но не
    чистый pass: отдельный accent-цвет, отличный от success и не тревожный. */
-.verify-badge[data-phase="accepted_stalemate"] { color: var(--accent-primary); }
+.verify-badge[data-phase="accepted_stalemate"] { color: var(--accent-text); }
 .verify-badge[data-phase="needs_changes"],
-.verify-badge[data-phase="inconclusive"] { color: var(--attention); }
-.verify-badge[data-phase="error"] { color: var(--danger); }
+.verify-badge[data-phase="inconclusive"] { color: var(--attention-text); }
+.verify-badge[data-phase="error"] { color: var(--danger-text); }
 @media (prefers-reduced-motion: reduce) {
   .verify-badge[data-phase="running"] { animation: none; }
 }
@@ -355,7 +342,7 @@
   font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  color: var(--c-awaiting-quota);
+  color: color-mix(in srgb, var(--c-awaiting-quota) var(--tone-text-mix), var(--text-primary));
   white-space: nowrap;
 }
 
@@ -396,19 +383,9 @@
   .stage-cost-spinner { animation: none; }
 }
 
-/* === Active (selected) stage === */
+/* === Active (selected) stage: a tint, no accent bar === */
 .stage-item.active {
   background: var(--surface-hover);
-}
-.stage-item.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--accent-primary);
 }
 /* One-shot entrance when a stage becomes selected. */
 .stage-item.active { animation: stageActivate 0.35s ease; }
@@ -417,45 +394,13 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* === Timeline connector between dots === A real child element — not ::before/::after. Positioned under
-   the status dot, bridging to the next row. */
-.stage-connector {
-  position: absolute;
-  left: 22.5px; /* центр 26px-ноды: 10px padding + 13px радиус */
-  top: 40px;    /* сразу под нодой */
-  bottom: -8px; /* тянется до ноды следующей строки (stretch по высоте строки) */
-  width: 2px;
-  border-radius: 2px;
-  background: var(--separator-subtle);
-  pointer-events: none;
-}
-.stage-connector::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 1.5px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--success);
-  opacity: 0;
-}
-/* One-shot pulse travelling down the connector when the stage completes. */
-.stage-item.just-done .stage-connector::after { animation: connTravel 0.6s ease-in; }
-@keyframes connTravel {
-  0%   { transform: translateY(0); opacity: 1; }
-  100% { transform: translateY(16px); opacity: 0; }
-}
-
 /* === One-shot completion: dot fill + check flash === */
 .status-dot .dot-check {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--surface-raised);
+  color: var(--surface-canvas);
   opacity: 0;
   transform: scale(0.4);
   pointer-events: none;

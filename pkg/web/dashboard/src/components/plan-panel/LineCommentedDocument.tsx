@@ -208,7 +208,7 @@ export function LineCommentedDocument({
 
     return (
       <Fragment key={`block-${block.startLine}`}>
-        <div className="md" dangerouslySetInnerHTML={{ __html: block.html }} />
+        <div className={block.gap === true ? 'md md-gap' : 'md'} dangerouslySetInnerHTML={{ __html: block.html }} />
         {blockEntries.map(([line, entry]) => {
           // Редактируемая запись показывается формой (цитата не задваивается карточкой).
           if (entry.editorOpen) {
@@ -227,7 +227,8 @@ export function LineCommentedDocument({
                 onSave={() => saveLine(line, entry)}
                 onFold={() => foldLine(line, entry)}
                 onDiscard={entry.saved !== '' ? () => deleteLine(line, entry) : undefined}
-                saveLabel={entry.saved !== '' ? 'Update' : 'Add'}
+                draft={isDraft(entry)}
+                saveLabel={entry.saved !== '' ? 'Update comment' : 'Save comment'}
                 discardLabel="Delete"
               />
             )
@@ -241,6 +242,7 @@ export function LineCommentedDocument({
               quote={entry.quote}
               text={entry.text}
               draft={isDraft(entry)}
+              status="Saved · not sent"
               onEdit={() => editLine(line)}
               onRemove={() => deleteLine(line, entry)}
             />

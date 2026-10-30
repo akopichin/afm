@@ -13,6 +13,7 @@
   padding: 8px 20px;
   border-bottom: 1px solid var(--amber);
   background: color-mix(in srgb, var(--amber) 12%, var(--panel-bg));
+  --text-muted: var(--text-secondary);
 }
 
 .review-banner-text {
@@ -21,7 +22,7 @@
 }
 
 .review-banner[data-state='resuming'] .review-banner-text {
-  color: var(--ink-dim);
+  color: var(--text-muted);
 }
 
 .review-banner-actions {

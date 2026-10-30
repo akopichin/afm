@@ -351,7 +351,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
     case 'discussion_message': {
       // A post in the stage's conversation with its agent. The stage feed shows it as a conversation bubble (its
       // mesh mirror, or the post itself from the stage's log) and drops this row then (buildFeedTimeline); the
-      // row stays where no bubble is shown (the Full feed, or before the stage's log was read).
+      // row stays in read-only activity views and before the stage's log was read.
       const author = str(obj.author_kind) === 'human' ? 'You' : str(obj.author_id)
       const messageId = str(obj.message_id)
       return {
@@ -543,19 +543,62 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
   return items
 }
 
+// isAgentMessage — нарратив агента (markdown-сообщение): у каждого своя строка автора.
+function isAgentMessage(item: FeedItem): boolean {
+  return item.actor === 'agent' && item.kind === 'message' && item.markdown === true
+}
+
 // groupFeedItems сливает подряд идущие items одной стороны и стадии в один FeedGroup. Разрыв (новый
-// пузырь) — при смене стороны/стадии/актора.
+// пузырь) — при смене стороны/стадии/актора и перед каждым новым сообщением агента.
 export function groupFeedItems(items: FeedItem[]): FeedGroup[] {
   const groups: FeedGroup[] = []
   for (const item of items) {
     const last = groups[groups.length - 1]
-    if (last && last.side === item.side && last.stageId === item.stageId && last.actor === item.actor && last.authorLabel === item.authorLabel) {
+    if (last && !isAgentMessage(item) && last.side === item.side && last.stageId === item.stageId && last.actor === item.actor && last.authorLabel === item.authorLabel) {
       last.items.push(item)
     } else {
       groups.push({ key: item.key, side: item.side, stageId: item.stageId, actor: item.actor, authorLabel: item.authorLabel, items: [item] })
     }
   }
   return groups
+}
+
+// FeedRow — строка пузыря: обычный item или подряд идущие вызовы инструментов, свёрнутые в одну полосу.
+export type FeedRow = { kind: 'item'; item: FeedItem } | { kind: 'tools'; key: string; items: FeedItem[] }
+
+// groupToolRuns сворачивает подряд идущие tool-items пузыря в один ряд. Любой другой item разрывает серию;
+// ключ серии — ключ её первого вызова, поэтому дозапись нового вызова не пересоздаёт уже показанный ряд.
+export function groupToolRuns(items: FeedItem[]): FeedRow[] {
+  const rows: FeedRow[] = []
+  for (const item of items) {
+    const last = rows[rows.length - 1]
+    if (item.kind !== 'tool') {
+      rows.push({ kind: 'item', item })
+    } else if (last?.kind === 'tools') {
+      last.items.push(item)
+    } else {
+      rows.push({ kind: 'tools', key: `tools:${item.key}`, items: [item] })
+    }
+  }
+  return rows
+}
+
+// toolCall разбирает text tool-item «name: detail» (его строят и лента стадии, и лента side-agent).
+export function toolCall(item: FeedItem): { name: string; detail: string } {
+  const split = item.text.indexOf(': ')
+  return split < 0 ? { name: item.text, detail: '' } : { name: item.text.slice(0, split), detail: item.text.slice(split + 2) }
+}
+
+const MAX_SUMMARY_TOOL_NAMES = 4
+
+// toolRunSummary — подпись свёрнутой серии: «3 tool calls» и перечень различных имён инструментов.
+export function toolRunSummary(items: FeedItem[]): { count: string; names: string } {
+  const distinct = [...new Set(items.map((item) => toolCall(item).name.toLowerCase()).filter((name) => name !== ''))]
+  const shown = distinct.slice(0, MAX_SUMMARY_TOOL_NAMES).join(', ')
+  return {
+    count: `${items.length} tool ${items.length === 1 ? 'call' : 'calls'}`,
+    names: distinct.length > MAX_SUMMARY_TOOL_NAMES ? `${shown}…` : shown,
+  }
 }
 
 // FeedFilter — фильтр ленты стадии: всё, только беседы, только работа автора (события стадии).

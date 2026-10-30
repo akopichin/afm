@@ -18,12 +18,12 @@ export function SideAgentHistory({ events, emptyHint }: SideAgentHistoryProps): 
   const groups = useMemo(() => sideAgentFeedGroups(events), [events])
 
   return (
-    <div className="side-agent-history" ref={feed.ref}>
+    <div className="side-agent-history" ref={feed.ref} role="region" aria-label="Assistant history" tabIndex={0}>
       {groups.length === 0 ? (
         <div className="empty-hint side-agent-empty">{emptyHint ?? 'Ask the assistant anything about this run.'}</div>
       ) : (
         groups.map((g) => (
-          <FeedGroupView key={g.key} group={g} showStageBadges={false} systemAuthorLabel="Assistant" imagePolicy="none" />
+          <FeedGroupView key={g.key} group={g} showStageBadges={false} systemAuthorLabel="Assistant" imagePolicy="none" messageCard />
         ))
       )}
       {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} />}

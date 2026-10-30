@@ -15,14 +15,14 @@
 }
 
 .review-notes-error {
-  color: var(--coral);
+  color: var(--danger-text);
   font-size: 12px;
   line-height: 1.5;
   margin: 0 0 10px;
 }
 
 .review-notes-hint {
-  color: var(--ink-dim);
+  color: var(--text-muted);
   font-size: 12px;
   margin: 4px 0;
 }
@@ -40,7 +40,7 @@
 
 .review-notes-file {
   font-size: 12px;
-  color: var(--mint);
+  color: var(--success-text);
   margin: 0 0 6px;
   word-break: break-all;
 }
@@ -64,19 +64,19 @@
 .review-notes-target-label {
   font-size: 10px;
   letter-spacing: 0.03em;
-  color: var(--ink-dim);
+  color: var(--text-muted);
 }
 
 .review-notes-target select {
   background: var(--bg);
   color: var(--ink);
-  border: 1px solid var(--mint-soft);
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   padding: 6px 8px;
   font-family: inherit;
   font-size: 12px;
 }
 .review-notes-target select:disabled {
-  color: var(--ink-dim);
+  color: var(--text-disabled);
   cursor: not-allowed;
 }

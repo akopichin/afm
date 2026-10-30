@@ -10,5 +10,12 @@ export function FileCommentCount({ count }: { count: number }): ReactElement | n
   )
 }
 
+// countInFolder — сколько из путей файлов лежит внутри каталога. Совпадение по границе пути: `foo` не захватывает
+// `foobar/…`.
+export function countInFolder(paths: readonly string[], dir: string): number {
+  const prefix = `${dir}/`
+  return paths.filter((path) => path.startsWith(prefix)).length
+}
+
 // noComments — счётчик по умолчанию для списков без комментариев (выбор файлов, изолированные тесты).
 export const noComments = (): number => 0

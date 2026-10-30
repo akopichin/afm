@@ -220,20 +220,20 @@ describe('CostPanel — table + Total + expand', () => {
     expect(document.querySelectorAll(`#${CSS.escape(regionId as string)}`).length).toBe(1)
   })
 
-  test('detail region lives inside a td with colSpan=5', () => {
+  test('detail region lives inside a td spanning stage, tokens and est. cost (colSpan=3)', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
     fireEvent.click(screen.getByRole('button', { name: /Build/ }))
     const region = screen.getByRole('region')
     const td = region.closest('td')
     expect(td).not.toBeNull()
-    expect(td?.getAttribute('colspan')).toBe('5')
+    expect(td?.getAttribute('colspan')).toBe('3')
     expect(region.tagName).not.toBe('TR')
   })
 })
 
 describe('CostPanel — show_money off drops the Cost column', () => {
-  test('no Cost header, no $ figures, and the detail row colSpan falls back to 4', () => {
+  test('no Cost header, no $ figures, and the detail row colSpan falls back to 2', () => {
     const stages = [makeStage('s1', makeCost({ displayCost: '$3.21' }), 'Build')]
     render(
       <CostPanel
@@ -246,16 +246,16 @@ describe('CostPanel — show_money off drops the Cost column', () => {
     )
     // Таблица есть, но денежных значений нет нигде.
     expect(screen.getByRole('table')).toBeInTheDocument()
-    expect(screen.queryByRole('columnheader', { name: 'Cost' })).toBeNull()
+    expect(screen.queryByRole('columnheader', { name: 'Est. cost' })).toBeNull()
     expect(screen.queryByText('$3.21')).toBeNull()
     expect(screen.queryByText('$7.77')).toBeNull()
     expect(screen.queryByText('$0.50')).toBeNull()
     // Токены/кэш остаются.
     expect(screen.getByRole('columnheader', { name: 'Tokens' })).toBeInTheDocument()
-    // Детализация раскрывается в td с colSpan=4.
+    // Детализация раскрывается в td с colSpan=2.
     fireEvent.click(screen.getByRole('button', { name: /Build/ }))
     const td = screen.getByRole('region').closest('td')
-    expect(td?.getAttribute('colspan')).toBe('4')
+    expect(td?.getAttribute('colspan')).toBe('2')
   })
 })
 
@@ -337,6 +337,93 @@ describe('CostPanel — coverage line', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
     expect(screen.queryByText(/coverage gaps/i)).not.toBeInTheDocument()
+  })
+
+  test('the gap list sits inside a disclosure under a "Partial coverage" badge, not as a bare line', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[makeIssue()]} accounting={ACCOUNTING_OK_DATA} />)
+    const summary = screen.getByText(/partial coverage · 1 gap$/i)
+    expect(summary.tagName).toBe('SUMMARY')
+    const details = summary.closest('details')
+    expect(details).not.toBeNull()
+    expect(details).not.toHaveAttribute('open')
+    expect(details).toHaveTextContent(/coverage gaps:/i)
+    expect(screen.queryByText('Full coverage')).toBeNull()
+  })
+
+  test('no gaps and healthy storage → "Full coverage" badge', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(screen.getByText('Full coverage')).toBeInTheDocument()
+  })
+
+  test('unavailable storage without gaps never claims full coverage', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_UNAVAILABLE_DATA} />)
+    expect(screen.queryByText('Full coverage')).toBeNull()
+  })
+})
+
+describe('CostPanel — layout: title, rows, total and usage breakdown', () => {
+  test('shows the "Cost & usage" heading with a subtitle that follows show_money', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    const { rerender } = render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(screen.getByRole('heading', { level: 2, name: 'Cost & usage' })).toBeInTheDocument()
+    expect(screen.getByText('Token usage and estimated cost by stage')).toBeInTheDocument()
+
+    rerender(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA_NO_MONEY} />)
+    expect(screen.getByText('Token usage by stage')).toBeInTheDocument()
+  })
+
+  test('columns are Stage / Tokens / Est. cost — no Model or Cache R/W column', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
+    expect(headers).toEqual(['Stage', 'Tokens', 'Est. cost'])
+  })
+
+  test('a row shows the stage name with its models as a meta line and the token count', () => {
+    const stages = [makeStage('s1', makeCost({ models: ['claude', 'codex'], totalTokens: 1234 }), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    const row = screen.getByText('Build').closest('tr')
+    expect(row).toHaveTextContent('claude, codex')
+    expect(row).toHaveTextContent('1,234')
+  })
+
+  test('a row without models renders no meta line', () => {
+    const stages = [makeStage('s1', makeCost({ models: [] }), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(document.querySelector('.cost-row-meta')).toBeNull()
+  })
+
+  test('Total row carries the run token total', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    render(
+      <CostPanel
+        stages={stages}
+        runCost={makeCost({ totalTokens: 98765 })}
+        coverageIssues={[]}
+        accounting={ACCOUNTING_OK_DATA_NO_MONEY}
+      />,
+    )
+    expect(screen.getByText('Total').closest('tr')).toHaveTextContent('98,765')
+  })
+
+  test('Usage breakdown lists run token types from real figures', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    const runCost = makeCost({ uncachedInput: 111, cacheRead: 2222, cacheWriteTotal: 333, output: 4444 })
+    render(<CostPanel stages={stages} runCost={runCost} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA_NO_MONEY} />)
+    const section = screen.getByRole('heading', { name: 'Usage breakdown' }).closest('.cost-usage')
+    expect(section).toHaveTextContent('Input111 tokens')
+    expect(section).toHaveTextContent('Cache read2,222 tokens')
+    expect(section).toHaveTextContent('Cache write333 tokens')
+    expect(section).toHaveTextContent('Output4,444 tokens')
+  })
+
+  test('no runCost → no Usage breakdown (nothing is invented)', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(screen.queryByText('Usage breakdown')).toBeNull()
   })
 })
 

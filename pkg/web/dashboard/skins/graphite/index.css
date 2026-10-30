@@ -27,16 +27,16 @@
   --surface-raised:        #111a27;
   --surface-overlay:       #141f2e;
   --surface-agent-message: #1a2431;
-  --surface-user-message:  #27396f;
+  --surface-user-message:  #1f2f60;
   --surface-tool:          #0e1622;   /* slightly recessed vs raised — tool/script rows */
   --surface-hover:         rgba(95, 120, 255, 0.06);
   --separator-subtle:      rgba(170, 180, 196, 0.10);
 
   --text-primary:   #f5f7fb;
-  --text-secondary: #aab4c4;
+  --text-secondary: #b3bccb;
   /* muted lifted from #758196 (4.44:1 on raised) to clear AA 4.5:1 for the
      10.5–13px secondary text that uses it (stage ordinal/status, metric labels). */
-  --text-muted:     #828da1;
+  --text-muted:     #97a1b4;
 
   --accent-primary:     #5f78ff;
   --accent-primary-rgb: 95, 120, 255;
@@ -51,12 +51,15 @@
   --cost-cachewrite: #c084fc;
 
   /* Dedicated cost tokens provide contrast on cost surfaces. */
-  --cost-rail:        #828da1;
-  --cost-rail-strong: #aab4c4;
+  --cost-rail:        #97a1b4;
+  --cost-rail-strong: #b3bccb;
   --cost-warning:     #f2b84b;
 
-  --focus-ring:     rgba(95, 120, 255, 0.55);
   --overlay-scrim:  rgba(0, 0, 0, 0.60);
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #6b768a;
+  --control-border: #6b768a;
+  --focus-ring:     var(--accent-primary);
   --shadow-overlay: 0 24px 60px rgba(0, 0, 0, 0.55);
 
   --radius-sm: 6px;
@@ -108,10 +111,10 @@
   --separator-subtle:      rgba(22, 27, 37, 0.08);
 
   --text-primary:   #161b25;
-  --text-secondary: #596579;
+  --text-secondary: #485366;
   /* muted darkened from #7b879a (3.33:1 on canvas) to clear AA 4.5:1 for the
      small secondary text (stage ordinal/status, metric labels, actor/gap). */
-  --text-muted:     #616c7e;
+  --text-muted:     #5a6577;
 
   --accent-primary:     #4d63d7;
   --accent-primary-rgb: 77, 99, 215;
@@ -129,12 +132,15 @@
   --cost-cachewrite: #9333ea;
 
   /* Cost tokens for the light theme. */
-  --cost-rail:        #616c7e;
-  --cost-rail-strong: #596579;
+  --cost-rail:        #5a6577;
+  --cost-rail-strong: #485366;
   --cost-warning:     #9c5a06;
 
-  --focus-ring:     rgba(77, 99, 215, 0.5);
   --overlay-scrim:  rgba(15, 20, 30, 0.45);
+  /* Form borders, disabled text and the focus ring keep 3:1 on canvas and raised surfaces. */
+  --text-disabled:  #848e9d;
+  --control-border: #848e9d;
+  --focus-ring:     var(--accent-primary);
   --shadow-overlay: 0 24px 60px rgba(22, 27, 37, 0.18);
 
   --radius-sm: 6px;
@@ -161,7 +167,7 @@
   --coral:     var(--danger);
 
   --qa-answer:              #3a4457;
-  --dialog-option-text:     #4759c9;
+  --dialog-option-text:     #4455c1;
   --btn-cancel-dialog-text: #c44150;
 
   /* same black scrim veil as dark (deliberately unchanged on light) */
@@ -184,42 +190,38 @@
   background-color: var(--bg);
 }
 
-/* base/layout.css: progress bar, jump-latest, icon-btn, attention pulse */
+/* base/layout.css: progress bar, jump-latest, icon-btn */
 .progress-bar { background: rgba(var(--accent-primary-rgb), 0.12); }
 .progress-fill {
   background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.30), var(--accent-primary));
   box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.35);
 }
 .icon-btn { border-color: rgba(var(--accent-primary-rgb), 0.4); }
-@keyframes attentionPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0); }
-  50%      { box-shadow: 0 0 10px 2px rgba(var(--attention-rgb), 0.50); }
-}
 
 /* base/stages-list.css */
-.stage-item:hover { background: rgba(var(--accent-primary-rgb), 0.06); }
+.stage-item:hover { background: rgba(var(--accent-primary-rgb), 0.06); --text-muted: var(--text-secondary); }
 /* Спокойное выделение: равномерный тонкий тинт + левый акцент-маркер из base
    (без градиента-«карточки» и без sweep). */
-.stage-item.active { background: rgba(var(--accent-primary-rgb), 0.08); }
+.stage-item.active { background: rgba(var(--accent-primary-rgb), 0.08); --text-muted: var(--text-secondary); }
 
 /* base/plan-panel.css (only hardcoded bg fills; border-left already on tokens) */
-.line-commented [data-line].is-hover { background: rgba(var(--accent-primary-rgb), 0.05); }
-.line-commented [data-line].has-comment { background: rgba(var(--attention-rgb), 0.09); }
-.line-commented [data-line].has-comment.is-hover { background: rgba(var(--attention-rgb), 0.14); }
+.line-commented [data-line].is-hover { background: rgba(var(--accent-primary-rgb), 0.05); --text-muted: var(--text-secondary); }
+.line-commented [data-line].has-comment { background: rgba(var(--attention-rgb), 0.09); --text-muted: var(--text-secondary); }
+.line-commented [data-line].has-comment.is-hover { background: rgba(var(--attention-rgb), 0.14); --text-muted: var(--text-secondary); }
 .plan-section-wrapper { background: rgba(var(--accent-primary-rgb), 0.04); }
-.plan-section-wrapper.plan-section-assumptions { background: rgba(var(--accent-primary-rgb), 0.06); }
-.plan-section-wrapper.plan-section-criteria { background: rgba(var(--success-rgb), 0.06); }
+.plan-section-wrapper.plan-section-assumptions { background: rgba(var(--accent-primary-rgb), 0.06); --text-muted: var(--text-secondary); }
+.plan-section-wrapper.plan-section-criteria { background: rgba(var(--success-rgb), 0.06); --text-muted: var(--text-secondary); }
 
 /* base/dialog-channel.css — teal/violet accents → indigo */
 #dialog-section {
   border-color: rgba(var(--accent-primary-rgb), 0.35);
   background: radial-gradient(circle at top right, rgba(var(--accent-primary-rgb), 0.08), transparent 60%);
+  --text-muted: var(--text-secondary);
 }
 #dialog-section h3 { border-bottom-color: rgba(var(--accent-primary-rgb), 0.25); }
 .dialog-history .qa { border-left-color: rgba(var(--accent-primary-rgb), 0.2); }
 .dialog-history .agent-msg { border-left-color: rgba(var(--accent-primary-rgb), 0.25); }
 .phase-divider { border-bottom-color: rgba(var(--accent-primary-rgb), 0.12); }
-.dialog-pending .dialog-custom { border-color: rgba(var(--accent-primary-rgb), 0.2); }
 .dialog-pending .dialog-options button { border-color: rgba(var(--accent-primary-rgb), 0.55); }
 @keyframes pendingBreathe {
   0%, 100% { box-shadow: inset 0 0 18px rgba(var(--accent-primary-rgb), 0.08), 0 0 12px rgba(var(--accent-primary-rgb), 0.10); }
@@ -231,16 +233,17 @@
   100% { box-shadow: 0 0 0 0 transparent, 0 0 0 transparent, inset 0 0 0 transparent; }
 }
 /* Retint dialog pending and option fills with theme RGB tokens. */
-.dialog-pending { background: linear-gradient(180deg, rgba(var(--accent-primary-rgb), 0.10), rgba(var(--accent-primary-rgb), 0.02)); }
+.dialog-pending { background: linear-gradient(180deg, rgba(var(--accent-primary-rgb), 0.10), rgba(var(--accent-primary-rgb), 0.02)); --text-muted: var(--text-secondary); }
 .dialog-pending .dialog-options button:hover { box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.40); }
 .dialog-pending .dialog-options button.selected {
   background: rgba(var(--accent-primary-rgb), 0.18);
   box-shadow: 0 0 12px rgba(var(--accent-primary-rgb), 0.45);
+  --text-muted: var(--text-secondary);
 }
 
 /* base/event-feed.css */
 .feed-entry { border-bottom-color: rgba(var(--accent-primary-rgb), 0.05); }
-.feed-entry:hover { background: rgba(var(--accent-primary-rgb), 0.05); }
+.feed-entry:hover { background: rgba(var(--accent-primary-rgb), 0.05); --text-muted: var(--text-secondary); }
 
 /* base/layout.css — .resize-handle (pure rgba(183,135,255,X), not var). */
 .resize-handle { background: rgba(var(--accent-primary-rgb), 0.2); }

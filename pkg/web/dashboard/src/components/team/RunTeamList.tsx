@@ -1,4 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode, type Ref } from 'react'
+import type { AssistantTask } from '../../types/assistant-task'
 import type { MeshParticipant, MeshThread, MeshThreadSummaries } from '../../api/mesh-client'
 import { activityLabel, activityPresence, participantLabel, participantRole, stagePresence, threadLabel, type Presence } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
@@ -54,6 +55,8 @@ export type RunTeamListProps = {
   // there is nowhere to write from right now, and pickHint says why.
   onPick?: (participant: MeshParticipant) => void
   pickHint?: string
+  helperTasks?: readonly AssistantTask[]
+  onClose?: () => void
 }
 
 function stageStatusLabel(status: string): string {
@@ -137,7 +140,7 @@ export function RunTeamList({
   onSelectParticipant, onSelectThread, onAddRunAgent, id = 'team-roster', drawer = true, open = false,
   focusStageId, onPick, pickHint, onAttachHelper, listView = 'conversations', onListViewChange,
   search = '', onSearchChange, summaries = {}, unreadThreadIds, newOnly = false, onNewOnlyChange,
-  onCreateConversation, actionButtonRef,
+  onCreateConversation, actionButtonRef, helperTasks = [], onClose,
 }: RunTeamListProps): ReactElement {
   const listTabsId = useId()
   const newFilterRef = useRef<HTMLButtonElement>(null)
@@ -176,6 +179,7 @@ export function RunTeamList({
     const status = focused ? focusStatus(p, stage) : participantStatus(p, stage)
     const detail = status ?? (p.scope === 'run' ? participantRole(p.kind) : null)
     const sandbox = focused ? sandboxLabel(p) : null
+    const helperTask = p.kind === 'helper' ? helperTasks.find((task) => p.id === `helper:${task.id}`) : undefined
     const disabled = focused && (onPick === undefined || !p.reachable)
     return (
       <li key={p.id}>
@@ -202,6 +206,7 @@ export function RunTeamList({
             <span className="team-person-detail" title={detail ?? undefined}>
               {p.alias !== undefined && p.alias !== '' && <span className="team-person-handle">@{p.alias}</span>}
               {detail !== null && <span className="team-person-status">{detail}</span>}
+              {helperTask !== undefined && <span className="team-person-mode">{helperTask.mode === 'required' ? 'Required' : 'Advisory'}</span>}
               {sandbox !== null && (
                 <span className="team-person-sandbox" data-enforcement={p.readonly_enforcement} title={sandbox.title}>
                   {sandbox.text}
@@ -226,26 +231,34 @@ export function RunTeamList({
   const rootClass = `team-roster${drawer ? '' : ' team-roster-embedded'}${drawer && open ? ' open' : ''}`
 
   if (focused) {
-    const thisStageRows = renderStage(focusStageId)
-    const otherStages = stageOrder(stageParticipants, stages).filter((s) => s !== focusStageId)
-    const otherCount = stageParticipants.filter((p) => p.stage_id !== focusStageId).length
+    const visibleParticipants = stageParticipants.filter(matchesPerson)
+    const thisStageRows = renderStage(focusStageId, visibleParticipants)
+    const otherStages = stageOrder(visibleParticipants, stages).filter((s) => s !== focusStageId)
+    const otherCount = visibleParticipants.filter((p) => p.stage_id !== focusStageId).length
+    const agents = matchingRunParticipants.filter((p) => p.kind !== 'side_agent')
+    const sideAgents = matchingRunParticipants.filter((p) => p.kind === 'side_agent')
     return (
       <nav id={id} className={rootClass} aria-label="People">
         <div className="team-roster-top">
-          <h2 className="team-roster-title">People</h2>
+          <div className="stage-people-heading"><h2 className="team-roster-title">People</h2>{onClose !== undefined && <button type="button" className="team-icon-btn" aria-label="Close people panel" onClick={onClose}>×</button>}</div>
+          <p className="team-roster-hint">Click someone to mention them in this feed.</p>
+          <input type="search" aria-label="Search people" placeholder="Find a name or @alias…" value={search} onChange={(event) => onSearchChange?.(event.target.value)} />
           {pickHint !== undefined && <p className="team-roster-hint">{pickHint}</p>}
         </div>
         <RosterGroup id={`${id}-stage`} label="This stage" count={thisStageRows.length}>
           <ul className="team-roster-list">{thisStageRows}</ul>
         </RosterGroup>
-        <RosterGroup id={`${id}-run`} label="Run agents" count={runParticipants.length}>
-          <ul className="team-roster-list">{runParticipants.map((p) => renderRow(p))}</ul>
+        <RosterGroup id={`${id}-run`} label="Run agents" count={agents.length}>
+          <ul className="team-roster-list">{agents.map((p) => renderRow(p))}</ul>
         </RosterGroup>
         {otherStages.length > 0 && (
           <RosterGroup id={`${id}-other`} label="Other stages" count={otherCount}>
-            <ul className="team-roster-list">{otherStages.flatMap((stageId) => renderStage(stageId))}</ul>
+            <ul className="team-roster-list">{otherStages.flatMap((stageId) => renderStage(stageId, visibleParticipants))}</ul>
           </RosterGroup>
         )}
+        {sideAgents.length > 0 && <RosterGroup id={`${id}-assistant`} label="Assistant" count={sideAgents.length}>
+          <ul className="team-roster-list">{sideAgents.map((p) => renderRow(p))}</ul>
+        </RosterGroup>}
         <div className="team-add-agent-bottom">
           <button type="button" className="btn team-add-run-agent" onClick={onAddRunAgent} title="An agent of the whole run: it talks to every stage">
             <span aria-hidden="true">+ </span>Add run agent…
@@ -262,18 +275,6 @@ export function RunTeamList({
 
   return (
     <nav id={id} className={rootClass} aria-label="Team roster">
-      <div className="team-roster-top">
-        <h2 className="team-roster-title">{listView === 'conversations' ? 'Conversations' : 'People'}</h2>
-        <button
-          ref={actionButtonRef}
-          type="button"
-          className="team-icon-btn team-roster-action"
-          aria-label={listView === 'conversations' ? 'New conversation' : 'Add run agent'}
-          title={listView === 'conversations' ? 'New conversation' : 'Add run agent'}
-          onClick={listView === 'conversations' ? (event) => onCreateConversation?.(event.currentTarget) : onAddRunAgent}
-        >+
-        </button>
-      </div>
       <TabList
         idPrefix={listTabsId}
         ariaLabel="Team navigation"
@@ -288,24 +289,34 @@ export function RunTeamList({
         <input
           type="search"
           aria-label={listView === 'conversations' ? 'Search conversations' : 'Search people'}
-          placeholder={listView === 'conversations' ? 'Search conversations' : 'Search people'}
+          placeholder={listView === 'conversations' ? 'Search conversations…' : 'Search people…'}
           value={search}
           onChange={(event) => onSearchChange?.(event.target.value)}
         />
       </label>
-      {listView === 'conversations' && onNewOnlyChange !== undefined && (
-        <button ref={newFilterRef} type="button" className={`team-new-filter${newOnly ? ' active' : ''}`}
-          aria-pressed={newOnly} onClick={() => onNewOnlyChange(!newOnly)}>
-          New to you <span className="team-new-filter-count">{unreadCount}</span>
+      <div className="team-roster-actions">
+        <button
+          ref={actionButtonRef}
+          type="button"
+          className="team-roster-action"
+          onClick={listView === 'conversations' ? (event) => onCreateConversation?.(event.currentTarget) : onAddRunAgent}
+        >
+          <span aria-hidden="true">+ </span>{listView === 'conversations' ? 'New conversation' : 'Add run agent'}
         </button>
-      )}
+        {listView === 'conversations' && onNewOnlyChange !== undefined && (
+          <button ref={newFilterRef} type="button" className={`team-new-filter${newOnly ? ' active' : ''}`}
+            aria-pressed={newOnly} onClick={() => onNewOnlyChange(!newOnly)}>
+            New to you <span className="team-new-filter-count">{unreadCount}</span>
+          </button>
+        )}
+      </div>
       {listView === 'conversations' ? (
         <div className="team-roster-results" {...tabPanelProps(listTabsId, 'conversations')}
           onFocusCapture={(event) => {
             focusedThreadRowRef.current = (event.target as HTMLElement).closest<HTMLButtonElement>('.team-thread-item')
           }}>
           <section className="team-roster-group" aria-labelledby={`${id}-conversations`}>
-            <h3 id={`${id}-conversations`}>Conversations<span className="team-roster-count" aria-hidden="true">{threads.length}</span></h3>
+            <h3 id={`${id}-conversations`} className="team-sr-only">Conversations<span className="team-roster-count" aria-hidden="true">{threads.length}</span></h3>
             {visibleThreads.length === 0 ? (
               <div className="team-roster-empty-state">
                 <p className="team-thread-list-empty empty-hint">{newOnly ? "You're all caught up" : query === '' ? 'No conversations yet' : 'No matching conversations'}</p>

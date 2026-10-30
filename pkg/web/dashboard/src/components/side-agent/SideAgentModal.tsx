@@ -4,7 +4,7 @@ import { SideAgentHistory } from './SideAgentHistory'
 import { SideAgentComposer } from './SideAgentComposer'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
 import type { AssistantProfile } from '../../types/assistant-profile'
-import { visibleFocusables } from '../../lib/focus-trap'
+import { trapTab } from '../../lib/focus-trap'
 
 // Таймер, после которого закрывающееся окно уходит из hit-testing/a11y. 220 оставляет запас, чтобы фолбэк
 // не срезал анимацию.
@@ -17,10 +17,9 @@ export type SideAgentModalProps = {
   // attentionShortcut — ждущее действие стадии: кнопка в шапке СНАЧАЛА скрывает Side agent, затем
   // открывает нужный attention-воркспейс. null → нет ожидания.
   attentionShortcut?: { label: string; onActivate: () => void } | null
-  // stages — известные пары id/title стадий, для селектора «Context: …» (T4.3). Пусто/не передано → адресат
-  // показывается как есть (raw stage id), без выпадающего списка — ровно то, что известно на этот момент.
+  // Without a stage list, keep the known context visible as its raw ID.
   stages?: { id: string; title: string }[]
-  // assistantProfiles — роли, доступные для @mention в композере (T4.2). Пусто → меню недостижимо.
+  // An empty profile list keeps helper mentions unavailable.
   assistantProfiles?: AssistantProfile[]
 }
 
@@ -57,6 +56,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
     // isOpen === false
     setPhase((prev) => {
       if (prev === 'closed') return 'closed'
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'closed'
       closeTimer.current = setTimeout(() => {
         closeTimer.current = null
         setPhase('closed')
@@ -72,8 +72,8 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
     if (el !== null) el.inert = phase !== 'open'
     if (phase === 'open') {
       modalRef.current?.querySelector<HTMLTextAreaElement>('.side-agent-composer .chat-composer-input')?.focus()
-    } else if (phase === 'closed') {
-      openerRef.current?.focus?.()
+    } else if (modalRef.current?.contains(document.activeElement) || document.activeElement === document.body) {
+      openerRef.current?.focus()
     }
   }, [phase])
 
@@ -95,17 +95,13 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
   }
 
   function onKeyDown(e: React.KeyboardEvent): void {
-    if (e.key !== 'Tab' || modalRef.current === null) return
-    const items = visibleFocusables(modalRef.current)
-    const first = items[0]
-    const last = items[items.length - 1]
-    if (first === undefined || last === undefined) return
-    if (e.shiftKey && document.activeElement === first) {
+    if (phase !== 'open' || e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Escape') {
       e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
+      e.stopPropagation()
+      close()
+    } else if (modalRef.current !== null) {
+      trapTab(e, modalRef.current)
     }
   }
 
@@ -117,6 +113,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
       ref={overlayRef}
       className={`side-agent-overlay side-agent-${phase}`}
       hidden={phase === 'closed'}
+      aria-hidden={phase !== 'open' ? true : undefined}
       onMouseDown={onScrimDown}
       onMouseUp={onScrimUp}
     >
@@ -132,7 +129,6 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
         <header className="side-agent-header">
           <div className="side-agent-title-wrap">
             <h2 id="side-agent-title" className="side-agent-title">Assistant</h2>
-            {command !== '' && <span className="side-agent-command" title="The configured agent command">{command}</span>}
           </div>
           <div className="side-agent-header-actions">
             <span className="side-agent-status" aria-live="polite" title={statusText}>
@@ -154,12 +150,9 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
           </div>
         </header>
 
-        {/* Адресат хода (T4.3): видно, какой стадии касается сообщение, и можно сменить ДО отправки — после
-            Send это уже не изменит отправленный ход (см. use-side-agent.ts's contextStageIdRef). Рендерится,
-            только если есть что показывать: либо уже есть адресат, либо есть из чего выбирать. */}
-        {(contextStageId !== '' || stages.length > 0) && (
+        {/* Context is captured when sending; changing it here only affects the next turn. */}
           <div className="side-agent-context-row">
-            <span className="side-agent-context-label">Context:</span>
+            <span className="side-agent-context-label">{contextStageId !== '' || stages.length > 0 ? 'Context:' : 'Run-wide context'}</span>
             {stages.length > 0 ? (
               <select
                 className="side-agent-context-select"
@@ -169,17 +162,15 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
               >
                 <option value="">No stage</option>
                 {stages.map((s) => (
-                  // Fall back to the id when the stage has no display name — state.Store.SetStageNames stores
-                  // empty names as-is and documents that "the UI handles them" (the stage rail already does
-                  // this); without the fallback the context dropdown renders a blank, unselectable-looking row.
+                  // Keep nameless stages selectable with a visible ID.
                   <option key={s.id} value={s.id}>{s.title || s.id}</option>
                 ))}
               </select>
             ) : (
               <span className="side-agent-context-value">{contextStageId}</span>
             )}
+            {command !== '' && <span className="side-agent-command" title="The configured agent command">{command}</span>}
           </div>
-        )}
 
         {unavailable && (
           <div className="side-agent-banner side-agent-banner-warning" role="status">

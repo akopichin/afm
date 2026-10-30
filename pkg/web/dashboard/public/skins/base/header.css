@@ -7,9 +7,9 @@
      with a plain `auto` first column a long description pushed the metrics into each other. */
   grid-template-columns: minmax(0, max-content) minmax(max-content, 1fr) auto;
   align-items: center;
-  gap: 20px;
-  min-height: 60px;
-  padding: 0 20px;
+  gap: 24px;
+  min-height: 64px;
+  padding: 0 24px;
   background: var(--surface-raised);
   border-bottom: 1px solid var(--separator-subtle);
 }
@@ -18,15 +18,15 @@
 .gh-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
 .gh-mark {
   display: inline-flex;
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   color: var(--accent-primary);
 }
 .gh-mark svg {
@@ -36,9 +36,9 @@
 }
 
 .gh-wordmark {
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.02em;
+  font-weight: 750;
+  font-size: 20px;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
   flex-shrink: 0;
 }
@@ -47,16 +47,16 @@
 .gh-flow {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
   min-width: 0;
-  padding-left: 12px;
+  padding-left: 18px;
   margin-left: 2px;
   border-left: 1px solid var(--separator-subtle);
 }
 
 .gh-flow-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 650;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -89,7 +89,25 @@
   gap: 8px;
 }
 
-/* Files button — icon + label, a touch wider than a bare icon-btn. */
+/* Assistant / Files — quiet buttons: icon + label, no outline until hover. */
+.header-actions .icon-btn.gh-files-btn,
+.header-actions .icon-btn.gh-side-agent-btn {
+  border-color: transparent;
+}
+.header-actions .icon-btn.gh-files-btn:hover,
+.header-actions .icon-btn.gh-side-agent-btn:hover {
+  border-color: transparent;
+}
+.header-actions .gh-files-icon svg,
+.header-actions .gh-side-agent-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.header-actions .gh-files-label,
+.header-actions .gh-side-agent-label {
+  font-size: 13px;
+  font-weight: 550;
+}
 .gh-files-btn {
   gap: 6px;
   padding: 5px 10px;
@@ -97,10 +115,6 @@
 .gh-files-icon {
   display: inline-flex;
   align-items: center;
-}
-.gh-files-label {
-  font-size: 12px;
-  font-weight: 500;
 }
 
 /* Сегментированный переключатель темы (солнце | луна) — пилюля с двумя
@@ -130,12 +144,12 @@
 }
 .gh-theme-seg-btn:hover { color: var(--text-secondary); }
 .gh-theme-seg-btn.active {
-  color: var(--accent-primary);
+  color: var(--accent-text);
   background: var(--surface-raised);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 /* Активное солнце — тёплым attention-акцентом, как в макете. */
-.gh-theme-seg-btn[aria-label="Light mode"].active { color: var(--attention); }
+.gh-theme-seg-btn[aria-label="Light mode"].active { color: var(--attention-text); }
 .gh-theme-seg-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 /* Иконки-кнопки шапки (уведомления и т.п.) держат SVG по центру. */
@@ -153,25 +167,23 @@
   padding: 0 14px;
   gap: 7px;
 }
-.header-actions .icon-btn.icon-btn-on { color: var(--accent-primary); }
+.header-actions .icon-btn.icon-btn-on { color: var(--accent-text); }
 
 /* === Connection indicator (was .ws-status boxy pill → calm dot + text) === */
 .gh-connection {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 4px 6px;
+  padding: 4px 0 4px 8px;
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
   color: var(--text-muted);
   /* Neutralize the legacy .ws-status pill (border/uppercase/tracking). */
   border: 0;
   text-transform: none;
 }
 .gh-connection-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
   flex-shrink: 0;
@@ -180,38 +192,27 @@
   white-space: nowrap;
 }
 
-.gh-connection.connected {
-  color: var(--text-secondary);
-}
 .gh-connection.connected .gh-connection-dot {
   background: var(--success);
-  box-shadow: 0 0 0 3px rgba(var(--success-rgb), 0.16);
-  animation: ghConnPulse 2.4s ease-in-out infinite;
 }
 /* Offline — красный во всех темах: и текст, и точка, чтобы разрыв связи был заметен, а не сливался с
    приглушённым нейтральным. */
 .gh-connection.disconnected {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 .gh-connection.disconnected .gh-connection-dot {
   background: var(--danger);
   box-shadow: 0 0 0 3px rgba(var(--danger-rgb), 0.16);
 }
-/* Soft breathing of the connection dot while online. */
-@keyframes ghConnPulse {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--success-rgb), 0.12); }
-  50%      { box-shadow: 0 0 0 4px rgba(var(--success-rgb), 0.22); }
-}
-/* Gentle fade while reconnecting (disconnected). */
-.gh-connection.disconnected { animation: ghConnReconnect 1.2s ease-in-out infinite; }
+/* Gentle fade while reconnecting: the dot only, so the "Offline" text keeps its AA contrast. */
+.gh-connection.disconnected .gh-connection-dot { animation: ghConnReconnect 1.2s ease-in-out infinite; }
 @keyframes ghConnReconnect {
   0%, 100% { opacity: 0.55; }
   50%      { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gh-connection.connected .gh-connection-dot,
-  .gh-connection.disconnected {
+  .gh-connection.disconnected .gh-connection-dot {
     animation: none;
   }
 }
@@ -225,8 +226,7 @@
   .global-header {
     gap: 8px 12px;
     grid-template-columns: minmax(0, 1fr) auto;
-    padding-top: 8px;
-    padding-bottom: 8px;
+    padding: 8px 16px;
   }
   .gh-left { grid-column: 1; grid-row: 1; }
   .gh-right { grid-column: 2; grid-row: 1; }
@@ -236,4 +236,32 @@
   .gh-files-btn { width: 38px; padding: 0; justify-content: center; }
   /* Connection → dot only; the word online/offline drops. */
   .gh-connection-text { display: none; }
+}
+
+/* Phone: two compact rows (identity + actions, then metrics), about 100px in total, so the feed starts
+   high on the screen. The wordmark drops — the mark and the flow name identify the app. */
+@media (max-width: 600px) {
+  .global-header {
+    gap: 4px 8px;
+    min-height: 0;
+    padding: 4px 12px;
+  }
+  .gh-wordmark { display: none; }
+  .gh-flow {
+    padding-left: 0;
+    margin-left: 0;
+    border-left: 0;
+  }
+  .header-actions { gap: 4px; }
+  /* Assistant → icon-only like Files (aria-label keeps its name), so the flow title gets the room. */
+  .gh-side-agent-label { display: none; }
+  /* Touch targets: 44px square icon buttons. The Assistant selector is longer than side-agent.css's own
+     width rule, which loads later and would otherwise keep the label-sized button. */
+  .header-actions .icon-btn,
+  .header-actions .icon-btn.gh-files-btn,
+  .global-header .header-actions .icon-btn.gh-side-agent-btn {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
 }

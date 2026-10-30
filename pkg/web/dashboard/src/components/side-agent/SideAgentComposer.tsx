@@ -4,6 +4,7 @@ import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { AssistantMentionMenu } from '../assistants/AssistantMentionMenu'
 import { ChatSendButton } from '../chat-composer/ChatSendButton'
+import { ComposerCard, ComposerHint, ComposerRecipients } from '../chat-composer/ComposerCard'
 import { filterMentionProfiles } from '../assistants/mention-match'
 import { useMentionMenu } from '../assistants/use-mention-menu'
 import type { AssistantProfile } from '../../types/assistant-profile'
@@ -58,6 +59,7 @@ export function SideAgentComposer({
   const mention = useMentionMenu<AssistantProfile>({
     matchesFor: (query) => filterMentionProfiles(assistantProfiles, query),
     textFor: (profile) => profile.id,
+    isUnavailable: (profile) => !profile.available,
     replaceRange,
   })
 
@@ -80,8 +82,18 @@ export function SideAgentComposer({
     handleTextareaSubmit(e, submit, canSend)
   }
 
+  function openMentions(): void {
+    const caret = textareaRef.current?.selectionStart ?? draft.length
+    const before = draft.slice(0, caret)
+    const trigger = before !== '' && !/\s$/.test(before) ? ' @' : '@'
+    replaceRange(caret, caret, trigger)
+    mention.onInput(before + trigger + draft.slice(caret), caret + trigger.length)
+    textareaRef.current?.focus()
+  }
+
   return (
     <div className="side-agent-composer">
+      <div className="side-agent-composer-heading">Message Assistant</div>
       {quote !== null && (
         <div className="side-agent-quote-chip">
           <span className="side-agent-quote-chip-label">↩ File comments</span>
@@ -96,7 +108,10 @@ export function SideAgentComposer({
           <pre className="side-agent-quote-chip-body">{quote}</pre>
         </div>
       )}
-      <div className="chat-composer-row">
+      <ComposerCard>
+        <ComposerRecipients>
+          <span className="chat-composer-recipient">Assistant</span>
+        </ComposerRecipients>
         <textarea
           {...mention.inputAria}
           ref={setRefs}
@@ -104,7 +119,7 @@ export function SideAgentComposer({
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
-          placeholder="Message the assistant…  (Enter to send, Shift+Enter for a new line, @ to mention a role)"
+          placeholder="Ask about the run, plan or current changes…"
           aria-label="Message the assistant"
           rows={1}
         />
@@ -117,15 +132,19 @@ export function SideAgentComposer({
             onSelect={mention.pick}
           />
         )}
-        {running && onStop !== undefined && (
-          <button type="button" className="chat-stop" aria-label="Stop" title="Stop" onClick={onStop}>
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-              <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
-            </svg>
-          </button>
-        )}
-        <ChatSendButton label="Send" disabled={!canSend} onClick={submit} />
-      </div>
+        <div className="chat-composer-toolbar">
+          {assistantProfiles.length > 0 && <button type="button" className="chat-composer-mention" aria-label="Mention a role" onClick={openMentions}>@</button>}
+          {running && onStop !== undefined && (
+            <button type="button" className="chat-stop" aria-label="Stop" title="Stop" onClick={onStop}>
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
+              </svg>
+            </button>
+          )}
+          <ChatSendButton label="Send" visibleLabel="Send" disabled={!canSend} onClick={submit} />
+        </div>
+      </ComposerCard>
+      <ComposerHint note="Messages go to the Assistant." />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import * as meshClient from '../../api/mesh-client'
+import { DialogOpenContext } from '../../lib/focus-trap'
 import { StagePeoplePanel } from './StagePeoplePanel'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { Stage } from '../../types'
@@ -422,4 +423,46 @@ describe('StagePeoplePanel', () => {
     expect(fireEvent.keyDown(last, { key: 'Tab' })).toBe(true)
     expect(last).toHaveFocus()
   })
+})
+
+
+test.each([[false, 0], [true, 1]])('People close button on a wide screen is absent, in drawer mode present (drawer=%s)', (drawer, count) => {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    media: query, matches: drawer && query === '(max-width: 1180px)',
+    addEventListener: () => {}, removeEventListener: () => {},
+  }))
+  renderPanel({ open: drawer })
+  expect(screen.queryAllByRole('button', { name: 'Close people panel' })).toHaveLength(count)
+})
+
+test('People reports modal context and takes focus only in drawer mode', () => {
+  const report = vi.fn()
+  let narrow = false
+  const listeners = new Set<() => void>()
+  vi.stubGlobal('matchMedia', () => ({
+    get matches() { return narrow },
+    addEventListener: (_: string, callback: () => void) => listeners.add(callback),
+    removeEventListener: (_: string, callback: () => void) => listeners.delete(callback),
+  }))
+  const opener = document.createElement('button')
+  document.body.append(opener)
+  opener.focus()
+  const props = { stageId: 'impl', participants, stages: [stage('impl', 'running')], profiles: [], open: true, onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn() }
+  const view = render(<DialogOpenContext.Provider value={report}><StagePeoplePanel {...props} /></DialogOpenContext.Provider>)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(opener).toHaveFocus()
+  expect(report).not.toHaveBeenCalled()
+  act(() => { narrow = true; listeners.forEach((notify) => notify()) })
+  const drawer = screen.getByRole('dialog', { name: 'Stage people' })
+  expect(drawer).toHaveAttribute('aria-modal', 'true')
+  expect(drawer.contains(document.activeElement)).toBe(true)
+  expect(report).toHaveBeenLastCalledWith(true)
+  view.rerender(<DialogOpenContext.Provider value={report}><StagePeoplePanel {...props} open={false} /></DialogOpenContext.Provider>)
+  expect(report).toHaveBeenLastCalledWith(false)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(opener).toHaveFocus()
+  view.unmount()
+  opener.remove()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })

@@ -20,6 +20,19 @@ function ControlledComposer(props: Omit<SideAgentComposerProps, 'draft' | 'onDra
 }
 
 describe('SideAgentComposer', () => {
+  it('uses one composer card for the fixed recipient, textarea and labelled Send toolbar', () => {
+    render(<ControlledComposer onSend={vi.fn()} running={false} assistantProfiles={PROFILES} />)
+    const card = document.querySelector('.chat-composer-card')
+    expect(card).toContainElement(screen.getByRole('group', { name: 'Recipients' }))
+    expect(card).toContainElement(screen.getByRole('combobox'))
+    expect(card).toContainElement(screen.getByRole('button', { name: 'Send' }))
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveTextContent('Send')
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a role' }))
+    expect(screen.getByRole('listbox', { name: 'Mention a role' })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
+    expect(screen.getByRole('combobox')).toHaveValue('@frontendDeveloper ')
+  })
+
   it('disables Send when the draft is empty, enables it when non-empty', () => {
     const { rerender } = render(
       <SideAgentComposer draft="" onDraftChange={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} running={false} />,
@@ -126,7 +139,7 @@ describe('SideAgentComposer', () => {
   it('names the textbox and placeholder after the assistant', () => {
     render(<SideAgentComposer draft="" onDraftChange={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} running={false} />)
     const ta = screen.getByRole('combobox', { name: 'Message the assistant' })
-    expect(ta).toHaveAttribute('placeholder', 'Message the assistant…  (Enter to send, Shift+Enter for a new line, @ to mention a role)')
+    expect(ta).toHaveAttribute('placeholder', 'Ask about the run, plan or current changes…')
   })
 
   it('names the mention listbox "Mention a role"', () => {

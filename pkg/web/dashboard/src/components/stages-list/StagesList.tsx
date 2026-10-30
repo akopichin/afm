@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useId, useRef, useState, type ReactElement } from 'react'
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
+import { trapTab, visibleFocusables } from '../../lib/focus-trap'
 import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
 import { attentionKindFor } from '../../hooks/use-attention'
@@ -24,7 +25,7 @@ type StagesListProps = {
   collaborationEnabled?: boolean
   // onAttachHelper — открыть диалог прикрепления помощника к стадии (App владеет модалкой).
   onAttachHelper?: (stageId: string) => void
-  // canAddStage — capabilities.add_stage; показывает кнопку «+ Stage» в шапке рейла. onAddStage открывает
+  // canAddStage — capabilities.add_stage; показывает кнопку «Add stage» внизу рейла. onAddStage открывает
   // диалог добавления динамической стадии (App владеет модалкой).
   canAddStage?: boolean
   onAddStage?: () => void
@@ -74,6 +75,12 @@ function verifyPhaseLabel(phase: StageVerify['phase']): string {
 // is stale; hide it rather than pulse amber beside a done/parked dot.
 function isStaleRunningVerify(status: Stage['status'], phase: StageVerify['phase']): boolean {
   return status !== 'running' && phase === 'running'
+}
+
+// progressState — цвет сегмента полоски прогресса: готово / идёт сейчас / остальное.
+function progressState(status: Stage['status']): 'done' | 'active' | '' {
+  if (status === 'done') return 'done'
+  return status === 'running' || status === 'planning' || status === 'revising' || status === 'retrying' ? 'active' : ''
 }
 
 // Статусы, для которых имеет смысл плейсхолдер «оценка ожидается» — стадия
@@ -168,6 +175,28 @@ export function StagesList({
   const menuRef = useRef<HTMLUListElement | null>(null)
   const openButtonRef = useRef<HTMLButtonElement | null>(null)
 
+  // Меню вынесено в body, вне Tab-ловушки рейла: фокус входит в него сразу и держится внутри, Escape
+  // закрывает меню и возвращает фокус на кебаб.
+  useEffect(() => {
+    if (openMenuStageId !== null && menuPos !== null && menuRef.current !== null) visibleFocusables(menuRef.current)[0]?.focus()
+  }, [openMenuStageId, menuPos])
+
+  function closeMenu(): void {
+    setOpenMenuStageId(null)
+    setMenuPos(null)
+    openButtonRef.current?.focus()
+  }
+
+  function onMenuKeyDown(e: KeyboardEvent<HTMLElement>): void {
+    if (e.key === 'Escape') {
+      e.stopPropagation() // Escape закрывает меню, но не шторку рейла
+      closeMenu()
+    } else if (menuRef.current !== null) {
+      trapTab(e, menuRef.current)
+      if (e.key === 'Tab') e.stopPropagation()
+    }
+  }
+
   useEffect(() => {
     if (openMenuStageId === null) return
 
@@ -175,21 +204,31 @@ export function StagesList({
       setOpenMenuStageId(null)
       setMenuPos(null)
     }
+    // Фокус был в меню, которое исчезает: возвращаем его на кебаб, иначе Tab уйдёт из шторки рейла.
+    const restoreFocus = () => openButtonRef.current?.focus({ preventScroll: true })
+    const onScroll = () => {
+      close()
+      restoreFocus()
+    }
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as Node
       if (openButtonRef.current?.contains(target)) return
       if (menuRef.current?.contains(target)) return
       close()
+      // Клик по фокусируемому элементу сам заберёт фокус; возвращаем его, только если он упал на body.
+      window.setTimeout(() => {
+        if (document.activeElement === document.body) restoreFocus()
+      }, 0)
     }
 
     document.addEventListener('mousedown', onMouseDown)
     // Меню спозиционировано fixed относительно кнопки внутри списка стадий. Скролл не всплывает, поэтому
     // чужие контейнеры до этого слушателя не дойдут.
     const scroller = document.querySelector('.stages-scroll')
-    scroller?.addEventListener('scroll', close)
+    scroller?.addEventListener('scroll', onScroll)
     return () => {
       document.removeEventListener('mousedown', onMouseDown)
-      scroller?.removeEventListener('scroll', close)
+      scroller?.removeEventListener('scroll', onScroll)
     }
   }, [openMenuStageId])
 
@@ -267,24 +306,17 @@ export function StagesList({
     <aside id="stages-panel">
       <div className="rail-head">
         <h2>Stages</h2>
-        {canAddStage && (
-          <button type="button" className="rail-add-stage" onClick={() => onAddStage?.()} title="Add a dynamic stage">
-            + Stage
-          </button>
-        )}
         {progressTotal !== undefined && progressTotal > 0 && (
-          <div className="rail-progress" title={`${progressDone ?? 0} of ${progressTotal} stages done`}>
-            <span id="progress-text" className="rail-progress-text">{progressDone ?? 0} / {progressTotal}</span>
-            <span className="rail-progress-bar" aria-hidden="true">
-              <span
-                id="progress-fill"
-                className="rail-progress-fill"
-                style={{ width: `${Math.round(((progressDone ?? 0) / progressTotal) * 100)}%` }}
-              />
-            </span>
-          </div>
+          <span id="progress-text" className="rail-progress-text">{progressDone ?? 0} of {progressTotal} done</span>
         )}
       </div>
+      {progressTotal !== undefined && progressTotal > 0 && (
+        <div className="rail-progress" role="img" aria-label={`${progressDone ?? 0} of ${progressTotal} stages done`}>
+          {stages.map((stage) => (
+            <span key={stage.id} className="rail-progress-seg" data-state={progressState(stage.status)} />
+          ))}
+        </div>
+      )}
       <div className="stages-scroll">
         <ul id="stages-list" className="stages-list">
         {stages.map((stage, index) => {
@@ -313,13 +345,9 @@ export function StagesList({
                 обязан быть доступен с клавиатуры. Кебаб — ОТДЕЛЬНАЯ соседняя
                 кнопка (вложенные интерактивные элементы недопустимы), поэтому
                 живёт в .stage-actions рядом, а не внутри .stage-row. */}
-            {/* title — статус во всплывающей подсказке: текстовой строки статуса
-                больше нет, а по цвету точки running/revising/retrying не различить
-                (все амбер) — так статус доступен наведением, не занимая места. */}
             <button
               type="button"
               className="stage-row"
-              title={STAGE_STATUS_LABELS[stage.status]}
               onClick={() => onSelect(stage.id)}
               aria-describedby={costId}
             >
@@ -328,20 +356,18 @@ export function StagesList({
                 data-status={stage.status}
                 data-blocked={awaitingAssistantsBlocked ? 'true' : undefined}
               >
-                <span className="dot-check" aria-hidden="true">✓</span>
+                <span className="dot-check" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3.5 8.5 6.7 11.6 12.5 4.6" />
+                  </svg>
+                </span>
                 <span className="dot-num" aria-hidden="true">{index + 1}</span>
               </span>
-              {/* Две строки: id из flow.yaml жирным (основная), длинный name —
-                  приглушённой второй строкой. «Stage N» и текстовый статус убраны
-                  (статус несёт сама нода-точка: цвет/анимация/галочка + бейджи).
-                  Статус для скринридеров — visually-hidden строкой в accessible
-                  name кнопки (сама точка помечена aria-hidden). */}
+              {/* Две строки: имя стадии жирным (id — только если имени нет) и слово статуса под ним; статус
+                  читается и скринридером из accessible name кнопки. */}
               <span className="stage-label">
-                <span className="stage-name">{stage.id}</span>
-                {stage.name !== '' && stage.name !== stage.id && (
-                  <span className="stage-subname">{stage.name}</span>
-                )}
-                <span className="stage-status-sr">{STAGE_STATUS_LABELS[stage.status]}</span>
+                <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
+                <span className="stage-status" data-status={stage.status}>{STAGE_STATUS_LABELS[stage.status]}</span>
               </span>
             </button>
             {/* Единый трейлинг-слот: бейджи + кебаб. Отдельная от .stage-row
@@ -421,8 +447,7 @@ export function StagesList({
                   onClick={(e) => {
                     e.stopPropagation() // не триггерить onSelect клика по строке
                     if (openMenuStageId === stage.id) {
-                      setOpenMenuStageId(null)
-                      setMenuPos(null)
+                      closeMenu()
                       return
                     }
                     const rect = e.currentTarget.getBoundingClientRect()
@@ -441,6 +466,7 @@ export function StagesList({
                       ref={menuRef}
                       style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
                       onClick={(e) => e.stopPropagation()}
+                      onKeyDown={onMenuKeyDown}
                     >
                       {/* Кастомные кнопки стадии (flow.yaml) — при живом агенте
                           (running/awaiting_approval, не скрипт), которому Revise
@@ -454,8 +480,7 @@ export function StagesList({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setOpenMenuStageId(null)
-                                  setMenuPos(null)
+                                  closeMenu()
                                   onButton?.(stage.id, label)
                                 }}
                               >
@@ -470,8 +495,7 @@ export function StagesList({
                           <button
                             type="button"
                             onClick={() => {
-                              setOpenMenuStageId(null)
-                              setMenuPos(null)
+                              closeMenu()
                               onEditPreNote?.(stage.id)
                             }}
                           >
@@ -484,8 +508,7 @@ export function StagesList({
                           <button
                             type="button"
                             onClick={() => {
-                              setOpenMenuStageId(null)
-                              setMenuPos(null)
+                              closeMenu()
                               onPause?.(stage.id)
                             }}
                           >
@@ -498,8 +521,7 @@ export function StagesList({
                           <button
                             type="button"
                             onClick={() => {
-                              setOpenMenuStageId(null)
-                              setMenuPos(null)
+                              closeMenu()
                               onAttachHelper?.(stage.id)
                             }}
                           >
@@ -513,11 +535,6 @@ export function StagesList({
               </span>
             )}
             </span>
-            {/* Коннектор — абсолютно спозиционированная линия к НОДЕ следующей стадии, её пиксельная
-                математика (stages-list.css) считает ровно одну строку на этот <li>. Развёрнутая ветка
-                добавляет строки помощников между этой стадией и следующей — коннектор бы просто проткнул их
-                насквозь, поэтому рисуем его только пока ветка свёрнута (или её нет). */}
-            {index < stages.length - 1 && !isExpandedBranch && <span className="stage-connector" aria-hidden="true" />}
           </li>
           {summary !== null && isExpandedBranch &&
             summary.roots.map((node) => (
@@ -537,9 +554,17 @@ export function StagesList({
         })}
         </ul>
       </div>
-      {version !== undefined && version.trim() !== '' && (
-        <div className="rail-foot">afm {version}</div>
-      )}
+      <div className="rail-bottom">
+        {canAddStage && (
+          <button type="button" className="rail-add-stage" onClick={() => onAddStage?.()} title="Add a dynamic stage">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Add stage
+          </button>
+        )}
+        {version !== undefined && version.trim() !== '' && <div className="rail-foot">afm {version}</div>}
+      </div>
     </aside>
   )
 }

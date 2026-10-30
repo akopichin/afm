@@ -1,7 +1,7 @@
 import { handleTextareaSubmit } from '../../lib/textarea-submit'
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ChangeEvent, type KeyboardEvent, type ReactElement, type ReactNode, type Ref, type TextareaHTMLAttributes } from 'react'
 import { useAutoGrowTextarea } from '../../hooks/use-auto-grow-textarea'
-import { useImagePaste } from '../../hooks/use-image-paste'
+import { useImagePaste, type ImagePasteDraft, type AttachmentActions } from '../../hooks/use-image-paste'
 import { useCaretInsert } from '../../hooks/use-caret-insert'
 import { useFileBrowserOptional } from '../file-browser'
 
@@ -28,8 +28,15 @@ type PasteableTextareaProps = {
   // attachInline — кнопка Attach рендерится ВНУТРИ строки ввода рядом с textarea, а не на верхней полосе.
   // Включает FeedComposer, где строка ввода — `[attach] [textarea] [✈]`.
   attachInline?: boolean
+  // Card composers put their actions beside Attach below the input without duplicating attachment logic.
+  toolbar?: ReactNode
   // rows — начальное число строк <textarea>. По умолчанию не задано (браузерный дефолт rows=2).
   rows?: number
+  attachmentDraft?: ImagePasteDraft
+  attachmentActionsRef?: MutableRefObject<AttachmentActions | null>
+  onAttachmentDraftChange?: (draft: ImagePasteDraft) => void
+  textareaRef?: Ref<HTMLTextAreaElement>
+  textareaProps?: Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, 'aria-label' | 'aria-describedby' | 'aria-controls' | 'aria-expanded' | 'aria-activedescendant' | 'aria-autocomplete' | 'role'>
 }
 
 // Drop-in replacement for a plain <textarea>, used everywhere a user writes text that ends up in front of
@@ -49,10 +56,17 @@ export function PasteableTextarea({
   onSubmit,
   allowFileReferences = false,
   attachInline = false,
+  toolbar,
   rows,
+  attachmentDraft,
+  attachmentActionsRef,
+  onAttachmentDraftChange,
+  textareaRef,
+  textareaProps,
 }: PasteableTextareaProps): ReactElement {
   const autoGrowRef = useAutoGrowTextarea(value, maxHeight)
-  const { nodeRef, attachments, onPaste, uploadFiles, retryAttachment, removeAttachment } = useImagePaste(stageId, value, onChange)
+  const { attachmentActions, nodeRef, attachments, onPaste, uploadFiles, retryAttachment, removeAttachment } = useImagePaste(stageId, value, onChange, attachmentDraft, onAttachmentDraftChange)
+  if (attachmentActionsRef !== undefined) attachmentActionsRef.current = attachmentActions
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const { nodeRef: caretNodeRef, insertAtCaret } = useCaretInsert(value, onChange)
   // Скрепка: поле, включившее allowFileReferences, всегда получает загрузку изображения — attachment
@@ -61,12 +75,14 @@ export function PasteableTextarea({
 
   const setRefs = useCallback(
     (node: HTMLTextAreaElement | null) => {
+      if (typeof textareaRef === 'function') textareaRef(node)
+      else if (textareaRef !== undefined && textareaRef !== null) (textareaRef as { current: HTMLTextAreaElement | null }).current = node
       nodeRef.current = node
       caretNodeRef.current = node
       // Note: autoGrowRef is called after nodeRef is set, in a stable manner
       autoGrowRef(node)
     },
-    [],
+    [textareaRef, autoGrowRef],
   )
 
   function handleChange(event: ChangeEvent<HTMLTextAreaElement>): void {
@@ -105,6 +121,7 @@ export function PasteableTextarea({
 
   const textarea = (
     <textarea
+      {...textareaProps}
       ref={setRefs}
       className={className}
       value={value}
@@ -122,7 +139,7 @@ export function PasteableTextarea({
 
   // attachInline: кнопка ушла в строку ввода, поэтому полоса нужна только под
   // превью. Дефолт: полоса как раньше (превью + кнопка) — DOM не меняется.
-  const showStrip = attachments.length > 0 || (showAttachButton && !attachInline)
+  const showStrip = attachments.length > 0 || (showAttachButton && !attachInline && toolbar === undefined)
 
   return (
     <div className="pasteable-textarea-wrap">
@@ -164,10 +181,18 @@ export function PasteableTextarea({
             )
           })}
           {/* Дефолт: кнопка на полосе. attachInline: кнопка — в строке ввода ниже. */}
-          {!attachInline && attachControls}
+          {!attachInline && toolbar === undefined && attachControls}
         </div>
       )}
-      {attachInline ? (
+      {toolbar !== undefined ? (
+        <>
+          {textarea}
+          <div className="pasteable-toolbar">
+            {attachControls}
+            {toolbar}
+          </div>
+        </>
+      ) : attachInline ? (
         <div className="pasteable-input-row">
           {attachControls}
           {textarea}

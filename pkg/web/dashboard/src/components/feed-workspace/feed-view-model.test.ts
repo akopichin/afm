@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { AfmEvent } from '../../types'
-import { toFeedItems, groupFeedItems, formatEventGap, buildFeedTimeline } from './feed-view-model'
+import type { FeedItem } from './feed-view-model'
+import { toFeedItems, groupFeedItems, groupToolRuns, toolCall, toolRunSummary, formatEventGap, buildFeedTimeline } from './feed-view-model'
 import type { MeshMessage } from '../../api/mesh-client'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string, seq?: number): AfmEvent =>
@@ -868,4 +869,65 @@ describe('quota_wait / quota_reset / quota_warning — usage-limit notices', () 
     expect(item?.tone).toBe('warning')
   })
 })
+})
+
+describe('groupToolRuns / toolRunSummary', () => {
+  const at = (n: number) => `2026-07-10T10:00:${String(n).padStart(2, '0')}Z`
+  const tool = (name: string, n: number, stageId = 's1') => ev('agent_action', { tool: name, detail: `d${n}` }, stageId, at(n), n)
+  const text = (n: number) => ev('agent_action', { tool: 'text', detail: `t${n}` }, 's1', at(n), n)
+
+  it('collapses consecutive tool items into one run and keeps other items as they are', () => {
+    const rows = groupToolRuns(toFeedItems([text(1), tool('Read', 2), tool('Edit', 3), text(4), tool('Bash', 5)]))
+    expect(rows.map((r) => r.kind)).toEqual(['item', 'tools', 'item', 'tools'])
+    expect(rows[1]).toMatchObject({ kind: 'tools', items: [{ text: 'Read: d2' }, { text: 'Edit: d3' }] })
+  })
+
+  it('two consecutive agent messages of one stage are two groups', () => {
+    const groups = groupFeedItems(toFeedItems([text(1), text(2)]))
+    expect(groups.map((g) => g.items.map((it) => it.text))).toEqual([['t1'], ['t2']])
+  })
+
+  it('splits groups only at agent messages: text, tool, tool, text, tool', () => {
+    const groups = groupFeedItems(toFeedItems([text(1), tool('Read', 2), tool('Edit', 3), text(4), tool('Bash', 5)]))
+    expect(groups.map((g) => g.items.map((it) => it.text))).toEqual([['t1', 'Read: d2', 'Edit: d3'], ['t4', 'Bash: d5']])
+    // The tool calls between two messages still collapse into one run.
+    expect(groups.map((g) => groupToolRuns(g.items).map((r) => r.kind))).toEqual([['item', 'tools'], ['item', 'tools']])
+  })
+
+  it('a live append of a message keeps the keys of earlier groups', () => {
+    const before = groupFeedItems(toFeedItems([text(1), tool('Read', 2)]))
+    const after = groupFeedItems(toFeedItems([text(1), tool('Read', 2), text(3)]))
+    expect(after.map((g) => g.key)).toEqual([...before.map((g) => g.key), 'seq:3'])
+    expect(after[0]?.items).toHaveLength(2)
+  })
+
+  it('a notice or a status between tool calls breaks the run', () => {
+    const items = toFeedItems([tool('Read', 1), ev('stage_status_changed', 'running', 's1', at(2), 2), tool('Edit', 3)])
+    expect(groupToolRuns(items).map((r) => r.kind)).toEqual(['tools', 'item', 'tools'])
+  })
+
+  it('tool calls of different stages never share a run (they land in different feed groups)', () => {
+    const groups = groupFeedItems(toFeedItems([tool('Read', 1), tool('Edit', 2, 's2')]))
+    expect(groups.map((g) => groupToolRuns(g.items).length)).toEqual([1, 1])
+  })
+
+  it('a live append extends the last run without re-keying earlier rows', () => {
+    const before = groupToolRuns(toFeedItems([text(1), tool('Read', 2)]))
+    const after = groupToolRuns(toFeedItems([text(1), tool('Read', 2), tool('Edit', 3)]))
+    expect(after.map((r) => (r.kind === 'tools' ? r.key : r.item.key))).toEqual(before.map((r) => (r.kind === 'tools' ? r.key : r.item.key)))
+    expect(after[1]).toMatchObject({ kind: 'tools', items: [{}, {}] })
+  })
+
+  it('splits a tool item into its name and detail', () => {
+    const [withDetail, bare] = toFeedItems([ev('agent_action', { tool: 'Bash', detail: 'ls -la: all' }, 's1', at(1), 1), ev('agent_action', { tool: 'TodoWrite' }, 's1', at(2), 2)])
+    expect(toolCall(withDetail as FeedItem)).toEqual({ name: 'Bash', detail: 'ls -la: all' })
+    expect(toolCall(bare as FeedItem)).toEqual({ name: 'TodoWrite', detail: '' })
+  })
+
+  it('summarizes with a count, distinct lowercased names and an ellipsis past four', () => {
+    const summary = (names: string[]) => toolRunSummary(toFeedItems(names.map((n, i) => tool(n, i + 1))))
+    expect(summary(['Read'])).toEqual({ count: '1 tool call', names: 'read' })
+    expect(summary(['Read', 'Edit', 'Read'])).toEqual({ count: '3 tool calls', names: 'read, edit' })
+    expect(summary(['A', 'B', 'C', 'D', 'E'])).toEqual({ count: '5 tool calls', names: 'a, b, c, d…' })
+  })
 })

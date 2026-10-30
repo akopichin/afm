@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import type { MeshMessage, MeshParticipant } from '../../api/mesh-client'
-import { participantRole, senderLabel } from '../../lib/mesh-roster'
+import { mentionHandles, participantRole, senderLabel } from '../../lib/mesh-roster'
 import { messageText } from '../../lib/agent-result'
 import { AgentMessageBody } from '../agent-message/AgentMessageBody'
 import { formatEventGap } from '../feed-workspace/feed-view-model'
@@ -29,6 +29,9 @@ export type ConversationMessageProps = {
   sideOutcome?: 'answered' | 'could_not_answer' | null
   // isNew — an agent message to the human that has just arrived: the bubble is briefly bright.
   isNew?: boolean
+  presentation?: 'feed'
+  delivery?: string
+  waitingForYou?: boolean
 }
 
 // roleLabel — a log post author's role in words; wire values (main_agent, assistant, a mesh kind) are not for people.
@@ -46,12 +49,15 @@ function roleLabel(role: string): string {
 // ConversationMessage — the ONE bubble of a conversation message, in Team and in the stage feed: avatar,
 // author, the agent's command, "→ recipients", time, then the text; a reply quotes the start of the message it
 // answers ("Replying to …").
-export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null, isNew = false }: ConversationMessageProps): ReactElement {
+export function ConversationMessage({ message, previousCreatedAt, participants, answered, onJumpToQuote, onReply, replyActive = false, notAnswered = false, markdown = false, role, evidence, sideOutcome = null, isNew = false, presentation, delivery, waitingForYou = false }: ConversationMessageProps): ReactElement {
   const author = senderLabel(message.sender_id, participants)
   const sender = participants.find((p) => p.id === message.sender_id)
   const kind = sender?.kind ?? (message.sender_id === 'user' ? 'user' : '')
-  const recipients = message.recipient_ids.map((id) => senderLabel(id, participants)).join(', ')
+  const feed = presentation === 'feed'
+  const handles = mentionHandles(participants)
+  const recipients = message.recipient_ids.map((id) => feed && id !== 'user' && handles.has(id) ? `@${handles.get(id)}` : senderLabel(id, participants)).join(', ')
   const fromYou = message.sender_id === 'user'
+  const authorRole = role ?? (feed && !fromYou ? (kind === 'stage_agent' ? 'main_agent' : kind) : undefined)
   const quote =
     answered === undefined ? null : (
       <>
@@ -59,14 +65,8 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
         <span className="team-conversation-reply-quote-text">{messageText(answered.body, answered.sender_id !== 'user')}</span>
       </>
     )
-  return (
-    <li
-      className={`team-conversation-message${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}${isNew ? ' is-new-agent-message' : ''}`}
-      data-sender={message.sender_id}
-      data-message-id={message.id}
-    >
-      <MeshAvatar name={author} kind={kind} />
-      <div className="team-conversation-message-content">
+  const content = (
+    <>
         <div className="team-conversation-message-header">
           <span className="team-conversation-message-sender">{author}</span>
           {sender?.command !== undefined && sender.command !== '' && (
@@ -74,7 +74,7 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
               {sender.command}
             </span>
           )}
-          {role !== undefined && <span className="conversation-role-chip">{roleLabel(role)}</span>}
+          {authorRole && <span className="conversation-role-chip">{roleLabel(authorRole)}</span>}
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}
           <MessageTime
             timestamp={message.created_at}
@@ -105,7 +105,7 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
               )}
             </blockquote>
           )}
-          <AgentMessageBody body={message.body} fromAgent={!fromYou} markdown={markdown} autoResult={message.auto_result === true} />
+          <AgentMessageBody body={message.body} fromAgent={!fromYou} markdown={markdown} autoResult={message.auto_result === true} mentionHandles={feed ? [...handles.values()] : undefined} />
           {evidence !== undefined && evidence.length > 0 && (
             <ul className="conversation-evidence" aria-label="Evidence">
               {evidence.map((e) => (
@@ -114,11 +114,25 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
             </ul>
           )}
         </div>
-        {onReply !== undefined && (
+    </>
+  )
+  return (
+    <li
+      className={`team-conversation-message${feed ? ' feed-message' : ''}${fromYou ? ' from-you' : ''}${replyActive ? ' is-reply-target' : ''}${isNew ? ' is-new-agent-message' : ''}${feed && waitingForYou ? ' is-waiting-for-you' : ''}`}
+      data-sender={message.sender_id}
+      data-message-id={message.id}
+    >
+      <MeshAvatar name={author} kind={kind} />
+      <div className="team-conversation-message-content">
+        {feed ? <div className="feed-message-card">{content}</div> : content}
+        {(onReply !== undefined || (feed && (delivery !== undefined || waitingForYou))) && (
           <div className="conversation-message-actions">
-            <button type="button" className="conversation-reply-link" aria-pressed={replyActive} onClick={onReply}>
-              ↩ Reply in conversation
-            </button>
+            {onReply !== undefined && (
+              <button type="button" className="conversation-reply-link" aria-label="↩ Reply in conversation" aria-pressed={replyActive} onClick={onReply}>
+                {feed ? '↩ Reply' : '↩ Reply in conversation'}
+              </button>
+            )}
+            {feed && <span className="feed-message-delivery">{waitingForYou ? 'Waiting for you' : delivery}</span>}
           </div>
         )}
       </div>

@@ -37,7 +37,8 @@
   border: 1px solid var(--separator-subtle);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-overlay);
-  z-index: 10;
+  /* Выше мобильной шторки рейла (.rail-slot, z-index 50), иначе меню открывается под ней. */
+  z-index: 60;
   padding: 6px;
 }
 
@@ -106,7 +107,7 @@
   border-radius: 999px;
   border: 1px solid rgba(var(--attention-rgb), 0.5);
   background: rgba(var(--attention-rgb), 0.10);
-  color: var(--attention);
+  color: var(--attention-text);
   font-family: var(--font-ui);
   font-size: 12.5px;
   font-weight: 600;
@@ -128,7 +129,7 @@
 }
 
 .agent-note-warning {
-  color: var(--attention);
+  color: var(--attention-text);
   font-size: 13px;
   line-height: 1.55;
   margin-bottom: 14px;

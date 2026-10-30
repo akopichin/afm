@@ -35,8 +35,8 @@ function formatCacheHit(ratio: number | null): string {
   return ratio === null ? '—' : `${Math.round(ratio * 100)}%`
 }
 
-// CostPanel — постоянная вкладка «Cost»: таблица затрат по стадиям + run overhead + Total, с раскрываемой
-// по клику детализацией для каждой строки.
+// CostPanel — постоянная вкладка «Cost»: таблица токенов/затрат по стадиям + run overhead + Total с
+// раскрываемой детализацией, бейдж покрытия и разбивка токенов рана.
 export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, accounting }: CostPanelProps): ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const idBase = useId()
@@ -52,10 +52,10 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
 
   const hasData = hasAccountingData(accounting)
   const unavailable = accounting.supported && accounting.health === 'unavailable'
-  // showMoney — показывать ли колонку Cost. false (дефолт) прячет все денежные ($) значения, оставляя
-  // токены/кэш. Колонок тогда 4, а не 5 (важно для colSpan раскрываемой строки детализации).
+  // showMoney — показывать ли колонку Est. cost. false (дефолт) прячет все денежные ($) значения, оставляя
+  // токены. Колонок тогда 2, а не 3 (важно для colSpan раскрываемой строки детализации).
   const showMoney = accounting.supported && accounting.showMoney
-  const detailColSpan = showMoney ? 5 : 4
+  const detailColSpan = showMoney ? 3 : 2
 
   // Порядок пустых состояний ТОЧНО в этом порядке: 1. unavailable && !hasData → "Cost unavailable this
   // run" (хранилище реально сломано, и снапшота показать нечего).
@@ -107,10 +107,9 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
               <span className={`cost-chevron${isExpanded ? ' open' : ''}`} aria-hidden="true">▸</span>
               <span id={labelId} className="cost-row-label">{row.label}</span>
             </button>
+            {row.cost.models.length > 0 && <span className="cost-row-meta">{row.cost.models.join(', ')}</span>}
           </td>
-          <td className="cost-col-model">{row.cost.models.length > 0 ? row.cost.models.join(', ') : '—'}</td>
           <td className="cost-col-tokens">{formatTokens(row.cost.totalTokens)}</td>
-          <td className="cost-col-cacherw">{formatTokens(row.cost.cacheRead)} / {formatTokens(row.cost.cacheWriteTotal)}</td>
           {showMoney && <td className="cost-col-cost">{row.cost.displayCost}</td>}
         </tr>
         {isExpanded && (
@@ -135,33 +134,77 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
         </div>
       )}
       <div className="cost-panel-scroll">
+        <header className="cost-panel-head">
+          <div className="cost-panel-titles">
+            <h2 className="cost-panel-title">Cost &amp; usage</h2>
+            <p className="cost-panel-subtitle">
+              {showMoney ? 'Token usage and estimated cost by stage' : 'Token usage by stage'}
+            </p>
+          </div>
+          <CoverageBadge issues={coverageIssues} unavailable={unavailable} />
+        </header>
         <div className="cost-table-wrap">
           <table className="cost-table">
             <thead>
               <tr>
                 <th scope="col" className="cost-col-stage">Stage</th>
-                <th scope="col" className="cost-col-model">Model</th>
                 <th scope="col" className="cost-col-tokens">Tokens</th>
-                <th scope="col" className="cost-col-cacherw">Cache R/W</th>
-                {showMoney && <th scope="col" className="cost-col-cost">Cost</th>}
+                {showMoney && <th scope="col" className="cost-col-cost">Est. cost</th>}
               </tr>
             </thead>
             <tbody>
               {rows.map((row, index) => renderRow(row, index))}
               <tr className="cost-row cost-row-total">
                 <td className="cost-col-stage">Total</td>
-                <td className="cost-col-model" />
-                <td className="cost-col-tokens" />
-                <td className="cost-col-cacherw" />
+                <td className="cost-col-tokens">{runCost !== undefined ? formatTokens(runCost.totalTokens) : '—'}</td>
                 {showMoney && <td className="cost-col-cost">{runCost?.displayCost ?? '—'}</td>}
               </tr>
             </tbody>
           </table>
         </div>
-        {coverageIssues.length > 0 && (
-          <p className="cost-coverage-line">Coverage gaps: {summarizeCoverageGroups(coverageIssues)}.</p>
-        )}
+        {runCost !== undefined && <UsageBreakdown cost={runCost} />}
       </div>
+    </div>
+  )
+}
+
+// CoverageBadge — «Full coverage», когда пробелов нет; иначе компактный бейдж-раскрывашка с полным списком
+// пробелов (длинный текст не должен занимать экран). При недоступном хранилище бейдж молчит: об этом
+// уже говорит баннер.
+function CoverageBadge({ issues, unavailable }: { issues: CoverageIssue[]; unavailable: boolean }): ReactElement | null {
+  if (issues.length > 0) {
+    return (
+      <details className="cost-coverage">
+        <summary className="cost-badge cost-badge-warn">
+          Partial coverage · {issues.length} {issues.length === 1 ? 'gap' : 'gaps'}
+        </summary>
+        <p className="cost-coverage-line">Coverage gaps: {summarizeCoverageGroups(issues)}.</p>
+      </details>
+    )
+  }
+  if (unavailable) return null
+  return <span className="cost-badge cost-badge-ok">Full coverage</span>
+}
+
+// UsageBreakdown — токены всего рана по типам, из тех же полей CostSummary, что и строки таблицы.
+function UsageBreakdown({ cost }: { cost: CostSummary }): ReactElement {
+  const items = [
+    { label: 'Input', value: cost.uncachedInput },
+    { label: 'Cache read', value: cost.cacheRead },
+    { label: 'Cache write', value: cost.cacheWriteTotal },
+    { label: 'Output', value: cost.output },
+  ]
+  return (
+    <div className="cost-usage">
+      <h3 className="cost-usage-title">Usage breakdown</h3>
+      <dl className="cost-usage-list">
+        {items.map((item) => (
+          <div key={item.label} className="cost-usage-row">
+            <dt>{item.label}</dt>
+            <dd>{formatTokens(item.value)} tokens</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   )
 }

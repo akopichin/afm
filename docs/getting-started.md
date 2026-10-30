@@ -111,6 +111,21 @@ afm run path/to/flow.yaml
 By default a web dashboard comes up (`http://localhost:9876`); its URL is printed
 to the log.
 
+For an unattended run, disable the dashboard and make a failed stage fail the
+command:
+
+```bash
+afm run --port=0 --require-approval --exit-on-fail path/to/flow.yaml
+```
+
+`--port=0` disables the dashboard; `--require-approval` fails if a stage needs
+plan approval without one. `--exit-on-fail` returns exit code 1 when a stage
+reaches `failed`, so CI can detect the failure. Use a flow whose stages can run
+unattended, such as [`script:` stages](script-stages.md) or the
+[autonomous track](autonomous-track.md). See
+[exit-on-fail configuration](config-reference.md#exit-on-stage-failure) and
+[failure and resume behavior](stage-lifecycle.md#exit-on-stage-failure).
+
 ### 3. Approve plans
 
 After the planning phase, each stage transitions to `awaiting_approval`. There are

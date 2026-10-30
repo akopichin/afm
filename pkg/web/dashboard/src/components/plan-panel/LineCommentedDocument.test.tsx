@@ -157,7 +157,7 @@ describe('LineCommentedDocument / useLineComments', () => {
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: 'please fix' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     expect(a1.classList.contains('has-comment')).toBe(true)
     expect(screen.getByTestId('count').textContent).toBe('1')
@@ -176,7 +176,7 @@ describe('LineCommentedDocument / useLineComments', () => {
     // Комментарий на строке 1.
     fireEvent.click(a1)
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'note' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     expect(a1.classList.contains('has-comment')).toBe(true)
 
     // Открываем форму на строке 2 (ре-рендер владельца без смены текста) —
@@ -189,7 +189,7 @@ describe('LineCommentedDocument / useLineComments', () => {
     const { container, rerender } = render(<Harness text={'# First line'} version="a" />)
     fireEvent.click(anchor(container, 1))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'x' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     expect(screen.getByTestId('count').textContent).toBe('1')
 
     rerender(<Harness text={'# First line'} version="b" />)
@@ -206,7 +206,7 @@ describe('LineCommentedDocument / useLineComments', () => {
     const { container, rerender } = render(<Harness text={'# First\n# Second'} />)
     fireEvent.click(anchor(container, 1))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'saved one' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     fireEvent.click(anchor(container, 2))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'typing two' } })
 
@@ -267,7 +267,7 @@ describe('LineCommentedDocument / useLineComments', () => {
     )
     fireEvent.click(anchor(container, 1))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'ok' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     expect(anchor(container, 1).classList.contains('has-comment')).toBe(true)
   })
 
@@ -286,12 +286,12 @@ describe('LineCommentedDocument / useLineComments', () => {
     // Комментарий на строке 1.
     fireEvent.click(anchor(container, 1))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'c1' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     // Комментарий на строке 3.
     fireEvent.click(anchor(container, 3))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'c3' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 
     expect(container.querySelector('.line-comment-display[data-comment-line="1"]')).not.toBeNull()
     expect(container.querySelector('.line-comment-display[data-comment-line="3"]')).not.toBeNull()
@@ -344,7 +344,7 @@ describe('LineCommentedDocument / useLineComments', () => {
     const a1 = anchor(container, 1)
     fireEvent.click(a1)
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: 'v' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     expect(document.activeElement).toBe(a1)
   })
 
@@ -398,7 +398,7 @@ describe('LineCommentedDocument render-prop api', () => {
     expect(screen.getByTestId('open-draft').textContent).toBe('true')
 
     act(() => {
-      fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     })
     expect(screen.getByTestId('open-draft').textContent).toBe('false')
     expect(docRef.current?.commentCount).toBe(1)
@@ -538,8 +538,6 @@ describe('LineCommentedDocument quote preview', () => {
     expect(form.querySelector('.line-comment-quote')).toBeNull()
   })
 
-  // blank line — не достижимо через клик (пустая строка никогда не получает
-  // якорь в renderAnchoredSections), поэтому проверяем чистую функцию напрямую.
   test('quotedSourceLine: blank line and hr both resolve to empty string', () => {
     expect(quotedSourceLine(['a', '', 'b'], 2)).toBe('')
     expect(quotedSourceLine(['a', '   ', 'b'], 2)).toBe('')
@@ -548,6 +546,123 @@ describe('LineCommentedDocument quote preview', () => {
     expect(quotedSourceLine(['a', '  text  ', 'b'], 2)).toBe('text')
     // out-of-range index → '' (defensive fallback, same as `?? ''`).
     expect(quotedSourceLine(['only one line'], 5)).toBe('')
+  })
+})
+
+// Комментарий ставится на любую исходную строку: пустую, продолжение абзаца, строку кода, разделитель таблицы.
+describe('LineCommentedDocument: comment on any source line', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const anyLineText = [
+    '# Title', //                   1
+    '', //                          2
+    'first paragraph line', //      3
+    'continued paragraph line', //  4
+    '', //                         5
+    '| A | B |', //                6
+    '|---|---|', //                7
+    '| 1 | 2 |', //                8
+    '', //                         9
+    '```js', //                   10
+    'const a = 1', //             11
+    '', //                        12
+    'const b = 2', //             13
+    '```', //                     14
+    '', //                        15
+    '## Assumptions', //          16
+    '', //                        17
+    '- item', //                  18
+  ].join('\n')
+  const lineCount = 18
+
+  function formAt(container: HTMLElement, line: number): HTMLElement {
+    return container.querySelector(`.line-comment-form[data-comment-line="${line}"]`) as HTMLElement
+  }
+
+  test('every line 1..N has exactly one anchor', () => {
+    const { container } = render(<Harness text={anyLineText} />)
+    for (let line = 1; line <= lineCount; line++) {
+      expect(container.querySelectorAll(`[data-line="${line}"]`), `line ${line}`).toHaveLength(1)
+    }
+    expect(container.querySelectorAll('[data-line]')).toHaveLength(lineCount)
+  })
+
+  // The gutter number is generated by CSS from the row's own line attribute; a table row has no attribute on its
+  // cells, so the first cell repeats it. No row type may draw its number from a separate element.
+  test('every line 1..N draws its number through the same attribute mechanism', () => {
+    const { container } = render(<Harness text={anyLineText} />)
+    expect(container.querySelector('.md-line-no')).toBeNull()
+    for (let line = 1; line <= lineCount; line++) {
+      const row = anchor(container, line)
+      const numberSource = row.tagName === 'TR' ? row.querySelector('[data-row-line]') : row
+      const attribute = row.tagName === 'TR' ? 'data-row-line' : 'data-line'
+      expect(numberSource?.getAttribute(attribute), `line ${line}`).toBe(String(line))
+    }
+  })
+
+  test.each([
+    [2, ''], //                       blank line between blocks
+    [4, 'continued paragraph line'], // continuation of a paragraph
+    [7, '|---|---|'], //              table delimiter
+    [12, ''], //                      blank line inside a fence
+    [13, 'const b = 2'], //           fence content
+    [14, '```'], //                   closing fence
+    [16, '## Assumptions'], //         special section heading
+    [17, ''], //                      blank line inside a special section
+  ])('line %i opens a form titled with its number and quoting its source', (line, quote) => {
+    const { container } = render(<Harness text={anyLineText} />)
+    fireEvent.click(anchor(container, line))
+
+    const form = formAt(container, line)
+    expect(form.querySelector('.comment-title')?.textContent).toBe(`Comment on line ${line}`)
+    expect(form.querySelector('.line-comment-quote-src')?.textContent ?? '').toBe(quote)
+    expect(anchor(container, line).classList.contains('is-active')).toBe(true)
+  })
+
+  test('a saved comment on a blank line keeps its number, marks the row and counts', () => {
+    const docRef = { current: null as LineCommentDocumentApi | null }
+    const { container } = render(<Harness text={anyLineText} docRef={docRef} />)
+    fireEvent.click(anchor(container, 2))
+    fireEvent.change(formAt(container, 2).querySelector('textarea') as HTMLTextAreaElement, { target: { value: 'add a summary here' } })
+    fireEvent.click(within(formAt(container, 2)).getByRole('button', { name: 'Save comment' }))
+
+    expect(anchor(container, 2).classList.contains('has-comment')).toBe(true)
+    expect(container.querySelector('.comment-card[data-comment-line="2"] .comment-title')?.textContent).toBe('Comment on line 2')
+    expect(docRef.current?.comments).toEqual([expect.objectContaining({ line: 2, text: 'add a summary here' })])
+  })
+
+  test('comments on several kinds of lines are listed in source order', () => {
+    const docRef = { current: null as LineCommentDocumentApi | null }
+    const { container } = render(<Harness text={anyLineText} docRef={docRef} />)
+    for (const line of [13, 2, 4]) {
+      fireEvent.click(anchor(container, line))
+      fireEvent.change(formAt(container, line).querySelector('textarea') as HTMLTextAreaElement, { target: { value: `note ${line}` } })
+      fireEvent.click(within(formAt(container, line)).getByRole('button', { name: 'Save comment' }))
+    }
+    expect(docRef.current?.comments.map((comment) => [comment.line, comment.text])).toEqual([
+      [2, 'note 2'],
+      [4, 'note 4'],
+      [13, 'note 13'],
+    ])
+  })
+
+  test('arrow keys visit every line in source order', () => {
+    const { container } = render(<Harness text={anyLineText} />)
+    anchor(container, 1).focus()
+    const visited = [1]
+    for (let step = 1; step < lineCount; step++) {
+      fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' })
+      visited.push(Number((document.activeElement as HTMLElement).getAttribute('data-line')))
+    }
+    expect(visited).toEqual(Array.from({ length: lineCount }, (_, i) => i + 1))
+  })
+
+  test('a link inside a continuation line still opens the link, not the form', () => {
+    const { container } = render(<Harness text={'one\ntwo [here](/x)'} specialSections={false} />)
+    fireEvent.click(container.querySelector('a') as HTMLElement)
+    expect(container.querySelector('.line-comment-form')).toBeNull()
+    fireEvent.click(anchor(container, 2))
+    expect(formAt(container, 2)).not.toBeNull()
   })
 })
 
@@ -563,7 +678,7 @@ describe('LineCommentedDocument saved-comment quote', () => {
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, {
       target: { value: text },
     })
-    fireEvent.click(screen.getByRole('button', { name: /^(Add|Update)$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^(Save|Update) comment$/ }))
   }
 
   test('a saved comment quotes its source line above the comment text', () => {
@@ -643,7 +758,7 @@ describe('LineCommentedDocument shared card and editor', () => {
   function saveCommentAt(container: HTMLElement, line: number, text: string): void {
     fireEvent.click(anchor(container, line))
     fireEvent.change(container.querySelector('.line-comment-form textarea') as HTMLTextAreaElement, { target: { value: text } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
   }
 
   test('Escape in the editor stops before document-level handlers', () => {

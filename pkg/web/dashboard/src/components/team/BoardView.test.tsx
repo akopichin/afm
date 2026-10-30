@@ -77,7 +77,8 @@ describe('BoardView', () => {
 
   test('shows how many tasks are completed', () => {
     renderView(boardOf(entries))
-    expect(screen.getByText('1 of 4 completed')).toBeInTheDocument()
+    expect(screen.getByText('1 of 4 tasks done')).toBeInTheDocument()
+    expect(screen.getByText('· whole run')).toBeInTheDocument()
   })
 
   test('a changed board moves the card between lanes', () => {
@@ -92,7 +93,7 @@ describe('BoardView', () => {
     )
     expect(cardTitles('Todo')).toEqual([])
     expect(cardTitles('Done')).toEqual(['CSV export, Done', 'Docs, Done'])
-    expect(screen.getByText('2 of 4 completed')).toBeInTheDocument()
+    expect(screen.getByText('2 of 4 tasks done')).toBeInTheDocument()
   })
 
   test('search matches the key, the title and the details', () => {
@@ -130,7 +131,7 @@ describe('BoardView', () => {
     renderView(boardOf(entries))
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'docs' } })
     expect(screen.getByText('1 shown')).toBeInTheDocument()
-    expect(screen.getByText('1 of 4 completed')).toBeInTheDocument()
+    expect(screen.getByText('1 of 4 tasks done')).toBeInTheDocument()
   })
 
   test('a card opens the task details, Escape closes them and focus returns to the card', () => {
@@ -176,6 +177,15 @@ describe('BoardView', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(opener).toHaveFocus()
+  })
+
+  test('the New task Cancel button is a quiet secondary button, not the red danger one', () => {
+    renderView(boardOf(entries))
+    fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+    const cancel = within(screen.getByRole('dialog', { name: 'New task' })).getByRole('button', { name: 'Cancel' })
+    expect(cancel).not.toHaveClass('btn-cancel')
+    fireEvent.click(cancel)
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   test('a posted task is revealed in Todo even when the filters hid it: filters clear, announced, focus back on New task', async () => {
@@ -343,11 +353,34 @@ describe('BoardView', () => {
     ]
     const typedBoard = () => boardOf([], { tasks: typedTasks, typedTasks: true })
 
+    test('an open task keeps its reason while a poll refreshes the full details and artifacts', () => {
+      const { rerender } = renderView(typedBoard())
+      fireEvent.click(screen.getByRole('button', { name: 'CSV export, Todo' }))
+      const reason = screen.getByLabelText('Reason')
+      fireEvent.change(reason, { target: { value: 'Keep this draft' } })
+      const updated = typedTaskView({
+        ...typedTasks[0]!,
+        version: 8,
+        status: 'in_progress',
+        assignments: [typedAssignment({ id: 'a1', participant_id: 'run:t-1', state: 'in_progress', progress: 'Checked all export fields', artifact_refs: ['reports/export.csv'] })],
+        history: [typedAssignment({ id: 'old', participant_id: 'stage:api', state: 'done', result: 'Original implementation', ended: 'reopened', ended_by: 'user', artifact_refs: ['notes/original.md'] })],
+      })
+      rerender(<BoardView board={boardOf([], { tasks: [updated], typedTasks: true })} participants={participants} stages={stages} />)
+      const info = screen.getByRole('region', { name: 'Task information' })
+      expect(within(info).getByText('Add GET /todos.csv')).toBeInTheDocument()
+      expect(within(info).getByText('v8')).toBeInTheDocument()
+      expect(within(info).getByText('reports/export.csv')).toBeInTheDocument()
+      expect(within(info).getByRole('list', { name: 'History' })).toHaveTextContent('Original implementation')
+      expect(within(info).getByText('notes/original.md')).toBeInTheDocument()
+      expect(screen.getByLabelText('Reason')).toBe(reason)
+      expect(reason).toHaveValue('Keep this draft')
+    })
+
     test('an assigned-only task stays in Todo with its assignee named, not Unassigned', () => {
       renderView(typedBoard())
       expect(cardTitles('Todo')).toEqual(['CSV export, Todo'])
       const card = within(lane('Todo')).getByRole('button', { name: 'CSV export, Todo' })
-      expect(within(card).getByText('QA', { selector: '.board-task-assignee-name' })).toBeInTheDocument()
+      expect(within(card).getByText('@qa', { selector: '.board-task-assignee-name' })).toHaveAttribute('title', 'QA')
       expect(within(card).getByText('Assigned')).toBeInTheDocument()
       expect(within(card).queryByText('Unassigned')).toBeNull()
     })
@@ -356,7 +389,7 @@ describe('BoardView', () => {
       renderView(typedBoard())
       expect(cardTitles('Done')).toEqual(['Docs, Done'])
       expect(cardTitles('In progress')).toEqual(['Old agent work, In progress'])
-      expect(screen.getByText('1 of 3 completed')).toBeInTheDocument()
+      expect(screen.getByText('1 of 3 tasks done')).toBeInTheDocument()
     })
 
     test('the assignee filter offers and matches a participant missing from the roster', () => {

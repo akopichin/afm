@@ -27,16 +27,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 56px;
-  padding: 16px 20px;
+  min-height: 48px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--separator-subtle);
   flex: 0 0 auto;
 }
 .file-browser-header h2 {
   margin: 0;
   font-family: var(--font-ui);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
   letter-spacing: 0;
   text-transform: none;
   color: var(--text-primary);
@@ -49,34 +49,29 @@
 /* Show the tree toggle and scrim only below 720px. */
 .file-browser-tree-toggle { display: none; }
 .file-browser-tree-scrim { display: none; }
-/* Attention shortcut closes Files and opens the waiting question or approval. */
+/* Attention shortcut closes Files and opens the waiting question or approval: a quiet amber text link. */
 .file-browser-attention-shortcut {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(var(--attention-rgb), 0.5);
-  background: rgba(var(--attention-rgb), 0.10);
-  color: var(--attention);
+  gap: 6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--attention-text);
   font-family: var(--font-ui);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
-  animation: fbAttnPulse 2s ease-in-out infinite;
 }
-.file-browser-attention-shortcut:hover { background: rgba(var(--attention-rgb), 0.18); }
+.file-browser-attention-shortcut:hover { background: rgba(var(--attention-rgb), 0.12); }
 .file-browser-attention-shortcut:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .file-browser-attention-shortcut .attn-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--attention);
   flex-shrink: 0;
-}
-@keyframes fbAttnPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0.35); }
-  50%      { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0); }
 }
 
 .file-browser-body {
@@ -92,8 +87,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 10px;
   min-height: 0;
 }
 
@@ -123,17 +118,29 @@
   flex: 0 0 auto;
 }
 .file-browser-root {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   width: 100%;
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: 5px;
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 7px 12px;
-  font-size: 12.5px;
+  padding: 6px 8px;
+  font-size: 12px;
   font-family: var(--font-ui);
   transition: background 0.12s, color 0.12s;
+}
+/* Folder icon drawn with a mask so it follows the text colour in every skin. */
+.file-browser-root::before {
+  content: "";
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'%3E%3Cpath d='M2 4.5h4l1.5 1.5H14v6.5H2z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .file-browser-root:hover {
   color: var(--text-primary);
@@ -141,8 +148,8 @@
 }
 .file-browser-root.active {
   color: var(--text-primary);
-  border-color: rgba(var(--accent-primary-rgb), 0.35);
   background: rgba(var(--accent-primary-rgb), 0.14);
+  --text-muted: var(--text-secondary);
 }
 
 .file-tree {
@@ -163,13 +170,14 @@
 .file-tree-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  min-height: 27px;
+  padding: 4px 7px;
+  border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
   color: var(--text-secondary);
+  font: 11.5px/1.5 var(--font-mono);
   transition: background 0.12s, color 0.12s;
 }
 .file-tree-row:hover {
@@ -179,6 +187,8 @@
 .file-tree-row.active {
   background: rgba(var(--accent-primary-rgb), 0.14);
   color: var(--text-primary);
+  font-weight: 600;
+  --text-muted: var(--text-secondary);
 }
 .file-tree-row:focus-visible {
   outline: 1px solid var(--accent-primary);
@@ -195,9 +205,22 @@
   color: var(--text-muted);
   font-size: 10px;
 }
+/* The emoji in the markup is hidden; a small line icon is drawn in its place, in the muted text colour. */
 .file-tree-icon {
-  flex: 0 0 auto;
-  font-size: 12px;
+  flex: 0 0 13px;
+  width: 13px;
+  height: 13px;
+  overflow: hidden;
+  font-size: 0;
+  color: transparent;
+  background: var(--text-muted);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'%3E%3Cpath d='M3.5 1.5h6l3 3v10h-9z'/%3E%3Cpath d='M9.5 1.5v3h3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.file-tree-icon-directory {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'%3E%3Cpath d='M2 4.5h4l1.5 1.5H14v6.5H2z'/%3E%3C/svg%3E");
+}
+.file-tree-icon-symlink {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'%3E%3Cpath d='M6.5 9.5l3-3M5 8 3.5 9.5a2.1 2.1 0 003 3L8 11M11 8l1.5-1.5a2.1 2.1 0 00-3-3L8 5'/%3E%3C/svg%3E");
 }
 .file-tree-name {
   overflow: hidden;
@@ -208,8 +231,8 @@
   flex: 0 0 auto;
   margin-left: auto;
   padding-left: 6px;
-  color: var(--attention);
-  font-size: 11px;
+  color: var(--attention-text);
+  font: 10px var(--font-mono);
   white-space: nowrap;
 }
 .file-tree-row[data-kind='symlink'] {
@@ -227,7 +250,7 @@
   text-align: left;
   background: transparent;
   border: none;
-  color: var(--accent-primary);
+  color: var(--accent-text);
   cursor: pointer;
   padding: 6px 8px;
   font-size: 11px;
@@ -237,7 +260,7 @@
   text-decoration: underline;
 }
 .file-tree-load-more:disabled {
-  color: var(--text-muted);
+  color: var(--text-disabled);
   cursor: default;
   text-decoration: none;
 }
@@ -249,7 +272,7 @@
 }
 .file-tree-error,
 .file-viewer-error {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 /* === Правая колонка: хлебная крошка + таб FILE/DIFF + содержимое === */
@@ -264,23 +287,23 @@
 .file-browser-breadcrumb-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 14px 20px;
+  gap: 10px;
+  padding: 8px 12px;
+  min-height: 36px;
   border-bottom: 1px solid var(--separator-subtle);
 }
 
 .file-browser-breadcrumb {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
-  letter-spacing: 0;
+  font: 11px var(--font-mono);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* === Метаданные текущего файла (modifiedAt) + Reload — Task "live-file UX" === */
+/* === Метаданные текущего файла (modifiedAt) + Reload: тихий текст, как в макете === */
 .file-browser-file-meta {
   display: flex;
   align-items: center;
@@ -289,28 +312,26 @@
   white-space: nowrap;
 }
 .file-browser-modified {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
 }
 .file-browser-reload-btn {
-  background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
+  padding: 2px 4px;
+  background: transparent;
+  border: 0;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 6px 14px;
   font-size: 11px;
-  letter-spacing: 0.02em;
   font-family: var(--font-ui);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: background 0.12s, color 0.12s;
 }
 .file-browser-reload-btn:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--surface-hover);
-  border-color: rgba(var(--accent-primary-rgb), 0.35);
 }
 .file-browser-reload-btn:disabled {
-  color: var(--text-muted);
+  color: var(--text-disabled);
   cursor: default;
 }
 .file-browser-reload-error {
@@ -319,50 +340,50 @@
   border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
   background: rgba(var(--danger-rgb), 0.08);
-  color: var(--danger);
+  color: var(--danger-text);
   font-size: 11.5px;
+  --text-muted: var(--text-secondary);
 }
 
-/* Preview/Diff — спокойный сегментированный переключатель-пилюля вместо
-   вкладок-«папок»: контейнер-подложка + активный сегмент с акцентной заливкой. */
+/* FILE / DIFF — подчёркнутые вкладки; активная отмечена акцентной линией. */
 .file-browser-tabs {
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 2px;
-  margin: 14px 20px 0;
-  padding: 3px;
-  background: var(--surface-tool);
-  border-radius: var(--radius-md);
+  display: flex;
+  gap: 18px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--separator-subtle);
   flex: 0 0 auto;
 }
 .file-browser-tab {
+  margin-bottom: -1px;
+  padding: 8px 1px;
   background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 6px 18px;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: none;
   font-family: var(--font-ui);
-  transition: background 0.12s, color 0.12s;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: color 0.12s, border-color 0.12s;
 }
 .file-browser-tab:hover:not(.active) {
   color: var(--text-secondary);
 }
 .file-browser-tab.active {
   color: var(--text-primary);
-  background: rgba(var(--accent-primary-rgb), 0.16);
+  border-bottom-color: var(--accent-primary);
+  background: transparent;
 }
 
 .file-browser-pane {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  margin-top: 14px;
-  background: var(--surface-raised);
+  padding: 10px 0;
+  background: var(--surface-canvas);
 }
 
 .file-viewer-hint {
@@ -374,7 +395,7 @@
 
 .file-viewer-source {
   margin: 0;
-  padding: 12px 0;
+  padding: 0;
   overflow-x: auto;
 }
 
@@ -383,17 +404,15 @@
   outline: none;
 }
 
-/* === Построчный рендер файла === Один div на строку исходника — по образцу .plan-line: та же
-   grid-раскладка "номер / контент / маркер", тот же ●-маркер и та же инлайновая .line-comment-form. */
+/* === Построчный рендер файла === Одна строка исходника — одна строка сетки: гутер с номером (правый край,
+   вертикальная линия), код, маркер комментария. Комментарии лежат между строками. */
 .file-line {
   display: grid;
-  grid-template-columns: 48px 1fr 20px;
-  gap: 4px;
-  align-items: flex-start;
-  padding: 0 20px;
+  grid-template-columns: 44px 1fr 20px;
+  align-items: baseline;
   font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.8;
   white-space: pre;
   position: relative;
   transition: background 0.1s;
@@ -403,112 +422,150 @@
 }
 .file-line.annotatable:hover {
   background: rgba(var(--accent-primary-rgb), 0.06);
+  --text-muted: var(--text-secondary);
 }
 .file-line.has-comment {
-  background: rgba(var(--attention-rgb), 0.08);
-  border-left: 2px solid var(--attention);
-  margin-left: -2px;
-  padding-left: 18px;
+  background: rgba(var(--attention-rgb), 0.06);
+  --text-muted: var(--text-secondary);
 }
 .file-line.has-comment:hover {
-  background: rgba(var(--attention-rgb), 0.13);
+  background: rgba(var(--attention-rgb), 0.12);
+  --text-muted: var(--text-secondary);
 }
 
 .file-line-num {
   text-align: right;
-  padding: 0 10px 0 0;
+  padding: 0 9px;
   border: 0;
+  border-right: 1px solid var(--separator-subtle);
   background: none;
   font-family: inherit;
   line-height: inherit;
   color: var(--text-muted);
-  font-size: 11px;
-  opacity: 0.5;
+  font-size: 12px;
   user-select: none;
-  transition: color 0.1s, opacity 0.1s;
+  transition: color 0.1s, background 0.1s;
 }
 button.file-line-num { cursor: pointer; }
 button.file-line-num:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: -2px;
-  opacity: 1;
 }
 .file-line.annotatable:hover .file-line-num {
-  color: var(--accent-primary);
-  opacity: 1;
+  color: var(--accent-text);
+  background: rgba(var(--accent-primary-rgb), 0.10);
+  --text-muted: var(--text-secondary);
+}
+.file-line.has-comment .file-line-num {
+  color: var(--attention-text);
+  background: rgba(var(--attention-rgb), 0.12);
+  --text-muted: var(--text-secondary);
 }
 
 .file-line code {
   font-family: inherit;
-  font-size: 12.5px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: inherit;
   min-width: 0;
+  padding: 0 14px 0 9px;
+  color: var(--text-secondary);
 }
 
 .file-line-comment-marker {
   text-align: center;
   font-size: 9px;
-  color: var(--attention);
+  color: var(--attention-text);
   opacity: 0;
   transition: opacity 0.15s;
   user-select: none;
 }
-.file-line.annotatable:hover .file-line-comment-marker {
-  opacity: 0.6;
-}
+.file-line.annotatable:hover .file-line-comment-marker,
 .file-line.has-comment .file-line-comment-marker {
   opacity: 1;
 }
 
 /* Карточка и редактор комментария — соседи строки, а не её дети: их кнопки не вложены в строку файла.
-   Отступ под номером строки; форма не наследует white-space: pre строки. */
+   Отступ правее гутера; форма не наследует white-space: pre строки. */
 .file-viewer-source > .comment-card,
 .file-viewer-source > .comment-editor {
-  margin: 4px 20px 8px 72px;
+  margin: 8px 18px 12px 52px;
   white-space: normal;
 }
+@media (max-width: 600px) {
+  .file-viewer-source > .comment-card,
+  .file-viewer-source > .comment-editor { margin: 8px 10px 12px; }
+}
+.file-browser-pane .line-comment-quote-src { font-family: var(--font-mono); font-size: 11.5px; }
 
-/* === Дифф === */
+/* === Дифф === Те же гутер и шрифт, что у файла; контекст нумеруется строками нового файла, у добавления и
+   удаления в гутере знак. */
 .diff-viewer {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 .diff-banner {
-  margin: 12px 20px 0;
+  margin: 4px 12px 8px;
   padding: 8px 12px;
   border: 1px solid var(--attention);
   border-radius: var(--radius-sm);
   background: rgba(var(--attention-rgb), 0.08);
-  color: var(--attention);
+  color: var(--attention-text);
   font-size: 11.5px;
+  --text-muted: var(--text-secondary);
 }
 .diff-lines {
   margin: 0;
-  padding: 12px 0;
+  padding: 0;
   font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.8;
   white-space: pre;
 }
 .diff-line {
-  padding: 0 20px;
+  display: flex;
+  align-items: baseline;
+}
+.diff-gutter {
+  flex: 0 0 44px;
+  padding: 0 9px;
+  border-right: 1px solid var(--separator-subtle);
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none;
+}
+.diff-text {
+  padding: 0 14px 0 9px;
 }
 .diff-line-add {
-  color: var(--success);
   background: rgba(var(--success-rgb), 0.10);
+  --text-muted: var(--text-secondary);
+}
+.diff-line-add .diff-gutter,
+.diff-line-add .diff-text {
+  color: var(--success-text);
 }
 .diff-line-del {
-  color: var(--danger);
   background: rgba(var(--danger-rgb), 0.10);
+  --text-muted: var(--text-secondary);
 }
+.diff-line-del .diff-gutter,
+.diff-line-del .diff-text {
+  color: var(--danger-text);
+}
+/* Hunk header: a full-width tinted bar above its lines. */
 .diff-line-hunk {
-  color: var(--accent-primary);
+  margin-bottom: 8px;
+  padding: 6px 13px;
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  color: var(--accent-text);
+  --text-muted: var(--text-secondary);
 }
-.diff-line-header {
-  color: var(--text-muted);
-}
-.diff-line-context {
+.diff-line-hunk .diff-gutter { display: none; }
+.diff-line-hunk .diff-text { padding: 0; }
+.diff-line-header .diff-gutter { display: none; }
+.diff-line-header .diff-text { padding: 0 13px; color: var(--text-muted); }
+.diff-line-context .diff-text {
   color: var(--text-secondary);
 }
 
@@ -517,12 +574,17 @@ button.file-line-num:focus-visible {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 14px 20px;
+  padding: 12px 18px;
   border-top: 1px solid var(--separator-subtle);
   flex: 0 0 auto;
 }
-/* Футер просмотра: статус отправки слева, Send all справа; без статуса кнопка остаётся у правого края. */
+/* Футер просмотра: статус отправки и число черновиков слева, Send all справа. */
 .file-browser-send-footer { justify-content: flex-end; }
+.file-browser-draft-count {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
 .file-browser-chips {
   display: flex;
   flex-wrap: wrap;
@@ -554,25 +616,27 @@ button.file-line-num:focus-visible {
   transition: color 0.12s;
 }
 .file-chip button:hover {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 /* Основное действие футера — акцентная primary-кнопка. */
 .file-browser-footer .btn-approve {
-  padding: 9px 20px;
-  font-size: 13px;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
   border-radius: var(--radius-sm);
   background: var(--accent-primary);
   border-color: var(--accent-primary);
   color: var(--surface-canvas);
 }
 .file-browser-footer .btn-approve:hover:not(:disabled) {
-  background: rgba(var(--accent-primary-rgb), 0.85);
-  border-color: rgba(var(--accent-primary-rgb), 0.85);
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
 }
 .file-browser-footer .btn-approve:disabled {
   opacity: 0.5;
 }
+.file-browser-footer .btn-approve svg { width: 14px; height: 14px; flex-shrink: 0; }
 
 .file-browser-toast {
   position: fixed;
@@ -583,24 +647,25 @@ button.file-line-num:focus-visible {
   background: var(--surface-raised);
   border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
-  color: var(--danger);
+  color: var(--danger-text);
   padding: 10px 16px;
   font-size: 12px;
   box-shadow: var(--shadow-overlay);
 }
 
 /* === Минимальная, тема-осознанная подсветка синтаксиса === Своя палитра токенов вместо готовой темы
-   highlight.js: те так или иначе хардкодят цвета и не реагируют на смену скина/темы. */
+   highlight.js: те так или иначе хардкодят цвета и не реагируют на смену скина/темы. Это текст, поэтому цвета —
+   --*-text токены (тон, подтянутый к цвету текста), а не чистый тон. */
 .hljs-keyword,
 .hljs-built_in,
 .hljs-type,
 .hljs-selector-tag {
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-template-string {
-  color: var(--success);
+  color: var(--success-text);
 }
 .hljs-comment,
 .hljs-quote {
@@ -609,7 +674,7 @@ button.file-line-num:focus-visible {
 }
 .hljs-number,
 .hljs-literal {
-  color: var(--attention);
+  color: var(--attention-text);
 }
 .hljs-title,
 .hljs-title.function_,
@@ -619,17 +684,17 @@ button.file-line-num:focus-visible {
 .hljs-tag,
 .hljs-name,
 .hljs-attr {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 /* markdown-заголовки и ссылки, bash-переменные — классы, которые дают yaml/markdown/bash поверх базовой
    четвёрки. Те же семантические токены скина, поэтому подсветка остаётся тема-осознанной. */
 .hljs-section,
 .hljs-link {
-  color: var(--accent-primary);
+  color: var(--accent-text);
 }
 .hljs-code,
 .hljs-variable {
-  color: var(--attention);
+  color: var(--attention-text);
 }
 .hljs-symbol,
 .hljs-bullet,
@@ -638,7 +703,7 @@ button.file-line-num:focus-visible {
   color: var(--text-muted);
 }
 .hljs-addition {
-  color: var(--success);
+  color: var(--success-text);
 }
 .hljs-emphasis {
   font-style: italic;
@@ -692,18 +757,18 @@ button.file-line-num:focus-visible {
   flex: 1 1 auto;
   min-width: 0;
   box-sizing: border-box;
-  margin: 2px 0;
-  padding: 8px 12px;
+  margin: 0;
+  padding: 6px 8px;
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-primary);
-  background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-md);
+  background: var(--surface-canvas);
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
   transition: border-color 0.12s;
 }
 .file-search-input::placeholder {
-  color: var(--text-muted);
+  color: var(--text-placeholder);
 }
 .file-search-input:focus-visible {
   outline: none;
@@ -727,13 +792,13 @@ button.file-line-num:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.15rem;
-  min-width: 1.15rem;
-  height: 1.15rem;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
   border-radius: var(--radius-sm);
-  font-size: 0.7rem;
+  font-size: 10px;
   font-weight: 700;
-  margin-right: 0.5rem;
+  margin-right: 8px;
   color: var(--surface-raised);
 }
 .change-badge-modified { background: var(--attention); }
@@ -741,7 +806,7 @@ button.file-line-num:focus-visible {
 .change-badge-deleted { background: var(--danger); }
 
 .file-change-row-disabled {
-  opacity: 0.55;
+  color: var(--text-disabled);
   cursor: default;
   overflow: hidden;
 }
@@ -758,7 +823,7 @@ button.file-line-num:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.72rem;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
@@ -781,28 +846,25 @@ button.file-line-num:focus-visible {
 .file-browser-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.25rem;
+  justify-content: space-between;
+  gap: 3px;
+  margin-bottom: 0;
 }
-/* Сегментированный переключатель вида — спокойная пилюля-подложка с акцентным
-   активным сегментом (тот же язык, что у Preview/Diff-табов выше). */
+/* Plain text tabs: no pill backdrop; the active one is brighter with a soft tint. */
 .file-browser-viewswitch {
-  display: inline-flex;
+  display: flex;
   gap: 2px;
-  padding: 3px;
-  background: var(--surface-tool);
-  border-radius: var(--radius-md);
-  overflow: hidden;
 }
 .file-browser-viewbtn {
-  padding: 6px 14px;
+  padding: 4px 7px;
   font-family: var(--font-ui);
-  font-size: 0.78rem;
+  font-size: 11px;
   font-weight: 500;
+  white-space: nowrap;
   background: transparent;
   color: var(--text-muted);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
@@ -810,21 +872,37 @@ button.file-line-num:focus-visible {
   color: var(--text-secondary);
 }
 .file-browser-viewbtn.active {
-  background: rgba(var(--accent-primary-rgb), 0.16);
+  background: var(--surface-hover);
   color: var(--text-primary);
 }
+.file-browser-viewbtn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .file-browser-refresh {
   margin-left: auto;
 }
 
-/* Files / Comments switch above the file panel; the files panel keeps its own column layout. */
-.file-browser-panelswitch { align-self: flex-start; }
+/* Files / Comments: underlined tabs above the file panel; the files panel keeps its own column layout. */
+.file-browser-panelswitch {
+  align-self: stretch;
+  gap: 14px;
+  border-bottom: 1px solid var(--separator-subtle);
+}
+.file-browser-panelswitch .file-browser-viewbtn {
+  margin-bottom: -1px;
+  padding: 6px 2px;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  font-size: 12px;
+}
+.file-browser-panelswitch .file-browser-viewbtn.active {
+  background: transparent;
+  border-bottom-color: var(--accent-primary);
+}
 .file-browser-files-panel:not([hidden]) {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 /* === Comments list: one row-button per file comment, grouped by root / file. === */
@@ -836,11 +914,11 @@ button.file-line-num:focus-visible {
   flex-direction: column;
   gap: 14px;
 }
-.file-comments-group { display: flex; flex-direction: column; gap: 6px; }
+.file-comments-group { display: flex; flex-direction: column; gap: 0; }
 .file-comments-group-title {
   font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--text-muted);
+  font-size: 11px;
+  color: var(--accent-text);
   overflow-wrap: anywhere;
 }
 .file-comments-row {
@@ -848,17 +926,18 @@ button.file-line-num:focus-visible {
   flex-direction: column;
   gap: 4px;
   min-height: 32px;
-  padding: 8px 10px;
+  padding: 10px 6px;
   text-align: left;
   font-family: var(--font-ui);
   color: var(--text-primary);
-  background: var(--surface-tool);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--separator-subtle);
+  border-radius: 0;
   cursor: pointer;
 }
 .file-comments-row:hover { background: var(--surface-hover); }
-.file-comments-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.file-comments-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .file-comments-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11.5px; }
 .file-comments-row-line { font-weight: 600; color: var(--text-secondary); }
 .file-comments-row-recipient { font-family: var(--font-ui); font-size: 11px; color: var(--text-muted); }
@@ -876,7 +955,7 @@ button.file-line-num:focus-visible {
   border: 1px solid var(--separator-subtle);
 }
 .file-comments-badge-warn {
-  color: var(--attention);
+  color: var(--attention-text);
   border-color: rgba(var(--attention-rgb), 0.5);
 }
 

@@ -10,7 +10,13 @@ export type PasteAttachment = {
   errorMsg: string | null
 }
 
+export type AttachmentActions = {
+  snapshot: () => ImagePasteDraft
+  discard: (sent: ImagePasteDraft) => void
+}
+
 export type UseImagePasteResult = {
+  attachmentActions: AttachmentActions
   nodeRef: MutableRefObject<HTMLTextAreaElement | null>
   attachments: PasteAttachment[]
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
@@ -21,7 +27,8 @@ export type UseImagePasteResult = {
   removeAttachment: (id: string) => void
 }
 
-type AttachmentRecord = PasteAttachment & { insertedText: string | null; file: File }
+export type AttachmentRecord = PasteAttachment & { insertedText: string | null; file: File }
+export type ImagePasteDraft = readonly AttachmentRecord[]
 
 function errorMessageFor(err: unknown): string {
   const status = err instanceof AttachmentUploadError ? err.status : 0
@@ -34,6 +41,8 @@ export function useImagePaste(
   stageId: string,
   value: string,
   onChange: (value: string) => void,
+  draft?: ImagePasteDraft,
+  onDraftChange?: (draft: ImagePasteDraft) => void,
 ): UseImagePasteResult {
   const nodeRef = useRef<HTMLTextAreaElement | null>(null)
   const valueRef = useRef(value)
@@ -41,26 +50,43 @@ export function useImagePaste(
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const removedIds = useRef<Set<string>>(new Set())
-  const nextId = useRef(0)
+  const nextId = useRef(Math.max(0, ...(draft ?? []).map((a) => Number(a.id) + 1)))
   const pendingCaret = useRef<number | null>(null)
 
-  const [attachments, setAttachments] = useState<AttachmentRecord[]>([])
+  const [attachments, setAttachmentState] = useState<AttachmentRecord[]>(() => [...(draft ?? [])])
+  const recordsRef = useRef(attachments)
+  const reportRef = useRef(onDraftChange)
+  reportRef.current = onDraftChange
+  function setAttachments(update: (previous: AttachmentRecord[]) => AttachmentRecord[]): void {
+    const next = update(recordsRef.current)
+    recordsRef.current = next
+    setAttachmentState(next)
+    reportRef.current?.(next)
+  }
 
   // Поколение композера, привязанное к stageId. Панель DialogChannel рендерится с постоянным key="dialog",
   // поэтому при переходе A → B ЭТОТ хук остаётся тем же.
   const genRef = useRef(0)
   const stageIdRef = useRef(stageId)
   useLayoutEffect(() => {
-    if (stageIdRef.current === stageId) return
+    if (stageIdRef.current !== stageId) {
+      recordsRef.current = [...(draft ?? [])]
+      setAttachmentState(recordsRef.current)
+      removedIds.current.clear()
+      nextId.current = Math.max(0, ...(draft ?? []).map((a) => Number(a.id) + 1))
+    }
     stageIdRef.current = stageId
-    genRef.current += 1
-    // Вложения принадлежали композеру прежней стадии — чистим (и освобождаем
-    // превью ещё не завершённых/упавших).
-    setAttachments((prev) => {
-      prev.forEach((a) => URL.revokeObjectURL(a.previewUrl))
-      return []
-    })
-    removedIds.current.clear()
+    const report = onDraftChange
+    return () => {
+      genRef.current += 1
+      const records = recordsRef.current
+      if (report !== undefined) {
+        if (records.some((a) => a.uploading)) {
+          recordsRef.current = records.map((a) => a.uploading ? { ...a, uploading: false, failed: true, errorMsg: 'Upload interrupted — retry to attach' } : a)
+          report(recordsRef.current)
+        }
+      } else records.forEach((a) => URL.revokeObjectURL(a.previewUrl))
+    }
   }, [stageId])
 
   useLayoutEffect(() => {
@@ -81,10 +107,7 @@ export function useImagePaste(
     try {
       const { path } = await uploadAttachment(stageId, file)
       // После смены стадии игнорируем upload старой стадии, чтобы не вставить ссылку в новый composer.
-      if (gen !== genRef.current) {
-        URL.revokeObjectURL(previewUrl)
-        return null
-      }
+      if (gen !== genRef.current) return null
       if (removedIds.current.has(id)) {
         URL.revokeObjectURL(previewUrl)
         return null
@@ -100,10 +123,7 @@ export function useImagePaste(
       return { caret: before.length + inserted.length }
     } catch (err) {
       // Устаревший (чужая стадия) ответ — тихо игнорируем.
-      if (gen !== genRef.current) {
-        URL.revokeObjectURL(previewUrl)
-        return null
-      }
+      if (gen !== genRef.current) return null
       if (removedIds.current.has(id)) {
         URL.revokeObjectURL(previewUrl)
         setAttachments((prev) => prev.filter((a) => a.id !== id))
@@ -127,7 +147,9 @@ export function useImagePaste(
   // и явным выбором файлов (uploadFiles). Каретка продвигается между вставками.
   async function runUploads(files: File[], startCaret: number): Promise<void> {
     let caret = startCaret
+    const generation = genRef.current
     for (const file of files) {
+      if (generation !== genRef.current) return
       const result = await uploadOne(file, caret)
       if (result !== null) {
         caret = result.caret
@@ -188,5 +210,17 @@ export function useImagePaste(
     setAttachments((prev) => prev.filter((a) => a.id !== id))
   }
 
-  return { nodeRef, attachments, onPaste: onPaste as (event: ClipboardEvent<HTMLTextAreaElement>) => void, uploadFiles, retryAttachment, removeAttachment }
+  const attachmentActions: AttachmentActions = {
+    snapshot: () => recordsRef.current,
+    discard: (sent) => {
+      const urls = new Set(sent.map((a) => a.previewUrl))
+      recordsRef.current.filter((a) => urls.has(a.previewUrl)).forEach((a) => {
+        removedIds.current.add(a.id)
+        URL.revokeObjectURL(a.previewUrl)
+      })
+      setAttachments((current) => current.filter((a) => !urls.has(a.previewUrl)))
+    },
+  }
+
+  return { attachmentActions, nodeRef, attachments, onPaste: onPaste as (event: ClipboardEvent<HTMLTextAreaElement>) => void, uploadFiles, retryAttachment, removeAttachment }
 }

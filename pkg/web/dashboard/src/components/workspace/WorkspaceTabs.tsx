@@ -57,9 +57,8 @@ export function WorkspaceTabs({ tabs, activeId, onSelect }: WorkspaceTabsProps):
             onClick={() => onSelect(tab.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
           >
-            {isAttention && <span className="attn-glyph" aria-hidden="true" />}
             <span className="workspace-tab-label">{tab.label}</span>
-            {tab.count !== undefined && tab.count > 0 && <span className="attn-count">· {tab.count}</span>}
+            {tab.count !== undefined && tab.count > 0 && <span className="workspace-tab-count">{tab.count}</span>}
           </button>
         )
       })}

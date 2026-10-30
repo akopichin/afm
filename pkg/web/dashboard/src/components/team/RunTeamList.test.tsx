@@ -287,9 +287,10 @@ describe('RunTeamList with focusStageId', () => {
 
   test('groups: this stage first, then run agents, then the other stages in flow order — no conversations', () => {
     renderFocused()
-    expect(groupNames()).toEqual(['This stage', 'Run agents', 'Other stages'])
+    expect(groupNames()).toEqual(['This stage', 'Run agents', 'Other stages', 'Assistant'])
     expect(rowNames('This stage')).toEqual(['Implement feature', 'Correctness helper', 'Docs helper'])
-    expect(rowNames('Run agents')).toEqual(['QA reviewer', 'claude', 'Security'])
+    expect(rowNames('Run agents')).toEqual(['QA reviewer', 'Security'])
+    expect(rowNames('Assistant')).toEqual(['claude'])
     // Flow order (plan → commit), each stage's helpers right under it; the focused stage is not repeated.
     expect(rowNames('Other stages')).toEqual(['Plan', 'Commit & cleanup', 'Commit helper'])
     expect(screen.queryByRole('region', { name: 'Conversations' })).toBeNull()
@@ -412,4 +413,15 @@ describe('RunTeamList without focusStageId (the Team tab)', () => {
     expect(within(row).getByText('Usage limit')).toBeInTheDocument()
     expect(row.querySelector('.team-presence')).toHaveAttribute('data-presence', 'waiting')
   })
+})
+
+
+test('focused People keeps unavailable history, uses the real Assistant address and labels helper mode', () => {
+  const pick = vi.fn()
+  render(<RunTeamList participants={participants} stages={stages} focusStageId="implement" onPick={pick} onAddRunAgent={vi.fn()}
+    helperTasks={[{ id: 'h1', mode: 'required', parentTaskId: null, profileId: 'review', title: '', trigger: 'one_shot', status: 'completed', statusReason: '', depth: 1, watchPasses: null, watchLastCheckpointSeq: null, blocksRootCompletion: true, waived: false, waiverReason: '' }]} />)
+  expect(screen.getByRole('button', { name: /Correctness helper/ })).toBeDisabled()
+  expect(screen.getByText('Required')).toBeInTheDocument()
+  fireEvent.click(within(screen.getByRole('region', { name: /^Assistant/ })).getByRole('button', { name: /claude/ }))
+  expect(pick).toHaveBeenCalledWith(expect.objectContaining({ id: 'side:run-1', kind: 'side_agent' }))
 })

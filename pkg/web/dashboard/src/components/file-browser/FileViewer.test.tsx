@@ -46,7 +46,7 @@ function typeIn(line: number, text: string): void {
 function saveNote(line: number, text: string): void {
   fireEvent.click(lineButton(line))
   typeIn(line, text)
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
 }
 
 describe('FileViewer', () => {
@@ -457,7 +457,7 @@ describe('FileViewer', () => {
       fireEvent.click(lineButton(1))
       typeIn(1, '  ')
 
-      fireEvent.click(screen.getByRole('button', { name: 'Update' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Update comment' }))
 
       expect(screen.getByText('precious')).toBeInTheDocument()
       expect(screen.queryByPlaceholderText('Comment on line 1...')).toBeNull()

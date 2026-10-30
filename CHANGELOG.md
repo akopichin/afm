@@ -3,6 +3,26 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-30
+
+### Improvement: refresh the dashboard workspace
+
+The dashboard now has a denser stage rail and header, resizable panels, and
+responsive Feed, People and Team views. Feed follows the selected stage without
+a visible Full feed tab. The Message and Revise composer keeps separate stage
+drafts, including reply and attachment context, as you move between views.
+Plan comments attach to exact source lines, including blank lines, table rows
+and code fences; Files shows comment counts on collapsed folders. Board,
+Assistant and the existing actions use the updated layout. See
+[Dashboard](docs/dashboard.md).
+
+### Improvement: maintain independent 1.x and 2.x release lines
+
+`make release-patch v1.x` and `make release-minor v1.x` publish the pushed
+maintenance branch commit. Stable 1.x releases update the `afm@1` Homebrew cask
+(command `afm-1`) and Docker `1`, while the main cask, Docker `latest`, and GitHub
+Latest remain on the current major. See [release commands](docs/releases.md).
+
 ## 2026-10-29
 
 ### Fix: recover malformed agent results without changing their verdict
@@ -23,6 +43,15 @@ post-exit continuations. The budgets survive restart, and the reminders and
 outcomes remain visible after reconnect. Existing user Stop hooks and CLI
 settings are preserved; an unavailable Stop hook falls back to the post-exit
 continuations. See [Autonomous track](docs/autonomous-track.md).
+
+### Improvement: stop a run when a stage fails
+
+`afm run --exit-on-fail` (or `AFM_EXIT_ON_FAIL=1`) returns exit code 1 after a
+stage enters `failed`, without waiting for other stages or dashboard drain.
+The run journal remains resumable. An explicit `--exit-on-fail=false` overrides
+the environment value; without the option, existing behavior remains. Automatic
+Docker mode forwards the setting and container exit code. See
+[exit-on-fail configuration](docs/config-reference.md#exit-on-stage-failure).
 
 ### Fix: resume coordinators waiting for spawned helpers
 

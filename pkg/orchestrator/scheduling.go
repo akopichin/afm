@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -232,6 +233,10 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 
 	// CAS ПЕРВЫМ: право на retry захватывает ровно один вызывающий.
 	if _, ok := o.Trigger(stageID, bus.EvManualRetry, bus.GuardCtx{}, ""); !ok {
+		return
+	}
+	if err := o.finishBarrierFailureBump(stageID); err != nil {
+		log.Printf("WARN: retry stage %q: start a new generation of its required helpers: %v", stageID, err)
 		return
 	}
 

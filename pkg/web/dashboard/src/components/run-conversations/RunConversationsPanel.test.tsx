@@ -495,11 +495,10 @@ describe('new agent message signal styles', () => {
     expect(meshCss).toMatch(/@keyframes newAgentMessage/)
   })
 
-  test('the new bubble is bright without the animation, so reduced motion still shows it', () => {
-    expect(rule('.team-conversation-message.is-new-agent-message .team-conversation-message-body')).toMatch(/background:/)
+  test('the new bubble keeps an accent border without the animation, so reduced motion still shows it', () => {
+    expect(rule('.team-conversation-message.is-new-agent-message .team-conversation-message-body')).toMatch(/border-color:\s*rgba\(var\(--accent-primary-rgb\)/)
     expect(reducedMotion).toMatch(/\.team-conversation-message\.is-new-agent-message \.team-conversation-message-body/)
     expect(reducedMotion).toMatch(/animation:\s*none/)
-    expect(reducedMotion).not.toMatch(/background:\s*none|background:\s*transparent/)
   })
 
   test('the opener count has its own visible badge', () => {

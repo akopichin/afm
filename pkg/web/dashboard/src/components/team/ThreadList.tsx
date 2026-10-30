@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import type { MeshParticipant, MeshThread, MeshThreadSummaries } from '../../api/mesh-client'
-import { directPeer, participantLabel, participantRole, senderLabel, threadLabel, threadMembersLine } from '../../lib/mesh-roster'
+import { directPeer, participantHandle, participantLabel, participantRole, senderLabel, threadHandlesLine, threadLabel } from '../../lib/mesh-roster'
 import { MeshAvatar, ThreadSymbol } from './MeshAvatar'
 
 export type ThreadListProps = {
@@ -42,8 +42,8 @@ export function ThreadList({ threads, participants, summaries = {}, unreadThread
         const date = last === undefined ? null : new Date(last.created_at)
         const validDate = date !== null && !Number.isNaN(date.getTime())
         const preview = last === undefined ? 'No messages yet' : `${senderLabel(last.sender_id, participants)}: ${last.preview}`
-        const detail = peer === undefined ? threadMembersLine(t, participants) :
-          t.title ? `${participantLabel(peer)} · ${participantRole(peer.kind)}` : participantRole(peer.kind)
+        const detail = peer === undefined ? threadHandlesLine(t, participants) :
+          `${t.title ? participantLabel(peer) : participantHandle(peer)} · ${participantRole(peer.kind)}`
         const unread = unreadThreadIds?.has(t.id) ?? false
         return (
           <li key={t.id}>

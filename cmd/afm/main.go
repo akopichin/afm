@@ -64,11 +64,20 @@ func resolveDebug(flag bool, env string) bool {
 	if flag {
 		return true
 	}
+	enabled, _ := parseEnvBool(env)
+	return enabled
+}
+
+// parseEnvBool разбирает булево значение env: 1/true/yes/on и 0/false/no/off, пустое — выключено.
+// known=false для любого другого значения.
+func parseEnvBool(env string) (enabled, known bool) {
 	switch strings.ToLower(strings.TrimSpace(env)) {
-	case "1", "true", "yes", "on":
-		return true
+	case "1", "true", yesString, "on":
+		return true, true
+	case "", "0", "false", noString, "off":
+		return false, true
 	default:
-		return false
+		return false, false
 	}
 }
 

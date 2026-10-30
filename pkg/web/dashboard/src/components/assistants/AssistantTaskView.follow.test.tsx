@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AssistantTaskView } from './AssistantTaskView'
 import type { AssistantTask } from '../../types/assistant-task'
@@ -93,7 +93,8 @@ function view(taskId: string, ring: AssistantActivityEntry[]) {
 
 afterEach(() => vi.restoreAllMocks())
 
-describe('AssistantTaskView feed following', () => {
+// The offsetTop mock is O(rows) per row, so each render of 170+ rows costs seconds under suite load.
+describe('AssistantTaskView feed following', { timeout: 15000 }, () => {
   test('a helper opened with a live ring longer than one tail page ends at the latest row and follows', async () => {
     mockLayout()
     const api = mockTails({ t1: 170 })
@@ -157,7 +158,7 @@ describe('AssistantTaskView feed following', () => {
 
     act(() => { region().scrollTop = 500 })
     await frame()
-    expect(jumpButton()).not.toBeNull()
+    await waitFor(() => expect(jumpButton()).not.toBeNull())
 
     rerender(view('t1', [...ring, live(171, 't1')]))
     await frame()

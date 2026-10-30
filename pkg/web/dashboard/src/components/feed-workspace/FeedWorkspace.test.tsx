@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import type { AfmEvent } from '../../types'
 import { FeedWorkspace, FeedGroupView, feedItemSignature } from './FeedWorkspace'
@@ -14,19 +14,70 @@ const ev = (type: string, payload: unknown, stageId: string, timestamp: string):
 describe('FeedWorkspace', () => {
   beforeEach(() => window.localStorage.clear())
 
-  it('renders messenger groups with stage badge and side alignment', () => {
+  it('renders messenger groups with side alignment', () => {
     const events = [
       ev('agent_action', { tool: 'read_file', detail: 'x.ts' }, 's1', '2026-07-10T10:00:00Z'),
       ev('dialog_answer', { phase: 'planning', id: 'q1', title: 'reply to user' }, 's1', '2026-07-10T10:00:01Z'),
     ]
-    const { container } = render(<FeedWorkspace events={events} stageId={null} showStageBadges />)
+    const { container } = render(<FeedWorkspace events={events} stageId={null} />)
     const groups = container.querySelectorAll('.feed-group')
     expect(groups).toHaveLength(2)
     expect(groups[0]).toHaveClass('feed-left')
-    expect(within(groups[0] as HTMLElement).getByText('s1')).toBeInTheDocument()
+    expect(groups[0]?.querySelector('.feed-stage-badge')).toBeNull()
     expect(groups[1]).toHaveClass('feed-right')
-    expect(container.textContent).toContain('read_file: x.ts')
+    expect(container.textContent).toContain('read_file x.ts')
     expect(container.textContent).toContain('reply to user')
+  })
+
+  describe('tool-call groups', () => {
+    const at = (n: number) => `2026-07-10T10:00:0${n}Z`
+    const tools = [
+      ev('agent_action', { tool: 'Read', detail: 'src/a.ts' }, 's1', at(1)),
+      ev('agent_action', { tool: 'Edit', detail: 'src/a.ts' }, 's1', at(2)),
+      ev('agent_action', { tool: 'Read', detail: 'src/b.ts' }, 's1', at(3)),
+    ]
+
+    it('renders consecutive tool calls as ONE collapsed group under the agent message', () => {
+      const events = [ev('agent_action', { tool: 'text', detail: 'Working on it' }, 's1', at(0)), ...tools]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      const groups = container.querySelectorAll('details.feed-tool-group')
+      expect(groups).toHaveLength(1)
+      expect(groups[0]).not.toHaveAttribute('open')
+      expect(groups[0]?.querySelector('summary')).toHaveTextContent('3 tool calls · read, edit')
+      expect(groups[0]?.querySelectorAll('.feed-tool-rows .feed-item')).toHaveLength(3)
+      const rows = groups[0]?.closest('.feed-rows')
+      expect(rows?.querySelector('.feed-item-markdown')).toHaveTextContent('Working on it')
+    })
+
+    it('shows each call as "<Tool> <detail>" and says "1 tool call" for a single call', () => {
+      const { container } = render(<FeedWorkspace events={tools.slice(0, 1)} stageId="s1" />)
+      expect(container.querySelector('summary')).toHaveTextContent(/^1 tool call · read$/)
+      const row = container.querySelector('.feed-tool-rows .feed-item')
+      expect(row?.querySelector('.feed-tool-name')).toHaveTextContent('Read')
+      expect(row?.querySelector('.feed-item-text')).toHaveTextContent('Read src/a.ts')
+    })
+
+    it('does not invent a result chip', () => {
+      const { container } = render(<FeedWorkspace events={tools} stageId="s1" />)
+      expect(container.querySelector('.feed-tool-result')).toBeNull()
+    })
+
+    it('a message between tool calls splits them into two groups', () => {
+      const events = [tools[0], ev('agent_action', { tool: 'text', detail: 'Next' }, 's1', at(2)), tools[2]] as AfmEvent[]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+    })
+
+    it('toggles from the keyboard-reachable summary and keeps the group open when a call is appended', () => {
+      const { container, rerender } = render(<FeedWorkspace events={tools.slice(0, 2)} stageId="s1" />)
+      const details = container.querySelector('details') as HTMLDetailsElement
+      details.open = true
+      rerender(<FeedWorkspace events={tools} stageId="s1" />)
+      expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(1)
+      expect(container.querySelector('details')).toBe(details)
+      expect(details.open).toBe(true)
+      expect(details.querySelector('summary')).toHaveTextContent('3 tool calls')
+    })
   })
 
   it('shows an empty feed without crashing', () => {
@@ -36,9 +87,9 @@ describe('FeedWorkspace', () => {
   })
 
   it.each([
-    ['stage', 's1', false],
-    ['full', null, true],
-  ])('shows host-local clock and previous-event gap in the %s feed', (_name, stageId, showStageBadges) => {
+    ['stage', 's1'],
+    ['activity', null],
+  ])('shows host-local clock and previous-event gap in the %s feed', (_name, stageId) => {
     const events = [
       ev('stage_status_changed', 'running', 's1', '2026-10-21T05:31:09Z'),
       ev('agent_action', { tool: 'read_file', detail: 'a' }, 's1', '2026-10-21T05:31:16Z'),
@@ -46,13 +97,14 @@ describe('FeedWorkspace', () => {
     ]
     const { container } = render(
       <MessageTimeZoneProvider timeZone="Asia/Tokyo" utcOffsetMinutes={0}>
-        <FeedWorkspace events={events} stageId={stageId} showStageBadges={showStageBadges} />
+        <FeedWorkspace events={events} stageId={stageId} />
       </MessageTimeZoneProvider>,
     )
     const times = Array.from(container.querySelectorAll('time.message-time'))
-    expect(times).toHaveLength(3)
-    expect(times.map((time) => time.querySelector('.message-time-clock')?.textContent)).toEqual(['14:31', '14:31', '14:33'])
-    expect(times.map((time) => time.querySelector('.message-time-gap')?.textContent)).toEqual(['+0s', '+7s', '+2m'])
+    // The flow line, the stage agent's author row (the time of its first row), then the two tool calls.
+    expect(times).toHaveLength(4)
+    expect(times.map((time) => time.querySelector('.message-time-clock')?.textContent)).toEqual(['14:31', '14:31', '14:31', '14:33'])
+    expect(times.map((time) => time.querySelector('.message-time-gap')?.textContent)).toEqual(['+0s', '+7s', '+7s', '+2m'])
     expect(times[0]).toHaveAttribute('title', expect.stringContaining('first event (+0s)'))
     expect(times[1]).toHaveAttribute('title', expect.stringContaining('+7s after previous'))
     expect(times.every((time) => time.getAttribute('tabindex') === '0')).toBe(true)
@@ -166,24 +218,52 @@ describe('FeedWorkspace', () => {
   })
 
   describe('systemAuthorLabel + imagePolicy (Side agent parameterization)', () => {
-    // Регрессия: без prop'ов обычная лента рисует 'Flow' для system-актора и
-    // раскрывает [AFM image: …] в stage-картинку ровно как прежде.
-    it('defaults: system author is "Flow" and image markers render as <img>', () => {
+    // Регрессия: [AFM image: …] раскрывается в stage-картинку; флоу-строки идут без подписи «Flow».
+    it('defaults: flow lines carry no author label and image markers render as <img>', () => {
       const events = [
         ev('stage_status_changed', 'running', '', '2026-07-10T10:00:00Z'),
         ev('agent_action', { tool: 'text', detail: '[AFM image: chart.png]' }, 's1', '2026-07-10T10:00:01Z'),
       ]
       const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
-      expect(container.querySelector('.feed-actor')?.textContent).toBe('Flow')
+      const labels = Array.from(container.querySelectorAll('.feed-actor')).map((el) => el.textContent)
+      expect(labels).not.toContain('Flow')
+      expect(labels).not.toContain('Agent')
+      expect(container.querySelector('.feed-flow')).toHaveTextContent('→ running')
       expect(container.querySelector('img.feed-image')).not.toBeNull()
     })
 
-    it('systemAuthorLabel overrides the "Flow" bubble label', () => {
-      const events = [ev('stage_status_changed', 'running', '', '2026-07-10T10:00:00Z')]
-      const { container } = render(<FeedWorkspace events={events} stageId={null} systemAuthorLabel="Side agent" />)
-      const labels = Array.from(container.querySelectorAll('.feed-actor')).map((el) => el.textContent)
-      expect(labels).toContain('Side agent')
-      expect(labels).not.toContain('Flow')
+    it('a stage agent message has an author row: avatar, bold stage name, role and time, without an outer frame', () => {
+      const events = [ev('agent_action', { tool: 'text', detail: 'Working on it' }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      const group = container.querySelector('.feed-group[data-actor="agent"]')
+      expect(group?.querySelector(':scope > .mesh-avatar')).toBeInTheDocument()
+      const row = group?.querySelector('.feed-author-row')
+      expect(row?.querySelector('.feed-actor')).toHaveTextContent('s1')
+      expect(row?.querySelector('.feed-role')).toHaveTextContent('Stage agent')
+      expect(row?.querySelector('time.message-time')).toBeInTheDocument()
+      expect(group?.querySelector('.feed-bubble')).toBeNull()
+      expect(group?.querySelector('.feed-rows .feed-item-markdown')).toHaveTextContent('Working on it')
+      expect(container.textContent).not.toContain('Agent')
+    })
+
+    it('each stage agent message has its own author row, tool calls stay in one collapsed group between them', () => {
+      const events = [
+        ev('agent_action', { tool: 'text', detail: 'First thought' }, 's1', '2026-07-10T10:00:00Z'),
+        ev('agent_action', { tool: 'Read', detail: 'a.ts' }, 's1', '2026-07-10T10:00:01Z'),
+        ev('agent_action', { tool: 'Edit', detail: 'a.ts' }, 's1', '2026-07-10T10:00:02Z'),
+        ev('agent_action', { tool: 'text', detail: 'Second thought' }, 's1', '2026-07-10T10:00:03Z'),
+        ev('agent_action', { tool: 'text', detail: 'Third thought' }, 's1', '2026-07-10T10:00:04Z'),
+      ]
+      const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
+      const groups = Array.from(container.querySelectorAll('.feed-group[data-actor="agent"]'))
+      expect(groups).toHaveLength(3)
+      for (const group of groups) {
+        expect(group.querySelectorAll('.feed-author-row')).toHaveLength(1)
+        expect(group.querySelector(':scope > .mesh-avatar')).toBeInTheDocument()
+      }
+      expect(groups[0]?.querySelectorAll('details')).toHaveLength(1)
+      expect(groups[1]?.querySelectorAll('details')).toHaveLength(0)
+      expect(groups.map((g) => g.querySelector('.feed-item-markdown')?.textContent?.trim())).toEqual(['First thought', 'Second thought', 'Third thought'])
     })
 
     it('imagePolicy="none" renders [AFM image: …] as literal markdown text, not an <img>', () => {
@@ -203,11 +283,7 @@ describe('FeedWorkspace', () => {
       expect(container.querySelector('.feed-stage-badge')).toBeNull()
     })
 
-    it('showStageBadges=true (Full feed) рендерит бейдж стадии', () => {
-      const { container } = render(<FeedWorkspace events={events()} stageId={null} showStageBadges />)
-      expect(container.querySelector('.feed-stage-badge')).not.toBeNull()
-      expect(container.querySelector('.feed-stage-badge')?.textContent).toBe('s1')
-    })
+
   })
 
   // --- Навигация по diалог-элементам (dialog_question/dialog_answer) ---
@@ -217,13 +293,14 @@ describe('FeedWorkspace', () => {
       ev('dialog_question', { phase: 'planning', id: 'q1', title: 'what next?' }, 's1', '2026-07-10T10:00:00Z'),
     ]
     const onOpenDialog = vi.fn()
-    render(<FeedWorkspace events={events} stageId="s1" onOpenDialog={onOpenDialog} />)
+    const { container } = render(<FeedWorkspace events={events} stageId="s1" onOpenDialog={onOpenDialog} />)
     const button = screen.getByRole('button', { name: /what next\?/ })
     expect(button.tagName).toBe('BUTTON')
     expect(button).toHaveClass('feed-item-navigable')
-    const time = button.querySelector('time.message-time')
-    expect(time).toBeInTheDocument()
-    expect(time).not.toHaveAttribute('tabindex')
+    // The time of the group's first row is in the author row, outside the button, so it may take focus.
+    expect(button.querySelector('time.message-time')).toBeNull()
+    const time = container.querySelector('.feed-author-row time.message-time')
+    expect(time).toHaveAttribute('tabindex', '0')
     expect(time?.querySelector('.message-time-gap')).toHaveTextContent('+0s')
     fireEvent.click(button)
     expect(onOpenDialog).toHaveBeenCalledWith('s1', 'planning', 'q1')
@@ -245,7 +322,7 @@ describe('FeedWorkspace', () => {
     const onOpenDialog = vi.fn()
     render(<FeedWorkspace events={events} stageId="s1" onOpenDialog={onOpenDialog} />)
     expect(screen.queryByRole('button', { name: /read_file/ })).not.toBeInTheDocument()
-    expect(screen.getByText('read_file: x.ts').closest('.feed-item')?.tagName).toBe('DIV')
+    expect(screen.getByText('read_file').closest('.feed-item')?.tagName).toBe('DIV')
   })
 
   it('без onOpenDialog navigable-элемент рендерится как обычный div, без падения', () => {
@@ -456,6 +533,12 @@ describe('FeedWorkspace', () => {
   })
 
   describe('FeedGroupView — repliable thoughts', () => {
+    it('the author row names the stage agent when the caller knows its name', () => {
+      const { container } = render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} agentName="Checkout executor" />)
+      expect(container.querySelector('.feed-author-row .feed-actor')).toHaveTextContent('Checkout executor')
+      expect(container.querySelector('.mesh-avatar')).toHaveTextContent('CE')
+    })
+
     it('клик по строке-мысли вызывает onReplyToThought(key, text)', () => {
       const onReply = vi.fn()
       render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} onReplyToThought={onReply} />)
@@ -471,14 +554,16 @@ describe('FeedWorkspace', () => {
     })
 
     it('reply button keeps the thought time out of the tab order', () => {
+      const first = thoughtItem({ key: 'k0', ts: Date.parse('2026-10-21T05:31:00Z'), gap: '0s' })
       const { container } = render(
-        <FeedGroupView group={groupOf([thoughtItem({ ts: Date.parse('2026-10-21T05:31:09Z'), gap: '0s' })])}
+        <FeedGroupView group={groupOf([first, thoughtItem({ ts: Date.parse('2026-10-21T05:31:09Z'), gap: '9s' })])}
           showStageBadges={false} onReplyToThought={vi.fn()} />,
       )
-      const row = container.querySelector('.feed-thought-row')
+      // The first row's time is in the author row; a later thought keeps its own time inside the row.
+      const row = container.querySelectorAll('.feed-thought-row')[1]
       expect(row?.querySelector('time.message-time')).toBeInTheDocument()
       expect(row?.querySelector('time.message-time')).not.toHaveAttribute('tabindex')
-      const reply = screen.getByRole('button', { name: /reply to this thought/i })
+      const reply = within(row as HTMLElement).getByRole('button', { name: /reply to this thought/i })
       reply.focus()
       expect(document.activeElement).toBe(reply)
       expect(row?.contains(reply)).toBe(true)
@@ -497,7 +582,7 @@ describe('FeedWorkspace', () => {
       const tool = thoughtItem({ kind: 'tool', markdown: false, mono: true, text: 'Bash: ls' })
       render(<FeedGroupView group={groupOf([tool])} showStageBadges={false} onReplyToThought={onReply} />)
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
-      fireEvent.click(screen.getByText('Bash: ls'))
+      fireEvent.click(screen.getByText('Bash'))
       expect(onReply).not.toHaveBeenCalled()
     })
 
@@ -512,7 +597,7 @@ describe('FeedWorkspace', () => {
       expect(targets[0]?.textContent).toContain('вторая')
     })
 
-    it('без onReplyToThought (Full feed) мысли не репляиблы', () => {
+    it('без onReplyToThought мысли не репляиблы', () => {
       const { container } = render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} />)
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
       expect(container.querySelector('.feed-thought-row')).toBeNull()
@@ -554,8 +639,8 @@ describe('FeedWorkspace', () => {
       expect(onSendNote).toHaveBeenCalledWith('s1', expect.stringContaining('> Мысль для ответа'))
     })
 
-    it('Full feed (без композера) рендерит мысли не репляиблыми', () => {
-      render(<FeedWorkspace events={thoughtEvents()} stageId={null} showStageBadges />)
+    it('Лента без композера рендерит мысли не репляиблыми', () => {
+      render(<FeedWorkspace events={thoughtEvents()} stageId={null} />)
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
     })
   })
@@ -611,14 +696,13 @@ describe('FeedWorkspace', () => {
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
     })
 
-    // scopeToken namespacing: a stage legitimately named "full" must NOT collide with the Full-feed scope.
-    it('does not animate when switching Full feed <-> a stage whose id is "full"', () => {
+    it('does not animate when switching an activity view to a stage', () => {
       const { rerender } = render(<FeedWorkspace
-        events={[ev('agent_action', { tool: 'text', detail: 'full-feed-last' }, 's1', '2026-01-01T00:00:00Z')]}
-        stageId={null} scopeToken="scope:full" showStageBadges />)
+        events={[ev('agent_action', { tool: 'text', detail: 'activity-last' }, 's1', '2026-01-01T00:00:00Z')]}
+        stageId={null}  />)
       rerender(<FeedWorkspace
         events={[ev('agent_action', { tool: 'text', detail: 'stage-full-last' }, 'full', '2026-01-01T00:00:05Z')]}
-        stageId="full" scopeToken="scope:stage:full" />)
+        stageId="full"  />)
       expect(document.querySelectorAll('.feed-item--enter').length).toBe(0)
     })
 
@@ -688,4 +772,36 @@ describe('FeedWorkspace', () => {
       expect(a).not.toBe(b)
     })
   })
+})
+
+
+it('starts tool calls collapsed and leaves the reading position alone when expanded', () => {
+  const events = [ev('agent_action', { tool: 'read_file', detail: 'long source text' }, 's1', '2026-01-01T00:00:00Z')]
+  const { container, rerender } = render(<FeedWorkspace events={events} stageId="s1" />)
+  const details = container.querySelector('details') as HTMLDetailsElement
+  expect(details.open).toBe(false)
+  const scroll = container.querySelector('.feed-scroll') as HTMLElement
+  Object.defineProperties(scroll, { scrollHeight: { value: 1000, configurable: true }, clientHeight: { value: 200, configurable: true } })
+  scroll.scrollTop = 800
+  fireEvent.scroll(scroll)
+  fireEvent.click(details.querySelector('summary') as HTMLElement)
+  expect(details.open).toBe(true)
+  rerender(<FeedWorkspace events={[...events, ev('agent_action', { tool: 'text', detail: 'new message' }, 's1', '2026-01-01T00:00:01Z')]} stageId="s1" />)
+  expect(scroll.scrollTop).toBe(800)
+})
+
+it('never gives a closed tool result a delayed entrance animation', () => {
+  vi.useFakeTimers()
+  try {
+    const initial = ev('agent_action', { tool: 'text', detail: 'baseline' }, 's1', '2026-01-01T00:00:00Z')
+    const tool = ev('agent_action', { tool: 'read_file', detail: 'later.txt' }, 's1', '2026-01-01T00:00:01Z')
+    const { rerender } = render(<FeedWorkspace events={[initial]} stageId="s1" />)
+    rerender(<FeedWorkspace events={[initial, tool]} stageId="s1" />)
+    const details = document.querySelector('details')!
+    expect(details).not.toHaveAttribute('open')
+    expect(details.querySelector('.feed-item--enter')).toBeNull()
+    act(() => vi.advanceTimersByTime(2400))
+    fireEvent.click(details.querySelector('summary')!)
+    expect(details.querySelector('.feed-item--enter')).toBeNull()
+  } finally { vi.useRealTimers() }
 })

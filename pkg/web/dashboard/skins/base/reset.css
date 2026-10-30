@@ -17,15 +17,18 @@
 
 html, body {
   height: 100%;
-  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 14px;
   line-height: 1.5;
   background: var(--bg);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--mint); text-decoration: none; }
+/* Form controls ignore the page font by default; mono is opted into per selector via --font-mono. */
+button, input, textarea, select { font: inherit; }
+
+a { color: var(--success-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 ::selection { background: rgba(229, 212, 66, 0.35); color: var(--ink-hi); }
