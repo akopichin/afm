@@ -3,6 +3,7 @@ package scripts_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -211,14 +212,18 @@ func TestReleaseRejectsDirtyTree(t *testing.T) {
 	}
 }
 
-func renderReleaseTemplate(t *testing.T, source, major, prerelease string) string {
+// GoReleaser exposes Major as uint64; a string fixture hides invalid template comparisons.
+func renderReleaseTemplate(t *testing.T, source string, major uint64, prerelease string) string {
 	t.Helper()
 	tmpl, err := template.New("release").Funcs(template.FuncMap{"split": strings.Split}).Parse(source)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := tmpl.Execute(&out, struct{ Major, Prerelease string }{major, prerelease}); err != nil {
+	if err := tmpl.Execute(&out, struct {
+		Major      uint64
+		Prerelease string
+	}{major, prerelease}); err != nil {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(out.String())
@@ -251,13 +256,16 @@ func TestHomebrewReleaseChannels(t *testing.T) {
 	if config.Release.Prerelease != "auto" || len(config.Casks) != 4 {
 		t.Fatal("expected automatic prereleases and four Homebrew channels")
 	}
-	for _, tt := range []struct{ major, prerelease, cask, command, latest string }{
-		{"2", "", "afm", "afm", "true"}, {"2", "alpha.1", "afm-alpha", "afm-alpha", "false"},
-		{"2", "alpha.10", "afm-alpha", "afm-alpha", "false"}, {"2", "beta.1", "afm-beta", "afm-beta", "false"},
-		{"2", "rc.1", "", "", "false"}, {"1", "", "afm@1", "afm-1", "false"},
-		{"1", "alpha.1", "", "", "false"}, {"1", "beta.1", "", "", "false"},
+	for _, tt := range []struct {
+		major                             uint64
+		prerelease, cask, command, latest string
+	}{
+		{2, "", "afm", "afm", "true"}, {2, "alpha.1", "afm-alpha", "afm-alpha", "false"},
+		{2, "alpha.10", "afm-alpha", "afm-alpha", "false"}, {2, "beta.1", "afm-beta", "afm-beta", "false"},
+		{2, "rc.1", "", "", "false"}, {1, "", "afm@1", "afm-1", "false"},
+		{1, "alpha.1", "", "", "false"}, {1, "beta.1", "", "", "false"},
 	} {
-		t.Run(tt.major+"/"+tt.prerelease, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%d/%s", tt.major, tt.prerelease), func(t *testing.T) {
 			if got := renderReleaseTemplate(t, config.Release.MakeLatest, tt.major, tt.prerelease); got != tt.latest {
 				t.Fatalf("make_latest = %q, want %q", got, tt.latest)
 			}

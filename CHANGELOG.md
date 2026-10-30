@@ -5,6 +5,12 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-30
 
+### Fix: publish releases for separate major version lines
+
+Fixed release packaging after introducing the 1.x maintenance line. Publication
+now selects the correct Homebrew cask and GitHub Latest policy without failing
+on the numeric major version supplied by GoReleaser.
+
 ### Improvement: refresh the dashboard workspace
 
 The dashboard now has a denser stage rail and header, resizable panels, and

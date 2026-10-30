@@ -4,7 +4,7 @@ project_name: afm
 
 release:
   prerelease: auto
-  make_latest: '{{ if or .Prerelease (eq .Major "1") }}false{{ else }}true{{ end }}'
+  make_latest: '{{ if or .Prerelease (eq .Major 1) }}false{{ else }}true{{ end }}'
 
 before:
   hooks:
@@ -36,14 +36,14 @@ checksum:
 homebrew_casks:
   - &afm_cask
     name: afm
-    skip_upload: '{{ if or .Prerelease (eq .Major "1") }}true{{ else }}false{{ end }}'
+    skip_upload: '{{ if or .Prerelease (eq .Major 1) }}true{{ else }}false{{ end }}'
     binaries:
-      - 'afm{{ if eq .Major "1" }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}'
+      - 'afm{{ if eq .Major 1 }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}'
     homepage: "https://github.com/akopichin/afm"
     description: "AI flow manager — orchestrates multi-stage agent runs"
     caveats: |
       Claude-скиллы (/afm-run, /afm-check и др.) не устанавливаются автоматически.
-      Установить: afm{{ if eq .Major "1" }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }} install-skills
+      Установить: afm{{ if eq .Major 1 }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }} install-skills
     directory: Casks
     repository:
       owner: akopichin
@@ -56,7 +56,7 @@ homebrew_casks:
     hooks:
       pre:
         install: |
-          {{ if eq .Major "1" -}}
+          {{ if eq .Major 1 -}}
           File.rename(staged_path.join("afm"), staged_path.join("afm-1"))
           {{ else if .Prerelease -}}
           File.rename(staged_path.join("afm"), staged_path.join("afm-{{ index (split .Prerelease ".") 0 }}"))
@@ -64,15 +64,15 @@ homebrew_casks:
       post:
         install: |
           if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/afm{{ if eq .Major "1" }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}"]
-            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm{{ if eq .Major "1" }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/afm{{ if eq .Major 1 }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}"]
+            system_command "/usr/bin/codesign", args: ["-f", "-s", "-", "#{staged_path}/afm{{ if eq .Major 1 }}-1{{ end }}{{ if .Prerelease }}-{{ index (split .Prerelease ".") 0 }}{{ end }}"]
           end
   - <<: *afm_cask
     name: afm-alpha
-    skip_upload: '{{ if and (ne .Major "1") (eq (index (split .Prerelease ".") 0) "alpha") }}false{{ else }}true{{ end }}'
+    skip_upload: '{{ if and (ne .Major 1) (eq (index (split .Prerelease ".") 0) "alpha") }}false{{ else }}true{{ end }}'
   - <<: *afm_cask
     name: afm-beta
-    skip_upload: '{{ if and (ne .Major "1") (eq (index (split .Prerelease ".") 0) "beta") }}false{{ else }}true{{ end }}'
+    skip_upload: '{{ if and (ne .Major 1) (eq (index (split .Prerelease ".") 0) "beta") }}false{{ else }}true{{ end }}'
   - <<: *afm_cask
     name: afm@1
-    skip_upload: '{{ if and (eq .Major "1") (not .Prerelease) }}false{{ else }}true{{ end }}'
+    skip_upload: '{{ if and (eq .Major 1) (not .Prerelease) }}false{{ else }}true{{ end }}'
