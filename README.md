@@ -180,6 +180,10 @@ See [Releases and prereleases](docs/releases.md) for details, the
 [CHANGELOG](CHANGELOG.md) for release history, and
 [CONTRIBUTING](CONTRIBUTING.md) to get started.
 
+For fixes and minor features on the old release line, use the `v1.x` maintenance
+branch. See [the 1.x contribution workflow](CONTRIBUTING.md#maintaining-the-1x-release-line)
+for feature worktrees, dev-pipeline, merging and separate patch/minor releases.
+
 ## License
 
 [MIT](LICENSE).
