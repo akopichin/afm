@@ -15,6 +15,11 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
+const (
+	reasonRecoveredDone    = "recovered .done"
+	reasonRecoveredSummary = "recovered execution_summary.md"
+)
+
 // errReviewPausePoisoned marks a corrupt, un-recoverable resuming review-pause round.
 var errReviewPausePoisoned = errors.New("review-pause resume transaction poisoned")
 
@@ -96,6 +101,11 @@ func (o *Orchestrator) autoRecoverFailedStages() {
 func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 	o.autoRecoverFailedStages()
 	for _, s := range o.opts.Stages {
+		// An executor already started by this process owns the stage: this pass's cascade, a control action
+		// accepted before Run, or review-pause recovery. Its status cannot distinguish it from crashed work.
+		if o.concurrency.Spawned(s.ID) {
+			continue
+		}
 		stageDir := filepath.Join(o.opts.RunDir, s.ID)
 		// After-hooks do not change stage status, so their recovery marker
 		// takes precedence over the status-based dispatch (including done).
@@ -105,7 +115,8 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		}
 
 		o.continueMu.Lock()
-		current := o.opts.Store.Get(s.ID)
+		snapshot := o.opts.Store.Stage(s.ID)
+		current := snapshot.Status
 		_, continuedHere := o.continuedThisProcess.Load(s.ID)
 		o.continueMu.Unlock()
 		if continuedHere {
@@ -123,11 +134,17 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if !s.NeedsPlanning() {
 				// Restart the execution path through ready, including its before-hook.
 				// A completion marker alone cannot bypass a configured verify gate.
-				if s.Verify.IsEmpty() && stagefiles.CheckCompletion(stageDir, ".", s) == nil {
-					o.Trigger(s.ID, bus.EvComplete, bus.GuardCtx{}, "recovered .done")
-					o.maybeRunAfterHook(ctx, s.ID)
+				completionErr := stagefiles.CheckCompletion(stageDir, ".", s)
+				reason := reasonRecoveredDone
+				if o.executionKind(s) == kindAutonomous && !s.IsScript() {
+					completionErr = stagefiles.CheckAutonomousCompletion(stageDir)
+					reason = reasonRecoveredSummary
+				}
+				fence := o.recoveryFence(s, snapshot.OwnerEpoch)
+				if s.Verify.IsEmpty() && completionErr == nil {
+					o.completeStage(ctx, s.ID, current, reason, fence)
 				} else {
-					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
+					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{OwnerEpoch: fence}, "retry recovery")
 				}
 				continue
 			}
@@ -139,7 +156,7 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 			if _, done := o.reviewResumed.Load(s.ID); done {
 				continue // review-pause recovery already restarted this owner
 			}
-			o.resumeStageAtStatus(ctx, s, current)
+			o.resumeStageAtStatus(ctx, s, current, snapshot.OwnerEpoch)
 		default:
 			if !s.NeedsPlanning() {
 				o.activatePrePlannedStage(s)
@@ -192,12 +209,12 @@ func (o *Orchestrator) resumePlanningStage(ctx context.Context, s flow.Stage) {
 
 // resumeStageAtStatus is shared by startup and Continue: the recorded status
 // describes work whose process is no longer running.
-func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, status state.StageStatus) {
+func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, status state.StageStatus, epoch uint64) {
 	switch status {
 	case state.StatusPlanning:
 		o.resumePlanningStage(ctx, s)
 	case state.StatusRunning, state.StatusRetrying:
-		o.resumeExecutionStage(ctx, s, status)
+		o.resumeExecutionStage(ctx, s, status, epoch)
 	case state.StatusRevising:
 		switch o.detectInterruptedPhase(filepath.Join(o.opts.RunDir, s.ID)) {
 		case phaseImplementation:
@@ -214,22 +231,31 @@ func (o *Orchestrator) resumeStageAtStatus(ctx context.Context, s flow.Stage, st
 	}
 }
 
+// recoveryFence uses the dispatch snapshot/Continue seq, never a later reread.
+// A resume delayed by filesystem probing cannot adopt a successor's ownership.
+func (o *Orchestrator) recoveryFence(s flow.Stage, epoch uint64) *uint64 {
+	if o.executionKind(s) == kindAutonomous && !s.IsScript() {
+		return &epoch
+	}
+	return nil
+}
+
 // resumeExecutionStage probes the author's output once. A configured verify gate always requires a fresh
 // execution pass, even when the output exists (guard: completionErr == nil && s.Verify.IsEmpty()).
 // Retrying without output may instead be an interrupted planning attempt.
-func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, status state.StageStatus) {
+func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, status state.StageStatus, epoch uint64) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	kind := o.executionKind(s)
-	reason := "recovered .done"
+	reason := reasonRecoveredDone
 	var completionErr error
 	if kind == kindAutonomous && !s.IsScript() {
 		completionErr = stagefiles.CheckAutonomousCompletion(stageDir)
-		reason = "recovered execution_summary.md"
+		reason = reasonRecoveredSummary
 	} else {
 		completionErr = stagefiles.CheckCompletion(stageDir, ".", s)
 	}
 	if completionErr == nil && s.Verify.IsEmpty() {
-		o.completeStage(ctx, s.ID, status, reason)
+		o.completeStage(ctx, s.ID, status, reason, o.recoveryFence(s, epoch))
 		return
 	}
 
@@ -257,14 +283,18 @@ func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage)
 
 	switch phase {
 	case phasePlanning:
-		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "resume interactive")
+		if _, ok := o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning, NewOwner: true}, "resume interactive"); !ok {
+			return
+		}
 		o.runPlanningAgent(ctx, s)
 	case phaseReview:
 		// Review runs after implementation completes; if we see review session open, the stage was paused inside
 		// review. Fall through to implementation agent which will re-trigger review at the end.
 		fallthrough
 	default:
-		o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "resume interactive")
+		if _, ok := o.Trigger(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation, NewOwner: true}, "resume interactive"); !ok {
+			return
+		}
 		o.runImplementationAgent(ctx, s)
 	}
 }

@@ -3,6 +3,7 @@ package stagefiles
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,15 +58,45 @@ func IsIncompleteWorkError(err error) bool {
 	return errors.As(err, &target)
 }
 
-// CheckAutonomousCompletion проверяет, что execution_summary.md существует и не пуст. Используется как
-// completion-check для runAutonomousAgent (автономный трек).
+// Причины, по которым execution_summary.md не принят: файла нет либо он пуст.
+const (
+	SummaryMissing = "missing"
+	SummaryEmpty   = "empty"
+)
+
+// SummaryError — summary автономной стадии отсутствует или пуст; это единственная причина, которая даёт
+// право на summary-recovery. Намеренно не *IncompleteWorkError: .done, план и verify не тратят этот бюджет.
+type SummaryError struct {
+	Path   string
+	Reason string // SummaryMissing | SummaryEmpty
+}
+
+func (e *SummaryError) Error() string {
+	if e.Reason == SummaryEmpty {
+		return "execution_summary.md is empty"
+	}
+	return "missing execution_summary.md"
+}
+
+// SummaryPath возвращает путь execution_summary.md внутри каталога стадии.
+func SummaryPath(stageDir string) string { return filepath.Join(stageDir, "execution_summary.md") }
+
+// readSummaryFile — шов для тестов: EACCES под root нельзя получить через chmod.
+var readSummaryFile = os.ReadFile
+
+// CheckAutonomousCompletion проверяет, что execution_summary.md существует и не пуст. Нет файла или он
+// пуст — *SummaryError; любая другая ошибка чтения возвращается как есть (с *fs.PathError внутри).
 func CheckAutonomousCompletion(stageDir string) error {
-	data, err := os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
+	path := SummaryPath(stageDir)
+	data, err := readSummaryFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return &SummaryError{Path: path, Reason: SummaryMissing}
+	}
 	if err != nil {
-		return &IncompleteWorkError{Reason: "missing execution_summary.md"}
+		return fmt.Errorf("read execution_summary.md: %w", err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return &IncompleteWorkError{Reason: "execution_summary.md is empty"}
+		return &SummaryError{Path: path, Reason: SummaryEmpty}
 	}
 	return nil
 }

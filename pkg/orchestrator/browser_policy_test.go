@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +69,7 @@ func TestRunnerFor_InteractiveAndFallbackGetBrowser(t *testing.T) {
 	if !execConfigHasBrowser(o.runnerFor(interactiveClaudeStage("build"), "implementation")) {
 		t.Fatal("interactive author runner should receive afm_chrome")
 	}
-	if !execConfigHasBrowser(o.runnerForFallback(interactiveClaudeStage("build"), "implementation")) {
+	if !execConfigHasBrowser(o.runnerForFallback(interactiveClaudeStage("build"), "implementation", nil)) {
 		t.Fatal("interactive fallback runner must also receive afm_chrome")
 	}
 }
@@ -82,7 +83,7 @@ func TestRunnerFor_NonInteractiveGetsBrowser(t *testing.T) {
 
 func TestRunnerForVerify_NoBrowser(t *testing.T) {
 	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
-	if execConfigHasBrowser(o.runnerForVerify(normalClaudeStage("build"), "codex-as-claude")) {
+	if execConfigHasBrowser(o.runnerForVerify(context.Background(), normalClaudeStage("build"), "codex-as-claude")) {
 		t.Fatal("verify runner must never receive the browser capability")
 	}
 }

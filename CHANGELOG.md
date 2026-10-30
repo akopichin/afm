@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-30
 
+### Fix: recover missing autonomous execution summaries
+
+When an `agents: [auto]` author exits successfully without a non-empty
+`execution_summary.md`, afm gives the same author up to two focused continuations
+to verify the work and finish the summary. The limit survives restarts and is
+separate from transport retries and verification corrections. Dependent stages
+still wait for the normal completion and verification checks; agent and file-read
+errors retain their own failure paths.
+
 ### Improvement: maintain independent 1.x and 2.x release lines
 
 `make release-patch v1.x` and `make release-minor v1.x` publish the pushed

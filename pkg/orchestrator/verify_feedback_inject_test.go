@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 )
@@ -83,6 +84,9 @@ func TestRunImplementationWithFeedback_InjectsVerifyFeedbackAlongsideHumanNote(t
 	o.opts.Runner = fake
 	o.runner = fake
 
+	if _, ok := o.Trigger("s1", bus.EvRevise, bus.GuardCtx{}, "feedback"); !ok {
+		t.Fatal("feedback run needs a successful Revise")
+	}
 	o.runImplementationWithFeedback(context.Background(), flow.Stage{ID: "s1"})
 
 	if !strings.Contains(capturedPrompt, humanNote) {

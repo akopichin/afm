@@ -77,6 +77,8 @@ func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, c
 	o.publishNotice(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: data})
 }
 
+// Per-step results are observations, not stage outcomes: correction may follow without an FSM transition.
+// RunVerification suppresses them when its turn was superseded while a step ran.
 // emitVerifyResult публикует наблюдательное событие "шаг verify завершился" — см. emitVerifyStarted.
 func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, command string, verdict verify.Verdict, execErrorKind, reason, reportPath string) {
 	data := map[string]any{
@@ -167,22 +169,52 @@ type verifyAgentRunner func(ctx context.Context, s flow.Stage, cmd, prompt, logF
 // verifyShellRunner — сигнатура функции, реально исполняющей один shell-шаг AI-verify.
 type verifyShellRunner func(ctx context.Context, dir, command string) (string, error)
 
+// verifyLease and verifyInterrupt prefer the invocation's resources. Legacy direct calls without a
+// turn context keep the stage-map fallback; an autonomous turn never borrows its successor's resources.
+func (o *Orchestrator) verifyLease(ctx context.Context, stageID string) *concurrency.Lease {
+	if lease, ok := ctx.Value(turnLeaseKey{}).(*concurrency.Lease); ok {
+		return lease
+	}
+	if turnOwner(ctx) != nil {
+		return nil
+	}
+	lease, _ := o.stageLeases.Load(stageID)
+	l, _ := lease.(*concurrency.Lease)
+	return l
+}
+
+func (o *Orchestrator) verifyInterrupt(ctx context.Context, stageID string) <-chan struct{} {
+	if owner := turnOwner(ctx); owner != nil {
+		return owner.interruptCh
+	}
+	ch, _ := o.interruptChans.Load(stageID)
+	ic, _ := ch.(chan struct{})
+	return ic
+}
+
+func (o *Orchestrator) verifyTurnSuperseded(ctx context.Context, stageID string) bool {
+	owner := turnOwner(ctx)
+	return owner != nil && !o.epochIsCurrent(stageID, owner)
+}
+
 // RunVerification выполняет ОДИН последовательный fail-fast проход по s.Verify.Steps для стадии, уже
 // прошедшей file-probe.
 func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase string) (err error) {
 	if s.Verify.IsEmpty() {
 		return nil
 	}
+	if o.verifyTurnSuperseded(ctx, s.ID) {
+		return executor.ErrUserInterrupted
+	}
 
 	// lease — общий с раннером-автором слот командного семафора: если стадия заспавнена обычным путём, lease
 	// сейчас удерживает слот Stage.Command.
-	if lease, ok := o.stageLeases.Load(s.ID); ok {
-		l := lease.(*concurrency.Lease)
+	if l := o.verifyLease(ctx, s.ID); l != nil {
 		defer func() {
 			// G1: своп ОБРАТНО на команду автора нужен ТОЛЬКО на исходе needs_changes — единственном, после
 			// которого runWithRetry перезапустит АВТОРА в ТОМ ЖЕ вызове, на ЭТОМ ЖЕ lease.
 			var rejected *VerifyRejectedError
-			if !errors.As(err, &rejected) {
+			if !errors.As(err, &rejected) || o.verifyTurnSuperseded(ctx, s.ID) {
 				l.Release()
 				return
 			}
@@ -229,6 +261,9 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	var passedSteps strings.Builder
 
 	for i, st := range s.Verify.Steps {
+		if o.verifyTurnSuperseded(ctx, s.ID) {
+			return executor.ErrUserInterrupted
+		}
 		idx := i + 1
 		kind := verifyStepManifestKind(st)
 		command := verifyStepManifestCommand(st)
@@ -262,6 +297,9 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			var err error
 			for execAttempt := 0; ; execAttempt++ {
 				result, alias, err = o.runVerifyAgentStep(stepCtx, s, st, idx, verID, in)
+				if o.verifyTurnSuperseded(ctx, s.ID) {
+					return executor.ErrUserInterrupted
+				}
 				if err == nil {
 					break
 				}
@@ -335,7 +373,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			case verify.VerdictNeedsChanges:
 				manifestSteps[i].Outcome = string(result.Verdict)
 				reason := "verify needs changes (step " + fmt.Sprint(idx) + "): " + result.Summary
-				return o.persistVerifyRejection(stageDir, verID, idx, kind, alias, reason, result, manifestSteps, s.ID, phase)
+				return o.persistVerifyRejection(ctx, stageDir, verID, idx, kind, alias, reason, result, manifestSteps, s.ID, phase)
 
 			case verify.VerdictInconclusive:
 				manifestSteps[i].Outcome = string(result.Verdict)
@@ -356,7 +394,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 
 		// E2: синхронная проверка ДО того, как вообще создан pauseAwareVerifyCtx и стартован shell-процесс.
 		// verifyShellInterruptPending закрывает именно уже-случившийся к МОМЕНТУ ВЫЗОВА случай.
-		if o.verifyShellInterruptPending(s.ID) {
+		if o.verifyShellInterruptPending(stepCtx, s.ID) {
 			manifestSteps[i].Outcome = execErrorKindInterrupted
 			_ = persistManifest()
 			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
@@ -367,6 +405,9 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
 		out, runErr := o.runVerifyShell(shellCtx, ".", st.Run)
 		interruptedByPause := stop()
+		if o.verifyTurnSuperseded(ctx, s.ID) {
+			return executor.ErrUserInterrupted
+		}
 
 		stepDir := stagefiles.StepDir(stageDir, verID, idx)
 		if mkErr := os.MkdirAll(stepDir, 0755); mkErr != nil {
@@ -415,7 +456,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			legacyReason := fmt.Sprintf("verify command failed (%v):\n%s", runErr, tail)
 			result := shellRejectionResult(st.Run, tail)
 			manifestSteps[i].Outcome = string(result.Verdict)
-			return o.persistVerifyRejection(stageDir, verID, idx, kind, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
+			return o.persistVerifyRejection(ctx, stageDir, verID, idx, kind, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
 		}
 		if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
 			// Перепроверяем дедлайн после успеха: select может выбрать done, когда stepCtx уже истёк.
@@ -432,7 +473,12 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	if err := persistManifest(); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error()}
 	}
-	if err := stagefiles.ClearActiveFeedback(stageDir); err != nil {
+	if err := o.withOwnerFiles(s.ID, turnOwner(ctx), "feedback_clear", func() error {
+		return stagefiles.ClearActiveFeedback(stageDir)
+	}); err != nil {
+		if errors.Is(err, executor.ErrUserInterrupted) {
+			return err
+		}
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error()}
 	}
 	return nil
@@ -441,11 +487,14 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 // runVerifyAgentStep возвращает валидный ModelResult или typed error; alias идентифицирует агента в
 // report/manifest.
 func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st flow.VerifyStep, idx int, verID string, in prompts.VerifyInputs) (verify.ModelResult, string, error) {
+	if o.verifyTurnSuperseded(ctx, s.ID) {
+		return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
+	}
 	// Перед запуском agent-шага переводим lease на его команду. Тот же командный слот, той же семантики
 	// SwapTo: та же команда, что у автора, — no-op; другая — release-before-acquire.
-	if lease, ok := o.stageLeases.Load(s.ID); ok {
+	if lease := o.verifyLease(ctx, s.ID); lease != nil {
 		waitCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
-		swapErr := lease.(*concurrency.Lease).SwapTo(waitCtx, st.Command)
+		swapErr := lease.SwapTo(waitCtx, st.Command)
 		interruptedDuringWait := stop()
 		if swapErr != nil {
 			if ctx.Err() == nil {
@@ -532,11 +581,10 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 // pauseAwareVerifyCtx отменяется родителем или interruptCh. Вызови stop до передачи канала subprocess: он
 // ждёт observer и сообщает о сигнале.
 func (o *Orchestrator) pauseAwareVerifyCtx(parent context.Context, stageID string) (ctx context.Context, stop func() bool) {
-	ch, ok := o.interruptChans.Load(stageID)
-	if !ok {
+	ic := o.verifyInterrupt(parent, stageID)
+	if ic == nil {
 		return parent, func() bool { return false }
 	}
-	ic := ch.(chan struct{})
 	cctx, cancel := context.WithCancel(parent)
 	interrupted := make(chan bool, 1)
 	done := make(chan struct{})
@@ -577,6 +625,9 @@ func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string, 
 	if o.opts.Store == nil {
 		return false, nil
 	}
+	if o.verifyTurnSuperseded(ctx, stageID) {
+		return true, executor.ErrUserInterrupted
+	}
 	switch o.currentStatus(stageID) {
 	case state.StatusPaused, state.StatusRevising:
 		return true, executor.ErrUserInterrupted
@@ -587,10 +638,13 @@ func (o *Orchestrator) verifyLaunchAborted(ctx context.Context, stageID string, 
 
 // verifyShellInterruptPending — E2: синхронная, неблокирующая проверка ИМЕННО канала прерывания ПЕРЕД тем,
 // как вообще создавать pauseAwareVerifyCtx и стартовать shell-verify процесс.
-func (o *Orchestrator) verifyShellInterruptPending(stageID string) bool {
-	if ch, ok := o.interruptChans.Load(stageID); ok {
+func (o *Orchestrator) verifyShellInterruptPending(ctx context.Context, stageID string) bool {
+	if o.verifyTurnSuperseded(ctx, stageID) {
+		return true
+	}
+	if ch := o.verifyInterrupt(ctx, stageID); ch != nil {
 		select {
-		case <-ch.(chan struct{}):
+		case <-ch:
 			return true
 		default:
 		}
@@ -608,7 +662,7 @@ func (o *Orchestrator) verifyShellInterruptPending(stageID string) bool {
 
 // persistVerifyRejection сохраняет result → report → manifest → feedback до emit и typed rejection; ошибка
 // записи даёт VerifyExecError.
-func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, kind, alias, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
+func (o *Orchestrator) persistVerifyRejection(ctx context.Context, stageDir, verID string, idx int, kind, alias, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
 	if err := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
 	}
@@ -625,7 +679,12 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, k
 	}); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
 	}
-	if err := stagefiles.WriteActiveFeedback(stageDir, verID, result, alias, idx); err != nil {
+	if err := o.withOwnerFiles(stageID, turnOwner(ctx), "feedback_write", func() error {
+		return stagefiles.WriteActiveFeedback(stageDir, verID, result, alias, idx)
+	}); err != nil {
+		if errors.Is(err, executor.ErrUserInterrupted) {
+			return err
+		}
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
 	}
 	o.emitVerifyResult(stageID, verID, idx, kind, alias, result.Verdict, "", result.Summary, verifyReportPath(stageDir, verID))

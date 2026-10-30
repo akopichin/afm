@@ -17,6 +17,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/progress"
@@ -483,10 +484,12 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	lg.LogStart(agentType, stageName)
 
 	var firstErr string
+	var terminal terminalResult
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(e.cfg.UsageHint)
 	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
+		terminal.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
@@ -507,6 +510,13 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 			}
 		}
 	})
+
+	// Exit 0 с ошибочным корневым result — это ошибка автора. Нормализуем ДО лога и accounting, чтобы
+	// возврат, лог и OnUsage получили один итог. Только автономный трек: остальные фазы не меняются.
+	if runErr == nil && e.cfg.Phase == string(flow.PhaseAutonomous) {
+		runErr = terminal.err()
+		firstErr = "" // текст уже внутри типизированной ошибки
+	}
 
 	lg.LogEnd(runErr)
 	if e.cfg.OnUsage != nil {

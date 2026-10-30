@@ -11,9 +11,9 @@ You are executing a task autonomously using attached skills. You have been pre-a
 
 ## Output Contract (mandatory)
 
-`execution_summary.md` MUST contain these top-level sections (exact names):
+`execution_summary.md` MUST be a non-empty text file. Recommended sections (not enforced):
 - `## Summary` — what you executed and key decisions made.
 - `## Changes` — files created or modified (list paths, one per line).
 - `## Result` — final outcome. Mention any failures or partial completions.
 
-Missing any section causes a retry.
+If you finish without a non-empty `execution_summary.md`, you may be asked to continue; write it before you stop.

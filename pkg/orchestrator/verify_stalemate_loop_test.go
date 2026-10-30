@@ -135,7 +135,6 @@ func TestStalemate_ShellFirstThenAgentAccepts(t *testing.T) {
 	o, runDir := setupHookOrch(t, "s1")
 	o.maxRetries = 15
 	o.fingerprintFn = func(string) (string, bool) { return "frozen", true }
-	events := o.critical.Recv()
 
 	stage := agentVerifyStage(1, 6, shellStep(), agentStep())
 
@@ -150,7 +149,7 @@ func TestStalemate_ShellFirstThenAgentAccepts(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("expected 2 attempts then accept, got %d", attempts)
 	}
-	if !drainAgentCompleted(events) {
+	if !commitQueuedCompletion(t, o) {
 		t.Error("expected EventAgentCompleted on stalemate accept (shell before agent is safe)")
 	}
 	if n := countStalemateNotices(t, runDir); n != 1 {
@@ -285,7 +284,6 @@ func TestStalemate_ChangeThenFreezeAccepts(t *testing.T) {
 			return "frozen", true // заморозка начиная с 3-го отклонения
 		}
 	}
-	events := o.critical.Recv()
 
 	stage := agentVerifyStage(2, 6, agentStep())
 
@@ -301,7 +299,7 @@ func TestStalemate_ChangeThenFreezeAccepts(t *testing.T) {
 	if attempts != 5 {
 		t.Fatalf("expected 5 attempts (2 changing + 3 frozen), got %d", attempts)
 	}
-	if !drainAgentCompleted(events) {
+	if !commitQueuedCompletion(t, o) {
 		t.Error("expected EventAgentCompleted after the tree freezes")
 	}
 	if got := o.opts.Store.Get("s1"); got == state.StatusFailed {

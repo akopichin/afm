@@ -160,7 +160,7 @@ func stalemateEligible(s flow.Stage, rejectStep int) bool {
 }
 
 // handleStalemate обрабатывает ОДИН verify-отказ для B1.
-func (o *Orchestrator) handleStalemate(ctx context.Context, s flow.Stage, phase string, vre *VerifyRejectedError, patience int, dir, prev string, count int, onUserInterrupted func()) (done bool, newPrev string, newCount int) {
+func (o *Orchestrator) handleStalemate(ctx context.Context, s flow.Stage, phase string, vre *VerifyRejectedError, patience int, dir, prev string, count int, owner *attemptOwner, onUserInterrupted func()) (done bool, newPrev string, newCount int) {
 	// Не eligible — сбрасываем счётчик: более поздний stalemate не должен унаследовать счёт, накопленный пока
 	// shell-шаг был недоказан.
 	if !stalemateEligible(s, vre.Step) {
@@ -185,27 +185,27 @@ func (o *Orchestrator) handleStalemate(ctx context.Context, s flow.Stage, phase 
 	}
 	// Ownership re-check ПОСЛЕ отпечатка (до ~3s) и НЕПОСРЕДСТВЕННО перед publish
 	// — Pause/Revise, закоммиченный в окне отпечатка, не затирается.
-	if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
+	if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
 		return true, "", 0
 	}
-	o.acceptStalemate(ctx, s, phase, vre, count)
+	o.acceptStalemate(ctx, s, phase, vre, count, owner)
 	return true, "", 0
 }
 
 // acceptStalemate принимает стадию как завершённую по stalemate — ТОТ ЖЕ терминальный success-путь, что и
 // чистый pass: durable-нотис EventAgentCompleted + publishCritical.
-func (o *Orchestrator) acceptStalemate(ctx context.Context, s flow.Stage, phase string, vre *VerifyRejectedError, rounds int) {
+func (o *Orchestrator) acceptStalemate(ctx context.Context, s flow.Stage, phase string, vre *VerifyRejectedError, rounds int, owner *attemptOwner) {
 	command := ""
 	if vre.Step >= 1 && vre.Step <= len(s.Verify.Steps) {
 		command = s.Verify.Steps[vre.Step-1].Command
 	}
-	o.emitStalemateAccepted(s.ID, vre.ReportID, vre.Step, command, rounds)
-	o.completeAgent(ctx, s.ID, phase)
+	o.completeAgent(ctx, s.ID, phase, ownerFence(phase, owner),
+		stalemateNotice(s.ID, vre.ReportID, vre.Step, command, rounds))
 }
 
 // emitStalemateAccepted публикует afm-вердикт live и durable через verify_result; декодер ответов модели
 // этот вердикт не принимает.
-func (o *Orchestrator) emitStalemateAccepted(stageID, verID string, step int, command string, rounds int) {
+func stalemateNotice(stageID, verID string, step int, command string, rounds int) bus.Event {
 	summary := fmt.Sprintf("accepted after %d unchanged round(s) (reviewer/author stalemate)", rounds)
 	data := map[string]any{
 		keyVerificationID: verID,
@@ -215,5 +215,5 @@ func (o *Orchestrator) emitStalemateAccepted(stageID, verID string, step int, co
 		keyVerdict:        string(verify.VerdictAcceptedStalemate),
 		keyVerifyReason:   summary,
 	}
-	o.publishNotice(bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data})
+	return bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data}
 }

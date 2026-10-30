@@ -16,44 +16,30 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// verifyOutcomeStillOwned — неатомарная проверка Pause/Revise перед обработкой verify; финальный fail
-// защищает CAS EvVerifyFail.
-func (o *Orchestrator) verifyOutcomeStillOwned(stageID string, onUserInterrupted func()) bool {
-	switch o.currentStatus(stageID) {
-	case state.StatusPaused:
-		return false
-	case state.StatusRevising:
-		onUserInterrupted()
-		return false
-	default:
-		return true
-	}
-}
-
-// commitVerifyFailure — H1: атомарная фиксация verify-driven fail.
-func (o *Orchestrator) commitVerifyFailure(stageID, reason string, onUserInterrupted func()) bool {
-	if !o.verifyOutcomeStillOwned(stageID, onUserInterrupted) {
+// commitVerifyFailure checks ownership again after verification, then fences the durable failure.
+func (o *Orchestrator) commitVerifyFailure(stageID, phase, reason string, owner *attemptOwner, onUserInterrupted func()) bool {
+	if o.yieldIfSuperseded(stageID, phase, owner, onUserInterrupted) {
 		return false
 	}
 	if o.verifyOutcomeGuardHook != nil {
 		o.verifyOutcomeGuardHook(stageID)
 	}
-	if _, ok := o.Trigger(stageID, bus.EvVerifyFail, bus.GuardCtx{}, reason); ok {
+	if _, _, ok := o.ownerTrigger(owner, phase, stageID, bus.EvVerifyFail, bus.GuardCtx{}, reason); ok {
 		return true
 	}
-	// CAS проиграл гонку: конкурентный Pause/Revise успел закоммититься МЕЖДУ fast-path чтением выше и этим
-	// Trigger — сама FSM атомарно отбросила переход, стадия больше не наша.
-	if o.currentStatus(stageID) == state.StatusRevising {
-		onUserInterrupted()
-	}
+	o.yieldIfSuperseded(stageID, phase, owner, onUserInterrupted)
 	return false
 }
 
-// completeAgent публикует терминальный success стадии — durable-нотис EventAgentCompleted ПЛЮС
-// critical-событие, из которого Run-цикл двигает FSM в completed.
-func (o *Orchestrator) completeAgent(ctx context.Context, stageID, phase string) {
-	stagefiles.AppendNotice(o.opts.RunDir, stageID, string(bus.EventAgentCompleted), phase)
-	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: stageID, Data: phase})
+// completeAgent queues a completion with its owner token. Durable outcome notices wait until the
+// event consumer successfully commits the fenced transition; a queued stale completion says nothing.
+func (o *Orchestrator) completeAgent(ctx context.Context, stageID, phase string, epoch *uint64, notices ...bus.Event) {
+	if epoch != nil {
+		value := *epoch
+		epoch = &value
+	}
+	o.publishCritical(ctx, bus.Event{Type: bus.EventAgentCompleted, StageID: stageID, Data: phase,
+		OwnerEpoch: epoch, CompletionNotices: notices})
 }
 
 // isRetryableError checks if the error is a rate limit or server error (retryable with backoff).
@@ -101,11 +87,29 @@ func dropSessionForFreshCorrection(freshCorrection bool, stageDir, phase string)
 	_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
 }
 
+// clearTurnSession fences both verify correction and transport-error cleanup.
+func (o *Orchestrator) clearTurnSession(stageID, phase string, owner *attemptOwner, enabled bool) bool {
+	if !enabled {
+		return true
+	}
+	if phase != phaseAutonomous {
+		owner = nil
+	}
+	err := o.withOwnerFiles(stageID, owner, "session_clear", func() error {
+		dropSessionForFreshCorrection(true, filepath.Join(o.opts.RunDir, stageID), phase)
+		return nil
+	})
+	return err == nil
+}
+
 // buildRetryContext reads the last N lines from the agent's raw stream-json
 // log and formats them as a continuation context for the retry prompt.
 func buildRetryContext(stageDir, phase string) string {
-	jsonlName := flow.PhaseJSONL(flow.Phase(phase))
+	return buildRetryContextFrom(stageDir, flow.PhaseJSONL(flow.Phase(phase)))
+}
 
+// buildRetryContextFrom — то же для конкретного jsonl-файла (feedback-вызов пишет в свой лог).
+func buildRetryContextFrom(stageDir, jsonlName string) string {
 	lines := executor.RenderActions(filepath.Join(stageDir, jsonlName))
 	if len(lines) == 0 {
 		return ""
@@ -135,12 +139,105 @@ var RetryBackoff = 5 * time.Second
 // Orchestrator.maxRetries при New.
 var MaxRetries = 15
 
+// agentAnswers отмечает агента хода тем, кому уходит ответ (answerToLiveAgent), пока ход не принял решение.
+// Отметка несёт владельца: при max_parallel>1 после Pause→Continue два хода одной стадии перекрываются, и отметку
+// нового автора может снять только он сам.
+func (o *Orchestrator) agentAnswers(stageID string, owner *attemptOwner) {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	// Pause/Continue do not use answerMu. The gate prevents an old registration
+	// from overwriting a newer marker after the launch check.
+	_ = o.opts.Store.WithStageOwner(stageID, owner.epoch, func() error {
+		o.liveAgents.Store(stageID, owner)
+		return nil
+	})
+}
+
+// stopAnswering снимает СВОЮ отметку без решения о диалоге: ответ с этого момента запускает своё продолжение.
+func (o *Orchestrator) stopAnswering(stageID string, owner *attemptOwner) {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	o.liveAgents.CompareAndDelete(stageID, owner)
+}
+
+type dialogExit int
+
+const (
+	dialogNone      dialogExit = iota // открытого вопроса нет: ход продолжается
+	dialogLeft                        // стадия ждёт пользователя; ответ запустит продолжение
+	dialogTakenOver                   // стадию забрал Pause/Continue/Revise раньше, чем ход успел её оставить
+)
+
+// leaveWithUser — единственное решение хода о диалоге, под answerMu как и каждый ответ: открытый вопрос читается и
+// стадия отдаётся пользователю в одной критической секции, поэтому ответ либо виден здесь, либо запускает своё
+// продолжение.
+func (o *Orchestrator) leaveWithUser(stageID, phase string, owner *attemptOwner, dialog bool) dialogExit {
+	if o.dialogHook != nil {
+		o.dialogHook(stageID, false)
+	}
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	o.liveAgents.CompareAndDelete(stageID, owner)
+	if !dialog {
+		return dialogNone
+	}
+	return o.leaveForOpenQuestionLocked(stageID, phase, owner)
+}
+
+// leaveForOpenQuestionLocked отдаёт стадию пользователю, если у фазы есть открытый вопрос. Вызывается под answerMu:
+// и ход, и решение summary-recovery принимают его в той же секции, что и поллер вопросов с доставкой ответа.
+func (o *Orchestrator) leaveForOpenQuestionLocked(stageID, phase string, owner *attemptOwner) dialogExit {
+	if !o.hasOpenQuestion(stageID, phase) {
+		return dialogNone
+	}
+	if o.currentStatus(stageID) == state.StatusAwaitingUserInput {
+		return dialogLeft
+	}
+	if _, _, ok := o.ownerTrigger(owner, phase, stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, ""); !ok {
+		return dialogTakenOver
+	}
+	return dialogLeft
+}
+
+func (o *Orchestrator) turnLeftForAnswer(stageID string) {
+	if o.dialogHook != nil {
+		o.dialogHook(stageID, true)
+	}
+}
+
 // runWithRetry wraps an agent function with automatic retry on rate limit errors. After exhausting all
 // retries: publishes EventRetryExhausted.
 func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase string, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
+	o.runWithRetryOpts(ctx, s, phase, retryOptions{}, agentFn, completionCheck, onUserInterrupted)
+}
+
+// retryOptions — необязательные настройки runWithRetryOpts.
+type retryOptions struct {
+	// actionsJSONL — raw-лог, из которого берётся контекст выполненных действий; пусто = лог фазы по умолчанию.
+	// Feedback-вызов пишет в собственный файл, и контекст обязан относиться к нему.
+	actionsJSONL string
+	// interruptCh — канал прерывания ЭТОГО хода, если вызывающий создал его заранее и передаёт раннеру сам
+	// (runnerForTurn). Пусто = канал создаёт runWithRetryOpts, а раннер берёт его из interruptChans.
+	interruptCh chan struct{}
+}
+
+func (o *Orchestrator) runWithRetryOpts(ctx context.Context, s flow.Stage, phase string, opts retryOptions, agentFn func(retryContext string) error, completionCheck func() error, onUserInterrupted func()) {
+	actionsJSONL := opts.actionsJSONL
+	if actionsJSONL == "" {
+		actionsJSONL = flow.PhaseJSONL(flow.Phase(phase))
+	}
 	// SpawnAgent checks pause after acquiring its slot; interruptChans handles pauses after the agent starts.
-	interruptCh := make(chan struct{}, 1)
+	interruptCh := opts.interruptCh
+	if interruptCh == nil {
+		interruptCh = make(chan struct{}, 1)
+	}
 	o.interruptChans.Store(s.ID, interruptCh)
+	// owner фиксирует права ЭТОЙ горутины: канал и epoch стадии на входе. Summary-переходы сверяют epoch под
+	// mutex Store, поэтому устаревший автор (Pause→Continue, Revise) не резервирует, не стартует и не валит стадию.
+	owner := turnOwner(ctx)
+	if owner == nil {
+		owner = &attemptOwner{interruptCh: interruptCh, epoch: o.opts.Store.Stage(s.ID).OwnerEpoch}
+	}
 	// G3: CompareAndDelete, а не безусловный Delete — тот же приём, что E3 применил к stageLeases.
 	// CompareAndDelete удаляет запись, только если она всё ещё РОВНО ТА, что сохранил этот вызов.
 	defer o.interruptChans.CompareAndDelete(s.ID, interruptCh)
@@ -154,6 +251,13 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 
 	incompleteReason := ""
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
+	// recovery — summary-продолжение в полёте. После restart/Continue/ответа на вопрос восстанавливаем уже
+	// зарезервированный номер и инструкцию без нового списания.
+	var recovery *summaryRecovery
+	if phase == phaseAutonomous {
+		recovery = o.restoreSummaryRecovery(s.ID, stageDir)
+	}
+	summaryRecovered := false // хотя бы одно продолжение было выдано автору — для notice «recovered»
 	// maxRetries/retryBackoff — снапшоты с инстанса (см. Orchestrator-комментарий):
 	// эта горутина может пережить возврат Run(), поэтому globals не читаем.
 	maxRetries := o.maxRetries
@@ -169,13 +273,26 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 	prevFingerprint := ""
 	unchangedRejections := 0
 	fingerprintDir := o.fingerprintDir()
+	// failAttempt проваливает стадию как исход этой попытки. У автономной стадии fail идёт только от текущего
+	// владельца: устаревший автор (Pause→Continue) не валит стадию, которой уже владеет другой.
+	failAttempt := func(reason string) {
+		if phase == phaseAutonomous {
+			o.failAsOwner(s.ID, owner, reason, onUserInterrupted)
+			return
+		}
+		o.ownerTrigger(owner, phase, s.ID, bus.EvFail, bus.GuardCtx{}, reason)
+		o.failBlockedStages()
+	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		retryCtx := ""
-		if attempt > 0 || resumeCtx {
-			retryCtx = buildRetryContext(stageDir, phase)
+		if attempt > 0 || resumeCtx || recovery != nil {
+			retryCtx = buildRetryContextFrom(stageDir, actionsJSONL)
 			if incompleteReason != "" {
 				retryCtx += "\n\n## Completion check failed\n\n" + incompleteReason +
 					"\n\nFix the underlying problem and make the check pass before finishing.\n"
+			}
+			if recovery != nil {
+				retryCtx += summaryRecoveryBlock(stageDir, recovery)
 			}
 			// Сессии не будет — агент не увидит прежние ответы пользователя в разговоре; дайджест их
 			// реконструирует. Resumed-агенту НЕ даём: он получил бы дубль того, что и так видит.
@@ -188,47 +305,94 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 		if o.currentStatus(s.ID) == state.StatusPaused {
 			return // a pause landed in the shouldRun->register gap; do not start the subprocess
 		}
+		if o.beforeLaunchHook != nil {
+			o.beforeLaunchHook(s.ID)
+		}
+		// Every author launch, including verify correction, belongs to this turn.
+		// runnerForTurn also carries its own interrupt channel to the subprocess boundary.
+		if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
+			return
+		}
 
+		if o.beforeLiveMarkerHook != nil {
+			o.beforeLiveMarkerHook(s.ID)
+		}
+		o.agentAnswers(s.ID, owner)
 		err := agentFn(retryCtx)
+		if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
+			o.stopAnswering(s.ID, owner)
+			return
+		}
+		if err != nil {
+			o.stopAnswering(s.ID, owner)
+		}
 		if err == nil {
+			if recovery != nil {
+				summaryRecovered = true // инструкция доставлена; дальше решает probe summary
+				recovery = nil
+			}
 			// afm bug: интерактивный агент может завершиться, не дождавшись ответа пользователя — на диске остаётся
-			// question.json без answer.json.
-			if (s.Interactive || phase == phaseAutonomous) && o.hasOpenQuestion(s.ID, phase) {
-				if cur := o.currentStatus(s.ID); cur != state.StatusAwaitingUserInput {
-					// Первое обнаружение этого открытого вопроса — стадия ещё не в awaiting_user_input, вопрос точно
-					// живой (только что написан этим же вызовом агента). Держим.
-					o.Trigger(s.ID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, "")
+			// question.json без answer.json. Вопрос, который поллер уже показал, пока агент работал, агент бросил: если
+			// работа сделана, стадия завершается.
+			dialog := s.Interactive || phase == phaseAutonomous
+			if dialog && o.currentStatus(s.ID) == state.StatusAwaitingUserInput && o.hasOpenQuestion(s.ID, phase) {
+				if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
+					o.stopAnswering(s.ID, owner)
 					return
 				}
-				// Статус уже awaiting_user_input — независимый поллер вопросов успел перевести стадию туда, ПОКА агент
-				// ещё выполнялся, обогнав его собственный выход.
 				if completionCheck == nil || completionCheck() == nil {
-					o.completeAgent(ctx, s.ID, phase)
+					o.stopAnswering(s.ID, owner)
+					if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
+						return
+					}
+					o.completeAgent(ctx, s.ID, phase, ownerFence(phase, owner))
+					return
 				}
+			}
+			switch o.leaveWithUser(s.ID, phase, owner, dialog) {
+			case dialogLeft:
+				o.turnLeftForAnswer(s.ID)
+				return
+			case dialogTakenOver:
+				o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted)
+				return
+			}
+			if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
 				return
 			}
 			var checkErr error
 			if completionCheck != nil {
 				checkErr = completionCheck()
 			}
-			// F1: completionCheck может занять сколько угодно времени ПОСЛЕ того, как автор уже вернулся, — за это
-			// время Pause/Revise мог долговечно перевести стадию в paused/revising.
-			switch o.currentStatus(s.ID) {
-			case state.StatusPaused:
-				return
-			case state.StatusRevising:
-				onUserInterrupted()
+			if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
 				return
 			}
 			if checkErr == nil {
-				o.completeAgent(ctx, s.ID, phase)
+				var notices []bus.Event
+				if summaryRecovered {
+					notices = append(notices, bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID,
+						Data: "execution_summary.md recovered; continuing with completion checks"})
+				}
+				o.completeAgent(ctx, s.ID, phase, ownerFence(phase, owner), notices...)
 				return
 			}
-			// AI-verify: верификатор слушает тот же interruptChans, что и автор — Pause/Revise во время verify
-			// всплывает сюда либо этим сентинелом, либо уже долговечным paused/revising-статусом.
 			if errors.Is(checkErr, executor.ErrUserInterrupted) {
-				onUserInterrupted()
+				if phase != phaseAutonomous {
+					onUserInterrupted()
+				}
 				return
+			}
+			// Summary отсутствует/пуст — отдельный бюджет из двух продолжений того же автора. Решение стоит до
+			// общей incomplete-ветки и не трогает attempt: transport/verify сохраняют прежний потолок.
+			var summaryErr *SummaryError
+			if errors.As(checkErr, &summaryErr) {
+				next, ok := o.handleMissingSummary(s.ID, summaryErr, owner, onUserInterrupted)
+				if !ok {
+					return
+				}
+				recovery = next
+				attempt-- // цикл сделает attempt++ — итоговый номер попытки не меняется
+				continue
 			}
 			// Incomplete work — две НЕЗАВИСИМЫЕ политики коррекции без backoff. verifyFailures++ — только для
 			// verify-ветки, чтобы транспортные ретраи и план-коррекции его не расходовали.
@@ -241,7 +405,7 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 					var done bool
 					done, prevFingerprint, unchangedRejections = o.handleStalemate(
 						ctx, s, phase, vre, reviewPatience, fingerprintDir,
-						prevFingerprint, unchangedRejections, onUserInterrupted)
+						prevFingerprint, unchangedRejections, owner, onUserInterrupted)
 					if done {
 						return
 					}
@@ -252,20 +416,25 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 					((isVerifyReject && verifyFailures < maxVerifyFailures) ||
 						(!isVerifyReject && attempt == 0))
 				if retryIncomplete {
-					// G2: повторная проверка ПРЯМО ПЕРЕД incompleteReason/continue — см. verifyOutcomeStillOwned.
+					// Verification may finish after this turn was replaced; recheck before correction.
 					if o.verifyOutcomeGuardHook != nil {
 						o.verifyOutcomeGuardHook(s.ID)
 					}
-					if !o.verifyOutcomeStillOwned(s.ID, onUserInterrupted) {
+					if o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) {
+						return
+					}
+					if isVerifyReject && !o.clearTurnSession(s.ID, phase, owner, freshCorrection) {
+						o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted)
 						return
 					}
 					if isVerifyReject {
 						verifyFailures++
-						dropSessionForFreshCorrection(freshCorrection, stageDir, phase)
 					}
 					incompleteReason = checkErr.Error()
 					// Раньше публиковалось как EventStageStatusChanged с Data- сообщением — фронт рисовал это пустым
 					// бейджем "→ ", и на reload сообщение терялось.
+					// Residual R3: this per-step notice can trail a later supersession;
+					// unlike completion it has no durable FSM transition to attach to.
 					msg := "incomplete work, retrying: " + checkErr.Error()
 					o.publishNotice(bus.Event{Type: bus.EventRetryScheduled, StageID: s.ID, Data: msg})
 					continue
@@ -274,43 +443,52 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 				// падаем в общий fail-путь ниже.
 			}
 			// Missing artifact or second incomplete attempt — fail. См. commitVerifyFailure.
-			if isVerifyDrivenError(checkErr) {
-				if !o.commitVerifyFailure(s.ID, checkErr.Error(), onUserInterrupted) {
-					return
-				}
-			} else {
-				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, checkErr.Error())
+			if !isVerifyDrivenError(checkErr) {
+				failAttempt(checkErr.Error()) // у автономной стадии — ошибка чтения summary и прочие исходы
+				return
+			}
+			if !o.commitVerifyFailure(s.ID, phase, checkErr.Error(), owner, onUserInterrupted) {
+				return
 			}
 			o.failBlockedStages()
 			return
 		}
 
 		if errors.Is(err, executor.ErrUserInterrupted) {
-			if o.currentStatus(s.ID) == state.StatusPaused {
-				return // Pause() already recorded the durable transition — nothing to restart
+			if phase != phaseAutonomous {
+				onUserInterrupted()
 			}
-			onUserInterrupted()
 			return
 		}
 
 		if !isRetryableError(err) {
 			// Drop the session file so a later retry starts a fresh Claude session instead of resuming a
 			// conversation that was never created. Mirrors the retryable branch.
-			_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
-			o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, err.Error())
-			o.failBlockedStages()
+			if !o.clearTurnSession(s.ID, phase, owner, true) {
+				o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted)
+				return
+			}
+			failAttempt(err.Error())
 			return
 		}
 
 		// Retryable errors are typically caused by an overgrown session context. Drop the session file so the
 		// next attempt starts a fresh Claude session.
-		_ = os.Remove(stagefiles.SessionFile(stageDir, phase))
+		if !o.clearTurnSession(s.ID, phase, owner, true) {
+			o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted)
+			return
+		}
 
 		if attempt < maxRetries {
 			// Сохраняем сообщение retry в reason, чтобы reload восстановил тот же payload; seq дедуплицирует live и
 			// историю.
 			msg := fmt.Sprintf("attempt %d/%d in %v", attempt+1, maxRetries, retryBackoff)
-			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvScheduleRetry, bus.GuardCtx{Phase: phase}, msg)
+			_, seq, scheduled := o.ownerTrigger(owner, phase, s.ID, bus.EvScheduleRetry,
+				bus.GuardCtx{Phase: phase}, msg)
+			if !scheduled && phase == phaseAutonomous {
+				o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted) // стадией уже владеет другой автор
+				return
+			}
 			o.ui.Publish(bus.Event{
 				Type:    bus.EventRetryScheduled,
 				StageID: s.ID,
@@ -322,18 +500,28 @@ func (o *Orchestrator) runWithRetry(ctx context.Context, s flow.Stage, phase str
 			case <-interruptCh:
 				return // Pause() already transitioned to paused — nothing to resume here
 			case <-ctx.Done():
-				o.Trigger(s.ID, bus.EvFail, bus.GuardCtx{}, "cancelled during retry")
-				o.failBlockedStages()
+				failAttempt("cancelled during retry")
 				return
 			}
-			switch phase {
-			case phasePlanning:
-				o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phasePlanning}, "")
-			default:
-				o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: phaseImplementation}, "")
+			if o.beforeRetryResumeHook != nil {
+				o.beforeRetryResumeHook(s.ID)
+			}
+			resumePhase := phaseImplementation
+			if phase == phasePlanning {
+				resumePhase = phasePlanning
+			}
+			if _, _, ok := o.ownerTrigger(owner, phase, s.ID, bus.EvResumeAfterRetry,
+				bus.GuardCtx{Phase: resumePhase}, ""); !ok && phase == phaseAutonomous {
+				o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted)
+				return
 			}
 		} else {
-			_, seq, _ := o.triggerWithSeq(s.ID, bus.EvFail, bus.GuardCtx{}, "retries exhausted")
+			_, seq, failed := o.ownerTrigger(owner, phase, s.ID, bus.EvFail,
+				bus.GuardCtx{}, "retries exhausted")
+			if !failed && phase == phaseAutonomous {
+				o.yieldIfSuperseded(s.ID, phase, owner, onUserInterrupted)
+				return
+			}
 			o.failBlockedStages()
 			o.publishCritical(ctx, bus.Event{Type: bus.EventRetryExhausted, StageID: s.ID, Seq: seq})
 		}

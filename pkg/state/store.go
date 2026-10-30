@@ -21,6 +21,19 @@ type Transition struct {
 	To      StageStatus `json:"to"`
 	Event   string      `json:"event"`
 	Reason  string      `json:"reason,omitempty"`
+	// SummaryRecovery — optional payload: новое значение summary-бюджета стадии. Нулевое значение сбрасывает
+	// бюджет (Revise/Manual Retry начинают новый пользовательский цикл в том же durable-переходе).
+	SummaryRecovery *SummaryRecovery `json:"summary_recovery,omitempty"`
+	// SameOwner — переход выполняет тот же владелец (вопрос/ответ, transport retry): OwnerEpoch не меняется.
+	SameOwner bool `json:"same_owner,omitempty"`
+	// ExpectedEpoch — runtime-only guard: Apply отвергает переход, если владелец стадии уже сменился.
+	ExpectedEpoch *uint64 `json:"-"`
+}
+
+// SummaryRecovery — durable состояние summary-recovery: число зарезервированных продолжений и причина.
+type SummaryRecovery struct {
+	Used   int    `json:"used"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // ErrRunLocked означает, что run-директория уже открыта другим процессом afm. flock освобождается ОС при
@@ -36,13 +49,14 @@ var ErrCorruptLog = errors.New("events.jsonl is corrupted mid-log")
 var ErrConcurrentChange = errors.New("concurrent change")
 
 type Store struct {
-	runDir    string
-	eventsLog *os.File
-	snapshot  *RunState
-	lastSeq   uint64
-	history   []Transition
-	lock      *progress.Lock
-	mu        sync.Mutex
+	runDir     string
+	eventsLog  *os.File
+	snapshot   *RunState
+	lastSeq    uint64
+	history    []Transition
+	lock       *progress.Lock
+	mu         sync.Mutex
+	ownerGates sync.Map // stageID -> *sync.Mutex; acquired before mu
 }
 
 func Open(runDir string, stageIDs []string) (*Store, error) {
@@ -174,6 +188,38 @@ func (s *Store) Get(stageID string) StageStatus {
 		return st.Status
 	}
 	return StatusPending
+}
+
+// Stage возвращает копию состояния стадии (все поля — значения, общих указателей нет).
+func (s *Store) Stage(stageID string) StageState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshot.Stages[stageID]
+}
+
+// ownerGate serializes ownership changes with tiny shared-artifact mutations.
+// Gates live as long as the Store and never move, including for legacy stage IDs.
+func (s *Store) ownerGate(stageID string) *sync.Mutex {
+	gate, _ := s.ownerGates.LoadOrStore(stageID, &sync.Mutex{})
+	return gate.(*sync.Mutex)
+}
+
+// WithStageOwner runs fn only while epoch still owns stageID. Apply takes the
+// same per-stage gate, so ownership cannot change between this check and a file
+// rename/remove. The data mutex is NOT held during fn: reads and other stages
+// remain available. fn must be short and must not call Apply or WithStageOwner.
+// This fences orchestrator writes; an external CLI still has its SIGINT grace.
+func (s *Store) WithStageOwner(stageID string, epoch uint64, fn func() error) error {
+	gate := s.ownerGate(stageID)
+	gate.Lock()
+	defer gate.Unlock()
+	s.mu.Lock()
+	current, ok := s.snapshot.Stages[stageID]
+	s.mu.Unlock()
+	if !ok || current.OwnerEpoch != epoch {
+		return fmt.Errorf("%w: stage %q no longer owned by epoch %d", ErrConcurrentChange, stageID, epoch)
+	}
+	return fn()
 }
 
 // PausedFrom returns the status a paused stage was paused from (empty if the stage has never been paused).
@@ -320,6 +366,9 @@ func SetApplyHook(h func(Transition)) {
 // Apply делает durable CAS-переход и заполняет t.Seq/t.Time до возврата; отдельное чтение LastSeq
 // подвержено гонке.
 func (s *Store) Apply(t *Transition) error {
+	gate := s.ownerGate(t.StageID)
+	gate.Lock()
+	defer gate.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -327,6 +376,13 @@ func (s *Store) Apply(t *Transition) error {
 	if current != t.From {
 		return fmt.Errorf("%w: stage %q is in %q, expected %q",
 			ErrConcurrentChange, t.StageID, current, t.From)
+	}
+
+	if t.ExpectedEpoch != nil {
+		if epoch := s.snapshot.Stages[t.StageID].OwnerEpoch; epoch != *t.ExpectedEpoch {
+			return fmt.Errorf("%w: stage %q owner epoch is %d, expected %d",
+				ErrConcurrentChange, t.StageID, epoch, *t.ExpectedEpoch)
+		}
 	}
 
 	s.lastSeq++
@@ -355,10 +411,8 @@ func (s *Store) Apply(t *Transition) error {
 		hook(*t)
 	}
 
-	// SetStageStatusAt, не SetStageStatus: t.Time уже зафиксирован выше и это именно то время, которое
-	// попадёт в events.jsonl.
-	accountIdleAndBackoff(s.snapshot, t.StageID, t.To, t.Time)
-	s.snapshot.SetStageStatusAt(t.StageID, t.To, t.Time)
+	// Reducer берёт t.Time, уже зафиксированный выше: это именно то время, которое попадёт в events.jsonl.
+	applyTransition(s.snapshot, *t)
 	s.snapshot.LastSeq = s.lastSeq
 
 	if err := s.writeSnapshot(); err != nil {

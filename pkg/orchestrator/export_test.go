@@ -14,7 +14,7 @@ import (
 // CompleteStageForTest вызывает приватный completeStage с переданным «снимком» статуса current — позволяет
 // тесту смоделировать проигрыш CAS EvComplete.
 func CompleteStageForTest(o *Orchestrator, stageID string, current state.StageStatus) {
-	o.completeStage(context.Background(), stageID, current, "")
+	o.completeStage(context.Background(), stageID, current, "", nil)
 }
 
 // PendingAfterHooksForTest возвращает текущее значение счётчика живых

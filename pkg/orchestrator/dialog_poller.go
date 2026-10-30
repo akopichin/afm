@@ -194,16 +194,19 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 				_ = o.resumeAfterAnswer(stageID, q.Phase, q.ID, answer, false)
 				continue
 			}
+			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию реальный seq этой transition — фронт
+			// дедуплицирует по нему live- событие с историческим двойником из /api/events.
+			seq, move := o.surfaceQuestion(stageID, q.Phase, q.ID)
+			if move == questionDeferred {
+				continue // не processed: следующий скан спросит, когда стадия сможет уйти к пользователю
+			}
 			processed[key] = true
 			// Первое всплытие ЭТОГО вопроса пользователю — ровно тот же гейт, что уже гарантирует единственность
 			// EventAskUser.
 			o.publishDialogQuestion(stageID, q.Phase, q.ID, q.Question)
-
-			// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
-			o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
-			// Триггерим ПЕРЕД публикацией ask_user, чтобы приложить к событию реальный seq этой transition — фронт
-			// дедуплицирует по нему live- событие с историческим двойником из /api/events.
-			_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
+			if move == questionAnswered {
+				continue
+			}
 			o.ui.Publish(bus.Event{
 				Type:    bus.EventAskUser,
 				StageID: stageID,
@@ -222,6 +225,49 @@ func (o *Orchestrator) pollQuestions(processed map[string]bool, malformed map[st
 			}
 		}
 	}
+}
+
+// questionMove — что surfaceQuestion сделал с вопросом, найденным сканом открытым.
+type questionMove int
+
+const (
+	questionAsked    questionMove = iota // стадия отдана пользователю по этому вопросу
+	questionAnswered                     // на вопрос уже ответили после скана: никого не спрашиваем
+	questionDeferred                     // стадия сейчас не может уйти к пользователю (её держит feedback-запуск Revise)
+)
+
+// surfaceQuestion отдаёт стадию пользователю по вопросу id, если на него не ответили после скана: решение
+// принимается под answerMu, поэтому ответ либо применяется после этого перехода, либо виден ему.
+func (o *Orchestrator) surfaceQuestion(stageID, phase, id string) (seq uint64, move questionMove) {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	if !o.questionOpen(stageID, phase, id) {
+		return 0, questionAnswered
+	}
+	// Сохраняем реальную фазу ДО перехода в awaiting_user_input.
+	askPhase := o.correctPhaseForState(o.currentStatus(stageID), phase)
+	o.preAskPhase.Store(stageID, askPhase)
+	if _, seq, ok := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase}, ""); ok {
+		return seq, questionAsked
+	}
+	if o.currentStatus(stageID) == state.StatusAwaitingUserInput {
+		return 0, questionAsked // стадия уже у пользователя по прежнему вопросу: этот задаётся рядом
+	}
+	o.preAskPhase.CompareAndDelete(stageID, askPhase)
+	return 0, questionDeferred
+}
+
+func (o *Orchestrator) questionOpen(stageID, phase, id string) bool {
+	questions, err := mcp.FindUnansweredQuestions(filepath.Join(o.opts.RunDir, stageID))
+	if err != nil {
+		return false
+	}
+	for _, q := range questions {
+		if q.Phase == phase && q.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // publishDialogQuestion publishes one identical payload live and to notices.jsonl for history/live
@@ -381,11 +427,16 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 	if e, _ := mcp.FindEntry(dialogPath, q.ID); e == nil {
 		_ = mcp.AppendQuestion(dialogPath, mcp.Question{ID: q.ID, Question: explanation, AllowCustom: true})
 	}
+	seq, move := o.surfaceQuestion(stageID, q.Phase, q.ID)
+	if move == questionDeferred {
+		return // заглушка теперь валидный вопрос: следующий скан спросит, когда стадия сможет уйти к пользователю
+	}
 	// Emit dialog_question HERE, on the give-up tick itself — do not wait for the stub to flow through
 	// pollQuestions' normal branch on the NEXT tick.
 	o.publishDialogQuestion(stageID, q.Phase, q.ID, explanation)
-	o.preAskPhase.Store(stageID, o.correctPhaseForState(o.currentStatus(stageID), q.Phase))
-	_, seq, _ := o.triggerWithSeq(stageID, bus.EvAskUser, bus.GuardCtx{Phase: q.Phase}, "")
+	if move == questionAnswered {
+		return
+	}
 	o.ui.Publish(bus.Event{
 		Type:    bus.EventAskUser,
 		StageID: stageID,

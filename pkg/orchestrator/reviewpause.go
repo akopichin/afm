@@ -56,7 +56,7 @@ func (o *Orchestrator) spawnAgentLeased(ctx context.Context, s flow.Stage, run f
 		// E3: CompareAndDelete, а не безусловный Delete — на Revise-прерывании раннер-замена может Store'ить
 		// свой lease под тем же stageID ДО того, как ЭТОТ callback размотает свой defer.
 		defer o.stageLeases.CompareAndDelete(s.ID, lease)
-		run(ctx, s)
+		run(context.WithValue(ctx, turnLeaseKey{}, lease), s)
 	})
 }
 

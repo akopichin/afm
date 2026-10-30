@@ -172,7 +172,7 @@ func TestRunnerForVerify_WiresInterruptChFromStage(t *testing.T) {
 	interruptCh := make(chan struct{}, 1)
 	o.interruptChans.Store(stage.ID, interruptCh)
 
-	ex := o.runnerForVerify(stage, scriptPath)
+	ex := o.runnerForVerify(context.Background(), stage, scriptPath)
 	logFile := filepath.Join(runDir, "verify.log")
 	resultFile := filepath.Join(runDir, "verify-result.json")
 

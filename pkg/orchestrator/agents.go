@@ -392,7 +392,13 @@ func (o *Orchestrator) runAutonomousAgent(ctx context.Context, s flow.Stage) {
 // runAutonomousAttempt — общее тело autonomous-попытки: собирает контекст, строит промпт и запускает
 // существующий runWithRetry.
 func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, stageDir, note, logFileName, artifactsWarnLabel string) {
-	o.runWithRetry(ctx, s, phaseAutonomous, func(retryContext string) error {
+	// Контекст действий берём из raw-лога именно этого вызова (feedback пишет в autonomous-feedback.jsonl).
+	// Канал прерывания создаём здесь и отдаём раннеру сами: устаревший автор не должен слушать канал преемника.
+	interruptCh := make(chan struct{}, 1)
+	owner := &attemptOwner{interruptCh: interruptCh, epoch: o.opts.Store.Stage(s.ID).OwnerEpoch}
+	ctx = context.WithValue(ctx, turnOwnerKey{}, owner)
+	opts := retryOptions{actionsJSONL: strings.TrimSuffix(logFileName, ".log") + ".jsonl", interruptCh: interruptCh}
+	o.runWithRetryOpts(ctx, s, phaseAutonomous, opts, func(retryContext string) error {
 		artCtx := o.collectArtifactsNoticing(s, artifactsWarnLabel)
 		depCtx := o.collectDependencyPlansNoticing(s)
 
@@ -413,7 +419,11 @@ func (o *Orchestrator) runAutonomousAttempt(ctx context.Context, s flow.Stage, s
 			BrowserRuntime:  o.browserRuntimeFor(s),
 		})
 		logFile := filepath.Join(stageDir, logFileName)
-		r := o.runnerFor(s, phaseAutonomous)
+		resume, err := o.ensureTurnSession(s, phaseAutonomous, owner)
+		if err != nil {
+			return err
+		}
+		r := o.runnerForTurnResume(s, phaseAutonomous, interruptCh, resume)
 		return r.RunAgent(ctx, phaseAutonomous, s.Name, prompt, logFile)
 	}, o.gateWithVerify(ctx, s, phaseAutonomous, func() error {
 		return stagefiles.CheckAutonomousCompletion(stageDir)
@@ -427,7 +437,9 @@ func (o *Orchestrator) runImplementationWithFeedback(ctx context.Context, s flow
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// Возвращаемся в Running. Без этого onAgentCompleted и EvComplete не увидели бы подходящий статус, и
 	// стадия зависла бы в Revising даже после успешного завершения агента.
-	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if _, ok := o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
+		return
+	}
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runImplementationAttempt(ctx, s, stageDir, feedbackNote, "implementation-feedback.log", "impl (feedback restart)")
@@ -438,7 +450,9 @@ func (o *Orchestrator) runReviewWithFeedback(ctx context.Context, s flow.Stage) 
 	o.setRunnerKind(s.ID, kindReview)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if _, ok := o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
+		return
+	}
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	depPlans := o.collectDependencyPlansNoticing(s)
@@ -452,7 +466,9 @@ func (o *Orchestrator) runAutonomousWithFeedback(ctx context.Context, s flow.Sta
 	o.setRunnerKind(s.ID, kindAutonomous)
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	// См. runImplementationWithFeedback: возвращаемся в Running из Revising.
-	o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, "")
+	if _, ok := o.Trigger(s.ID, bus.EvStartRun, bus.GuardCtx{}, ""); !ok {
+		return
+	}
 	feedbackNote := o.feedbackNoteBlock(stageDir)
 
 	o.runAutonomousAttempt(ctx, s, stageDir, feedbackNote, "autonomous-feedback.log", "autonomous (feedback restart)")

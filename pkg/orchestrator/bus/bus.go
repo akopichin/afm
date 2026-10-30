@@ -74,6 +74,9 @@ type Event struct {
 	// Seq — реальный seq FSM-transition. Позволяет фронту дедуплицировать историю из /api/events с
 	// live-потоком WS по стабильному ключу вместо содержимого.
 	Seq uint64 `json:"seq,omitempty"`
+	// Completion ownership and notices travel with the in-process handoff, never over the wire.
+	OwnerEpoch        *uint64 `json:"-"`
+	CompletionNotices []Event `json:"-"`
 }
 
 type CriticalBus struct {

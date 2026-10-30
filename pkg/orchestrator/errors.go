@@ -21,6 +21,8 @@ const (
 	ClassStorageFatal
 	// ClassVerifyFailed — верификатор не смог выдать вердикт.
 	ClassVerifyFailed
+	// ClassSummaryMissing — автономный автор вышел без непустого execution_summary.md (отдельный бюджет).
+	ClassSummaryMissing
 )
 
 // Retryable error pattern substrings used by Classify and tests.
@@ -42,6 +44,7 @@ const (
 // Алиасы stagefiles сохраняют identity ошибок для errors.As и классификации ретраев.
 type IncompleteWorkError = stagefiles.IncompleteWorkError
 type MissingArtifactError = stagefiles.MissingArtifactError
+type SummaryError = stagefiles.SummaryError
 
 type MissingSectionsError struct{ Missing []string }
 
@@ -101,6 +104,10 @@ func Classify(err error) Classification {
 	var inc *IncompleteWorkError
 	if errors.As(err, &inc) {
 		return ClassIncomplete
+	}
+	var sum *SummaryError
+	if errors.As(err, &sum) {
+		return ClassSummaryMissing
 	}
 	var miss *MissingArtifactError
 	if errors.As(err, &miss) {

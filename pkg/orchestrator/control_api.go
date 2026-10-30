@@ -49,17 +49,10 @@ func (o *Orchestrator) NotifyAnswer(stageID, phase, qID, answer string, fromOpti
 	return o.resumeAfterAnswer(stageID, phase, qID, answer, true)
 }
 
-// resumeAfterAnswer drives a stage out of awaiting_user_input once answer.json is already on disk. If the
-// goroutine has exited, we publish to the critical bus so onUserAnswered restarts it.
+// resumeAfterAnswer drives a stage out of awaiting_user_input once answer.json is already on disk. If the agent
+// will not read the answer itself, we publish to the critical bus so onUserAnswered starts a continuation.
 func (o *Orchestrator) resumeAfterAnswer(stageID, phase, qID, answer string, publishUI bool) error {
-	if o.concurrency.IsActive(stageID) {
-		guardPhase := o.popPreAskPhase(stageID, phase)
-		_, seq, _ := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase}, "")
-		if publishUI {
-			o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
-				keyID: qID, keyPhase: phase, keyAnswer: answer,
-			}, Seq: seq})
-		}
+	if o.answerToLiveAgent(stageID, phase, qID, answer, publishUI) {
 		return nil
 	}
 	return o.critical.Publish(context.Background(), bus.Event{
@@ -67,6 +60,59 @@ func (o *Orchestrator) resumeAfterAnswer(stageID, phase, qID, answer string, pub
 		StageID: stageID,
 		Data:    map[string]any{keyID: qID, keyPhase: phase, keyAnswer: answer},
 	})
+}
+
+// answerToLiveAgent resumes a stage whose agent will read the answer itself (liveAgents). A turn that has not started
+// its agent or has already decided its exit reads nothing: the answer must start the continuation. Decided under
+// answerMu, the lock of every dialog decision of a turn.
+func (o *Orchestrator) answerToLiveAgent(stageID, phase, qID, answer string, publishUI bool) bool {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	owner, live := o.currentLiveAgent(stageID)
+	if !live {
+		return false
+	}
+	if o.beforeLiveAnswerHook != nil {
+		o.beforeLiveAnswerHook(stageID)
+	}
+	guardPhase := phase
+	if saved, ok := o.preAskPhase.Load(stageID); ok {
+		guardPhase = saved.(string)
+	}
+	_, seq, applied := o.triggerWithSeq(stageID, bus.EvUserAnswered, bus.GuardCtx{Phase: guardPhase, OwnerEpoch: &owner.epoch}, "")
+	if !applied {
+		// An answer can arrive before the poller surfaces its question. That live
+		// owner still reads it; a stale marker or lost CAS must enqueue a restart.
+		st := o.opts.Store.Stage(stageID)
+		if st.OwnerEpoch != owner.epoch || (st.Status != state.StatusRunning && st.Status != state.StatusPlanning) {
+			o.liveAgents.CompareAndDelete(stageID, owner)
+			return false
+		}
+	} else {
+		o.preAskPhase.Delete(stageID)
+	}
+
+	if publishUI {
+		o.ui.Publish(bus.Event{Type: bus.EventUserAnswered, StageID: stageID, Data: map[string]any{
+			keyID: qID, keyPhase: phase, keyAnswer: answer,
+		}, Seq: seq})
+	}
+	return true
+}
+
+// currentLiveAgent is called under answerMu at both delivery and queued restart.
+// Registration may have preceded a Pause/Continue; its presence alone is no proof.
+func (o *Orchestrator) currentLiveAgent(stageID string) (*attemptOwner, bool) {
+	marker, ok := o.liveAgents.Load(stageID)
+	if !ok {
+		return nil, false
+	}
+	owner, ok := marker.(*attemptOwner)
+	if !ok || !o.epochIsCurrent(stageID, owner) {
+		o.liveAgents.CompareAndDelete(stageID, marker)
+		return nil, false
+	}
+	return owner, true
 }
 
 // autoApproveIfConfigured honors auto_approve regardless of dashboard or --require-approval; returns
@@ -233,7 +279,7 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 	}
 	pausedFrom := o.opts.Store.PausedFrom(stageID)
 	o.continuedThisProcess.Store(stageID, struct{}{})
-	to, ok := o.Trigger(stageID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "")
+	to, epoch, ok := o.triggerWithSeq(stageID, bus.EvContinue, bus.GuardCtx{PausedFrom: pausedFrom}, "")
 	if !ok {
 		o.continuedThisProcess.Delete(stageID)
 		o.continueMu.Unlock()
@@ -248,7 +294,7 @@ func (o *Orchestrator) Continue(reqCtx context.Context, stageID string) error {
 		return nil
 	}
 
-	o.resumeStageAtStatus(ctx, *stage, to)
+	o.resumeStageAtStatus(ctx, *stage, to, epoch)
 	return nil
 }
 

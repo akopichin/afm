@@ -70,6 +70,15 @@ type StageState struct {
 	// PausedFrom хранит исходный статус паузы и навсегда остаётся маркером пройденного pause-цикла для
 	// auto_run:false.
 	PausedFrom StageStatus `json:"paused_from,omitempty"`
+	// OwnerEpoch — seq последнего перехода, сменившего владельца стадии (см. Transition.SameOwner). Нужен,
+	// чтобы устаревший автор не мог действовать после Pause/Revise, даже если статус снова стал тем же.
+	OwnerEpoch uint64 `json:"owner_epoch,omitempty"`
+	// PrevOwnerEpoch identifies the turn displaced by the last ownership change, including Revise.
+	PrevOwnerEpoch uint64 `json:"prev_owner_epoch,omitempty"`
+	// SummaryRecoveryUsed/Reason — сколько post-exit продолжений execution_summary.md уже зарезервировано в текущем
+	// пользовательском цикле и почему (SummaryMissing/SummaryEmpty).
+	SummaryRecoveryUsed   int    `json:"summary_recovery_used,omitempty"`
+	SummaryRecoveryReason string `json:"summary_recovery_reason,omitempty"`
 }
 
 // RunState is the snapshot cache; events.jsonl is authoritative.
@@ -122,11 +131,30 @@ func (rs *RunState) SetStageStatus(stageID string, status StageStatus) {
 
 // SetStageStatusAt updates a stage status, stamping it with the given time t instead of time.Now.
 func (rs *RunState) SetStageStatusAt(stageID string, status StageStatus, t time.Time) {
-	pausedFrom := rs.Stages[stageID].PausedFrom
+	st := rs.Stages[stageID] // копия по значению: остальные поля стадии сохраняются
 	if status == StatusPaused {
-		pausedFrom = rs.Stages[stageID].Status // статус ДО этого перехода
+		st.PausedFrom = st.Status // статус ДО этого перехода
 	}
-	rs.Stages[stageID] = StageState{Status: status, UpdatedAt: t, PausedFrom: pausedFrom}
+	st.Status = status
+	st.UpdatedAt = t
+	rs.Stages[stageID] = st
+}
+
+// applyTransition — единый reducer стадийного перехода для live Apply и replay parseEventLog: таймеры,
+// статус, epoch владельца и summary-бюджет не должны расходиться между живым раном и рестартом.
+func applyTransition(rs *RunState, t Transition) {
+	accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
+	rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+	st := rs.Stages[t.StageID]
+	if !t.SameOwner {
+		st.PrevOwnerEpoch = st.OwnerEpoch
+		st.OwnerEpoch = t.Seq
+	}
+	if t.SummaryRecovery != nil {
+		st.SummaryRecoveryUsed = t.SummaryRecovery.Used
+		st.SummaryRecoveryReason = t.SummaryRecovery.Reason
+	}
+	rs.Stages[t.StageID] = st
 }
 
 // isIdle сообщает, ждёт ли флоу реакции пользователя прямо сейчас — единое состояние на весь флоу.
@@ -363,8 +391,7 @@ func parseEventLog(data []byte, rs *RunState) replayResult {
 			goodOffset = offset
 			continue
 		}
-		accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
-		rs.SetStageStatusAt(t.StageID, t.To, t.Time)
+		applyTransition(rs, t)
 		res.history = append(res.history, t)
 		res.lastSeq = t.Seq
 		goodOffset = offset

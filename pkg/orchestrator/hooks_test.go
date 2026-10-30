@@ -15,6 +15,7 @@ import (
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/memorypipeline"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -317,11 +318,12 @@ func setupHookOrch(t *testing.T, stageID string) (*Orchestrator, string) {
 	critical := bus.NewCriticalBus(16)
 	stages := []flow.Stage{{ID: stageID}}
 	o := &Orchestrator{
-		opts:     Options{RootDir: rootDir, RunDir: runDir, Store: store, Stages: stages},
-		ui:       ui,
-		critical: critical,
-		fsm:      bus.NewFSM(store),
-		graph:    graph.NewGraph(stages),
+		opts:        Options{RootDir: rootDir, RunDir: runDir, Store: store, Stages: stages},
+		ui:          ui,
+		critical:    critical,
+		fsm:         bus.NewFSM(store),
+		graph:       graph.NewGraph(stages),
+		concurrency: concurrency.NewWithSemaphores(critical, map[string]concurrency.Semaphore{}, ""),
 	}
 	return o, runDir
 }

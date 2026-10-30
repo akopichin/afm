@@ -22,6 +22,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/orchestrator/graph"
+	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -212,6 +213,28 @@ type Orchestrator struct {
 	// verifyOutcomeGuardHook — тест-сейм: вызывается в retry.go's commitVerifyFailure НЕПОСРЕДСТВЕННО ПЕРЕД
 	// атомарным Trigger — т.е. ПОСЛЕ дешёвого fast-path чтения, но ДО самого CAS.
 	verifyOutcomeGuardHook func(stageID string)
+
+	// summaryDecisionHook — тест-сейм: вызывается в handleMissingSummary ПЕРЕД reserve/fail CAS, то есть после
+	// всех дешёвых проверок статуса, но до durable-перехода — окно для Pause/Continue/Revise в тестах.
+	summaryDecisionHook func(stageID string)
+
+	// beforeLaunchHook — тест-сейм: вызывается в цикле попытки перед отсевом устаревшего автора и запуском агента,
+	// то есть после резерва recovery предыдущей итерации.
+	beforeLaunchHook func(stageID string)
+	// Deterministic test barriers immediately before the retry-resume and completion CAS.
+	beforeRetryResumeHook func(stageID string)
+	beforeCompleteHook    func(stageID string)
+	// Test seams at shared-file and answer-delivery ownership boundaries.
+	beforeOwnerFileHook  func(stageID, operation string)
+	beforeLiveMarkerHook func(stageID string)
+	beforeLiveAnswerHook func(stageID string)
+
+	// answerMu сериализует решения диалога (EvAskUser, доставку ответа) с чтением файлов вопросов; liveAgents —
+	// стадии, чей агент сам прочтёт ответ (отметка на время хода). dialogHook — тест-сейм до (left=false) и после
+	// (left=true) решения хода о диалоге.
+	answerMu   sync.Mutex
+	liveAgents sync.Map
+	dialogHook func(stageID string, left bool)
 
 	// flowPauseMu защищает составные решения PauseFlow; отдельные поля activationHeld/finalizing/reviewMarker
 	// читаются атомарно.
@@ -591,13 +614,35 @@ func (o *Orchestrator) handleEvent(ctx context.Context, ev bus.Event) error {
 // and unblocks dependents.
 func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error {
 	agentType, _ := ev.Data.(string)
+	// Completion may have waited on the critical bus across any number of owner changes.
+	// Only the directly displaced turn can hand off its own Revise.
+	yield := func() bool {
+		if ev.OwnerEpoch == nil {
+			return false
+		}
+		return o.yieldIfSuperseded(ev.StageID, phaseAutonomous, &attemptOwner{epoch: *ev.OwnerEpoch}, func() {
+			if stage := o.graph.Stage(ev.StageID); stage != nil {
+				o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousWithFeedback)
+			}
+		})
+	}
+	if yield() {
+		return nil
+	}
+	recordCompletion := func() {
+		stagefiles.AppendNotice(o.opts.RunDir, ev.StageID, string(bus.EventAgentCompleted), agentType)
+		for _, notice := range ev.CompletionNotices {
+			o.publishNotice(notice)
+		}
+	}
 	current := o.currentStatus(ev.StageID)
 
 	// Check all phases for fresh questions.
-	if current != state.StatusAwaitingUserInput && o.hasOpenQuestion(ev.StageID, agentType) {
-		o.preAskPhase.Store(ev.StageID, agentType)
-		o.Trigger(ev.StageID, bus.EvAskUser, bus.GuardCtx{Phase: agentType}, "")
-		return nil
+	if current != state.StatusAwaitingUserInput {
+		if o.askIfStillOpen(ev.StageID, agentType, ev.OwnerEpoch) {
+			return nil
+		}
+		current = o.currentStatus(ev.StageID) // Revise после снимка оставляет стадию его feedback-запуску ниже
 	}
 
 	switch agentType {
@@ -607,7 +652,10 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		if current != state.StatusPlanning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput {
 			return nil
 		}
-		o.Trigger(ev.StageID, bus.EvPlanReady, bus.GuardCtx{}, "")
+		if _, ok := o.Trigger(ev.StageID, bus.EvPlanReady, bus.GuardCtx{}, ""); !ok {
+			return nil
+		}
+		recordCompletion()
 		// auto_approve: true on the stage config wins regardless of
 		// dashboard/--require-approval — checked before the headless branch.
 		if stage := o.graph.Stage(ev.StageID); stage != nil && o.autoApproveIfConfigured(ctx, *stage) {
@@ -629,6 +677,10 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		// Revise мог опередить естественное завершение агента без SIGINT; перезапускаем revising-стадию с
 		// сохранённым feedback.
 		if current == state.StatusRevising {
+			if ev.OwnerEpoch != nil {
+				yield()
+				return nil
+			}
 			stage := o.graph.Stage(ev.StageID)
 			if stage == nil {
 				return nil
@@ -642,16 +694,22 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 		}
 		// Фаза завершена: implementation-агент дошёл до конца, либо
 		// autonomous-трек написал execution_summary.md → переводим в done.
-		o.completeStage(ctx, ev.StageID, current, "")
+		if o.completeStage(ctx, ev.StageID, current, "", ev.OwnerEpoch) {
+			recordCompletion()
+		} else {
+			yield()
+		}
 	case phaseScript:
 		// Script-стадия завершилась (runScriptStage): нет revising-гонки (interruptChans не регистрируется вне
 		// runWithRetry, Revise() на script-стадию не осмыслен) — просто done, как остальные фазы.
-		o.completeStage(ctx, ev.StageID, current, "")
+		o.completeStage(ctx, ev.StageID, current, "", nil)
 	case phaseReview:
 		// Standalone review публикует собственный completion; встроенный review завершается через implementation
 		// и сюда не попадает.
 		if current == state.StatusRunning || current == state.StatusRevising {
-			o.completeStage(ctx, ev.StageID, current, "review complete")
+			if o.completeStage(ctx, ev.StageID, current, "review complete", nil) {
+				recordCompletion()
+			}
 		}
 	default:
 		// unknown agent type: no status change needed
@@ -660,14 +718,22 @@ func (o *Orchestrator) onAgentCompleted(ctx context.Context, ev bus.Event) error
 }
 
 // completeStage finalizes a stage that genuinely reached done.
-func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus, reason string) {
+func (o *Orchestrator) completeStage(ctx context.Context, stageID string, current state.StageStatus, reason string, epoch *uint64) bool {
 	if current != state.StatusRunning && current != state.StatusRetrying && current != state.StatusAwaitingUserInput {
-		return
+		return false
 	}
 	// current — снимок статуса, прочитанный вызывающим ДО этого момента: между чтением и CAS сюда мог влезть
 	// Pause/Revise на другой горутине и увести стадию из running/retrying.
-	if _, ok := o.Trigger(stageID, bus.EvComplete, bus.GuardCtx{}, reason); !ok {
-		return
+	phase := ""
+	var owner *attemptOwner
+	if epoch != nil {
+		phase, owner = phaseAutonomous, &attemptOwner{epoch: *epoch}
+	}
+	if o.beforeCompleteHook != nil {
+		o.beforeCompleteHook(stageID)
+	}
+	if _, _, ok := o.ownerTrigger(owner, phase, stageID, bus.EvComplete, bus.GuardCtx{}, reason); !ok {
+		return false
 	}
 	// script_after runs first, and reflection only starts once it returns — so a stage's reflect capture
 	// always sees after.log if the stage has one.
@@ -676,21 +742,24 @@ func (o *Orchestrator) completeStage(ctx context.Context, stageID string, curren
 	o.startPlanningForUnblocked(ctx)
 	o.startReadyStages(ctx)
 	o.tryActivatePrePlanned(ctx)
+	return true
 }
 
 // onUserAnswered resumes a stage that was paused on awaiting_user_input. If the agent exited before the
 // user answered, we restart it here.
 func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
-	if o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
-		return nil
-	}
-
 	data, _ := ev.Data.(map[string]any)
 	rawPhase, _ := data[keyPhase].(string)
 	if rawPhase == "" {
 		return nil
 	}
 
+	// Решаем под answerMu вместе с решением самого хода о диалоге (leaveWithUser): живой агент читает ответ сам.
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	if _, live := o.currentLiveAgent(ev.StageID); live || o.currentStatus(ev.StageID) != state.StatusAwaitingUserInput {
+		return nil
+	}
 	if o.hasOpenQuestion(ev.StageID, rawPhase) {
 		return nil
 	}
@@ -707,21 +776,46 @@ func (o *Orchestrator) onUserAnswered(ctx context.Context, ev bus.Event) error {
 	// answer.json (bash loop exits immediately since the file now exists).
 	switch phase {
 	case phasePlanning:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "")
+		if _, ok := o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning, NewOwner: true}, ""); !ok {
+			return nil
+		}
 		o.spawnKind(ctx, *stage, kindPlanning, o.runPlanningAgent)
 	case phaseImplementation:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "")
+		if _, ok := o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation, NewOwner: true}, ""); !ok {
+			return nil
+		}
 		o.spawnKind(ctx, *stage, kindImplementation, o.runImplementationAgent)
 	case phaseReview:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseReview}, "")
+		if _, ok := o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseReview, NewOwner: true}, ""); !ok {
+			return nil
+		}
 		o.spawnKind(ctx, *stage, kindReview, o.runReviewAgent)
 	case phaseAutonomous:
-		o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseAutonomous}, "")
+		if _, ok := o.Trigger(ev.StageID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseAutonomous, NewOwner: true}, ""); !ok {
+			return nil
+		}
 		o.spawnKind(ctx, *stage, kindAutonomous, o.runAutonomousAgent)
 	default:
 		return fmt.Errorf("unexpected phase: %q", phase)
 	}
 	return nil
+}
+
+// askIfStillOpen переводит стадию к пользователю по открытому вопросу фазы phase, решая под answerMu как и доставка
+// ответа: уже записанный ответ не остаётся в awaiting_user_input. false — вопроса нет, либо стадия не может уйти к
+// пользователю (её забрал Pause/Revise после завершения хода).
+func (o *Orchestrator) askIfStillOpen(stageID, phase string, epoch *uint64) bool {
+	o.answerMu.Lock()
+	defer o.answerMu.Unlock()
+	if !o.hasOpenQuestion(stageID, phase) {
+		return false
+	}
+	o.preAskPhase.Store(stageID, phase)
+	if _, ok := o.Trigger(stageID, bus.EvAskUser, bus.GuardCtx{Phase: phase, OwnerEpoch: epoch}, ""); !ok {
+		o.preAskPhase.CompareAndDelete(stageID, phase)
+		return false
+	}
+	return true
 }
 
 func (o *Orchestrator) currentStatus(id string) state.StageStatus {

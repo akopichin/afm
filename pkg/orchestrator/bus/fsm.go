@@ -40,6 +40,9 @@ const (
 	// EvVerifyFail — H1: АТОМАРНЫЙ аналог EvFail для verify-driven исходов. Не трогает существующий From:nil
 	// у EvFail — другие call site'ы EvFail сознательно должны срабатывать из любого статуса.
 	EvVerifyFail FSMEvent = "verify_fail"
+	// EvSummaryRecover — fenced running → running: резервирует одно post-exit продолжение автора из-за
+	// отсутствующего/пустого execution_summary.md ДО запуска CLI. Не lifecycle-событие.
+	EvSummaryRecover FSMEvent = "summary_recover"
 )
 
 type GuardCtx struct {
@@ -48,11 +51,24 @@ type GuardCtx struct {
 	// PausedFrom используется только EvContinue — вызывающий код читает его
 	// заранее из Store.PausedFrom(stageID) (см. Orchestrator.Continue).
 	PausedFrom state.StageStatus
+	// OwnerEpoch, если задан, защищает переход: он применяется только пока владелец стадии не сменился
+	// (state.Store сверяет epoch под своим mutex до записи в журнал).
+	OwnerEpoch *uint64
+	// NewOwner distinguishes an answer restarting an exited turn from delivery to a live turn.
+	NewOwner bool
+	// SummaryRecovery — payload EvSummaryRecover: новое значение summary-бюджета.
+	SummaryRecovery *state.SummaryRecovery
 }
 
 type Rule struct {
 	From []state.StageStatus
 	To   func(GuardCtx) state.StageStatus
+	// SameOwner — переход делает тот же владелец стадии, OwnerEpoch не меняется. Любой переход, который живой
+	// владелец выполняет сам во время autonomous-хода (вопрос/ответ, transport retry), обязан быть SameOwner:
+	// иначе он сдвинет epoch и отсечёт самого владельца от его же fenced-переходов.
+	SameOwner bool
+	// ResetSummaryRecovery — переход начинает новый пользовательский цикл и обнуляет summary-бюджет.
+	ResetSummaryRecovery bool
 }
 
 type FSM struct {
@@ -81,7 +97,7 @@ func NewFSM(store *state.Store) *FSM {
 			// завершить planning.
 			EvPlanReady: {From: []state.StageStatus{state.StatusPending, state.StatusPlanning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusAwaitingApproval)},
 			EvApprove:   {From: []state.StageStatus{state.StatusAwaitingApproval}, To: to(state.StatusReady)},
-			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused}, To: to(state.StatusRevising)},
+			EvRevise:    {From: []state.StageStatus{state.StatusAwaitingApproval, state.StatusRunning, state.StatusPaused}, To: to(state.StatusRevising), ResetSummaryRecovery: true},
 			// Revising тоже разрешён здесь: run<Phase>WithFeedback переводит стадию обратно в Running этим же
 			// событием ПЕРЕД повторным runWithRetry — без этого стадия застревала бы в Revising навсегда.
 			EvStartRun: {From: []state.StageStatus{state.StatusReady, state.StatusRevising}, To: to(state.StatusRunning)},
@@ -92,20 +108,24 @@ func NewFSM(store *state.Store) *FSM {
 			// EvVerifyFail — намеренно ЗЕРКАЛИТ From-набор EvComplete, но НЕ включает Paused/Revising: если стадия
 			// уже там, её владеет конкурентный Pause/Revise, а не устаревший verify-исход.
 			EvVerifyFail: {From: []state.StageStatus{state.StatusRunning, state.StatusAwaitingApproval, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusFailed)},
-			// EvAskUser must be reachable from any state the question poller scans.
-			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusRevising}, To: to(state.StatusAwaitingUserInput)},
-			EvUserAnswered: {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch},
+			// EvAskUser must be reachable from any state the question poller scans. Not from revising: a question left
+			// open there belongs to the turn the Revise interrupted, and handing the stage to the user would take it
+			// from the Revise's feedback run.
+			EvAskUser:      {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying}, To: to(state.StatusAwaitingUserInput), SameOwner: true},
+			EvUserAnswered: {From: []state.StageStatus{state.StatusAwaitingUserInput}, To: phaseDispatch, SameOwner: true},
 			// Разрешаем retry из AwaitingUserInput: поллер мог сменить статус до возврата ретраибельной ошибки
 			// агента.
-			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput}, To: to(state.StatusRetrying)},
-			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying, state.StatusAwaitingUserInput}, To: phaseDispatch},
-			EvManualRetry:      {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending)},
+			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput}, To: to(state.StatusRetrying), SameOwner: true},
+			EvResumeAfterRetry: {From: []state.StageStatus{state.StatusRetrying, state.StatusAwaitingUserInput}, To: phaseDispatch, SameOwner: true},
+			EvManualRetry:      {From: []state.StageStatus{state.StatusFailed}, To: to(state.StatusPending), ResetSummaryRecovery: true},
 			EvBlockedByDep:     {From: []state.StageStatus{state.StatusPending}, To: to(state.StatusFailed)},
 			EvReady:            {From: []state.StageStatus{state.StatusPending, state.StatusRetrying}, To: to(state.StatusReady)},
 			EvHookFailed:       {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusHookFailed)},
 			EvHookResolved:     {From: []state.StageStatus{state.StatusHookFailed}, To: to(state.StatusRunning)},
 			EvPause:            {From: []state.StageStatus{state.StatusPending, state.StatusRunning, state.StatusPlanning, state.StatusRevising, state.StatusRetrying}, To: to(state.StatusPaused)},
 			EvContinue:         {From: []state.StageStatus{state.StatusPaused}, To: func(ctx GuardCtx) state.StageStatus { return ctx.PausedFrom }},
+			// Резерв меняет владельца (epoch := seq резерва): устаревший автор с прежним epoch больше не пройдёт.
+			EvSummaryRecover: {From: []state.StageStatus{state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput}, To: to(state.StatusRunning)},
 		},
 	}
 }
@@ -131,11 +151,17 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 	}
 	to = rule.To(ctx)
 	tr := &state.Transition{
-		StageID: stageID,
-		From:    from,
-		To:      to,
-		Event:   string(ev),
-		Reason:  reason,
+		StageID:         stageID,
+		From:            from,
+		To:              to,
+		Event:           string(ev),
+		Reason:          reason,
+		SameOwner:       rule.SameOwner && !ctx.NewOwner,
+		SummaryRecovery: ctx.SummaryRecovery,
+		ExpectedEpoch:   ctx.OwnerEpoch,
+	}
+	if rule.ResetSummaryRecovery {
+		tr.SummaryRecovery = &state.SummaryRecovery{}
 	}
 	if err := f.store.Apply(tr); err != nil {
 		if errors.Is(err, state.ErrConcurrentChange) {

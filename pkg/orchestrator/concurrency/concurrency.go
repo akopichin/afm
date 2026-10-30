@@ -69,6 +69,9 @@ type Manager struct {
 	defaultCmd   string
 	activeAgents sync.Map
 	agentWG      sync.WaitGroup
+	// spawned marks stages for which this process started an executor, queued or finished.
+	// It is set synchronously at spawn and never cleared.
+	spawned sync.Map
 
 	// shouldRun — единая точка входа для пред-запускной проверки стадии. nil означает "всегда запускать"
 	// (используется тестами, которым эта проверка не нужна).
@@ -128,6 +131,12 @@ func (m *Manager) IsActive(stageID string) bool {
 	return ok
 }
 
+// Spawned reports whether this process has started an executor for the stage.
+func (m *Manager) Spawned(stageID string) bool {
+	_, ok := m.spawned.Load(stageID)
+	return ok
+}
+
 // resolveCmd нормализует имя команды к тому же виду, что использует New при построении m.sems: "" →
 // дефолтная команда Manager'а.
 func (m *Manager) resolveCmd(cmd string) string {
@@ -148,6 +157,7 @@ func (m *Manager) semForCmd(cmd string) Semaphore {
 // SpawnAgentLease runs an agent with one transferable command-slot lease. Cancellation while waiting
 // prevents startup.
 func (m *Manager) SpawnAgentLease(ctx context.Context, s flow.Stage, run func(ctx context.Context, s flow.Stage, lease *Lease)) {
+	m.spawned.Store(s.ID, struct{}{})
 	m.agentWG.Add(1)
 	go func() {
 		defer m.agentWG.Done()

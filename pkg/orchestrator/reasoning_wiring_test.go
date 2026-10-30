@@ -37,7 +37,7 @@ func TestRunnerFor_ForwardsReasoning(t *testing.T) {
 	if got := execConfigReasoning(t, o.runnerFor(interactiveClaudeStage("build"), "implementation")); got != "high" {
 		t.Errorf("interactive author runner reasoning = %q, want high", got)
 	}
-	if got := execConfigReasoning(t, o.nonInteractiveRunner(flow.Stage{ID: "b2"}, "implementation")); got != "high" {
+	if got := execConfigReasoning(t, o.nonInteractiveRunner(flow.Stage{ID: "b2"}, "implementation", nil)); got != "high" {
 		t.Errorf("default-command runner reasoning = %q, want high", got)
 	}
 }

@@ -156,19 +156,33 @@ func TestFSM_Apply_AskUser(t *testing.T) {
 	}
 }
 
-func TestFSM_Apply_AskUser_FromRetryAndRevising(t *testing.T) {
-	for _, from := range []state.StageStatus{state.StatusRetrying, state.StatusRevising} {
-		fsm, store := newTestFSM(t, []string{"a"})
-		_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"})
+func TestFSM_Apply_AskUser_FromRetry(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"})
 
-		_, to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
-		store.Close()
-		if err != nil {
-			t.Fatalf("%s: Apply: %v", from, err)
-		}
-		if !ok || to != state.StatusAwaitingUserInput {
-			t.Errorf("%s->awaiting_user_input: got (%v, %v), want (awaiting_user_input, true)", from, to, ok)
-		}
+	_, to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !ok || to != state.StatusAwaitingUserInput {
+		t.Errorf("retrying->awaiting_user_input: got (%v, %v), want (awaiting_user_input, true)", to, ok)
+	}
+}
+
+// A question left open in revising belongs to the turn the Revise interrupted: handing the stage to the user would take
+// it from the Revise's feedback run.
+func TestFSM_Apply_AskUser_NotFromRevising(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	_ = store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRevising, Event: "test_setup"})
+
+	_, to, _, ok, err := fsm.Apply("a", EvAskUser, GuardCtx{Phase: "implementation"}, "")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if ok || to != state.StatusRevising {
+		t.Errorf("revising->awaiting_user_input: got (%v, %v), want the transition rejected", to, ok)
 	}
 }
 

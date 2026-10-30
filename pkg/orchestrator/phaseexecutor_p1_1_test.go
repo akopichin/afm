@@ -612,9 +612,11 @@ func TestP11_RunAutonomousWithFeedback_NoteOrder(t *testing.T) {
 	s := flow.Stage{ID: stageID, Agents: []flow.AgentType{flow.AgentAuto}}
 	o.runAutonomousWithFeedback(context.Background(), s)
 
+	// Раннер summary не пишет, поэтому за первым вызовом следуют ровно два summary-продолжения: порядок
+	// заметок проверяем у первого вызова.
 	calls := runner.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("expected exactly 1 RunAgent call, got %d: %+v", len(calls), calls)
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 RunAgent calls (run + 2 summary recoveries), got %d", len(calls))
 	}
 	assertNoteOrder(t, calls[0].prompt,
 		"Write execution_summary.md here when done.",
@@ -786,8 +788,9 @@ func TestP11_LogFileNames_PinnedPerVariant(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			call:     func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(context.Background(), s) },
-			wantLogs: []string{"autonomous-feedback.log"},
+			call: func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(context.Background(), s) },
+			// Раннер summary не пишет: первый вызов и два summary-продолжения идут в один и тот же лог.
+			wantLogs: []string{"autonomous-feedback.log", "autonomous-feedback.log", "autonomous-feedback.log"},
 		},
 	}
 

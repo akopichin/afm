@@ -1,6 +1,8 @@
 package stagefiles
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,4 +156,76 @@ func TestCheckCompletion_Verify(t *testing.T) {
 			t.Errorf("missing .done should still be incomplete work, got %v", err)
 		}
 	})
+}
+
+func TestCheckAutonomousCompletion_SummaryStates(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, stageDir string)
+		wantReason string // "" — summary принят
+	}{
+		{"missing", func(*testing.T, string) {}, SummaryMissing},
+		{"empty", func(t *testing.T, d string) { writeFile(t, SummaryPath(d), nil) }, SummaryEmpty},
+		{"whitespace only", func(t *testing.T, d string) { writeFile(t, SummaryPath(d), []byte(" \n\t\r\n")) }, SummaryEmpty},
+		{"non-empty without headings", func(t *testing.T, d string) { writeFile(t, SummaryPath(d), []byte("done")) }, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stageDir := t.TempDir()
+			tt.setup(t, stageDir)
+
+			err := CheckAutonomousCompletion(stageDir)
+			if tt.wantReason == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			var se *SummaryError
+			if !errors.As(err, &se) {
+				t.Fatalf("err = %v (%T), want *SummaryError", err, err)
+			}
+			if se.Reason != tt.wantReason || se.Path != SummaryPath(stageDir) {
+				t.Errorf("SummaryError = %+v, want reason %q path %q", se, tt.wantReason, SummaryPath(stageDir))
+			}
+			if IsIncompleteWorkError(err) {
+				t.Error("a summary error must not be an IncompleteWorkError: .done/plan/verify share no budget with it")
+			}
+		})
+	}
+}
+
+func TestCheckAutonomousCompletion_DirectoryKeepsPathError(t *testing.T) {
+	stageDir := t.TempDir()
+	if err := os.Mkdir(SummaryPath(stageDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CheckAutonomousCompletion(stageDir)
+	var pe *fs.PathError
+	if !errors.As(err, &pe) || pe.Path != SummaryPath(stageDir) {
+		t.Fatalf("err = %v, want *fs.PathError for the summary path", err)
+	}
+	var se *SummaryError
+	if errors.As(err, &se) {
+		t.Fatal("a directory is a read error, not a missing summary")
+	}
+}
+
+func TestCheckAutonomousCompletion_PermissionErrorViaSeam(t *testing.T) {
+	stageDir := t.TempDir()
+	orig := readSummaryFile
+	t.Cleanup(func() { readSummaryFile = orig })
+	readSummaryFile = func(name string) ([]byte, error) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+	}
+
+	err := CheckAutonomousCompletion(stageDir)
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("err = %v, want fs.ErrPermission preserved", err)
+	}
+	var se *SummaryError
+	if errors.As(err, &se) {
+		t.Fatal("EACCES must not be reported as a missing summary")
+	}
 }

@@ -10,6 +10,54 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 )
 
+func TestSpawnAgentLease_SpawnedBeforeAcquireAndAfterExit(t *testing.T) {
+	sem := make(ChannelSemaphore, 1)
+	sem <- struct{}{}
+	m := NewWithSemaphores(bus.NewCriticalBus(16), map[string]Semaphore{"": sem}, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		m.WaitAgents()
+	})
+	if m.Spawned("queued") {
+		t.Fatal("stage was registered before a spawn")
+	}
+	var calls atomic.Int32
+	m.SpawnAgentLease(ctx, flow.Stage{ID: "queued"}, func(context.Context, flow.Stage, *Lease) {
+		calls.Add(1)
+	})
+	// The sole semaphore slot is occupied, so this check does not depend on goroutine scheduling.
+	if !m.Spawned("queued") {
+		t.Error("spawn must be registered synchronously before acquiring the semaphore")
+	}
+	if m.IsActive("queued") || calls.Load() != 0 {
+		t.Error("queued executor must not be active or run before its slot is released")
+	}
+	<-sem
+	m.WaitAgents()
+	if calls.Load() != 1 || m.IsActive("queued") {
+		t.Fatal("executor did not finish exactly once")
+	}
+	if !m.Spawned("queued") {
+		t.Error("spawn record must survive executor exit")
+	}
+	// The registry is an observation for startup, not a lifetime gate on legitimate later turns.
+	m.SpawnAgent(ctx, flow.Stage{ID: "queued"}, func(context.Context, flow.Stage) { calls.Add(1) })
+	m.WaitAgents()
+	if calls.Load() != 2 {
+		t.Error("spawn registry blocked a later executor for the same stage")
+	}
+}
+
+func TestSpawnDetached_DoesNotRegisterSpawn(t *testing.T) {
+	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
+	m.SpawnDetached(context.Background(), func(context.Context) {})
+	m.WaitAgents()
+	if m.Spawned("") || m.Spawned("helper") {
+		t.Fatal("detached helper must not register a stage spawn")
+	}
+}
+
 func TestSpawnAgent_TracksActiveAndWaitGroup(t *testing.T) {
 	m := New(bus.NewCriticalBus(16), nil, "", 0, nil)
 	var ran atomic.Bool
