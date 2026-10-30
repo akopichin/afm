@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/akopichin/afm/pkg/jsonstrict"
+	"github.com/akopichin/afm/schema"
 )
 
 // MaxResultBytes — верхняя граница размера сырого JSON-ответа помощника, проверяется на ПОЛНОМ входе до
@@ -67,24 +68,24 @@ func (e Envelope) ClosesRequiredGate() bool {
 // resultEnvelope — JSON-форма kind:"result" (зеркало definitions.result схемы). Свободный текст (summary,
 // evidence, suggested_change, limitations) принимается и строкой, и списком строк (freetext.go).
 type resultEnvelope struct {
-	SchemaVersion   int           `json:"schema_version"`
-	Kind            Kind          `json:"kind"`
-	Verdict         Verdict       `json:"verdict"`
-	Summary         textField     `json:"summary"`
-	Findings        []Finding     `json:"findings,omitempty"`
-	Evidence        textListField `json:"evidence,omitempty"`
-	ContextVersion  string        `json:"context_version,omitempty"`
-	SuggestedChange textField     `json:"suggested_change,omitempty"`
-	Limitations     textField     `json:"limitations,omitempty"`
+	SchemaVersion   jsonstrict.Integer `json:"schema_version"`
+	Kind            Kind               `json:"kind"`
+	Verdict         Verdict            `json:"verdict"`
+	Summary         textField          `json:"summary"`
+	Findings        []Finding          `json:"findings,omitempty"`
+	Evidence        textListField      `json:"evidence,omitempty"`
+	ContextVersion  string             `json:"context_version,omitempty"`
+	SuggestedChange textField          `json:"suggested_change,omitempty"`
+	Limitations     textField          `json:"limitations,omitempty"`
 }
 
 // delegateEnvelope — JSON-форма kind:"delegate" (зеркало definitions.delegate схемы).
 type delegateEnvelope struct {
-	SchemaVersion int               `json:"schema_version"`
-	Kind          Kind              `json:"kind"`
-	Summary       textField         `json:"summary,omitempty"`
-	Children      []DelegateRequest `json:"children"`
-	Continuation  *Continuation     `json:"continuation,omitempty"`
+	SchemaVersion jsonstrict.Integer `json:"schema_version"`
+	Kind          Kind               `json:"kind"`
+	Summary       textField          `json:"summary,omitempty"`
+	Children      []DelegateRequest  `json:"children"`
+	Continuation  *Continuation      `json:"continuation,omitempty"`
 }
 
 // discriminator — первый проход разбора: достаточно только kind, чтобы решить,
@@ -101,12 +102,12 @@ type discriminator struct {
 // тот же контракт.
 func DecodeResult(raw []byte) (Envelope, error) {
 	if err := jsonstrict.EnforceMaxBytes(raw, MaxResultBytes); err != nil {
-		return Envelope{}, fmt.Errorf("assistant result exceeds %d byte limit (got %d)", MaxResultBytes, len(raw))
+		return Envelope{}, fmt.Errorf("assistant %w", err)
 	}
 
 	trimmed := bytes.TrimSpace(raw)
 	if err := jsonstrict.RejectFence(trimmed); err != nil {
-		return Envelope{}, errors.New("assistant result is wrapped in a markdown code fence; expected bare JSON")
+		return Envelope{}, fmt.Errorf("assistant %w", err)
 	}
 
 	env, err := decodeEnvelopeStrict(trimmed)
@@ -116,7 +117,7 @@ func DecodeResult(raw []byte) (Envelope, error) {
 
 	// Тот же узкий ремонт, что verify.DecodeModelResult: сырые управляющие символы ВНУТРИ строкового
 	// литерала (например, многострочная цитата кода в summary/detail без экранирования).
-	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed {
+	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed && jsonstrict.EnforceMaxBytes(repaired, MaxResultBytes) == nil {
 		if env2, err2 := decodeEnvelopeStrict(repaired); err2 == nil {
 			return env2, nil
 		}
@@ -133,12 +134,12 @@ func DecodeEnvelope(raw []byte) (Envelope, error) {
 // decodeEnvelopeStrict разбирает уже прошедший размер/fence-проверки документ: дискриминатор kind, дубли
 // ключей на любой глубине, затем доменная схема конкретного kind.
 func decodeEnvelopeStrict(raw []byte) (Envelope, error) {
+	if err := jsonstrict.DecodeNoDuplicates(raw); err != nil {
+		return Envelope{}, fmt.Errorf("parse assistant result JSON: %w", err)
+	}
 	var disc discriminator
 	if err := json.Unmarshal(raw, &disc); err != nil {
 		return Envelope{}, fmt.Errorf("parse assistant result JSON: %w", err)
-	}
-	if err := jsonstrict.DecodeNoDuplicates(raw); err != nil {
-		return Envelope{}, fmt.Errorf("duplicate key in assistant result JSON: %w", err)
 	}
 
 	switch disc.Kind {
@@ -147,9 +148,9 @@ func decodeEnvelopeStrict(raw []byte) (Envelope, error) {
 	case KindDelegate:
 		return decodeDelegateEnvelope(raw)
 	case "":
-		return Envelope{}, errors.New(`assistant result is missing required discriminator "kind"`)
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New(`assistant result is missing required discriminator "kind"`))
 	default:
-		return Envelope{}, fmt.Errorf("assistant result has unknown kind %q", disc.Kind)
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("assistant result has unknown kind %q", disc.Kind))
 	}
 }
 
@@ -159,15 +160,18 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 		return Envelope{}, err
 	}
 	if e.SchemaVersion != SupportedSchemaVersion {
-		return Envelope{}, fmt.Errorf("unsupported schema_version %d (expected %d)", e.SchemaVersion, SupportedSchemaVersion)
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("unsupported schema_version %d (expected %d)", e.SchemaVersion, SupportedSchemaVersion))
 	}
 	switch e.Verdict {
 	case VerdictPass, VerdictNeedsChanges, VerdictInconclusive:
 	default:
-		return Envelope{}, fmt.Errorf("invalid verdict value %q", e.Verdict)
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("invalid verdict value %q", e.Verdict))
 	}
 	if err := validateVerdictConsistency(e.Verdict, e.Findings); err != nil {
-		return Envelope{}, err
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, err)
+	}
+	if err := schema.Validate(schema.AssistantResult, raw); err != nil {
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.StructureIssue, err)
 	}
 
 	result := &Result{
@@ -179,7 +183,7 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 		SuggestedChange: string(e.SuggestedChange),
 		Limitations:     string(e.Limitations),
 	}
-	return Envelope{SchemaVersion: e.SchemaVersion, Kind: KindResult, Result: result}, nil
+	return Envelope{SchemaVersion: int(e.SchemaVersion), Kind: KindResult, Result: result}, nil
 }
 
 func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
@@ -188,7 +192,7 @@ func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
 		return Envelope{}, err
 	}
 	if e.SchemaVersion != SupportedSchemaVersion {
-		return Envelope{}, fmt.Errorf("unsupported schema_version %d (expected %d)", e.SchemaVersion, SupportedSchemaVersion)
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("unsupported schema_version %d (expected %d)", e.SchemaVersion, SupportedSchemaVersion))
 	}
 	if len(e.Children) == 0 {
 		return Envelope{}, errors.New(`assistant result with kind:"delegate" requires at least one child in "children"`)
@@ -197,8 +201,11 @@ func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
 		return Envelope{}, fmt.Errorf("assistant result with kind:\"delegate\" requests %d children, exceeding the cap of %d", len(e.Children), MaxDelegateChildren)
 	}
 
+	if err := schema.Validate(schema.AssistantResult, raw); err != nil {
+		return Envelope{}, jsonstrict.NewIssue(jsonstrict.StructureIssue, err)
+	}
 	delegate := &Delegate{Summary: string(e.Summary), Children: e.Children, Continuation: e.Continuation}
-	return Envelope{SchemaVersion: e.SchemaVersion, Kind: KindDelegate, Delegate: delegate}, nil
+	return Envelope{SchemaVersion: int(e.SchemaVersion), Kind: KindDelegate, Delegate: delegate}, nil
 }
 
 // strictDecode разбирает ОДИН JSON-документ без неизвестных полей и без
@@ -207,7 +214,7 @@ func decodeDelegateEnvelope(raw []byte) (Envelope, error) {
 func strictDecode(raw []byte, v any) error {
 	if err := jsonstrict.DecodeDisallowUnknown(raw, v); err != nil {
 		if errors.Is(err, jsonstrict.ErrTrailingContent) {
-			return errors.New("trailing content after JSON document in assistant result")
+			return fmt.Errorf("%w in assistant result", err)
 		}
 		return fmt.Errorf("parse assistant result JSON: %w", err)
 	}

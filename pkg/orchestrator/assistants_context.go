@@ -19,6 +19,7 @@ import (
 	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/redact"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/schema"
 )
 
 // ErrTaskContextTooLarge is returned by buildTaskContext BEFORE a task is admitted/run when the assembled
@@ -134,7 +135,15 @@ func (o *Orchestrator) outputContractBlock(task assistants.Task) string {
 	}
 	var b strings.Builder
 	b.WriteString("## Output contract\n\n")
-	b.WriteString(o.opts.Prompts.HelperResult)
+	contract := schema.AssistantResultOnly
+	if task.ProfileSnapshot.Capabilities.Delegate {
+		contract = schema.AssistantResult
+	}
+	body := strings.ReplaceAll(o.opts.Prompts.HelperResult, schema.JSON(schema.AssistantResultOnly), schema.JSON(contract))
+	b.WriteString(body)
+	if !strings.Contains(body, schema.JSON(contract)) {
+		b.WriteString("\n\nOutput JSON Schema:\n" + schema.JSON(contract))
+	}
 	if task.ProfileSnapshot.Capabilities.Delegate && o.opts.Prompts.HelperDelegate != "" {
 		b.WriteString("\n\n")
 		b.WriteString(o.opts.Prompts.HelperDelegate)

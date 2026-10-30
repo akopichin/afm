@@ -5,6 +5,25 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-29
 
+### Fix: recover malformed agent results without changing their verdict
+
+afm repairs bounded JSON formatting errors in helper, run-agent, verifier, and
+interactive question answers. It checks repaired answers against their original
+content and contract, preserving findings and recommendations; invalid repairs
+still fail. Supported CLI schema modes can guide format-only responses, with a
+prompt fallback when the CLI or provider cannot use them. See
+[Helpers and collaboration](docs/collaboration.md#helper-answers-and-protocol-errors)
+and [Verify](docs/verify.md#outcome-semantics).
+
+### Improvement: help autonomous authors finish their summary
+
+For a missing or empty `execution_summary.md`, afm can remind a Claude, GLM, or
+supported Codex author once in its current session, then offer up to two
+post-exit continuations. The budgets survive restart, and the reminders and
+outcomes remain visible after reconnect. Existing user Stop hooks and CLI
+settings are preserved; an unavailable Stop hook falls back to the post-exit
+continuations. See [Autonomous track](docs/autonomous-track.md).
+
 ### Fix: resume coordinators waiting for spawned helpers
 
 A helper can ask its coordinator a callback question while the coordinator

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/server"
 )
 
@@ -243,10 +244,9 @@ func newAgentWaitCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "wait",
 		Short: "Register a wait on a reply/addressed-message/task-result/board-key/stage-status condition",
-		Long: "Register a durable wait, then end your turn. --condition reply_to_all --message-ids a,b,c waits for the reply to " +
-			"EACH listed request (up to 16 distinct ids of requests you sent) with one deadline for the whole set: you are resumed " +
-			"once, after every one of them was answered, cancelled or expired. Read each item's outcome and the reason an item " +
-			"ended without an answer with `afm agent wait-status`; the answers are in your inbox.",
+		Long: "Register a durable wait and inspect the returned status. --condition reply_to_all --message-ids a,b,c waits for the reply to " +
+			"EACH listed request (up to 16 distinct ids of requests you sent) with one deadline for the whole set. If it returns yield, you are resumed " +
+			"once, after every one of them was answered, cancelled or expired.\n\n" + prompts.AgentWaitGuidance,
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {
@@ -337,6 +337,7 @@ func newAgentWaitStatusCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:          agentWaitStatusName,
 		Short:        "Read the outcome of each request of your batch waits (--wait-id for one batch)",
+		Long:         "Read your existing waits without registering another wait.\n\n" + prompts.AgentWaitGuidance,
 		SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentCmd(cmd, func(c2 *agentMeshClient) (any, error) {

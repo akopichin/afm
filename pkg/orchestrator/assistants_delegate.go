@@ -68,7 +68,7 @@ func (o *Orchestrator) admitChildren(
 	continuation *assistants.Continuation,
 ) ([]assistants.TaskID, error) {
 	return o.admitChildrenWithParentChange(ctx, operationID, parentTaskID, children, actor,
-		state.TaskStatusChangedPayload{Status: string(parentToStatus)}, continuation)
+		state.TaskStatusChangedPayload{Status: string(parentToStatus)}, continuation, nil)
 }
 
 // admitChildrenWithParentChange is admitChildren with the parent's whole status change — handleDelegate's
@@ -81,6 +81,7 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 	actor state.Actor,
 	parentTo state.TaskStatusChangedPayload,
 	continuation *assistants.Continuation,
+	check func(*state.RunState) error,
 ) ([]assistants.TaskID, error) {
 	if !o.opts.AssistantsEnabled {
 		return nil, &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "collaboration is disabled"}
@@ -219,6 +220,7 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 			PolicyRevision: rs.Assistants.Policy.Revision,
 			TaskStatus:     map[string]assistants.TaskStatus{parentIDStr: parent.Status},
 			MaxQuota:       maxQuota,
+			Check:          check,
 		},
 		Effects: effects,
 	}
@@ -355,7 +357,7 @@ func delegateOperationID(taskID assistants.TaskID, contextVersion assistants.Con
 // lease and clears its "task:" activity marker (T4a.4: no extra code needed here to "release the lease
 // before waiting", it falls out of handleDelegate doing nothing further after admitChildren commits).
 // turn is the delegating turn, ended by the same commit (its input consumed); 0 ends none.
-func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.TaskID, turn uint64, contextVersion assistants.ContextVersion, delegate assistants.Delegate) {
+func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.TaskID, turn uint64, contextVersion assistants.ContextVersion, delegate assistants.Delegate, guard func(*state.RunState) error) error {
 	continuation := delegate.Continuation
 	if continuation == nil {
 		// No explicit continuation trigger named — the only sensible default is "wake me once every
@@ -366,11 +368,19 @@ func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.Tas
 	actor := state.Actor{Kind: string(assistants.OriginAssistant), ID: string(taskID)}
 	opID := delegateOperationID(taskID, contextVersion)
 	parentTo := state.TaskStatusChangedPayload{Status: string(assistants.StatusWaitingChildren), Turn: turn}
-	if _, err := o.admitChildrenWithParentChange(ctx, opID, taskID, delegate.Children, actor, parentTo, continuation); err != nil {
+	if _, err := o.admitChildrenWithParentChange(ctx, opID, taskID, delegate.Children, actor, parentTo, continuation, guard); err != nil {
+		if errors.Is(err, errHelperOutputSuperseded) {
+			return err
+		}
+		if guard != nil {
+			rs := o.opts.Store.Snapshot()
+			if guardErr := guard(&rs); guardErr != nil {
+				return guardErr
+			}
+		}
 		// T4a.7 gives the parent a typed, actionable rejection instead of a bare failure — see
 		// assistants_reject.go's deliverDelegationRejection.
-		o.deliverDelegationRejection(taskID, turn, err)
-		return
+		return o.deliverDelegationRejection(taskID, turn, err, guard)
 	}
 	// Successful delegation resets the consecutive-rejection guard: the task reacted correctly, so a future
 	// rejection starts counting from zero again.
@@ -381,6 +391,7 @@ func (o *Orchestrator) handleDelegate(ctx context.Context, taskID assistants.Tas
 			log.Printf("assistants: task %s: drop the delegating turn's inbox cache: %v", taskID, err)
 		}
 	}
+	return nil
 }
 
 // requiredChildOpen reports whether taskID has at least one DIRECT required child that has not (yet, or

@@ -4,7 +4,10 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +20,9 @@ import (
 	"github.com/kaptinlin/jsonrepair"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/jsonstrict"
+	"github.com/akopichin/afm/pkg/memory"
+	"github.com/akopichin/afm/schema"
 )
 
 // Question is the record written when an agent calls ask_user.
@@ -212,6 +218,10 @@ type QuestionFile struct {
 // FindUnansweredQuestions scans stageDir for *.question.json files that do not
 // have a matching *.answer.json. Filenames must follow "<phase>.<id>.question.json".
 func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
+	return scanUnansweredQuestions(stageDir, nil)
+}
+
+func scanUnansweredQuestions(stageDir string, beforeRepair func()) ([]QuestionFile, error) {
 	entries, err := os.ReadDir(stageDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -245,30 +255,24 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 		if readErr != nil {
 			continue
 		}
-		var qf struct {
-			ID          string   `json:"id"`
-			Question    string   `json:"question"`
-			Options     []string `json:"options"`
-			AllowCustom *bool    `json:"allow_custom"`
-		}
-		malformed := false
-		if err := json.Unmarshal(raw, &qf); err != nil {
-			// jsonrepair исправляет типичные ошибки JSON, написанного агентом вручную.
-			repaired, repairErr := jsonrepair.Repair(string(raw))
-			if repairErr == nil {
-				repairErr = json.Unmarshal([]byte(repaired), &qf)
+		qf, fixed, source, decodeErr := RecoverQuestion(raw)
+		malformed := decodeErr != nil
+		if malformed {
+			log.Printf("WARN: %s: invalid question JSON: %v", qPath, decodeErr)
+			qf = QuestionPayload{Question: string(raw)}
+		} else if !bytes.Equal(raw, fixed) {
+			if beforeRepair != nil {
+				beforeRepair()
 			}
-			if repairErr != nil {
-				// Даже jsonrepair не справился.
-				log.Printf("WARN: %s: invalid JSON even after repair: %v", qPath, err)
-				malformed = true
-				qf.Question = string(raw)
-			} else if writeErr := os.WriteFile(qPath, []byte(repaired), 0644); writeErr != nil {
-				log.Printf("WARN: %s: repaired invalid JSON in memory but failed to persist fix: %v", qPath, writeErr)
-			} else {
-				log.Printf("INFO: %s: repaired invalid JSON: %v", qPath, err)
+			committed, err := persistQuestionRepair(qPath, raw, fixed, source)
+			if err != nil {
+				log.Printf("WARN: %s: failed to persist question repair: %v", qPath, err)
+			}
+			if !committed {
+				continue
 			}
 		}
+
 		// The FILENAME id is authoritative — it's what the agent's polling loop derives its answer path from and
 		// what the answerPath existence check above already keys off.
 		if id == "" {
@@ -286,18 +290,192 @@ func FindUnansweredQuestions(stageDir string) ([]QuestionFile, error) {
 	return out, nil
 }
 
-// CanParseQuestion reports whether raw is a *.question.json payload that FindUnansweredQuestions would
-// treat as parseable — a direct json.Unmarshal, or after jsonrepair.Repair.
-func CanParseQuestion(raw []byte) bool {
-	var probe map[string]any
-	if json.Unmarshal(raw, &probe) == nil {
-		return true
+// QuestionPayload keeps allow_custom optional: omitted and null both default to true.
+type QuestionPayload struct {
+	ID          string   `json:"id"`
+	Question    string   `json:"question"`
+	Options     []string `json:"options"`
+	AllowCustom *bool    `json:"allow_custom"`
+}
+
+const MaxQuestionBytes = 256 * 1024
+const maxQuestionRepairBytes = 16 * 1024
+
+// DecodeQuestion is the strict validator shared by file scans and format recovery.
+func DecodeQuestion(raw []byte) (QuestionPayload, error) {
+	if err := jsonstrict.EnforceMaxBytes(raw, MaxQuestionBytes); err != nil {
+		return QuestionPayload{}, err
 	}
-	repaired, err := jsonrepair.Repair(string(raw))
+	if err := jsonstrict.RejectFence(bytes.TrimSpace(raw)); err != nil {
+		return QuestionPayload{}, err
+	}
+	if err := jsonstrict.DecodeNoDuplicates(raw); err != nil {
+		return QuestionPayload{}, err
+	}
+	var q QuestionPayload
+	if err := jsonstrict.DecodeDisallowUnknown(raw, &q); err != nil {
+		return QuestionPayload{}, err
+	}
+	if err := schema.Validate(schema.Question, raw); err != nil {
+		return QuestionPayload{}, jsonstrict.NewIssue(jsonstrict.StructureIssue, err)
+	}
+	return q, nil
+}
+
+// RecoverQuestion bounds syntax repair and returns accepted bytes without changing the original input.
+func RecoverQuestion(raw []byte) (QuestionPayload, []byte, jsonstrict.RepairKind, error) {
+	q, original := DecodeQuestion(raw)
+	if original == nil {
+		return q, raw, "", nil
+	}
+	if len(raw) > MaxQuestionBytes || errors.Is(original, jsonstrict.ErrDuplicateKey) {
+		return QuestionPayload{}, nil, "", original
+	}
+	if len(bytes.TrimSpace(raw)) > maxQuestionRepairBytes {
+		return QuestionPayload{}, nil, "", original
+	}
+	input := quoteQuestionKeys(bytes.TrimSpace(raw))
+	_, complete := jsonstrict.SingleObject(input)
+	if !complete {
+		return QuestionPayload{}, nil, "", jsonstrict.NewIssue(jsonstrict.RefusalIssue, original)
+	}
+	// Valid documents with an invalid shape must not pass through a syntax repairer.
+	if json.Valid(raw) {
+		return QuestionPayload{}, nil, "", original
+	}
+	if err := jsonstrict.DecodeNoDuplicates(input); errors.Is(err, jsonstrict.ErrDuplicateKey) {
+		return QuestionPayload{}, nil, "", err
+	}
+	fixed, err := jsonrepair.Repair(string(input))
+	if err == nil {
+		if q, err := DecodeQuestion([]byte(fixed)); err == nil {
+			return q, []byte(fixed), jsonstrict.MechanicalRepair, nil
+		}
+	}
+	return QuestionPayload{}, nil, "", original
+}
+
+// A missing opening key quote otherwise looks like an unfinished string to the boundary scanner.
+func quoteQuestionKeys(raw []byte) []byte {
+	out := make([]byte, 0, len(raw))
+	inString, escaped, keyPosition := false, false, false
+	for i, b := range raw {
+		if !inString && keyPosition && b != ' ' && b != '\n' && b != '\r' && b != '\t' {
+			for _, key := range []string{"id", "question", "options", "allow_custom"} {
+				prefix := key + `"`
+				if bytes.HasPrefix(raw[i:], []byte(prefix)) && bytes.HasPrefix(bytes.TrimSpace(raw[i+len(prefix):]), []byte(":")) {
+					out = append(out, '"')
+					inString = true
+					break
+				}
+			}
+			keyPosition = false
+		}
+		out = append(out, b)
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case b == '\\':
+				escaped = true
+			case b == '"':
+				inString = false
+			default:
+				// Any other byte inside a string is content.
+			}
+		} else {
+			switch b {
+			case '"':
+				inString = true
+			case '{', ',':
+				keyPosition = true
+			default:
+				// Other bytes keep the current key position.
+			}
+		}
+	}
+	return out
+}
+
+var questionRepairMu sync.Mutex
+
+func persistQuestionRepair(path string, raw, fixed []byte, source jsonstrict.RepairKind) (bool, error) {
+	committed, err := CommitQuestionRepair(path, raw, fixed)
+	if err != nil || !committed {
+		return false, err
+	}
+	rawHash := fmt.Sprintf("%x", sha256.Sum256(raw))
+	receipt, err := json.Marshal(map[string]any{
+		"contract": schema.Question, "owner": "question/" + filepath.Base(path),
+		"source": source, "validation": "accepted", "raw_sha256": rawHash,
+		"candidate_sha256": fmt.Sprintf("%x", sha256.Sum256(fixed)), "attempts": 0,
+	})
 	if err != nil {
-		return false
+		return false, err
 	}
-	return json.Unmarshal([]byte(repaired), &probe) == nil
+	return true, memory.AtomicWrite(path+"."+rawHash+".recovery.json", receipt)
+}
+
+// CommitQuestionRepair fences both local and model candidates against a newer question or an answer.
+func CommitQuestionRepair(path string, raw, fixed []byte) (bool, error) {
+	questionRepairMu.Lock()
+	defer questionRepairMu.Unlock()
+	if _, err := DecodeQuestion(fixed); err != nil {
+		return false, err
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(current, raw) {
+		return false, nil
+	}
+	answerPath := strings.TrimSuffix(path, ".question.json") + ".answer.json"
+	if _, err := os.Stat(answerPath); !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := preserveQuestionRaw(path, raw); err != nil {
+		return false, err
+	}
+	if err := memory.AtomicWrite(path, fixed); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func preserveQuestionRaw(path string, raw []byte) error {
+	// Reused question IDs need separate immutable snapshots for distinct payloads.
+	for _, snapshot := range []string{path + ".raw", fmt.Sprintf("%s.%x.raw", path, sha256.Sum256(raw))} {
+		f, err := os.OpenFile(snapshot, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if os.IsExist(err) {
+			saved, err := os.ReadFile(snapshot)
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(saved, raw) {
+				return nil
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, writeErr := f.Write(raw)
+		if writeErr == nil {
+			writeErr = f.Sync()
+		}
+		closeErr := f.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+	return errors.New("question raw snapshot differs from its content hash")
+}
+
+func CanParseQuestion(raw []byte) bool {
+	_, _, _, err := RecoverQuestion(raw)
+	return err == nil
 }
 
 // autoAnswerFallbackText is the answer afm synthesizes for an open question
@@ -341,6 +519,8 @@ func stripRecommendedMarker(opt string) (string, bool) {
 
 // WriteAnswerFile atomically creates <stageDir>/<phase>.<id>.answer.json.
 func WriteAnswerFile(stageDir, phase, id, answer string, fromOptions bool) error {
+	questionRepairMu.Lock()
+	defer questionRepairMu.Unlock()
 	answerPath := filepath.Join(stageDir, phase+"."+id+".answer.json")
 	payload, err := json.Marshal(map[string]any{
 		"id": id, "answer": answer, "from_options": fromOptions,

@@ -6,7 +6,7 @@ Rules:
 - `schema_version` is always `1`.
 - `kind` is always `"delegate"`.
 - `summary` is optional: a short note on why you are delegating.
-- `children[]` requires 1 to 8 entries, each with `profile_id`, `title`, `instruction`, `mode` (`advisory` or `required`), and `trigger` (`one_shot`, `checkpoints`, or `on_completion`).
+- `children[]` requires 1 to 8 entries, each with `profile_id`, `title`, and `instruction`. Optional `mode` is `advisory` or `required`; omitted, empty, or null defaults to `advisory`. Optional `trigger` is `one_shot`, `checkpoints`, or `on_completion`; omitted, empty, or null defaults to `one_shot`.
 - `continuation` is optional: `trigger` (same enum as above) says when you want to be woken up once your children report back, and `note` is a short reminder of what you are waiting for.
 - Any field not listed here is rejected outright — do not add your own.
 

@@ -70,6 +70,10 @@ const (
 	// EvQuotaReset — the wait is over: dispatch back to the phase the stage was in (phaseDispatch), like
 	// EvUserAnswered. Callers fence it with GuardCtx.ExpectStageSeq of the park they decided it for.
 	EvQuotaReset FSMEvent = "quota_reset"
+	// EvReserveSummaryHook — a self-transition of a running stage that records a summary step before it happens:
+	// the Stop hook reminder, or the launch of a post-exit correction. Fenced by the turn's epoch; the stage
+	// does not move, so it resolves no wait and completes nothing.
+	EvReserveSummaryHook FSMEvent = "reserve_summary_hook"
 )
 
 type GuardCtx struct {
@@ -93,6 +97,9 @@ type GuardCtx struct {
 	ExpectStageSeq *uint64
 	// Quota is recorded by EvAwaitQuota, and by EvContinue back into a park (the one-shot manual probe).
 	Quota *state.QuotaWait
+	// SummaryStep is recorded by the transition that reserves a correction of a missing execution_summary.md:
+	// EvScheduleRetry for a post-exit continuation, EvReserveSummaryHook for the Stop hook reminder.
+	SummaryStep *state.SummaryStep
 }
 
 type Rule struct {
@@ -164,6 +171,8 @@ func NewFSM(store *state.Store) *FSM {
 			// can hit the limit too. EvQuotaReset returns to the phase; Pause/Fail leave the wait like any other.
 			EvAwaitQuota: {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusRetrying, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusAwaitingQuota)},
 			EvQuotaReset: {From: []state.StageStatus{state.StatusAwaitingQuota}, To: phaseDispatch},
+			// EvReserveSummaryHook stays in running: it only records the reminder (see its doc comment).
+			EvReserveSummaryHook: {From: []state.StageStatus{state.StatusRunning}, To: to(state.StatusRunning)},
 			// Разрешаем retry из AwaitingUserInput/AwaitingPeer: поллер мог сменить статус до возврата
 			// ретраибельной ошибки агента.
 			EvScheduleRetry:    {From: []state.StageStatus{state.StatusPlanning, state.StatusRunning, state.StatusAwaitingUserInput, state.StatusAwaitingPeer}, To: to(state.StatusRetrying)},
@@ -214,6 +223,7 @@ func (f *FSM) Apply(stageID string, ev FSMEvent, ctx GuardCtx, reason string) (f
 
 		PeerWaits:      ctx.PeerWaits,
 		Quota:          ctx.Quota,
+		SummaryStep:    ctx.SummaryStep,
 		ExpectEpoch:    ctx.ExpectEpoch,
 		ExpectStageSeq: ctx.ExpectStageSeq,
 	}

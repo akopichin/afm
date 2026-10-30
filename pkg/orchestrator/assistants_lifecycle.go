@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -16,9 +17,11 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/jsonstrict"
 	"github.com/akopichin/afm/pkg/memory"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/schema"
 )
 
 // helperAgentRunner is the subsituteable seam for one helper-agent turn — mirrors verifyAgentRunner.
@@ -88,14 +91,32 @@ func (o *Orchestrator) recordTaskUsage(taskID assistants.TaskID, profileID assis
 	}
 }
 
-// persistTaskResult durably (atomic write) saves an accepted assistants.Result under the task's own
-// directory (T3.6's result.json).
-func (o *Orchestrator) persistTaskResult(dir string, result assistants.Result) error {
-	raw, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return err
+// persistTaskResult makes the latest result visible before completion and returns a rollback for rejection.
+// Even a failed atomic write may have renamed the file before its directory sync failed.
+func (o *Orchestrator) persistTaskResult(dir string, raw []byte) (func() error, error) {
+	path := filepath.Join(dir, "result.json")
+	previous, readErr := os.ReadFile(path)
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return nil, readErr
 	}
-	return memory.AtomicWrite(filepath.Join(dir, "result.json"), raw)
+	restore := func() error {
+		if readErr == nil {
+			return memory.AtomicWrite(path, previous)
+		}
+		if err := os.Remove(path); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		parent, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		defer parent.Close()
+		return parent.Sync()
+	}
+	return restore, memory.AtomicWrite(path, raw)
 }
 
 // taskCacheView is task.json's shape — a CACHE of a few identity fields for quick inspection, never the
@@ -159,7 +180,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		o.settleWatcherBinding(taskID)
 	}()
 
-	turn, ok := o.prepareHelperTurn(taskID, task)
+	turn, ok := o.prepareHelperTurn(ctx, taskID, task)
 	if !ok {
 		return
 	}
@@ -193,8 +214,35 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	// that apart from a run shutdown, which has no other writer and must still commit its own terminal status.
 	end.finalizedByOther = o.taskTerminal(taskID)
 
-	// Both follow-ups use the run's ctx, not runCtx: they must outlive this task's own cancellation.
-	if o.classifyHelperFailure(ctx, taskID, task, end) {
+	// Only final classification/commit outlive task cancellation; formatting belongs to this turn.
+	if o.classifyHelperFailure(ctx, taskID, task, turn, end) {
+		return
+	}
+	turn.runCtx = runCtx
+	end.recovery, end.err = o.recoverHelperOutput(runCtx, taskID, task, turn, []byte(end.outcome.RawText))
+	if end.err == nil && end.recovery.Provenance.Attempts == 0 {
+		turn.runCtx = nil // A locally complete answer retains the existing shutdown/hold completion semantics.
+	}
+	if !o.helperOutputCurrent(taskID, task, turn) {
+		o.interruptHelperOutput(ctx, taskID, task, turn)
+		return
+	}
+	var runErr *outputRunError
+	if errors.As(end.err, &runErr) {
+		if err := persistOutputRecovery(turn.dir, fmt.Sprintf("turn-%d-output", turn.number), end.recovery); err != nil {
+			if o.helperOutputCommitHook != nil {
+				o.helperOutputCommitHook()
+			}
+			finishErr := o.finishTaskTurnReplyingGuarded(taskID, end.consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist recovery: "+err.Error(), nil, o.helperTurnGuard(taskID, task, turn), nil)
+			if finishErr != nil && !o.helperOutputCurrent(taskID, task, turn) {
+				o.interruptHelperOutput(ctx, taskID, task, turn)
+			}
+			return
+		}
+		end.outcome = executor.HelperOutcome{ProcessErr: runErr.err}
+		end.err = runErr.err
+		end.consumed = 0
+		o.classifyHelperFailure(ctx, taskID, task, turn, end)
 		return
 	}
 	o.commitHelperResult(ctx, taskID, task, turn, end)
@@ -202,15 +250,18 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 
 // helperTurn is what a helper turn needs once its preparation succeeded.
 type helperTurn struct {
+	runCtx     context.Context
 	dir        string
 	ctx        TaskContext
 	number     uint64
+	holdEpoch  uint64
 	logFile    string
 	resultFile string
 }
 
 // helperTurnEnd is what the entry method observed around the agent call; classification and commit read it.
 type helperTurnEnd struct {
+	recovery         outputRecovery
 	outcome          executor.HelperOutcome
 	err              error
 	consumed         uint64 // the turn number when the turn ran to its end, else 0
@@ -221,7 +272,7 @@ type helperTurnEnd struct {
 
 // prepareHelperTurn creates the task's workspace and context and starts the turn. It reports false when the
 // turn must not run: the task already failed here (finishTaskFrom) or the turn did not start.
-func (o *Orchestrator) prepareHelperTurn(taskID assistants.TaskID, task assistants.Task) (helperTurn, bool) {
+func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task) (helperTurn, bool) {
 	dir := o.taskDir(taskID)
 	if err := ensureTaskWorkspace(dir, o.taskScratchDir(taskID)); err != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: create task workspace: "+err.Error())
@@ -253,7 +304,7 @@ func (o *Orchestrator) prepareHelperTurn(taskID assistants.TaskID, task assistan
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
 		return helperTurn{}, false
 	}
-	number, started := o.startTurn(taskID, tc.inboxIDs)
+	number, holdEpoch, started := o.startTurn(taskID, tc.inboxIDs)
 	if !started {
 		return helperTurn{}, false
 	}
@@ -264,19 +315,43 @@ func (o *Orchestrator) prepareHelperTurn(taskID assistants.TaskID, task assistan
 	// nonempty text (RunHelperAgent, pkg/executor/hardening.go). Without clearing it first, a textless turn
 	// would silently serve an EARLIER turn's answer as if it were this one's.
 	if rerr := os.Remove(resultFile); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: clear stale raw answer: "+rerr.Error())
+		// The turn already started, so a Pause in this window supersedes it: requeue instead of failing.
+		started := helperTurn{number: number, holdEpoch: holdEpoch}
+		if o.helperOutputCommitHook != nil {
+			o.helperOutputCommitHook()
+		}
+		err := o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed,
+			"assistants: clear stale raw answer: "+rerr.Error(), nil, o.helperTurnGuard(taskID, task, started), nil)
+		if err != nil && !o.helperOutputCurrent(taskID, task, started) {
+			o.interruptHelperOutput(ctx, taskID, task, started)
+		}
 		return helperTurn{}, false
 	}
 	return helperTurn{
-		dir: dir, ctx: tc, number: number,
+		dir: dir, ctx: tc, number: number, holdEpoch: holdEpoch,
 		logFile: filepath.Join(dir, "agent.log"), resultFile: resultFile,
 	}, true
 }
 
 // classifyHelperFailure ends, parks or hands over a turn without an acceptable answer and reports whether it did.
 // The order is the precedence; false means the turn has a plain answer for commitHelperResult.
-func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assistants.TaskID, task assistants.Task, end helperTurnEnd) bool {
+func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, end helperTurnEnd) bool {
 	outcome, err, consumed := end.outcome, end.err, end.consumed
+	guard := o.helperTurnGuard(taskID, task, turn)
+	beforeCommit := func() {
+		if o.helperOutputCommitHook != nil {
+			o.helperOutputCommitHook()
+		}
+	}
+	interruptIfSuperseded := func(err error) {
+		if err != nil && !o.helperOutputCurrent(taskID, task, turn) {
+			o.interruptHelperOutput(ctx, taskID, task, turn)
+		}
+	}
+	fail := func(reason string) {
+		beforeCommit()
+		interruptIfSuperseded(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil))
+	}
 
 	// The run itself is shutting down (Ctrl+C): an invocation it cut short did not fail. The task stays
 	// running, exactly like an interrupted stage, and recoverAssistants re-queues it when the run is resumed.
@@ -292,7 +367,8 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	var limit *executor.UsageLimitError
 	if errors.As(err, &limit) || errors.As(outcome.ProcessErr, &limit) {
 		if !end.finalizedByOther {
-			o.parkTaskForQuota(ctx, taskID, limit)
+			beforeCommit()
+			interruptIfSuperseded(o.parkTaskForQuota(ctx, taskID, limit, guard))
 		}
 		return true
 	}
@@ -300,7 +376,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 		if end.finalizedByOther {
 			return true
 		}
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: helper execution failed: "+err.Error())
+		fail("assistants: helper execution failed: " + err.Error())
 		return true
 	}
 	switch {
@@ -309,36 +385,18 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 		// subprocess reaching here must not clobber it with a second, contradictory status.
 		return true
 	case outcome.TimedOut:
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "helper agent timed out")
+		fail("helper agent timed out")
 		return true
 	case !outcome.ProcessOK:
-		// A PauseTask (or StopAndClarify, T4.7) on an ALREADY-RUNNING task cancels runCtx directly (not via
-		// executor's InterruptCh), which RunHelperAgent's default branch (pkg/executor/hardening.go) surfaces
-		// as a bare !ProcessOK outcome — indistinguishable at this point from a genuine crash. CancelTask
-		// already returned above via finalizedByOther, so reaching here with ANY signal set below can only mean
-		// a deliberate pause/clarify, never a real crash:
-		//   - taskPausePending (LoadAndDelete, consumed exactly once HERE): PauseTask's signal, set BEFORE
-		//     cancel() — NOT the live hold state, which an immediate ContinueTask can already have cleared by
-		//     the time this goroutine reaches this check (see its doc comment on orchestrator.go).
-		//   - taskClarifyPending (LoadAndDelete, consumed exactly once HERE): StopAndClarify's signal — it has
-		//     no separate "clear" step precisely to avoid racing THIS check (see its doc comment).
-		//   - taskHeld: belt-and-suspenders fallback for the (non-racy) case where Continue has not run yet.
-		// Requeue either way, with the same post-commit lost-wakeup retry as spawnTask's pre-start pause path
-		// (a concurrent ContinueTask may have cleared the hold and tried to reschedule before this requeue
-		// committed, in which case it saw status still "running" and silently no-op'd).
-		_, pausedBeforeClassification := o.taskPausePending.LoadAndDelete(taskID)
-		_, clarifying := o.taskClarifyPending.LoadAndDelete(taskID)
+		// Pause/clarify cancels runCtx just like a crash; its marker survives a concurrent Continue.
+		// Requeue consumes the markers and retries scheduling to close Continue's lost-wakeup window.
+		_, pausedBeforeClassification := o.taskPausePending.Load(taskID)
+		_, clarifying := o.taskClarifyPending.Load(taskID)
 		if pausedBeforeClassification || clarifying || o.taskHeld(taskID) {
-			o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
-			if !o.taskHeld(taskID) {
-				o.maybeScheduleTask(ctx, taskID)
-			}
-			if o.taskRequeuePreDeferHook != nil {
-				o.taskRequeuePreDeferHook(taskID)
-			}
+			o.requeuePausedTurn(ctx, taskID)
 			return true
 		}
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, o.helperFailureReason(outcome.ProcessErr))
+		fail(o.helperFailureReason(outcome.ProcessErr))
 		return true
 	}
 
@@ -348,51 +406,170 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	// classified BEFORE the executor's "no final answer" protocol error is looked at. This task's own
 	// concurrency lease is released simply by runHelperTask returning next.
 	if o.turnYielded(end.waiter, end.waitsBefore, outcome.RawText) {
-		o.parkYieldedTurn(ctx, taskID, consumed, end.waiter, end.waitsBefore)
+		beforeCommit()
+		interruptIfSuperseded(o.parkYieldedTurn(ctx, taskID, consumed, end.waiter, end.waitsBefore, guard))
 		return true
 	}
 	if outcome.ProtocolErr != nil {
-		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error())
+		beforeCommit()
+		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error(), guard))
 		return true
 	}
 	return false
 }
 
-// commitHelperResult decodes the turn's answer (once, with mechanical repair) and commits its outcome:
-// delegation, a result for a watcher, a run agent, a stage agent's helper or a plain one-shot task — each one
-// operation — or a failed answer.
-func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, end helperTurnEnd) {
-	consumed := end.consumed
-	env, repaired, decErr := assistants.DecodeResultWithRepair([]byte(end.outcome.RawText))
-	if decErr != nil {
-		// A malformed/invalid machine answer is a protocol error — NEVER treated as a "pass" (dev-plan's
-		// §9.3 acceptance criterion), regardless of how plausible the raw text looks. Mechanical repair has
-		// already been tried and failed — decErr is the ORIGINAL strict decode error.
-		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+decErr.Error())
+func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, raw []byte) (outputRecovery, error) {
+	contract := schema.AssistantResultOnly
+	if task.ProfileSnapshot.Capabilities.Delegate {
+		contract = schema.AssistantResult
+	}
+	validator := func(raw []byte) ([]byte, jsonstrict.RepairKind, error) {
+		env, candidate, kind, err := assistants.RecoverResult(raw)
+		if err != nil {
+			return nil, "", err
+		}
+		if env.Kind == assistants.KindDelegate && !task.ProfileSnapshot.Capabilities.Delegate {
+			return nil, "", jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New("profile cannot delegate"))
+		}
+		if env.Result != nil && env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
+			return nil, "", jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New("verdict pass with an unresolved required child"))
+		}
+		return candidate, kind, nil
+	}
+	cfg := o.outputFormatterConfig(task.ProfileSnapshot.Command, task.RootStageID)
+	cfg.OnUsage = o.recordTaskUsage(taskID, task.ProfileID)
+	cfg.OnLimitWarning = o.limitWarningSink(task.RootStageID, taskID)
+	prefix := fmt.Sprintf("turn-%d-output", turn.number)
+	if err := memory.AtomicWrite(filepath.Join(turn.dir, prefix+".raw.json"), raw); err != nil {
+		return outputRecovery{}, fmt.Errorf("persist immutable helper output: %w", err)
+	}
+	owner := fmt.Sprintf("task/%s/generation/%d/turn/%d", taskID, task.TaskGeneration, turn.number)
+	return recoverOutput(ctx, contract, owner, raw, validator, outputFormatAttempts, o.outputFormatter(cfg, turn.dir, prefix, taskID))
+}
+
+func (o *Orchestrator) helperOutputCurrent(taskID assistants.TaskID, task assistants.Task, turn helperTurn) bool {
+	if turn.runCtx != nil && turn.runCtx.Err() != nil {
+		return false
+	}
+	rs := o.opts.Store.Snapshot()
+	return helperOutputOwned(&rs, taskID, task, turn)
+}
+
+var errHelperOutputSuperseded = errors.New("helper output no longer owns the turn")
+
+func helperOutputOwned(rs *state.RunState, taskID assistants.TaskID, task assistants.Task, turn helperTurn) bool {
+	current := rs.Assistants.Tasks[taskID]
+	if current == nil {
+		return false
+	}
+	held := len(current.Holds) > 0
+	// Ancestor holds stop new work; a produced local result can finish unless its own task was paused.
+	if turn.runCtx != nil {
+		held, _ = rs.Assistants.EffectivelyHeld(taskID)
+	}
+	return current.Status == assistants.StatusRunning && current.Turn == turn.number && current.HoldEpoch == turn.holdEpoch &&
+		current.TaskGeneration == task.TaskGeneration && current.RootGeneration == task.RootGeneration &&
+		rs.Assistants.RootGenerations[task.RootStageID] == task.RootGeneration && !held
+}
+
+func (o *Orchestrator) helperTurnGuard(taskID assistants.TaskID, task assistants.Task, turn helperTurn) func(*state.RunState) error {
+	return func(rs *state.RunState) error {
+		if !helperOutputOwned(rs, taskID, task, turn) || (turn.runCtx != nil && turn.runCtx.Err() != nil) {
+			return errHelperOutputSuperseded
+		}
+		return nil
+	}
+}
+
+func (o *Orchestrator) interruptHelperOutput(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn) {
+	rs := o.opts.Store.Snapshot()
+	current := rs.Assistants.Tasks[taskID]
+	if current == nil || current.Turn != turn.number || current.TaskGeneration != task.TaskGeneration || current.RootGeneration != task.RootGeneration || rs.Assistants.RootGenerations[task.RootStageID] != task.RootGeneration {
 		return
 	}
+	if current.Status.Terminal() || ctx.Err() != nil {
+		return
+	}
+	// A rejected ownership guard proves takeover even before PauseTask signals the live process.
+	o.requeuePausedTurn(ctx, taskID)
+}
+
+func (o *Orchestrator) requeuePausedTurn(ctx context.Context, taskID assistants.TaskID) {
+	o.taskPausePending.LoadAndDelete(taskID)
+	o.taskClarifyPending.LoadAndDelete(taskID)
+	o.finishTaskTurn(taskID, 0, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
+	if !o.taskHeld(taskID) {
+		o.maybeScheduleTask(ctx, taskID)
+	}
+	if o.taskRequeuePreDeferHook != nil {
+		o.taskRequeuePreDeferHook(taskID)
+	}
+}
+
+// commitHelperResult runs after recovery under the original turn's ownership.
+func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, end helperTurnEnd) {
+	consumed := end.consumed
+	guard := o.helperTurnGuard(taskID, task, turn)
+	interruptIfSuperseded := func(err error) {
+		if err != nil && !o.helperOutputCurrent(taskID, task, turn) {
+			o.interruptHelperOutput(ctx, taskID, task, turn)
+		}
+	}
+	fail := func(reason string, answered bool) {
+		if o.helperOutputCommitHook != nil {
+			o.helperOutputCommitHook()
+		}
+		if answered {
+			interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, reason, guard))
+		} else {
+			interruptIfSuperseded(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil))
+		}
+	}
+	if !o.helperOutputCurrent(taskID, task, turn) {
+		o.interruptHelperOutput(ctx, taskID, task, turn)
+		return
+	}
+	if err := persistOutputRecovery(turn.dir, fmt.Sprintf("turn-%d-output", turn.number), end.recovery); err != nil {
+		fail("assistants: persist recovery: "+err.Error(), false)
+		return
+	}
+	if end.err != nil {
+		fail(protocolErrorPrefix+end.err.Error(), true)
+		return
+	}
+	env, decErr := assistants.DecodeResult(end.recovery.Candidate)
+	if decErr != nil {
+		fail(protocolErrorPrefix+decErr.Error(), true)
+		return
+	}
+	repaired := end.recovery.Provenance.Source != ""
 	if repaired {
-		// Observational only — repair changes syntax, never the model's own verdict text.
 		o.publishNotice(bus.Event{Type: bus.EventHelperResultRepaired, StageID: task.RootStageID, Data: map[string]any{
-			"task_id": string(taskID),
+			"task_id": string(taskID), "source": end.recovery.Provenance.Source,
+			"contract": end.recovery.Provenance.Contract, "owner": end.recovery.Provenance.Owner, "validation": validationAccepted,
 		}})
 	}
 	if env.Kind == assistants.KindDelegate {
 		// T4a.3: admit the requested children and move this task to waiting_children — never treated as a
 		// completed check (assistants.Envelope.ClosesRequiredGate is false for kind:"delegate" by
 		// construction, T4a.1).
-		o.handleDelegate(ctx, taskID, consumed, turn.ctx.Version, *env.Delegate)
+		if o.helperOutputCommitHook != nil {
+			o.helperOutputCommitHook()
+		}
+		if err := o.handleDelegate(ctx, taskID, consumed, turn.ctx.Version, *env.Delegate, guard); errors.Is(err, errHelperOutputSuperseded) {
+			o.interruptHelperOutput(ctx, taskID, task, turn)
+		}
 		return
 	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
-		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+"unsupported kind")
+		fail(protocolErrorPrefix+"unsupported kind", true)
 		return
 	}
 	if env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
 		// dev-plan.md's TestResult_ConsistencyWithRequiredChildren: a required child that has not (yet, or
 		// ever will) reached verdict:"pass" keeps this gate closed — the model's own claimed "pass" text does
 		// not override it.
-		o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+"verdict:\"pass\" with an unresolved required child")
+		fail(protocolErrorPrefix+"verdict:\"pass\" with an unresolved required child", true)
 		return
 	}
 
@@ -402,8 +579,17 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	result := o.redactResult(*env.Result)
 	result.ContextVersion = turn.ctx.Version
 	result.Repaired = repaired
-	if werr := o.persistTaskResult(turn.dir, result); werr != nil {
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist result: "+werr.Error())
+	if !o.helperOutputCurrent(taskID, task, turn) {
+		o.interruptHelperOutput(ctx, taskID, task, turn)
+		return
+	}
+	resultBytes, marshalErr := json.MarshalIndent(result, "", "  ")
+	if marshalErr != nil {
+		fail("assistants: marshal result: "+marshalErr.Error(), false)
+		return
+	}
+	if werr := memory.AtomicWrite(filepath.Join(turn.dir, fmt.Sprintf("turn-%d-result.json", turn.number)), resultBytes); werr != nil {
+		fail("assistants: persist result: "+werr.Error(), false)
 		return
 	}
 	// The decoded result is attached as a SECOND effect of the SAME finish operation — never a separate
@@ -411,8 +597,43 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	// result event does not exist yet (see finishTaskFrom's extra doc comment).
 	resultEff, eerr := taskResultEffect(taskID, result)
 	if eerr != nil {
-		o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: marshal result event: "+eerr.Error())
+		fail("assistants: marshal result event: "+eerr.Error(), false)
 		return
+	}
+
+	if o.helperOutputCommitHook != nil {
+		o.helperOutputCommitHook()
+	}
+	restore, writeErr := o.persistTaskResult(turn.dir, resultBytes)
+	restoreLatest := func() bool {
+		if restore != nil {
+			if err := restore(); err != nil {
+				o.setFatal(fmt.Errorf("assistants: task %s: restore latest result: %w", taskID, err))
+				return false
+			}
+		}
+		return true
+	}
+	if writeErr != nil {
+		if restoreLatest() {
+			fail("assistants: persist latest result: "+writeErr.Error(), false)
+		}
+		return
+	}
+	_, finalPass := o.taskFinalPass.Load(taskID)
+	committed := func(state.OperationResult) {
+		if o.helperOutputCommittedHook != nil {
+			o.helperOutputCommittedHook()
+		}
+		if isWatcherTrigger(task.Trigger) && finalPass {
+			o.taskFinalPass.Delete(taskID)
+		}
+	}
+	finish := func(status assistants.TaskStatus, reason string, replies []plannedMessage) {
+		err := o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, status, reason, replies, guard, committed, resultEff)
+		if err != nil && restoreLatest() {
+			interruptIfSuperseded(err)
+		}
 	}
 
 	// Этап 5 (T5.4): a checkpoints/on_completion watcher's successful turn lands in the non-terminal
@@ -421,12 +642,9 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	// reporting MaxPasses reached — see watch_tasks.go's commitAndFire/finalizeWatcherOnCompletion, both of
 	// which Store the taskFinalPass signal strictly BEFORE this turn's own completion can observe it). A plain
 	// one_shot task never reaches this branch non-final (isWatcherTrigger is false for it).
-	if isWatcherTrigger(task.Trigger) {
-		_, final := o.taskFinalPass.LoadAndDelete(taskID)
-		if !final {
-			o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusWatching, "", resultEff)
-			return
-		}
+	if isWatcherTrigger(task.Trigger) && !finalPass {
+		finish(assistants.StatusWatching, "", nil)
+		return
 	}
 	// A run agent is a standing role: its turn ends idle (queued, which never holds the run open — see
 	// state.RunBlocker) rather than completed, and the next message addressed to it starts its next turn
@@ -434,7 +652,7 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	// answers the message that woke the turn: a passive reply in the same commit (agentcomm_turn_reply.go).
 	if task.Scope == assistants.ScopeRun {
 		replies := o.planTurnReplies(taskID, consumed, turnReplyBody(taskID, consumed, result))
-		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleReason, replies, resultEff)
+		finish(assistants.StatusQueued, runAgentIdleReason, replies)
 		o.maybeScheduleTask(ctx, taskID)
 		return
 	}
@@ -442,10 +660,10 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	// passive reply, so the stage's reply_to wait on that request ends with the answer.
 	if task.CreatedBy == assistants.OriginStageAgent {
 		replies := o.planTurnReplies(taskID, consumed, turnReplyBody(taskID, consumed, result))
-		o.finishTaskTurnReplying(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", replies, resultEff)
+		finish(assistants.StatusCompleted, "", replies)
 		return
 	}
-	o.finishTaskTurn(taskID, consumed, assistants.StatusRunning, assistants.StatusCompleted, "", resultEff)
+	finish(assistants.StatusCompleted, "", nil)
 }
 
 // parkTaskForQuota parks a helper turn that hit a provider usage limit: the task goes back to queued — not
@@ -454,32 +672,30 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 // primitives (quotaWaits, planQuotaWait); the wake timer is the same run-scoped one (retryTaskAt). A limit that
 // cannot be waited out also puts PauseTask's manual hold on the task in the same commit: it stays paused with
 // the exact reason, and ContinueTask probes it once.
-func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.TaskID, limit *executor.UsageLimitError) {
+func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.TaskID, limit *executor.UsageLimitError, guard func(*state.RunState) error) error {
 	t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
 	if !ok {
-		return
+		return errHelperOutputSuperseded
 	}
 	waits := quotaWaits(t.Quota, state.QuotaTargetHelper, false, limit)
 	q := planQuotaWait(o.opts.Config.UsageLimit, limit, state.QuotaTargetHelper, waits, o.clk().Now())
 	reason := o.sanitizeTaskReason(taskQuotaReason(q))
 	parkEff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(assistants.StatusQueued), Reason: reason, Quota: &q})
 	if err != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error())
-		return
+		return o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error(), nil, guard, nil)
 	}
 	effects := []state.Effect{parkEff}
 	if q.PauseReason != "" {
 		holdEff, err := taskHoldEffect("task_hold_set", taskID, holdOwnerManual, reason)
 		if err != nil {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error())
-			return
+			return o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error(), nil, guard, nil)
 		}
 		effects = append(effects, holdEff)
 	}
 	op := state.Operation{
 		ID:      "task-quota-park:" + string(taskID) + ":" + randomOpSuffix(),
 		Kind:    "park_task_quota",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusRunning}},
+		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusRunning}, Check: guard},
 		Effects: effects,
 	}
 	_, err = o.opts.Store.ApplyRunOperation(op, func(state.OperationResult) {
@@ -494,6 +710,7 @@ func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.T
 		}
 	})
 	o.handleTaskOperationErr(err)
+	return err
 }
 
 // taskQuotaReason is the status reason of a parked task: until when it waits, or why it is paused.
@@ -509,12 +726,11 @@ func taskQuotaReason(q state.QuotaWait) string {
 // not end it: it goes back to idle, reachable for the next message, and the message that woke the turn gets a
 // passive reply saying why there is no result — so a colleague waiting for that reply is answered, not left
 // waiting on an agent that will never write again.
-func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string) {
+func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string, guard func(*state.RunState) error) error {
 	reason = o.sanitizeTaskReason(reason) // the reply and the idle reason below use the same recorded value
 	// turn 0 consumed nothing: going idle would hand the same input straight back to a new turn.
 	if task.Scope != assistants.ScopeRun || turn == 0 {
-		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason)
-		return
+		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil)
 	}
 	agent := task.Title
 	if agent == "" {
@@ -522,8 +738,11 @@ func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.T
 	}
 	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason)
 	replies := o.planTurnReplies(taskID, turn, body)
-	o.finishTaskTurnReplying(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies)
+	if err := o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies, guard, nil); err != nil {
+		return err
+	}
 	o.maybeScheduleTask(ctx, taskID)
+	return nil
 }
 
 // parkYieldedTurn parks a yielded task in waiting_peer — ending turn, which consumed its input — and closes the ready-before-park window: a reply (or a
@@ -531,15 +750,18 @@ func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.T
 // resume Send attempted was a no-op. Nobody else will resume it now, so it re-checks through the same
 // CAS-protected resumes Send uses — a resume that already won makes them no-ops. A wait the run closed
 // (closeRemainingMeshWaits) never resumes anybody.
-func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, turn uint64, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus) {
-	o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusWaitingPeer, "")
+func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.TaskID, turn uint64, waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus, guard func(*state.RunState) error) error {
+	if err := o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusWaitingPeer, "", nil, guard, nil); err != nil {
+		return err
+	}
 	for id, w := range o.opts.Store.Snapshot().Assistants.Mesh.Waits {
 		if _, existed := waitsBefore[id]; w.Waiter == waiter && !existed && w.Status == agentcomm.WaitRunClosed {
-			return
+			return nil
 		}
 	}
 	o.tryResumePeer(ctx, taskID)
 	o.maybeResumeAwaitingPeerQuestion(ctx, waiter)
+	return nil
 }
 
 // turnYielded reports whether a helper turn yielded into a mesh wait: one of waiter is still pending, or the turn

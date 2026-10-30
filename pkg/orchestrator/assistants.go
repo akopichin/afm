@@ -552,10 +552,14 @@ func (o *Orchestrator) finishTaskTurn(taskID assistants.TaskID, turn uint64, fro
 // and a notice says why the result was not delivered. A task never stays running without a process, and a
 // requester never waits for an answer that was dropped.
 func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, replies []plannedMessage, extra ...state.Effect) {
+	_ = o.finishTaskTurnReplyingGuarded(taskID, turn, from, to, reason, replies, nil, nil, extra...)
+}
+
+func (o *Orchestrator) finishTaskTurnReplyingGuarded(taskID assistants.TaskID, turn uint64, from, to assistants.TaskStatus, reason string, replies []plannedMessage, guard func(*state.RunState) error, committed func(state.OperationResult), extra ...state.Effect) error {
 	reason = o.sanitizeTaskReason(reason)
 	eff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(to), Reason: reason, Turn: turn})
 	if err != nil {
-		return
+		return err
 	}
 	effects := append([]state.Effect{eff}, extra...)
 	rootStage := o.taskRootStage(taskID)
@@ -578,15 +582,29 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 	mirror := messages
 
 	finishOp := func(effects []state.Effect, check func(*state.RunState) error) state.Operation {
+		admitted := func(rs *state.RunState) error {
+			if guard != nil {
+				if err := guard(rs); err != nil {
+					return err
+				}
+			}
+			if check != nil {
+				return check(rs)
+			}
+			return nil
+		}
 		return state.Operation{
 			ID:      "task-finish:" + string(taskID) + ":" + string(to) + ":" + randomOpSuffix(),
 			Kind:    "finish_task",
-			Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}, Check: check},
+			Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): from}, Check: admitted},
 			Effects: effects,
 		}
 	}
 	afterFinish := func(delivered []plannedMessage, endedReasons map[agentcomm.WaitID]string) func(state.OperationResult) {
 		return func(res state.OperationResult) {
+			if committed != nil {
+				committed(res)
+			}
 			o.publishNotice(bus.Event{Type: bus.EventAssistantTaskStatus, StageID: rootStage, Data: map[string]any{
 				"task_id": string(taskID), "status": string(to), "reason": reason,
 			}})
@@ -661,7 +679,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		cancels, endedReasons := undeliveredReplyWaitEffects(rs, undelivered)
 		all = append(all, cancels...)
 		_, err = o.opts.Store.ApplyRunOperation(finishOp(all, check), afterFinish(replies, endedReasons))
-		if err == nil || errors.As(err, &storageErr) {
+		if err == nil || errors.As(err, &storageErr) || errors.Is(err, errHelperOutputSuperseded) {
 			break
 		}
 		rs = o.opts.Store.Snapshot()
@@ -704,6 +722,7 @@ func (o *Orchestrator) finishTaskTurnReplying(taskID assistants.TaskID, turn uin
 		}
 	}
 	o.handleTaskOperationErr(err)
+	return err
 }
 
 // resultNoticeStage is the stage whose feed hears that a result was not delivered: the stage the turn reply was

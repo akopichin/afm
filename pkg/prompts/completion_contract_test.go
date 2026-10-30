@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -84,5 +85,47 @@ func TestCompletionContract_NoEnvVarIndirection(t *testing.T) {
 	got := CompletionContract(flow.PhaseImplementation, "/abs/run/stage1")
 	if strings.Contains(got, "$AFM_STAGE_DIR") {
 		t.Fatalf("D5: contract must use a literal absolute path, not $AFM_STAGE_DIR indirection, got:\n%s", got)
+	}
+}
+
+func TestSummaryCorrection_NamesPathReasonAndBudget(t *testing.T) {
+	path := "/abs/run/my stage/execution_summary.md"
+	got := SummaryCorrection(path, "empty", 1, 2)
+
+	for _, want := range []string{path, "empty", "1 of 2", "Continue the current task", "do not start it over"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("correction lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "last correction") {
+		t.Errorf("the first of two corrections must not say it is the last:\n%s", got)
+	}
+	if last := SummaryCorrection(path, "missing", 2, 2); !strings.Contains(last, "last correction") {
+		t.Errorf("the final correction must warn that the stage fails next:\n%s", last)
+	}
+}
+
+func TestSummaryReminder_NamesPathAndReasonAndKeepsBackgroundWork(t *testing.T) {
+	path := "/abs/run/my stage/execution_summary.md"
+	got := SummaryReminder(path, "missing")
+
+	for _, want := range []string{path, "missing", "Do not finish yet", "background", "only reminder"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reminder lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "kill") || strings.Contains(got, "terminate") {
+		t.Errorf("the reminder must not ask to stop background work:\n%s", got)
+	}
+}
+
+// Контракт не обещает retry за отсутствующие секции: проверка требует лишь непустой файл.
+func TestAutonomousPrompt_DoesNotPromiseSectionRetries(t *testing.T) {
+	data, err := os.ReadFile("../../assets/prompts/autonomous.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "causes a retry") {
+		t.Error("autonomous.md still promises a retry for missing sections")
 	}
 }

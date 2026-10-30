@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/verify-result.schema.json",
+  "title": "afm verify-result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verdict",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "needs_changes",
+        "inconclusive"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "pattern": "[^\\s\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+    },
+    "findings": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "blocking": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line_start": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line_end": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requirement": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "minimal_fix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "not": {
+              "type": "array",
+              "contains": {
+                "type": "object",
+                "required": [
+                  "blocking"
+                ],
+                "properties": {
+                  "blocking": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "needs_changes"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "findings"
+        ],
+        "properties": {
+          "findings": {
+            "type": "array",
+            "contains": {
+              "type": "object",
+              "required": [
+                "blocking"
+              ],
+              "properties": {
+                "blocking": {
+                  "const": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

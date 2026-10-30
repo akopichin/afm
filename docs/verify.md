@@ -227,6 +227,12 @@ The verifier returns a strict JSON verdict — `pass`, `needs_changes`, or
 | `needs_changes` (≥1 blocking finding) | the verifier found a real, provable problem | the author gets a corrective attempt via the incomplete-retry mechanism, with the blockers and a link to the full report injected into its prompt. How many corrections are allowed before the stage fails is the **correction budget** (default 1, configurable via [`verify.max_failures`](#the-correction-budget-verifymax_failures)) |
 | `inconclusive`, a protocol error, a timeout, a non-zero verifier exit, or a transport failure | verify itself could not produce a trustworthy verdict | a "verify execution failed" error — the stage is marked `failed`; the author is **not** re-run automatically (a broken/unreachable verifier is not evidence the author's work is wrong) |
 
+For a verifier answer with a format error, afm tries bounded local repair and
+then, if needed, a format-only model call. Every candidate must pass the same
+strict schema and verdict checks and preserve the original findings. A changed
+verdict or lost finding is rejected. The original answer remains in
+`raw-result.json`; repair does not spend the author's verify correction budget.
+
 A recognized provider usage limit is an exception to a non-zero verifier exit:
 the stage enters [`awaiting_quota`](stage-lifecycle.md) and resumes at the same
 verify step after the wait. It does not spend the verifier's execution retry or

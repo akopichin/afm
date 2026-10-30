@@ -68,9 +68,11 @@ helpers are available for bounded review and analysis (see below).
 3. **Record, then wait.** Record every returned message_id immediately (step 0
    fields). For independent requests whose outcomes belong in one round, register
    ONE `afm agent wait --condition reply_to_all --message-ids <id1,id2,...>`
-   (optionally with `--deadline-seconds N`; at most 16 IDs). `ready` means all have ended;
-   `yield` means save the `batch_id` and END YOUR TURN. A separate incoming
-   question can wake you before the batch ends: answer it, check the batch,
+   (optionally with `--deadline-seconds N`; at most 16 IDs). Inspect the returned
+   status: `yield` means a pending wait is registered — save the `batch_id` and
+   END YOUR TURN. `ready` means all items have ended: read their outcomes and
+   continue working; do not end your turn or re-register the satisfied wait.
+   A separate incoming question can wake you before the batch ends: answer it, check the batch,
    then park again if it is still pending. Never poll or sleep in a shell, and
    never write a final summary while requests are pending.
 4. **Classify every outcome by its request's purpose.** On continuation, read
@@ -80,10 +82,15 @@ helpers are available for bounded review and analysis (see below).
    must cover the requested scope — an explicit "no findings" is a valid,
    complete review. An acknowledgement or partial status is NEITHER: do not
    re-wait the satisfied message id and do not redispatch the task — send
-   one linked follow-up to the same agent asking for the final result. A
-   cancelled or expired item is an outcome without an answer, even when the
-   batch status is `ready`: retain the other results and its reason. It proves
-   nothing about the tree: confirm the writer stopped editing and inspect the
+   one NEW linked request to the same agent asking for the final result, using
+   `afm agent send --kind request` with the original request ID in its body.
+   Wait on the new request ID if needed. An ACK or ordinary reply linked to a
+   request satisfies `reply_to`; check the required result contract or Board
+   task state to establish task completion. A cancelled, expired or `run_closed`
+   wait, or a rejected wait registration, does not mean the task is complete:
+   inspect the reason. A cancelled or expired item is an outcome without an
+   answer, even when the batch status is `ready`: retain the other results and
+   its reason. It proves nothing about the tree: confirm the writer stopped editing and inspect the
    partial changes in its files before retrying (at most one retry per request
    chain, counted in the ledger) or reporting the concrete blocker.
 5. **Accept on evidence, not on words.** The writer's changes are ALREADY in

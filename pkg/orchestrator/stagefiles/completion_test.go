@@ -318,3 +318,65 @@ func TestCheckPlanCompletion_MissingNamesPath(t *testing.T) {
 		t.Errorf("error %v does not wrap the underlying os.ErrNotExist", err)
 	}
 }
+
+// Тот же типизированный диагноз у .done и execution_summary.md: исправимы только missing/empty, а текст
+// ошибки .done остаётся прежним.
+func TestMarkerFailure_TypesEveryMarkerProblem(t *testing.T) {
+	dir := t.TempDir()
+	stage := flow.Stage{ID: testStageID}
+	cases := []struct {
+		name  string
+		setup func(path string)
+		want  MarkerProblem
+	}{
+		{"missing", func(string) {}, MarkerMissing},
+		{"empty", func(path string) { writeFile(t, path, []byte(" \n\t")) }, MarkerEmpty},
+		{"directory", func(path string) {
+			if err := os.Mkdir(path, 0755); err != nil {
+				t.Fatal(err)
+			}
+		}, MarkerUnreadable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := filepath.Join(dir, tc.name)
+			if err := os.Mkdir(sub, 0755); err != nil {
+				t.Fatal(err)
+			}
+			summary := filepath.Join(sub, SummaryFile)
+			tc.setup(summary)
+			failure, ok := MarkerFailureOf(CheckAutonomousCompletion(sub))
+			if !ok || failure.Problem != tc.want || failure.Path != summary {
+				t.Fatalf("summary failure = %+v ok=%v, want %s at %s", failure, ok, tc.want, summary)
+			}
+
+			doneSub := filepath.Join(dir, tc.name+"-done")
+			if err := os.Mkdir(doneSub, 0755); err != nil {
+				t.Fatal(err)
+			}
+			done := filepath.Join(doneSub, ".done")
+			tc.setup(done)
+			failure, ok = MarkerFailureOf(CheckCompletion(doneSub, ".", stage))
+			if !ok || failure.Problem != tc.want || failure.Path != done {
+				t.Fatalf(".done failure = %+v ok=%v, want %s at %s", failure, ok, tc.want, done)
+			}
+		})
+	}
+}
+
+// Не marker-проба — не marker-ошибка: недостающий declared artifact остаётся своим типом и не лечится как summary.
+func TestMarkerFailureOf_IgnoresOtherErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".done"), []byte("done"))
+	stage := flow.Stage{ID: testStageID, Artifacts: []flow.Artifact{{Name: testArtifactName, Path: testArtifactPath}}}
+	err := CheckCompletion(dir, dir, stage)
+	if _, ok := MarkerFailureOf(err); ok {
+		t.Fatalf("a missing declared artifact (%v) reads as a marker failure", err)
+	}
+	if _, ok := MarkerFailureOf(&IncompleteWorkError{Reason: "verify rejected"}); ok {
+		t.Fatal("an incomplete-work error without a marker reads as a marker failure")
+	}
+	if _, ok := MarkerFailureOf(nil); ok {
+		t.Fatal("nil reads as a marker failure")
+	}
+}

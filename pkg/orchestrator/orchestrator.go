@@ -216,9 +216,12 @@ type Orchestrator struct {
 	// случайный шум; нет отдельного nil-safe аксессора, т.к. 0 — корректное самостоятельное значение, а не
 	// маркер "не задано" (в отличие от clock, где nil не является валидным Clock).
 	jitterFrac float64
-	// spawnJSONFix запускает свежий изолированный агент, единственная задача которого — переписать битый
-	// question.json валидным JSON. Возвращает канал, закрываемый по завершении агента.
-	spawnJSONFix func(s flow.Stage, phase, id string) <-chan struct{}
+	// spawnJSONFix keeps question formatting in the managed detached lifecycle.
+	spawnJSONFix              func(s flow.Stage, phase, id string, attempt int) <-chan questionFixOutcome
+	runOutputFormat           outputFormatRunner
+	helperOutputCommitHook    func()
+	helperOutputCommittedHook func()
+	questionOutputCommitHook  func()
 
 	// mem — двухфазный движок конвейера памяти, собранный в New: CaptureStage и Finalize.
 	mem *memorypipeline.Pipeline
@@ -449,9 +452,8 @@ type Orchestrator struct {
 	watchMu      sync.Mutex
 	watchByStage map[string][]*watcherBinding
 	watchByTask  map[assistants.TaskID]*watcherBinding
-	// taskFinalPass marks a taskID whose NEXT completed turn must land in the terminal "completed" status
-	// instead of the resting "watching" one — consumed exactly once (LoadAndDelete) by runHelperTask's success
-	// tail, mirroring taskPausePending/taskClarifyPending's one-shot signal pattern above.
+	// taskFinalPass keeps a watcher's final-pass intent across rejected turns.
+	// Only a successful guarded result commit consumes it.
 	taskFinalPass sync.Map
 	// renderedInbox maps a mesh participant to the message ids its most recently built prompt put into the
 	// <inbox> block — what that turn's OnDelivered marks delivered once its process has started (see

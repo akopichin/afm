@@ -4,7 +4,8 @@ A stage with `interactive: true` gets a file-based protocol for dialog with the
 user through the dashboard. The agent receives the `AFM_STAGE_DIR` env variable (the
 absolute path to the stage directory, even when `flow.root_dir` changes its working
 directory). To ask a question, the agent writes a
-`<phase>.q<N>.question.json` file (`<phase>` is `planning`/`implementation`/`review`;
+`<phase>.q<N>.question.json` file (`<phase>` is `planning`,
+`implementation`, `review`, or `autonomous_execution`;
 `N` increments: q1, q2, …), then waits for `<phase>.q<N>.answer.json` to appear via
 a bash loop. A "Dialog" section appears in the dashboard where the user answers.
 While there's no answer, the stage sits in `awaiting_user_input` status; once
@@ -16,6 +17,12 @@ always added (`--verbose` is required for stream-json in Claude Code 2.1.x). If 
 interactive agent mistakenly writes `question.json` outside `$AFM_STAGE_DIR`, the
 poller auto-relocates the file into stageDir and creates a symlink for the answer —
 the stage moves into `awaiting_user_input` instead of hanging.
+
+If `question.json` contains malformed JSON, afm tries a local repair and then
+limited format-only attempts. It accepts only a question that passes the usual
+validation without changing its meaning. After three unsuccessful attempts, an
+interactive stage shows the raw text as a free-text question so the user can
+answer; a non-interactive stage uses its automatic-answer fallback.
 
 ```yaml
 stages:

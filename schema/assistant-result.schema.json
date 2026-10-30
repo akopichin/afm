@@ -4,21 +4,36 @@
   "title": "afm assistant result",
   "description": "Machine-readable envelope a collaboration assistant returns for one turn. \"kind\" is a required discriminator: \"result\" (verdict/findings) and \"delegate\" (children/continuation) are structurally distinct and must not be told apart by field presence alone. See docs/collaboration-journal.md for the compatibility policy.",
   "oneOf": [
-    { "$ref": "#/definitions/result" },
-    { "$ref": "#/definitions/delegate" }
+    {
+      "$ref": "#/definitions/result"
+    },
+    {
+      "$ref": "#/definitions/delegate"
+    }
   ],
   "definitions": {
     "freeText": {
       "description": "Free text: one string, or a list of strings (lines). afm stores a list as lines of one text, or a single string as a one-item list, whichever the field holds.",
       "anyOf": [
-        { "type": "string" },
-        { "type": "array", "items": { "type": "string" } }
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       ]
     },
     "finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "severity", "detail"],
+      "required": [
+        "id",
+        "severity",
+        "detail"
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -26,19 +41,33 @@
         },
         "severity": {
           "type": "string",
-          "enum": ["info", "minor", "major", "blocker"],
+          "enum": [
+            "info",
+            "minor",
+            "major",
+            "blocker"
+          ],
           "description": "\"blocker\" is incompatible with verdict:\"pass\" (see the result definition's consistency rule)."
         },
         "path": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Repo-relative path the finding is about. Omitted/null when the finding is not tied to a specific file."
         },
         "line_start": {
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1
         },
         "line_end": {
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1
         },
         "detail": {
@@ -49,38 +78,78 @@
     "result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "kind", "verdict", "summary"],
+      "required": [
+        "schema_version",
+        "kind",
+        "verdict",
+        "summary"
+      ],
       "properties": {
-        "schema_version": { "const": 1 },
-        "kind": { "const": "result" },
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "result"
+        },
         "verdict": {
           "type": "string",
-          "enum": ["pass", "needs_changes", "inconclusive"]
+          "enum": [
+            "pass",
+            "needs_changes",
+            "inconclusive"
+          ]
         },
-        "summary": { "$ref": "#/definitions/freeText" },
+        "summary": {
+          "$ref": "#/definitions/freeText"
+        },
         "findings": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/finding" }
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/finding"
+          }
         },
-        "evidence": { "$ref": "#/definitions/freeText" },
+        "evidence": {
+          "$ref": "#/definitions/freeText"
+        },
         "context_version": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Identifies the context snapshot this result was computed against, to detect stale answers."
         },
-        "suggested_change": { "$ref": "#/definitions/freeText" },
-        "limitations": { "$ref": "#/definitions/freeText" }
+        "suggested_change": {
+          "$ref": "#/definitions/freeText"
+        },
+        "limitations": {
+          "$ref": "#/definitions/freeText"
+        }
       },
       "not": {
         "description": "verdict:\"pass\" cannot coexist with a blocker finding.",
-        "required": ["verdict", "findings"],
+        "required": [
+          "verdict",
+          "findings"
+        ],
         "properties": {
-          "verdict": { "const": "pass" },
+          "verdict": {
+            "const": "pass"
+          },
           "findings": {
             "type": "array",
             "contains": {
               "type": "object",
-              "required": ["severity"],
-              "properties": { "severity": { "const": "blocker" } }
+              "required": [
+                "severity"
+              ],
+              "properties": {
+                "severity": {
+                  "const": "blocker"
+                }
+              }
             }
           }
         }
@@ -89,40 +158,109 @@
     "delegateChild": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["profile_id", "title", "instruction", "mode", "trigger"],
+      "required": [
+        "profile_id",
+        "title",
+        "instruction"
+      ],
       "properties": {
-        "profile_id": { "type": "string" },
-        "title": { "type": "string" },
-        "instruction": { "type": "string" },
-        "mode": { "type": "string", "enum": ["advisory", "required"] },
-        "trigger": { "type": "string", "enum": ["one_shot", "checkpoints", "on_completion"] }
+        "profile_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "advisory",
+            "required",
+            "",
+            null
+          ],
+          "default": "advisory",
+          "description": "Omitted, empty or null uses the admission default: advisory."
+        },
+        "trigger": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "one_shot",
+            "checkpoints",
+            "on_completion",
+            "",
+            null
+          ],
+          "default": "one_shot",
+          "description": "Omitted, empty or null uses the admission default: one_shot."
+        }
       }
     },
     "continuation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["trigger"],
+      "required": [
+        "trigger"
+      ],
       "properties": {
-        "trigger": { "type": "string", "enum": ["one_shot", "checkpoints", "on_completion"] },
-        "note": { "type": "string" }
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "one_shot",
+            "checkpoints",
+            "on_completion"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
       }
     },
     "delegate": {
       "type": "object",
       "additionalProperties": false,
       "description": "Full shape (delegation authorization/limits) is finalized in stage 4a; this is the minimal decodable form.",
-      "required": ["schema_version", "kind", "children"],
+      "required": [
+        "schema_version",
+        "kind",
+        "children"
+      ],
       "properties": {
-        "schema_version": { "const": 1 },
-        "kind": { "const": "delegate" },
-        "summary": { "$ref": "#/definitions/freeText" },
+        "schema_version": {
+          "const": 1
+        },
+        "kind": {
+          "const": "delegate"
+        },
+        "summary": {
+          "$ref": "#/definitions/freeText"
+        },
         "children": {
           "type": "array",
           "minItems": 1,
           "maxItems": 8,
-          "items": { "$ref": "#/definitions/delegateChild" }
+          "items": {
+            "$ref": "#/definitions/delegateChild"
+          }
         },
-        "continuation": { "$ref": "#/definitions/continuation" }
+        "continuation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/continuation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       }
     }
   }

@@ -627,8 +627,9 @@ func TestP11_RunAutonomousWithFeedback_NoteOrder(t *testing.T) {
 	o.runAutonomousWithFeedback(context.Background(), s)
 
 	calls := runner.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("expected exactly 1 RunAgent call, got %d: %+v", len(calls), calls)
+	// The fake author writes no summary: the run and the two post-exit corrections.
+	if len(calls) != 1+maxSummaryPostExit {
+		t.Fatalf("expected the run and %d corrections, got %d calls: %+v", maxSummaryPostExit, len(calls), calls)
 	}
 	summaryMarker := filepath.Join(stageID, "execution_summary.md") // o.stageDir(stageID) in the test harness (absRunDir unset)
 	assertNoteOrder(t, calls[0].prompt,
@@ -801,8 +802,9 @@ func TestP11_LogFileNames_PinnedPerVariant(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			call:     func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(context.Background(), s) },
-			wantLogs: []string{"autonomous-feedback.log"},
+			call: func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(context.Background(), s) },
+			// The fake author writes no summary: the run and the post-exit corrections share the log.
+			wantLogs: []string{"autonomous-feedback.log", "autonomous-feedback.log", "autonomous-feedback.log"},
 		},
 	}
 
@@ -833,7 +835,8 @@ func TestP11_LogFileNames_PinnedPerVariant(t *testing.T) {
 // --- Общие prompts.Inputs стадийных фаз --------------------------------------
 
 // stagePromptCase — путь, строящий стадийный промпт. wantRules — выдаёт ли фаза <interactive_rules> для
-// не-интерактивной стадии; promptCall — индекс вызова runner, чей промпт проверяется.
+// не-интерактивной стадии; promptCall — индекс вызова runner, чей промпт проверяется. Фейковый автор не пишет
+// execution_summary.md, поэтому прогон autonomous feedback — это запуск и maxSummaryPostExit коррекций.
 type stagePromptCase struct {
 	name       string
 	status     state.StageStatus
@@ -856,7 +859,7 @@ func stagePromptEntrypoints() []stagePromptCase {
 		{"review", state.StatusPending, []flow.AgentType{flow.AgentReview}, func(o *Orchestrator, s flow.Stage) { o.runReviewAgent(ctx, s) }, false, 1, 0},
 		{"review feedback", state.StatusRevising, []flow.AgentType{flow.AgentReview}, func(o *Orchestrator, s flow.Stage) { o.runReviewWithFeedback(ctx, s) }, false, 1, 0},
 		{"autonomous", state.StatusPending, []flow.AgentType{flow.AgentAuto}, func(o *Orchestrator, s flow.Stage) { o.runAutonomousAgent(ctx, s) }, true, 1, 0},
-		{"autonomous feedback", state.StatusRevising, []flow.AgentType{flow.AgentAuto}, func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(ctx, s) }, true, 1, 0},
+		{"autonomous feedback", state.StatusRevising, []flow.AgentType{flow.AgentAuto}, func(o *Orchestrator, s flow.Stage) { o.runAutonomousWithFeedback(ctx, s) }, true, 1 + maxSummaryPostExit, 0},
 	}
 }
 

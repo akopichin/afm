@@ -406,14 +406,30 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 	fingerprintDir := o.projectDir()
 	// progressed — ход этой горутины уже успешно завершался: следующий usage-limit начинает серию отказов заново.
 	progressed := false
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	// A turn that continues a summary correction reserved before a restart or park is that correction.
+	summaryNote := o.summaryContinuation(s, stageDir, phase)
+	resumeCtx = resumeCtx || summaryNote != ""
+	// A correction launched before a crash has an unknown outcome: the first pass only weighs the file and the waits,
+	// and the failed check spends what is left of the budget instead of repeating that correction.
+	weighsIssued := o.summaryOutcomeUnknown(s.ID, stageDir, phase)
+	// Summary corrections have their own durable budget: they extend the loop instead of spending the transport and
+	// verify attempts, which count from the first turn that is not one. justReserved — the next turn follows one.
+	summaryRuns, justReserved := 0, false
+	cliOutcome := ""
+	resumePhase := phaseImplementation
+	if phase == phasePlanning {
+		resumePhase = phasePlanning
+	}
+	for run := 0; run <= maxRetries+summaryRuns; run++ {
+		attempt := run - summaryRuns
 		retryCtx := ""
-		if attempt > 0 || resumeCtx {
+		if run > 0 || resumeCtx {
 			retryCtx = buildRetryContext(stageDir, phase)
 			if incompleteReason != "" {
 				retryCtx += "\n\n## Completion check failed\n\n" + incompleteReason +
 					"\n\nFix the underlying problem and make the check pass before finishing.\n"
 			}
+			retryCtx += summaryNote
 			// Сессии не будет — агент не увидит прежние ответы пользователя в разговоре; дайджест их
 			// реконструирует. Resumed-агенту НЕ даём: он получил бы дубль того, что и так видит.
 			if !willResume(s, stageDir, phase) {
@@ -430,10 +446,21 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			o.handOffRevise(s.ID, epoch, onUserInterrupted)
 			return
 		}
+		// A turn may start in retrying (Continue of a paused backoff, a restart): the records it makes need running.
+		if o.currentStatus(s.ID) == state.StatusRetrying {
+			guard := bus.GuardCtx{Phase: resumePhase, ExpectFrom: state.StatusRetrying, ExpectEpoch: &epoch}
+			if _, ok := o.Trigger(s.ID, bus.EvResumeAfterRetry, guard, ""); !ok {
+				o.handOffRevise(s.ID, epoch, onUserInterrupted)
+				return
+			}
+		}
 		// Пробуждение verify-парка: автор уже отработал, первая попытка идёт сразу в completionCheck, и verify
 		// продолжает припаркованный проход (RunVerification).
-		resumesVerify := attempt == 0 && verifyResume != nil
-		if !resumesVerify {
+		resumesVerify := run == 0 && verifyResume != nil
+		// The marker may have appeared while the correction was being reserved: nothing left for the author to do.
+		runsAgent := !resumesVerify && !weighsIssued && (!justReserved || !summaryProbePasses(stageDir))
+		justReserved, weighsIssued = false, false
+		if runsAgent {
 			// Admission провайдера — после слота команды и before-hook (мы внутри lease), на каждом ходе, в том числе на
 			// пробуждении: другая стадия того же провайдера, запаркованная пока мы ждали слот, держит и эту. Парк по
 			// hold'у не расходует retry, unknownRetries и серию отказов.
@@ -444,11 +471,26 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			}
 		}
 		waitsBefore := o.meshWaitStatusesOf(meshStageParticipantID(s.ID))
+		turn.startRun(waitsBefore)
 		markerBefore := o.readCompletionMarker(s, stageDir, phase)
 		var err error
-		if !resumesVerify {
+		if runsAgent {
 			o.agentAnswers(s.ID)
+			if summaryNote != "" {
+				if !o.markSummaryCorrectionIssued(s.ID, epoch) {
+					o.stopAnswering(s.ID)
+					o.handOffRevise(s.ID, epoch, onUserInterrupted)
+					return
+				}
+				o.noteSummaryCorrectionStarted(s.ID, stageDir)
+			}
 			err = agentFn(retryCtx)
+			if outcome := cliOutcomeOf(err); outcome != "" {
+				cliOutcome = outcome
+			}
+			if err != nil && o.finishedDespiteResultError(s, stageDir, phase, markerBefore, err) {
+				err = nil
+			}
 			if err != nil {
 				o.stopAnswering(s.ID)
 			}
@@ -468,7 +510,7 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			// The turn ran to its end, so its <inbox> messages were handed over. The executor marks them at
 			// process start (OnDelivered); repeating it here (idempotent) also covers a runner that never calls
 			// it — otherwise they would look unread and earn the stage an extra turn (agentcomm_unread.go).
-			if !resumesVerify {
+			if runsAgent {
 				o.deliverRenderedInbox(meshStageParticipantID(s.ID))()
 			}
 			// afm bug: интерактивный агент может завершиться, не дождавшись ответа пользователя — на диске остаётся
@@ -507,8 +549,12 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			}
 			var checkErr error
 			if completionCheck != nil {
+				if phase == phaseAutonomous {
+					o.noteSummaryRecovered(s.ID, stageDir)
+				}
 				checkErr = completionCheck()
 			}
+			summaryNote = ""
 			if resumesVerify {
 				verifyResume.spend() // verify мимо этого прохода (проба файлов не прошла) не продолжит старый проход позже
 			}
@@ -534,6 +580,16 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 			if errors.As(checkErr, &verifyLimit) {
 				o.parkVerifyForQuota(ctx, s, phase, epoch, verifyLimit, correction.counters(), feedback, onUserInterrupted)
 				return
+			}
+			// A missing or empty execution_summary.md has its own budget; an unreadable one is the exact file error.
+			verdict, instruction := o.decideSummaryFailure(s, phase, stageDir, epoch, checkErr, cliOutcome, onUserInterrupted)
+			switch verdict {
+			case summaryCorrect:
+				summaryNote, summaryRuns, justReserved = instruction, summaryRuns+1, true
+				continue
+			case summarySettled:
+				return
+			default: // summaryUnhandled: the generic retry handling below applies
 			}
 			// Only verify rejections spend the correction budget; transport and plan retries leave it intact.
 			if stagefiles.IsIncompleteWorkError(checkErr) {
@@ -648,10 +704,6 @@ func (o *Orchestrator) runRetryLoop(ctx context.Context, s flow.Stage, phase str
 		case <-ctx.Done():
 			o.failTurn(s.ID, epoch, "cancelled during retry", onUserInterrupted)
 			return
-		}
-		resumePhase := phaseImplementation
-		if phase == phasePlanning {
-			resumePhase = phasePlanning
 		}
 		o.Trigger(s.ID, bus.EvResumeAfterRetry, bus.GuardCtx{Phase: resumePhase, ExpectEpoch: &epoch}, "")
 	}

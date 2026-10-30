@@ -49,6 +49,17 @@ For implementation and review, afm appends a completion contract requiring a
 non-empty `.done` file. For autonomous execution, it requires a non-empty
 `execution_summary.md`. This contract gives the exact absolute stage path and is
 added by code on every attempt, including when `prompts_dir` replaces a template.
+It asks the author to describe what changed, why, and how it verified the work.
+When an autonomous summary is missing or empty, a supported CLI can receive one
+Stop hook reminder in the current session; after exit, afm can append a summary
+correction prompt to each of two separate continuation attempts. These prompts
+ask the author to finish any outstanding work before writing the file.
+
+JSON result and question contracts are available in the relevant prompts before
+the agent answers. A format-only correction receives the same schema in its
+prompt. For verified CLI and provider combinations, afm can additionally use the
+CLI's structured-output mode; unsupported combinations keep prompt guidance and
+the same server-side validation.
 
 ## 1. Planning agent
 

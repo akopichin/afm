@@ -13,7 +13,30 @@ import (
 )
 
 // IncompleteWorkError signals a completion check that failed but is retryable once.
-type IncompleteWorkError struct{ Reason string }
+type IncompleteWorkError struct {
+	Reason string
+	// Marker is set when the check failed on a completion marker file; it says which file and why.
+	Marker *MarkerFailure
+}
+
+// MarkerProblem is why a completion marker file does not pass its probe.
+type MarkerProblem string
+
+const (
+	MarkerMissing    MarkerProblem = "missing"
+	MarkerEmpty      MarkerProblem = "empty"
+	MarkerUnreadable MarkerProblem = "unreadable"
+)
+
+// MarkerFailure is the typed cause of a failed marker probe. Only missing and empty are the author's to fix;
+// unreadable is a filesystem fault (permissions, a directory in place of the file) the author cannot repair.
+type MarkerFailure struct {
+	Path    string
+	Problem MarkerProblem
+}
+
+// SummaryFile is the autonomous track's completion marker.
+const SummaryFile = "execution_summary.md"
 
 func (e *IncompleteWorkError) Error() string { return "incomplete work: " + e.Reason }
 
@@ -69,20 +92,29 @@ func checkMarkerFile(path, label string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return &IncompleteWorkError{Reason: fmt.Sprintf("missing %s: %v", label, err)}
+			return &IncompleteWorkError{Reason: fmt.Sprintf("missing %s: %v", label, err), Marker: &MarkerFailure{Path: path, Problem: MarkerMissing}}
 		}
-		return &IncompleteWorkError{Reason: fmt.Sprintf("cannot read %s: %v", label, err)}
+		return &IncompleteWorkError{Reason: fmt.Sprintf("cannot read %s: %v", label, err), Marker: &MarkerFailure{Path: path, Problem: MarkerUnreadable}}
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return &IncompleteWorkError{Reason: fmt.Sprintf("%s is empty: %s", label, path)}
+		return &IncompleteWorkError{Reason: fmt.Sprintf("%s is empty: %s", label, path), Marker: &MarkerFailure{Path: path, Problem: MarkerEmpty}}
 	}
 	return nil
+}
+
+// MarkerFailureOf returns the marker probe failure inside err, if err is one.
+func MarkerFailureOf(err error) (*MarkerFailure, bool) {
+	var inc *IncompleteWorkError
+	if !errors.As(err, &inc) || inc.Marker == nil {
+		return nil, false
+	}
+	return inc.Marker, true
 }
 
 // CheckAutonomousCompletion проверяет, что execution_summary.md существует и не пуст. Используется как
 // completion-check для runAutonomousAgent (автономный трек).
 func CheckAutonomousCompletion(stageDir string) error {
-	return checkMarkerFile(filepath.Join(stageDir, "execution_summary.md"), "execution_summary.md")
+	return checkMarkerFile(filepath.Join(stageDir, SummaryFile), SummaryFile)
 }
 
 // CheckCompletion verifies that .done exists and all declared artifacts are present. Returns

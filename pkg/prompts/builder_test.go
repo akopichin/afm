@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/schema"
 )
 
 func TestBuild_EscapesStageTagInDescription(t *testing.T) {
@@ -414,5 +415,12 @@ func TestBuild_BrowserRuntimeBlockPresent(t *testing.T) {
 func TestBuild_NoBrowserBlockWhenNil(t *testing.T) {
 	if strings.Contains(Build(Inputs{}), "afm_chrome") {
 		t.Fatal("no browser block when capability off")
+	}
+}
+
+func TestBuild_QuestionOutputSchema(t *testing.T) {
+	out := Build(Inputs{Template: "rules", Interactive: true, PhaseAgent: AgentImplementation, StageDir: t.TempDir()})
+	if !strings.Contains(out, schema.JSON(schema.Question)) {
+		t.Fatal("question schema missing")
 	}
 }

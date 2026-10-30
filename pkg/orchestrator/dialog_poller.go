@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/schema"
 )
 
 // maxJSONFixAttempts — сколько раз afm запускает свежий изолированный агент для починки question.json,
@@ -24,10 +27,15 @@ const maxJSONFixAttempts = 3
 
 // malformedQuestionState отслеживает прогресс починки одного, чей question.json не парсится. Живёт всё
 // время работы поллинг-горутины, параллельно с `processed` (см. startQuestionPoller).
+type questionFixOutcome struct {
+	Err error
+}
+
 type malformedQuestionState struct {
-	lastRaw  []byte          // сырые байты, увиденные на предыдущем тике (torn-read grace + детект перезаписи)
-	attempts int             // сколько свежих fix-агентов уже запущено (0..maxJSONFixAttempts)
-	done     <-chan struct{} // != nil, пока fix-агент в полёте; закрывается по его завершении
+	retryAfter time.Time
+	lastRaw    []byte                    // сырые байты, увиденные на предыдущем тике (torn-read grace + детект перезаписи)
+	attempts   int                       // сколько свежих fix-агентов уже запущено (0..maxJSONFixAttempts)
+	done       <-chan questionFixOutcome // != nil, пока fix-агент в полёте; закрывается по его завершении
 }
 
 // violationCacheEntry хранит stat-данные для одного .jsonl файла.
@@ -337,8 +345,17 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 	if st.done != nil {
 		// A fix-agent is in flight. Distinguish via the done channel.
 		select {
-		case <-st.done:
-			st.done = nil // agent finished (still broken): fall through to next attempt / exhaustion
+		case outcome := <-st.done:
+			st.done = nil
+			var limit *executor.UsageLimitError
+			if errors.As(outcome.Err, &limit) {
+				st.retryAfter = limit.ResetAt
+				if !st.retryAfter.After(o.clk().Now()) {
+					st.retryAfter = o.clk().Now().Add(o.opts.Config.UsageLimit.ResolvedProbeInterval())
+				}
+			} else {
+				st.attempts++
+			}
 		default:
 			st.lastRaw = raw
 			return // agent still working — keep waiting
@@ -351,6 +368,9 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 	}
 
 	st.lastRaw = raw
+	if o.clk().Now().Before(st.retryAfter) {
+		return
+	}
 	if st.attempts >= maxJSONFixAttempts {
 		if stage.Interactive {
 			o.giveUpOnMalformedQuestion(stageID, stageDir, q, qPath, raw)
@@ -361,11 +381,10 @@ func (o *Orchestrator) handleMalformedQuestion(malformed map[string]*malformedQu
 		return
 	}
 
-	st.attempts++
-	st.done = o.spawnJSONFix(*stage, q.Phase, q.ID)
+	st.done = o.spawnJSONFix(*stage, q.Phase, q.ID, st.attempts+1)
 	notice := fmt.Sprintf(
 		"⚙️ afm: question.json %s.%s не парсится даже после jsonrepair — запущен отдельный агент для починки JSON (попытка %d из %d).",
-		q.Phase, q.ID, st.attempts, maxJSONFixAttempts,
+		q.Phase, q.ID, st.attempts+1, maxJSONFixAttempts,
 	)
 	o.publishNotice(bus.Event{
 		Type:    bus.EventAutoAnswered,
@@ -437,8 +456,10 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 		log.Printf("WARN: marshal malformed-question stub %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
 		return
 	}
-	if err := os.WriteFile(qPath, data, 0644); err != nil {
-		log.Printf("WARN: persist malformed-question stub %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+	if committed, err := mcp.CommitQuestionRepair(qPath, raw, data); err != nil || !committed {
+		if err != nil {
+			log.Printf("WARN: persist malformed-question stub %s/%s.%s: %v", stageID, q.Phase, q.ID, err)
+		}
 		return
 	}
 
@@ -467,77 +488,75 @@ func (o *Orchestrator) giveUpOnMalformedQuestion(stageID, stageDir string, q mcp
 	})
 }
 
-// runJSONFixAgent launches a fresh, clean-context agent whose ONLY task is to rewrite one malformed
-// question.json as valid JSON, and returns a channel closed when that agent finishes.
 const phaseJSONFix = "json_fix"
 
-func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string) <-chan struct{} {
-	done := make(chan struct{})
+// The formatter returns a candidate; only AFM may replace the still-current question.
+func (o *Orchestrator) runJSONFixAgent(s flow.Stage, phase, id string, attempt int) <-chan questionFixOutcome {
+	done := make(chan questionFixOutcome, 1)
 	ctx := o.runCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	qPath := filepath.Join(stageDir, phase+"."+id+".question.json")
-	logFile := filepath.Join(stageDir, phase+"."+id+".jsonfix.log")
-
+	raw, err := os.ReadFile(qPath)
+	info, statErr := os.Stat(qPath)
+	if err != nil || statErr != nil {
+		done <- questionFixOutcome{Err: errors.Join(err, statErr)}
+		close(done)
+		return done
+	}
+	epoch := o.opts.Store.Snapshot().Stages[s.ID].Epoch
 	cmd := s.Command
-	var extra []string
 	if cmd == "" {
 		cmd = o.opts.Config.Client.Command
-		extra = o.opts.Config.Client.ExtraArgs
 	}
-	// All agent commands accept Claude stream-json flags; --print is required for non-interactive execution.
-	cfg := executor.Config{
-		Command:     cmd,
-		ExtraArgs:   executor.ResolveArgs(extra),
-		IdleTimeout: o.opts.Config.Executor.IdleTimeout,
-		WrapperDir:  executor.WrapperDirFor(cmd, o.opts.WrapperDir, o.opts.GeneratedAgents),
-		Dir:         o.opts.RootDir,
-		Debug:       o.opts.Debug,
-		RunDir:      o.opts.RunDir,
-		StageID:     s.ID,
-		Phase:       phaseJSONFix,
-		UsageHint:   o.usageHintFor(cmd),
-		OnUsage:     o.recordUsage(s.ID, phaseJSONFix, ""),
-		Reasoning:   o.opts.Config.Client.Reasoning,
+	cfg := o.outputFormatterConfig(cmd, s.ID)
+	if s.Command == "" {
+		cfg.ExtraArgs = executor.ResolveArgs(o.opts.Config.Client.ExtraArgs)
 	}
-	ex := executor.New(cfg)
-	prompt := buildJSONFixPrompt(qPath, id)
-
+	prefix := phase + "." + id + ".jsonfix-" + randomOpSuffix()
 	o.concurrency.SpawnDetached(ctx, func(ctx context.Context) {
-		defer close(done)
-		if err := ex.RunAgent(ctx, "jsonfix", s.Name, prompt, logFile); err != nil {
-			log.Printf("WARN: json-fix agent %s/%s.%s: %v", s.ID, phase, id, err)
+		outcome := questionFixOutcome{}
+		defer func() { done <- outcome; close(done) }()
+		owner := fmt.Sprintf("stage/%s/epoch/%d/question/%s/%s", s.ID, epoch, phase, id)
+		formatter := o.outputFormatter(cfg, stageDir, prefix, "")
+		recovered, recoveryErr := recoverOutput(ctx, schema.Question, owner, raw, questionOutputValidator, 1, func(ctx context.Context, contract schema.Contract, prompt string, _ int) ([]byte, error) {
+			return formatter(ctx, contract, prompt, attempt)
+		})
+		outcome.Err = recoveryErr
+		o.answerMu.Lock()
+		defer o.answerMu.Unlock()
+		current, readErr := os.ReadFile(qPath)
+		currentInfo, infoErr := os.Stat(qPath)
+		stage := o.opts.Store.Snapshot().Stages[s.ID]
+		if ctx.Err() != nil || readErr != nil || infoErr != nil || !os.SameFile(info, currentInfo) || !info.ModTime().Equal(currentInfo.ModTime()) || !bytes.Equal(current, raw) || stage.Epoch != epoch || !isDialogActive(stage.Status) {
+			return
 		}
+		if _, err := os.Stat(filepath.Join(stageDir, phase+"."+id+".answer.json")); !errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err := persistOutputRecovery(stageDir, prefix, recovered); err != nil {
+			log.Printf("WARN: persist question recovery %s/%s.%s: %v", s.ID, phase, id, err)
+			return
+		}
+		if recoveryErr != nil {
+			return
+		}
+		if o.questionOutputCommitHook != nil {
+			o.questionOutputCommitHook()
+		}
+		o.opts.Store.View(func(rs *state.RunState) {
+			stage := rs.Stages[s.ID]
+			if ctx.Err() != nil || stage.Epoch != epoch || !isDialogActive(stage.Status) {
+				return
+			}
+			if _, err := mcp.CommitQuestionRepair(qPath, raw, recovered.Candidate); err != nil {
+				log.Printf("WARN: commit question recovery %s/%s.%s: %v", s.ID, phase, id, err)
+			}
+		})
 	})
 	return done
-}
-
-// buildJSONFixPrompt is the narrow, single-purpose instruction for the JSON
-// fix agent. It deliberately forbids anything except repairing the one file.
-func buildJSONFixPrompt(qPath, id string) string {
-	return fmt.Sprintf(`Your ONLY task is to repair one malformed JSON file. Do nothing else.
-
-File (absolute path): %s
-
-This file must contain a single JSON object for afm's file-based dialog protocol.
-It is currently NOT valid JSON. Read it, fix ONLY the JSON syntax (unescaped
-quotes, raw newlines inside string values, trailing commas, and similar), and
-overwrite the SAME file with valid JSON.
-
-Rules:
-- Keep the id field exactly %q.
-- Preserve the meaning and text of every field (question, options,
-  allow_custom). Fix syntax only — do not rewrite, summarize, shorten, or
-  translate the content.
-- The result MUST parse as exactly one JSON object.
-- Do NOT create any other file, do NOT ask any question, do NOT write anything
-  to disk except the corrected content of this exact file.
-
-Before finishing, verify it parses:
-  cat %q | python3 -c 'import json,sys; json.load(sys.stdin)'
-This command must exit 0.`, qPath, id, qPath)
 }
 
 // detectDialogViolation scans the agent's stream-json logs for a Write of a *.question.json file OUTSIDE

@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "kind": "result",
+  "verdict": "needs_changes",
+  "summary": "Seven observations; six have a specific recommendation.",
+  "findings": [
+    {
+      "id": "f1-tool-expand-false-green",
+      "severity": "major",
+      "path": "pkg/web/dashboard/src/components/feed-workspace/FeedWorkspace.test.tsx",
+      "line_start": 694,
+      "line_end": 706,
+      "detail": "Scroll assertion runs before MutationObserver microtasks.",
+      "suggested_change": "Flush microtasks before asserting scrollTop; add a control case."
+    },
+    {
+      "id": "f2-feed-entrance-untested",
+      "severity": "major",
+      "path": "pkg/web/dashboard/src/components/feed-workspace/FeedWorkspace.tsx",
+      "line_start": 159,
+      "line_end": 200,
+      "detail": "Feed entrance animation lacks coverage for independently loaded histories.",
+      "suggested_change": "Establish the baseline after both histories load; test new incoming messages."
+    },
+    {
+      "id": "f3-draft-mode-not-proven",
+      "severity": "minor",
+      "path": "pkg/web/dashboard/src/components/feed-workspace/FeedWorkspace.conversations.test.tsx",
+      "line_start": 371,
+      "line_end": 411,
+      "detail": "Draft test finds a hidden panel without proving mode restoration.",
+      "suggested_change": "Assert the selected Revise tab before changing tabs after remount."
+    },
+    {
+      "id": "f4-people-panel-untested",
+      "severity": "minor",
+      "path": "pkg/web/dashboard/src/components/team/StagePeoplePanel.tsx",
+      "line_start": 49,
+      "line_end": 96,
+      "detail": "People panel search, close and dialog behavior are untested.",
+      "suggested_change": "Test search, Close, dialog attributes and open-state reporting."
+    },
+    {
+      "id": "f5-app-wiring-untested",
+      "severity": "minor",
+      "path": "pkg/web/dashboard/src/app/App.tsx",
+      "line_start": 263,
+      "line_end": 316,
+      "detail": "App integration of reply attention and paused controls is untested.",
+      "suggested_change": "Test reply attention in Feed and disabled controls during flow pause."
+    },
+    {
+      "id": "f6-test-hygiene",
+      "severity": "minor",
+      "path": "pkg/web/dashboard/src/components/feed-workspace/FeedWorkspace.conversations.test.tsx",
+      "line_start": 370,
+      "line_end": 427,
+      "detail": "Top-level tests escape the describe block that restores mocks.",
+      "suggested_change": "Restore mocks after each test and use the standard async assertion helper."
+    },
+    {
+      "id": "f7-stale-full-feed",
+      "severity": "info",
+      "path": "pkg/web/dashboard/src/app/App.test.tsx",
+      "line_start": 322,
+      "line_end": 3038,
+      "detail": "Obsolete Full feed names remain in tests."
+    }
+  ],
+  "evidence": [
+    "Read the changed tests and their components."
+  ],
+  "suggested_change": "Add the missing behavioral assertions.",
+  "limitations": [
+    "Minimized from the read-only redesign review envelope."
+  ]
+}

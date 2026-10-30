@@ -42,6 +42,8 @@ type TaskState struct {
 	// Holds — independent reasons this task is currently held, keyed by owner. Paused reports len(Holds)>0;
 	// EffectivelyHeld (AssistantsState) additionally walks the parent chain.
 	Holds map[string]Hold `json:"holds,omitempty"`
+	// HoldEpoch counts holds set on this task; derived on replay, like StageState.Epoch.
+	HoldEpoch uint64 `json:"hold_epoch,omitempty"`
 	// Continuation — set when the task is waiting_children with a saved continuation to resume with. Its
 	// mere presence does NOT imply a concurrency slot is held: pkg/state has no notion of slots at all
 	// (those live in pkg/orchestrator/concurrency and are always empty right after a restart).
@@ -835,6 +837,7 @@ func applyTaskHoldSet(as *AssistantsState, c *Control, dryRun bool) error {
 	if t.Holds == nil {
 		t.Holds = map[string]Hold{}
 	}
+	t.HoldEpoch++
 	t.Holds[p.Owner] = Hold{Reason: p.Reason}
 	return nil
 }

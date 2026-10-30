@@ -170,6 +170,12 @@ type Config struct {
 	// non-secret AFM_MESH_DESCRIPTOR env var. nil means this invocation gets no mesh descriptor at all
 	// (verify agents, JSON-fix agents, memory-pipeline agents and lifecycle hooks never set it).
 	MeshClient *MeshClient
+	// StopHook, if set, opens a Stop hook bridge for this author runner's process: a per-invocation loopback
+	// listener and a 0600 descriptor named by AFM_STOP_HOOK_DESCRIPTOR. Only the autonomous author gets it.
+	StopHook *StopHookClient
+	// NativeSchema, if set, asks RunHelperAgent to constrain the final answer with the CLI's own schema mode when
+	// that CLI/provider pair is verified (HelperOutcome.NativeFallback says why not). Other run kinds ignore it.
+	NativeSchema *NativeSchema
 	// OnDelivered, if set, is called exactly once, right after cmd.Start() SUCCEEDS — the one moment a
 	// prepared prompt package (Agent Mesh Phase 4, T4.4: the <inbox> block) has actually been handed to a
 	// live process, as opposed to merely assembled. A caller uses this to mark queued mesh messages
@@ -179,6 +185,8 @@ type Config struct {
 	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
 	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
 	runMode RunMode
+	// nativeSchemaOn is internal-only: RunHelperAgent sets it once NativeSchema passed the capability check.
+	nativeSchemaOn bool
 	// Clock is the executor's clock. nil (the production default) means clock.Real(); tests inject a
 	// clock.FakeClock to drive the idle timer / interrupt grace period without real sleeps.
 	Clock clock.Clock
@@ -565,11 +573,12 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 		}
 	})
 
+	runErr = e.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
 	}
-	if limit := e.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+	if limit, ok := runErr.(*UsageLimitError); ok {
 		return limit
 	}
 	runErr = withStderrTail(logFile, stderrFrom, runErr)
@@ -723,6 +732,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 		_ = stderrStream.Close()
 		stderrStream = nil
 	}
+	runErr = e.turnOutcome(limits, runErr, logFile, stderrFrom)
 	logErr := runErr
 	if logErr != nil && redactOutput {
 		logErr = errors.New(red.text(logErr.Error()))
@@ -731,7 +741,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	if e.cfg.OnUsage != nil {
 		e.cfg.OnUsage(collector.Finish(runErr))
 	}
-	if limit := e.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+	if limit, ok := runErr.(*UsageLimitError); ok {
 		return limit
 	}
 	runErr = withStderrTail(logFile, stderrFrom, runErr)
@@ -813,6 +823,7 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		}
 	})
 
+	runErr = ve.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
 	if ve.cfg.OnUsage != nil {
 		ve.cfg.OnUsage(collector.Finish(runErr))
@@ -821,7 +832,7 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		lg.LogAction("verify-note", "process reported an error line; see log above: "+firstErr)
 	}
 	// Лимит — не вердикт и не сбой гейта: возвращаем типизированную ошибку, чтобы вызывающий дождался сброса.
-	if limit := ve.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+	if limit, ok := runErr.(*UsageLimitError); ok {
 		return verify.RunOutcome{}, limit
 	}
 
@@ -921,7 +932,7 @@ func (e *Executor) jsonQueryEnv(ambient []string) []string {
 	filtered := make([]string, 0, len(ambient)+1)
 	pathSet := false
 	for _, kv := range ambient {
-		if IsBrowserTransportEnv(kv) {
+		if IsBrowserTransportEnv(kv) || IsStopHookTransportEnv(kv) {
 			continue
 		}
 		if e.cfg.WrapperDir != "" && strings.HasPrefix(kv, "PATH=") {
@@ -937,21 +948,23 @@ func (e *Executor) jsonQueryEnv(ambient []string) []string {
 	return filtered
 }
 
+// commandPath resolves the agent command through WrapperDir, where generated wrapper scripts live: exec.LookPath in
+// this process does not see that directory, so the absolute path is resolved here.
+func (e *Executor) commandPath() string {
+	if e.cfg.WrapperDir != "" {
+		if resolved, err := exec.LookPath(filepath.Join(e.cfg.WrapperDir, e.cfg.Command)); err == nil {
+			return resolved
+		}
+	}
+	return e.cfg.Command
+}
+
 func (e *Executor) RunJSONQuery(ctx context.Context, prompt string) ([]byte, error) {
 	e.logAgentInput("supervisor", prompt)
 	// Чистая one-shot JSON-инвокация.
 	args := []string{"-p", prompt, "--output-format", "json"}
 
-	// Команда может лежать в WrapperDir; exec.LookPath в текущем процессе его не
-	// видит, поэтому резолвим абсолютный путь сами — как в e.run.
-	cmdPath := e.cfg.Command
-	if e.cfg.WrapperDir != "" {
-		if resolved, err := exec.LookPath(filepath.Join(e.cfg.WrapperDir, e.cfg.Command)); err == nil {
-			cmdPath = resolved
-		}
-	}
-
-	cmd := exec.CommandContext(ctx, cmdPath, args...)
+	cmd := exec.CommandContext(ctx, e.commandPath(), args...)
 	// RunJSONQuery is NOT an author runner — it must never inherit the browser transport.
 	cmd.Env = e.jsonQueryEnv(os.Environ())
 	var stderr bytes.Buffer
@@ -974,12 +987,16 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 			// always strip for nested sessions
 		case strings.HasPrefix(kv, "AFM_STAGE_DIR="), strings.HasPrefix(kv, "AFM_SCRATCH_DIR="):
 			// always strip inherited; re-added by caller only if cfg.StageDir/cfg.ScratchDir is set
+		case strings.HasPrefix(kv, OutputSchemaFileEnv+"="):
+			// always strip inherited; re-added by run only for a native schema call
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
 			// always strip inherited; re-added by caller only if mode.isolated()
 		case IsBrowserTransportEnv(kv):
 			// Strip AFM_BROWSER_* from all children; only author runners re-add non-secret browser vars.
 		case IsMeshTransportEnv(kv):
 			// Strip AFM_MESH_* from all children; only author runners with a MeshClient re-add it below.
+		case IsStopHookTransportEnv(kv):
+			// Strip AFM_STOP_HOOK_* from all children; only an author runner that opened a bridge re-adds it below.
 		case mode.isolated() && isVerifierOwnSecret(kv, e.cfg.Command):
 			// D2b: the verifier's/helper's OWN secret (AFM_SECRET_<command>) survives.
 			filtered = append(filtered, kv)
@@ -1002,7 +1019,7 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 // lineCallback for each stdout line. Respects idle timeout. lineCallback must not block for long: once the agent
 // has exited, run stops waiting for a callback stuck past pipeFlushPeriod after the group kill and returns; that
 // one call still finishes on its own, and no further call is made.
-func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) error {
+func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) (runErr error) {
 	e.logAgentInput(phase, prompt)
 	args := append([]string{}, e.cfg.ExtraArgs...)
 	if e.cfg.SessionID != "" {
@@ -1042,14 +1059,19 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 		defer cleanup()
 		meshEnv = menv
 	}
-	// Resolve the command via WrapperDir before exec.
-	cmdPath := e.cfg.Command
-	if e.cfg.WrapperDir != "" {
-		if resolved, err := exec.LookPath(filepath.Join(e.cfg.WrapperDir, e.cfg.Command)); err == nil {
-			cmdPath = resolved
-		}
+	// Stop hook (the autonomous author only). It is an extra on top of AFM's own recovery: when it cannot be
+	// installed the agent runs without it.
+	stopHook := e.startStopHook(args, stderr)
+	defer func() { stopHook.finish(runErr == nil) }()
+	args = append(args, stopHook.args...)
+	// Native schema mode (the isolated format-only call): the schema flag for claude, a schema file for the shim.
+	nativeSchema, nerr := e.startNativeSchema()
+	if nerr != nil {
+		return nerr
 	}
-	cmd := exec.CommandContext(ctx, cmdPath, args...)
+	defer nativeSchema.cleanup()
+	args = append(args, nativeSchema.args...)
+	cmd := exec.CommandContext(ctx, e.commandPath(), args...)
 	// Пин рабочей директории агента к project root (flow.root_dir), чтобы
 	// относительные пути проекта резолвились в одном корне для всех стадий.
 	if e.cfg.Dir != "" {
@@ -1076,6 +1098,8 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	// descriptor files referenced by AFM_BROWSER_DESCRIPTOR/AFM_MESH_DESCRIPTOR).
 	filtered = append(filtered, browserEnv...)
 	filtered = append(filtered, meshEnv...)
+	filtered = append(filtered, stopHook.env...)
+	filtered = append(filtered, nativeSchema.env...)
 	if e.cfg.WrapperDir != "" {
 		pathSet := false
 		for i, kv := range filtered {

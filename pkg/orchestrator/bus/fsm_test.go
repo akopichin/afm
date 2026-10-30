@@ -708,3 +708,74 @@ func TestFSM_Quota_GuardsAreCheckedInStoreApply(t *testing.T) {
 		t.Fatalf("stale author park: ok=%v err=%v, want refused", ok, err)
 	}
 }
+
+func TestFSM_ReserveSummaryHook_IsFencedSelfTransitionOfRunningStage(t *testing.T) {
+	fsm, store := newTestFSM(t, []string{"a"})
+	defer store.Close()
+	if err := store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: state.StatusRunning, Event: string(EvStartRun)}); err != nil {
+		t.Fatal(err)
+	}
+	step := &state.SummaryStep{Source: state.SummarySourceStopHook, Reason: "missing"}
+	epoch := store.Snapshot().Stages["a"].Epoch
+
+	staleEpoch := epoch + 1
+	if _, _, _, ok, err := fsm.Apply("a", EvReserveSummaryHook, GuardCtx{ExpectEpoch: &staleEpoch, SummaryStep: step}, ""); ok || err != nil {
+		t.Fatalf("a reservation of a turn that lost the stage: applied=%v err=%v, want a plain no-op", ok, err)
+	}
+	if got := store.Snapshot().Stages["a"].Summary; got != nil {
+		t.Fatalf("a refused reservation was counted: %+v", got)
+	}
+
+	from, to, _, ok, err := fsm.Apply("a", EvReserveSummaryHook, GuardCtx{ExpectEpoch: &epoch, SummaryStep: step}, "")
+	if err != nil || !ok || from != state.StatusRunning || to != state.StatusRunning {
+		t.Fatalf("reservation = %s->%s applied=%v err=%v, want running->running", from, to, ok, err)
+	}
+	st := store.Snapshot().Stages["a"]
+	if st.Epoch != epoch || st.Summary == nil || st.Summary.Hook != 1 {
+		t.Fatalf("after the reservation epoch=%d summary=%+v, want the same epoch and one hook reminder", st.Epoch, st.Summary)
+	}
+}
+
+// The stage resumed after a peer wait keeps the continuation of its earlier turns through the reservation; the launch
+// mark of a post-exit correction is the same kind of self-transition.
+func TestFSM_ReserveSummaryHook_KeepsThePeerContinuation(t *testing.T) {
+	for _, source := range []string{state.SummarySourceStopHook, state.SummarySourcePostExitIssued} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		for _, step := range []struct {
+			from, to state.StageStatus
+			event    FSMEvent
+		}{
+			{state.StatusPending, state.StatusRunning, EvStartRun},
+			{state.StatusRunning, state.StatusAwaitingPeer, "test_park"},
+			{state.StatusAwaitingPeer, state.StatusRunning, EvPeerReplied},
+		} {
+			if err := store.Apply(&state.Transition{StageID: "a", From: step.from, To: step.to, Event: string(step.event)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := store.Snapshot().Stages["a"]
+		epoch := before.Epoch
+
+		if _, _, _, ok, err := fsm.Apply("a", EvReserveSummaryHook, GuardCtx{ExpectEpoch: &epoch, SummaryStep: &state.SummaryStep{Source: source, Reason: "missing"}}, ""); err != nil || !ok {
+			t.Fatalf("%s: applied=%v err=%v, want the self-transition", source, ok, err)
+		}
+		if after := store.Snapshot().Stages["a"]; !before.PeerContinued || !after.PeerContinued {
+			t.Errorf("%s: peer_continued before=%v after=%v, want it kept", source, before.PeerContinued, after.PeerContinued)
+		}
+		store.Close()
+	}
+}
+
+func TestFSM_ReserveSummaryHook_OnlyFromRunning(t *testing.T) {
+	for _, from := range []state.StageStatus{state.StatusRetrying, state.StatusPaused, state.StatusAwaitingPeer, state.StatusDone, state.StatusFailed} {
+		fsm, store := newTestFSM(t, []string{"a"})
+		if err := store.Apply(&state.Transition{StageID: "a", From: state.StatusPending, To: from, Event: "test_setup"}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, ok, err := fsm.Apply("a", EvReserveSummaryHook, GuardCtx{SummaryStep: &state.SummaryStep{Source: state.SummarySourceStopHook}}, "")
+		if ok || err != nil {
+			t.Errorf("reservation from %s: applied=%v err=%v, want a no-op", from, ok, err)
+		}
+		store.Close()
+	}
+}

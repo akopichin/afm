@@ -12,8 +12,17 @@ Rules:
 - `findings[]` entries require `id`, `severity` (`info`, `minor`, `major`, or `blocker`), and `detail`. `path`, `line_start`, `line_end` are optional — omit them rather than inventing a location you did not actually observe.
 - `verdict:"pass"` cannot coexist with a finding of `severity:"blocker"`.
 - `evidence[]`, `suggested_change`, `limitations`, `context_version` are optional.
+- `suggested_change` is a root-level field. Put a recommendation for an individual finding in that finding's `detail`, alongside its explanation.
+- `summary`, `evidence`, `suggested_change`, and `limitations` accept a string or a list of strings. Free-text fields do not accept null.
+- Optional finding locations, `findings`, and `context_version` may be null. Line numbers, when supplied, must be positive integers.
 - Any field not listed here is rejected outright — do not add your own.
 - Prose inside `summary`/`detail`/`suggested_change`/`limitations` may be in any language, but the JSON keys and the enum values (`verdict`, `severity`) must be exactly as written here.
+
+Exact JSON Schema for the `kind:"result"` form:
+
+```text
+{{OUTPUT_SCHEMA}}
+```
 
 Example:
 

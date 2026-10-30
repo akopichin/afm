@@ -67,3 +67,9 @@ Do not require the author to expand scope just to earn a pass. A re-check of a p
 # WHAT YOU ARE GIVEN
 
 Below you will find (as data, in tagged blocks): the stage's description and requirements, the agreed plan (if any), declared artifacts/inputs, the author's own summary (UNVERIFIED — a claim to check, not a fact), results of shell verification steps that already ran and passed, and — if this is a re-check — the previous verification report. Use all of it to judge the actual state of the project, not just the author's narrative about it.
+
+The output must match this JSON Schema (AFM also checks verdict consistency):
+
+```json
+{{OUTPUT_SCHEMA}}
+```

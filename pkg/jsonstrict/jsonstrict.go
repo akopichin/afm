@@ -53,7 +53,11 @@ func DecodeDisallowUnknown(raw []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("parse JSON: %w", err)
+		kind := Classify(err)
+		if kind == RefusalIssue {
+			kind = StructureIssue
+		}
+		return NewIssue(kind, fmt.Errorf("parse JSON: %w", err))
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return ErrTrailingContent

@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"sync"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
 	"github.com/akopichin/afm/pkg/state"
 )
@@ -48,8 +50,28 @@ func (o *Orchestrator) grantTurnAt(stageID string, epoch uint64, ev bus.FSMEvent
 	return to, epoch, true
 }
 
-// turnRecord is the live turn of a stage, read by the token mint of its invocations.
-type turnRecord struct{ epoch uint64 }
+// turnRecord is the live turn of a stage, read by the token mint of its invocations and by the Stop hook policy of
+// its author process.
+type turnRecord struct {
+	epoch uint64
+
+	mu          sync.Mutex
+	waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus // the author's waits before its current run started
+}
+
+// startRun records the author's waits as they stood before the run that is about to start, the baseline a yield
+// (turnEpisode) is told from.
+func (t *turnRecord) startRun(waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.waitsBefore = waitsBefore
+}
+
+func (t *turnRecord) currentWaitsBefore() map[agentcomm.WaitID]agentcomm.WaitStatus {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.waitsBefore
+}
 
 func (o *Orchestrator) mintEpochOf(stageID string) uint64 {
 	if t, ok := o.liveTurns.Load(stageID); ok {

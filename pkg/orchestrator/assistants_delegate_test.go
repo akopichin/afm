@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -230,7 +232,14 @@ func TestAdmission_AncestorHoldBlocksChild(t *testing.T) {
 	}
 	close(parentRelease) // let the parent's turn finish, freeing the ONE semaphore slot the child is waiting on
 
-	waitForTaskStatus(t, store, parentID, assistants.StatusCompleted, 2*time.Second)
+	o.concurrency.WaitAgents()
+	parent := waitForTaskStatus(t, store, parentID, assistants.StatusQueued, 2*time.Second)
+	if parent.ResultSeq != 0 {
+		t.Fatal("paused parent committed its late result")
+	}
+	if _, err := os.Stat(filepath.Join(o.taskDir(parentID), "result.json")); !os.IsNotExist(err) {
+		t.Fatalf("paused parent published a result: %v", err)
+	}
 	waitForTaskStatus(t, store, childIDs[0], assistants.StatusQueued, 2*time.Second)
 	if childRan.Load() {
 		t.Fatal("the child must not have run — its ancestor is held")
@@ -301,7 +310,14 @@ func TestAdmission_AncestorHoldBlocksGrandchild(t *testing.T) {
 	}
 	close(rootRelease)
 
-	waitForTaskStatus(t, store, rootID, assistants.StatusCompleted, 2*time.Second)
+	o.concurrency.WaitAgents()
+	root := waitForTaskStatus(t, store, rootID, assistants.StatusQueued, 2*time.Second)
+	if root.ResultSeq != 0 {
+		t.Fatal("paused root committed its late result")
+	}
+	if _, err := os.Stat(filepath.Join(o.taskDir(rootID), "result.json")); !os.IsNotExist(err) {
+		t.Fatalf("paused root published a result: %v", err)
+	}
 	waitForTaskStatus(t, store, childID, assistants.StatusQueued, 2*time.Second)
 	waitForTaskStatus(t, store, grandchildID, assistants.StatusQueued, 2*time.Second)
 	if childRan.Load() {

@@ -53,6 +53,8 @@ if [[ "$CODEX_VERIFY" == "1" ]]; then
         last_msg_file=$(mktemp)
         codex_args+=(--output-last-message "$last_msg_file")
     fi
+    # The isolated format-only call constrains its final answer to a schema file afm wrote (Codex's strict mode).
+    [[ -n "${AFM_OUTPUT_SCHEMA_FILE:-}" ]] && codex_args+=(--output-schema "$AFM_OUTPUT_SCHEMA_FILE")
 else
     codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox -s "$CODEX_SANDBOX")
 fi
@@ -71,6 +73,12 @@ if [[ "$CODEX_VERIFY" != "1" && -n "${AFM_BROWSER_DESCRIPTOR:-}" ]]; then
     fi
     # If AFM_BROWSER_LAUNCHER is unset, skip the override rather than guess a bare
     # "afm" that may not be on PATH under that name.
+fi
+
+# Author-only Stop hook: afm passes the TOML of the hook and of its trust (for exactly that hook). Both are
+# session overrides, so codex's own config, CODEX_HOME and trust policy stay as the user set them.
+if [[ "$CODEX_VERIFY" != "1" && -n "${AFM_STOP_HOOK_CODEX_HOOKS:-}" && -n "${AFM_STOP_HOOK_CODEX_STATE:-}" ]]; then
+    codex_args+=(-c "hooks.Stop=$AFM_STOP_HOOK_CODEX_HOOKS" -c "hooks.state=$AFM_STOP_HOOK_CODEX_STATE")
 fi
 
 # resolve_codex_model: $CODEX_MODEL -> safe top-level `model` key from codex's own config.toml -> empty.

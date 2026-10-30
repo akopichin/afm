@@ -772,14 +772,13 @@ if [ -n "$AFM_STAGE_DIR" ]; then
   exit 0
 fi
 prompt="$(cat)"
-qpath="$(printf '%%s' "$prompt" | sed -n 's/^File (absolute path): //p' | head -1)"
-[ -z "$qpath" ] && exit 1
-python3 - "$qpath" <<'PY'
-import sys
-p = sys.argv[1]
-raw = open(p, encoding='utf-8').read()
-open(p, 'w', encoding='utf-8').write(raw.replace(chr(92) + chr(92) + chr(34), chr(92) + chr(34)))
-PY
+printf '%%s' "$prompt" | python3 -c '
+import json, sys
+prompt = sys.stdin.read()
+raw = json.loads(prompt.split("Source JSON, encoded as a JSON string:\n", 1)[1])
+fixed = raw.replace(chr(92) + chr(92) + chr(34), chr(92) + chr(34))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": fixed}]}}))
+'
 `, brokenAbs, tc.phase, tc.phase)
 			if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 				t.Fatal(err)

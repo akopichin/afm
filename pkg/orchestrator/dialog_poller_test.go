@@ -1190,7 +1190,7 @@ func setupMalformedTestOrchNI(t *testing.T, broken string) (*Orchestrator, *stat
 func injectFixStub(t *testing.T, o *Orchestrator, fixed string) *int {
 	t.Helper()
 	calls := 0
-	o.spawnJSONFix = func(s flow.Stage, phase, id string) <-chan struct{} {
+	o.spawnJSONFix = func(s flow.Stage, phase, id string, _ int) <-chan questionFixOutcome {
 		calls++
 		if fixed != "" {
 			qPath := filepath.Join(o.opts.RunDir, s.ID, phase+"."+id+".question.json")
@@ -1198,7 +1198,8 @@ func injectFixStub(t *testing.T, o *Orchestrator, fixed string) *int {
 				t.Errorf("fix stub write: %v", err)
 			}
 		}
-		ch := make(chan struct{})
+		ch := make(chan questionFixOutcome, 1)
+		ch <- questionFixOutcome{}
 		close(ch)
 		return ch
 	}

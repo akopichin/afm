@@ -330,10 +330,10 @@ func (o *Orchestrator) unfinishedTurnInput(taskID assistants.TaskID) []agentcomm
 // a task's progress, which an older binary still reads — never a new kind it would reject. turn-inbox.json is
 // refreshed as a cache of the same list. ok=false: the task is no longer running (cancelled meanwhile) or the
 // journal failed (handleTaskOperationErr ends the run); the turn must not start.
-func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.MessageID) (turn uint64, ok bool) {
+func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.MessageID) (turn, holdEpoch uint64, ok bool) {
 	t, found := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
 	if !found {
-		return 0, false
+		return 0, 0, false
 	}
 	turn = t.Turn + 1
 	ids := make([]string, len(inbox))
@@ -346,7 +346,7 @@ func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.Mes
 	})
 	if err != nil {
 		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record the turn: "+err.Error())
-		return 0, false
+		return 0, 0, false
 	}
 	op := state.Operation{
 		ID:      fmt.Sprintf("task-turn:%s:%d:%s", taskID, turn, randomOpSuffix()),
@@ -356,12 +356,12 @@ func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.Mes
 	}
 	if _, err := o.opts.Store.ApplyRunOperation(op, nil); err != nil {
 		o.handleTaskOperationErr(err)
-		return 0, false
+		return 0, 0, false
 	}
 	if err := o.saveTurnInbox(taskID, inbox); err != nil {
 		log.Printf("assistants: task %s: write the turn-inbox cache: %v", taskID, err)
 	}
-	return turn, true
+	return turn, t.HoldEpoch, true
 }
 
 // turnInboxFileName is a cache of the latest unfinished turn's input (state.TaskState.TurnInbox) for a human

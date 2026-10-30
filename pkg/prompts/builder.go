@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/schema"
 )
 
 // Agent — фаза выполнения (алиас доменного flow.Phase). Значения приходят из единого источника pkg/flow;
@@ -121,7 +122,9 @@ func Build(in Inputs) string {
 		fmt.Fprintf(&sb, "  After writing %s.q<N>.question.json, WAIT for its %s.q<N>.answer.json (step 2) before writing the next question — do NOT write the next question until the current one is answered.\n", in.PhaseAgent, in.PhaseAgent)
 		sb.WriteString("  If you have several questions for this round, either ask them ONE BY ONE (recommended), or combine them into a SINGLE question file with numbered sub-questions inside 'question' and let the user answer them together.\n")
 		sb.WriteString("  Note: afm accepts an answer only to the OLDEST unanswered question — any extra question files you write ahead of time are ignored until the earlier ones are answered, so writing a batch will stall you.\n")
-		sb.WriteString("</interactive_rules>\n")
+		sb.WriteString("Question JSON Schema (the filename owns the question ID):\n")
+		sb.WriteString(schema.JSON(schema.Question))
+		sb.WriteString("\n</interactive_rules>\n")
 	}
 
 	// Контракт публикации картинки в ленту: агент может показать пользователю файл-изображение, атомарно

@@ -72,8 +72,18 @@ type HelperOutcome struct {
 	// assistants envelope.
 	ProtocolErr error
 	// RawText is the final assistant text block, also durably written to resultFile when non-empty (even on
-	// a non-zero exit — an audit trail of whatever the model produced, not a verdict).
+	// a non-zero exit — an audit trail of whatever the model produced, not a verdict). In Claude's native
+	// schema mode it is the CLI's structured payload instead (StructuredPayload).
 	RawText string
+	// StructuredPayload is true when RawText is Claude's structured output rather than a text block. When native
+	// mode was used and this is false, the CLI gave no payload and RawText is whatever text it wrote.
+	StructuredPayload bool
+	// NativeFallback is why a requested native schema mode was not used ("" when it was used or not requested):
+	// the call then ran with the schema in the prompt alone.
+	NativeFallback NativeSchemaFallback
+	// NativeStarted is true only when the process really started in native mode: a failure before the start
+	// cannot be the provider rejecting it.
+	NativeStarted bool
 }
 
 // RunHelperAgent runs one helper-agent turn: a fresh, isolated session (no --resume, no AFM_STAGE_DIR, no
@@ -123,10 +133,19 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	helperCfg.VerifyMode = false
 	helperCfg.runMode = ModeHelper
 	helperCfg.BrowserMCP = nil // helpers never get the managed browser capability (§7.4)
+	started := false
+	delivered := helperCfg.OnDelivered
+	helperCfg.OnDelivered = func() { // run calls it right after cmd.Start succeeds
+		started = true
+		if delivered != nil {
+			delivered()
+		}
+	}
 	he := &Executor{cfg: helperCfg}
+	nativeFallback := he.selectNativeSchema()
 
 	var finalText strings.Builder
-	var haveFinalText bool
+	var haveFinalText, hasPayload bool
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(he.cfg.UsageHint)
@@ -140,7 +159,12 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
-			if isErrorLine(line) {
+			if payload, found := structuredPayload(line); found && he.cfg.claudeNativeSchema() {
+				// The payload arrives only in the result event, after every text block: it is the answer.
+				finalText.Reset()
+				finalText.WriteString(payload)
+				haveFinalText, hasPayload = true, true
+			} else if isErrorLine(line) {
 				lg.LogAction("error", line)
 				if firstErr == "" {
 					firstErr = line
@@ -165,6 +189,12 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		}
 	})
 
+	// The redacted stderr must be flushed before its tail is read for the limit text.
+	if stderrStream != nil {
+		_ = stderrStream.Close()
+		stderrStream = nil
+	}
+	runErr = he.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
 	if he.cfg.OnUsage != nil {
 		he.cfg.OnUsage(collector.Finish(runErr))
@@ -172,17 +202,15 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	if firstErr != "" {
 		lg.LogAction("helper-note", "process reported an error line; see log above: "+firstErr)
 	}
-	// The redacted stderr must be flushed before its tail is read for the limit text.
-	if stderrStream != nil {
-		_ = stderrStream.Close()
-		stderrStream = nil
-	}
 	// A usage limit is neither an answer nor a crash: the caller waits for the reset instead of failing the task.
-	if limit := he.usageLimitError(limits, runErr, logFile, stderrFrom); limit != nil {
+	if limit, ok := runErr.(*UsageLimitError); ok {
 		return HelperOutcome{ProcessErr: limit}, limit
 	}
 
-	outcome := HelperOutcome{}
+	outcome := HelperOutcome{StructuredPayload: hasPayload, NativeFallback: nativeFallback, NativeStarted: started && he.cfg.nativeSchemaOn}
+	if he.cfg.claudeNativeSchema() && !hasPayload && runErr == nil {
+		lg.LogAction("helper-note", "native schema mode returned no structured payload; the text answer is validated as usual")
+	}
 	switch {
 	case errors.Is(runErr, ErrUserInterrupted):
 		outcome.Interrupted = true

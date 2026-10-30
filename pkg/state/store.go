@@ -32,6 +32,10 @@ type Transition struct {
 	// Quota — on a park in awaiting_quota (and on a Continue back into one): the usage-limit metadata, projected
 	// onto StageState.Quota. Absent in journals written before it and on every other transition.
 	Quota *QuotaWait `json:"quota,omitempty"`
+	// SummaryStep — on a transition that reserves a correction of a missing execution_summary.md: the
+	// source and file problem, projected onto StageState.Summary. Absent in journals written before it and on
+	// every other transition.
+	SummaryStep *SummaryStep `json:"summary_step,omitempty"`
 	// ExpectEpoch, when set, fences the transition: it commits only while the stage's StageState.Epoch still
 	// has this value — the process that decided it still owns the stage. Never journaled.
 	ExpectEpoch *uint64 `json:"-"`

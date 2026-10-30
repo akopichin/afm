@@ -40,6 +40,27 @@ type UsageLimitError struct {
 
 func (e *UsageLimitError) Error() string { return "usage limit reached: " + e.Message }
 
+// TerminalResultError — CLI завершился с кодом 0, но его финальный корневой result помечен is_error: ход
+// не удался, хотя процесс отработал штатно. Оркестратор классифицирует её как ошибку CLI, а не как успех.
+type TerminalResultError struct {
+	// Subtype — result.subtype (error_during_execution, error_max_turns…); может быть пустым.
+	Subtype string
+	// Message — result.result: текст, который CLI показал как причину отказа.
+	Message        string
+	APIErrorStatus int
+}
+
+func (e *TerminalResultError) Error() string {
+	msg := "agent finished with an error result"
+	if e.Subtype != "" {
+		msg += " (" + e.Subtype + ")"
+	}
+	if e.Message != "" {
+		msg += ": " + e.Message
+	}
+	return msg
+}
+
 // LimitWarning — провайдер сообщил, что лимит близок (rate_limit_event со status:"allowed_warning"): ход
 // продолжается, ничего не останавливается. Это не действие агента, поэтому у него свой узкий callback
 // Config.OnLimitWarning, а не OnAction.
@@ -270,15 +291,18 @@ type limitInfo struct {
 
 // limitStreamLine — поля строки stream-json, нужные распознавателю лимита. Полиморфные поля читаются лениво.
 type limitStreamLine struct {
-	Type           string           `json:"type"`
-	IsError        bool             `json:"is_error"`
-	Result         json.RawMessage  `json:"result"`
-	Message        json.RawMessage  `json:"message"`
-	Error          json.RawMessage  `json:"error"`
-	APIError       string           `json:"api_error"`
-	APIErrorStatus int              `json:"api_error_status"`
-	APIErrorParams limitErrorParams `json:"api_error_params"`
-	RateLimitInfo  *limitInfo       `json:"rate_limit_info"`
+	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
+	IsError bool   `json:"is_error"`
+	// ParentToolUseID непуст у событий субагента: корневой result его не имеет.
+	ParentToolUseID string           `json:"parent_tool_use_id"`
+	Result          json.RawMessage  `json:"result"`
+	Message         json.RawMessage  `json:"message"`
+	Error           json.RawMessage  `json:"error"`
+	APIError        string           `json:"api_error"`
+	APIErrorStatus  int              `json:"api_error_status"`
+	APIErrorParams  limitErrorParams `json:"api_error_params"`
+	RateLimitInfo   *limitInfo       `json:"rate_limit_info"`
 }
 
 // limitErrorParams — api_error_params ассистента и result: структурные детали отказа.
@@ -307,8 +331,9 @@ type usageLimitScanner struct {
 	info       *limitInfo // rate_limit_info, приложенный к самой ошибке (приоритетнее rejected)
 	hit        bool       // структурный признак лимита
 	hitMessage string
-	textHit    *UsageLimitError // лимит, распознанный по тексту error-строки
-	rawHit     *UsageLimitError // лимит в не-JSON строке stdout; засчитывается только при сбое процесса
+	textHit    *UsageLimitError     // лимит, распознанный по тексту error-строки
+	rawHit     *UsageLimitError     // лимит в не-JSON строке stdout; засчитывается только при сбое процесса
+	terminal   *TerminalResultError // последний корневой result с is_error; успешный result его снимает
 	progress   bool
 }
 
@@ -340,7 +365,8 @@ func (s *usageLimitScanner) observe(line string) {
 		s.observeRateLimitEvent(ev.RateLimitInfo)
 	case eventTypeAssistant:
 		s.observeAssistant(&ev)
-	case "result":
+	case streamEventResult:
+		s.observeTerminal(&ev)
 		s.observeResult(&ev)
 	case eventTypeError:
 		s.observeErrorText(rawErrorText(ev.Message, ev.Error))
@@ -378,6 +404,23 @@ func (s *usageLimitScanner) observeAssistant(ev *limitStreamLine) {
 	}
 	if errKind == "" && assistantHasWork(ev.Message) {
 		s.progress = true
+	}
+}
+
+// observeTerminal запоминает ошибочный итог корневого хода. Ошибки инструментов и субагентов приходят не как
+// корневой result, а успешный result после ошибочного означает, что ход всё же завершился.
+func (s *usageLimitScanner) observeTerminal(ev *limitStreamLine) {
+	switch {
+	case ev.ParentToolUseID != "":
+		// Result субагента не описывает исход корневого хода.
+	case ev.IsError:
+		s.terminal = &TerminalResultError{
+			Subtype:        ev.Subtype,
+			Message:        strings.TrimSpace(rawString(ev.Result)),
+			APIErrorStatus: ev.APIErrorStatus,
+		}
+	default:
+		s.terminal = nil
 	}
 }
 
@@ -557,4 +600,16 @@ func (e *Executor) usageLimitError(sc *usageLimitScanner, runErr error, logFile 
 		limit.Provider = e.cfg.Provider
 	}
 	return limit
+}
+
+// turnOutcome — единый исход хода для лога, accounting и вызывающего: usage-limit приоритетнее прочего, остановка
+// и ошибка запуска остаются как есть, а ошибочный корневой result при exit 0 становится *TerminalResultError.
+func (e *Executor) turnOutcome(sc *usageLimitScanner, runErr error, logFile string, stderrFrom int64) error {
+	if limit := e.usageLimitError(sc, runErr, logFile, stderrFrom); limit != nil {
+		return limit
+	}
+	if runErr == nil && sc.terminal != nil {
+		return sc.terminal
+	}
+	return runErr
 }

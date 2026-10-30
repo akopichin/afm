@@ -224,7 +224,8 @@ func TestRenderReviewFeedback_TruncatesLargeAggregate(t *testing.T) {
 	}
 }
 
-func TestResumeOwner_ReSpawnsRetryingOwnerWithoutTransition(t *testing.T) {
+// The respawned turn of a retrying owner moves the stage to running itself; resumeOwner commits nothing.
+func TestResumeOwner_ReSpawnsRetryingOwnerOnce(t *testing.T) {
 	o, runner, ctx := newBlockingRunnerOrch(t, []flow.Stage{
 		{ID: "s1", Name: "s1", Agents: []flow.AgentType{flow.AgentAuto}},
 	})
@@ -240,9 +241,7 @@ func TestResumeOwner_ReSpawnsRetryingOwnerWithoutTransition(t *testing.T) {
 		t.Fatal("resumeOwner must report the retrying owner as handled")
 	}
 	waitFor(t, func() bool { return runner.count("s1") == 1 })
-	if got := o.currentStatus("s1"); got != state.StatusRetrying {
-		t.Fatalf("retrying owner must stay retrying (no extra transition), got %v", got)
-	}
+	waitFor(t, func() bool { return o.currentStatus("s1") == state.StatusRunning })
 	time.Sleep(100 * time.Millisecond)
 	if n := runner.count("s1"); n != 1 {
 		t.Fatalf("retrying owner spawned %d times, want exactly 1", n)

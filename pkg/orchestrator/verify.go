@@ -22,6 +22,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/prompts"
 	"github.com/akopichin/afm/pkg/state"
+	"github.com/akopichin/afm/schema"
 )
 
 // verifyExecutionLabel — execution-purpose метка AI-verify для логов/usage.
@@ -338,7 +339,17 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	agentLog := filepath.Join(stepDir, "agent.log")
 	rawResult := filepath.Join(stepDir, "raw-result.json")
 
+	if err := os.Remove(rawResult); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
+	}
+	epoch := uint64(0)
+	if o.opts.Store != nil {
+		epoch = o.opts.Store.Snapshot().Stages[s.ID].Epoch
+	}
 	prompt := prompts.BuildVerify(in)
+	if !strings.Contains(prompt, schema.JSON(schema.VerifyResult)) {
+		prompt += "\n\nOutput JSON Schema:\n" + schema.JSON(schema.VerifyResult)
+	}
 	// Наблюдательная проверка read-only инварианта AI-verify: отпечаток дерева ДО и ПОСЛЕ subprocess'а, вне
 	// зависимости от исхода (pass/reject/exec-error). Чисто побочный эффект — ни на result, ни на err не
 	// влияет.
@@ -382,7 +393,43 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		}
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: reason, Step: idx, Transient: transient}
 	}
-	if outcome.ProtocolErr != nil {
+	if raw, readErr := os.ReadFile(rawResult); readErr == nil {
+		if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID, idx); aborted {
+			return verify.ModelResult{}, st.Command, abortErr
+		}
+		formatCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
+		cfg := o.outputFormatterConfig(st.Command, s.ID)
+		recovered, recoveryErr := recoverOutput(formatCtx, schema.VerifyResult, fmt.Sprintf("stage/%s/epoch/%d/verify/%s/step/%d", s.ID, epoch, verID, idx), raw, verifyOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, stepDir, "output", ""))
+		interrupted := stop()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
+		}
+		if interrupted || ctx.Err() != nil {
+			return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
+		}
+		if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID, idx); aborted {
+			return verify.ModelResult{}, st.Command, abortErr
+		}
+		if o.opts.Store != nil && o.opts.Store.Snapshot().Stages[s.ID].Epoch != epoch {
+			return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
+		}
+		if storageErr := persistOutputRecovery(stepDir, "output", recovered); storageErr != nil {
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify storage failure: " + storageErr.Error(), Step: idx}
+		}
+		if recoveryErr != nil {
+			var limit *executor.UsageLimitError
+			if errors.As(recoveryErr, &limit) {
+				return verify.ModelResult{}, st.Command, limit
+			}
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify output recovery: " + recoveryErr.Error(), Step: idx}
+		}
+		decoded, decodeErr := verify.DecodeModelResult(recovered.Candidate)
+		if decodeErr != nil {
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify protocol error: " + decodeErr.Error(), Step: idx}
+		}
+		outcome.Result = &decoded
+		outcome.ProtocolErr = nil
+	} else if outcome.ProtocolErr != nil {
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify protocol error: " + outcome.ProtocolErr.Error(), Step: idx}
 	}
 	if outcome.Result == nil {

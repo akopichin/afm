@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/akopichin/afm/pkg/jsonstrict"
+	"github.com/akopichin/afm/schema"
 )
 
 // Verdict — итоговое решение верификатора по стадии.
@@ -38,10 +39,10 @@ type Finding struct {
 
 // ModelResult — финальный JSON-ответ верификатора в разобранном виде.
 type ModelResult struct {
-	SchemaVersion int       `json:"schema_version"`
-	Verdict       Verdict   `json:"verdict"`
-	Summary       string    `json:"summary"`
-	Findings      []Finding `json:"findings"`
+	SchemaVersion jsonstrict.Integer `json:"schema_version"`
+	Verdict       Verdict            `json:"verdict"`
+	Summary       string             `json:"summary"`
+	Findings      []Finding          `json:"findings"`
 }
 
 // MaxResultBytes — верхняя граница размера сырого JSON-ответа.
@@ -54,14 +55,14 @@ const SupportedSchemaVersion = 1
 // согласованность.
 func DecodeModelResult(raw []byte) (ModelResult, error) {
 	if err := jsonstrict.EnforceMaxBytes(raw, MaxResultBytes); err != nil {
-		return ModelResult{}, fmt.Errorf("verification result exceeds %d byte limit (got %d)", MaxResultBytes, len(raw))
+		return ModelResult{}, fmt.Errorf("verification %w", err)
 	}
 
 	trimmed := bytes.TrimSpace(raw)
 	// Markdown-fence отклоняем до любого ремонта: это намеренная строгость (модель обязана отдавать голый
 	// JSON), а jsonrepair умеет снимать fence и тем самым обошёл бы это правило.
 	if err := jsonstrict.RejectFence(trimmed); err != nil {
-		return ModelResult{}, errors.New("verification result is wrapped in a markdown code fence; expected bare JSON")
+		return ModelResult{}, fmt.Errorf("verification %w", err)
 	}
 
 	r, err := decodeStrict(trimmed)
@@ -71,7 +72,7 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 
 	// Ремонтируем ТОЛЬКО одну узкую поломку: сырые управляющие символы ВНУТРИ строкового литерала JSON —
 	// именно это выдают ревьюеры, вписывая многострочную цитату кода в поле evidence.
-	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed {
+	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed && jsonstrict.EnforceMaxBytes(repaired, MaxResultBytes) == nil {
 		if r2, err2 := decodeStrict(repaired); err2 == nil {
 			return r2, nil
 		}
@@ -79,32 +80,52 @@ func DecodeModelResult(raw []byte) (ModelResult, error) {
 	return ModelResult{}, err
 }
 
+// RecoverModelResult exposes accepted candidate bytes while retaining verify's narrow repair policy.
+func RecoverModelResult(raw []byte) (ModelResult, []byte, jsonstrict.RepairKind, error) {
+	r, err := DecodeModelResult(raw)
+	if err == nil {
+		if fixed, changed := jsonstrict.RepairRawNewlines(raw); changed {
+			return r, fixed, jsonstrict.MechanicalRepair, nil
+		}
+		return r, raw, "", nil
+	}
+	if len(raw) > MaxResultBytes {
+		return ModelResult{}, nil, "", err
+	}
+	if _, complete := jsonstrict.SingleObject(raw); !complete {
+		err = jsonstrict.NewIssue(jsonstrict.RefusalIssue, err)
+	}
+	return ModelResult{}, nil, "", err
+}
+
 // decodeStrict — строгий конвейер разбора ОДНОГО JSON-документа без репейра.
 func decodeStrict(trimmed []byte) (ModelResult, error) {
+	if err := jsonstrict.DecodeNoDuplicates(trimmed); err != nil {
+		return ModelResult{}, fmt.Errorf("parse verification result JSON: %w", err)
+	}
 	var r ModelResult
 	if err := jsonstrict.DecodeDisallowUnknown(trimmed, &r); err != nil {
 		if errors.Is(err, jsonstrict.ErrTrailingContent) {
-			return ModelResult{}, errors.New("trailing content after JSON document in verification result (extra data or multiple documents)")
+			return ModelResult{}, fmt.Errorf("%w in verification result (extra data or multiple documents)", err)
 		}
 		return ModelResult{}, fmt.Errorf("failed to parse verification result JSON: %w", err)
 	}
 
-	if err := jsonstrict.DecodeNoDuplicates(trimmed); err != nil {
-		return ModelResult{}, fmt.Errorf("duplicate key in verification result JSON: %w", err)
-	}
-
 	if r.SchemaVersion != SupportedSchemaVersion {
-		return ModelResult{}, fmt.Errorf("unsupported schema_version %d (expected %d)", r.SchemaVersion, SupportedSchemaVersion)
+		return ModelResult{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("unsupported schema_version %d (expected %d)", r.SchemaVersion, SupportedSchemaVersion))
 	}
 
 	switch r.Verdict {
 	case VerdictPass, VerdictNeedsChanges, VerdictInconclusive:
 	default:
-		return ModelResult{}, fmt.Errorf("invalid verdict value %q", r.Verdict)
+		return ModelResult{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("invalid verdict value %q", r.Verdict))
 	}
 
 	if err := validateVerdictConsistency(r); err != nil {
-		return ModelResult{}, err
+		return ModelResult{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, err)
+	}
+	if err := schema.Validate(schema.VerifyResult, trimmed); err != nil {
+		return ModelResult{}, jsonstrict.NewIssue(jsonstrict.StructureIssue, err)
 	}
 
 	return r, nil

@@ -110,7 +110,54 @@ type StageState struct {
 	// paused from the wait) and after the wake, so the consecutive-waits series survives until the stage ends;
 	// consumers show it only in awaiting_quota or in paused with PausedFrom == awaiting_quota. Derived on replay.
 	Quota *QuotaWait `json:"quota,omitempty"`
+	// Summary — the corrections of a missing execution_summary.md spent in the stage's current cycle
+	// (Transition.SummaryStep). Carried across pause, restart and retries; only an explicit Retry or Revise
+	// starts a new cycle. Derived on replay.
+	Summary *SummaryCorrections `json:"summary,omitempty"`
 }
+
+// SummaryCorrections counts the corrections spent on a missing or empty execution_summary.md. A reservation is
+// recorded before the correction starts, so a crash between the two leaves it spent. Optional on the wire:
+// journals written before it replay without it.
+type SummaryCorrections struct {
+	// PostExit counts the continuations AFM started after the author's process had exited.
+	PostExit int `json:"post_exit,omitempty"`
+	// Hook counts the reminders the Stop hook gave the live session.
+	Hook int `json:"hook,omitempty"`
+	// Reason is the file problem (stagefiles.MarkerProblem) the latest correction was reserved for.
+	Reason string `json:"reason,omitempty"`
+	// ReservedSeq is the seq of the transition that reserved the latest correction; it names that correction.
+	ReservedSeq uint64 `json:"reserved_seq,omitempty"`
+	// PostExitSeq is the seq of the transition that reserved the latest post-exit correction. Unlike ReservedSeq,
+	// a Stop hook reminder does not move it, so it names the correction for the whole of its run.
+	PostExitSeq uint64 `json:"post_exit_seq,omitempty"`
+	// Issued marks that the latest post-exit correction was launched and nothing was recorded since: after a crash
+	// its outcome is unknown, so a restart weighs the file and spends the remainder instead of repeating it. Any
+	// later transition (a park, a retry, an end) means the turn is over and drops the mark.
+	Issued bool `json:"issued,omitempty"`
+}
+
+// SummaryStep is what one transition spends: a correction of the given source for the given file problem.
+type SummaryStep struct {
+	Source string `json:"source"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// SummaryStep sources.
+const (
+	SummarySourcePostExit = "post_exit"
+	SummarySourceStopHook = "stop_hook"
+	// SummarySourcePostExitIssued marks the launch of the latest post-exit correction; it spends nothing.
+	SummarySourcePostExitIssued = "post_exit_issued"
+)
+
+// summaryResetEvents are the FSM events (pkg/orchestrator/bus) by which the user starts a stage over: each one
+// begins a new correction cycle.
+var summaryResetEvents = map[string]bool{"manual_retry": true, "revise": true}
+
+// summaryRecordEvents are the FSM events (pkg/orchestrator/bus) that only record a correction of a running stage:
+// the stage does not move, so the projection changes nothing but the correction, the seq and the timestamp.
+var summaryRecordEvents = map[string]bool{"reserve_summary_hook": true}
 
 // QuotaWait is the durable metadata of a usage-limit park: what the stage waits for, until when, and what to
 // resume. All fields are optional on the wire; journals written before quota existed replay without it.
@@ -388,6 +435,13 @@ func (rs *RunState) applyTransition(t *Transition) {
 	if stageTakeoverEvents[t.Event] {
 		st.Epoch++
 	}
+	if summaryRecordEvents[t.Event] {
+		st.Summary = summaryAfter(prev.Summary, t)
+		st.Seq = t.Seq
+		rs.Stages[t.StageID] = st
+		rs.resolveStageStatusWaits()
+		return
+	}
 	st.PeerWaits = slices.Clone(t.PeerWaits)
 	// Pausing a park and continuing it keep its episode: Continue decides the continuation on the same waits.
 	if (t.To == StatusPaused && t.From == StatusAwaitingPeer) || (t.From == StatusPaused && t.To == StatusAwaitingPeer) {
@@ -395,6 +449,7 @@ func (rs *RunState) applyTransition(t *Transition) {
 	}
 	st.PeerContinued = continuesPeerTurn(prev, t)
 	st.Quota = quotaAfter(prev.Quota, t)
+	st.Summary = summaryAfter(prev.Summary, t)
 	st.Seq = t.Seq
 	rs.Stages[t.StageID] = st
 	rs.resolveStageStatusWaits()
@@ -419,6 +474,41 @@ func quotaAfter(prev *QuotaWait, t *Transition) *QuotaWait {
 	}
 	q.VerifyResume = wake && prev.Target == QuotaTargetVerify
 	return &q
+}
+
+// summaryAfter derives the stage's summary corrections after transition t: a step adds to the count of its
+// source, any other transition carries them until the user starts the stage over.
+func summaryAfter(prev *SummaryCorrections, t *Transition) *SummaryCorrections {
+	if summaryResetEvents[t.Event] {
+		prev = nil
+	}
+	if prev == nil && t.SummaryStep == nil {
+		return nil
+	}
+	var next SummaryCorrections
+	if prev != nil {
+		next = *prev
+	}
+	if !summaryRecordEvents[t.Event] {
+		next.Issued = false
+	}
+	if step := t.SummaryStep; step != nil {
+		switch step.Source {
+		case SummarySourcePostExitIssued:
+			next.Issued = true
+			return &next
+		case SummarySourcePostExit:
+			next.PostExit++
+			next.PostExitSeq = t.Seq
+		case SummarySourceStopHook:
+			next.Hook++
+		default:
+			// An unknown source still records the reservation below.
+		}
+		next.Reason = step.Reason
+		next.ReservedSeq = t.Seq
+	}
+	return &next
 }
 
 // accountIdleAndBackoff обновляет таймеры ДО перехода; вызывается и из live Apply, и из replay

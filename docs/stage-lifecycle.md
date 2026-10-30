@@ -49,6 +49,10 @@ running → awaiting_quota → running
   fails immediately. Delays start at 5 seconds, double up to a 60-second cap,
   and are reduced by up to 20% of jitter. The retry notice shows the actual delay.
   Completion-check corrections and `verify` retries have separate rules.
+  For an autonomous stage, a missing or empty `execution_summary.md` can receive
+  one Stop hook reminder in the live session and up to two post-exit author
+  continuations. Those continuations have their own durable budget; an unreadable
+  file fails with its file error. See [Autonomous track](autonomous-track.md).
   A recognized provider usage limit uses `awaiting_quota` instead: waiting does
   not consume the ordinary retry or verify correction budget.
 - `hook_failed` — a [`script_before` hook](script-stages.md) exhausted its retries;
@@ -80,6 +84,8 @@ When you invoke `afm run` again, the tool automatically:
   expired while afm was stopped resumes on restart
 - Restarts interrupted stages (`planning`, `running`, `revising`, `retrying`)
 - Restores autonomous stages (from `execution_summary.md` / `autonomous.flag`)
+- Preserves spent autonomous summary reminders and post-exit continuations; an
+  interrupted continuation does not gain an extra attempt
 - Preserves stages in `awaiting_user_input`: question/answer files survive the
   restart, an unanswered question is shown again in the dashboard, and once answered
   the stage continues

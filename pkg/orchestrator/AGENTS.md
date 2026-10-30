@@ -20,6 +20,9 @@
   зависимостей. Голый `EvComplete` оставляет зависимые стадии в pending.
 - Любой результат хода, и ошибка агента тоже, действует, только пока ход владеет эпохой: после Pause/Continue/Revise
   он ничего не меняет, кроме hand-off Revise своего хода. Fail и retry хода fenced его эпохой (`failTurn`).
+- Исход helper-хода (result, delegate, ошибка ответа) коммитится только под turn-ownership guard в Store lock; Pause→Continue виден через `TaskState.HoldEpoch`.
+- Guard исходного helper-хода обязателен и для ошибок процесса, quota/yield; final-pass watcher потребляется только после успешного коммита.
+- `result.json` должен быть на диске до видимого commit результата helper; отвергнутый commit восстанавливает прежние байты или отсутствие файла, сохраняя per-turn артефакты.
 - `runnerFor` привязывает `OnAction` к stage ID. Инъектированный тестовый runner
   не должен подменять production-runner стадии с собственной командой.
 
@@ -90,6 +93,9 @@ Required-гейт использует durable verdict/waiver текущего �
   планирует и отвечает на сообщения); исключение — eager planning-only стадия, её завершает approve плана.
 - Recovery решает по намерению из журнала, а не по текущему статусу: bump Revise доделывается для любой стадии,
   стадия с pending-ожиданием не завершается по маркеру, а паркуется (`parkInterruptedTurn`, из running и retrying).
+- Завершение autonomous-стадии по файлам решает один `executionProbe` (summary, не `.done`) на всех путях recovery;
+  ход, стартовавший в retrying (Continue, рестарт), сам переводит стадию в running в начале `runRetryLoop`. Признак
+  `Summary.Issued` снимает любой переход, кроме записи-самоперехода внутри живого хода.
 - Revise из awaiting_assistants бампит поколение под ключом seq своего перехода (`reviseBumpOpID`); Revise из
   других статусов не бампит.
 

@@ -162,8 +162,8 @@ func (o *Orchestrator) nonInteractiveRunner(s flow.Stage, phase string) executor
 }
 
 // baseStageExecutorConfig is the wiring shared by every author turn of a stage. Call it per attempt, never
-// cache the result: the interrupt channel is read now, and the mesh client mints its token and takes the
-// stage epoch only when the process starts. Verify and helper runs deliberately build their own configs.
+// cache the result: the interrupt channel is read now, the Stop hook binds to the live turn now, and the mesh client
+// mints its token and takes the stage epoch only when the process starts. Verify and helper runs deliberately build their own configs.
 func (o *Orchestrator) baseStageExecutorConfig(s flow.Stage, phase, cmd string, extraArgs []string) executor.Config {
 	cfg := executor.Config{
 		Command:        cmd,
@@ -187,6 +187,7 @@ func (o *Orchestrator) baseStageExecutorConfig(s flow.Stage, phase, cmd string, 
 		OnUsage:       o.recordUsage(s.ID, phase, ""),
 		BrowserMCP:    o.browserForStage(s, cmd),
 		MeshClient:    o.meshClientFor(meshStageParticipantID(s.ID)),
+		StopHook:      o.stopHookFor(s, phase, cmd),
 		OnDelivered:   o.agentCommOnDeliveredForStage(s),
 		Reasoning:     o.opts.Config.Client.Reasoning,
 		RunID:         o.opts.RunID,

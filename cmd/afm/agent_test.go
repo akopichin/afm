@@ -273,6 +273,40 @@ func TestAgentCLI_Wait_NeverBlocksAndReportsYieldOrReady(t *testing.T) {
 	}
 }
 
+func TestAgentWait_HelpExplainsOutcomes(t *testing.T) {
+	for _, cmd := range []*cobra.Command{newAgentWaitCmd(), newAgentWaitStatusCmd()} {
+		t.Run(cmd.Name(), func(t *testing.T) {
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs([]string{"--help"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				"status: yield — a pending wait is registered; END YOUR TURN",
+				"status: ready — the event already happened; read the result and continue working",
+				"Do not end your turn or re-register the satisfied wait",
+				"cancelled, expired or run_closed",
+				"inspect the reason; this does not mean the task is complete",
+				"An ACK or ordinary reply satisfies reply_to",
+				"Check the required result contract or Board task state",
+				"send a NEW linked request to the same agent for the final result",
+				"name the original request ID in its body",
+				"Do not wait again on the satisfied request ID",
+				"A ready batch can contain cancelled or expired items",
+			} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("help missing wait guidance %q", want)
+				}
+			}
+			if strings.Contains(out.String(), "Register a durable wait, then end your turn.") {
+				t.Error("help still unconditionally ends the turn")
+			}
+		})
+	}
+}
+
 // A rejected send prints the server's reason, so the agent learns what to fix instead of "HTTP 500".
 func TestAgentCLI_Send_RejectionPrintsServerReason(t *testing.T) {
 	fake := &fakeCLIAgentMesh{token: "tok-X", participant: "helper:abc", sendErr: &state.OperationRejectedError{

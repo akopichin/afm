@@ -58,6 +58,43 @@ func TestAgentComm_ExplainsTheBatchWait(t *testing.T) {
 	}
 }
 
+func TestAgentComm_WaitOutcomesGuidance(t *testing.T) {
+	for _, scope := range []string{"stage", "run"} {
+		for _, typed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/typed=%v", scope, typed), func(t *testing.T) {
+				block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: scope + ":build", Scope: scope, Available: true, TypedBoardTasks: typed})
+				out := Build(Inputs{Template: "RULES", Stage: flow.Stage{ID: "build"}, PhaseAgent: AgentAutonomous, AgentComm: block})
+				for _, want := range []string{
+					"status: yield — a pending wait is registered; END YOUR TURN",
+					"status: ready — the event already happened; read the result and continue working",
+					"Do not end your turn or re-register the satisfied wait",
+					"cancelled, expired or run_closed",
+					"inspect the reason; this does not mean the task is complete",
+					"An ACK or ordinary reply satisfies reply_to",
+					"Check the required result contract or Board task state",
+					"send a NEW linked request to the same agent for the final result",
+					"name the original request ID in its body",
+					"Do not wait again on the satisfied request ID",
+					"A ready batch can contain cancelled or expired items",
+				} {
+					if !strings.Contains(out, want) {
+						t.Errorf("prompt missing wait guidance %q", want)
+					}
+				}
+				for _, unwanted := range []string{
+					"register a durable wait, THEN END YOUR TURN",
+					"and END YOUR TURN; when resumed",
+					"uses `afm agent wait` and then ending your turn",
+				} {
+					if strings.Contains(out, unwanted) {
+						t.Errorf("prompt still unconditionally ends the turn: %q", unwanted)
+					}
+				}
+			})
+		}
+	}
+}
+
 // A side turn has no wait at all, so it learns nothing of the batch wait either.
 func TestAgentComm_SideAgentDoesNotLearnTheBatchWait(t *testing.T) {
 	if block := SideAgentCommunicationBlock("side:run-1"); strings.Contains(block, "reply_to_all") || strings.Contains(block, "wait-status") {
@@ -341,7 +378,7 @@ func TestAgentCommRequests_SaysWhatWasLeftOut(t *testing.T) {
 	}
 }
 
-// Without TypedBoardTasks the block is exactly what resumed legacy runs always got.
+// Legacy runs keep the free-text board protocol alongside current wait guidance.
 func TestAgentComm_LegacyBlockGolden(t *testing.T) {
 	const goldenPath = "testdata/golden/agentcomm_legacy.txt"
 	got := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "run", Available: true})

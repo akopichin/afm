@@ -7,8 +7,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akopichin/afm/schema"
 	"gopkg.in/yaml.v3"
 )
+
+func TestReadPrompt_OutputSchema(t *testing.T) {
+	for _, body := range []string{"custom prompt", "schema: {{OUTPUT_SCHEMA}}"} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "helper-result.md"), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, overridden, err := ReadPrompt("helper-result.md", dir)
+		if err != nil || !overridden {
+			t.Fatalf("override=%v err=%v", overridden, err)
+		}
+		want := strings.ReplaceAll(body, "{{OUTPUT_SCHEMA}}", schema.JSON(schema.AssistantResultOnly))
+		if got != want {
+			t.Fatal("override schema does not match the decoder asset")
+		}
+	}
+	got, _, err := ReadPrompt("helper-result.md", "")
+	if err != nil || !strings.Contains(got, schema.JSON(schema.AssistantResultOnly)) {
+		t.Fatalf("embedded schema missing: %v", err)
+	}
+}
 
 // Кастомный промпт из overrideDir используется, когда файл есть.
 func TestReadPrompt_OverrideUsedWhenPresent(t *testing.T) {
@@ -123,4 +145,11 @@ func parseFrontmatter(text string) (skillFrontmatter, error) {
 		}
 	}
 	return meta, errors.New("frontmatter has no closing --- line")
+}
+
+func TestReadPrompt_VerifyOutputSchema(t *testing.T) {
+	got, _, err := ReadPrompt("verify.md", "")
+	if err != nil || !strings.Contains(got, schema.JSON(schema.VerifyResult)) {
+		t.Fatalf("verify schema missing: %v", err)
+	}
 }

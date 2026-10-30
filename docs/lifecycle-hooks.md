@@ -5,6 +5,9 @@ happen — to send notifications, push metrics, or update an external status boa
 They are deliberately separate from [`script_before`/`script_after` and script
 stages](script-stages.md):
 
+The autonomous author's [Stop hook reminder](autonomous-track.md) is a separate
+CLI integration for `execution_summary.md`; it does not add a hook to this list.
+
 - `script_before`/`script_after` participate in a stage and can block it;
 - a lifecycle hook only *observes* — it receives the event and runs alongside;
 - **a lifecycle hook error never changes the FSM, the stage result, or the flow

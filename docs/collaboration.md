@@ -846,12 +846,14 @@ Helpers must return one JSON object with `schema_version: 1` and either
 `kind: "delegate"` (with child tasks). afm includes this output contract at the
 end of each helper's task context, including after any follow-up instruction.
 
-If strict decoding fails, afm tries one mechanical repair of a single JSON
-object, such as extracting an answer from a markdown fence or surrounding prose.
-The repaired object still has to pass the same schema and verdict checks; repair
-cannot change its verdict. An accepted result shows a **repaired** badge in the
-helper view and a warning in the stage feed. If the answer still fails, the
-helper gets a `protocol_error`. Open **Show the helper's raw answer** in the
+If strict decoding fails, afm first tries bounded local repair of one JSON
+object, including known shape errors. If the result is still invalid because of
+format, a format-only model call may produce a candidate. afm accepts a candidate
+only after strict schema and domain checks and a comparison that preserves the
+original verdict, findings, and recommendations. It keeps the raw answer for
+inspection. An accepted repaired result shows a **repaired** badge in the helper
+view and a warning in the stage feed. If repair cannot preserve a valid result,
+the helper gets a `protocol_error`. Open **Show the helper's raw answer** in the
 helper view to inspect its final text, when available. The free-text fields
 `summary`, `evidence`, `suggested_change` and `limitations` may be either a
 string or an array of strings; anything else in them is still a protocol error.

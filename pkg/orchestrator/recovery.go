@@ -170,8 +170,8 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 				// barrier (Этап 7, T7.3: completeStage — not a bare Trigger(EvComplete) — checks
 				// RequiredBlocker and diverts to awaiting_assistants exactly like the live completion path
 				// would have; TestResumeByDoneMarkerDoesNotBypassBarrier).
-				if s.Verify.IsEmpty() && stagefiles.CheckCompletion(stageDir, o.projectDir(), s) == nil {
-					o.completeRecoveredStage(ctx, s, state.StatusRetrying, "recovered .done")
+				if reason, err := o.executionProbe(s, stageDir); s.Verify.IsEmpty() && err == nil {
+					o.completeRecoveredStage(ctx, s, state.StatusRetrying, reason)
 				} else {
 					o.Trigger(s.ID, bus.EvReady, bus.GuardCtx{}, "retry recovery")
 				}
@@ -340,14 +340,27 @@ func (o *Orchestrator) completeRecoveredStage(ctx context.Context, s flow.Stage,
 	if !s.IsScript() && o.parkInterruptedTurn(ctx, s, from) {
 		return
 	}
+	autonomous := o.executionKind(s) == kindAutonomous
 	phase := phaseImplementation
-	if o.executionKind(s) == kindAutonomous {
+	if autonomous {
 		phase = phaseAutonomous
 	}
 	if !s.IsScript() && o.continueForUnreadMessages(ctx, s.ID, phase, nil) {
 		return
 	}
+	if autonomous && !s.IsScript() {
+		o.noteSummaryRecovered(s.ID, filepath.Join(o.opts.RunDir, s.ID))
+	}
 	o.completeStage(ctx, s.ID, from, reason)
+}
+
+// executionProbe is the one check of what a finished author leaves on disk, used by every restart path that completes
+// a stage from its files: the summary of an autonomous stage (its .done is no proof), the .done marker otherwise.
+func (o *Orchestrator) executionProbe(s flow.Stage, stageDir string) (reason string, err error) {
+	if o.executionKind(s) == kindAutonomous && !s.IsScript() {
+		return "recovered execution_summary.md", stagefiles.CheckAutonomousCompletion(stageDir)
+	}
+	return "recovered .done", stagefiles.CheckCompletion(stageDir, o.projectDir(), s)
 }
 
 // resumeExecutionStage probes the author's output once. A configured verify gate always requires a fresh
@@ -356,14 +369,7 @@ func (o *Orchestrator) completeRecoveredStage(ctx context.Context, s flow.Stage,
 func (o *Orchestrator) resumeExecutionStage(ctx context.Context, s flow.Stage, status state.StageStatus) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	kind := o.executionKind(s)
-	reason := "recovered .done"
-	var completionErr error
-	if kind == kindAutonomous && !s.IsScript() {
-		completionErr = stagefiles.CheckAutonomousCompletion(stageDir)
-		reason = "recovered execution_summary.md"
-	} else {
-		completionErr = stagefiles.CheckCompletion(stageDir, o.projectDir(), s)
-	}
+	reason, completionErr := o.executionProbe(s, stageDir)
 	if completionErr == nil && s.Verify.IsEmpty() {
 		o.completeRecoveredStage(ctx, s, status, reason)
 		return
@@ -418,29 +424,22 @@ func (o *Orchestrator) verifyStepStillParked(s flow.Stage, q *state.QuotaWait) b
 	return m.Steps[q.VerifyStep-1].Outcome == verifyOutcomeQuotaWait
 }
 
-// resumeInteractiveAgent re-runs the agent of the phase whose session.json exists most recently.
+// resumeInteractiveAgent re-runs the agent of an unanswered question: the planning one when its session is the latest,
+// otherwise the stage's execution turn. A review session means the stage was paused inside review, which the
+// implementation agent re-triggers at its end; an autonomous stage has no session to tell it apart, so its kind decides.
 func (o *Orchestrator) resumeInteractiveAgent(ctx context.Context, s flow.Stage) {
 	stageDir := filepath.Join(o.opts.RunDir, s.ID)
 	phase := o.detectInterruptedPhase(stageDir)
-
-	switch phase {
-	case phasePlanning:
-		epoch, ok := o.grantTurn(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phasePlanning}, "resume interactive")
-		if !ok {
-			return // the answer resumed it first
-		}
-		o.runPlanningAgent(withTurnEpoch(ctx, epoch), s)
-	case phaseReview:
-		// Review runs after implementation completes; if we see review session open, the stage was paused inside
-		// review. Fall through to implementation agent which will re-trigger review at the end.
-		fallthrough
-	default:
-		epoch, ok := o.grantTurn(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phaseImplementation}, "resume interactive")
-		if !ok {
-			return // the answer resumed it first
-		}
-		o.runImplementationAgent(withTurnEpoch(ctx, epoch), s)
+	if phase != phasePlanning {
+		phase = executionPhases[o.executionKind(s)]
 	}
+
+	epoch, ok := o.grantTurn(s.ID, bus.EvUserAnswered, bus.GuardCtx{Phase: phase}, "resume interactive")
+	if !ok {
+		return // the answer resumed it first
+	}
+	kind, _ := kindOfPhase(phase)
+	o.plainRunner(kind)(withTurnEpoch(ctx, epoch), s)
 }
 
 func (o *Orchestrator) detectInterruptedPhase(stageDir string) string {

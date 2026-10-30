@@ -30,7 +30,10 @@ const maxConsecutiveDelegationRejections = 3
 // maxConsecutiveDelegationRejections in a row the task is failed instead of requeued, so a model that keeps
 // re-sending the same rejected delegate cannot spin forever.
 // turn is the rejected delegating turn, ended by the status change recorded here.
-func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn uint64, rejectErr error) {
+func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn uint64, rejectErr error, guard func(*state.RunState) error) error {
+	if o.helperOutputCommitHook != nil {
+		o.helperOutputCommitHook()
+	}
 	code := assistants.ErrorCode("delegation_rejected")
 	reason := rejectErr.Error()
 	var rej *state.OperationRejectedError
@@ -43,12 +46,10 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn
 	if prev, ok := o.taskDelegationRejects.Load(taskID); ok {
 		count = prev.(int) + 1
 	}
-	o.taskDelegationRejects.Store(taskID, count)
 	if count >= maxConsecutiveDelegationRejections {
-		o.taskDelegationRejects.Delete(taskID)
-		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed,
-			fmt.Sprintf("delegation_rejected %d times in a row (%s): %s", count, code, reason))
-		return
+		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed,
+			fmt.Sprintf("delegation_rejected %d times in a row (%s): %s", count, code, reason), nil, guard,
+			func(state.OperationResult) { o.taskDelegationRejects.Delete(taskID) })
 	}
 
 	note := fmt.Sprintf(
@@ -57,10 +58,19 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn
 			"No child was created (the whole group is rejected together, never a partial one). "+
 			"Either complete the remaining work yourself, or honestly report this limitation in your own "+
 			"result instead of repeating the same delegation request.", code, reason)
-	if werr := o.saveFollowUp(taskID, note); werr != nil {
-		o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist delegation rejection: "+werr.Error())
-		return
+	var writeErr error
+	committed := func(state.OperationResult) {
+		// SpawnOwned keeps the next turn behind this callback, including its follow-up publication.
+		o.taskDelegationRejects.Store(taskID, count)
+		writeErr = o.saveFollowUp(taskID, note)
 	}
-	o.finishTaskTurn(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, "delegation_rejected: "+string(code))
+	if err := o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, "delegation_rejected: "+string(code), nil, guard, committed); err != nil {
+		return err
+	}
+	if writeErr != nil {
+		o.finishTaskFrom(taskID, assistants.StatusQueued, assistants.StatusFailed, "assistants: persist delegation rejection: "+writeErr.Error())
+		return writeErr
+	}
 	o.maybeScheduleTask(o.runContext(context.Background()), taskID)
+	return nil
 }

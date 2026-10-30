@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/akopichin/afm/main/schema/question.schema.json",
+  "title": "afm question",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "File question payload. The filename owns the question ID. Omitted or null allow_custom defaults to true.",
+  "properties": {
+    "id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "question": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "options": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "allow_custom": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  }
+}
