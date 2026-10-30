@@ -14,6 +14,12 @@ separate from transport retries and verification corrections. Dependent stages
 still wait for the normal completion and verification checks; agent and file-read
 errors retain their own failure paths.
 
+### Fix: publish releases for separate major version lines
+
+Fixed release packaging after introducing the 1.x maintenance line. Publication
+now selects the correct Homebrew cask and GitHub Latest policy without failing
+on the numeric major version supplied by GoReleaser.
+
 ### Improvement: maintain independent 1.x and 2.x release lines
 
 `make release-patch v1.x` and `make release-minor v1.x` publish the pushed
