@@ -406,8 +406,8 @@ func TestDockerConfig_GetImage(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
 		t.Setenv("AFM_DOCKER_IMAGE", "")
 		cfg := config.DockerConfig{}
-		if cfg.GetImage() != "akopichin/afm:latest" {
-			t.Errorf("got %q, want akopichin/afm:latest", cfg.GetImage())
+		if cfg.GetImage() != "akopichin/afm:1" {
+			t.Errorf("got %q, want akopichin/afm:1", cfg.GetImage())
 		}
 	})
 	t.Run("config override", func(t *testing.T) {

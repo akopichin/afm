@@ -14,7 +14,7 @@ docker run --rm -it \
   -e AFM_HOST_UID=$(id -u) -e AFM_HOST_GID=$(id -g) \
   -e AFM_IN_DOCKER=1 \
   -e ANTHROPIC_API_KEY \
-  akopichin/afm:latest \
+  akopichin/afm:1 \
   run flow.yaml
 ```
 
@@ -47,7 +47,7 @@ restarts itself inside the container:
 # .afm/config.yaml
 docker:
   enabled: true             # or set AFM_USE_DOCKER=1
-  # image: akopichin/afm:latest
+  # image: akopichin/afm:1
 ```
 
 The image includes claude CLI, Node 22, Python 3.12, Go 1.26, and git. The container

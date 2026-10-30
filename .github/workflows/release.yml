@@ -36,13 +36,20 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push docker image (multi-arch)
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          set -- -t "akopichin/afm:$RELEASE_TAG"
+          case "$RELEASE_TAG" in
+            *-*) ;;
+            v1.*) set -- "$@" -t akopichin/afm:1 ;;
+            *) set -- "$@" -t akopichin/afm:latest ;;
+          esac
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --build-arg AFM_VERSION="${{ github.ref_name }}" \
+            --build-arg AFM_VERSION="$RELEASE_TAG" \
             -f Dockerfile.runtime \
-            -t akopichin/afm:${{ github.ref_name }} \
-            -t akopichin/afm:latest \
+            "$@" \
             --push .
 
       - name: Release binaries + Homebrew cask
@@ -52,5 +59,6 @@ jobs:
           version: 2.17.0
           args: release --clean
         env:
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}

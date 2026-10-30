@@ -32,6 +32,10 @@ git config core.hooksPath .githooks
 `core.hooksPath` is local git config, so it must be set once per clone. To skip the
 hook for a single commit: `git commit --no-verify`.
 
+For stable releases, prereleases, and the maintenance branch, see
+[Releases and prereleases](docs/releases.md). Publication regression tests are
+included in `make test` (`go test ./scripts`).
+
 ## Documentation
 
 User docs live under [`docs/`](docs/) and are published to

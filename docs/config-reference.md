@@ -66,7 +66,7 @@ verify:
 
 docker:
   enabled: false            # true / env AFM_USE_DOCKER=1 — restart inside a container
-  # image: akopichin/afm:latest
+  # image: akopichin/afm:1
   # autoShim: true          # generate claude wrappers for agents.<cmd> inside the container
   # file_browser:
   #   enabled: false         # dashboard file browser; ON by default, env AFM_FILE_BROWSER overrides

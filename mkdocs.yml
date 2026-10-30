@@ -67,6 +67,7 @@ nav:
       - Directory layout: internals/directory-layout.md
       - Event log: internals/event-log.md
       - Prompts: internals/prompts.md
+  - Releases: releases.md
   - Changelog: https://github.com/akopichin/afm/blob/main/CHANGELOG.md
 
 markdown_extensions:

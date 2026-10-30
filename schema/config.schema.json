@@ -198,7 +198,7 @@
         },
         "image": {
           "type": "string",
-          "description": "Docker image to run. Default akopichin/afm:latest."
+          "description": "Docker image to run. Default akopichin/afm:1."
         },
         "autoShim": {
           "type": "boolean",

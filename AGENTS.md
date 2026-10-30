@@ -622,7 +622,7 @@ afm автоматически перезапускается внутри Docke
 ```yaml
 docker:
   enabled: true
-  image: akopichin/afm:latest   # опц., дефолт
+  image: akopichin/afm:1   # опц., дефолт
 ```
 
 Или `AFM_USE_DOCKER=1 afm run flow.yaml`.
@@ -680,18 +680,11 @@ Marker-детект через инъектируемый seam `containerMarkerP
 
 ### Publishing a new image
 
-```bash
-make release-patch   # bugfix
-make release-minor   # feature
-make release-major   # breaking
-```
-
-`scripts/release.sh` только создаёт+пушит git-тег `vX.Y.Z`; сборку (docker-образ,
-бинарники, GitHub Release, Homebrew) делает `.github/workflows/release.yml`. Любой
-push в `main` авто-бампит patch-тег (`ci.yml`'s `auto-release-tag`). Релиз всегда
-multi-arch (`linux/amd64` + `linux/arm64`) через `docker buildx --platform ... --push`
-+ QEMU; версия в бинарник — `--build-arg AFM_VERSION`. `make docker-build`/
-`docker-push` — dev-only single-arch.
+Релизные команды и каналы: [docs/releases.md](docs/releases.md). Push ветки
+запускает только проверки; публикация требует явного version-тега. Ветка `v1.x`
+не должна обновлять основной Homebrew cask, Docker `latest` или GitHub Latest.
+Образ по умолчанию в этой ветке остаётся на линии 1.x; явный override сохраняет
+приоритет. `make docker-build`/`docker-push` — dev-only single-arch.
 
 ### Пины версий в образе — бампить руками
 
