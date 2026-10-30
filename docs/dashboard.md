@@ -63,7 +63,9 @@ right. The selected stage's Feed can also show a People panel on wide screens.
   so a question arriving then opens right away.
 - **Stage header** — a compact row above the selected stage's view shows its name
   and current status. When applicable it shows a reply count, **People**,
-  **Retry** for a failed stage, and **Pause** or **Continue**. The latter two are
+  **Retry** for a failed stage, and **Pause** or **Continue**. **People** shows
+  and hides the [People panel](#people-panel) and is highlighted in the theme's
+  accent color while the panel is visible. **Pause** and **Continue** are
   icon buttons with accessible labels.
 - **Approval / Question views** — the plan with line-by-line review and inline
   comments, or the agent's question with answer options and a free-text reply, each
@@ -357,7 +359,11 @@ which overrides the built-in theme.
 The dashboard uses entrance animations as content appears. The reply-to-thought
 quote chip and the line-comment quote mark glow in, taking their accent color from
 the active theme. The newest feed message slides and fades in over 420 ms with a
-brief accent glow that disappears by the end of the animation. All of them honor
+brief accent glow that disappears by the end of the animation. In a collapsed
+`N tool calls` series, the number briefly grows and flashes in the theme's accent
+color when the agent adds a call to a series you already see; it does not play when
+the series first appears, on page load, or when you switch stage or feed filter.
+All of them honor
 `prefers-reduced-motion`: if your system requests reduced motion, they collapse to
 effectively instant.
 
@@ -435,7 +441,9 @@ Revise note.
 2. Type your note and send it — click **Apply Revise** when the composer has
    modes (otherwise the send button), or press **Enter**
    (**Shift+Enter** inserts a newline). **Attach** lets you paste or upload an image,
-   and in Docker mode reference a project file.
+   and in Docker mode reference a project file. An image sent with the note is
+   removed from the composer once the send succeeds, even if you edited the line
+   after its `[Screenshot: …]` label; if the send fails it stays.
 3. The agent finishes its current step, then receives SIGINT (a graceful interrupt,
    not a kill); the stage moves through `revising` and restarts the same phase
    (planning/implementation/review/autonomous) with your note folded into its
@@ -584,12 +592,23 @@ resizing still works, but the width is not retained.
   helper** dialog (a helper that works for this stage's agent). The second is
   shown only while the stage can take a helper.
 
-At viewport widths of 1180 px or less, the panel becomes a right-side drawer:
-open it with the 👥 button at the right of the stage header. The resize divider
+On a wide screen the panel is open by default next to the Feed. Click **People**
+in the stage header, or **×** in the panel, to hide it; the Feed and composer then
+use the full width. Click **People** again to bring it back at its saved width.
+Your choice holds when you change stage or tab, until you reload the page. Picking
+a person, **Add run agent…**, **Attach helper to stage…** and **Escape** leave the
+panel open.
+
+At viewport widths of 1180 px or less, the panel becomes a right-side drawer,
+closed by default: open it with the **People** button in the stage header, which
+is highlighted while the drawer is open. The wide panel and the drawer remember
+their state separately: narrowing the window does not open the drawer, and
+widening it restores the wide panel as you left it. The resize divider
 is hidden; if it had keyboard focus when the layout changed, focus moves to the
-👥 button. The open drawer takes the keyboard focus and keeps **Tab** inside it;
-**Escape**, a click beside it or a pick closes it and returns the focus. A long
-command is shortened with an ellipsis; hover it for the full value.
+**People** button. The open drawer takes the keyboard focus and keeps **Tab**
+inside it; **Escape**, **×**, a click beside it or a pick closes it and returns
+the focus. A long command is shortened with an ellipsis; hover it for the full
+value.
 
 ### Conversations in the stage feed
 

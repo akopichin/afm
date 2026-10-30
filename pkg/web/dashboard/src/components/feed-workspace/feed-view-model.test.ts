@@ -924,10 +924,10 @@ describe('groupToolRuns / toolRunSummary', () => {
     expect(toolCall(bare as FeedItem)).toEqual({ name: 'TodoWrite', detail: '' })
   })
 
-  it('summarizes with a count, distinct lowercased names and an ellipsis past four', () => {
+  it('summarizes with a count, its label, distinct lowercased names and an ellipsis past four', () => {
     const summary = (names: string[]) => toolRunSummary(toFeedItems(names.map((n, i) => tool(n, i + 1))))
-    expect(summary(['Read'])).toEqual({ count: '1 tool call', names: 'read' })
-    expect(summary(['Read', 'Edit', 'Read'])).toEqual({ count: '3 tool calls', names: 'read, edit' })
-    expect(summary(['A', 'B', 'C', 'D', 'E'])).toEqual({ count: '5 tool calls', names: 'a, b, c, d…' })
+    expect(summary(['Read'])).toEqual({ count: 1, label: 'tool call', names: 'read' })
+    expect(summary(['Read', 'Edit', 'Read'])).toEqual({ count: 3, label: 'tool calls', names: 'read, edit' })
+    expect(summary(['A', 'B', 'C', 'D', 'E'])).toEqual({ count: 5, label: 'tool calls', names: 'a, b, c, d…' })
   })
 })

@@ -1,10 +1,18 @@
+import { useState, type ReactElement } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import * as meshClient from '../../api/mesh-client'
 import { DialogOpenContext } from '../../lib/focus-trap'
-import { StagePeoplePanel } from './StagePeoplePanel'
+import { AttachHelperDialog } from '../assistants'
+import { StagePeoplePanel as Panel, STAGE_PEOPLE_DRAWER_QUERY } from './StagePeoplePanel'
+import { useMediaQuery } from '../../hooks/use-media-query'
 import type { MeshParticipant } from '../../api/mesh-client'
 import type { Stage } from '../../types'
+
+// Resolves the drawer flag from the viewport the way App does, so every test below keeps driving the panel by matchMedia.
+function StagePeoplePanel(props: Omit<Parameters<typeof Panel>[0], 'drawer'>): ReactElement {
+  return <Panel {...props} drawer={useMediaQuery(STAGE_PEOPLE_DRAWER_QUERY)} />
+}
 
 function stage(id: string, status: Stage['status']): Stage {
   return {
@@ -18,6 +26,14 @@ const participants: MeshParticipant[] = [
   { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', stage_id: 'impl', alias: 'impl', reachable: true, command: 'claude' },
   { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
 ]
+
+// Pins the viewport to the wide layout or the drawer layout of the People panel.
+function stubViewport(mode: 'wide' | 'drawer') {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    media: query, matches: mode === 'drawer' && query === STAGE_PEOPLE_DRAWER_QUERY,
+    addEventListener: () => {}, removeEventListener: () => {},
+  }))
+}
 
 function renderPanel(overrides: Partial<Parameters<typeof StagePeoplePanel>[0]> = {}) {
   const onPick = vi.fn()
@@ -37,6 +53,55 @@ function renderPanel(overrides: Partial<Parameters<typeof StagePeoplePanel>[0]> 
     />,
   )
   return { onPick, onClose, onAgentAdded }
+}
+
+// Owns the open flag like App does, next to the People toggle that opens the drawer.
+function PeopleHarness({ onPick, onAttachHelper }: { onPick?: () => void; onAttachHelper?: () => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" className="stage-people-toggle" onClick={() => setOpen(!open)}>People</button>
+      <StagePeoplePanel
+        stageId="impl" participants={participants} stages={[stage('impl', 'running')]}
+        profiles={[{ id: 'qa', title: 'QA', command: 'claude', available: true, unavailableReason: '' }]}
+        open={open} onClose={() => setOpen(false)} onPick={onPick} onAgentAdded={vi.fn()} onAttachHelper={onAttachHelper}
+      />
+    </>
+  )
+}
+
+// Same owner as App: the panel's Attach helper opens the real AttachHelperDialog next to it.
+function PeopleWithAttachDialogHarness() {
+  const [open, setOpen] = useState(false)
+  const [attachStageId, setAttachStageId] = useState<string | null>(null)
+  return (
+    <>
+      <button type="button" className="stage-people-toggle" onClick={() => setOpen(!open)}>People</button>
+      <StagePeoplePanel
+        stageId="impl" participants={participants} stages={[stage('impl', 'running')]}
+        profiles={[{ id: 'qa', title: 'QA', command: 'claude', available: true, unavailableReason: '' }]}
+        open={open} onClose={() => setOpen(false)} onPick={vi.fn()} onAgentAdded={vi.fn()} onAttachHelper={setAttachStageId}
+      />
+      {attachStageId !== null && (
+        <AttachHelperDialog
+          stageId={attachStageId} stageTitle="impl"
+          profiles={[{ id: 'qa', title: 'QA', command: 'claude', available: true, unavailableReason: '' }]}
+          onAttached={() => setAttachStageId(null)} onCancel={() => setAttachStageId(null)}
+        />
+      )}
+    </>
+  )
+}
+
+// Opens the drawer from the People toggle, with the focus on it, and returns the toggle.
+function openDrawerFromToggle(props: Parameters<typeof PeopleHarness>[0] = {}, Harness: () => ReactElement = () => <PeopleHarness {...props} />): HTMLElement {
+  stubViewport('drawer')
+  render(<Harness />)
+  const toggle = screen.getByRole('button', { name: 'People' })
+  toggle.focus()
+  fireEvent.click(toggle)
+  expect(screen.getByRole('dialog', { name: 'Stage people' })).toBeInTheDocument()
+  return toggle
 }
 
 function mockFeedWidth(initialWidth: number) {
@@ -119,10 +184,67 @@ describe('StagePeoplePanel', () => {
   })
 
   test('a pick addresses the person and closes the drawer', () => {
+    stubViewport('drawer')
     const { onPick, onClose } = renderPanel()
     fireEvent.click(screen.getByText('QA reviewer'))
     expect(onPick).toHaveBeenCalledWith(participants[2])
     expect(onClose).toHaveBeenCalled()
+  })
+
+  test('on a wide screen a pick, Add run agent and Attach helper leave the panel open', () => {
+    stubViewport('wide')
+    const onAttachHelper = vi.fn()
+    const { onPick, onClose } = renderPanel({ onAttachHelper })
+    fireEvent.click(screen.getByText('QA reviewer'))
+    expect(onPick).toHaveBeenCalledWith(participants[2])
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent…' }))
+    expect(screen.getByRole('dialog', { name: 'Add run agent' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Attach helper to stage…' }))
+    expect(onAttachHelper).toHaveBeenCalledWith('impl')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  test('on a wide screen Escape does not hide the panel and there is no scrim', () => {
+    stubViewport('wide')
+    const { onClose } = renderPanel()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Close people' })).toBeNull()
+  })
+
+  test('on a wide screen the close button hides the panel and hands the focus to the People toggle', () => {
+    stubViewport('wide')
+    const props = { stageId: 'impl', participants, stages: [stage('impl', 'running')], profiles: [], onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn() }
+    const tree = (open: boolean) => (
+      <>
+        <button type="button" className="stage-people-toggle">People</button>
+        <StagePeoplePanel {...props} open={open} />
+      </>
+    )
+    const view = render(tree(true))
+    const close = screen.getByRole('button', { name: 'Close people panel' })
+    close.focus()
+    fireEvent.click(close)
+    expect(props.onClose).toHaveBeenCalledTimes(1)
+    view.rerender(tree(false))
+    expect(document.querySelector('.stage-people-toggle')).toHaveFocus()
+  })
+
+  test('on a wide screen a panel hidden while the focus is elsewhere leaves the focus alone', () => {
+    stubViewport('wide')
+    const props = { stageId: 'impl', participants, stages: [stage('impl', 'running')], profiles: [], onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn() }
+    const tree = (open: boolean) => (
+      <>
+        <button type="button" className="stage-people-toggle">People</button>
+        <textarea aria-label="Composer" />
+        <StagePeoplePanel {...props} open={open} />
+      </>
+    )
+    const view = render(tree(true))
+    screen.getByRole('textbox', { name: 'Composer' }).focus()
+    view.rerender(tree(false))
+    expect(screen.getByRole('textbox', { name: 'Composer' })).toHaveFocus()
   })
 
   test('the reachable Assistant stays selectable in People', () => {
@@ -145,6 +267,7 @@ describe('StagePeoplePanel', () => {
   })
 
   test('"Attach helper to stage…" sits next to it and opens the stage\'s helper dialog; without it there is no button', () => {
+    stubViewport('drawer')
     const onAttachHelper = vi.fn()
     const { onClose } = renderPanel({ onAttachHelper })
     fireEvent.click(screen.getByRole('button', { name: 'Attach helper to stage…' }))
@@ -158,11 +281,130 @@ describe('StagePeoplePanel', () => {
   })
 
   test('the drawer closes on Escape and on its scrim', () => {
+    stubViewport('drawer')
     const { onClose } = renderPanel()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Close people' }))
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  test.each([
+    ['Escape', () => fireEvent.keyDown(window, { key: 'Escape' })],
+    ['the scrim', () => fireEvent.click(screen.getByRole('button', { name: 'Close people' }))],
+    ['the close button', () => fireEvent.click(screen.getByRole('button', { name: 'Close people panel' }))],
+    ['a pick', () => fireEvent.click(screen.getByText('QA reviewer'))],
+    ['Attach helper', () => fireEvent.click(screen.getByRole('button', { name: 'Attach helper to stage…' }))],
+  ] as const)('the drawer closes on %s and hands the focus back to the People toggle', (_, close) => {
+    const toggle = openDrawerFromToggle({ onPick: vi.fn(), onAttachHelper: vi.fn() })
+    act(() => { close() })
+    expect(screen.queryByRole('dialog', { name: 'Stage people' })).toBeNull()
+    expect(document.getElementById('stage-people')).not.toHaveClass('open')
+    expect(toggle).toHaveFocus()
+  })
+
+  test('the drawer closes on "Add run agent…" and the dialog it opens takes over', () => {
+    openDrawerFromToggle()
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent…' }))
+    expect(screen.queryByRole('dialog', { name: 'Stage people' })).toBeNull()
+    expect(document.getElementById('stage-people')).not.toHaveClass('open')
+    expect(screen.getByRole('dialog', { name: 'Add run agent' })).toBeInTheDocument()
+  })
+
+  // The dialog opens in the same update that closes the drawer: its opener must be the People toggle, not a
+  // control inside the drawer that is about to be hidden.
+  test.each([
+    ['Add run agent…', 'Add run agent', 'Cancel', () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))],
+    ['Add run agent…', 'Add run agent', 'Escape', () => fireEvent.keyDown(document, { key: 'Escape' })],
+    ['Attach helper to stage…', 'Attach helper', 'Cancel', () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))],
+    ['Attach helper to stage…', 'Attach helper', 'Escape', () => fireEvent.keyDown(document, { key: 'Escape' })],
+  ] as const)('in the drawer "%s" opens the real %s dialog and %s hands the focus to the People toggle', (button, dialog, _how, dismiss) => {
+    const toggle = openDrawerFromToggle({}, PeopleWithAttachDialogHarness)
+    fireEvent.click(screen.getByRole('button', { name: button }))
+    expect(screen.getByRole('dialog', { name: dialog })).toBeInTheDocument()
+    act(() => { dismiss() })
+    expect(screen.queryByRole('dialog', { name: dialog })).toBeNull()
+    expect(toggle).toHaveFocus()
+  })
+
+  test('on a wide screen the dialog opened from the panel returns the focus to the button that opened it', () => {
+    stubViewport('wide')
+    render(<PeopleWithAttachDialogHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'People' }))
+    const attach = screen.getByRole('button', { name: 'Attach helper to stage…' })
+    attach.focus()
+    fireEvent.click(attach)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(attach).toHaveFocus()
+  })
+
+  test('a wide panel mounted while another control has the focus hands the focus to the People toggle when closed', () => {
+    stubViewport('wide')
+    const props = { stageId: 'impl', participants, stages: [stage('impl', 'running')], profiles: [], onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn() }
+    const tree = (panel: 'none' | 'open' | 'closed') => (
+      <>
+        <button type="button" className="stage-people-toggle">People</button>
+        <button type="button">Feed tab</button>
+        {panel !== 'none' && <StagePeoplePanel {...props} open={panel === 'open'} />}
+      </>
+    )
+    const view = render(tree('none'))
+    screen.getByRole('button', { name: 'Feed tab' }).focus()
+    view.rerender(tree('open'))
+    const close = screen.getByRole('button', { name: 'Close people panel' })
+    close.focus()
+    fireEvent.click(close)
+    view.rerender(tree('closed'))
+    expect(document.querySelector('.stage-people-toggle')).toHaveFocus()
+  })
+
+  test('a wide panel closed after the drawer was open does not reuse the drawer\'s opener', () => {
+    const matches = { narrow: true }
+    const listeners = new Set<() => void>()
+    vi.stubGlobal('matchMedia', () => ({
+      get matches() { return matches.narrow },
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    }))
+    const props = { stageId: 'impl', participants, stages: [stage('impl', 'running')], profiles: [], onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn() }
+    const tree = (open: boolean) => (
+      <>
+        <button type="button" className="stage-people-toggle">People</button>
+        <button type="button">Feed tab</button>
+        <StagePeoplePanel {...props} open={open} />
+      </>
+    )
+    const view = render(tree(false))
+    screen.getByRole('button', { name: 'Feed tab' }).focus()
+    view.rerender(tree(true))
+    act(() => { matches.narrow = false; listeners.forEach((notify) => notify()) })
+    const close = screen.getByRole('button', { name: 'Close people panel' })
+    close.focus()
+    view.rerender(tree(false))
+    expect(document.querySelector('.stage-people-toggle')).toHaveFocus()
+  })
+
+  test('switching from the wide panel to the closed drawer leaves the focus where it was', () => {
+    let narrow = false
+    const listeners = new Set<() => void>()
+    vi.stubGlobal('matchMedia', () => ({
+      get matches() { return narrow },
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    }))
+    const props = { stageId: 'impl', participants, stages: [stage('impl', 'running')], profiles: [], onClose: vi.fn(), onPick: vi.fn(), onAgentAdded: vi.fn() }
+    const tree = (open: boolean) => (
+      <>
+        <button type="button" className="stage-people-toggle">People</button>
+        <StagePeoplePanel {...props} open={open} />
+      </>
+    )
+    const view = render(tree(true))
+    expect(document.body).toHaveFocus()
+    // App swaps its wide flag for the drawer one on this switch: the panel is open before, closed after.
+    act(() => { narrow = true; listeners.forEach((notify) => notify()); view.rerender(tree(false)) })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.body).toHaveFocus()
   })
 
   test('the drawer takes the focus when opened, keeps Tab inside, and gives it back when closed', () => {
@@ -426,13 +668,11 @@ describe('StagePeoplePanel', () => {
 })
 
 
-test.each([[false, 0], [true, 1]])('People close button on a wide screen is absent, in drawer mode present (drawer=%s)', (drawer, count) => {
-  vi.stubGlobal('matchMedia', (query: string) => ({
-    media: query, matches: drawer && query === '(max-width: 1180px)',
-    addEventListener: () => {}, removeEventListener: () => {},
-  }))
-  renderPanel({ open: drawer })
-  expect(screen.queryAllByRole('button', { name: 'Close people panel' })).toHaveLength(count)
+test.each(['wide', 'drawer'] as const)('People close button is there in %s mode', (mode) => {
+  stubViewport(mode)
+  const { onClose } = renderPanel({ open: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Close people panel' }))
+  expect(onClose).toHaveBeenCalledTimes(1)
 })
 
 test('People reports modal context and takes focus only in drawer mode', () => {

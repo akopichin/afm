@@ -441,6 +441,8 @@
 .workspace-action-icon { width: 28px; }
 .workspace-action:hover:not(:disabled),
 .workspace-header .stage-people-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
+.workspace-header .stage-people-toggle[aria-expanded='true'],
+.workspace-header .stage-people-toggle[aria-expanded='true']:hover { color: var(--accent-text); }
 .workspace-action:focus-visible,
 .workspace-header .stage-people-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .workspace-action:disabled { color: var(--text-disabled); cursor: default; }

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useMediaQuery } from '../../hooks/use-media-query'
 
 const MIN_WIDTH = 200
 const MAX_WIDTH = 560
@@ -12,6 +13,8 @@ type Options = {
   container: 'parent' | 'self'
   direction: -1 | 1
   drawerQuery: string
+  // The owner's own answer to drawerQuery, when it has already acted on it in the same render.
+  drawer?: boolean
   drawerBelow?: number
   toggleSelector: string
 }
@@ -33,14 +36,15 @@ function loadWidth(key: string, fallback: number): number {
   return fallback
 }
 
-export function usePanelResize({ storageKey, defaultWidth, container, direction, drawerQuery, drawerBelow, toggleSelector }: Options) {
+export function usePanelResize({ storageKey, defaultWidth, container, direction, drawerQuery, drawer, drawerBelow, toggleSelector }: Options) {
   const targetRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<HTMLDivElement | null>(null)
   const focusedHandleRef = useRef(false)
   const cleanupDrag = useRef<(() => void) | null>(null)
   const [preferredWidth, setPreferredWidth] = useState(() => loadWidth(storageKey, defaultWidth))
   const [containerWidth, setContainerWidth] = useState<number | null>(null)
-  const [viewportDrawer, setViewportDrawer] = useState(() => window.matchMedia?.(drawerQuery).matches ?? false)
+  const queriedDrawer = useMediaQuery(drawerQuery)
+  const viewportDrawer = drawer ?? queriedDrawer
 
   useLayoutEffect(() => {
     const target = targetRef.current
@@ -59,15 +63,6 @@ export function usePanelResize({ storageKey, defaultWidth, container, direction,
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
   }, [container])
-
-  useEffect(() => {
-    const query = window.matchMedia?.(drawerQuery)
-    if (query === undefined) return
-    const update = (): void => setViewportDrawer(query.matches)
-    update()
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [drawerQuery])
 
   const maxWidth = containerWidth === null ? MAX_WIDTH : Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, containerWidth - CONTENT_WIDTH))
   const maxWidthRef = useRef(maxWidth)

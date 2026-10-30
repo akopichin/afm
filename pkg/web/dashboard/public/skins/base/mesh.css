@@ -1890,12 +1890,18 @@
   justify-content: center;
 }
 
-.stage-people-toggle,
 .stage-people-scrim {
   display: none;
 }
 
-/* Narrower than the feed plus the panel: the panel becomes a drawer from the right, opened by 👥. */
+/* Wide screen: the People button in the workspace header hides the panel; the feed takes its width. */
+@media not all and (max-width: 1180px) {
+  .stage-people:not(.open) {
+    display: none;
+  }
+}
+
+/* Narrower than the feed plus the panel: the panel becomes a drawer from the right, opened by the People button. */
 @media (max-width: 1180px) {
   .stage-people-resizer { display: none; }
   .stage-people {
@@ -1912,13 +1918,12 @@
     visibility: hidden;
     transition: transform var(--motion-fast, 120ms) ease, visibility var(--motion-fast, 120ms);
   }
+  /* Opening shows the drawer at once: a delayed visibility keeps it hidden for the first frame, and the focus()
+     that follows the open would be ignored. Closing keeps the delay, so the slide-out stays visible. */
   .stage-people.open {
     transform: none;
     visibility: visible;
-  }
-  .stage-people-toggle {
-    display: grid;
-    font-size: 15px;
+    transition: transform var(--motion-fast, 120ms) ease, visibility 0s;
   }
   .stage-people-scrim {
     display: block;
@@ -1932,7 +1937,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .stage-people {
+  .stage-people,
+  .stage-people.open {
     transition: none;
   }
 }

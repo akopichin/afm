@@ -100,7 +100,7 @@ it('persists reply/image/mode drafts through People, views and stages, and relea
   fireEvent.click(screen.getByRole('button', { name: 'Show people' }))
   expect(composer()).toBe(input)
   fireEvent.click(screen.getByRole('button', { name: 'Show people' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Show people' }))
+  expect(composer()).toBe(input)
   const people = screen.getByRole('navigation', { name: 'People' })
   fireEvent.click(within(people).getByText('QA reviewer'))
   expect(composer()).toBe(input)

@@ -12,6 +12,8 @@ export type PasteAttachment = {
 
 export type AttachmentActions = {
   snapshot: () => ImagePasteDraft
+  // sentIn — the attachments whose label is in the text, i.e. the ones a message with this text carries.
+  sentIn: (text: string) => ImagePasteDraft
   discard: (sent: ImagePasteDraft) => void
 }
 
@@ -29,6 +31,12 @@ export type UseImagePasteResult = {
 
 export type AttachmentRecord = PasteAttachment & { insertedText: string | null; file: File }
 export type ImagePasteDraft = readonly AttachmentRecord[]
+
+// attachmentMarker — the "[Screenshot: <path>]" label a paste put into the text, without the line break it adds
+// (the user may edit that break out). Null until the upload has inserted it.
+function attachmentMarker(record: Pick<AttachmentRecord, 'insertedText'>): string | null {
+  return record.insertedText === null ? null : record.insertedText.replace(/\n$/, '')
+}
 
 function errorMessageFor(err: unknown): string {
   const status = err instanceof AttachmentUploadError ? err.status : 0
@@ -199,10 +207,14 @@ export function useImagePaste(
     if (target === undefined) return
 
     URL.revokeObjectURL(target.previewUrl)
-    if (target.insertedText !== null) {
-      const idx = valueRef.current.indexOf(target.insertedText)
+    const marker = attachmentMarker(target)
+    if (marker !== null) {
+      const idx = valueRef.current.indexOf(marker)
       if (idx !== -1) {
-        onChangeRef.current(valueRef.current.slice(0, idx) + valueRef.current.slice(idx + target.insertedText.length))
+        // The line break the paste added goes with the label, if it is still there.
+        const end = idx + marker.length
+        const markerEnd = valueRef.current[end] === '\n' ? end + 1 : end
+        onChangeRef.current(valueRef.current.slice(0, idx) + valueRef.current.slice(markerEnd))
       }
     } else {
       removedIds.current.add(id)
@@ -212,6 +224,10 @@ export function useImagePaste(
 
   const attachmentActions: AttachmentActions = {
     snapshot: () => recordsRef.current,
+    sentIn: (text) => recordsRef.current.filter((a) => {
+      const marker = attachmentMarker(a)
+      return marker !== null && text.includes(marker)
+    }),
     discard: (sent) => {
       const urls = new Set(sent.map((a) => a.previewUrl))
       recordsRef.current.filter((a) => urls.has(a.previewUrl)).forEach((a) => {

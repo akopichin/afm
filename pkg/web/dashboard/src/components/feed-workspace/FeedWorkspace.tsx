@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type ReactElement } from 'react'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
@@ -254,6 +254,7 @@ export function FeedWorkspace({
                 imagePolicy={imagePolicy}
                 enteringKey={enteringKey}
                 onEntered={onEntered}
+                toolCountScope={`${stageId ?? ''}|${filter}`}
                 onOpenDialog={onOpenDialog}
                 // Репляибл только per-stage Feed с живым композером: мысль выбирается
                 // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
@@ -369,6 +370,9 @@ type FeedGroupViewProps = {
   // enteringKey — the feed key of the single newest row that should play the entrance animation.
   enteringKey?: string | null
   onEntered?: () => void
+  // toolCountScope — what a tool run's count belongs to (the feed's stage and filter). Another scope starts the
+  // count over without a bump: a filter can merge two runs into one without any new call.
+  toolCountScope?: string
   messageCard?: boolean
   // agentName — the stage agent's name in the author row of its messages; defaults to the stage id.
   agentName?: string
@@ -376,7 +380,7 @@ type FeedGroupViewProps = {
 
 // FeedGroupView — одна группа: стейдж-агент — строка автора и тело без рамки, события флоу — тихие строки,
 // пользователь и карточки истории — пузырь с шапкой.
-export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered, messageCard = false, agentName }: FeedGroupViewProps): ReactElement {
+export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false, agentName }: FeedGroupViewProps): ReactElement {
   // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
   // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
   const authorLabel = group.authorLabel ?? (group.actor === 'system' || (messageCard && group.actor === 'agent') ? systemAuthorLabel : ACTOR_LABEL[group.actor])
@@ -406,7 +410,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
       {head}
       <div className={framed ? 'feed-bubble' : 'feed-rows'}>
         {groupToolRuns(group.items).map((row) => {
-          if (row.kind === 'tools') return <ToolRun key={row.key} items={row.items} />
+          if (row.kind === 'tools') return <ToolRun key={row.key} items={row.items} countScope={toolCountScope} />
           const item = row.item
           const isMd = item.markdown === true
           const isThought = item.kind === 'message' && isMd
@@ -518,13 +522,31 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
   )
 }
 
+// useToolCountBump — номер всплеска счётчика серии: растёт, когда число вызовов выросло внутри той же области.
+// Первое значение и смена области (стадия, фильтр) — тихий baseline; уменьшение только обновляет baseline.
+function useToolCountBump(count: number, scope: string): { bump: number; playing: boolean; onBumpEnd: () => void } {
+  const [state, setState] = useState<{ scope: string | undefined; count: number; bump: number; playing: boolean }>({ scope: undefined, count, bump: 0, playing: false })
+  if (state.scope !== scope) {
+    setState({ scope, count, bump: 0, playing: false })
+  } else if (count !== state.count) {
+    const grew = count > state.count
+    setState({ scope, count, bump: grew ? state.bump + 1 : state.bump, playing: grew })
+  }
+  const onBumpEnd = useCallback(() => setState((s) => (s.playing ? { ...s, playing: false } : s)), [])
+  return { bump: state.bump, playing: state.playing, onBumpEnd }
+}
+
 // ToolRun — подряд идущие вызовы инструментов агента: одна свёрнутая полоса вместо строки на каждый вызов.
-function ToolRun({ items }: { items: FeedItem[] }): ReactElement {
-  const { count, names } = toolRunSummary(items)
+// Число вызовов анимируется, когда у показанной серии добавился вызов.
+function ToolRun({ items, countScope = '' }: { items: FeedItem[]; countScope?: string }): ReactElement {
+  const { count, label, names } = toolRunSummary(items)
+  const { bump, playing, onBumpEnd } = useToolCountBump(count, countScope)
   return (
     <details className="feed-tool-group">
       <summary>
-        <strong>{count}</strong>
+        <strong>
+          <span key={bump} className={`feed-tool-count${playing ? ' feed-tool-count--bump' : ''}`} onAnimationEnd={onBumpEnd}>{count}</span> {label}
+        </strong>
         {names !== '' && <span className="feed-tool-names"> · {names}</span>}
       </summary>
       <div className="feed-tool-rows">

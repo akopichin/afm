@@ -5,6 +5,26 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-30
 
+### Fix: People button shows and hides the stage People panel
+
+The **People** button in the stage header toggles the People panel on any screen
+width again and is highlighted while the panel is visible. On a wide screen the
+panel starts open and stays open when you pick a person, add an agent or press
+Escape; the narrow-screen drawer starts closed and is remembered separately.
+See [Dashboard](docs/dashboard.md).
+
+### Improvement: animate the tool call counter in the feed
+
+The number in a collapsed `N tool calls` series briefly grows and flashes in the
+accent color when a new call is added to a series you already see. It stays still
+on first display, reload, and stage or filter changes, and respects reduced
+motion. See [Dashboard](docs/dashboard.md).
+
+### Fix: remove a sent image from the feed composer
+
+An image sent from the feed composer no longer stays attached when the line break
+after its `[Screenshot: …]` label was edited. See [Dashboard](docs/dashboard.md).
+
 ### Fix: publish releases for separate major version lines
 
 Fixed release packaging after introducing the 1.x maintenance line. Publication

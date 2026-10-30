@@ -2229,9 +2229,8 @@ describe('App', () => {
     expect(screen.getByPlaceholderText('Message QA…')).toHaveValue('unsent thought')
   }, 10000)
 
-  // The stage Feed's people panel. A click on a person adds them to the Feed composer's recipients (Message
-  // mode); the Team tab keeps its own roster.
-  test('people panel: a click on a person addresses them in the current Feed composer', async () => {
+  // A run with two stages, a collaboration-enabled mesh and a run agent to pick from the stage Feed's people panel.
+  function mockPeopleRun() {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       if (url.includes('/api/status')) {
@@ -2239,6 +2238,7 @@ describe('App', () => {
           ok: true,
           json: async () => ({
             flow_name: 'demo',
+            run_id: 'people-run',
             stages: [stageView('s1', 'Propose', 'running'), stageView('s2', 'Review', 'pending')],
             capabilities: { collaboration: true },
             accounting: { health: 'ok', has_data: false, show_money: true },
@@ -2259,10 +2259,204 @@ describe('App', () => {
         } as Response
       }
       if (url.includes('/api/mesh/threads')) return { ok: true, json: async () => ({ threads: [] }) } as Response
+      if (url.includes('/api/mesh/board')) return { ok: true, json: async () => ({ entries: [] }) } as Response
       if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
       if (url.includes('/dialog')) return { ok: true, json: async () => [] } as Response
       return { ok: true, json: async () => [] } as Response
     })
+  }
+
+  // Pins the viewport: the People panel is a drawer at (max-width: 1180px), a side panel above it.
+  function stubPeopleViewport(narrow: boolean) {
+    const listeners = new Set<() => void>()
+    let isNarrow = narrow
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      media: query,
+      get matches() { return isNarrow && query === '(max-width: 1180px)' },
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    }))
+    return {
+      resize(next: boolean) { act(() => { isNarrow = next; listeners.forEach((notify) => notify()) }) },
+      // Notifies the subscribers one at a time, each in its own act(): a render may be observed between two
+      // subscriptions to the same query, as with the separate change events of a real browser.
+      resizeStepwise(next: boolean, afterEach: () => void, order: 'subscribed' | 'reversed') {
+        isNarrow = next
+        const notifiers = order === 'subscribed' ? [...listeners] : [...listeners].reverse()
+        for (const notify of notifiers) {
+          act(() => notify())
+          afterEach()
+        }
+      },
+    }
+  }
+
+  const peopleToggle = () => screen.getByRole('button', { name: 'Show people' })
+  const peoplePanel = () => document.getElementById('stage-people') as HTMLElement
+
+  test('people toggle: a wide screen shows the panel and the button is pressed; each click flips it', async () => {
+    mockPeopleRun()
+    render(<App />)
+    await screen.findByRole('navigation', { name: 'People' })
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'true')
+    expect(peoplePanel()).toHaveClass('open')
+
+    fireEvent.click(peopleToggle())
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(peoplePanel()).not.toHaveClass('open')
+
+    fireEvent.click(peopleToggle())
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'true')
+    expect(peoplePanel()).toHaveClass('open')
+  })
+
+  test('people toggle: a narrow screen starts with the drawer closed and the button opens it', async () => {
+    stubPeopleViewport(true)
+    mockPeopleRun()
+    render(<App />)
+    await screen.findByRole('navigation', { name: 'People', hidden: true })
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(peoplePanel()).not.toHaveClass('open')
+
+    fireEvent.click(peopleToggle())
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('dialog', { name: 'Stage people' })).toHaveClass('open')
+  })
+
+  test('people toggle: resizing keeps the wide panel and the drawer apart, whether the wide panel was shown or hidden', async () => {
+    const viewport = stubPeopleViewport(false)
+    mockPeopleRun()
+    render(<App />)
+    await screen.findByRole('navigation', { name: 'People' })
+    const composer = await screen.findByRole('combobox', { name: /message the mesh/i })
+    composer.focus()
+
+    viewport.resize(true)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(composer).toHaveFocus()
+    viewport.resize(false)
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'true')
+    expect(peoplePanel()).toHaveClass('open')
+
+    fireEvent.click(peopleToggle())
+    viewport.resize(true)
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(peopleToggle())
+    expect(screen.getByRole('dialog', { name: 'Stage people' })).toBeInTheDocument()
+    viewport.resize(false)
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(peoplePanel()).not.toHaveClass('open')
+  })
+
+  // One media-query answer drives both the open flag and the drawer layout, whichever subscriber hears the change first.
+  describe.each(['subscribed', 'reversed'] as const)('people toggle: widening the window, subscribers notified in %s order', (order) => {
+    // Records every focus() call, wherever it lands: a resize must not move the focus at all.
+    function trackFocusCalls() {
+      const calls: HTMLElement[] = []
+      const original = HTMLElement.prototype.focus
+      vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+        calls.push(this)
+        original.call(this, options)
+      })
+      return calls
+    }
+
+    async function renderWideStage() {
+      const viewport = stubPeopleViewport(false)
+      mockPeopleRun()
+      render(<App />)
+      await screen.findByRole('navigation', { name: 'People' })
+      return viewport
+    }
+
+    test('wide panel open, focus on the People button: narrow and back never moves the focus', async () => {
+      const viewport = await renderWideStage()
+      peopleToggle().focus()
+      const focusCalls = trackFocusCalls()
+
+      viewport.resizeStepwise(true, () => expect(screen.queryByRole('dialog')).toBeNull(), order)
+      expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+      expect(peopleToggle()).toHaveFocus()
+      viewport.resizeStepwise(false, () => {
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(peopleToggle()).toHaveFocus()
+      }, order)
+
+      expect(peopleToggle()).toHaveAttribute('aria-expanded', 'true')
+      expect(peoplePanel()).toHaveClass('open')
+      expect(focusCalls).toEqual([])
+    })
+
+    test('wide panel hidden: narrow, open the drawer, widen: stays hidden and the focus is not moved', async () => {
+      const viewport = await renderWideStage()
+      fireEvent.click(peopleToggle())
+      peopleToggle().focus()
+      viewport.resizeStepwise(true, () => {}, order)
+      fireEvent.click(peopleToggle())
+      expect(screen.getByRole('dialog', { name: 'Stage people' })).toBeInTheDocument()
+      const focused = document.activeElement
+      const focusCalls = trackFocusCalls()
+
+      viewport.resizeStepwise(false, () => {}, order)
+
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+      expect(peoplePanel()).not.toHaveClass('open')
+      expect(document.activeElement).toBe(focused)
+      expect(focusCalls).toEqual([])
+    })
+
+    test('wide panel shown: narrow, open the drawer, widen: the wide panel is back and takes no focus', async () => {
+      const viewport = await renderWideStage()
+      viewport.resizeStepwise(true, () => {}, order)
+      fireEvent.click(peopleToggle())
+      expect(screen.getByRole('dialog', { name: 'Stage people' })).toBeInTheDocument()
+      const focused = document.activeElement
+      const focusCalls = trackFocusCalls()
+
+      viewport.resizeStepwise(false, () => {}, order)
+
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(peopleToggle()).toHaveAttribute('aria-expanded', 'true')
+      expect(peoplePanel()).toHaveClass('open')
+      expect(document.activeElement).toBe(focused)
+      expect(focusCalls).toEqual([])
+    })
+  })
+
+  test('people toggle: the × in the panel hides it on a wide screen and hands the focus to the button', async () => {
+    mockPeopleRun()
+    render(<App />)
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    const close = within(people).getByRole('button', { name: 'Close people panel' })
+    close.focus()
+    fireEvent.click(close)
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(peopleToggle()).toHaveFocus()
+  })
+
+  test('people toggle: hiding the panel survives another stage and the Team tab, and is not stored', async () => {
+    mockPeopleRun()
+    render(<App />)
+    await screen.findByRole('navigation', { name: 'People' })
+    const storedBefore = Object.keys(localStorage).sort()
+    fireEvent.click(peopleToggle())
+
+    fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
+    fireEvent.click(tabs.getByRole('tab', { name: 'Team' }))
+    fireEvent.click(tabs.getByRole('tab', { name: 'Feed' }))
+    expect(peopleToggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(peoplePanel()).not.toHaveClass('open')
+    expect(Object.keys(localStorage).sort()).toEqual(storedBefore)
+  })
+
+  // The stage Feed's people panel. A click on a person adds them to the Feed composer's recipients (Message
+  // mode); the Team tab keeps its own roster.
+  test('people panel: a click on a person addresses them in the current Feed composer', async () => {
+    mockPeopleRun()
 
     render(<App />)
 
@@ -2277,6 +2471,7 @@ describe('App', () => {
     expect(composer.value).toBe('')
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Show people' })).toHaveAttribute('aria-expanded', 'true')
   })
 
   // Stage 3a: the stage's conversations are in its Feed; "↩ Reply in conversation" answers a message in the

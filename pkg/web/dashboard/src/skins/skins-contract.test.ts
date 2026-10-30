@@ -145,6 +145,23 @@ describe('skins CSS contract — feed item entrance (Task 4)', () => {
   })
 })
 
+describe('skins CSS contract — tool-call count bump', () => {
+  it('pops the number with transform and flashes it with the accent text colour, nothing else', () => {
+    const b = keyframe(feedWorkspaceCss, 'feedToolCountBump')
+    expect(b).toMatch(/transform:\s*scale\(1\.18\)/)
+    expect(b).toMatch(/color:\s*var\(--accent-text\)/)
+    const properties = [...b.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1])
+    expect(new Set(properties)).toEqual(new Set(['transform', 'color']))
+  })
+  it('plays at --motion-slow and keeps the layout still', () => {
+    expect(rule(feedWorkspaceCss, '.feed-tool-count--bump')).toMatch(/animation:\s*feedToolCountBump\s+var\(--motion-slow\)/)
+    expect(rule(feedWorkspaceCss, '.feed-tool-count')).toMatch(/display:\s*inline-block/)
+  })
+  it('is off under reduced motion', () => {
+    expect(feedWorkspaceCss).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.feed-tool-count--bump\s*\{[^}]*animation:\s*none/)
+  })
+})
+
 describe('skins CSS contract — reduced motion (Task 5)', () => {
   const rmBlock = () =>
     tokens().match(/@media[^{]*prefers-reduced-motion[^{]*\{[\s\S]*?\}\s*\}/)?.[0] ?? ''
@@ -359,14 +376,39 @@ describe('skins CSS contract — stage people panel', () => {
     const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 1180px)'))
     expect(narrow).toMatch(/\.stage-people \{[^}]*position:\s*fixed[^}]*right:\s*0/)
     expect(narrow).toMatch(/\.stage-people\.open \{[^}]*visibility:\s*visible/)
-    expect(narrow).toMatch(/\.stage-people-toggle \{[^}]*display:\s*grid/)
-    expect(rule(meshCss, '.stage-people-toggle,\n.stage-people-scrim')).toMatch(/display:\s*none/)
+    expect(rule(meshCss, '.stage-people-scrim')).toMatch(/display:\s*none/)
+    expect(narrow).toMatch(/\.stage-people-scrim \{[^}]*display:\s*block/)
   })
 
-  it('stays visible beside the feed on a wide screen: nothing outside the drawer media query hides it', () => {
-    const wide = meshCss.slice(0, meshCss.indexOf('@media (max-width: 1180px)')) + meshCss.slice(meshCss.indexOf('@media (prefers-reduced-motion', meshCss.indexOf('@media (max-width: 1180px)')))
-    expect(wide).not.toMatch(/\.stage-people:not\(\.open\)/)
+  it('leaves the people toggle visible at every width: only layout.css styles it', () => {
+    expect(meshCss).not.toMatch(/\.stage-people-toggle/)
+    expect(rule(layoutCss, '.workspace-header .stage-people-toggle')).toMatch(/display:\s*inline-flex/)
+  })
+
+  it('hides a closed panel only on a wide screen, as the exact complement of the drawer query', () => {
+    const wideBlock = meshCss.match(/@media not all and \(max-width: 1180px\)\s*\{[^@]*?\n\}/)?.[0] ?? ''
+    expect(wideBlock).toMatch(/\.stage-people:not\(\.open\)\s*\{[^}]*display:\s*none/)
     expect(rule(meshCss, '.stage-people')).not.toMatch(/display:\s*none|visibility:\s*hidden/)
+    // The drawer hides itself by sliding out, never with display: none.
+    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 1180px)'), meshCss.indexOf('@media (prefers-reduced-motion', meshCss.indexOf('@media (max-width: 1180px)')))
+    expect(narrow).not.toMatch(/\.stage-people:not\(\.open\)/)
+  })
+
+  it('shows the opening drawer at once so it can take the focus, and delays hiding it until it has slid out', () => {
+    const narrow = meshCss.slice(meshCss.indexOf('@media (max-width: 1180px)'))
+    // A visibility transition keeps `hidden` for its whole first frame, and focus() on a hidden element is a no-op.
+    expect(rule(narrow, '.stage-people.open')).toMatch(/transition:[^;]*visibility\s+0s/)
+    expect(rule(narrow, '.stage-people')).toMatch(/transition:[^;]*visibility\s+var\(--motion-fast, 120ms\)/)
+  })
+
+  it('has no drawer slide under reduced motion, open or closed', () => {
+    const reduced = meshCss.slice(meshCss.indexOf('@media (prefers-reduced-motion', meshCss.indexOf('@media (max-width: 1180px)')))
+    expect(reduced).toMatch(/^[^{]*\{\s*\.stage-people,\s*\.stage-people\.open\s*\{\s*transition:\s*none/)
+  })
+
+  it('tints the people toggle with the theme accent while the panel is shown, also on hover', () => {
+    expect(rule(layoutCss, ".workspace-header .stage-people-toggle[aria-expanded='true'],\n.workspace-header .stage-people-toggle[aria-expanded='true']:hover"))
+      .toMatch(/color:\s*var\(--accent-text\)/)
   })
 
   it('uses a preferred desktop width but keeps the existing 1180px drawer fixed and hides its separator', () => {

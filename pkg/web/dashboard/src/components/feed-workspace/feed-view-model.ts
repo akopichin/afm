@@ -591,12 +591,14 @@ export function toolCall(item: FeedItem): { name: string; detail: string } {
 
 const MAX_SUMMARY_TOOL_NAMES = 4
 
-// toolRunSummary — подпись свёрнутой серии: «3 tool calls» и перечень различных имён инструментов.
-export function toolRunSummary(items: FeedItem[]): { count: string; names: string } {
+// toolRunSummary — подпись свёрнутой серии: число вызовов, его слово («tool calls») и перечень различных имён
+// инструментов. Число отдельно, чтобы его можно было анимировать.
+export function toolRunSummary(items: FeedItem[]): { count: number; label: string; names: string } {
   const distinct = [...new Set(items.map((item) => toolCall(item).name.toLowerCase()).filter((name) => name !== ''))]
   const shown = distinct.slice(0, MAX_SUMMARY_TOOL_NAMES).join(', ')
   return {
-    count: `${items.length} tool ${items.length === 1 ? 'call' : 'calls'}`,
+    count: items.length,
+    label: items.length === 1 ? 'tool call' : 'tool calls',
     names: distinct.length > MAX_SUMMARY_TOOL_NAMES ? `${shown}…` : shown,
   }
 }

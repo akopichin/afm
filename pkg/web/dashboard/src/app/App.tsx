@@ -3,7 +3,7 @@ import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, trig
 import { GlobalHeader } from '../components/global-header'
 import { StagesList, canAttachHelper } from '../components/stages-list'
 import { AssistantTaskView, AttachHelperDialog, AddStageDialog } from '../components/assistants'
-import { StagePeoplePanel, STAGE_PEOPLE_ID, TeamView } from '../components/team'
+import { StagePeoplePanel, STAGE_PEOPLE_ID, STAGE_PEOPLE_DRAWER_QUERY, TeamView } from '../components/team'
 import { BoardLoadState } from '../components/team/BoardLoadState'
 import { BoardView } from '../components/team/BoardView'
 import { teamStagesOf } from '../components/team/RunTeamList'
@@ -27,6 +27,7 @@ import { MessageTimeZoneProvider } from '../lib/message-time-zone'
 import { DialogOpenContext } from '../lib/focus-trap'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
+import { useMediaQuery } from '../hooks/use-media-query'
 import { useSelectedStage } from '../hooks/use-selected-stage'
 import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
 import { useStageAssistants } from '../hooks/use-stage-assistants'
@@ -204,13 +205,20 @@ export function App(): ReactElement {
   const runConversationsAvailable = meshRoster.enabled && runId !== '' && collaborationMode === 'assistants'
   const [runConversationsOpen, setRunConversationsOpen] = useState(false)
   const closeRunConversations = useCallback(() => setRunConversationsOpen(false), [])
-  // The stage Feed's people panel: its narrow-screen drawer, and the last person picked there for the Feed
-  // composer (seq makes a second click on the same person a new pick).
-  const [peopleOpen, setPeopleOpen] = useState(false)
+  // The stage Feed's people panel: the wide panel (open by default) and the narrow drawer (closed) keep separate
+  // flags, so resizing never opens the drawer or forgets the wide choice. peoplePick: the last person picked there.
+  const peopleDrawer = useMediaQuery(STAGE_PEOPLE_DRAWER_QUERY)
+  const [peopleShown, setPeopleShown] = useState({ wide: true, drawer: false })
+  const peopleOpen = peopleDrawer ? peopleShown.drawer : peopleShown.wide
+  // Changes only the layout in effect now.
+  const setPeopleOpen = useCallback(
+    (open: boolean) => setPeopleShown((shown) => (peopleDrawer ? { ...shown, drawer: open } : { ...shown, wide: open })),
+    [peopleDrawer],
+  )
   const [feedReplies, setFeedReplies] = useState<{ stageId: string | null; count: number }>({ stageId: null, count: 0 })
   const reportFeedReplies = useCallback((stageId: string | null, count: number) => setFeedReplies({ stageId, count }), [])
   const [peoplePick, setPeoplePick] = useState<MeshPick | null>(null)
-  const closePeople = useCallback(() => setPeopleOpen(false), [])
+  const closePeople = useCallback(() => setPeopleOpen(false), [setPeopleOpen])
   // addedParticipants — run agents added from the people panel that the roster poll has not reported yet.
   // The panel AND the Feed composer use the merged list, so a click on a just-added agent addresses it. They
   // belong to the run they were added in: another run starts without them.
@@ -739,7 +747,7 @@ export function App(): ReactElement {
                           title="People"
                           aria-controls={STAGE_PEOPLE_ID}
                           aria-expanded={peopleOpen}
-                          onClick={() => setPeopleOpen((v) => !v)}
+                          onClick={() => setPeopleOpen(!peopleOpen)}
                         >
                           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                             <circle cx="9" cy="8" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 5" />
@@ -816,6 +824,7 @@ export function App(): ReactElement {
                         onAgentAdded={addParticipant}
                         onAttachHelper={canAttachHelper(workspaceStage, capabilities.collaboration) ? setAttachHelperStageId : undefined}
                         open={peopleOpen}
+                        drawer={peopleDrawer}
                         onClose={closePeople}
                         // The click adds a recipient in the Feed composer, which exists only while noteTarget is set.
                         onPick={

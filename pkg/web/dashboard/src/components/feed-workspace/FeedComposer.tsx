@@ -953,5 +953,5 @@ function RecipientChip({ recipient, participants, onRemove }: { recipient: Compo
 }
 
 function submittedAttachments(actions: AttachmentActions | null, text: string): ImagePasteDraft {
-  return actions?.snapshot().filter((a) => a.insertedText !== null && text.includes(a.insertedText)) ?? []
+  return actions?.sentIn(text) ?? []
 }

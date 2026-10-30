@@ -9,6 +9,12 @@ import { visibleFocusables, trapTab, DialogOpenContext } from '../../lib/focus-t
 import { usePanelResize } from '../layout/use-panel-resize'
 
 export const STAGE_PEOPLE_ID = 'stage-people'
+// At this width and below the panel is a drawer; keep in sync with the media query in skins/base/mesh.css.
+export const STAGE_PEOPLE_DRAWER_QUERY = '(max-width: 1180px)'
+
+function peopleToggle(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.stage-people-toggle')
+}
 
 export type StagePeoplePanelProps = {
   stageId: string
@@ -18,8 +24,12 @@ export type StagePeoplePanelProps = {
   participants: MeshParticipant[]
   stages: Stage[]
   profiles: AssistantProfile[]
-  // open — on a narrow screen the panel is a drawer (opened by the 👥 button in the workspace header).
+  // open — whether the panel is shown: beside the feed on a wide screen, as a drawer on a narrow one. Both are
+  // toggled by the People button in the workspace header.
   open: boolean
+  // drawer — the layout `open` was resolved for. The same flag decides both, so the panel never sees a wide
+  // `open` with the drawer layout (or the reverse) while the viewport crosses the breakpoint.
+  drawer: boolean
   onClose: () => void
   // onPick — address the person in the Feed composer. Undefined while this stage has no composer: the
   // rows are disabled and a hint says when one appears.
@@ -35,15 +45,15 @@ export type StagePeoplePanelProps = {
 // StagePeoplePanel — the stage Feed's right side panel: who this stage can talk to (RunTeamList in focus
 // mode). A click adds the person to the Feed composer's recipients; "Add run agent…" opens the same dialog as
 // the Team tab, "Attach helper to stage…" the stage's helper dialog. A wide screen shows it next to the feed, a
-// narrow one as a drawer.
-export function StagePeoplePanel({ stageId, participants, stages, profiles, open, onClose, onPick, onAgentAdded, onAttachHelper, helperTasks }: StagePeoplePanelProps): ReactElement {
+// narrow one as a drawer. Only the drawer closes itself after an action; the wide panel stays until hidden.
+export function StagePeoplePanel({ stageId, participants, stages, profiles, open, drawer, onClose, onPick, onAgentAdded, onAttachHelper, helperTasks }: StagePeoplePanelProps): ReactElement {
   const [search, setSearch] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement | null>(null)
   const openerRef = useRef<HTMLElement | null>(null)
   const resize = usePanelResize({
     storageKey: 'afm.peopleWidth', defaultWidth: 280, container: 'parent', direction: -1,
-    drawerQuery: '(max-width: 1180px)', toggleSelector: '.stage-people-toggle',
+    drawerQuery: STAGE_PEOPLE_DRAWER_QUERY, drawer, toggleSelector: '.stage-people-toggle',
   })
 
   const reportOpen = useContext(DialogOpenContext)
@@ -59,35 +69,56 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
     return () => { layout?.style.removeProperty('--people-width') }
   }, [resize.effectiveWidth, resize.targetRef])
 
-  // The open drawer covers the feed: it takes the focus (its first control), and on close hands it back to
-  // whatever opened it (the 👥 button) — unless the focus has already moved on, e.g. to the composer a pick
-  // filled in.
+  // An open drawer takes the focus and remembers who had it; the wide panel has no opener.
   useEffect(() => {
     const drawer = drawerRef.current
-    if (!open || drawer === null) return
-    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    if (resize.isDrawer) visibleFocusables(drawer)[0]?.focus()
-    return () => {
-      const active = document.activeElement
-      if (active === null || active === document.body || drawer.contains(active)) openerRef.current?.focus()
-      openerRef.current = null
-    }
+    if (!resize.isDrawer) openerRef.current = null
+    if (!open || !resize.isDrawer || drawer === null) return
+    const opener = document.activeElement
+    openerRef.current = opener instanceof HTMLElement && opener !== document.body ? opener : null
+    visibleFocusables(drawer)[0]?.focus()
   }, [open, resize.isDrawer])
+
+  // A panel that gets closed hands the focus to its opener (else the People button) unless it already moved on,
+  // e.g. to the composer a pick filled in. Only closing the layout in effect counts: a resize between the wide
+  // panel and the drawer, or an unmount, never moves the focus.
+  const layout = resize.isDrawer ? 'drawer' : 'wide'
+  const shown = open ? layout : null
+  const previouslyShown = useRef(shown)
+  useEffect(() => {
+    const wasShown = previouslyShown.current
+    previouslyShown.current = shown
+    if (wasShown !== layout || shown !== null) return
+    const active = document.activeElement
+    if (active === null || active === document.body || drawerRef.current?.contains(active)) {
+      const returnTo = openerRef.current ?? peopleToggle()
+      returnTo?.focus()
+    }
+    openerRef.current = null
+  }, [shown, layout])
+
+  // A dialog opened from the drawer records the focused element as its opener. Hand the focus to the People
+  // toggle first, so Cancel/Escape return there and not to a control of the drawer that is being hidden.
+  function closeDrawerForDialog(): void {
+    if (!resize.isDrawer) return
+    peopleToggle()?.focus()
+    onClose()
+  }
 
   // Tab stays inside the open drawer: from its last control to its first, and back with Shift+Tab.
   function handleTab(e: ReactKeyboardEvent<HTMLDivElement>): void {
     if (open && resize.isDrawer && drawerRef.current !== null) trapTab(e, drawerRef.current)
   }
 
-  // Escape closes the drawer, like the scrim.
+  // Escape closes the drawer, like the scrim; the wide panel ignores it.
   useEffect(() => {
-    if (!open) return
+    if (!open || !resize.isDrawer) return
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+  }, [open, resize.isDrawer, onClose])
 
   return (
     <>
@@ -115,7 +146,7 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
           helperTasks={helperTasks}
           search={search}
           onSearchChange={setSearch}
-          onClose={resize.isDrawer ? onClose : undefined}
+          onClose={onClose}
           participants={participants}
           stages={teamStagesOf(stages)}
           onPick={
@@ -123,25 +154,25 @@ export function StagePeoplePanel({ stageId, participants, stages, profiles, open
               ? undefined
               : (p) => {
                   onPick(p)
-                  onClose()
+                  if (resize.isDrawer) onClose()
                 }
           }
           pickHint={onPick === undefined ? 'You can write to them here while the run is going.' : undefined}
           onAddRunAgent={() => {
-            onClose()
+            closeDrawerForDialog()
             setAddOpen(true)
           }}
           onAttachHelper={
             onAttachHelper === undefined
               ? undefined
               : () => {
-                  onClose()
+                  closeDrawerForDialog()
                   onAttachHelper(stageId)
                 }
           }
         />
       </div>
-      {open && <button type="button" className="stage-people-scrim" aria-label="Close people" onClick={onClose} />}
+      {open && resize.isDrawer && <button type="button" className="stage-people-scrim" aria-label="Close people" onClick={onClose} />}
       {addOpen && (
         <AddRunAgentDialog
           profiles={profiles}

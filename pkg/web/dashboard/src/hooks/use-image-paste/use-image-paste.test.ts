@@ -141,6 +141,47 @@ describe('useImagePaste', () => {
     expect(value).toBe('')
   })
 
+  it('removeAttachment strips the marker and keeps the text glued to it when the line break after it is gone', async () => {
+    mockUpload.mockResolvedValue({ path: '/x/paste-1.png' })
+    let value = ''
+    const onChange = vi.fn((next: string) => {
+      value = next
+    })
+    const { result, rerender } = renderHook(({ v }) => useImagePaste('s1', v, onChange), {
+      initialProps: { v: value },
+    })
+
+    await act(async () => {
+      await result.current.onPaste(makePasteEvent([makeImageItem()], 0))
+    })
+    rerender({ v: '[Screenshot: /x/paste-1.png] tool calls' })
+
+    act(() => {
+      result.current.removeAttachment(result.current.attachments[0]!.id)
+    })
+
+    expect(value).toBe(' tool calls')
+    expect(result.current.attachments).toHaveLength(0)
+  })
+
+  it('sentIn finds the attachment by its label, with or without the line break after it, and skips unlabeled ones', async () => {
+    mockUpload.mockResolvedValueOnce({ path: '/x/a.png' }).mockResolvedValueOnce({ path: '/x/b.png' })
+    const { result, rerender } = renderHook(({ v }) => useImagePaste('s1', v, vi.fn()), { initialProps: { v: '' } })
+    await act(async () => {
+      await result.current.onPaste(makePasteEvent([makeImageItem()], 0))
+    })
+    rerender({ v: '[Screenshot: /x/a.png]\n' })
+    await act(async () => {
+      await result.current.onPaste(makePasteEvent([makeImageItem()], 0))
+    })
+    const [a, b] = result.current.attachments
+    const actions = result.current.attachmentActions
+
+    expect(actions.sentIn('[Screenshot: /x/a.png]\nhello')).toEqual([a])
+    expect(actions.sentIn('[Screenshot: /x/a.png] glued, [Screenshot: /x/b.png]')).toEqual([a, b])
+    expect(actions.sentIn('no labels here')).toEqual([])
+  })
+
   it('removing an in-flight attachment prevents its text from being inserted once the upload resolves', async () => {
     let resolveUpload: (value: { path: string }) => void = () => {}
     mockUpload.mockImplementation(

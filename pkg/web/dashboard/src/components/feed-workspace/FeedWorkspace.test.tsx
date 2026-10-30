@@ -4,6 +4,7 @@ import type { AfmEvent } from '../../types'
 import { FeedWorkspace, FeedGroupView, feedItemSignature } from './FeedWorkspace'
 import type { FeedGroup, FeedItem } from './feed-view-model'
 import * as verifyReportClient from '../../api/verify-report-client'
+import * as meshClient from '../../api/mesh-client'
 import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
 import { sideAgentFeedGroups } from '../side-agent/side-agent-feed-model'
 import type { SideAgentEvent } from '../../types/side-agent'
@@ -77,6 +78,97 @@ describe('FeedWorkspace', () => {
       expect(container.querySelector('details')).toBe(details)
       expect(details.open).toBe(true)
       expect(details.querySelector('summary')).toHaveTextContent('3 tool calls')
+    })
+  })
+
+  describe('tool-call count bump', () => {
+    const at = (n: number) => `2026-07-10T10:00:0${n}Z`
+    const tool = (n: number, stageId = 's1') => ev('agent_action', { tool: 'Read', detail: `src/${n}.ts` }, stageId, at(n))
+    const text = (n: number) => ev('agent_action', { tool: 'text', detail: `Message ${n}` }, 's1', at(n))
+    const counts = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('summary .feed-tool-count')]
+    const bumping = (container: HTMLElement) => container.querySelectorAll('.feed-tool-count--bump')
+
+    it('keeps the summary text and does not animate the first render', () => {
+      const { container } = render(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s1" />)
+      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls · read')
+      expect(counts(container)[0]).toHaveTextContent(/^3$/)
+      expect(bumping(container)).toHaveLength(0)
+    })
+
+    it('bumps the number when a call joins a shown run, and stops when the animation ends', () => {
+      const { container, rerender } = render(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
+      rerender(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s1" />)
+      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls · read')
+      expect(bumping(container)).toHaveLength(1)
+      fireEvent.animationEnd(bumping(container)[0] as HTMLElement)
+      expect(bumping(container)).toHaveLength(0)
+      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls · read')
+    })
+
+    it('restarts the animation on every further call', () => {
+      const { container, rerender } = render(<FeedWorkspace events={[tool(1)]} stageId="s1" />)
+      rerender(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
+      const first = counts(container)[0]
+      rerender(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s1" />)
+      const second = counts(container)[0]
+      expect(second).not.toBe(first)
+      expect(second).toHaveClass('feed-tool-count--bump')
+      expect(second).toHaveTextContent(/^3$/)
+    })
+
+    it('stays still without growth, for a new run, and when the run shrinks', () => {
+      const { container, rerender } = render(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
+      rerender(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
+      expect(bumping(container)).toHaveLength(0)
+      // A message splits the feed: the second run is new, the first is unchanged.
+      rerender(<FeedWorkspace events={[tool(1), tool(2), text(3), tool(4)]} stageId="s1" />)
+      expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+      expect(bumping(container)).toHaveLength(0)
+      // The run only loses calls.
+      rerender(<FeedWorkspace events={[tool(1)]} stageId="s1" />)
+      expect(bumping(container)).toHaveLength(0)
+    })
+
+    it('treats another stage as a fresh baseline even when its run is longer', () => {
+      const { container, rerender } = render(<FeedWorkspace events={[tool(1), tool(2)]} stageId="s1" />)
+      rerender(<FeedWorkspace events={[tool(1), tool(2), tool(3)]} stageId="s2" />)
+      expect(container.querySelector('summary')).toHaveTextContent('3 tool calls')
+      expect(bumping(container)).toHaveLength(0)
+    })
+
+    // A filter can glue two runs into one without any new call: the number grows, but not by an agent call.
+    describe('with the feed filter', () => {
+      const participants = [
+        { id: 'user', kind: 'user', scope: 'run', display_name: 'You', reachable: true },
+        { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', alias: 's1', display_name: 'Stage', stage_id: 's1', reachable: true, command: 'claude' },
+        { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true },
+      ] as const
+      const conversation = { id: 'm1', thread_id: 'mt-1', sender_id: 'stage:s1', recipient_ids: ['run:qa'], kind: 'message', body: 'Quiet question', seq: 2, created_at: at(2) }
+      const mesh = { roster: { enabled: true, probed: true, participants: [...participants], threads: [] }, profiles: [], stages: [], pick: null }
+      afterEach(() => vi.restoreAllMocks())
+
+      it('does not bump when the filter merges runs or splits them again, only for a new call', async () => {
+        vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({
+          messages: [conversation], threads: [{ id: 'mt-1', scope: 'run', members: ['user', 'stage:s1', 'run:qa'], status: 'open' }], next_cursor: 2, has_more: false,
+        })
+        const feed = (events: AfmEvent[]) => <FeedWorkspace events={events} stageId="s1" mesh={mesh} />
+        const { container, rerender } = render(feed([tool(1), tool(3)]))
+        await screen.findByText('Quiet question')
+        expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+
+        fireEvent.click(screen.getByRole('button', { name: /^Author's work/ }))
+        expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(1)
+        expect(container.querySelector('summary')).toHaveTextContent('2 tool calls')
+        expect(bumping(container)).toHaveLength(0)
+
+        rerender(feed([tool(1), tool(3), tool(4)]))
+        expect(container.querySelector('summary')).toHaveTextContent('3 tool calls')
+        expect(bumping(container)).toHaveLength(1)
+
+        fireEvent.click(screen.getByRole('button', { name: /^All activity/ }))
+        expect(container.querySelectorAll('details.feed-tool-group')).toHaveLength(2)
+        expect(bumping(container)).toHaveLength(0)
+      })
     })
   })
 

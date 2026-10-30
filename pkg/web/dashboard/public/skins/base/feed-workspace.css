@@ -743,6 +743,17 @@
 .feed-tool-names { min-width: 0; overflow-wrap: anywhere; }
 .feed-tool-rows .feed-item { border-top: 1px solid var(--separator-subtle); border-radius: 0; padding: 8px 14px; white-space: pre-wrap; }
 .feed-tool-name { color: var(--text-secondary); }
+/* The number in a collapsed run pops and flashes the accent when the run grows; only transform and color move. */
+.feed-tool-count { display: inline-block; transform-origin: left center; }
+.feed-tool-count--bump { animation: feedToolCountBump var(--motion-slow) var(--ease-out); }
+@keyframes feedToolCountBump {
+  0% { transform: scale(1); color: var(--accent-text); }
+  40% { transform: scale(1.18); color: var(--accent-text); }
+  100% { transform: scale(1); color: var(--text-secondary); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .feed-tool-count--bump { animation: none; }
+}
 @media (max-width: 600px) {
   .feed-scroll { padding: 10px 0 16px; }
   .feed-composer { padding: 8px 0; }
