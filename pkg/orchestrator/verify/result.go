@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 )
 
@@ -129,14 +130,78 @@ func escapeRawControlCharsInStrings(data []byte) ([]byte, bool) {
 	return out, true
 }
 
+// text — свободный текст ответа: строка или список строк (склеивается через перевод строки). null, как и для
+// обычной строки, оставляет поле пустым; число, объект и список не из строк — ошибка разбора.
+type text string
+
+func (t *text) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if string(trimmed) == "null" {
+		return nil
+	}
+	notText := &json.UnmarshalTypeError{Value: "a value other than a string or an array of strings", Type: reflect.TypeFor[string]()}
+	if bytes.HasPrefix(trimmed, []byte(`"`)) {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		*t = text(s)
+		return nil
+	}
+	var items []json.RawMessage
+	if !bytes.HasPrefix(trimmed, []byte("[")) || json.Unmarshal(trimmed, &items) != nil {
+		return notText
+	}
+	lines := make([]string, len(items))
+	for i, item := range items {
+		if !bytes.HasPrefix(bytes.TrimSpace(item), []byte(`"`)) || json.Unmarshal(item, &lines[i]) != nil {
+			return notText
+		}
+	}
+	*t = text(strings.Join(lines, "\n"))
+	return nil
+}
+
+// modelResultWire — JSON-форма ModelResult со свободным текстом в summary и текстовых полях находок.
+type modelResultWire struct {
+	SchemaVersion int           `json:"schema_version"`
+	Verdict       Verdict       `json:"verdict"`
+	Summary       text          `json:"summary"`
+	Findings      []findingWire `json:"findings"`
+}
+
+type findingWire struct {
+	Blocking    bool    `json:"blocking"`
+	Title       text    `json:"title"`
+	Path        *string `json:"path"`
+	LineStart   *int    `json:"line_start"`
+	LineEnd     *int    `json:"line_end"`
+	Requirement text    `json:"requirement"`
+	Evidence    text    `json:"evidence"`
+	MinimalFix  text    `json:"minimal_fix"`
+}
+
+func (w modelResultWire) result() ModelResult {
+	r := ModelResult{SchemaVersion: w.SchemaVersion, Verdict: w.Verdict, Summary: string(w.Summary)}
+	if w.Findings != nil {
+		r.Findings = make([]Finding, len(w.Findings))
+	}
+	for i, f := range w.Findings {
+		r.Findings[i] = Finding{Blocking: f.Blocking, Title: string(f.Title), Path: f.Path, LineStart: f.LineStart, LineEnd: f.LineEnd,
+			Requirement: string(f.Requirement), Evidence: string(f.Evidence), MinimalFix: string(f.MinimalFix)}
+	}
+	return r
+}
+
 // decodeStrict — строгий конвейер разбора ОДНОГО JSON-документа без репейра.
 func decodeStrict(trimmed []byte) (ModelResult, error) {
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.DisallowUnknownFields()
-	var r ModelResult
-	if err := dec.Decode(&r); err != nil {
+	var wire modelResultWire
+	if err := dec.Decode(&wire); err != nil {
 		return ModelResult{}, fmt.Errorf("failed to parse verification result JSON: %w", err)
 	}
+	r := wire.result()
 	if _, err := dec.Token(); err != io.EOF {
 		return ModelResult{}, errors.New("trailing content after JSON document in verification result (extra data or multiple documents)")
 	}

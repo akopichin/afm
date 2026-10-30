@@ -227,6 +227,10 @@ The verifier returns a strict JSON verdict — `pass`, `needs_changes`, or
 | `needs_changes` (≥1 blocking finding) | the verifier found a real, provable problem | the author gets a corrective attempt via the incomplete-retry mechanism, with the blockers and a link to the full report injected into its prompt. How many corrections are allowed before the stage fails is the **correction budget** (default 1, configurable via [`verify.max_failures`](#the-correction-budget-verifymax_failures)) |
 | `inconclusive`, a protocol error, a timeout, a non-zero verifier exit, or a transport failure | verify itself could not produce a trustworthy verdict | a "verify execution failed" error — the stage is marked `failed`; the author is **not** re-run automatically (a broken/unreachable verifier is not evidence the author's work is wrong) |
 
+`summary` and a finding's `title`, `requirement`, `evidence` and `minimal_fix`
+may be either a string or a list of strings; afm joins the lines. A blank
+`summary` and any other shape are still protocol errors.
+
 A shell step's non-zero exit is treated the same as an AI `needs_changes` — it
 consumes the correction budget, giving the author a corrective retry, then
 `failed` once the budget is spent.

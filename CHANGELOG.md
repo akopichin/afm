@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-31
+
+### Fix: keep a verifier's review when its prose comes as a list of lines
+
+A verifier that wrote `summary` or a finding's `title`, `requirement`,
+`evidence` or `minimal_fix` as a list of lines failed verification with a
+protocol error, although its verdict and findings were valid. These fields now
+accept a string or a list of strings; afm joins the lines. See
+[Verify](docs/verify.md#outcome-semantics).
+
 ## 2026-10-30
 
 ### Fix: recover missing autonomous execution summaries
