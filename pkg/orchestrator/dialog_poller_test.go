@@ -30,6 +30,197 @@ func writeQuestionFile(t *testing.T, stageDir, phase, id string, options []strin
 	}
 }
 
+func newDialogPollCharacterization(t *testing.T, status state.StageStatus, interactive bool) (*Orchestrator, string) {
+	t.Helper()
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Interactive: interactive, Agents: []flow.AgentType{flow.AgentImplementation}}
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if status != state.StatusPending {
+		if err := store.Apply(&state.Transition{StageID: stage.ID, From: state.StatusPending, To: status, Event: "test_setup"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: config.Default()})
+	t.Cleanup(o.concurrency.WaitAgents)
+	stageDir := filepath.Join(runDir, stage.ID)
+	writeQuestionFile(t, stageDir, "implementation", "q1", []string{"A", "B (recommended)"})
+	return o, stageDir
+}
+
+func TestPollQuestions_ActiveStatusCharacterization(t *testing.T) {
+	active := map[state.StageStatus]bool{
+		state.StatusPlanning: true, state.StatusRunning: true, state.StatusRevising: true,
+		state.StatusRetrying: true, state.StatusAwaitingUserInput: true,
+	}
+	for _, status := range state.AllStatuses() {
+		t.Run(string(status), func(t *testing.T) {
+			o, stageDir := newDialogPollCharacterization(t, status, false)
+			processed := map[string]bool{}
+			o.pollQuestions(processed, map[string]*malformedQuestionState{})
+			if got := processed["s1|implementation|q1"]; got != active[status] {
+				t.Errorf("processed = %v, want %v", got, active[status])
+			}
+			_, err := os.Stat(filepath.Join(stageDir, "implementation.q1.answer.json"))
+			if active[status] && err != nil || !active[status] && !os.IsNotExist(err) {
+				t.Errorf("answer stat = %v, want answer present = %v", err, active[status])
+			}
+			if got := o.currentStatus("s1"); got != status {
+				t.Errorf("status = %s, want unchanged %s", got, status)
+			}
+		})
+	}
+}
+
+func TestPollQuestions_AutoAnswerDeferredCharacterization(t *testing.T) {
+	for _, cause := range []string{"review transaction", "exclusive write conflict"} {
+		t.Run(cause, func(t *testing.T) {
+			o, stageDir := newDialogPollCharacterization(t, state.StatusAwaitingUserInput, false)
+			answerPath := filepath.Join(stageDir, "implementation.q1.answer.json")
+			unblock := func() { o.reviewMarker.Store(nil) }
+			if cause == "review transaction" {
+				o.reviewMarker.Store(&state.PauseMarker{})
+			} else {
+				// A dangling link stays unanswered to Stat but forces O_EXCL to fail, even as root.
+				if err := os.Symlink(filepath.Join(stageDir, "missing-answer"), answerPath); err != nil {
+					t.Fatal(err)
+				}
+				unblock = func() {
+					if err := os.Remove(answerPath); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			subID, events := o.ui.Subscribe(16)
+			defer o.ui.Unsubscribe(subID)
+			processed := map[string]bool{}
+			malformed := map[string]*malformedQuestionState{}
+			o.pollQuestions(processed, malformed)
+			if processed["s1|implementation|q1"] {
+				t.Fatal("deferred question was marked processed")
+			}
+			if got := o.currentStatus("s1"); got != state.StatusAwaitingUserInput {
+				t.Fatalf("status before answer = %s, want awaiting_user_input", got)
+			}
+			select {
+			case event := <-o.critical.Recv():
+				t.Fatalf("resumed before a successful answer write: %+v", event)
+			default:
+			}
+			if got := drainAllEvents(events); len(got) != 0 {
+				t.Fatalf("live events before answer = %+v, want none", got)
+			}
+			if got := readNotices(t, o.opts.RunDir); len(got) != 0 {
+				t.Fatalf("durable notices before answer = %+v, want none", got)
+			}
+			entries, err := mcp.ReadDialog(mcp.DialogPath(stageDir, "implementation"))
+			if err != nil || len(entries) != 1 || entries[0].Question != "which?" || entries[0].Answer != nil {
+				t.Fatalf("deferred question history = %+v, %v", entries, err)
+			}
+
+			unblock()
+			o.pollQuestions(processed, malformed)
+			if !processed["s1|implementation|q1"] {
+				t.Fatal("successful retry was not marked processed")
+			}
+			data, err := os.ReadFile(answerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var answer map[string]any
+			if err := json.Unmarshal(data, &answer); err != nil {
+				t.Fatal(err)
+			}
+			if want := (map[string]any{"id": "q1", "answer": "B", "from_options": true}); !reflect.DeepEqual(answer, want) {
+				t.Fatalf("answer = %+v, want %+v", answer, want)
+			}
+			select {
+			case event := <-o.critical.Recv():
+				if event.Type != bus.EventUserAnswered || event.StageID != "s1" || !reflect.DeepEqual(event.Data, map[string]any{"id": "q1", "phase": "implementation", "answer": "B"}) {
+					t.Fatalf("resume event = %+v", event)
+				}
+			default:
+				t.Fatal("successful answer did not resume the parked stage")
+			}
+			live := drainAllEvents(events)
+			notices := readNotices(t, o.opts.RunDir)
+			if len(live) != 2 || live[0].Type != bus.EventDialogQuestion || live[1].Type != bus.EventAutoAnswered {
+				t.Fatalf("live order = %+v, want exactly question then auto-answer", live)
+			}
+			if len(notices) != 2 || notices[0].Type != string(bus.EventDialogQuestion) || notices[1].Type != string(bus.EventAutoAnswered) {
+				t.Fatalf("durable order = %+v, want exactly question then auto-answer", notices)
+			}
+			entries, err = mcp.ReadDialog(mcp.DialogPath(stageDir, "implementation"))
+			if err != nil || len(entries) != 1 || entries[0].Answer == nil || *entries[0].Answer != "B" || !entries[0].AutoAnswered {
+				t.Fatalf("answered history = %+v, %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestPollQuestions_InteractiveSequenceAndPhaseCharacterization(t *testing.T) {
+	for _, tc := range []struct {
+		status state.StageStatus
+		phase  string
+	}{
+		{state.StatusPlanning, "planning"},
+		{state.StatusRunning, "implementation"},
+		{state.StatusAwaitingUserInput, "implementation"},
+	} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			o, _ := newDialogPollCharacterization(t, tc.status, true)
+			subID, events := o.ui.Subscribe(16)
+			defer o.ui.Unsubscribe(subID)
+			processed := map[string]bool{}
+			o.pollQuestions(processed, map[string]*malformedQuestionState{})
+			if !processed["s1|implementation|q1"] || o.currentStatus("s1") != state.StatusAwaitingUserInput {
+				t.Fatal("question was not processed and handed to the user")
+			}
+			if got, ok := o.preAskPhase.Load("s1"); !ok || got != tc.phase {
+				t.Errorf("preAskPhase = %v, %v; want %s", got, ok, tc.phase)
+			}
+			history, err := o.opts.Store.History()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wantSeq uint64
+			if tc.status != state.StatusAwaitingUserInput {
+				last := history[len(history)-1]
+				if last.Event != string(bus.EvAskUser) || last.From != tc.status || last.To != state.StatusAwaitingUserInput || last.Seq == 0 {
+					t.Fatalf("ask transition = %+v", last)
+				}
+				wantSeq = last.Seq
+			} else if len(history) != 1 {
+				t.Fatalf("already awaiting question added a transition: %+v", history)
+			}
+			var dialog []bus.Event
+			for _, event := range drainAllEvents(events) {
+				if event.Type == bus.EventDialogQuestion || event.Type == bus.EventAskUser {
+					dialog = append(dialog, event)
+				}
+			}
+			if len(dialog) != 2 || dialog[0].Type != bus.EventDialogQuestion || dialog[1].Type != bus.EventAskUser || dialog[1].Seq != wantSeq {
+				t.Fatalf("dialog events = %+v, want question then ask with seq %d", dialog, wantSeq)
+			}
+			wantData := map[string]any{"id": "q1", "phase": "implementation", "question": "which?", "options": []string{"A", "B (recommended)"}, "allow_custom": true}
+			if !reflect.DeepEqual(dialog[1].Data, wantData) {
+				t.Errorf("ask data = %+v, want %+v", dialog[1].Data, wantData)
+			}
+			notices := readNotices(t, o.opts.RunDir)
+			if len(notices) != 1 || notices[0].Type != string(bus.EventDialogQuestion) {
+				t.Fatalf("durable dialog notices = %+v", notices)
+			}
+			o.pollQuestions(processed, map[string]*malformedQuestionState{})
+			if got := drainAllEvents(events); len(got) != 0 {
+				t.Errorf("second scan duplicated events: %+v", got)
+			}
+		})
+	}
+}
+
 func TestPollQuestions_NonInteractiveStageAutoAnswers(t *testing.T) {
 	runDir := t.TempDir()
 	stage := flow.Stage{ID: "s1", Name: "Backend", Agents: []flow.AgentType{flow.AgentImplementation}}

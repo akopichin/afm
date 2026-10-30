@@ -112,12 +112,12 @@ func TestRunExitError_InterruptIsNotAUsageError(t *testing.T) {
 	interrupted, cancel := context.WithCancel(context.Background())
 	cancel()
 	var exitErr *ExitError
-	if err := runExitError(interrupted, context.Canceled); !errors.As(err, &exitErr) || !exitErr.Silent || exitErr.Code != interruptedExitCode {
+	if err := runExitError(interrupted, context.Canceled, ""); !errors.As(err, &exitErr) || !exitErr.Silent || exitErr.Code != interruptedExitCode {
 		t.Fatalf("interrupted run error = %v, want a silent ExitError with code %d", err, interruptedExitCode)
 	}
 
 	boom := errors.New("boom")
-	if err := runExitError(context.Background(), boom); !errors.Is(err, boom) || errors.As(err, &exitErr) {
+	if err := runExitError(context.Background(), boom, ""); !errors.Is(err, boom) || errors.As(err, &exitErr) {
 		t.Fatalf("failed run error = %v, want the wrapped run error", err)
 	}
 }

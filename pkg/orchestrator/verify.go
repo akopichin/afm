@@ -229,25 +229,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		verID = resume.quota.VerifyID
 	}
 
-	manifestSteps := make([]stagefiles.ManifestStep, len(s.Verify.Steps))
-	for i, st := range s.Verify.Steps {
-		manifestSteps[i] = stagefiles.ManifestStep{
-			Index:   i + 1,
-			Kind:    verifyStepManifestKind(st),
-			Command: verifyStepManifestCommand(st),
-			Outcome: "not-run",
-		}
-	}
-	persistManifest := func() error {
-		return stagefiles.WriteManifest(stageDir, verID, stagefiles.Manifest{
-			RunID:          o.opts.RunID,
-			StageID:        s.ID,
-			Phase:          phase,
-			VerificationID: verID,
-			CreatedAt:      time.Now(),
-			Steps:          append([]stagefiles.ManifestStep(nil), manifestSteps...),
-		})
-	}
+	pass := newVerificationPass(o, s, stageDir, verID, phase)
 
 	plan, _ := os.ReadFile(filepath.Join(stageDir, "plan.md"))
 	authorSummary, _ := os.ReadFile(filepath.Join(stageDir, "execution_summary.md"))
@@ -257,17 +239,26 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 	}
 	prevReport := previousVerifyReport(stageDir)
 
-	var passedSteps strings.Builder
 	firstStep := 0
 	if resume != nil {
 		firstStep = resume.quota.VerifyStep - 1
-		if err := restoreVerifyPasses(stageDir, s, resume.quota, manifestSteps, &passedSteps); err != nil {
+		if err := restoreVerifyPasses(stageDir, s, resume.quota, pass.manifestSteps, &pass.passedSteps); err != nil {
 			reason := "verify storage failure: " + err.Error()
 			o.emitVerifyResult(s.ID, verID, resume.quota.VerifyStep, "", "", "", execErrorKindExecFailure, reason, "")
 			return &VerifyExecError{Reason: reason, Step: resume.quota.VerifyStep}
 		}
 	}
 
+	in := prompts.VerifyInputs{
+		Template:       o.opts.Prompts.Verify,
+		Stage:          s,
+		GlobalPrompt:   o.opts.GlobalPrompt,
+		StagePrompt:    s.Prompt,
+		Plan:           string(plan),
+		Artifacts:      artCtx,
+		AuthorSummary:  string(authorSummary),
+		PreviousReport: prevReport,
+	}
 	for i, st := range s.Verify.Steps {
 		if i < firstStep {
 			continue
@@ -277,214 +268,18 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		command := verifyStepManifestCommand(st)
 		o.emitVerifyStarted(s.ID, verID, idx, kind, command)
 
-		// Step timeout и idle-timeout действуют независимо; срабатывает первый истёкший.
-		stepCtx := ctx
-		if st.Timeout > 0 {
-			var cancelStep context.CancelFunc
-			stepCtx, cancelStep = context.WithTimeout(ctx, st.Timeout)
-			defer cancelStep() //nolint:revive // накопление на малое число шагов одного прохода безопасно; см. комментарий выше
-		}
-
+		var stepErr error
 		if st.Kind == flow.VerifyAgent {
-			in := prompts.VerifyInputs{
-				Template:       o.opts.Prompts.Verify,
-				Stage:          s,
-				GlobalPrompt:   o.opts.GlobalPrompt,
-				StagePrompt:    s.Prompt,
-				Plan:           string(plan),
-				Artifacts:      artCtx,
-				AuthorSummary:  string(authorSummary),
-				PassedSteps:    passedSteps.String(),
-				PreviousReport: prevReport,
-				VerifyPrompt:   st.Prompt,
-			}
-			// Транзиентный инфра-сбой verify-процесса ретраим с backoff; все прочие ошибки
-			// (timeout/interrupt/protocol/storage/детерминированный exec-сбой) — fail-fast.
-			var result verify.ModelResult
-			var alias string
-			var err error
-			for execAttempt := 0; ; execAttempt++ {
-				result, alias, err = o.runVerifyAgentStep(stepCtx, s, st, idx, verID, in)
-				if err == nil {
-					break
-				}
-				var ve *VerifyExecError
-				transient := errors.As(err, &ve) && ve.Transient
-				if !transient || execAttempt >= verifyExecMaxRetries || ctx.Err() != nil {
-					break
-				}
-				o.emitVerifyRetry(s.ID, verID, idx, kind, command, execAttempt+1, err.Error())
-				if !o.verifyBackoffInterruptible(stepCtx, s.ID, verifyExecBackoff) {
-					// Backoff погашен досрочно. Истёкший дедлайн шага (st.Timeout) — это ТАЙМАУТ verify-шага
-					// (терминальный exec_failure), а НЕ пользовательское прерывание: иначе runWithRetry по
-					// ErrUserInterrupted перезапустил бы автора, и при детерминированном сбое стадия зациклилась бы.
-					if errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
-						err = &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
-					} else {
-						err = executor.ErrUserInterrupted // Pause/Revise/отмена рана
-					}
-					break
-				}
-			}
-			if err != nil {
-				var limit *executor.UsageLimitError
-				if errors.As(err, &limit) {
-					// Лимит провайдера — не ошибка проверки: шаг и счётчики сохраняются, стадия паркуется до сброса.
-					manifestSteps[i].Outcome = verifyOutcomeQuotaWait
-					if perr := persistManifest(); perr != nil {
-						reason := "verify storage failure: " + perr.Error()
-						o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-						return &VerifyExecError{Reason: reason, Step: idx}
-					}
-					return &verifyLimitError{Limit: limit, VerifyID: verID, Step: idx}
-				}
-				manifestSteps[i].Outcome = verifyManifestErrorOutcome(err)
-				_ = persistManifest()
-				execKind := execErrorKindExecFailure
-				if errors.Is(err, executor.ErrUserInterrupted) {
-					execKind = execErrorKindInterrupted
-				}
-				if execKind == execErrorKindExecFailure {
-					// Хвост agent.stderr.log подмешиваем ОДИН раз, уже после исчерпания ретраев;
-					// interrupted не обогащаем и identity ошибки не трогаем.
-					var ve *VerifyExecError
-					if errors.As(err, &ve) {
-						stepDir := stagefiles.StepDir(filepath.Join(o.opts.RunDir, s.ID), verID, idx)
-						ve.Reason = enrichExecReason(stepDir, ve.Reason)
-					}
-				}
-				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execKind, err.Error(), "")
-				return err
-			}
-
-			// Перепроверяем stepCtx до любого вердикта: executor может вернуть успешный результат одновременно с
-			// истечением дедлайна.
-			if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
-				manifestSteps[i].Outcome = verifyOutcomeError
-				_ = persistManifest()
-				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
-				return raceErr
-			}
-
-			switch result.Verdict {
-			case verify.VerdictPass:
-				if perr := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); perr != nil {
-					manifestSteps[i].Outcome = verifyOutcomeError
-					_ = persistManifest()
-					reason := "verify storage failure: " + perr.Error()
-					o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-					return &VerifyExecError{Reason: reason, Step: idx}
-				}
-				if perr := stagefiles.WriteReport(stageDir, verID, result, alias, idx); perr != nil {
-					manifestSteps[i].Outcome = verifyOutcomeError
-					_ = persistManifest()
-					reason := "verify storage failure: " + perr.Error()
-					o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-					return &VerifyExecError{Reason: reason, Step: idx}
-				}
-				manifestSteps[i].Outcome = string(result.Verdict)
-				passedSteps.WriteString(passedAgentStepLine(idx, alias, result.Summary))
-				o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictPass, "", result.Summary, verifyReportPath(stageDir, verID))
-
-			case verify.VerdictNeedsChanges:
-				manifestSteps[i].Outcome = string(result.Verdict)
-				reason := "verify needs changes (step " + fmt.Sprint(idx) + "): " + result.Summary
-				return o.persistVerifyRejection(stageDir, verID, idx, kind, alias, reason, result, manifestSteps, s.ID, phase)
-
-			case verify.VerdictInconclusive:
-				manifestSteps[i].Outcome = string(result.Verdict)
-				_ = persistManifest()
-				o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictInconclusive, "", result.Summary, "")
-				return &VerifyExecError{Reason: "verify inconclusive: " + result.Summary, Step: idx}
-			default:
-				// Недостижимо при исправном executor.RunVerifyAgent — защитная ветка на случай нестандартного
-				// фейкового раннера в тестах: неизвестный вердикт НИКОГДА не pass.
-				manifestSteps[i].Outcome = verifyOutcomeError
-				_ = persistManifest()
-				reason := fmt.Sprintf("verify produced unknown verdict %q", result.Verdict)
-				o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-				return &VerifyExecError{Reason: reason, Step: idx}
-			}
-			continue
+			stepErr = pass.runAgentVerifyStep(ctx, st, i, in)
+		} else {
+			stepErr = pass.runShellVerifyStep(ctx, st, i)
 		}
-
-		// E2: синхронная проверка ДО того, как вообще создан pauseAwareVerifyCtx и стартован shell-процесс.
-		// verifyShellInterruptPending закрывает именно уже-случившийся к МОМЕНТУ ВЫЗОВА случай.
-		if o.verifyShellInterruptPending(s.ID) {
-			manifestSteps[i].Outcome = execErrorKindInterrupted
-			_ = persistManifest()
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
-			return executor.ErrUserInterrupted
+		if stepErr != nil {
+			return stepErr
 		}
-
-		// Shell-шаг: отменяемый процесс в корне проекта агентов, иначе `go test ./...` проверял бы не тот код,
-		// который меняли агенты.
-		shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
-		out, runErr := o.runVerifyShell(shellCtx, o.projectDir(), st.Run)
-		interruptedByPause := stop()
-
-		stepDir := stagefiles.StepDir(stageDir, verID, idx)
-		if mkErr := os.MkdirAll(stepDir, 0755); mkErr != nil {
-			manifestSteps[i].Outcome = verifyOutcomeError
-			_ = persistManifest()
-			reason := "verify storage failure: " + mkErr.Error()
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-			return &VerifyExecError{Reason: reason, Step: idx}
-		}
-		if werr := os.WriteFile(filepath.Join(stepDir, "command.log"), []byte(out), 0644); werr != nil {
-			manifestSteps[i].Outcome = verifyOutcomeError
-			_ = persistManifest()
-			reason := "verify storage failure: " + werr.Error()
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-			return &VerifyExecError{Reason: reason, Step: idx}
-		}
-		if interruptedByPause {
-			// Ненулевой exit после Pause/Revise означает прерывание, а не needs_changes; отказ автора не сохраняем.
-			manifestSteps[i].Outcome = execErrorKindInterrupted
-			_ = persistManifest()
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindInterrupted, "verify interrupted", "")
-			return executor.ErrUserInterrupted
-		}
-		if runErr != nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded) {
-			// DeadlineExceeded у stepCtx означает истечение st.Timeout; отмена рана и пауза обрабатываются
-			// отдельно.
-			manifestSteps[i].Outcome = verifyOutcomeError
-			_ = persistManifest()
-			reason := verifyTimedOutReason
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-			return &VerifyExecError{Reason: reason, Step: idx}
-		}
-		if runErr != nil && ctx.Err() != nil {
-			// Проверяем родительский ctx: stop сам отменяет shellCtx, поэтому его Err не доказывает прерывание
-			// рана.
-			manifestSteps[i].Outcome = verifyOutcomeError
-			_ = persistManifest()
-			reason := "verify execution failed: " + ctx.Err().Error()
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, reason, "")
-			return &VerifyExecError{Reason: reason, Step: idx}
-		}
-		if runErr != nil {
-			// Ненулевой shell exit нормализуем в needs_changes и сохраняем тем же путём, что отказ AI; legacy
-			// reason сохраняется.
-			tail := stagefiles.TailOutput(out, verifyShellOutputLimit)
-			legacyReason := fmt.Sprintf("verify command failed (%v):\n%s", runErr, tail)
-			result := shellRejectionResult(st.Run, tail)
-			manifestSteps[i].Outcome = string(result.Verdict)
-			return o.persistVerifyRejection(stageDir, verID, idx, kind, st.Run, legacyReason, result, manifestSteps, s.ID, phase)
-		}
-		if raceErr := verifyStepDeadlineRace(stepCtx, idx); raceErr != nil {
-			// Перепроверяем дедлайн после успеха: select может выбрать done, когда stepCtx уже истёк.
-			manifestSteps[i].Outcome = verifyOutcomeError
-			_ = persistManifest()
-			o.emitVerifyResult(s.ID, verID, idx, kind, command, "", execErrorKindExecFailure, raceErr.Error(), "")
-			return raceErr
-		}
-		manifestSteps[i].Outcome = verifyOutcomePass
-		passedSteps.WriteString(passedShellStepLine(idx, st.Run))
-		o.emitVerifyResult(s.ID, verID, idx, kind, command, verify.VerdictPass, "", "passed", "")
 	}
 
-	if err := persistManifest(); err != nil {
+	if err := pass.persist(); err != nil {
 		return &VerifyExecError{Reason: "verify storage failure: " + err.Error()}
 	}
 	if err := stagefiles.ClearActiveFeedback(stageDir); err != nil {

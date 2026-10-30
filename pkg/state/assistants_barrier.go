@@ -140,3 +140,26 @@ func (as AssistantsState) NeedsHumanDecision(stageID string) bool {
 		return false
 	}
 }
+
+// DeadRequiredTask returns the first failed or cancelled, non-waived required task anywhere in stageID's current
+// required tree. Unlike RequiredBlocker it keeps walking below a task that is still open, so a dead task is
+// found even when an earlier blocker is alive or waits for a decision. Waived and advisory tasks never count.
+func (as AssistantsState) DeadRequiredTask(stageID string) (TaskState, bool) {
+	return as.deadRequiredIn(as.currentRootChildren(stageID))
+}
+
+func (as AssistantsState) deadRequiredIn(ids []assistants.TaskID) (TaskState, bool) {
+	for _, id := range ids {
+		t, ok := as.Tasks[id]
+		if !ok || t.Mode != assistants.ModeRequired {
+			continue
+		}
+		if !t.Waived && (t.Status == assistants.StatusFailed || t.Status == assistants.StatusCancelled) {
+			return *t, true
+		}
+		if dead, found := as.deadRequiredIn(as.currentChildrenOf(t.ID, t.TaskGeneration)); found {
+			return dead, true
+		}
+	}
+	return TaskState{}, false
+}

@@ -201,11 +201,8 @@ func (o *Orchestrator) reviseAwaitingAssistants(reqCtx context.Context, stageID,
 	}
 	// Spawn under run ctx, not reqCtx — see reviseAwaitingApproval's identical comment below.
 	runCtx := o.runContext(reqCtx)
-	if o.executionKind(*stage) == kindAutonomous {
-		o.spawnKind(runCtx, *stage, kindAutonomous, o.runAutonomousWithFeedback)
-	} else {
-		o.spawnKind(runCtx, *stage, kindImplementation, o.runImplementationWithFeedback)
-	}
+	kind := o.executionKind(*stage)
+	o.spawnKind(runCtx, *stage, kind, o.withFeedbackRunner(kind))
 	return true, seq, nil
 }
 

@@ -103,6 +103,20 @@ project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
 still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
 
+## Exit on stage failure
+
+`afm run --exit-on-fail` makes a committed `failed` stage stop the run and return
+exit code 1. It is off by default. Set `AFM_EXIT_ON_FAIL=1` for the same behavior
+without a flag. An explicit CLI flag takes precedence in either direction:
+`--exit-on-fail=false` disables it even when the environment enables it.
+
+The environment value is case-insensitive and ignores surrounding whitespace.
+Accepted true values are `1`, `true`, `yes`, and `on`; false values are `0`,
+`false`, `no`, and `off`. An empty value acts as unset. Any other value fails
+before afm creates a run or worktree. This is a `run` option, not a
+`config.yaml` or `flow.yaml` field; its value stays fixed for that invocation,
+including repeated cycles. See [stage failure and resume](stage-lifecycle.md#exit-on-stage-failure).
+
 ## Usage limits
 
 `usage_limit` controls how long afm waits when an agent reports that its

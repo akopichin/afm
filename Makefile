@@ -130,9 +130,31 @@ docker-run:
 RELEASE_TARGETS := $(addprefix release-,patch minor major \
 	patch-alpha minor-alpha major-alpha patch-beta minor-beta major-beta)
 
+# Проверяем все цели до выполнения рецептов, чтобы опечатка ветки не выпустила HEAD.
+RELEASE_BRANCH := $(filter main v1.x,$(MAKECMDGOALS))
+ifneq ($(filter $(RELEASE_TARGETS),$(MAKECMDGOALS)),)
+ifneq ($(words $(filter $(RELEASE_TARGETS),$(MAKECMDGOALS))),1)
+$(error Specify exactly one release target)
+endif
+ifneq ($(filter-out $(RELEASE_TARGETS) main v1.x,$(MAKECMDGOALS)),)
+$(error Release targets accept only an optional main or v1.x branch)
+endif
+endif
+ifneq ($(RELEASE_BRANCH),)
+ifneq ($(words $(filter $(RELEASE_TARGETS),$(MAKECMDGOALS))),1)
+$(error Specify exactly one release target with a branch)
+endif
+ifneq ($(words $(RELEASE_BRANCH)),1)
+$(error Specify exactly one release branch)
+endif
+.PHONY: $(RELEASE_BRANCH)
+$(RELEASE_BRANCH):
+	@:
+endif
+
 .PHONY: $(RELEASE_TARGETS)
 $(RELEASE_TARGETS):
-	./scripts/release.sh $(subst -, ,$(patsubst release-%,%,$@))
+	./scripts/release.sh $(subst -, ,$(patsubst release-%,%,$@)) $(if $(RELEASE_BRANCH),--branch $(RELEASE_BRANCH))
 
 .PHONY: sdk-test sdk-test-integration sdk-lint
 

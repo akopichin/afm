@@ -38,6 +38,10 @@ type Transition struct {
 	// ExpectStageSeq, when set, fences the transition to the stage's latest transition (StageState.Seq): e.g. a
 	// resume decided for one park commits only while the stage is still in that park. Never journaled.
 	ExpectStageSeq *uint64 `json:"-"`
+	// Fence, when set, runs in Store.Apply under the store lock right before the commit: false loses the CAS, so a
+	// decision made on an earlier snapshot is re-checked at the commit. Must be pure and non-blocking (read rs and
+	// lock-free state only, no Store/Orchestrator calls or other locks). Never journaled.
+	Fence func(rs *RunState) bool `json:"-"`
 }
 
 // ErrRunLocked означает, что run-директория уже открыта другим процессом afm. flock освобождается ОС при
@@ -535,6 +539,9 @@ func (s *Store) Apply(t *Transition) error {
 	if t.ExpectStageSeq != nil && current.Seq != *t.ExpectStageSeq {
 		return fmt.Errorf("%w: stage %q moved on (latest transition %d, expected %d)",
 			ErrConcurrentChange, t.StageID, current.Seq, *t.ExpectStageSeq)
+	}
+	if t.Fence != nil && !t.Fence(s.snapshot) {
+		return fmt.Errorf("%w: stage %q: the decision behind the transition is no longer valid", ErrConcurrentChange, t.StageID)
 	}
 
 	s.lastSeq++
