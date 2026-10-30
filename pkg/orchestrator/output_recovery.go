@@ -192,18 +192,20 @@ func comparableOutput(contract schema.Contract, raw []byte, repairSyntax bool) (
 	for _, key := range []string{"summary", "suggested_change", "limitations"} {
 		joinOutputLines(root, key)
 	}
+	findingText := []string{"detail"}
 	if contract == schema.VerifyResult {
-		if findings, ok := root["findings"].([]any); ok {
-			for _, item := range findings {
-				if finding, ok := item.(map[string]any); ok {
-					for _, key := range []string{"title", "requirement", "evidence", "minimal_fix"} {
-						joinOutputLines(finding, key)
-					}
+		findingText = []string{"title", "requirement", "evidence", "minimal_fix"}
+	} else if evidence, ok := root["evidence"].(string); ok {
+		root["evidence"] = []any{evidence}
+	}
+	if findings, ok := root["findings"].([]any); ok {
+		for _, item := range findings {
+			if finding, ok := item.(map[string]any); ok {
+				for _, key := range findingText {
+					joinOutputLines(finding, key)
 				}
 			}
 		}
-	} else if evidence, ok := root["evidence"].(string); ok {
-		root["evidence"] = []any{evidence}
 	}
 	return root, nil
 }

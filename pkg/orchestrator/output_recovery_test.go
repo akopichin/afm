@@ -79,6 +79,18 @@ func TestOutputRecovery_PreservationAndBudget(t *testing.T) {
 	}
 }
 
+// Joining a finding's detail lines is a lossless shape change, like the other free-text fields.
+func TestOutputRecovery_FindingDetailLinesJoinedByFormatter(t *testing.T) {
+	raw := strings.Replace(recoveryHelperRaw, `"detail":"Keep this finding"`, `"detail":["Keep this","finding"]`, 1)
+	candidate := strings.Replace(recoveryHelperFixed, `"detail":"Keep this finding"`, `"detail":"Keep this\nfinding"`, 1)
+	got, err := recoverOutput(context.Background(), schema.AssistantResult, "t", []byte(raw), assistantOutputValidator, 1, func(context.Context, schema.Contract, string, int) ([]byte, error) {
+		return []byte(candidate), nil
+	})
+	if err != nil || got.Provenance.Source != "model_format" {
+		t.Fatalf("err=%v provenance=%+v", err, got.Provenance)
+	}
+}
+
 func TestOutputRecovery_RefusalsNeverCallModel(t *testing.T) {
 	for _, raw := range []string{
 		"", `{"schema_version":1`, strings.Repeat("x", assistants.MaxResultBytes+1),

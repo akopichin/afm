@@ -129,11 +129,11 @@ func NormalizeResult(raw []byte) ([]byte, bool) {
 		if json.Unmarshal(suggestion, &text) != nil {
 			return nil, false
 		}
-		var detail string
-		if !bytes.HasPrefix(bytes.TrimSpace(finding["detail"]), []byte(`"`)) || json.Unmarshal(finding["detail"], &detail) != nil {
+		var detail textField
+		if json.Unmarshal(finding["detail"], &detail) != nil {
 			return nil, false
 		}
-		finding["detail"], _ = json.Marshal(detail + "\n\nSuggested change:\n" + string(text))
+		finding["detail"], _ = json.Marshal(string(detail) + "\n\nSuggested change:\n" + string(text))
 		delete(finding, "suggested_change")
 		changed = true
 	}

@@ -855,8 +855,9 @@ inspection. An accepted repaired result shows a **repaired** badge in the helper
 view and a warning in the stage feed. If repair cannot preserve a valid result,
 the helper gets a `protocol_error`. Open **Show the helper's raw answer** in the
 helper view to inspect its final text, when available. The free-text fields
-`summary`, `evidence`, `suggested_change` and `limitations` may be either a
-string or an array of strings; anything else in them is still a protocol error.
+`summary`, `evidence`, `suggested_change`, `limitations` and a finding's
+`detail` may be either a string or an array of strings; anything else in them
+is still a protocol error.
 
 A run agent is a standing role, so a turn with an invalid answer does not end
 it: the agent goes back to idle (its status says the last turn failed and why,
