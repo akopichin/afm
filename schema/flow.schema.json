@@ -136,7 +136,7 @@
     },
     "skillsDir": {
       "type": "string",
-      "description": "One extra local skill library: a directory of <name>/SKILL.md folders. The nearest level that sets it wins (stage or team member, then flow, then config skills_dir); libraries are never merged. A relative path is resolved from the effective project root (worktree, else root_dir from the afm root). Empty values, a leading ~ and control characters are rejected.",
+      "description": "One extra local skill library: a directory of <name>/SKILL.md folders. The nearest level that sets it wins (stage, stage assistant or team member, then flow, then config skills_dir); libraries are never merged. A relative path is resolved from the effective project root (worktree, else root_dir from the afm root). Empty values, a leading ~ and control characters are rejected.",
       "allOf": [
         { "pattern": "\\S" },
         { "pattern": "^[^~]" },
@@ -383,7 +383,7 @@
           "description": "Explicit false opts this stage out of the managed Chrome DevTools (afm_chrome) capability. Omitted inherits the global browser policy."
         },
         "assistants": {
-          "description": "Helper profiles (collaboration.profiles) auto-attached at the start of this stage's execution phase, the same way a manual dashboard Attach click would: a profile name, an object with profile plus optional title/instruction/mode/trigger, or a list mixing both forms.",
+          "description": "Helper profiles (collaboration.profiles) auto-attached at the start of this stage's execution phase, the same way a manual dashboard Attach click would: a profile name, an object with profile plus optional title/instruction/mode/trigger/skills/skills_dir, or a list mixing both forms.",
           "oneOf": [
             { "type": "string", "minLength": 1, "description": "Profile name." },
             { "$ref": "#/definitions/stageAssistant" },
@@ -538,7 +538,9 @@
           "type": "string",
           "enum": ["", "one_shot", "checkpoints", "on_completion"],
           "description": "one_shot (default, same as omitting this key or an explicit empty string): a single turn. checkpoints/on_completion: a watcher invited at the root stage's checkpoints or completion."
-        }
+        },
+        "skills": { "$ref": "#/definitions/skillNames" },
+        "skills_dir": { "$ref": "#/definitions/skillsDir" }
       }
     },
     "lifecycleHook": {

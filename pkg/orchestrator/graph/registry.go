@@ -69,8 +69,16 @@ func cloneStage(s flow.Stage) flow.Stage {
 	s.MemoryUse = clonePtr(s.MemoryUse)
 	s.Hooks = cloneHooks(s.Hooks)
 	s.Browser = clonePtr(s.Browser)
-	s.Assistants = slices.Clone(s.Assistants)
+	s.Assistants = cloneAssistants(s.Assistants)
 	return s
+}
+
+func cloneAssistants(declared flow.StageAssistants) flow.StageAssistants {
+	out := slices.Clone(declared)
+	for i := range out {
+		out[i].Skills = slices.Clone(out[i].Skills)
+	}
+	return out
 }
 
 func cloneArtifacts(artifacts []flow.Artifact) []flow.Artifact {

@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-31
 
+### Improvement: skills for helpers declared on a stage
+
+A helper in a stage's `assistants:` list now accepts `skills` and `skills_dir`,
+like a stage or a `team` member. The helper loads its own skills; it still does not
+inherit the stage's. A helper without `skills_dir` uses the flow's or the config's
+library. See [Flow reference](docs/flow-reference.md#declared-helpers).
+
 ### Improvement: quieter comment icons and a visible Draft label
 
 In a plan or question, the comment icon at the right edge of a line now appears only

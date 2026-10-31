@@ -24,8 +24,8 @@ type topLevelTaskRequest struct {
 	// kind is just "agent", so a task one creates names its origin explicitly.
 	Origin assistants.Origin
 	Actor  state.Actor
-	// Skills and SkillsDir are a flow team member's required skills and extra library (absolute); no other
-	// request sets them, so a helper or a delegated child never inherits its author's.
+	// Skills and SkillsDir are the required skills and extra library (absolute) of an agent declared in
+	// flow.yaml — a team member or a stage's helper; a delegated child or a dashboard attach never inherits them.
 	Skills    []string
 	SkillsDir string
 }

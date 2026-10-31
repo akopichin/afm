@@ -1,6 +1,7 @@
 package flow_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ stages:
 		t.Fatalf("ParseFile: %v", err)
 	}
 	want := flow.StageAssistants{{Profile: "reviewer"}}
-	if got := f.Stages[0].Assistants; len(got) != 1 || got[0] != want[0] {
+	if got := f.Stages[0].Assistants; len(got) != 1 || !reflect.DeepEqual(got[0], want[0]) {
 		t.Fatalf("Assistants = %+v, want %+v", got, want)
 	}
 }
@@ -39,7 +40,7 @@ stages:
 		t.Fatalf("ParseFile: %v", err)
 	}
 	want := flow.StageAssistants{{Profile: "reviewer"}}
-	if got := f.Stages[0].Assistants; len(got) != 1 || got[0] != want[0] {
+	if got := f.Stages[0].Assistants; len(got) != 1 || !reflect.DeepEqual(got[0], want[0]) {
 		t.Fatalf("Assistants = %+v, want %+v", got, want)
 	}
 }
@@ -84,7 +85,7 @@ stages:
 		Profile: "qa", Title: "QA gate", Instruction: "Check test coverage",
 		Mode: assistants.ModeRequired, Trigger: assistants.TriggerOnCompletion,
 	}
-	if len(got) != 1 || got[0] != want {
+	if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("Assistants = %+v, want [%+v]", got, want)
 	}
 }
@@ -108,10 +109,10 @@ stages:
 	if len(got) != 2 {
 		t.Fatalf("Assistants = %+v, want 2 elements", got)
 	}
-	if got[0] != (flow.StageAssistant{Profile: "reviewer"}) {
+	if !reflect.DeepEqual(got[0], flow.StageAssistant{Profile: "reviewer"}) {
 		t.Fatalf("Assistants[0] = %+v, want {Profile: reviewer}", got[0])
 	}
-	if got[1] != (flow.StageAssistant{Profile: "qa", Mode: assistants.ModeRequired}) {
+	if !reflect.DeepEqual(got[1], flow.StageAssistant{Profile: "qa", Mode: assistants.ModeRequired}) {
 		t.Fatalf("Assistants[1] = %+v, want {Profile: qa, Mode: required}", got[1])
 	}
 }
@@ -130,7 +131,7 @@ stages:
 		t.Fatalf("ParseFile: %v", err)
 	}
 	want := flow.StageAssistants{{Profile: "qa"}}
-	if got := f.Stages[0].Assistants; len(got) != 1 || got[0] != want[0] {
+	if got := f.Stages[0].Assistants; len(got) != 1 || !reflect.DeepEqual(got[0], want[0]) {
 		t.Fatalf("Assistants = %+v, want %+v", got, want)
 	}
 }

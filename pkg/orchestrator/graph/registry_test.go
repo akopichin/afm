@@ -313,7 +313,7 @@ func fullStage() flow.Stage {
 			ResolvedEnv: map[string]string{"TOKEN": "secret"},
 		}},
 		Browser:    &on,
-		Assistants: flow.StageAssistants{{Profile: "reviewer", Mode: assistants.Mode("advisory")}},
+		Assistants: flow.StageAssistants{{Profile: "reviewer", Mode: assistants.Mode("advisory"), Skills: []string{"review"}}},
 	}
 }
 
@@ -339,6 +339,7 @@ func scribble(s *flow.Stage) {
 	s.Hooks[0].ResolvedEnv["TOKEN"] = "x"
 	*s.Browser = false
 	s.Assistants[0].Profile = "x"
+	s.Assistants[0].Skills[0] = "x"
 }
 
 // Every way a stage enters or leaves a Registry must hand out an independent copy of all reference fields.
