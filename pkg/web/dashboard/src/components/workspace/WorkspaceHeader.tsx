@@ -3,9 +3,12 @@ import type { Stage } from '../../types'
 import { STAGE_STATUS_LABELS } from '../../types'
 import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 import { useStageAction } from '../../hooks/use-stage-retry'
-import { continueStage, pauseStage, retryHookStage, retryStage } from '../../api/run-client'
+import { continueStage, pauseStage, retryHookStage, retryStage, triggerStageButton } from '../../api/run-client'
 
 const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'])
+
+// Кнопки из flow.yaml доставляются через Revise, поэтому нужен живой агент: running/awaiting_approval, не скрипт.
+const BUTTON_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
 
 // AttentionNav — навигация prev/next между стадиями очереди attention (rule 6),
 // показывается только когда таких стадий больше одной.
@@ -27,6 +30,8 @@ type WorkspaceHeaderProps = {
   replyNeeded?: number
   controlsEnabled?: boolean
   showControls?: boolean
+  // showStageButtons — false, когда в воркспейсе выбран helper, а не сама стадия: кнопки принадлежат стадии.
+  showStageButtons?: boolean
   onContinue?: () => void
 }
 
@@ -45,9 +50,10 @@ const PLAY_ICON = icon(<path d="m8 4 12 8-12 8Z" />)
 
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + чип статуса (точка, слово,
 // «thinking» во время running) и справа действия: ответ ждут, People, Retry, Pause/Continue иконкой.
-export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, controlsEnabled = true, showControls = true, onContinue }: WorkspaceHeaderProps): ReactElement {
+export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue }: WorkspaceHeaderProps): ReactElement {
   const action = useStageAction(stage)
   const paused = stage.status === 'paused'
+  const buttonsShown = showStageButtons && !stage.isScript && BUTTON_STATUSES.has(stage.status) && stage.buttons.length > 0
   return (
     <div className="workspace-header">
       <h2 id="detail-title" className="workspace-title">{stage.name !== '' ? stage.name : stage.id}</h2>
@@ -70,6 +76,21 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
         </span>
         {stage.status === 'awaiting_quota' && stage.quota !== undefined && <QuotaCountdown quota={stage.quota} live={statusAvailable} compact />}
       </span>
+      {buttonsShown && (
+        <span className="stage-buttons" role="group" aria-label="Stage buttons">
+          {stage.buttons.map((label) => (
+            <button
+              key={label}
+              type="button"
+              className="stage-button"
+              disabled={action.locked || !statusAvailable || !controlsEnabled}
+              onClick={() => void action.send((stageId) => triggerStageButton(stageId, label))}
+            >
+              {label}
+            </button>
+          ))}
+        </span>
+      )}
       {attentionNav !== undefined && (
         <span className="attention-nav" role="group" aria-label="Navigate items needing attention">
           <button type="button" className="attention-nav-btn" aria-label="Previous item" onClick={attentionNav.onPrev}>‹</button>
@@ -96,7 +117,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
           </button>
         )}
       </span>
-      {showControls && action.error !== null && <span className="workspace-action-error" role="alert">{action.error}</span>}
+      {(showControls || buttonsShown) && action.error !== null && <span className="workspace-action-error" role="alert">{action.error}</span>}
     </div>
   )
 }

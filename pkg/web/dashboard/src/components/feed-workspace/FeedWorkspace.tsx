@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode } from 'react'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
@@ -56,6 +56,8 @@ type FeedWorkspaceProps = {
   onComposerDraftChange?: (stageId: string, patch: Partial<ComposerDraft>) => void
   paused?: boolean
   onReplyNeededChange?: (stageId: string | null, count: number) => void
+  // aboveFeed — a block between the filter row and the feed (the Stage note); it stays outside the scroll area.
+  aboveFeed?: ReactNode
 }
 
 const ACTOR_LABEL: Record<FeedActor, string> = {
@@ -90,6 +92,7 @@ export function FeedWorkspace({
   onComposerDraftChange,
   paused = false,
   onReplyNeededChange,
+  aboveFeed,
 }: FeedWorkspaceProps): ReactElement {
   const feed = useStickToBottom<HTMLDivElement>()
   // Drafts are per stage: switching stages (or the Feed following the run) remounts the composer for the new
@@ -212,6 +215,8 @@ export function FeedWorkspace({
           {filterContext && <span className="feed-filter-context">{filterContext}</span>}
         </div>
       )}
+      {/* Фрагмент отделяет ключ слота от key={noteTarget} композера: совпавшие ключи среди детей section осиротят DOM слота. */}
+      <>{aboveFeed}</>
       <div id="feed-content" className="feed-scroll" ref={feed.ref} onClickCapture={onSummaryClick}>
         {timeline.length === 0 ? (
           <div className="empty-hint feed-empty">{items.length + conversationMessages.length === 0 ? (emptyHint ?? 'No events yet') : 'Nothing to show for this filter'}</div>

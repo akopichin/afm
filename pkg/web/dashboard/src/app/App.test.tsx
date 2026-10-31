@@ -31,6 +31,7 @@ type StageViewOverrides = {
   // updatedAt параметризует episode-подпись attention. По умолчанию '' — так же, как раньше, чтобы
   // существующие тесты не менялись; тесты про повторные эпизоды одной стадии задают разные t1/t2.
   updatedAt?: string
+  preNote?: string
 }
 
 // Строит один элемент нового wire-формата stages: []StageView.
@@ -52,6 +53,7 @@ function stageView(id: string, name: string, status: string, overrides: StageVie
     is_script: isScript,
     show_plan: overrides.showPlan ?? ((status !== 'pending' && !isScript && !autonomous) || status === 'failed' || status === 'paused'),
     show_dialog: overrides.showDialog ?? (hasDialog || status === 'awaiting_user_input'),
+    pre_note: overrides.preNote ?? '',
   }
 }
 
@@ -807,7 +809,7 @@ describe('App', () => {
     await waitFor(() => expect(composer).toHaveValue('test note'))
   })
 
-  test('a failed kebab /pause POST is visible and retryable through the shared header action', async () => {
+  test('a failed /pause POST is visible and retryable through the shared header action', async () => {
     let pauses = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = typeof input === 'string' ? input : (input as Request).url
@@ -821,7 +823,7 @@ describe('App', () => {
           }),
         } as Response
       }
-      // Стадия успела уйти из pausable-статуса за время между открытием кебаба и кликом.
+      // Стадия успела уйти из pausable-статуса за время между poll и кликом.
       if (url.includes('/pause')) {
         pauses++
         return { ok: false, status: 409, json: async () => ({}) } as Response
@@ -835,10 +837,8 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(within(document.querySelector('.stage-kebab-menu') as HTMLElement).getByText('Pause'))
-
     const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    fireEvent.click(header.getByRole('button', { name: 'Pause' }))
     expect(await header.findByRole('alert')).toHaveTextContent('409')
     expect(header.getByRole('button', { name: 'Pause' })).toBeEnabled()
     expect(pauses).toBe(1)
@@ -848,6 +848,334 @@ describe('App', () => {
     expect(await header.findByRole('alert')).toHaveTextContent('409')
     expect(header.getByRole('button', { name: 'Pause' })).toBeEnabled()
     expect(pauses).toBe(2)
+  })
+
+  describe('stage buttons in the header', () => {
+    function mockButtonRun(stages: unknown[], posts: { url: string; body: unknown }[]) {
+      return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        if (url.includes('/api/status')) {
+          return { ok: true, json: async () => ({ flow_name: 'demo', accounting: { health: 'ok', has_data: false, show_money: true }, stages }) } as Response
+        }
+        if ((init?.method ?? 'GET').toUpperCase() === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init?.body ?? 'null')) })
+          return { ok: true, json: async () => ({}) } as Response
+        }
+        if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+        if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
+        return { ok: true, json: async () => [] } as Response
+      })
+    }
+    const withButtons = (view: ReturnType<typeof stageView>) => ({ ...view, buttons: ['Run linter', 'Rebuild'] })
+
+    test('a running stage shows its buttons after the status; a click posts only the label', async () => {
+      const posts: { url: string; body: unknown }[] = []
+      mockButtonRun([withButtons(stageView('s1', 'Propose', 'running'))], posts)
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+      const group = within(document.querySelector('.workspace-header') as HTMLElement).getByRole('group', { name: 'Stage buttons' })
+      expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Run linter', 'Rebuild'])
+      fireEvent.click(within(group).getByRole('button', { name: 'Rebuild' }))
+      await waitFor(() => expect(posts).toHaveLength(1))
+      expect(posts[0]).toEqual({ url: '/api/stages/s1/button', body: { name: 'Rebuild' } })
+    })
+
+    test('the Approval view of an awaiting_approval stage keeps the buttons in the header', async () => {
+      mockButtonRun([withButtons(stageView('s1', 'Propose', 'awaiting_approval'))], [])
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+
+      expect(screen.getByRole('tab', { name: /Approval/ })).toHaveAttribute('aria-selected', 'true')
+      expect(within(document.querySelector('.workspace-header') as HTMLElement).getByRole('group', { name: 'Stage buttons' })).toBeInTheDocument()
+    })
+
+    test('a pending stage and a running script never show the stage buttons', async () => {
+      mockButtonRun([
+        withButtons(stageView('s1', 'Propose', 'pending')),
+        withButtons(stageView('s2', 'Lint', 'running', { isScript: true })),
+      ], [])
+      render(<App />)
+      // The running script is auto-selected; its header has no button group.
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Lint'))
+      expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: /Propose/ }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+      expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
+    })
+
+    test('Pause and Continue are available from the header', async () => {
+      const posts: { url: string; body: unknown }[] = []
+      mockButtonRun([stageView('s1', 'Propose', 'running')], posts)
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+      fireEvent.click(within(document.querySelector('.workspace-header') as HTMLElement).getByRole('button', { name: 'Pause' }))
+      await waitFor(() => expect(posts.map((p) => p.url)).toEqual(['/api/stages/s1/pause']))
+    })
+  })
+
+  describe('Stage note above the feed', () => {
+    type Call = { url: string; body: { note?: string } }
+
+    // A run whose pending stage s2 keeps its note server-side: a POST to /note changes what /api/status reports.
+    function mockNoteRun(calls: Call[], options: { noteStatus?: number; assistants?: boolean } = {}) {
+      let saved = ''
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        if (url.includes('/api/status')) {
+          return {
+            ok: true,
+            json: async () => ({
+              flow_name: 'demo',
+              run_id: 'note-run',
+              capabilities: { collaboration: options.assistants === true },
+              accounting: { health: 'ok', has_data: false, show_money: true },
+              stages: [stageView('s1', 'Alpha', 'running'), stageView('s2', 'Beta', 'pending', { preNote: saved })],
+            }),
+          } as Response
+        }
+        if (url.endsWith('/note') && (init?.method ?? 'GET').toUpperCase() === 'POST') {
+          const body = JSON.parse(String(init?.body)) as { note: string }
+          calls.push({ url, body })
+          if (options.noteStatus !== undefined) return { ok: false, status: options.noteStatus, json: async () => { throw new SyntaxError('plain text') } } as unknown as Response
+          saved = body.note
+          return { ok: true, json: async () => ({ status: 'noted' }) } as Response
+        }
+        if (url.includes('/stages/s2/assistants') && options.assistants === true) {
+          return { ok: true, json: async () => ({ tasks: [{ id: 't1', profile_id: 'fakeqa', title: 'Fake QA', mode: 'advisory', trigger: 'one_shot', status: 'running' }] }) } as Response
+        }
+        if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+        if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
+        return { ok: true, json: async () => [] } as Response
+      })
+    }
+
+    async function openBeta(): Promise<void> {
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    }
+
+    const noteRegion = () => screen.queryByRole('region', { name: 'Stage note' })
+
+    test('a running stage without a note has no block; a pending one offers Add note above the feed', async () => {
+      mockNoteRun([])
+      await openBeta()
+      const region = await screen.findByRole('region', { name: 'Stage note' })
+      expect(within(region).getByRole('button', { name: 'Add note' })).toBeInTheDocument()
+      const feed = document.getElementById('feed-content') as HTMLElement
+      expect(region.compareDocumentPosition(feed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      expect(noteRegion()).toBeNull()
+    })
+
+    test('Save posts the text, shows it with Edit note and puts the indicator on the rail row', async () => {
+      const calls: Call[] = []
+      mockNoteRun(calls)
+      await openBeta()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'first line\nsecond line' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+
+      await waitFor(() => expect(calls).toEqual([{ url: '/api/stages/s2/note', body: { note: 'first line\nsecond line' } }]))
+      expect(await screen.findByRole('button', { name: 'Edit note' })).toHaveFocus()
+      await waitFor(() => expect(screen.getByRole('region', { name: 'Stage note' })).toHaveTextContent('first line'))
+      expect(screen.getByRole('img', { name: 'Stage note attached' })).toBeInTheDocument()
+    })
+
+    test('Remove posts an empty note and the rail indicator disappears', async () => {
+      const calls: Call[] = []
+      mockNoteRun(calls)
+      await openBeta()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'temporary' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+      await screen.findByRole('img', { name: 'Stage note attached' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Remove note' }))
+      await waitFor(() => expect(calls[1]).toEqual({ url: '/api/stages/s2/note', body: { note: '' } }))
+      await waitFor(() => expect(screen.queryByRole('img', { name: 'Stage note attached' })).toBeNull())
+      expect(await screen.findByRole('button', { name: 'Add note' })).toBeInTheDocument()
+    })
+
+    test('an unsaved draft survives a stage change and a tab change, and leaves the composer draft alone', async () => {
+      mockNoteRun([])
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      const composer = await screen.findByPlaceholderText('Note to agent…')
+      fireEvent.change(composer, { target: { value: 'revise alpha' } })
+
+      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'unsaved words' } })
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+      expect(noteRegion()).toBeNull()
+      fireEvent.click(within(screen.getByRole('tablist', { name: 'Workspace' })).getByRole('tab', { name: 'Feed' }))
+      expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
+
+      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      expect(noteRegion()).toBeNull()
+      expect(await screen.findByPlaceholderText('Note to agent…')).toHaveValue('revise alpha')
+
+      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
+    })
+
+    test('Cancel returns to the saved state and drops the draft for good', async () => {
+      mockNoteRun([])
+      await openBeta()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'never mind' } })
+      fireEvent.keyDown(screen.getByRole('textbox', { name: 'Stage note' }), { key: 'Escape' })
+      expect(screen.getByRole('button', { name: 'Add note' })).toHaveFocus()
+
+      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      expect(await screen.findByRole('button', { name: 'Add note' })).toBeInTheDocument()
+      expect(screen.queryByRole('textbox', { name: 'Stage note' })).toBeNull()
+    })
+
+    test('a failed save keeps the draft through a stage change', async () => {
+      mockNoteRun([], { noteStatus: 500 })
+      await openBeta()
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'keep me' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not save the note. Try again.')
+
+      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('keep me')
+    })
+
+    test('a selected helper of a pending stage has no Stage note, while the stage itself has one', async () => {
+      mockNoteRun([], { assistants: true })
+      await openBeta()
+      expect(await screen.findByRole('region', { name: 'Stage note' })).toBeInTheDocument()
+      fireEvent.click(await screen.findByRole('button', { name: /Fake QA/ }))
+      await waitFor(() => expect(document.querySelector('.assistant-task-item.active')).not.toBeNull())
+      expect(noteRegion()).toBeNull()
+    })
+  })
+
+  // The live configuration: the mesh answers, so the stage feed has a composer keyed by the selected stage next to
+  // the Stage note slot. These tests must see exactly one note block through stage switches and status polls.
+  describe('Stage note with the mesh on', () => {
+    type RunState = { s1: string; s2: string; s1Note: string; s2Note: string }
+
+    function mockMeshRun(state: RunState, options: { mesh?: boolean } = {}) {
+      const mesh = options.mesh !== false
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = typeof input === 'string' ? input : (input as Request).url
+        const json = (value: unknown) => ({ ok: true, json: async () => value }) as Response
+        if (url.includes('/api/status')) {
+          return json({
+            flow_name: 'demo',
+            run_id: 'mesh-note-run',
+            collaboration_mode: 'team',
+            capabilities: { collaboration: mesh },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+            stages: [stageView('s1', 'Alpha', state.s1, { preNote: state.s1Note }), stageView('s2', 'Beta', state.s2, { preNote: state.s2Note })],
+          })
+        }
+        if (url.includes('/api/mesh/participants')) {
+          return json({ participants: [{ id: 'user', kind: 'user', scope: 'run', reachable: true }] })
+        }
+        if (url.includes('/api/mesh/stages/')) return json({ messages: [], threads: [], next_cursor: 0, has_more: false })
+        if (url.includes('/api/mesh/board')) return json({ entries: [] })
+        if (url.includes('/api/mesh/threads')) return json({ threads: [] })
+        if (url.includes('/api/mesh/')) return { ok: false, status: 404, json: async () => ({}) } as Response
+        if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+        return json([])
+      })
+    }
+
+    const regions = () => screen.queryAllByRole('region', { name: 'Stage note' })
+    const selectStage = async (name: RegExp, title: string) => {
+      fireEvent.click(screen.getByRole('button', { name }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent(title))
+    }
+    // A WebSocket event makes App reload /api/status right away instead of waiting for the 3 s poll; each event
+    // carries its own payload because identical consecutive events are deduplicated.
+    let pollSeq = 0
+    async function pollStatus(): Promise<void> {
+      pollSeq += 1
+      const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
+      const before = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/api/status')).length
+      await act(async () => ws?.onmessage?.({ data: JSON.stringify({ type: 'revised', data: { poll: pollSeq }, stage_id: 's2' }) }))
+      await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/api/status')).length).toBeGreaterThan(before))
+    }
+
+    async function openMeshRun(state: RunState): Promise<void> {
+      mockMeshRun(state)
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      await screen.findByRole('combobox', { name: 'Message the mesh' })
+    }
+
+    test('a pending draft is not shown on a running stage and returns once with its text', async () => {
+      await openMeshRun({ s1: 'running', s2: 'pending', s1Note: '', s2Note: '' })
+      await selectStage(/Beta/, 'Beta')
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'unsaved words' } })
+
+      await selectStage(/Alpha/, 'Alpha')
+      expect(regions()).toHaveLength(0)
+
+      await selectStage(/Beta/, 'Beta')
+      await waitFor(() => expect(regions()).toHaveLength(1))
+      expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
+    })
+
+    test('a running stage with a saved note keeps one read-only block through stage switches', async () => {
+      await openMeshRun({ s1: 'running', s2: 'running', s1Note: 'mind the limits', s2Note: '' })
+      expect(regions()).toHaveLength(1)
+      expect(within(regions()[0]!).getByText('mind the limits')).toBeInTheDocument()
+
+      await selectStage(/Beta/, 'Beta')
+      expect(regions()).toHaveLength(0)
+      await selectStage(/Alpha/, 'Alpha')
+      expect(regions()).toHaveLength(1)
+      expect(within(regions()[0]!).getByText('Read only')).toBeInTheDocument()
+    })
+
+    test('an open editor of a stage that starts becomes one read-only block that keeps the draft', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: '', s2Note: '' }
+      await openMeshRun(state)
+      await selectStage(/Beta/, 'Beta')
+      fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+      fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'late draft' } })
+      await selectStage(/Alpha/, 'Alpha')
+      await selectStage(/Beta/, 'Beta')
+      await waitFor(() => expect(regions()).toHaveLength(1))
+
+      state.s2 = 'running'
+      await pollStatus()
+
+      await screen.findByRole('button', { name: 'Discard draft' })
+      expect(regions()).toHaveLength(1)
+      const boxes = screen.getAllByRole('textbox', { name: 'Stage note' })
+      expect(boxes).toHaveLength(1)
+      expect(boxes[0]).toHaveValue('late draft')
+      expect(boxes[0]).toHaveAttribute('readonly')
+      expect(screen.queryByRole('button', { name: 'Save note' })).toBeNull()
+      expect(screen.queryByText(/Included in the agent’s context/)).toBeNull()
+    })
+
+    test('without the mesh a running stage with a note keeps one block through several status polls', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: 'legacy note', s2Note: '' }
+      mockMeshRun(state, { mesh: false })
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      await screen.findByRole('region', { name: 'Stage note' })
+      for (let i = 0; i < 3; i += 1) await pollStatus()
+      expect(regions()).toHaveLength(1)
+    })
   })
 
   test('hides the "thinking" badge while offline even if the selected stage is running', async () => {
@@ -897,6 +1225,61 @@ describe('App', () => {
       const text = document.getElementById('idle')?.textContent ?? ''
       expect(text).not.toBe('00:05')
     }, { timeout: 4000 })
+  })
+
+  test('one stage clock keeps rail and Cost equal through stale, recovery and finished status', async () => {
+    vi.useFakeTimers()
+    const start = '2026-10-30T20:00:00Z'
+    vi.setSystemTime(new Date(start))
+    let stale = false
+    let finished = false
+    mockFetchForStatus(() => {
+      if (stale) throw new Error('offline')
+      return {
+        flow_name: 'timing', started_at: start, run_status: finished ? 'finished' : 'running',
+        ended_at: finished ? '2026-10-30T20:01:30Z' : null,
+        elapsed_accumulated_ms: finished ? 90000 : 0, elapsed_since: finished ? null : start,
+        accounting: null,
+        stages: [
+          { ...stageView('s1', 'Timed stage', finished ? 'done' : 'running'), timing: {
+            started: true, complete: true, work_ms: finished ? 90000 : 0,
+            approval_ms: 0, helpers_ms: 0, backoff_ms: 0, scheduling_ms: 0, paused_ms: 0,
+            ...(finished ? {} : { open: { kind: 'work', since: start } }),
+          } },
+          { ...stageView('s2', 'Pending stage', 'pending'), timing: { started: false, complete: true } },
+        ],
+      }
+    })
+    render(<App />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+    const railTime = () => document.querySelector('[data-stage-id="s1"] .stage-time')?.textContent
+    const costTime = () => within(screen.getByRole('table')).getByText('Timed stage').closest('tr')?.querySelector('.cost-col-time')?.textContent
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000) })
+    expect(railTime()).toBe('1m 01s')
+    expect(costTime()).toBe(railTime())
+    expect(document.querySelector('[data-stage-id="s2"] .stage-time')).toHaveTextContent('—')
+    expect(within(screen.getByRole('table')).getByText('Pending stage').closest('tr')?.querySelector('.cost-col-time')).toHaveTextContent('—')
+    expect(document.getElementById('elapsed')).toHaveTextContent('01:01')
+    expect(screen.getByText('Run elapsed').parentElement).toHaveTextContent('1m 01s')
+    stale = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    const frozen = railTime()
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(railTime()).toBe(frozen)
+    expect(costTime()).toBe(frozen)
+    stale = false
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(railTime()).not.toBe(frozen)
+    expect(costTime()).toBe(railTime())
+    finished = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(railTime()).toBe('1m 30s')
+    await act(async () => { await vi.advanceTimersByTimeAsync(61000) })
+    expect(railTime()).toBe('1m 30s')
+    expect(costTime()).toBe(railTime())
+    expect(document.getElementById('elapsed')).toHaveTextContent('01:30')
+    expect(screen.getByText('Run elapsed').parentElement).toHaveTextContent('1m 30s')
   })
 
   test('Elapsed stays at the persisted end time while the completed dashboard is open', async () => {
@@ -1083,8 +1466,7 @@ describe('App', () => {
     expect(document.getElementById('detail-title')).not.toBeInTheDocument()
   })
 
-  test('Cost tab is absent when accounting is unsupported (display switch off)', async () => {
-    // Disabled accounting hides all cost UI, including the permanent Cost tab.
+  test('Cost tab stays available for time when accounting is unsupported', async () => {
     mockFetchForStatus(() => ({
       flow_name: 'demo',
       stages: [stageView('s1', 'Propose', 'running')],
@@ -1095,7 +1477,10 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
 
     const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
-    expect(labels).not.toContain('Cost')
+    expect(labels).toContain('Cost')
+    fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+    expect(screen.getByRole('columnheader', { name: 'Time' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Cost' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByRole('button', { name: /est\. cost/i })).toBeNull()
   })
 
@@ -1629,6 +2014,7 @@ describe('App', () => {
     let blocked = false
     mockFetchForStatus(() => ({
       flow_name: 'demo',
+      capabilities: { file_browser: true },
       stages: [
         stageView('s1', 'Alpha', 'running'),
         {
@@ -1642,9 +2028,7 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
-    const s3Kebab = within(document.querySelector('[data-stage-id="s3"]') as HTMLElement).getByRole('button', { name: /more actions/i })
-    fireEvent.click(s3Kebab)
-    fireEvent.click(screen.getByText('Add note (before start)'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open project files' }))
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
 
     blocked = true
@@ -1658,6 +2042,7 @@ describe('App', () => {
     let asking = false
     mockFetchForStatus(() => ({
       flow_name: 'demo',
+      capabilities: { file_browser: true },
       stages: [
         stageView('s1', 'Alpha', 'running'),
         stageView('s2', 'Beta', asking ? 'awaiting_user_input' : 'running', asking ? QUESTION_FLAGS : {}),
@@ -1669,11 +2054,9 @@ describe('App', () => {
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
-    // Открываем модалку pre-note на pending s3 — anyModalOpen=true. Проводка App→hook, которую
+    // Открываем модалку Files — anyModalOpen=true. Проводка App→hook, которую
     // reducer-тест с абстрактным suppressed не доказывает.
-    const s3Kebab = within(document.querySelector('[data-stage-id="s3"]') as HTMLElement).getByRole('button', { name: /more actions/i })
-    fireEvent.click(s3Kebab)
-    fireEvent.click(screen.getByText('Add note (before start)'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open project files' }))
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
 
     // Вопрос s2 приходит, пока открыт overlay: только светится, Feed под ним цел.
@@ -1685,7 +2068,7 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /Question waiting/ })).toBeInTheDocument()
 
     // Закрываем overlay — актуальный вопрос авто-открывается.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
@@ -3039,14 +3422,41 @@ describe('App', () => {
     expect(requests.filter((r) => r.includes('/api/mesh/board'))).toHaveLength(0)
   })
 
-  test('assistants mode: the stage menu still offers Attach helper…', async () => {
+  test('assistants mode: the stage header offers Attach helper… (no People panel to hold it)', async () => {
     mockModeRun([], () => 'assistants')
     render(<App />)
     await screen.findByText('Found a bug in parse()')
 
-    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Attach helper…' }))
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull()
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    fireEvent.click(header.getByRole('button', { name: 'Attach helper…' }))
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  test('team mode: Attach helper… stays in the People panel, not duplicated in the header', async () => {
+    mockModeRun([], () => 'team')
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    expect(header.getByRole('button', { name: 'Show people' })).toBeInTheDocument()
+    expect(header.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull()
+  })
+
+  test('the header has no Attach helper… when collaboration is off or the stage is done', async () => {
+    mockFetchForStatus(() => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }))
+    const { unmount } = render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
+    unmount()
+
+    vi.restoreAllMocks()
+    mockFetchForStatus(() => ({ flow_name: 'demo', capabilities: { collaboration: true }, stages: [stageView('s1', 'Propose', 'done')] }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Propose/ }))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
   })
 
   test('assistants mode: the Feed composer keeps Message and Revise for a running stage', async () => {

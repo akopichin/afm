@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Stage, StageStatus, StageVerify } from '../../types'
 import { STAGE_STATUSES, parseStageQuota } from '../../types'
+import { parseStageTiming } from '../../types/stage'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 
 // Периодический опрос состояния флоу.
@@ -291,6 +292,7 @@ function toStage(raw: unknown): Stage | null {
     verify,
     awaitingAssistantsBlocked: obj.awaiting_assistants_blocked === true,
     quota: parseStageQuota(obj.quota),
+    timing: parseStageTiming(obj.timing),
   }
 }
 

@@ -30,8 +30,8 @@ type AssistantTaskRowProps = {
 
 // AssistantTaskRow — one helper-task row under its root stage in the rail, plus (recursively, depth-first)
 // its own visible children. Deliberately NOT a stage row: no ordinal number, its own compact status dot, no
-// kebab menu (T3.9 scope has no task mutation UI — see run-client.ts's doc comment on why attach/pause/
-// continue/cancel aren't wired here yet).
+// row actions (the rail has no helper-task mutation UI; see run-client.ts for why attach/pause/continue/cancel
+// aren't wired here).
 //
 // Renders as a flat Fragment of sibling <li>s — NOT nested inside its own <ul> — so StagesList can splice
 // them directly into #stages-list's flat list, right after the parent stage's <li>. Nesting a <ul> inside

@@ -10,7 +10,6 @@ import meshCss from '../../skins/base/mesh.css?raw'
 import layoutCss from '../../skins/base/layout.css?raw'
 import chatComposerCss from '../../public/chat-composer.css?raw'
 import dialogChannelCss from '../../skins/base/dialog-channel.css?raw'
-import agentNoteModalCss from '../../skins/base/agent-note-modal.css?raw'
 import headerCss from '../../skins/base/header.css?raw'
 import stagesListCss from '../../skins/base/stages-list.css?raw'
 import resetCss from '../../skins/base/reset.css?raw'
@@ -21,6 +20,7 @@ import costPanelCss from '../../skins/base/cost-panel.css?raw'
 import commentsCss from '../../skins/base/comments.css?raw'
 import markdownCss from '../../skins/base/markdown.css?raw'
 import pasteableTextareaCss from '../../skins/base/pasteable-textarea.css?raw'
+import stageNoteCss from '../../skins/base/stage-note.css?raw'
 import graphiteIndexCss from '../../skins/graphite/index.css?raw'
 import gogaIndexCss from '../../skins/goga/index.css?raw'
 import novacorpsIndexCss from '../../skins/novacorps/index.css?raw'
@@ -186,6 +186,37 @@ describe('skins CSS contract — assistants.css is imported by every skin (T3.10
   it('goga imports assistants.css', () => expect(gogaIndexCss).toContain(IMPORT_LINE))
   it('novacorps imports assistants.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
   it('coffee imports assistants.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
+})
+
+// cost-panel.css styles the Cost tab, which is always present, so every skin imports it explicitly.
+describe('skins CSS contract — cost-panel.css is imported by every skin', () => {
+  const IMPORT_LINE = '@import url("../base/cost-panel.css");'
+
+  it('graphite imports cost-panel.css', () => expect(graphiteIndexCss).toContain(IMPORT_LINE))
+  it('goga imports cost-panel.css', () => expect(gogaIndexCss).toContain(IMPORT_LINE))
+  it('novacorps imports cost-panel.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
+  it('coffee imports cost-panel.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
+})
+
+// stage-note.css styles the Stage note block above the feed: structural and skin-agnostic like assistants.css, so
+// every skin imports it explicitly.
+describe('skins CSS contract — stage-note.css is imported by every skin', () => {
+  const IMPORT_LINE = '@import url("../base/stage-note.css");'
+
+  it('graphite imports stage-note.css', () => expect(graphiteIndexCss).toContain(IMPORT_LINE))
+  it('goga imports stage-note.css', () => expect(gogaIndexCss).toContain(IMPORT_LINE))
+  it('novacorps imports stage-note.css', () => expect(novacorpsIndexCss).toContain(IMPORT_LINE))
+  it('coffee imports stage-note.css', () => expect(coffeeIndexCss).toContain(IMPORT_LINE))
+
+  it('bounds the block height with its own scroll and gives the editor room on a narrow screen', () => {
+    expect(rule(stageNoteCss, '.stage-note-wrap')).toMatch(/max-height:\s*48%;[\s\S]*overflow-y:\s*auto/)
+    const narrow = stageNoteCss.slice(stageNoteCss.indexOf('@media (max-width: 600px)'))
+    expect(narrow).toMatch(/\.stage-note-wrap \{[^}]*max-height:\s*55%/)
+  })
+
+  it('takes every colour from semantic tokens', () => {
+    expect(stageNoteCss).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/)
+  })
 })
 
 // mesh.css (Agent Mesh Phase 7, T7.3's Team view) is a structural, skin-agnostic stylesheet, same posture as
@@ -385,6 +416,24 @@ describe('skins CSS contract — stage people panel', () => {
     expect(rule(layoutCss, '.workspace-header .stage-people-toggle')).toMatch(/display:\s*inline-flex/)
   })
 
+  it('on a phone puts the stage buttons under the title without a divider and keeps the actions on their row', () => {
+    const phone = layoutCss.slice(layoutCss.indexOf('@media (max-width: 600px)', layoutCss.indexOf('.workspace-header-actions')))
+    expect(phone).toMatch(/\.workspace-header:has\(\.stage-buttons\)\s*\{[^}]*display:\s*grid/)
+    expect(phone).toMatch(/\.workspace-header:has\(\.stage-buttons\) \.workspace-header-actions\s*\{[^}]*grid-row:\s*2/)
+    expect(phone).toMatch(/\n  \.stage-buttons\s*\{[^}]*grid-row:\s*2[^}]*border-inline-start:\s*0/)
+  })
+
+  it('on a phone gives the title of a header with stage buttons its natural width, not a percentage of its own grid column', () => {
+    const phone = layoutCss.slice(layoutCss.indexOf('@media (max-width: 600px)', layoutCss.indexOf('.workspace-header-actions')))
+    // A percentage max-width resolves against the auto column the title sits in and squeezes it to "Build …".
+    expect(phone).toMatch(/\.workspace-header:has\(\.stage-buttons\) \.workspace-title\s*\{[^}]*max-width:\s*none/)
+    expect(phone).toMatch(/\.workspace-header:has\(\.stage-buttons\)\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*max-content\)\s+auto\s+minmax\(0,\s*1fr\)\s+auto/)
+    // Buttons span title, status and the free column; the right-hand group stays in the last column.
+    expect(phone).toMatch(/\n  \.stage-buttons\s*\{[^}]*grid-column:\s*1 \/ 4/)
+    expect(phone).toMatch(/\.workspace-header:has\(\.stage-buttons\) \.attention-nav\s*\{[^}]*grid-column:\s*4/)
+    expect(phone).toMatch(/\.workspace-header:has\(\.stage-buttons\) \.workspace-header-actions\s*\{[^}]*grid-column:\s*4/)
+  })
+
   it('hides a closed panel only on a wide screen, as the exact complement of the drawer query', () => {
     const wideBlock = meshCss.match(/@media not all and \(max-width: 1180px\)\s*\{[^@]*?\n\}/)?.[0] ?? ''
     expect(wideBlock).toMatch(/\.stage-people:not\(\.open\)\s*\{[^}]*display:\s*none/)
@@ -581,14 +630,6 @@ describe('skins CSS contract — dense shell and stage rail', () => {
     expect(baseRules.every((r) => r.body.includes('var(--control-border)'))).toBe(true)
   })
 
-  it('keeps the stage kebab menu above the mobile rail drawer', () => {
-    const menuLayer = Number(rule(agentNoteModalCss, '.stage-kebab-menu').match(/z-index:\s*(\d+)/)?.[1])
-    const drawerRule = layoutCss.slice(layoutCss.indexOf('@media (max-width: 900px)'))
-    const drawerLayer = Number(rule(drawerRule, '.rail-slot').match(/z-index:\s*(\d+)/)?.[1])
-    expect(drawerLayer).toBeGreaterThan(0)
-    expect(menuLayer).toBeGreaterThan(drawerLayer)
-  })
-
   it('fades only the connection dot while offline, so the Offline text keeps its contrast', () => {
     expect(headerCss).toMatch(/\.gh-connection\.disconnected \.gh-connection-dot \{ animation: ghConnReconnect/)
     expect(headerCss).not.toMatch(/\.gh-connection\.disconnected \{ animation/)
@@ -625,10 +666,16 @@ describe('skins CSS contract — global typography', () => {
     '.workspace-tab-count',
     '.quota-badge',
     '.stage-cost',
+    '.stage-time',
     '.dot-num',
     '.metric-value',
     '.cost-table .cost-col-tokens,\n.cost-table .cost-col-cost',
     '.cost-figure dd',
+    '.cost-time-summary dd',
+    '.cost-table .cost-col-time',
+    '.cost-time-title > span',
+    '.cost-time-legend dd',
+    '.cost-time-waiting dd',
     '.cost-usage-row dd',
   ])
   const uiFiles: Array<[string, string]> = [
@@ -675,6 +722,52 @@ describe('skins CSS contract — shell parity (rail, header, tabs, stage header,
   it('shows every metric as a label over its value, without icons', () => {
     expect(rule(runMetricsCss, '.metric')).toMatch(/flex-direction:\s*column/)
     expect(runMetricsCss).not.toContain('.metric-icon')
+  })
+
+  // The hidden 260px tooltip, centred on the tile, is scrollable overflow even at opacity 0: it widened the page
+  // at 390px and again at 601-640px. Narrow widths anchor it to the tile's right edge instead of hiding it,
+  // so hover and keyboard focus still explain the tile.
+  describe('cost tooltip never widens the page', () => {
+    // Bodies of every `@media (max-width: Npx)` block, found by brace matching (blocks contain nested rules).
+    const maxWidthBlocks = (css: string) => {
+      const blocks: { px: number; body: string }[] = []
+      for (const m of css.matchAll(/@media \(max-width:\s*(\d+)px\)\s*\{/g)) {
+        let depth = 1
+        let i = m.index + m[0].length
+        const from = i
+        while (depth > 0 && i < css.length) {
+          depth += css[i] === '{' ? 1 : css[i] === '}' ? -1 : 0
+          i++
+        }
+        blocks.push({ px: Number(m[1]), body: css.slice(from, i - 1) })
+      }
+      return blocks
+    }
+    const tooltip = '.metric-cost[data-tooltip]::after'
+    const anchored = maxWidthBlocks(runMetricsCss).filter((b) => rule(b.body, tooltip) !== '')
+
+    it('right-anchors the tooltip in a block that covers the 601-640px band', () => {
+      expect(anchored.length).toBeGreaterThan(0)
+      for (const { px, body } of anchored) {
+        expect(px).toBeGreaterThanOrEqual(640)
+        const decls = rule(body, tooltip)
+        expect(decls).toMatch(/left:\s*auto/)
+        expect(decls).toMatch(/right:\s*0/)
+        expect(decls).toMatch(/transform:\s*none/)
+      }
+    })
+
+    it('bounds the tooltip width by the viewport', () => {
+      for (const { body } of anchored) expect(rule(body, tooltip)).toMatch(/max-width:[^;]*100vw/)
+    })
+
+    it('never hides the tooltip pseudo-element at any width', () => {
+      for (const { body } of maxWidthBlocks(runMetricsCss)) expect(rule(body, tooltip)).not.toMatch(/display:\s*none/)
+    })
+
+    it('still reveals the tooltip on hover and keyboard focus', () => {
+      expect(runMetricsCss).toMatch(/\.metric-cost\[data-tooltip\]:hover::after,\s*\.metric-cost\[data-tooltip\]:focus-visible::after \{\s*opacity:\s*1;\s*visibility:\s*visible;/)
+    })
   })
 
   it('draws workspace tabs as plain underline tabs with a square count badge and no glow', () => {
@@ -864,9 +957,9 @@ describe('skins CSS contract — scanner', () => {
     expect(scanCss('x.css', '/* only a comment */\n').problem).toMatch(/no declarations/)
   })
 
-  it('scans all 25 stylesheets, each balanced and with declarations', () => {
-    expect(Object.keys(SHIPPED_CSS)).toHaveLength(25)
-    expect(SCANNED).toHaveLength(25)
+  it('scans all 26 stylesheets, each balanced and with declarations', () => {
+    expect(Object.keys(SHIPPED_CSS)).toHaveLength(26)
+    expect(SCANNED).toHaveLength(26)
     expect(SCANNED.flatMap(({ problem }) => (problem === null ? [] : [problem]))).toEqual([])
   })
 })
@@ -1292,5 +1385,76 @@ describe('skins CSS contract — wide tables and images stay inside a line-comme
 
   it('the table does not become the containing block of the hanging numbers and icons', () => {
     expect(rulesFor('table').filter((d) => d.property === 'position').map(where)).toEqual([])
+  })
+})
+
+describe('skins CSS contract — stage time colours', () => {
+  const skinFiles = {
+    graphite: graphiteIndexCss,
+    goga: gogaIndexCss,
+    coffee: coffeeIndexCss,
+    novacorps: novacorpsIndexCss,
+  }
+  const modeBlock = (css: string, mode: 'dark' | 'light') =>
+    css.match(new RegExp(`:root\\[data-theme="${mode}"\\]\\s*\\{[\\s\\S]*?\\n\\}`))?.[0] ?? ''
+  // The value of a token in one block, following var(--other) aliases defined in the same block.
+  const resolve = (block: string, name: string): string => {
+    const raw = block.match(new RegExp(`${name}:\\s*([^;]+);`))?.[1]?.trim() ?? ''
+    const aliasName = raw.match(/^var\((--[\w-]+)\)$/)?.[1]
+    return aliasName === undefined ? raw.toLowerCase() : resolve(block, aliasName)
+  }
+
+  // CIE76 distance in Lab (sRGB, D65): enough to tell two share-bar segments apart.
+  const deltaE76 = (hexA: string, hexB: string): number => {
+    const lab = (hex: string): number[] => {
+      const linear = [1, 3, 5].map((i) => {
+        const c = parseInt(hex.slice(i, i + 2), 16) / 255
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+      })
+      const [r, g, b] = linear as [number, number, number]
+      const xyz = [
+        (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047,
+        0.2126 * r + 0.7152 * g + 0.0722 * b,
+        (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883,
+      ].map((t) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116)) as [number, number, number]
+      return [116 * xyz[1] - 16, 500 * (xyz[0] - xyz[1]), 200 * (xyz[1] - xyz[2])]
+    }
+    const [a, b] = [lab(hexA), lab(hexB)] as [number[], number[]]
+    return Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!)
+  }
+
+  it('the share bar and legend read the dedicated work, waiting and paused tokens', () => {
+    expect(costPanelCss).toMatch(/\.cost-time-segment\.work, \.cost-time-swatch\.work \{ background: var\(--cost-time-work\); \}/)
+    expect(costPanelCss).toMatch(/\.cost-time-segment\.waiting, \.cost-time-swatch\.waiting \{ background: var\(--cost-time-waiting\); \}/)
+    expect(costPanelCss).toMatch(/\.cost-time-segment\.paused, \.cost-time-swatch\.paused \{ background: var\(--cost-time-paused\); \}/)
+  })
+
+  for (const [skin, css] of Object.entries(skinFiles)) {
+    for (const mode of ['dark', 'light'] as const) {
+      it(`${skin} ${mode}: work, waiting and paused are defined and pairwise distinguishable`, () => {
+        const block = modeBlock(css, mode)
+        const work = resolve(block, '--cost-time-work')
+        const waiting = resolve(block, '--cost-time-waiting')
+        const paused = resolve(block, '--cost-time-paused')
+        for (const colour of [work, waiting, paused]) expect(colour).toMatch(/^#[0-9a-f]{6}$/)
+        expect(deltaE76(work, waiting)).toBeGreaterThanOrEqual(30)
+        expect(deltaE76(work, paused)).toBeGreaterThanOrEqual(30)
+        expect(deltaE76(waiting, paused)).toBeGreaterThanOrEqual(30)
+      })
+    }
+  }
+})
+
+describe('skins CSS contract — rail time column', () => {
+  it('.stage-time hangs on the right edge of the row, so every row ends its time at the same x', () => {
+    const time = rule(stagesListCss, '.stage-time')
+    expect(time).toMatch(/position:\s*absolute/)
+    expect(time).toMatch(/right:\s*8px/)
+    expect(rule(stagesListCss, '.stage-item')).toMatch(/position:\s*relative/)
+    expect(rule(stagesListCss, '.stage-actions')).not.toMatch(/min-width/)
+    // The containing block must be the row, not the button or its status line.
+    for (const selector of ['.stage-row', '.stage-label', '.stage-status-line']) {
+      expect(rule(stagesListCss, selector)).not.toMatch(/position:/)
+    }
   })
 })

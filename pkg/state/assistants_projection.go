@@ -515,7 +515,13 @@ type TaskHoldPayload struct {
 // record ever reaches the durable journal — a record that fails projection must never be written, or every
 // future replay of this run would fail forever.
 func applyControlToRunState(rs *RunState, c *Control) error {
-	return dispatchControl(rs, c, false)
+	if err := dispatchControl(rs, c, false); err != nil {
+		return err
+	}
+	// A control record can change a stage's time class without a transition (helper verdict, waiver). Not in
+	// dispatchControl: the dry-run validation calls it too.
+	rs.syncStageTiming(c.Time)
+	return nil
 }
 
 // validateControlForRunState reports whether applyControlToRunState would succeed for c against rs's

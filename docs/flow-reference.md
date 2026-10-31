@@ -82,7 +82,7 @@ stages:
 | `script_before_timeout` | no | Hard timeout for `script_before` (default `5m`) |
 | `script_after` | no | Shell script run right after the stage successfully completes |
 | `script_after_timeout` | no | Hard timeout for `script_after` (default `5m`) |
-| `buttons` | no | Named one-click prompts for the stage's live agent, shown in the dashboard kebab menu (see [Dashboard](dashboard.md)) |
+| `buttons` | no | Named one-click prompts for the stage's live agent, shown in the header of the selected stage, after its name and status (see [Dashboard](dashboard.md#stage-buttons)) |
 | `assistants` | no | Helper profiles to attach automatically when this stage starts execution. A profile name, an object, or a list of either; see [Declared helpers](#declared-helpers) |
 | `reflect` | no | An object `{ file, mode }` that opts the stage into [agent memory](agent-memory.md): `file` is the stage's own Markdown memory file (relative to `memory.path`), `mode` is `r`/`w`/`rw` (default `rw`). Requires the flow-level `memory:` block |
 | `memory_use` | no | Overrides the flow-level `memory.memory_use` for this stage (`true`/`false`; unset = inherit). Controls whether the stage **reads** [memory](agent-memory.md) |

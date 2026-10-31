@@ -178,6 +178,7 @@
    aria-describedby строки; .quota-sr — статичная подпись ожидания лимита (<time dateTime>), тикающий текст
    рядом помечен aria-hidden. */
 .stage-cost-sr,
+.stage-time-sr,
 .quota-sr {
   position: absolute;
   width: 1px;
@@ -268,7 +269,7 @@
   50%      { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0); }
 }
 
-/* === Trailing slot: badges + kebab === */
+/* === Trailing slot: badges and helper-branch toggle === */
 .stage-actions {
   display: inline-flex;
   align-items: center;
@@ -417,3 +418,9 @@
   55%  { opacity: 1; transform: scale(1.2); }
   100% { opacity: 1; transform: scale(1); }
 }
+
+/* Time and status share the line. */
+.stage-status-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.stage-status-line .stage-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Time hangs on the row's right edge, at the same inset as .stage-actions: an even column that takes no width from the status. */
+.stage-time { position: absolute; right: 8px; color: var(--text-muted); font: 10px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }

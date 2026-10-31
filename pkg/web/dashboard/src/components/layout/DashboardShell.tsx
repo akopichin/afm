@@ -57,20 +57,17 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
     return () => document.removeEventListener('keydown', onKey)
   }, [railOpen])
 
-  // Открытая шторка перекрывает воркспейс: Tab и Shift+Tab ходят по кругу внутри неё. Меню кебаба вынесено
-  // в body и держит Tab само (StagesList), сюда его события не доходят.
+  // Открытая шторка перекрывает воркспейс: Tab и Shift+Tab ходят по кругу внутри неё.
   function onRailKeyDown(e: KeyboardEvent<HTMLElement>): void {
     if (railOpen && isMobile && railRef.current !== null) trapTab(e, railRef.current)
   }
 
-  // Клик по строке стадии (или строке помощника, T3.9) внутри шторки = выбор сделан → закрываем её. Клик по
-  // кебабу/его меню, или по развернуть-свернуть ветки помощников (.assistant-toggle — живёт и на самой
-  // стадии, и на любом узле-помощнике с детьми), НЕ закрывает — иначе открытое меню или ветка схлопнулись бы
-  // вместе со шторкой.
+  // Клик по строке стадии (или строке помощника) внутри шторки = выбор сделан → закрываем её. Клик по
+  // развернуть-свернуть ветки помощников (.assistant-toggle — живёт и на самой стадии, и на любом узле-помощнике
+  // с детьми) НЕ закрывает — иначе ветка схлопнулась бы вместе со шторкой.
   function onRailClickCapture(e: MouseEvent<HTMLElement>): void {
     if (!railOpen) return
     const target = e.target as HTMLElement
-    if (target.closest('.stage-kebab-wrap') !== null) return
     if (target.closest('.assistant-toggle') !== null) return
     if (target.closest('[data-stage-id]') !== null || target.closest('[data-task-id]') !== null) {
       setRailOpen(false)

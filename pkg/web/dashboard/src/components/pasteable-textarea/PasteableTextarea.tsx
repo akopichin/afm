@@ -230,7 +230,7 @@ function AttachMenu({
     [],
   )
 
-  // Закрытие меню кликом вне / по Escape (тот же приём, что и у кебаба стадии).
+  // Закрытие меню кликом вне / по Escape.
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => {

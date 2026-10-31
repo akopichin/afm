@@ -83,9 +83,10 @@ export async function triggerStageButton(stageId: string, name: string): Promise
 }
 
 // setStageNote прикрепляет заметку к ещё не стартовавшей стадии — доедет до агента в контексте при старте.
-// В отличие от reviseStage не трогает FSM: стадия остаётся pending.
+// В отличие от reviseStage не трогает FSM: стадия остаётся pending. Ошибка — FlowApiError: UI различает 400 и 409 по
+// статусу (тело ответа — plain text).
 export async function setStageNote(stageId: string, note: string): Promise<void> {
-  await postJson(stageUrl(stageId, 'note'), { note })
+  await jsonRequest(stageUrl(stageId, 'note'), 'POST', { note })
 }
 
 export async function retryStage(stageId: string): Promise<void> {

@@ -3,6 +3,37 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-10-31
+
+### Fix: Run elapsed after a crash stops at the last log record
+
+A run that died without a clean shutdown now counts its elapsed time up to the last
+record in the event log, and the figure is the same after every reload and on
+`afm check`. The time until you resumed the run is no longer added. See
+[Dashboard](docs/dashboard.md#stage-time).
+
+### Improvement: stage time in the rail and the Cost tab
+
+Each started stage shows its time in the stage rail, and the **Cost** tab has a
+**Time** column, a run summary and a per-stage breakdown into working, waiting and
+paused time. With accounting off the tab shows time only, as **Stage time**. See
+[Dashboard](docs/dashboard.md#stage-time).
+
+### Improvement: Stage note above the Feed
+
+A note for a stage that has not started now lives in a **Stage note** block above
+its Feed, with **Add note**, **Edit note**, **Save note**, **Cancel** and **Remove
+note**. An unsaved draft survives switching stages, and after the start the note
+stays visible as read only. See [Dashboard](docs/dashboard.md#stage-note).
+
+### Improvement: stage buttons moved to the stage header, kebab menu removed
+
+Buttons declared with `buttons:` now sit in the header of the selected stage after
+its name and status. The per-stage kebab (⋮) menu is gone: **Pause**, **Continue**
+and **Retry** are in the header, and **Attach helper** is in the People panel (or
+in the header when there is no People panel). See
+[Dashboard](docs/dashboard.md#stage-buttons).
+
 ## 2026-10-30
 
 ### Fix: the Feed follows new events again after a tool call series is collapsed

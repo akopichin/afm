@@ -47,10 +47,7 @@ async function refreshStatus() {
 const composer = () => screen.getByRole('combobox', { name: 'Message the mesh' }) as HTMLTextAreaElement
 const tab = (name: string | RegExp) => within(screen.getByRole('tablist', { name: 'Workspace' })).getByRole('tab', { name })
 const header = () => within(document.querySelector('.workspace-header') as HTMLElement)
-function kebabPause() {
-  fireEvent.click(within(document.querySelector('[data-stage-id="s1"]') as HTMLElement).getByRole('button', { name: 'More actions' }))
-  fireEvent.click(within(document.querySelector('.stage-kebab-menu') as HTMLElement).getByRole('button', { name: 'Pause' }))
-}
+const headerPause = () => fireEvent.click(header().getByRole('button', { name: 'Pause' }))
 function paste(node: HTMLElement) {
   fireEvent.paste(node, { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => new File(['x'], 'shot.png', { type: 'image/png' }) }] } })
 }
@@ -249,31 +246,31 @@ it.each([
   expect(header().getByRole('button', { name: feedAction })).toBeEnabled()
 })
 
-it.each(['header', 'kebab'] as const)('shares Pause between header and kebab with %s first, until a new episode', async (first) => {
+it('locks header Pause after a click until a new episode arrives, and the rail offers no second Pause', async () => {
   const state = setup()
   let finish!: () => void
   const pause = vi.spyOn(api, 'pauseStage').mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve })).mockResolvedValue(undefined)
   await act(async () => { render(<App />) })
-  const clickHeader = () => fireEvent.click(header().getByRole('button', { name: 'Pause' }))
-  if (first === 'header') { clickHeader(); kebabPause() }
-  else { kebabPause(); clickHeader() }
+  expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull()
+  headerPause()
+  headerPause()
   expect(pause).toHaveBeenCalledTimes(1)
   expect(header().getByRole('button', { name: 'Pause' })).toBeDisabled()
   await act(async () => finish())
   await refreshStatus()
   expect(header().getByRole('button', { name: 'Pause' })).toBeDisabled()
-  kebabPause()
+  headerPause()
   expect(pause).toHaveBeenCalledTimes(1)
   state.updatedAt = '2026-10-29T10:01:00Z'
   await refreshStatus()
   expect(header().getByRole('button', { name: 'Pause' })).toBeEnabled()
-  kebabPause()
+  headerPause()
   await act(async () => {})
   expect(pause).toHaveBeenCalledTimes(2)
   expect(header().getByRole('button', { name: 'Pause' })).toBeDisabled()
 })
 
-it('keeps header and kebab Pause behind Hold ownership before the paused status poll', async () => {
+it('keeps header Pause behind Hold ownership before the paused status poll', async () => {
   const state = setup()
   localStorage.setItem('afm.pauseOnFocus', 'true')
   let finish!: () => void
@@ -283,13 +280,12 @@ it('keeps header and kebab Pause behind Hold ownership before the paused status 
   fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
   fireEvent.focus(screen.getByPlaceholderText('Describe what the agent should change…'))
   expect(header().getByRole('button', { name: 'Pause' })).toBeDisabled()
-  kebabPause()
+  headerPause()
   expect(pause).toHaveBeenCalledTimes(1)
   await act(async () => finish())
   expect(document.querySelector('#detail-status')).toHaveAttribute('data-status', 'running')
   expect(header().getByRole('button', { name: 'Pause' })).toBeDisabled()
-  fireEvent.click(header().getByRole('button', { name: 'Pause' }))
-  kebabPause()
+  headerPause()
   expect(pause).toHaveBeenCalledTimes(1)
   state.status = 'paused'
   await refreshStatus()

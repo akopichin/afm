@@ -15,6 +15,7 @@
 @import url("../base/cost-panel.css");
 @import url("../base/markdown.css");
 @import url("../base/agent-note-modal.css");
+@import url("../base/stage-note.css");
 @import url("../base/pasteable-textarea.css");
 @import url("../base/file-browser.css");
 @import url("../base/review-banner.css");
@@ -96,6 +97,10 @@
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
+  /* Stage time bar: work, waiting and paused must differ in hue — --accent-primary and --attention share one colour in most skins. */
+  --cost-time-work:    #5f78ff;
+  --cost-time-waiting: #f2b84b;
+  --cost-time-paused:  #97a1b4;
 }
 
 :root[data-theme="light"] {
@@ -176,6 +181,9 @@
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
+  --cost-time-work:    #4d63d7;
+  --cost-time-waiting: #9c5a06;
+  --cost-time-paused:  #5a6577;
 }
 
 /* Override base fills with graphite RGB tokens; place rules after imports so the theme wins the cascade. */

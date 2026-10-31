@@ -59,8 +59,8 @@ running → awaiting_quota → running
   the stage is blocked until you hit **Retry** or **Skip** on the dashboard (a
   `script_after` failure never uses this status — the stage stays `done`)
 - `paused` — waiting for you to hit **Continue** on the dashboard: either gated by
-  `auto_run: false` on first activation, or manually paused mid-run via the kebab (⋮)
-  menu. A usage limit also pauses the stage when the provider reports quota
+  `auto_run: false` on first activation, or manually paused mid-run with **Pause** in the
+  stage header. A usage limit also pauses the stage when the provider reports quota
   exhaustion with no reset, its reset exceeds `usage_limit.max_wait`, or
   consecutive refusals without progress exceed `usage_limit.max_waits`.
   Continue makes one immediate attempt;

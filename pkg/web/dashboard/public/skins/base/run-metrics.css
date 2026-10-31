@@ -208,3 +208,14 @@ button.metric:hover .metric-value { color: var(--accent-text); }
   }
   .metrics-popover { max-width: calc(100vw - 24px); }
 }
+
+/* The hidden tooltip, centred on the tile, still counts as page overflow up to ~640px wide. Anchor it to the
+   tile's right edge instead; 72px leaves room for the tile's right-hand neighbours so its left edge stays on screen. */
+@media (max-width: 700px) {
+  .metric-cost[data-tooltip]::after {
+    left: auto;
+    right: 0;
+    transform: none;
+    max-width: min(260px, calc(100vw - 72px));
+  }
+}

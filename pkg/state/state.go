@@ -89,6 +89,8 @@ func AllStatuses() []StageStatus {
 type StageState struct {
 	Status    StageStatus `json:"status"`
 	UpdatedAt time.Time   `json:"updated_at"`
+	// Timing is the stage's time ledger (stage_timing.go), derived from the journal like the rest of the state.
+	Timing StageTiming `json:"timing,omitzero"`
 	// PausedFrom хранит исходный статус паузы и навсегда остаётся маркером пройденного pause-цикла для
 	// auto_run:false.
 	PausedFrom StageStatus `json:"paused_from,omitempty"`
@@ -278,6 +280,10 @@ type RunState struct {
 	// touched by any of this. len(DynamicStages)+1 IS the runtime registry's current revision — the two can
 	// never drift apart because stage_graph_added is the ONLY way either one changes.
 	DynamicStages []DynamicStageAdded `json:"dynamic_stages,omitempty"`
+
+	// lastRecordAt is the time of the latest journal record of any kind: the point up to which a process that
+	// died without a terminal run event is known to have lived (crash boundary of Run elapsed and stage time).
+	lastRecordAt time.Time
 }
 
 // noteJournalRecord makes the time of the journal's first record — control or transition alike — the run's
@@ -381,18 +387,20 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 	if event == runEventStarted {
 		if rs.EndedAt == nil {
 			// A previous process disappeared without a terminal event. Its exact exit time is unknowable; count
-			// only up to its last durable stage transition, excluding the offline gap before this resume.
+			// only up to its last durable record, excluding the offline gap before this resume.
 			previousStart := rs.RunStartedAt
 			if previousStart.IsZero() {
 				previousStart = rs.StartedAt // run created before run events existed
 			}
-			if last := maxUpdatedAt(rs.Stages); !previousStart.IsZero() && last.After(previousStart) {
+			if last := rs.lastRecordAt; !previousStart.IsZero() && last.After(previousStart) {
 				rs.ElapsedAccumulatedMs += last.Sub(previousStart).Milliseconds()
 			}
+			rs.closeStageTimingAt(rs.lastRecordAt)
 		}
 		rs.RunStatus = RunStatusRunning
 		rs.EndedAt = nil
 		rs.RunStartedAt = t
+		rs.syncStageTiming(t)
 		return
 	}
 	if rs.EndedAt == nil {
@@ -413,6 +421,7 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 		}
 	}
 	rs.EndedAt = &t
+	rs.syncStageTiming(t)
 	switch event {
 	case runEventFinished:
 		rs.RunStatus = RunStatusFinished
@@ -429,6 +438,8 @@ func applyRunEvent(rs *RunState, event string, t time.Time) {
 // timers before the change, the new status, then the stage_status waits the new status resolves.
 func (rs *RunState) applyTransition(t *Transition) {
 	accountIdleAndBackoff(rs, t.StageID, t.To, t.Time)
+	rs.markStageStarted(t)
+	defer rs.syncStageTiming(t.Time) // after both exits below have written the stage
 	prev := rs.Stages[t.StageID]
 	rs.SetStageStatusAt(t.StageID, t.To, t.Time)
 	st := rs.Stages[t.StageID]

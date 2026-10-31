@@ -147,3 +147,66 @@ it('deduplicates Retry clicks through success until a new failed episode arrives
   expect(retry).toHaveBeenCalledTimes(2)
   await act(async () => finish())
 })
+
+describe('WorkspaceHeader stage buttons', () => {
+  const buttons = ['Run linter', 'Rebuild']
+
+  it('renders the configured buttons in YAML order in a labelled group right after the status', () => {
+    const { container } = render(<WorkspaceHeader stage={stage({ status: 'running', buttons })} connected />)
+    const group = screen.getByRole('group', { name: 'Stage buttons' })
+    expect(Array.from(group.querySelectorAll('button')).map((b) => b.textContent)).toEqual(buttons)
+    expect(container.querySelector('.status-badge-wrap')?.nextElementSibling).toBe(group)
+  })
+
+  it('is hidden for a helper selection, a script, empty buttons and every non-live status', () => {
+    const { rerender } = render(<WorkspaceHeader stage={stage({ status: 'running', buttons })} connected showStageButtons={false} />)
+    expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
+    rerender(<WorkspaceHeader stage={stage({ status: 'running', buttons, isScript: true })} connected />)
+    expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
+    rerender(<WorkspaceHeader stage={stage({ status: 'running', buttons: [] })} connected />)
+    expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
+    for (const status of ['pending', 'ready', 'planning', 'revising', 'retrying', 'awaiting_user_input', 'awaiting_peer', 'awaiting_quota', 'paused', 'failed', 'hook_failed', 'done'] as const) {
+      rerender(<WorkspaceHeader stage={stage({ status, buttons })} connected />)
+      expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
+    }
+  })
+
+  it('stays visible in the Approval view, where the lifecycle controls are hidden', () => {
+    render(<WorkspaceHeader stage={stage({ status: 'awaiting_approval', buttons })} connected showControls={false} />)
+    expect(screen.getByRole('group', { name: 'Stage buttons' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
+  })
+
+  it('sends only the label to the existing button API and locks the stage action until a new episode', async () => {
+    const api = await import('../../api/run-client')
+    const trigger = vi.spyOn(api, 'triggerStageButton').mockResolvedValue(undefined)
+    const running = stage({ status: 'running', buttons })
+    const { rerender } = render(<WorkspaceHeader stage={running} connected />)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rebuild' })) })
+    expect(trigger).toHaveBeenCalledTimes(1)
+    expect(trigger).toHaveBeenCalledWith('s1', 'Rebuild')
+    expect(screen.getByRole('button', { name: 'Run linter' })).toBeDisabled()
+    rerender(<WorkspaceHeader stage={{ ...running, updatedAt: '2026-10-29T10:05:00Z' }} connected />)
+    expect(screen.getByRole('button', { name: 'Run linter' })).toBeEnabled()
+  })
+
+  it('is disabled while status is stale or controls are blocked (flow pause, pause-on-focus)', () => {
+    const running = stage({ status: 'running', buttons })
+    const { rerender } = render(<WorkspaceHeader stage={running} connected statusAvailable={false} />)
+    expect(screen.getByRole('button', { name: 'Run linter' })).toBeDisabled()
+    rerender(<WorkspaceHeader stage={running} connected controlsEnabled={false} />)
+    expect(screen.getByRole('button', { name: 'Run linter' })).toBeDisabled()
+    rerender(<WorkspaceHeader stage={running} connected />)
+    expect(screen.getByRole('button', { name: 'Run linter' })).toBeEnabled()
+  })
+
+  it('shows a rejected button request as an alert and stays retryable, even in the Approval view', async () => {
+    const api = await import('../../api/run-client')
+    const trigger = vi.spyOn(api, 'triggerStageButton').mockRejectedValue(new Error('Button refused'))
+    render(<WorkspaceHeader stage={stage({ status: 'awaiting_approval', buttons })} connected showControls={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Run linter' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Button refused')
+    expect(screen.getByRole('button', { name: 'Run linter' })).toBeEnabled()
+    expect(trigger).toHaveBeenCalledOnce()
+  })
+})

@@ -111,7 +111,7 @@ time. A helper task can show the same wait in its task row. Times in the panel
 use the afm host's time zone, as described under [Message times](#message-times).
 
 The stage resumes automatically when its wait expires. To try sooner, use
-**Pause** in the stage's kebab (⋮) menu, then **Continue** in its panel. Continue
+**Pause** in the stage header, then **Continue**. Continue
 makes one immediate attempt with a fresh session; if the provider still refuses,
 the stage waits again. A provider quota with no reset, a reset beyond
 `usage_limit.max_wait`, or too many consecutive refusals instead shows a paused
@@ -372,14 +372,58 @@ All of them honor
 `prefers-reduced-motion`: if your system requests reduced motion, they collapse to
 effectively instant.
 
+## Stage time
+
+Every stage that has started shows how long it has been going.
+
+- **Stage rail** — a time under each stage name, such as `3m 05s` or
+  `1h 02m 03s`. A stage that has not started shows `—`; a started stage that has
+  spent no time yet shows `0s`. The figure for an active stage ticks every second.
+- **Cost tab** — a **Time** column with the same figures, plus a summary of
+  **Run elapsed**, **Stage work**, **Stage waiting** and **Stage paused**.
+  Expand a row to see its **Time breakdown**.
+
+Time is counted from the stage's **first start** and includes retries, waiting and
+pauses. Time before the first start (waiting for dependencies, a run that has not
+reached the stage yet) is not counted. It stops when the stage is `done` or
+`failed`, or when the run ends. **Retry** on a failed stage counts the time it
+spends waiting to be scheduled again, and the earlier time stays.
+
+The breakdown splits the time into three groups:
+
+| Group | Statuses |
+|---|---|
+| **Working** | `planning`, `running`, `revising` |
+| **Waiting** | **Approval & replies** — `awaiting_approval`, `awaiting_user_input`, `hook_failed`, and `awaiting_assistants` when a required helper task needs your decision; **Helpers & colleagues** — `awaiting_peer`, and `awaiting_assistants` while a helper is still working; **Backoff & usage limits** — `retrying`, `awaiting_quota`; **Scheduling** — a started stage that is `pending` or `ready` again (shown only when above zero) |
+| **Paused** | `paused` |
+
+The figures come from the server and are derived from the
+[event log](internals/event-log.md), so a reload, a resumed run and `afm check`
+agree. The dashboard adds the running part of the current interval and rounds
+each group down to whole seconds, so the groups always add up to the total. While
+the dashboard cannot reach `/api/status` (for example when the connection is
+lost), the figures stop instead of running ahead of the server and catch up when
+the connection returns.
+
+**Run elapsed** is the duration of the run (the same figure as **Elapsed** in the
+header). **Stage total** — the sum of stage times — can exceed it when stages run
+in parallel. After a crash the stage times and **Run elapsed** both stop at the
+last record in the log, so the gap until you resumed is not counted. Older
+runs are supported: their logs are replayed like any other. Only a stage whose
+start the log cannot place — it started before the first `run_started` record, or
+its history exists only in a migrated `state.json` — has an unknown time. Such a
+stage shows `—` and **Incomplete time** in the Cost tab, and it is left out of the
+totals, which then say so.
+
 ## Cost tracking
 
 The dashboard surfaces the run's **estimated** cost in three places:
 
 - an **Est. cost** tile in the header (the run total; an amber marker flags a coverage
   gap or that the accounting writer went unavailable),
-- a **Cost** tab — the same per-stage / run-overhead / total table as `afm report`,
-  each row expandable into a token-mix breakdown,
+- a **Cost** tab — the same per-stage / run-overhead / total table as `afm report`
+  with a [**Time**](#stage-time) column, each row expandable into its time breakdown
+  and a token-mix breakdown,
 - a quiet per-stage figure in the stage rail once a stage has a priced record — while
   an active stage's first estimate is still pending, a small spinner sits in its place.
 
@@ -387,6 +431,10 @@ All three are a **list-price estimate**, not an invoice. To hide them entirely, 
 `accounting: { enabled: false }` (or `AFM_ACCOUNTING=0`) — cost is still collected
 into `usage.jsonl`, just not displayed. See [Cost accounting](accounting.md) for the
 full model (token semantics, `pricing:` overrides, coverage, and the display switch).
+
+With accounting off, or on a run with no usage data, the **Cost** tab is still
+available as **Stage time**: the same summary and **Time** column without the token
+and cost columns. The rail keeps showing stage time.
 
 ## Inline plan comments
 
@@ -596,6 +644,9 @@ resizing still works, but the width is not retained.
   to every stage); **Attach helper to stage…** opens the stage's **Attach
   helper** dialog (a helper that works for this stage's agent). The second is
   shown only while the stage can take a helper.
+- Where there is no People panel (for example in `assistants` mode, or with
+  collaboration on but no Agent Mesh), the stage header has an **Attach helper…**
+  button instead, shown under the same condition. It opens the same dialog.
 
 On a wide screen the panel is open by default next to the Feed. Click **People**
 in the stage header, or **×** in the panel, to hide it; the Feed and composer then
@@ -681,14 +732,15 @@ untouched.
 At the `awaiting_approval` checkpoint you redirect the stage a different way — with
 line comments and "Send revision" (see [Inline plan comments](#inline-plan-comments) above).
 
-> An earlier version offered "Add a note for the agent" in the stage's kebab (⋮)
-> menu; that item was replaced by this Feed composer. The kebab still hosts stage
-> buttons, **Pause**, and the pre-note item for `pending` stages. **Pause** is
-> offered while a stage is `planning`, `running` (not for a running script),
-> `revising`, `retrying`, `awaiting_peer` (parked waiting for a colleague's
-> reply); **Continue** returns a paused `awaiting_peer` stage to its wait, and it
-> goes on by itself if the wait was answered meanwhile. It is also offered for
-> `awaiting_quota` (parked for a provider usage limit).
+> An earlier version offered "Add a note for the agent" in a per-stage menu; that
+> item was replaced by this Feed composer, and the menu itself is gone. **Pause**
+> and **Continue** are icon buttons in the stage header, **Retry** appears there
+> for a failed stage, and [stage buttons](#stage-buttons) follow the stage name.
+> **Pause** is offered while a stage is `planning`, `running` (not for a running
+> script), `revising`, `retrying`, `awaiting_peer` (parked waiting for a
+> colleague's reply) or `awaiting_quota` (parked for a provider usage limit);
+> **Continue** returns a paused `awaiting_peer` stage to its wait, and it goes on
+> by itself if the wait was answered meanwhile.
 
 A message whose post the server refuses — for example because someone you named
 can no longer read it — keeps its draft and shows the server's reason under the
@@ -720,7 +772,7 @@ rule keep the feed from fetching off-origin URLs.
 ## Stage buttons
 
 A stage can declare named one-click actions in `flow.yaml`. Each button carries a
-canned prompt; clicking it in the kebab (⋮) menu delivers that prompt to the stage's
+canned prompt; clicking it in the stage header delivers that prompt to the stage's
 live agent — the same graceful-revise path as a Feed note, but reusable with a single
 click.
 
@@ -732,16 +784,35 @@ stages:
       Rebuild:    "Rebuild the project from scratch and make sure tests pass"
 ```
 
-Menu order matches declaration order. Available while the stage is
-`running`/`awaiting_approval` (not on `script:` stages).
+The buttons sit in the header of the selected stage, right after its name and
+status; their order matches declaration order. They are available while the stage
+is `running` or `awaiting_approval` (not on `script:` stages) and are hidden while
+the workspace shows a helper's branch instead of the stage itself. On a narrow
+screen they wrap under the name.
 
-## Adding a note before a stage starts (pre-note)
+## Stage note
 
-You can attach a note to a `pending` stage that hasn't started yet. It's spliced into
-the agent's context on its **first** start, as part of the original task (unlike a
-note to a running stage, which restarts an already-running agent). Use "Add note
-(before start)" in the kebab menu of a pending stage; a 📝 indicator marks a stage
-that has one.
+You can attach a note to a stage that hasn't started yet (`pending`, not a
+`script:` stage). A **Stage note** block appears above the Feed of such a stage.
+Its text is spliced into the agent's context on the stage's **first** start, as
+part of the original task (unlike a note to a running stage, which restarts an
+already-running agent).
+
+- **Add note** (or **Edit note**) opens an editor. **Save note** stores the text,
+  **Cancel** returns to the saved text, and **Remove note** deletes it. The editor
+  accepts pasted images and `@` file references like the Feed composer.
+- **Cmd/Ctrl+Enter** saves and **Esc** cancels. Plain **Enter** adds a line,
+  unlike in message fields. The text is shown as written, without markdown
+  formatting.
+- An unsaved draft is kept when you switch to another stage and back, until you
+  reload the page.
+- The stage rail marks a stage that has a note with a 📝 icon.
+
+Once the stage starts, the block stays above the Feed as **Read only**, so you can
+check what the agent was given. If it starts while you are editing, the editor
+turns read only, keeps your draft and offers **Discard draft**; the note is not
+saved. If the stage starts at the very moment you save, the dashboard warns that
+the agent may not have received the note.
 
 ## File comments (Docker mode)
 
@@ -847,7 +918,7 @@ only gates the stage's very first activation — once it's been through a pause/
 cycle, later retries (e.g. after a `failed`) run normally without pausing again.
 
 You can also pause any `running`/`planning`/`revising`/`retrying` stage mid-flight
-from the kebab (⋮) menu — the same "Pause" action, just triggered manually. The agent
+with **Pause** in the stage header — the same action, just triggered manually. The agent
 gets a graceful interrupt (SIGINT), and Continue resumes it exactly where
 recovery-on-restart would (`--resume` for agents that support it). Script-only stages
 (`script:`) can only be paused via `auto_run: false`, before they start.

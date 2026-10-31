@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type { Stage, StageQuota } from '../../types'
 import type { AccountingState, CostSummary } from '../../types/cost'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import type { AssistantTask } from '../../types/assistant-task'
 import { StagesList } from './StagesList'
+import { stageTimes } from '../../lib/stage-timing'
 
 function makeTask(overrides: Partial<AssistantTask> = {}): AssistantTask {
   return {
@@ -57,6 +58,11 @@ const ACCOUNTING_OK: AccountingState = { supported: true, health: 'ok', hasData:
 const ACCOUNTING_OK_NO_MONEY: AccountingState = { supported: true, health: 'ok', hasData: true, showMoney: false }
 const ACCOUNTING_UNAVAILABLE: AccountingState = { supported: true, health: 'unavailable', hasData: true, showMoney: true }
 const ACCOUNTING_UNSUPPORTED: AccountingState = { supported: false }
+
+const railStage: Stage = {
+  id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false,
+  hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [],
+}
 
 describe('StagesList', () => {
   test('renders rail progress (done / total) when progress props are given', () => {
@@ -181,24 +187,47 @@ describe('StagesList', () => {
     expect(item.querySelector('.dialog-badge')).not.toBeInTheDocument()
   })
 
-  // Регресс: .stage-item — грид из 3 колонок. Чиним, группируя бейджи+кебаб в единый слот .stage-actions,
-  // чтобы у грида всегда было ровно 3 in-flow ребёнка.
-  test('badge and kebab share one .stage-actions slot (grid does not overflow)', () => {
-    // awaiting_approval с кастомной кнопкой: есть и approval-бейдж, и кебаб. Без кнопок у
-    // awaiting_approval кебаба нет — заметка живому агенту ушла в поле ленты, а Pause к нему неприменим.
+  // .stage-item — грид из 3 колонок: все бейджи живут в одном слоте .stage-actions рядом с кнопкой строки.
+  test('badges share one .stage-actions slot beside the row button (grid does not overflow)', () => {
     const stages: Stage[] = [
-      { id: 's1', name: 'Plan', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
+      { ...railStage, id: 's1', name: 'Plan', status: 'awaiting_approval', preNote: 'keep it small' },
     ]
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
     const item = screen.getByRole('listitem')
     const actions = item.querySelector('.stage-actions')
-    expect(actions).toBeInTheDocument()
     expect(actions?.parentElement).toBe(item)
-    // и бейдж, и кебаб живут внутри общего слота — не отдельными детьми грида
     expect(actions?.querySelector('.approval-badge')).toBeInTheDocument()
-    expect(actions?.querySelector('.stage-kebab')).toBeInTheDocument()
+    expect(actions?.querySelector('.prenote-badge')).toBeInTheDocument()
+  })
+
+  test('the rail has no kebab or stage actions: no "More actions" button and no menu for any status', () => {
+    const statuses: Stage['status'][] = ['pending', 'planning', 'running', 'awaiting_approval', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota', 'paused', 'failed', 'done']
+    const stages: Stage[] = statuses.map((status) => ({ ...railStage, id: status, status, buttons: ['Run linter'], preNote: 'note' }))
+    const { container } = render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+
+    expect(screen.queryByRole('button', { name: /more actions/i })).toBeNull()
+    expect(container.querySelector('.stage-kebab, .stage-kebab-wrap, .stage-kebab-menu')).toBeNull()
+    expect(screen.queryByText('Run linter')).toBeNull()
+    expect(screen.queryByText('Pause')).toBeNull()
+    expect(screen.queryByText(/Attach helper/)).toBeNull()
+  })
+
+  test('a stage with a note shows a labelled indicator outside the row button; the row name does not change', () => {
+    const noted: Stage = { ...railStage, id: 'a', name: 'Build', status: 'pending', preNote: 'mind the limits' }
+    const { container, rerender } = render(<StagesList stages={[noted]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+
+    const indicator = screen.getByRole('img', { name: 'Stage note attached' })
+    expect(indicator).toHaveAttribute('title', 'Stage note attached · select stage to read')
+    expect(indicator.closest('.stage-actions')).not.toBeNull()
+    expect(indicator.closest('.stage-row')).toBeNull()
+    const rowName = screen.getByRole('button', { name: /Build/ }).textContent
+
+    rerender(<StagesList stages={[{ ...noted, preNote: '' }]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
+    expect(screen.queryByRole('img', { name: 'Stage note attached' })).toBeNull()
+    expect(container.querySelector('.prenote-badge')).toBeNull()
+    expect(screen.getByRole('button', { name: /Build/ }).textContent).toBe(rowName)
   })
 
   test('does not mark running stage with attention', () => {
@@ -233,273 +262,6 @@ describe('StagesList', () => {
     expect(row.querySelector('.stage-name')).toHaveTextContent('Build the checkout')
     expect(row.querySelector('.stage-status')).toHaveTextContent('Running')
     expect(row).not.toHaveTextContent('impl')
-  })
-
-  test('kebab shows for a pausable running stage; a bare awaiting_approval (no buttons) and a done stage have none', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      { id: 'b', name: '', status: 'done', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      // awaiting_approval без кнопок: пункт «Add note for agent» убран (заметка — в поле ленты), Pause к
-      // нему неприменим, pre-note только для pending → кебаба нет вовсе.
-      { id: 'c', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-    expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(1) // только a (pausable)
-  })
-
-  test('shows the kebab for planning/revising/retrying too, not just running/awaiting_approval', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'planning', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      { id: 'b', name: '', status: 'revising', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      { id: 'c', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-    expect(screen.getAllByRole('button', { name: /more actions/i })).toHaveLength(3)
-  })
-
-  test('Pause menu item calls onPause; a running script stage shows no kebab at all (Pause is its only possible item, and it is gated out)', () => {
-    const onPause = vi.fn()
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-      { id: 'b', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} accounting={{ supported: false }} />)
-
-    const buttons = screen.getAllByRole('button', { name: /more actions/i })
-    expect(buttons).toHaveLength(1) // только stage a — у running-СКРИПТА (b) кебаба нет (пустое меню)
-    fireEvent.click(buttons[0]!) // stage a: regular running stage
-    expect(screen.getByText('Pause')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('Pause'))
-    expect(onPause).toHaveBeenCalledWith('a')
-  })
-
-  test('a stage parked waiting for a colleague (awaiting_peer) can be paused from the menu', () => {
-    const onPause = vi.fn()
-    const stages: Stage[] = [
-      { id: 'p', name: '', status: 'awaiting_peer', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: false, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={onPause} accounting={{ supported: false }} />)
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(screen.getByText('Pause'))
-    expect(onPause).toHaveBeenCalledWith('p')
-  })
-
-  test('the kebab no longer offers "Add note for agent" on a running stage — that moved to the feed composer', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={vi.fn()} accounting={{ supported: false }} />)
-    // Кебаб у running-стадии есть (через Pause), но пункта заметки в нём нет.
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.queryByText('Add note for agent')).not.toBeInTheDocument()
-    expect(screen.getByText('Pause')).toBeInTheDocument()
-  })
-
-  test('pre-note: pending non-script stage shows the "Add note (before start)" item, calling onEditPreNote', () => {
-    const onEditPreNote = vi.fn()
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={onEditPreNote} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(screen.getByText('Add note (before start)'))
-    expect(onEditPreNote).toHaveBeenCalledWith('a')
-  })
-
-  test('pre-note: item label becomes "Edit note" and a 📝 badge shows when a note is attached', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: 'учти лимиты', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={vi.fn()} accounting={{ supported: false }} />)
-
-    expect(screen.getByTitle('Note attached for agent')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Edit note (before start)')).toBeInTheDocument()
-  })
-
-  test('no kebab for a running SCRIPT stage — every menu item is gated out, so an empty ⋮ must not show', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
-  })
-
-  test('pre-note: no kebab at all for a pending SCRIPT stage (no agent to note)', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onEditPreNote={vi.fn()} accounting={{ supported: false }} />)
-    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
-  })
-
-  test('CRITICAL: kebab menu portals to document.body so the scrollable .stages-scroll cannot clip it', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-
-    const menuItem = screen.getByText('Pause')
-    const menu = menuItem.closest('ul')
-    expect(menu).not.toBeNull()
-    // .stages-scroll has overflow-y: auto — any descendant that opens
-    // below the visible viewport gets clipped. The menu must live outside it.
-    expect(document.getElementById('stages-panel')?.contains(menu)).toBe(false)
-    expect(document.body.contains(menu)).toBe(true)
-  })
-
-  test('keyboard: opening the kebab menu moves focus into it, Tab wraps inside, Escape closes it and returns focus to the kebab', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} onPause={vi.fn()} accounting={{ supported: false }} />)
-    const kebab = screen.getByRole('button', { name: /more actions/i })
-
-    fireEvent.click(kebab)
-    const items = Array.from(document.querySelectorAll<HTMLElement>('.stage-kebab-menu button'))
-    const first = items[0] as HTMLElement
-    const last = items[items.length - 1] as HTMLElement
-    expect(items.length).toBeGreaterThan(1)
-    expect(document.activeElement).toBe(first)
-
-    last.focus()
-    fireEvent.keyDown(last, { key: 'Tab' })
-    expect(document.activeElement).toBe(first)
-    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(last)
-
-    fireEvent.keyDown(last, { key: 'Escape' })
-    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
-    expect(document.activeElement).toBe(kebab)
-  })
-
-  test('clicking outside the open kebab menu closes it', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Pause')).toBeInTheDocument()
-
-    fireEvent.mouseDown(document.body)
-    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
-  })
-
-  test('closing the menu by scroll or by clicking an inert area returns focus to the kebab, so Tab stays in the rail', async () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onPause={vi.fn()} accounting={{ supported: false }} />)
-    const kebab = screen.getByRole('button', { name: /more actions/i })
-
-    fireEvent.click(kebab)
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Pause' }))
-    fireEvent.scroll(document.querySelector('.stages-scroll')!)
-    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
-    expect(document.activeElement).toBe(kebab)
-
-    // Браузер после mousedown на нефокусируемой области роняет фокус на body.
-    fireEvent.click(kebab)
-    fireEvent.mouseDown(document.body)
-    ;(document.activeElement as HTMLElement).blur()
-    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
-    await waitFor(() => expect(document.activeElement).toBe(kebab))
-  })
-
-  test('scrolling the stages scroller closes the open kebab menu (the menu is anchored to a button inside it)', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Pause')).toBeInTheDocument()
-
-    fireEvent.scroll(document.querySelector('.stages-scroll')!)
-    expect(screen.queryByText('Pause')).not.toBeInTheDocument()
-  })
-
-  // Регресс: раньше меню слушало скролл на window с capture:true и закрывалось от ЛЮБОГО скролла в
-  // документе — в т.ч. Скролл постороннего контейнера НЕ должен закрывать меню.
-  test('scrolling an unrelated container (e.g. the event feed auto-scroll) does NOT close the open kebab menu', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.getByText('Pause')).toBeInTheDocument()
-
-    // Отдельный скролл-контейнер вне #stages-panel — модель ленты событий.
-    const feed = document.createElement('div')
-    document.body.appendChild(feed)
-    fireEvent.scroll(feed)
-
-    expect(screen.getByText('Pause')).toBeInTheDocument()
-  })
-
-  test('custom buttons: renders one menu item per button in declared order', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Zebra', 'Apple'] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    const labels = screen.getAllByRole('button').map((b) => b.textContent)
-    // Порядок объявления сохраняется: Zebra перед Apple.
-    expect(labels).toContain('Zebra')
-    expect(labels).toContain('Apple')
-    expect(labels.indexOf('Zebra')).toBeLessThan(labels.indexOf('Apple'))
-  })
-
-  test('custom buttons: clicking one calls onButton with the label and closes the menu', () => {
-    const onButton = vi.fn()
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'awaiting_approval', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={onButton} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    fireEvent.click(screen.getByText('Run linter'))
-    expect(onButton).toHaveBeenCalledWith('a', 'Run linter')
-    // Меню закрылось после клика (тот же паттерн, что у остальных пунктов).
-    expect(screen.queryByText('Run linter')).not.toBeInTheDocument()
-  })
-
-  test('custom buttons: gated by status — hidden on a running SCRIPT stage (no agent)', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: true, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
-
-    // running СКРИПТ: add-note/buttons/pre-note/pause — все отфильтрованы, поэтому
-    // кебаба нет вовсе (а значит и кнопки в нём).
-    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument()
-    expect(screen.queryByText('Run linter')).not.toBeInTheDocument()
-  })
-
-  test('custom buttons: gated by status — not shown on a retrying stage (only running/awaiting_approval)', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'retrying', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: ['Run linter'] },
-    ]
-    render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.queryByText('Run linter')).not.toBeInTheDocument()
-  })
-
-  test('custom buttons: sub-block and divider absent when buttons is empty', () => {
-    const stages: Stage[] = [
-      { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
-    ]
-    const { baseElement } = render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} onButton={vi.fn()} accounting={{ supported: false }} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(baseElement.querySelector('.stage-kebab-buttons')).toBeNull()
   })
 
   test('переход стадии в done навешивает one-shot класс just-done', async () => {
@@ -634,7 +396,7 @@ describe('StagesList', () => {
     const row = screen.getByRole('button', { name: /^a/ })
     const describedBy = row.getAttribute('aria-describedby')
     expect(describedBy).not.toBeNull()
-    expect(document.getElementById(describedBy!)).toHaveTextContent('Estimated cost $2.00, partial pricing coverage')
+    expect(row).toHaveAccessibleDescription('Stage time — Estimated cost $2.00, partial pricing coverage')
   })
 
   test('rail cost: coverage none renders "Estimated cost unavailable" as the accessible description', () => {
@@ -646,16 +408,16 @@ describe('StagesList', () => {
     const row = screen.getByRole('button', { name: /^a/ })
     const describedBy = row.getAttribute('aria-describedby')
     expect(describedBy).not.toBeNull()
-    expect(document.getElementById(describedBy!)).toHaveTextContent('Estimated cost unavailable')
+    expect(row).toHaveAccessibleDescription('Stage time — Estimated cost unavailable')
   })
 
-  test('rail cost: an empty rail (no cost figure) leaves the stage row without aria-describedby', () => {
+  test('rail cost: a row without cost keeps only its time description', () => {
     const stages: Stage[] = [
       { id: 'a', name: '', status: 'pending', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
 
-    expect(screen.getByRole('button', { name: /^a/ })).not.toHaveAttribute('aria-describedby')
+    expect(screen.getByRole('button', { name: /^a/ })).toHaveAccessibleDescription('Stage time —')
   })
 
   // --- Version footer (pinned bottom-left of the rail) ---
@@ -787,23 +549,6 @@ describe('StagesList', () => {
         <StagesList stages={[running]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
       )
       expect(container.querySelector('.verify-badge[data-phase="running"]')).not.toBeNull()
-    })
-
-    test('pause/kebab actions remain available on a stage with a verify badge', () => {
-      const running: Stage = { ...stage, status: 'running', verify: { step: 1, command: 'codex', phase: 'running' } }
-      const onPause = vi.fn()
-      render(
-        <StagesList
-          stages={[running]}
-          selectedStageId={null}
-          onSelect={() => {}}
-          onPause={onPause}
-          accounting={ACCOUNTING_OK}
-        />,
-      )
-      fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
-      fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
-      expect(onPause).toHaveBeenCalledWith('a')
     })
   })
 
@@ -1015,15 +760,6 @@ describe('StagesList — usage-limit wait (awaiting_quota)', () => {
     expect(container.querySelector('.quota-badge')).toBeNull()
   })
 
-  test('Pause is offered while waiting (and Continue is not a rail action)', () => {
-    const onPause = vi.fn()
-    render(<StagesList stages={[waiting]} selectedStageId={null} onSelect={() => {}} onPause={onPause} accounting={{ supported: false }} />)
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    expect(screen.queryByText('Continue')).toBeNull()
-    fireEvent.click(screen.getByText('Pause'))
-    expect(onPause).toHaveBeenCalledWith('a')
-  })
-
   test('a helper queued on a usage-limit park reads "Usage limit" (label, title and amber dot), not "Queued"', () => {
     const helper = makeTask({ id: 'h1', title: 'Reviewer', status: 'queued', quota })
     const { container } = render(
@@ -1061,4 +797,22 @@ describe('StagesList: кнопка «Add stage» зависит от capability 
     fireEvent.click(screen.getByRole('button', { name: 'Add stage' }))
     expect(onAddStage).toHaveBeenCalledTimes(1)
   })
+})
+
+
+test('stage time shares the status line, distinguishes pending from zero and stays out of the button name', () => {
+  const stages: Stage[] = [
+    { ...railStage, id: 'pending', name: 'Pending stage', status: 'pending', timing: { started: false, complete: true } },
+    { ...railStage, id: 'zero', name: 'Started stage', timing: { started: true, complete: true, ms: { work: 0, approval: 0, helpers: 0, backoff: 0, scheduling: 0, paused: 0 } } },
+  ]
+  render(<StagesList stages={stages} times={stageTimes(stages, 0, false)} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} />)
+  const pending = screen.getByRole('button', { name: 'Pending stage Pending' })
+  const started = screen.getByRole('button', { name: 'Started stage Running' })
+  expect(pending.querySelector('.stage-time')).toHaveTextContent('—')
+  expect(pending).toHaveAccessibleDescription('Stage time —')
+  expect(started.querySelector('.stage-time')).toHaveTextContent('0s')
+  expect(started.querySelector('.stage-status')?.parentElement).toBe(started.querySelector('.stage-time')?.parentElement)
+  expect(started.querySelector('.stage-time')).toHaveAttribute('aria-hidden', 'true')
+  expect(started).toHaveAccessibleDescription('Stage time 0s')
+  expect(started.querySelector('[aria-live]')).toBeNull()
 })

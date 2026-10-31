@@ -15,6 +15,7 @@
 @import url("../base/cost-panel.css");
 @import url("../base/markdown.css");
 @import url("../base/agent-note-modal.css");
+@import url("../base/stage-note.css");
 @import url("../base/pasteable-textarea.css");
 @import url("../base/file-browser.css");
 @import url("../base/review-banner.css");
@@ -57,7 +58,7 @@
   --dialog-option-text:     #d4baff;
   --btn-cancel-dialog-text: #ff8a7a;
 
-  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
+  /* overlay scrim (модалки, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
      одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
   /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
@@ -73,6 +74,10 @@
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
+  /* Stage time bar: work, waiting and paused must differ in hue — --accent-primary and --attention share one colour in most skins. */
+  --cost-time-work:    #3882f6;
+  --cost-time-waiting: #f2b84b;
+  --cost-time-paused:  #a0aec0;
 }
 
 :root[data-theme="light"] {
@@ -109,7 +114,7 @@
   --dialog-option-text:     #2157cf;
   --btn-cancel-dialog-text: #b91c1c;
 
-  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
+  /* overlay scrim (модалки, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
   --overlay-scrim-rgb: 0, 0, 0;
   /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
@@ -125,6 +130,9 @@
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
+  --cost-time-work:    #2563eb;
+  --cost-time-waiting: #b45309;
+  --cost-time-paused:  #566478;
 }
 
 /* === goga-специфика поверх base === Base-партиалы импортированы выше — эти правила автоматически

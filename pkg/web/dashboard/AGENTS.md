@@ -21,6 +21,12 @@
   Image upload тоже защищён generation выбранной стадии.
 - Таймеры используют server accumulator + anchor. Тик зависит от свежести
   `/api/status`, не WebSocket; при stale-ответе замирает, terminal фиксирует число.
+- Время стадий вычисляется один раз в App общими `useStageClock`/`stageTimes`;
+  rail и Cost получают один результат. Cost использует тот же Run elapsed, что шапка.
+  Нет `timing` — время неизвестно при любом статусе: факт старта по статусу не
+  выводится, Retry возвращает стадию в pending/ready.
+- Слот `aboveFeed` (Stage note) FeedWorkspace рендерит внутри фрагмента: его `key` — id стадии, как и у композера
+  (`noteTarget`); совпавшие ключи среди детей `section` оставляют осиротевший DOM заметки с живыми обработчиками.
 - Общие textarea/Markdown/rendering-хелперы сохраняют единое поведение вложений,
   submit и экранирования. Исходник файла не передаётся Markdown-renderer;
   подсветка использует безопасный общий highlighter.

@@ -12,8 +12,10 @@
 @import url("../base/plan-panel.css");
 @import url("../base/dialog-channel.css");
 @import url("../base/feed-workspace.css");
+@import url("../base/cost-panel.css");
 @import url("../base/markdown.css");
 @import url("../base/agent-note-modal.css");
+@import url("../base/stage-note.css");
 @import url("../base/pasteable-textarea.css");
 @import url("../base/file-browser.css");
 @import url("../base/review-banner.css");
@@ -44,7 +46,7 @@
   --dialog-option-text:     #c2d6a6;
   --btn-cancel-dialog-text: #ff8a5a;
 
-  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
+  /* overlay scrim (модалки, agent-note-modal.css) — RGB-триплет, чёрная затемняющая вуаль,
      одинаковая во всех темах/скинах (не тонируется под палитру, как --bg) */
   --overlay-scrim-rgb: 0, 0, 0;
   /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
@@ -60,6 +62,10 @@
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
+  /* Stage time bar: work, waiting and paused must differ in hue — --accent-primary and --attention share one colour in most skins. */
+  --cost-time-work:    #ff9a34;
+  --cost-time-waiting: #a6c188;
+  --cost-time-paused:  #857c73;
 }
 
 :root[data-theme="light"] {
@@ -86,7 +92,7 @@
   --dialog-option-text:     #465e2c;
   --btn-cancel-dialog-text: #b23a1a;
 
-  /* overlay scrim (модалка/тень кебаб-меню, agent-note-modal.css) — та же
+  /* overlay scrim (модалки, agent-note-modal.css) — та же
      чёрная вуаль, что и в тёмной теме (сознательно не меняется на светлой) */
   --overlay-scrim-rgb: 0, 0, 0;
   /* Tint triplets equal the tones above: rgba(var(--*-rgb), a) washes follow the palette (palette-contrast.test.ts). */
@@ -102,6 +108,9 @@
   /* legacy aliases */
   --text:     var(--ink);
   --text-dim: var(--ink-dim);
+  --cost-time-work:    #8a5614;
+  --cost-time-waiting: #4f6e30;
+  --cost-time-paused:  #8c847d;
 }
 
 /* === coffee-специфика поверх base === Захардкоженные в base neon-заливки перекрашиваем под кофейную

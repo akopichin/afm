@@ -1,76 +1,7 @@
-/* pkg/web/dashboard/public/skins/base/agent-note-modal.css Модалка «Добавить поправку агенту»: кебаб-меню
-   в StagesList + центрированная модалка поверх всего. */
+/* pkg/web/dashboard/skins/base/agent-note-modal.css Общие стили центрированных модалок поверх всего
+   (overlay, content, actions, attention-shortcut). */
 
-/* === Кебаб-кнопка на строке стадии === */
-.stage-kebab-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.stage-kebab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  border-radius: var(--radius-sm);
-  transition: color 0.12s ease, background 0.12s ease;
-}
-.stage-kebab:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
-}
-.stage-kebab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-
-/* position: fixed + top/left вычисляются в JS и рендерятся порталом в document.body — .stages-scroll
-   скроллится и обрезал бы абсолютно спозиционированное меню. */
-.stage-kebab-menu {
-  list-style: none;
-  min-width: 200px;
-  background: var(--surface-overlay);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-overlay);
-  /* Выше мобильной шторки рейла (.rail-slot, z-index 50), иначе меню открывается под ней. */
-  z-index: 60;
-  padding: 6px;
-}
-
-.stage-kebab-menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: 13.5px;
-  letter-spacing: 0;
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  transition: color 0.12s ease, background 0.12s ease;
-}
-.stage-kebab-menu button:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
-}
-
-/* Разделитель между «Add note for agent» и сабблоком кастомных кнопок стадии
-   (flow.yaml). Показывается только когда у стадии реально объявлены кнопки. */
-.stage-kebab-divider {
-  height: 1px;
-  margin: 6px 8px;
-  background: var(--separator-subtle);
-}
-
-/* === Модалка «Добавить поправку агенту» === */
+/* === Центрированная модалка === */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -93,7 +24,7 @@
 }
 
 /* Attention shortcut row inside a modal: a glowing pill that closes the modal and jumps to the waiting
-   action, so a pending question/approval is never lost behind AgentNote/ReviewNotes. */
+   action, so a pending question/approval is never lost behind a modal. */
 .modal-attention-row {
   display: flex;
   justify-content: flex-end;
@@ -126,33 +57,6 @@
 @keyframes modalAttnPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(var(--attention-rgb), 0.35); }
   50%      { box-shadow: 0 0 0 4px rgba(var(--attention-rgb), 0); }
-}
-
-.agent-note-warning {
-  color: var(--attention-text);
-  font-size: 13px;
-  line-height: 1.55;
-  margin-bottom: 14px;
-}
-
-.agent-note-textarea {
-  width: 100%;
-  background: var(--surface-canvas);
-  color: var(--text-primary);
-  border: 1px solid var(--separator-subtle);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
-  resize: vertical;
-  margin-bottom: 16px;
-  min-height: 72px;
-  overflow-y: auto;
-}
-.agent-note-textarea:focus {
-  outline: none;
-  border-color: var(--accent-primary);
 }
 
 .modal-actions {

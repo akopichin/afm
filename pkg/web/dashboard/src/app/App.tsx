@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { cancelNotes, continueStage, pauseStage, reviseStage, setStageNote, triggerStageButton } from '../api/run-client'
+import { cancelNotes, continueStage, pauseStage, reviseStage } from '../api/run-client'
 import { GlobalHeader } from '../components/global-header'
 import { StagesList, canAttachHelper } from '../components/stages-list'
 import { AssistantTaskView, AttachHelperDialog, AddStageDialog } from '../components/assistants'
@@ -7,7 +7,7 @@ import { StagePeoplePanel, STAGE_PEOPLE_ID, STAGE_PEOPLE_DRAWER_QUERY, TeamView 
 import { BoardLoadState } from '../components/team/BoardLoadState'
 import { BoardView } from '../components/team/BoardView'
 import { teamStagesOf } from '../components/team/RunTeamList'
-import { AgentNoteModal } from '../components/agent-note-modal'
+import { StageNote } from '../components/stage-note'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
@@ -18,7 +18,7 @@ import { CostPanel } from '../components/cost-panel'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
-import { createStageActions, sendStageAction, StageActionsContext } from '../hooks/use-stage-retry'
+import { createStageActions, StageActionsContext } from '../hooks/use-stage-retry'
 import { CommentProvider } from '../components/comments/CommentProvider'
 import { CommentRecipientsContext } from '../components/comments/comment-recipients'
 import { FileBrowserProvider } from '../components/file-browser'
@@ -42,6 +42,8 @@ import { useEventFeed } from '../hooks/use-event-feed'
 import { useStageEvents } from '../hooks/use-stage-events'
 import { useRunEpoch } from '../hooks/use-run-epoch'
 import { useElapsed } from '../hooks/use-elapsed'
+import { useStageClock } from '../hooks/use-stage-clock'
+import { hasOpenTiming, stageTimes } from '../lib/stage-timing'
 import { useIdleMs } from '../hooks/use-idle-ms'
 import { useBackoffMs } from '../hooks/use-backoff-ms'
 import { anyAwaiting } from '../hooks/use-attention'
@@ -98,39 +100,12 @@ export function App(): ReactElement {
   // Модалка ревью-раунда — открывается по клику ReviewBanner's "Send notes".
   const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
-  // Стадия, для которой открыта модалка pre-note; null — модалка скрыта.
-  const [preNoteModalStageId, setPreNoteModalStageId] = useState<string | null>(null)
   const [attachHelperStageId, setAttachHelperStageId] = useState<string | null>(null)
   const [addStageOpen, setAddStageOpen] = useState(false)
-
-  async function handleSubmitPreNote(note: string): Promise<void> {
-    if (preNoteModalStageId === null) return
-    try {
-      await setStageNote(preNoteModalStageId, note)
-      setPreNoteModalStageId(null)
-    } catch (err) {
-      // Как handleSubmitNote: не закрываем молча — оставляем модалку открытой с введённым текстом, чтобы
-      // пользователь мог повторить (стадия могла уже стартовать, либо сеть отвалилась).
-      console.error('Failed to save pre-note:', err)
-    }
-  }
 
   // «Pause on focus» — при включённом toggle фокус поля заметки ставит running- стадию на паузу, а
   // отправка сперва снимает паузу, затем доставляет заметку.
   const pauseOnFocus = usePauseOnFocus({ pauseStage, continueStage, reviseStage, runEpoch })
-
-  function handlePause(stageId: string): void {
-    const stage = stages.find((candidate) => candidate.id === stageId)
-    if (stage === undefined || pauseOnFocus.hasActiveOp(stageId)) return
-    void sendStageAction(stageActions, stage, pauseStage)
-  }
-
-  function handleButton(stageId: string, name: string): void {
-    // Fire-immediately, без модалки: StagesList закрывает кебаб синхронно ДО вызова onButton.
-    triggerStageButton(stageId, name).catch((err: unknown) => {
-      console.error('Failed to trigger stage button:', err)
-    })
-  }
 
   const reviewNoteCount = useReviewNoteCount(flowPauseState === 'paused')
 
@@ -165,7 +140,7 @@ export function App(): ReactElement {
     setOpenDialogs(openDialogsRef.current)
   }, [])
   const dialogOpenNow = useCallback(() => openDialogsRef.current > 0, [])
-  const otherModalsOpen = filesOpen || preNoteModalStageId !== null || reviewModalOpen || attachHelperStageId !== null || addStageOpen || openDialogs > 0
+  const otherModalsOpen = filesOpen || reviewModalOpen || attachHelperStageId !== null || addStageOpen || openDialogs > 0
   const anyModalOpen = otherModalsOpen || sideAgentOpen
   // selfOwnedActive — у какой-то стадии есть незавершённая «Pause on focus»-операция.
   const selfOwnedActive = stages.some((s) => pauseOnFocus.shouldSuppressAttention(s.id))
@@ -269,8 +244,7 @@ export function App(): ReactElement {
   // the rest; empty list when the capability is off (no network calls).
   const assistantProfiles = useAssistantProfiles(capabilities.collaboration)
 
-  // Защита: если collaboration выключена на бэкенде, а вид застрял на 'assistant' — уводим в Feed (тот же
-  // паттерн, что и у accounting/'cost' ниже).
+  // If collaboration is disabled, a previously selected helper view returns to Feed.
   useEffect(() => {
     if (!capabilities.collaboration && wsState.view === 'assistant') openFeed()
   }, [capabilities.collaboration, wsState.view])
@@ -317,10 +291,6 @@ export function App(): ReactElement {
     document.querySelector<HTMLElement>('.workspace-tabs [data-tab-id="cost"]')?.focus()
     setCostFocusPending(false)
   }, [costFocusPending, wsState.view])
-  // Защита: если accounting выключён на бэкенде, а вид застрял на 'cost' — уводим в Feed.
-  useEffect(() => {
-    if (!accounting.supported && wsState.view === 'cost') openFeed()
-  }, [accounting.supported, wsState.view])
 
   // Стадия, о которой сейчас говорит воркспейс: в attention-режиме — активный элемент очереди; иначе —
   // выбранная в рейле стадия.
@@ -444,6 +414,17 @@ export function App(): ReactElement {
     // Text is rendered locally; saving it must not repaint the feed on every keystroke.
     if (Object.keys(patch).some((key) => !['revise', 'message', 'replyMessage'].includes(key))) refreshComposerDrafts((n) => n + 1)
   }, [runEpoch, draftPreviews])
+  // stageNoteDrafts — each stage's unsaved Stage note text for this page session. Separate from the composer drafts:
+  // it is another input with another destination. A new run starts without them. Typing only writes the ref.
+  const stageNoteDrafts = useRef({ runEpoch, drafts: new Map<string, string>() })
+  if (stageNoteDrafts.current.runEpoch !== runEpoch) stageNoteDrafts.current = { runEpoch, drafts: new Map() }
+  const updateStageNoteDraft = useCallback((stageId: string, text: string | null) => {
+    if (stageNoteDrafts.current.runEpoch !== runEpoch) return
+    const drafts = new Map(stageNoteDrafts.current.drafts)
+    if (text === null) drafts.delete(stageId)
+    else drafts.set(stageId, text)
+    stageNoteDrafts.current = { runEpoch, drafts }
+  }, [runEpoch])
   const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   const meshSideFailures = useMemo(() => (stageMesh ? sideAgentFailures(events) : NO_DELIVERIES), [stageMesh, events])
   // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
@@ -461,6 +442,9 @@ export function App(): ReactElement {
   // showPeople — the stage Feed shows who this stage can talk to.
   const showPeople = stageMesh && collaborationMode === 'team' && workspaceStage !== null && wsState.view === 'feed'
 
+  const stageNowMs = useStageClock(statusAvailable && runAlive && hasOpenTiming(stages))
+  // A stale status freezes the clock, preserving the last displayed open interval in both views.
+  const times = stageTimes(stages, stageNowMs, runAlive)
   const statusLive = statusAvailable
   const elapsedMs = useElapsed(startedAt, endedAt, statusLive, elapsedAccumulatedMs, elapsedSince)
   const idleMs = useIdleMs(idleAccumulatedMs, idleSince, statusLive)
@@ -566,9 +550,7 @@ export function App(): ReactElement {
     tabs.push({ id: 'team', label: 'Team' }, { id: 'board', label: 'Board' })
   }
   // Cost всегда последней — после detail/beacon, а не второй вкладкой сразу после Feed.
-  if (accounting.supported) {
-    tabs.push({ id: 'cost', label: 'Cost' })
-  }
+  tabs.push({ id: 'cost', label: 'Cost' })
   const activeTabId = wsState.view === 'feed' ? 'feed' : wsState.view === 'cost' ? 'cost' : wsState.view === 'team' ? 'team' : wsState.view === 'board' ? 'board' : 'detail'
   function onSelectTab(id: string): void {
     if (id === 'feed') { openFeed(); return }
@@ -669,11 +651,9 @@ export function App(): ReactElement {
             rail={
               <StagesList
                 stages={stages}
+                times={times}
                 selectedStageId={workspaceStageId}
                 onSelect={handleSelectStage}
-                onEditPreNote={setPreNoteModalStageId}
-                onPause={handlePause}
-                onButton={handleButton}
                 progressDone={stages.filter((s) => s.status === 'done').length}
                 progressTotal={stages.length}
                 accounting={accounting}
@@ -681,8 +661,6 @@ export function App(): ReactElement {
                 assistants={assistantsByStage}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={handleSelectAssistantTask}
-                collaborationEnabled={capabilities.collaboration}
-                onAttachHelper={setAttachHelperStageId}
                 canAddStage={capabilities.addStage}
                 onAddStage={() => setAddStageOpen(true)}
                 statusAvailable={statusAvailable}
@@ -730,6 +708,7 @@ export function App(): ReactElement {
                     connected={connected}
                     statusAvailable={statusAvailable}
                     showControls={wsState.view === 'feed' && selection?.kind === 'stage'}
+                    showStageButtons={selection?.kind === 'stage'}
                     controlsEnabled={flowPauseState === 'none' && (!pauseOnFocus.hasActiveOp(workspaceStage.id) || (workspaceStage.status === 'paused' && pauseOnFocus.isOwned(workspaceStage.id)))}
                     onContinue={heldContinue}
                     replyNeeded={wsState.view === 'feed' && feedReplies.stageId === workspaceStage.id ? feedReplies.count : 0}
@@ -754,6 +733,11 @@ export function App(): ReactElement {
                           </svg>
                           <span>People</span>
                         </button>
+                      ) : canAttachHelper(workspaceStage, capabilities.collaboration) ? (
+                        // Без People-панели (assistants, collaboration без mesh) это единственное место прикрепить helper.
+                        <button type="button" className="workspace-action" onClick={() => setAttachHelperStageId(workspaceStage.id)}>
+                          Attach helper…
+                        </button>
                       ) : undefined
                     }
                   />
@@ -761,6 +745,8 @@ export function App(): ReactElement {
                 {wsState.view === 'cost' ? (
                   <CostPanel
                     stages={stages}
+                    times={times}
+                    elapsedMs={elapsedMs}
                     runCost={runCost}
                     runOverheadCost={runOverheadCost}
                     coverageIssues={coverageIssues}
@@ -813,6 +799,17 @@ export function App(): ReactElement {
                       reviseAvailable={reviseAvailable}
                       paused={workspaceStage?.status === 'paused' || flowPauseState !== 'none'}
                       onReplyNeededChange={reportFeedReplies}
+                      aboveFeed={
+                        wsState.view === 'feed' && selection?.kind === 'stage' && workspaceStage !== null ? (
+                          <StageNote
+                            key={workspaceStage.id}
+                            stage={workspaceStage}
+                            initialDraft={stageNoteDrafts.current.drafts.get(workspaceStage.id)}
+                            onDraftChange={updateStageNoteDraft}
+                            onChanged={refresh}
+                          />
+                        ) : undefined
+                      }
                     />
                     {showPeople && workspaceStage !== null && (
                       <StagePeoplePanel
@@ -909,17 +906,6 @@ export function App(): ReactElement {
           />
         </MaximizeProvider>
       </main>
-
-      {preNoteModalStageId !== null && (
-        <AgentNoteModal
-          stageId={preNoteModalStageId}
-          variant="prenote"
-          initialNote={stages.find((s) => s.id === preNoteModalStageId)?.preNote ?? ''}
-          onCancel={() => setPreNoteModalStageId(null)}
-          onSubmit={handleSubmitPreNote}
-          attentionShortcut={attentionShortcut}
-        />
-      )}
 
       {reviewModalOpen && (
         <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} attentionShortcut={attentionShortcut} />

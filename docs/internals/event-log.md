@@ -28,6 +28,17 @@ This is what makes long runs reliable:
   of any kind — a stage transition, a run event or a control record such as the
   board task protocol marker — so a live run, a resumed run and `afm check` all
   report the same start.
+- **Stage time is derived, not stored.** The per-stage time shown by the
+  [dashboard](../dashboard.md#stage-time) adds no event type. It is a projection
+  of the same records: every record of any kind (a transition, a control record or
+  a run event) closes the interval a stage was in and opens the next one, at the
+  record's own time, rounded the same way live and on replay so both give identical
+  figures. A resumed run does not count the gap between runs. After a crash (a log
+  with no terminal run event) **Run elapsed** and the stage intervals stop at the
+  last record written before the next start. A stage that started before the log had run events, or that was restored from a
+  migrated `state.json`, has no recorded past, so it is reported as incomplete
+  rather than as `0s`. An offline CLI transition made on a crashed run
+  is also a record, so it moves that boundary.
 - **Unique run ids.** `<run-name>-<timestamp>-<rand4hex>`, where `<run-name>` is
   the `--worktree` name when supplied and the flow name otherwise. The random suffix
   avoids collisions even within the same second.

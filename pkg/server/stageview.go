@@ -52,6 +52,60 @@ type StageView struct {
 	// Quota — usage-limit wait: only while the stage is awaiting_quota or paused out of such a wait (an unwaitable
 	// limit or a manual Pause), the same after a restart because it is read from the journal state.
 	Quota *QuotaView `json:"quota,omitempty"`
+	// Timing is the stage's time ledger; it does not depend on accounting.
+	Timing *StageTimingView `json:"timing,omitempty"`
+}
+
+// StageTimingView is the client form of state.StageTiming. The sums are present only for a started stage with
+// complete data (Complete); Open is the stored open interval, the client adds its live part.
+type StageTimingView struct {
+	Started  bool `json:"started"`
+	Complete bool `json:"complete"`
+	*StageTimeSums
+	Open *StageTimeOpen `json:"open,omitempty"`
+}
+
+// StageTimeSums are the closed intervals per kind in milliseconds; zeros are kept to tell "0" from "unknown".
+type StageTimeSums struct {
+	WorkMs       int64 `json:"work_ms"`
+	ApprovalMs   int64 `json:"approval_ms"`
+	HelpersMs    int64 `json:"helpers_ms"`
+	BackoffMs    int64 `json:"backoff_ms"`
+	SchedulingMs int64 `json:"scheduling_ms"`
+	PausedMs     int64 `json:"paused_ms"`
+}
+
+// StageTimeOpen is the interval still running since Since (RFC3339 UTC).
+type StageTimeOpen struct {
+	Kind  string    `json:"kind"`
+	Since time.Time `json:"since"`
+}
+
+// newStageTimingView projects the ledger without reclassifying: a stage is never "open" unless the journal state
+// stored an open interval for it.
+func newStageTimingView(tm state.StageTiming) *StageTimingView {
+	switch {
+	case !tm.Started:
+		return &StageTimingView{Complete: true}
+	case tm.Incomplete:
+		return &StageTimingView{Started: true}
+	}
+	view := &StageTimingView{
+		Started:  true,
+		Complete: true,
+		StageTimeSums: &StageTimeSums{
+			WorkMs:       tm.WorkMs,
+			ApprovalMs:   tm.ApprovalMs,
+			HelpersMs:    tm.HelpersMs,
+			BackoffMs:    tm.BackoffMs,
+			SchedulingMs: tm.SchedulingMs,
+			PausedMs:     tm.PausedMs,
+		},
+	}
+	if tm.OpenKind != state.TimeNone {
+		view.Open = &StageTimeOpen{Kind: string(tm.OpenKind), Since: tm.OpenSince.UTC()}
+	}
+	return view
 }
 
 // QuotaView is the small shared dashboard view of a usage-limit wait — the stage's (StageView.quota) and a parked
@@ -148,6 +202,7 @@ func buildStageViews(rs state.RunState, runDir string, stages map[string]StageCo
 			Verify:                    verifyByStage[id],
 			AwaitingAssistantsBlocked: awaitingAssistantsBlocked,
 			Quota:                     NewQuotaView(orchestrator.StageQuota(st)),
+			Timing:                    newStageTimingView(st.Timing),
 		})
 	}
 	return views

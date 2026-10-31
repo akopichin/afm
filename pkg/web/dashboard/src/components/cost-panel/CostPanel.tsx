@@ -1,30 +1,26 @@
 import { Fragment, useId, useState, type ReactElement } from 'react'
 import type { Stage } from '../../types'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
+import { formatStageDuration, type StageTimes, type StageTimeView } from '../../lib/stage-timing'
 import { summarizeCoverageGroups } from './coverage-summary'
 
 export type CostPanelProps = {
-  // stages — полный список стадий флоу; панель сама отбирает только те, у которых есть cost.
   stages: Stage[]
+  times: StageTimes
+  elapsedMs: number
   runCost?: CostSummary
   runOverheadCost?: CostSummary
   coverageIssues: CoverageIssue[]
   accounting: AccountingState
 }
 
-// RowKey — дискриминированный ключ раскрываемой строки: стадия ИЛИ run-overhead.
-type RowKey = { kind: 'stage'; id: string } | { kind: 'overhead' }
-
-function rowKeyToString(key: RowKey): string {
-  return key.kind === 'stage' ? `stage:${key.id}` : 'overhead'
-}
-
-type CostRow = { key: RowKey; label: string; cost: CostSummary }
-
-// hasAccountingData — единственное место, где считается, «есть ли вообще данные учёта затрат» (см. round-6
-// #2 спеки: has_data == len>0 на бэкенде).
-function hasAccountingData(accounting: AccountingState): boolean {
-  return accounting.supported && accounting.hasData
+type CostRow = {
+  key: string
+  label: string
+  cost?: CostSummary
+  time: StageTimeView | null
+  incomplete: boolean
+  overhead?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -35,89 +31,65 @@ function formatCacheHit(ratio: number | null): string {
   return ratio === null ? '—' : `${Math.round(ratio * 100)}%`
 }
 
-// CostPanel — постоянная вкладка «Cost»: таблица токенов/затрат по стадиям + run overhead + Total с
-// раскрываемой детализацией, бейдж покрытия и разбивка токенов рана.
-export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, accounting }: CostPanelProps): ReactElement {
+export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, coverageIssues, accounting }: CostPanelProps): ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const idBase = useId()
+  const usage = accounting.supported && accounting.hasData
+  const money = usage && accounting.showMoney
+  const unavailable = accounting.supported && accounting.health === 'unavailable'
+  const detailColSpan = 2 + Number(usage) + Number(money)
 
-  function toggleExpand(keyStr: string): void {
+  function toggleExpand(key: string): void {
     setExpanded((prev) => {
       const next = new Set(prev)
-      if (next.has(keyStr)) next.delete(keyStr)
-      else next.add(keyStr)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
 
-  const hasData = hasAccountingData(accounting)
-  const unavailable = accounting.supported && accounting.health === 'unavailable'
-  // showMoney — показывать ли колонку Est. cost. false (дефолт) прячет все денежные ($) значения, оставляя
-  // токены. Колонок тогда 2, а не 3 (важно для colSpan раскрываемой строки детализации).
-  const showMoney = accounting.supported && accounting.showMoney
-  const detailColSpan = showMoney ? 3 : 2
+  const totalOrUnknown = (seconds: number): number | null => (times.totalsKnown ? seconds : null)
 
-  // Порядок пустых состояний ТОЧНО в этом порядке: 1. unavailable && !hasData → "Cost unavailable this
-  // run" (хранилище реально сломано, и снапшота показать нечего).
-  if (unavailable && !hasData) {
-    return (
-      <div className="cost-panel cost-panel-empty">
-        <p className="empty-hint">Cost unavailable this run</p>
-      </div>
-    )
+  const rows: CostRow[] = stages.map((stage) => ({
+    key: `stage:${stage.id}`, label: stage.name || stage.id,
+    cost: usage ? stage.cost : undefined,
+    time: times.byStage.get(stage.id) ?? null,
+    incomplete: times.incompleteIds.has(stage.id),
+  }))
+  if (usage && runOverheadCost !== undefined) {
+    rows.push({ key: 'overhead', label: 'Run overhead', cost: runOverheadCost, time: null, incomplete: false, overhead: true })
   }
-  if (!hasData) {
-    return (
-      <div className="cost-panel cost-panel-empty">
-        <p className="empty-hint">No usage data</p>
-      </div>
-    )
-  }
-
-  const stageRows: CostRow[] = stages
-    .filter((s): s is Stage & { cost: CostSummary } => s.cost != null)
-    .map((s) => ({ key: { kind: 'stage', id: s.id }, label: s.name !== '' ? s.name : s.id, cost: s.cost }))
-
-  const overheadRow: CostRow | null =
-    runOverheadCost != null ? { key: { kind: 'overhead' }, label: 'Run overhead', cost: runOverheadCost } : null
-
-  const rows: CostRow[] = overheadRow !== null ? [...stageRows, overheadRow] : stageRows
 
   function renderRow(row: CostRow, index: number): ReactElement {
-    const keyStr = rowKeyToString(row.key)
-    const isExpanded = expanded.has(keyStr)
-    // Derive ARIA IDs from row positions so identifiers remain valid IDREFs; expanded state still uses
-    // stable keyStr.
-    const domSuffix = row.key.kind === 'overhead' ? 'overhead' : String(index)
-    const regionId = `${idBase}-region-${domSuffix}`
-    const labelId = `${idBase}-label-${domSuffix}`
-    const rowClassName = row.key.kind === 'overhead' ? 'cost-row cost-row-overhead' : 'cost-row'
-
+    const expandable = row.time !== null || row.cost !== undefined
+    const isExpanded = expandable && expanded.has(row.key)
+    // Position-derived DOM IDs also work for stage IDs containing spaces.
+    const regionId = `${idBase}-region-${index}`
+    const labelId = `${idBase}-label-${index}`
     return (
-      <Fragment key={keyStr}>
-        <tr className={rowClassName}>
+      <Fragment key={row.key}>
+        <tr className={`cost-row${row.overhead ? ' cost-row-overhead' : ''}`}>
           <td className="cost-col-stage">
-            <button
-              type="button"
-              className="cost-expand-btn"
-              aria-expanded={isExpanded}
-              aria-controls={regionId}
-              onClick={() => toggleExpand(keyStr)}
-            >
-              <span className={`cost-chevron${isExpanded ? ' open' : ''}`} aria-hidden="true">▸</span>
-              <span id={labelId} className="cost-row-label">{row.label}</span>
-            </button>
-            {row.cost.models.length > 0 && <span className="cost-row-meta">{row.cost.models.join(', ')}</span>}
+            {expandable ? (
+              <button type="button" className="cost-expand-btn" aria-expanded={isExpanded}
+                aria-controls={regionId} onClick={() => toggleExpand(row.key)}>
+                <span className={`cost-chevron${isExpanded ? ' open' : ''}`} aria-hidden="true">▸</span>
+                <span id={labelId} className="cost-row-label">{row.label}</span>
+              </button>
+            ) : <span id={labelId} className="cost-row-label cost-row-static">{row.label}</span>}
+            {row.cost !== undefined && row.cost.models.length > 0 && <span className="cost-row-meta">{row.cost.models.join(', ')}</span>}
+            {row.incomplete && <span className="cost-row-meta">Incomplete time</span>}
           </td>
-          <td className="cost-col-tokens">{formatTokens(row.cost.totalTokens)}</td>
-          {showMoney && <td className="cost-col-cost">{row.cost.displayCost}</td>}
+          <td className="cost-col-time">{formatStageDuration(row.time?.timeSec ?? null)}</td>
+          {usage && <td className="cost-col-tokens">{row.cost ? formatTokens(row.cost.totalTokens) : '—'}</td>}
+          {money && <td className="cost-col-cost">{row.cost?.displayCost ?? '—'}</td>}
         </tr>
         {isExpanded && (
           <tr className="cost-detail-row">
             <td colSpan={detailColSpan}>
               <div id={regionId} role="region" aria-labelledby={labelId} className="cost-detail">
-                <TokenMixBar cost={row.cost} />
-                <FigureGrid cost={row.cost} />
+                {row.time !== null && <TimeBreakdown time={row.time} />}
+                {row.cost !== undefined && <><TokenMixBar cost={row.cost} /><FigureGrid cost={row.cost} /></>}
               </div>
             </td>
           </tr>
@@ -128,7 +100,7 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
 
   return (
     <div className="cost-panel">
-      {unavailable && (
+      {unavailable && usage && (
         <div className="cost-panel-banner" role="status">
           Cost accounting storage is unavailable right now — totals shown below may be incomplete.
         </div>
@@ -136,35 +108,90 @@ export function CostPanel({ stages, runCost, runOverheadCost, coverageIssues, ac
       <div className="cost-panel-scroll">
         <header className="cost-panel-head">
           <div className="cost-panel-titles">
-            <h2 className="cost-panel-title">Cost &amp; usage</h2>
+            <h2 className="cost-panel-title">{usage ? 'Cost, usage & time' : 'Stage time'}</h2>
             <p className="cost-panel-subtitle">
-              {showMoney ? 'Token usage and estimated cost by stage' : 'Token usage by stage'}
+              {money ? 'Time, token usage and estimated cost by stage' : usage ? 'Time and token usage by stage' : 'Time by stage'}
             </p>
           </div>
-          <CoverageBadge issues={coverageIssues} unavailable={unavailable} />
+          {usage && <CoverageBadge issues={coverageIssues} unavailable={unavailable} />}
         </header>
+        <dl className="cost-time-summary">
+          <TimeFigure label="Run elapsed" seconds={elapsedMs / 1000} />
+          <TimeFigure label="Stage work" seconds={totalOrUnknown(times.totals.workSec)} />
+          <TimeFigure label="Stage waiting" seconds={totalOrUnknown(times.totals.waitingSec)} />
+          <TimeFigure label="Stage paused" seconds={totalOrUnknown(times.totals.pausedSec)} />
+        </dl>
+        <p className="cost-time-note">Run elapsed is the run’s duration. Stage work, waiting and pauses are added across stages and can overlap when stages run in parallel.</p>
+        {times.partial && <p className="cost-time-incomplete">Time totals are incomplete: stages with incomplete timing are excluded.</p>}
         <div className="cost-table-wrap">
-          <table className="cost-table">
+          <table className={`cost-table${usage ? ' cost-table-usage' : ' cost-table-time-only'}${money ? ' cost-table-money' : ''}`}>
+            <colgroup>
+              <col className="cost-width-stage" /><col className="cost-width-time" />
+              {usage && <col className="cost-width-tokens" />}{money && <col className="cost-width-money" />}
+            </colgroup>
             <thead>
               <tr>
                 <th scope="col" className="cost-col-stage">Stage</th>
-                <th scope="col" className="cost-col-tokens">Tokens</th>
-                {showMoney && <th scope="col" className="cost-col-cost">Est. cost</th>}
+                <th scope="col" className="cost-col-time">Time</th>
+                {usage && <th scope="col" className="cost-col-tokens">Tokens</th>}
+                {money && <th scope="col" className="cost-col-cost">Est. cost</th>}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, index) => renderRow(row, index))}
+              {rows.map(renderRow)}
               <tr className="cost-row cost-row-total">
-                <td className="cost-col-stage">Total</td>
-                <td className="cost-col-tokens">{runCost !== undefined ? formatTokens(runCost.totalTokens) : '—'}</td>
-                {showMoney && <td className="cost-col-cost">{runCost?.displayCost ?? '—'}</td>}
+                <td className="cost-col-stage">{usage ? 'Total' : 'Stage total'}</td>
+                <td className="cost-col-time">
+                  {formatStageDuration(totalOrUnknown(times.totals.timeSec))}
+                  {usage && <span className="cost-total-caption">Stage total</span>}
+                </td>
+                {usage && <td className="cost-col-tokens">{runCost !== undefined ? formatTokens(runCost.totalTokens) : '—'}</td>}
+                {money && <td className="cost-col-cost">{runCost?.displayCost ?? '—'}</td>}
               </tr>
             </tbody>
           </table>
         </div>
-        {runCost !== undefined && <UsageBreakdown cost={runCost} />}
+        <p className="cost-time-note cost-total-note">
+          Stage total is the sum of stage times and can exceed Run elapsed when stages run in parallel.
+          {usage && (money ? ' Tokens and estimated cost cover the whole run, including Run overhead.' : ' Tokens cover the whole run, including Run overhead.')}
+        </p>
+        {!usage && <p className="empty-hint">{unavailable ? 'Cost unavailable this run' : 'No usage data'}</p>}
+        {usage && runCost !== undefined && <UsageBreakdown cost={runCost} />}
       </div>
     </div>
+  )
+}
+
+function TimeFigure({ label, seconds, kind }: { label: string; seconds: number | null; kind?: string }): ReactElement {
+  return <div><dt>{kind && <span className={`cost-time-swatch ${kind}`} aria-hidden="true" />}{label}</dt><dd>{formatStageDuration(seconds)}</dd></div>
+}
+
+function TimeBreakdown({ time }: { time: StageTimeView }): ReactElement {
+  const parts = [
+    { label: 'Working', seconds: time.workSec, kind: 'work' },
+    { label: 'Waiting', seconds: time.waitingSec, kind: 'waiting' },
+    { label: 'Paused', seconds: time.pausedSec, kind: 'paused' },
+  ]
+  return (
+    <section className="cost-time-detail">
+      <div className="cost-time-title"><h3>Time breakdown</h3><span>{formatStageDuration(time.timeSec)} total</span></div>
+      <div className="cost-time-bar" aria-hidden="true">
+        {parts.filter((part) => part.seconds > 0).map((part) => (
+          <span key={part.kind} className={`cost-time-segment ${part.kind}`} style={{ width: `${part.seconds / time.timeSec * 100}%` }} />
+        ))}
+      </div>
+      <dl className="cost-time-legend">{parts.map((part) => <TimeFigure key={part.kind} {...part} />)}</dl>
+      <div className="cost-time-waiting">
+        <span>Waiting includes</span>
+        <dl>
+          <TimeFigure label="Approval & replies" seconds={time.approvalSec} />
+          <TimeFigure label="Helpers & colleagues" seconds={time.helpersSec} />
+          <TimeFigure label="Backoff & usage limits" seconds={time.backoffSec} />
+          {time.schedulingSec > 0 && <TimeFigure label="Scheduling" seconds={time.schedulingSec} />}
+        </dl>
+      </div>
+      <p className="cost-time-note">From the first start, including retries, waiting and pauses. Time queued before starting is excluded.</p>
+    </section>
   )
 }
 

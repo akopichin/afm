@@ -30,6 +30,55 @@ describe('FeedWorkspace', () => {
     expect(container.textContent).toContain('reply to user')
   })
 
+  it('renders the aboveFeed slot between the filter row and the feed', () => {
+    const { container } = render(<FeedWorkspace events={[]} stageId="s1" aboveFeed={<div data-testid="above">Stage note slot</div>} />)
+    const above = screen.getByTestId('above')
+    const feedContent = container.querySelector('#feed-content')
+    expect(above.compareDocumentPosition(feedContent!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(feedContent).not.toContainElement(above)
+  })
+
+  describe('aboveFeed slot next to the composer', () => {
+    // The caller keys the slot by stage id and the composer is keyed by noteTarget (the same id): the two keys must
+    // not meet among the section's children, or React orphans the previous slot's DOM.
+    const meshLike = { roster: { enabled: true, probed: true, participants: [], threads: [] }, profiles: [], stages: [], pick: null }
+    const layouts = [
+      ['legacy layout, no filter row', undefined],
+      ['mesh layout, with filter row', meshLike],
+    ] as const
+
+    function renderSlot(id: string, mesh: typeof meshLike | undefined) {
+      return (
+        <FeedWorkspace
+          events={[]}
+          stageId={id}
+          noteTarget={id}
+          onSendNote={vi.fn()}
+          mesh={mesh}
+          aboveFeed={<div key={id} data-testid="slot">{id}</div>}
+        />
+      )
+    }
+
+    it.each(layouts)('keeps exactly one slot for the current stage across rerenders and switches: %s', (_name, mesh) => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const { rerender } = render(renderSlot('a', mesh))
+      rerender(renderSlot('a', mesh))
+      expect(screen.getAllByTestId('slot').map((el) => el.textContent)).toEqual(['a'])
+      rerender(renderSlot('b', mesh))
+      expect(screen.getAllByTestId('slot').map((el) => el.textContent)).toEqual(['b'])
+      rerender(renderSlot('a', mesh))
+      expect(screen.getAllByTestId('slot').map((el) => el.textContent)).toEqual(['a'])
+      expect(errors.mock.calls.filter((call) => /same key/.test(String(call[0])))).toEqual([])
+      errors.mockRestore()
+    })
+  })
+
+  it('renders nothing extra without an aboveFeed slot', () => {
+    const { container } = render(<FeedWorkspace events={[]} stageId="s1" />)
+    expect(container.querySelector('.feed-workspace')?.children).toHaveLength(1)
+  })
+
   describe('tool-call groups', () => {
     const at = (n: number) => `2026-07-10T10:00:0${n}Z`
     const tools = [

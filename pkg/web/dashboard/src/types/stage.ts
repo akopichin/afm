@@ -16,8 +16,8 @@ export type Stage = {
   hasDialog: boolean
   showPlan: boolean
   showDialog: boolean
-  // isScript: true, если стадия скриптовая (Stage.IsScript() в Go) — кебаб- меню скрывает пункт "Pause",
-  // пока такая стадия реально выполняется (нет graceful mid-script stop).
+  // isScript: true, если стадия скриптовая (Stage.IsScript() в Go) — для неё нет кнопок стадии, заметки и
+  // Pause во время выполнения (нет graceful mid-script stop).
   isScript: boolean
   // pausedFrom заполнен только когда status === 'paused' (см. Go StageView.PausedFrom) — пустая строка
   // иначе. Панель паузы использует его для текста причины.
@@ -41,6 +41,8 @@ export type Stage = {
   // quota — durable-ожидание сброса лимита подписки (Go StageView.Quota). Есть только у awaiting_quota и у
   // paused, припаркованной по лимиту; у остальных стадий undefined.
   quota?: StageQuota
+  // timing — учёт времени стадии (Go StageView.Timing). undefined — старый сервер без поля.
+  timing?: StageTiming
 }
 
 // StageQuota — малый общий вид quota-парковки стадии или helper-задачи (сервер отдаёт RFC3339 в UTC; не вся
@@ -81,6 +83,46 @@ export function parseStageQuota(raw: unknown): StageQuota | undefined {
 // пополнение квоты автоматически не ждётся).
 export function quotaTitle(quota: StageQuota | undefined): string {
   return quota?.pauseReason === 'no_reset' ? 'Quota exhausted' : 'Usage limit'
+}
+
+export const STAGE_TIME_KINDS = ['work', 'approval', 'helpers', 'backoff', 'scheduling', 'paused'] as const
+export type StageTimeKind = (typeof STAGE_TIME_KINDS)[number]
+
+// StageTiming — время стадии из /api/status. ms (закрытые интервалы по видам, мс) есть только у стартовавшей
+// стадии с полными данными; open — интервал, который сервер ещё не закрыл, живую часть добавляет клиент.
+// complete=false — данные неполные (журнал без run-событий): сумм нет, нуль не выдумываем.
+export type StageTiming = {
+  started: boolean
+  complete: boolean
+  ms?: Record<StageTimeKind, number>
+  open?: { kind: StageTimeKind; sinceMs: number }
+}
+
+// parseStageTiming приводит `timing` из API к StageTiming. Сломанная форма — undefined (как у старого сервера);
+// стартовавшая стадия с полными данными, но без числовых сумм, считается неполной.
+export function parseStageTiming(raw: unknown): StageTiming | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.started !== 'boolean' || typeof obj.complete !== 'boolean') return undefined
+  if (!obj.started) return { started: false, complete: obj.complete }
+  if (!obj.complete) return { started: true, complete: false }
+
+  const ms = {} as Record<StageTimeKind, number>
+  for (const kind of STAGE_TIME_KINDS) {
+    const value = obj[`${kind}_ms`]
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return { started: true, complete: false }
+    ms[kind] = value
+  }
+  return { started: true, complete: true, ms, open: parseStageTimeOpen(obj.open) }
+}
+
+function parseStageTimeOpen(raw: unknown): StageTiming['open'] {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const kind = (STAGE_TIME_KINDS as readonly unknown[]).includes(obj.kind) ? (obj.kind as StageTimeKind) : null
+  const sinceMs = typeof obj.since === 'string' ? Date.parse(obj.since) : NaN
+  if (kind === null || Number.isNaN(sinceMs)) return undefined
+  return { kind, sinceMs }
 }
 
 // StageVerify — компактное текущее состояние AI-verify одной стадии: verify_started → 'running',

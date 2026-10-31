@@ -2,7 +2,12 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test } from 'vitest'
 import type { Stage } from '../../types'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
-import { CostPanel } from './CostPanel'
+import { CostPanel as CostPanelView, type CostPanelProps } from './CostPanel'
+import { stageTimes } from '../../lib/stage-timing'
+
+function CostPanel(props: Omit<CostPanelProps, 'times' | 'elapsedMs'> & Partial<Pick<CostPanelProps, 'times' | 'elapsedMs'>>) {
+  return <CostPanelView times={stageTimes(props.stages, 0, false)} elapsedMs={0} {...props} />
+}
 
 // Минимальный валидный CostSummary для тестов — та же форма, что и в
 // StagesList.test.tsx, чтобы не плодить разные соглашения по фикстурам.
@@ -48,6 +53,8 @@ function makeStage(id: string, cost?: CostSummary, name = ''): Stage {
     preNote: '',
     buttons: [],
     cost,
+    // Новый сервер всегда присылает timing; отсутствие поля — старый сервер (см. тест ниже).
+    timing: { started: true, complete: true, ms: { work: 0, approval: 0, helpers: 0, backoff: 0, scheduling: 0, paused: 0 } },
   }
 }
 
@@ -83,7 +90,7 @@ describe('CostPanel — empty-state order', () => {
       />,
     )
     expect(screen.getByText('Cost unavailable this run')).toBeInTheDocument()
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.getByRole('table')).toBeInTheDocument()
   })
 
   test('unsupported → "No usage data"', () => {
@@ -126,7 +133,7 @@ describe('CostPanel — empty-state order', () => {
 })
 
 describe('CostPanel — table + Total + expand', () => {
-  test('renders only stages with cost, plus run overhead row and Total', () => {
+  test('renders all stages, plus run overhead row and Total', () => {
     const stages = [
       makeStage('s1', makeCost(), 'Build'),
       makeStage('s2', undefined, 'No cost stage'),
@@ -141,8 +148,8 @@ describe('CostPanel — table + Total + expand', () => {
       />,
     )
     expect(screen.getByText('Build')).toBeInTheDocument()
-    expect(screen.queryByText('No cost stage')).not.toBeInTheDocument()
-    expect(screen.getByText(/run overhead/i)).toBeInTheDocument()
+    expect(screen.getByText('No cost stage')).toBeInTheDocument()
+    expect(screen.getByText('Run overhead')).toBeInTheDocument()
     expect(screen.getByText('$0.50')).toBeInTheDocument()
     expect(screen.getByText('Total')).toBeInTheDocument()
     expect(screen.getByText('$5.00')).toBeInTheDocument()
@@ -220,20 +227,20 @@ describe('CostPanel — table + Total + expand', () => {
     expect(document.querySelectorAll(`#${CSS.escape(regionId as string)}`).length).toBe(1)
   })
 
-  test('detail region lives inside a td spanning stage, tokens and est. cost (colSpan=3)', () => {
+  test('detail region lives inside a td spanning stage, time, tokens and est. cost (colSpan=4)', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
     fireEvent.click(screen.getByRole('button', { name: /Build/ }))
     const region = screen.getByRole('region')
     const td = region.closest('td')
     expect(td).not.toBeNull()
-    expect(td?.getAttribute('colspan')).toBe('3')
+    expect(td?.getAttribute('colspan')).toBe('4')
     expect(region.tagName).not.toBe('TR')
   })
 })
 
 describe('CostPanel — show_money off drops the Cost column', () => {
-  test('no Cost header, no $ figures, and the detail row colSpan falls back to 2', () => {
+  test('no Cost header, no $ figures, and the detail row colSpan falls back to 3', () => {
     const stages = [makeStage('s1', makeCost({ displayCost: '$3.21' }), 'Build')]
     render(
       <CostPanel
@@ -252,10 +259,10 @@ describe('CostPanel — show_money off drops the Cost column', () => {
     expect(screen.queryByText('$0.50')).toBeNull()
     // Токены/кэш остаются.
     expect(screen.getByRole('columnheader', { name: 'Tokens' })).toBeInTheDocument()
-    // Детализация раскрывается в td с colSpan=2.
+    // Детализация раскрывается в td с colSpan=3.
     fireEvent.click(screen.getByRole('button', { name: /Build/ }))
     const td = screen.getByRole('region').closest('td')
-    expect(td?.getAttribute('colspan')).toBe('2')
+    expect(td?.getAttribute('colspan')).toBe('3')
   })
 })
 
@@ -365,21 +372,21 @@ describe('CostPanel — coverage line', () => {
 })
 
 describe('CostPanel — layout: title, rows, total and usage breakdown', () => {
-  test('shows the "Cost & usage" heading with a subtitle that follows show_money', () => {
+  test('shows the "Cost, usage & time" heading with a subtitle that follows show_money', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     const { rerender } = render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    expect(screen.getByRole('heading', { level: 2, name: 'Cost & usage' })).toBeInTheDocument()
-    expect(screen.getByText('Token usage and estimated cost by stage')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'Cost, usage & time' })).toBeInTheDocument()
+    expect(screen.getByText('Time, token usage and estimated cost by stage')).toBeInTheDocument()
 
     rerender(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA_NO_MONEY} />)
-    expect(screen.getByText('Token usage by stage')).toBeInTheDocument()
+    expect(screen.getByText('Time and token usage by stage')).toBeInTheDocument()
   })
 
-  test('columns are Stage / Tokens / Est. cost — no Model or Cache R/W column', () => {
+  test('columns are Stage / Time / Tokens / Est. cost — no Model or Cache R/W column', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
-    expect(headers).toEqual(['Stage', 'Tokens', 'Est. cost'])
+    expect(headers).toEqual(['Stage', 'Time', 'Tokens', 'Est. cost'])
   })
 
   test('a row shows the stage name with its models as a meta line and the token count', () => {
@@ -447,5 +454,107 @@ describe('CostPanel — vertical scroll container', () => {
     expect(screen.getByText('Total')).toBeInTheDocument()
     expect(screen.getByText('$100.00')).toBeInTheDocument()
     expect(document.querySelector('.cost-panel-scroll')).not.toBeNull()
+  })
+})
+
+
+describe('CostPanel — stage time', () => {
+  const timed = (id: string, overrides: Partial<Stage> = {}): Stage => ({
+    ...makeStage(id),
+    timing: { started: true, complete: true, ms: { work: 60000, approval: 3000, helpers: 2000, backoff: 1000, scheduling: 4000, paused: 5000 } },
+    ...overrides,
+  })
+
+  test.each([ACCOUNTING_UNSUPPORTED, ACCOUNTING_OK_NO_DATA, ACCOUNTING_UNAVAILABLE_NO_DATA])('retains time without usage: %j', (accounting) => {
+    render(<CostPanel stages={[timed('script', { isScript: true }), { ...makeStage('pending'), status: 'pending', timing: { started: false, complete: true } }]} elapsedMs={40000} accounting={accounting} coverageIssues={[makeIssue()]} />)
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Stage', 'Time'])
+    expect(screen.getByText('script').closest('tr')).toHaveTextContent('1m 15s')
+    expect(screen.getByText('pending').closest('tr')).toHaveTextContent('—')
+    expect(screen.queryByRole('button', { name: 'pending' })).toBeNull()
+    expect(screen.getByText('Stage total').closest('tr')).toHaveTextContent('1m 15s')
+    expect(screen.getByText('Run elapsed').parentElement).toHaveTextContent('0m 40s')
+    expect(screen.queryByText(/coverage/i)).toBeNull()
+    expect(screen.queryByText('Run overhead')).toBeNull()
+    expect(screen.queryByText('Usage breakdown')).toBeNull()
+  })
+
+  test('parallel stage sums exceed elapsed; disclosure preserves token details and waiting reasons', () => {
+    const stages = [timed('build', { cost: makeCost() }), timed('script', { isScript: true })]
+    render(<CostPanel stages={stages} runCost={makeCost({ totalTokens: 9999 })} runOverheadCost={makeCost()} elapsedMs={75000} accounting={ACCOUNTING_OK_DATA} coverageIssues={[]} />)
+    expect(screen.getByText('Stage work').parentElement).toHaveTextContent('2m 00s')
+    expect(screen.getByText('Stage waiting').parentElement).toHaveTextContent('0m 20s')
+    expect(screen.getByText('Stage paused').parentElement).toHaveTextContent('0m 10s')
+    const total = screen.getByText('Total').closest('tr')
+    expect(total).toHaveTextContent('2m 30s')
+    expect(total).toHaveTextContent('9,999')
+    expect(screen.getByText('Run overhead').closest('tr')?.querySelector('.cost-col-time')).toHaveTextContent('—')
+    expect(screen.getByText('script').closest('tr')?.querySelector('.cost-col-tokens')).toHaveTextContent('—')
+    fireEvent.click(screen.getByRole('button', { name: 'build' }))
+    const detail = screen.getByRole('region', { name: 'build' })
+    expect(detail).toHaveTextContent('Working1m 00s')
+    expect(detail).toHaveTextContent('Waiting0m 10s')
+    expect(detail).toHaveTextContent('Paused0m 05s')
+    expect(detail).toHaveTextContent('Approval & replies0m 03s')
+    expect(detail).toHaveTextContent('Helpers & colleagues0m 02s')
+    expect(detail).toHaveTextContent('Backoff & usage limits0m 01s')
+    expect(detail).toHaveTextContent('Scheduling0m 04s')
+    expect(detail).toHaveTextContent('Cache read')
+    const shares = Array.from(detail.querySelectorAll<HTMLElement>('.cost-time-segment'))
+    expect(shares.reduce((sum, el) => sum + parseFloat(el.style.width), 0)).toBeCloseTo(100)
+    expect(screen.getByText(/Stage total is the sum/)).toHaveTextContent('can exceed Run elapsed')
+  })
+
+  test('incomplete timing is excluded and visibly distinguished from zero or not started', () => {
+    const stages = [timed('known'), timed('old', { timing: { started: true, complete: false } })]
+    render(<CostPanel stages={stages} accounting={ACCOUNTING_UNSUPPORTED} coverageIssues={[]} />)
+    expect(screen.getByText('old').closest('tr')).toHaveTextContent('—')
+    expect(screen.getByText('old').closest('tr')).toHaveTextContent('Incomplete time')
+    expect(screen.getByText('Stage total').closest('tr')).toHaveTextContent('1m 15s')
+    expect(screen.getByText(/Time totals are incomplete/)).toBeInTheDocument()
+    expect(screen.queryByText('Full coverage')).toBeNull()
+  })
+
+  test('an old server without timing shows unknown totals, not zero', () => {
+    const stages = [{ ...makeStage('a'), timing: undefined }, { ...makeStage('b'), timing: undefined }]
+    render(<CostPanel stages={stages} accounting={ACCOUNTING_UNSUPPORTED} coverageIssues={[]} />)
+    for (const label of ['Stage work', 'Stage waiting', 'Stage paused']) {
+      expect(screen.getByText(label).parentElement).toHaveTextContent('—')
+    }
+    expect(screen.getByText('Stage total').closest('tr')).toHaveTextContent('—')
+    expect(screen.getByText('Stage total').closest('tr')).not.toHaveTextContent('0s')
+    expect(screen.getByText('a').closest('tr')).toHaveTextContent('Incomplete time')
+    expect(screen.getByText(/Time totals are incomplete/)).toBeInTheDocument()
+  })
+
+  test('an old server after Retry keeps unknown totals instead of zeros', () => {
+    const stages = [
+      { ...makeStage('retried'), status: 'ready' as const, timing: undefined },
+      { ...makeStage('next'), status: 'pending' as const, timing: undefined },
+    ]
+    render(<CostPanel stages={stages} accounting={ACCOUNTING_UNSUPPORTED} coverageIssues={[]} />)
+    for (const label of ['Stage work', 'Stage waiting', 'Stage paused']) {
+      expect(screen.getByText(label).parentElement).toHaveTextContent('—')
+    }
+    expect(screen.getByText('Stage total').closest('tr')).toHaveTextContent('—')
+    expect(screen.getByText('Stage total').closest('tr')).not.toHaveTextContent('0s')
+    expect(screen.getByText('retried').closest('tr')).toHaveTextContent('Incomplete time')
+    expect(screen.getByText('next').closest('tr')).toHaveTextContent('Incomplete time')
+  })
+
+  test('zero timing remains expandable and omits zero Scheduling', () => {
+    const stage = timed('zero', { timing: { started: true, complete: true, ms: { work: 0, approval: 0, helpers: 0, backoff: 0, scheduling: 0, paused: 0 } } })
+    render(<CostPanel stages={[stage]} accounting={ACCOUNTING_UNSUPPORTED} coverageIssues={[]} />)
+    const button = screen.getByRole('button', { name: 'zero' })
+    expect(button).toHaveAttribute('type', 'button')
+    button.focus()
+    expect(button).toHaveFocus()
+    fireEvent.click(button)
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('region')).toHaveTextContent('Working0s')
+    expect(screen.queryByText('Scheduling')).toBeNull()
+    expect(document.querySelector('.cost-time-bar')?.innerHTML).not.toContain('NaN')
+    fireEvent.click(button)
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    expect(button).toHaveFocus()
   })
 })

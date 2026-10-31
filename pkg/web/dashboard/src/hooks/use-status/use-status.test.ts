@@ -770,4 +770,43 @@ describe('useStatus', () => {
     expect(byId.get('e')?.quota).toBeUndefined() // provider обязателен
     expect(byId.get('f')?.quota).toMatchObject({ provider: 'claude', source: 'text', pauseReason: '' }) // неизвестные enum → безопасные значения
   })
+
+  test('парсит timing по Go-контракту StageTimingView, мусор и отсутствие дают undefined', () => {
+    const { stages } = normalizeStatus({
+      stages: [
+        {
+          id: 'a', status: 'running',
+          timing: {
+            started: true, complete: true,
+            work_ms: 1500, approval_ms: 0, helpers_ms: 20, backoff_ms: 30, scheduling_ms: 40, paused_ms: 50,
+            open: { kind: 'work', since: '2026-10-30T20:44:12Z' },
+          },
+        },
+        { id: 'b', status: 'pending', timing: { started: false, complete: true } },
+        { id: 'c', status: 'done', timing: { started: true, complete: true, work_ms: 7, approval_ms: 0, helpers_ms: 0, backoff_ms: 0, scheduling_ms: 0, paused_ms: 0 } },
+        { id: 'd', status: 'running', timing: { started: true, complete: false } },
+        { id: 'e', status: 'running' },
+        { id: 'f', status: 'running', timing: 'oops' },
+        { id: 'g', status: 'running', timing: { started: 'yes', complete: true } },
+        // Полные данные без числа в сумме не превращаются в выдуманный ноль.
+        { id: 'h', status: 'running', timing: { started: true, complete: true, work_ms: 5 } },
+        { id: 'i', status: 'running', timing: { started: true, complete: true, work_ms: 5, approval_ms: 0, helpers_ms: 0, backoff_ms: 0, scheduling_ms: 0, paused_ms: 0, open: { kind: 'bogus', since: '2026-10-30T20:44:12Z' } } },
+      ],
+    })
+    const byId = new Map(stages.map((s) => [s.id, s]))
+    expect(byId.get('a')?.timing).toEqual({
+      started: true, complete: true,
+      ms: { work: 1500, approval: 0, helpers: 20, backoff: 30, scheduling: 40, paused: 50 },
+      open: { kind: 'work', sinceMs: Date.parse('2026-10-30T20:44:12Z') },
+    })
+    expect(byId.get('b')?.timing).toEqual({ started: false, complete: true })
+    expect(byId.get('c')?.timing?.open).toBeUndefined()
+    expect(byId.get('c')?.timing?.ms?.work).toBe(7)
+    expect(byId.get('d')?.timing).toEqual({ started: true, complete: false })
+    expect(byId.get('e')?.timing).toBeUndefined()
+    expect(byId.get('f')?.timing).toBeUndefined()
+    expect(byId.get('g')?.timing).toBeUndefined()
+    expect(byId.get('h')?.timing).toEqual({ started: true, complete: false })
+    expect(byId.get('i')?.timing?.open).toBeUndefined()
+  })
 })

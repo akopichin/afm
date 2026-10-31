@@ -364,7 +364,7 @@
         },
         "buttons": {
           "type": "object",
-          "description": "Predefined kebab-menu actions: label -> canned prompt delivered to the live agent.",
+          "description": "Predefined stage-header buttons: label -> canned prompt delivered to the live agent.",
           "propertyNames": { "minLength": 1 },
           "additionalProperties": { "type": "string", "minLength": 1 }
         },

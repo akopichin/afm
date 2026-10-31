@@ -120,14 +120,15 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 
 	eventsPath := filepath.Join(runDir, "events.jsonl")
 
-	// legacy fallback: state.json exists, events.jsonl does not
+	// legacy fallback: state.json exists, events.jsonl does not. Statuses are applied below as synthetic
+	// transitions, the same way replay will project them on the next Open.
+	legacyStatuses := map[string]StageStatus{}
 	if _, err := os.Stat(eventsPath); os.IsNotExist(err) {
 		if legacy, lerr := loadLegacyState(filepath.Join(runDir, "state.json")); lerr == nil {
 			for id, st := range legacy.Stages {
-				if _, known := rs.Stages[id]; !known {
-					continue
+				if _, known := rs.Stages[id]; known {
+					legacyStatuses[id] = st.Status
 				}
-				rs.SetStageStatus(id, st.Status)
 			}
 		}
 	}
@@ -181,18 +182,18 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 	// if started from legacy fallback — write synthetic events
 	if lastSeq == 0 {
 		for _, id := range stageIDs {
-			st := rs.Stages[id].Status
-			if st == StatusPending {
+			st := legacyStatuses[id]
+			if st == "" || st == StatusPending {
 				continue
 			}
 			s.lastSeq++
 			tr := Transition{
 				Seq:     s.lastSeq,
-				Time:    clk().Now(),
+				Time:    clk().Now().Round(0),
 				StageID: id,
 				From:    StatusPending,
 				To:      st,
-				Event:   "legacy_load",
+				Event:   legacyLoadEvent,
 			}
 			data, _ := json.Marshal(tr)
 			data = append(data, '\n')
@@ -201,6 +202,8 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 			}
 			s.writeOffset += int64(len(data))
 			s.history = append(s.history, tr)
+			rs.noteJournalRecord(s.lastSeq-1, tr.Time)
+			rs.applyTransition(&tr)
 		}
 		if s.lastSeq > 0 {
 			if err := f.Sync(); err != nil {
@@ -215,6 +218,9 @@ func Open(runDir string, stageIDs []string) (*Store, error) {
 	locked = false
 	return s, nil
 }
+
+// legacyLoadEvent marks the synthetic transitions written when a run is migrated from state.json.
+const legacyLoadEvent = "legacy_load"
 
 func loadLegacyState(path string) (*RunState, error) {
 	data, err := os.ReadFile(path)
@@ -271,6 +277,7 @@ func (s *Store) Snapshot() RunState {
 		Stages:               make(map[string]StageState, len(s.snapshot.Stages)),
 		IdleAccumulatedMs:    s.snapshot.IdleAccumulatedMs,
 		BackoffAccumulatedMs: s.snapshot.BackoffAccumulatedMs,
+		lastRecordAt:         s.snapshot.lastRecordAt,
 		Assistants:           s.snapshot.Assistants.Clone(),
 		DynamicStages:        append([]DynamicStageAdded(nil), s.snapshot.DynamicStages...),
 	}
@@ -480,7 +487,7 @@ func (s *Store) appendRunEvent(event string) error {
 	if event != runEventStarted && s.snapshot.EndedAt != nil {
 		return nil
 	}
-	t := Transition{Seq: s.lastSeq + 1, Time: clk().Now(), Event: event}
+	t := Transition{Seq: s.lastSeq + 1, Time: clk().Now().Round(0), Event: event}
 	data, err := json.Marshal(t)
 	if err != nil {
 		return fmt.Errorf("marshal run event: %w", err)

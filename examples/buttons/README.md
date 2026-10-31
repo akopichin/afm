@@ -1,8 +1,8 @@
 # Stage buttons
 
 A stage can declare named one-click actions in `flow.yaml`. Each button carries
-a canned prompt; clicking it in the dashboard kebab (⋮) menu delivers that prompt
-to the stage's live agent (the same path as "Add a note for the agent").
+a canned prompt; clicking it in the dashboard stage header delivers that prompt
+to the stage's live agent (the same path as a Feed note).
 
 ```yaml
 stages:
@@ -16,5 +16,5 @@ stages:
 afm run examples/buttons/flow.yaml
 ```
 
-Menu order matches declaration order. See
+Button order matches declaration order. See
 [Dashboard](https://akopichin.github.io/afm/dashboard/) for details.

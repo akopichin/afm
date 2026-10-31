@@ -13,6 +13,7 @@ import {
   pauseStage,
   postStageDiscussionMessage,
   retryStage,
+  setStageNote,
   triggerStageButton,
   updateNote,
 } from './run-client'
@@ -249,6 +250,24 @@ describe('FlowApiError carries the server reason', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) } as Response)
     const err = await postStageDiscussionMessage('s1', 'req-1', { body: 'hi', mentions: [], interrupt: false }).catch((e: unknown) => e)
     expect((err as FlowApiError).message).toBe('/api/stages/s1/discussion -> 404 (not_found)')
+  })
+})
+
+describe('setStageNote', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  test('posts the note to the stage note route', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ status: 'noted' }) } as Response)
+    await setStageNote('build 1', 'mind the limits')
+    expect(fetchMock).toHaveBeenCalledWith('/api/stages/build%201/note', expect.objectContaining({ method: 'POST', body: JSON.stringify({ note: 'mind the limits' }) }))
+  })
+
+  // The server answers a plain-text body, so the UI tells 409 (saved, but the stage started) from 400 by status.
+  test.each([400, 404, 409, 500])('a plain-text %i surfaces as a FlowApiError with that status', async (status) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status, json: async () => { throw new SyntaxError('not json') } } as unknown as Response)
+    const err = await setStageNote('s1', 'x').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FlowApiError)
+    expect((err as FlowApiError).status).toBe(status)
   })
 })
 

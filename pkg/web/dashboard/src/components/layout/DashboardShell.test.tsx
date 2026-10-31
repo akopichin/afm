@@ -1,7 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test } from 'vitest'
-import { StagesList } from '../stages-list/StagesList'
-import type { Stage } from '../../types'
 import { DashboardShell } from './DashboardShell'
 
 // Переводит matchMedia в «мобильный» режим (matches=true) для теста шторки.
@@ -19,7 +17,7 @@ function mockMobile(matches: boolean): void {
 }
 
 // Рейл-шторка — чистое клиентское состояние DashboardShell: тумблер ☰ открывает/закрывает, скрим/Escape
-// закрывают, клик по строке стадии закрывает, клик по кебабу — НЕ закрывает.
+// закрывают, клик по строке стадии закрывает.
 
 function renderShell(): HTMLElement {
   const { container } = render(
@@ -28,9 +26,6 @@ function renderShell(): HTMLElement {
         <div>
           <div data-stage-id="s1" className="stage-item">
             Stage one
-            <span className="stage-kebab-wrap">
-              <button type="button" className="stage-kebab">More actions</button>
-            </span>
           </div>
         </div>
       }
@@ -129,13 +124,9 @@ describe('DashboardShell rail drawer', () => {
     expect(body.classList.contains('rail-open')).toBe(false)
   })
 
-  test('picking a stage closes the drawer, but the kebab does not', () => {
+  test('picking a stage closes the drawer', () => {
     const body = renderShell()
     fireEvent.click(screen.getByLabelText('Toggle stages'))
-    expect(body.classList.contains('rail-open')).toBe(true)
-
-    // Клик по кебабу внутри строки стадии НЕ закрывает шторку.
-    fireEvent.click(screen.getByText('More actions'))
     expect(body.classList.contains('rail-open')).toBe(true)
 
     // Клик по самой строке стадии — выбор сделан → шторка закрывается.
@@ -143,16 +134,13 @@ describe('DashboardShell rail drawer', () => {
     expect(body.classList.contains('rail-open')).toBe(false)
   })
 
-  test('TestRail_DrawerDoesNotCloseOnKebabOrChildToggle: kebab AND the helper-task branch toggle are both carved out, a child row click still closes it', () => {
+  test('TestRail_DrawerDoesNotCloseOnChildToggle: the helper-task branch toggle is carved out, a child row click still closes it', () => {
     const { container } = render(
       <DashboardShell
         rail={
           <div>
             <div data-stage-id="s1" className="stage-item">
               Stage one
-              <span className="stage-kebab-wrap">
-                <button type="button" className="stage-kebab">More actions</button>
-              </span>
               <span className="assistant-branch-toggle-wrap">
                 <button type="button" className="assistant-toggle">Expand helper tasks</button>
               </span>
@@ -170,9 +158,6 @@ describe('DashboardShell rail drawer', () => {
     fireEvent.click(screen.getByLabelText('Toggle stages'))
     expect(body.classList.contains('rail-open')).toBe(true)
 
-    // Кебаб — carve-out, как и раньше.
-    fireEvent.click(screen.getByText('More actions'))
-    expect(body.classList.contains('rail-open')).toBe(true)
 
     // Переключатель ветки помощников — тоже carve-out: разворот/сворот не должен схлопывать шторку вместе с
     // собой, иначе пользователь терял бы шторку на каждый клик по ▾/▸.
@@ -276,34 +261,6 @@ describe('DashboardShell rail drawer — mobile a11y', () => {
     expect(fireEvent.keyDown(rail, { key: 'Tab' })).toBe(false) // default prevented: focus stays in the drawer
     expect(fireEvent.keyDown(rail, { key: 'Tab', shiftKey: true })).toBe(false)
     expect(document.activeElement).toBe(rail)
-  })
-
-  test('the stage kebab menu is reachable from the keyboard inside the drawer; Escape closes only the menu', () => {
-    mockMobile(true)
-    const stage: Stage = { id: 'a', name: '', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] }
-    const { container } = render(
-      <DashboardShell
-        rail={<StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} onPause={() => {}} accounting={{ supported: false }} />}
-        tabs={<div>tabs</div>}
-        workspace={<div>workspace</div>}
-      />,
-    )
-    const rail = container.querySelector('#rail-slot') as HTMLElement
-    fireEvent.click(screen.getByLabelText('Toggle stages'))
-
-    const kebab = screen.getByRole('button', { name: /more actions/i })
-    fireEvent.click(kebab)
-    const pause = screen.getByRole('button', { name: 'Pause' })
-    expect(document.activeElement).toBe(pause)
-
-    // Tab in the one-item menu stays in the menu; the drawer's own trap never sees it.
-    expect(fireEvent.keyDown(pause, { key: 'Tab' })).toBe(false)
-    expect(document.activeElement).toBe(pause)
-
-    fireEvent.keyDown(pause, { key: 'Escape' })
-    expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument()
-    expect(document.activeElement).toBe(kebab)
-    expect(rail.inert).toBe(false) // the drawer is still open
   })
 
   test('on desktop the rail is never inert', () => {

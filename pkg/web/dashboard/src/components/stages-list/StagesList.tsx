@@ -1,37 +1,21 @@
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
-import { createPortal } from 'react-dom'
-import { trapTab, visibleFocusables } from '../../lib/focus-trap'
+import { Fragment, useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
 import { attentionKindFor } from '../../hooks/use-attention'
+import { formatStageDuration, type StageTimes } from '../../lib/stage-timing'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import { AssistantTaskRow } from '../assistants'
 import { QuotaCountdown } from './QuotaCountdown'
 
-// Ширина меню — должна совпадать с min-width в .stage-kebab-menu (agent-note-modal.css),
-// иначе right-выравнивание относительно кнопки съедет.
-const KEBAB_MENU_WIDTH = 200
-
 type StagesListProps = {
   stages: Stage[]
+  times?: StageTimes
   selectedStageId: string | null
   onSelect: (stageId: string) => void
-  // Заметку живому агенту шлют теперь из messenger-поля внизу ленты, а не из кебаба — поэтому onAddNote
-  // убран. Кебаб оставляет pre-note (pending), кастомные кнопки стадии и Pause.
-  onEditPreNote?: (stageId: string) => void // «Add note (before start)» (pending-стадия)
-  onPause?: (stageId: string) => void
-  // collaborationEnabled — capabilities.collaboration. Гейтит пункт кебаба «Attach helper…»: без включённой
-  // фичи прикреплять помощника некуда (сервер всё равно вернул бы 404).
-  collaborationEnabled?: boolean
-  // onAttachHelper — открыть диалог прикрепления помощника к стадии (App владеет модалкой).
-  onAttachHelper?: (stageId: string) => void
   // canAddStage — capabilities.add_stage; показывает кнопку «Add stage» внизу рейла. onAddStage открывает
   // диалог добавления динамической стадии (App владеет модалкой).
   canAddStage?: boolean
   onAddStage?: () => void
-  // onButton — клик по предопределённой в flow.yaml кнопке стадии: передаём только метку, сервер сам
-  // резолвит промпт и доставляет его живому агенту через Revise.
-  onButton?: (stageId: string, name: string) => void
   // Прогресс прогона — компактно в шапке рейла. Пришёл сюда из удалённого футера (план §5.2).
   progressDone?: number
   progressTotal?: number
@@ -109,57 +93,16 @@ function railCost(stage: Stage, accounting: AccountingState): { text: string; a1
   return { text: '', a11y: 'Estimated cost pending', pending: true }
 }
 
-// Статусы, при которых у стадии доступен кебаб хоть с одним пунктом.
-// Статусы, из которых можно поставить стадию на паузу вручную (POST /api/stages/{id}/pause). awaiting_peer —
-// стадия припаркована в ожидании коллеги: пауза держит её, Continue возвращает в ожидание (и продолжает сама,
-// если ожидание тем временем ответили). awaiting_quota — ожидание сброса лимита: Continue напрямую недоступен,
-// поэтому пауза — путь к ручной пробе «сейчас».
-const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'])
-
-// Статусы, при которых у стадии есть ЖИВОЙ агент, которому Revise доставит промпт:
-// running/awaiting_approval и никогда скрипт. Гейтит кастомные кнопки стадии (см. hasLiveAgent).
-const LIVE_AGENT_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'awaiting_approval'])
-
-// Pre-note (заметка ДО старта) доступна только пока стадия pending и только у
-// стадий с агентом — у скрипта нет агента, которому вклеить заметку в контекст.
-function canPreNote(stage: Stage): boolean {
-  return stage.status === 'pending' && !stage.isScript
-}
-
-// У стадии есть живой агент (running/awaiting_approval, не скрипт) — под ним и
-// живут кастомные кнопки стадии, которые Revise доставляет как промпт.
-function hasLiveAgent(stage: Stage): boolean {
-  return LIVE_AGENT_STATUSES.has(stage.status) && !stage.isScript
-}
-
-// Ручная пауза — из PAUSABLE_STATUSES, но не на running-скрипте (его нельзя
-// прервать gracefully). Совпадает с гейтом пункта Pause в JSX.
-function canPause(stage: Stage): boolean {
-  return PAUSABLE_STATUSES.has(stage.status) && !(stage.isScript && stage.status === 'running')
-}
-
 // Прикрепить помощника можно к любой не-скрипт стадии, которая ещё не достигла терминального статуса
-// (сервер отвергает done/failed и script — см. orchestrator.Attach). Совпадает с гейтом пункта в JSX.
+// (сервер отвергает done/failed и script — см. orchestrator.Attach). Кнопка живёт в шапке стадии.
 export function canAttachHelper(stage: Stage, collaborationEnabled: boolean): boolean {
   return collaborationEnabled && !stage.isScript && stage.status !== 'done' && stage.status !== 'failed'
 }
 
-// Кебаб показываем ТОЛЬКО если реально есть хоть один пункт меню — считаем из тех же предикатов, что и
-// сами пункты.
-function hasKebab(stage: Stage, collaborationEnabled: boolean): boolean {
-  return (
-    (hasLiveAgent(stage) && stage.buttons.length > 0) ||
-    canPreNote(stage) ||
-    canPause(stage) ||
-    canAttachHelper(stage, collaborationEnabled)
-  )
-}
-
 // Левая панель: список стадий с выбором активной.
 export function StagesList({
-  stages, selectedStageId, onSelect, onEditPreNote, onPause, onButton, progressDone, progressTotal, accounting,
-  version, assistants, selectedTaskId, onSelectTask, collaborationEnabled = false, onAttachHelper,
-  canAddStage = false, onAddStage, statusAvailable = true,
+  stages, times, selectedStageId, onSelect, progressDone, progressTotal, accounting,
+  version, assistants, selectedTaskId, onSelectTask, canAddStage = false, onAddStage, statusAvailable = true,
 }: StagesListProps): ReactElement {
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
@@ -167,71 +110,6 @@ export function StagesList({
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
-  // Какая стадия сейчас показывает открытое кебаб-меню.
-  const [openMenuStageId, setOpenMenuStageId] = useState<string | null>(null)
-  // .stages-scroll скроллится — абсолютно спозиционированное меню внутри него обрезалось бы краем панели,
-  // если строка стадии оказывается ближе к низу видимой области.
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
-  const menuRef = useRef<HTMLUListElement | null>(null)
-  const openButtonRef = useRef<HTMLButtonElement | null>(null)
-
-  // Меню вынесено в body, вне Tab-ловушки рейла: фокус входит в него сразу и держится внутри, Escape
-  // закрывает меню и возвращает фокус на кебаб.
-  useEffect(() => {
-    if (openMenuStageId !== null && menuPos !== null && menuRef.current !== null) visibleFocusables(menuRef.current)[0]?.focus()
-  }, [openMenuStageId, menuPos])
-
-  function closeMenu(): void {
-    setOpenMenuStageId(null)
-    setMenuPos(null)
-    openButtonRef.current?.focus()
-  }
-
-  function onMenuKeyDown(e: KeyboardEvent<HTMLElement>): void {
-    if (e.key === 'Escape') {
-      e.stopPropagation() // Escape закрывает меню, но не шторку рейла
-      closeMenu()
-    } else if (menuRef.current !== null) {
-      trapTab(e, menuRef.current)
-      if (e.key === 'Tab') e.stopPropagation()
-    }
-  }
-
-  useEffect(() => {
-    if (openMenuStageId === null) return
-
-    const close = () => {
-      setOpenMenuStageId(null)
-      setMenuPos(null)
-    }
-    // Фокус был в меню, которое исчезает: возвращаем его на кебаб, иначе Tab уйдёт из шторки рейла.
-    const restoreFocus = () => openButtonRef.current?.focus({ preventScroll: true })
-    const onScroll = () => {
-      close()
-      restoreFocus()
-    }
-    const onMouseDown = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (openButtonRef.current?.contains(target)) return
-      if (menuRef.current?.contains(target)) return
-      close()
-      // Клик по фокусируемому элементу сам заберёт фокус; возвращаем его, только если он упал на body.
-      window.setTimeout(() => {
-        if (document.activeElement === document.body) restoreFocus()
-      }, 0)
-    }
-
-    document.addEventListener('mousedown', onMouseDown)
-    // Меню спозиционировано fixed относительно кнопки внутри списка стадий. Скролл не всплывает, поэтому
-    // чужие контейнеры до этого слушателя не дойдут.
-    const scroller = document.querySelector('.stages-scroll')
-    scroller?.addEventListener('scroll', onScroll)
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown)
-      scroller?.removeEventListener('scroll', onScroll)
-    }
-  }, [openMenuStageId])
-
   useEffect(() => {
     const newly: string[] = []
     for (const stage of stages) {
@@ -322,6 +200,9 @@ export function StagesList({
         {stages.map((stage, index) => {
           // railCost — null означает «пустой рейл»: ни фигуры, ни описания. costId существует, только пока
           // есть что описывать — иначе aria-describedby указывал бы в никуда.
+          const time = formatStageDuration(times?.byStage.get(stage.id)?.timeSec ?? null)
+          const timeId = `${costIdBase}-time-${index}`
+          const timeDescription = times?.incompleteIds.has(stage.id) ? 'Stage time unavailable: incomplete timing' : `Stage time ${time}`
           const cost = railCost(stage, accounting)
           const costId = cost !== null ? `${costIdBase}-cost-${index}` : undefined
           // summary — this stage's helper-task tree from its OWN poll (useStageAssistants), not /api/status.
@@ -341,15 +222,14 @@ export function StagesList({
             data-attention={attentionKindFor(stage) !== null ? 'true' : undefined}
           >
             {/* Сама строка — настоящая <button> (Enter/Space/focus-visible из
-                коробки): рейл стал основным способом открыть стадию, поэтому он
-                обязан быть доступен с клавиатуры. Кебаб — ОТДЕЛЬНАЯ соседняя
-                кнопка (вложенные интерактивные элементы недопустимы), поэтому
-                живёт в .stage-actions рядом, а не внутри .stage-row. */}
+                коробки): рейл — основной способ открыть стадию, поэтому он
+                обязан быть доступен с клавиатуры. Бейджи и переключатель helper-ветки —
+                соседи в .stage-actions: вложенные интерактивные элементы недопустимы. */}
             <button
               type="button"
               className="stage-row"
               onClick={() => onSelect(stage.id)}
-              aria-describedby={costId}
+              aria-describedby={[timeId, costId].filter(Boolean).join(' ')}
             >
               <span
                 className="status-dot"
@@ -367,11 +247,15 @@ export function StagesList({
                   читается и скринридером из accessible name кнопки. */}
               <span className="stage-label">
                 <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
-                <span className="stage-status" data-status={stage.status}>{STAGE_STATUS_LABELS[stage.status]}</span>
+                <span className="stage-status-line">
+                  <span className="stage-status" data-status={stage.status}>{STAGE_STATUS_LABELS[stage.status]}</span>
+                  <span className="stage-time" aria-hidden="true">{time}</span>
+                </span>
               </span>
             </button>
-            {/* Единый трейлинг-слот: бейджи + кебаб. Отдельная от .stage-row
-                ячейка строки, чтобы кебаб не оказался вложен в кнопку строки. */}
+            {/* Единый трейлинг-слот: бейджи и переключатель ветки. Отдельная от .stage-row
+                ячейка, чтобы индикаторы не меняли accessible name кнопки строки. */}
+            <span id={timeId} className="stage-time-sr">{timeDescription}</span>
             <span className="stage-actions">
             {stage.status === 'awaiting_user_input' && <span className="dialog-badge" title="Awaiting your reply">💬</span>}
             {stage.status === 'awaiting_approval' && (
@@ -389,7 +273,9 @@ export function StagesList({
             {awaitingAssistantsBlocked && (
               <span className="assistants-blocked-badge" title="A required helper task needs your decision">⚠</span>
             )}
-            {stage.preNote !== '' && <span className="prenote-badge" title="Note attached for agent">📝</span>}
+            {stage.preNote !== '' && (
+              <span className="prenote-badge" role="img" aria-label="Stage note attached" title="Stage note attached · select stage to read">📝</span>
+            )}
             {stage.verify !== undefined && !isStaleRunningVerify(stage.status, stage.verify.phase) && (
               <span
                 className="verify-badge"
@@ -399,7 +285,7 @@ export function StagesList({
                 🔎
               </span>
             )}
-            {/* Стоимость — тихий моно-спан ПЕРЕД кебабом. Видимая цифра
+            {/* Стоимость — тихий моно-спан. Видимая цифра
                 помечена aria-hidden (тон/ellipsis не несут собственного
                 смысла для скринридера); полное предложение — в спрятанном
                 узле, на который указывает aria-describedby строки. */}
@@ -436,102 +322,6 @@ export function StagesList({
                     </span>
                   )}
                 </button>
-              </span>
-            )}
-            {hasKebab(stage, collaborationEnabled) && (
-              <span className="stage-kebab-wrap">
-                <button
-                  type="button"
-                  className="stage-kebab"
-                  aria-label="More actions"
-                  onClick={(e) => {
-                    e.stopPropagation() // не триггерить onSelect клика по строке
-                    if (openMenuStageId === stage.id) {
-                      closeMenu()
-                      return
-                    }
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    openButtonRef.current = e.currentTarget
-                    setMenuPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - KEBAB_MENU_WIDTH) })
-                    setOpenMenuStageId(stage.id)
-                  }}
-                >
-                  ⋮
-                </button>
-                {openMenuStageId === stage.id &&
-                  menuPos !== null &&
-                  createPortal(
-                    <ul
-                      className="stage-kebab-menu"
-                      ref={menuRef}
-                      style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={onMenuKeyDown}
-                    >
-                      {/* Кастомные кнопки стадии (flow.yaml) — при живом агенте
-                          (running/awaiting_approval, не скрипт), которому Revise
-                          доставит промпт. Показываем, только если кнопки реально
-                          объявлены. Разделитель больше не нужен: это верхний
-                          блок меню (пункт «Add note for agent» убран). */}
-                      {hasLiveAgent(stage) && stage.buttons.length > 0 && (
-                        <>
-                          {stage.buttons.map((label) => (
-                            <li key={`btn-${label}`} className="stage-kebab-buttons">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  closeMenu()
-                                  onButton?.(stage.id, label)
-                                }}
-                              >
-                                {label}
-                              </button>
-                            </li>
-                          ))}
-                        </>
-                      )}
-                      {canPreNote(stage) && (
-                        <li>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              closeMenu()
-                              onEditPreNote?.(stage.id)
-                            }}
-                          >
-                            {stage.preNote === '' ? 'Add note (before start)' : 'Edit note (before start)'}
-                          </button>
-                        </li>
-                      )}
-                      {canPause(stage) && (
-                        <li>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              closeMenu()
-                              onPause?.(stage.id)
-                            }}
-                          >
-                            Pause
-                          </button>
-                        </li>
-                      )}
-                      {canAttachHelper(stage, collaborationEnabled) && (
-                        <li>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              closeMenu()
-                              onAttachHelper?.(stage.id)
-                            }}
-                          >
-                            Attach helper…
-                          </button>
-                        </li>
-                      )}
-                    </ul>,
-                    document.body,
-                  )}
               </span>
             )}
             </span>
