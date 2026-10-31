@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentjobs"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/clock"
@@ -98,6 +99,9 @@ type Options struct {
 	// Accounting — durable usage.jsonl store for this run. Observability only: never gates the FSM, never
 	// fails the run.
 	Accounting *accounting.Store
+	// Jobs — the run's agent-jobs.jsonl: every agent subprocess the orchestrator starts is measured there.
+	// nil = no journal. Like Accounting it never gates the FSM; the caller closes it after Run returned.
+	Jobs *agentjobs.Store
 	// Lifecycle hooks (Phase 1): FlowName/RunID/Resumed питают payload,
 	// Hooks — собранный dispatcher (nil = хуков нет). Сборка — cmd/afm/run.go.
 	FlowName string
@@ -227,6 +231,11 @@ type Orchestrator struct {
 
 	// mem — двухфазный движок конвейера памяти, собранный в New: CaptureStage и Finalize.
 	mem *memorypipeline.Pipeline
+
+	// liveSince is when this process took the run over: an open job that started earlier died with an older
+	// process. analyticsMeta caches AnalyticsMeta between journal changes.
+	liveSince     time.Time
+	analyticsMeta analyticsMetaCache
 
 	// hooks — lifecycle dispatcher (observer-only; nil-safe).
 	hooks *lifecyclehooks.Dispatcher
@@ -598,6 +607,7 @@ func New(opts Options) *Orchestrator {
 		clock:             opts.Clock,
 		jitterFrac:        defaultJitterFrac,
 	}
+	o.liveSince = o.clk().Now()
 	o.hooks = opts.Hooks
 	o.spawnJSONFix = o.runJSONFixAgent
 	o.runVerifyAgent = o.execVerifyAgent
@@ -618,6 +628,7 @@ func New(opts Options) *Orchestrator {
 		IdleTimeout: opts.Config.Executor.IdleTimeout,
 		Debug:       opts.Debug,
 		OnUsage:     o.recordUsage,
+		Job:         o.memoryJob,
 		Reasoning:   opts.Config.Client.Reasoning,
 	})
 	return o

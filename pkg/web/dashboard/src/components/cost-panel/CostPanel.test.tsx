@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import type { Stage } from '../../types'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
 import { CostPanel as CostPanelView, type CostPanelProps } from './CostPanel'
@@ -556,5 +556,69 @@ describe('CostPanel — stage time', () => {
     fireEvent.click(button)
     expect(button).toHaveAttribute('aria-expanded', 'false')
     expect(button).toHaveFocus()
+  })
+})
+
+describe('CostPanel — Models & agents entry', () => {
+  test('no entry without the analytics capability', () => {
+    render(<CostPanel stages={[makeStage('s1', makeCost(), 'Build')]} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(screen.queryByRole('button', { name: /models & agents/i })).toBeNull()
+  })
+
+  test('the entry opens the details', () => {
+    const onOpenDetails = vi.fn()
+    render(<CostPanel stages={[makeStage('s1', makeCost(), 'Build')]} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} onOpenDetails={onOpenDetails} />)
+    fireEvent.click(screen.getByRole('button', { name: /models & agents/i }))
+    expect(onOpenDetails).toHaveBeenCalledTimes(1)
+  })
+
+  test('the entry shows model and agent counts once they are known, and none before', () => {
+    const stages = [makeStage('s1', makeCost(), 'Build')]
+    const { rerender } = render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} onOpenDetails={() => {}} />)
+    expect(screen.queryByText(/\d+ models?/)).toBeNull()
+    rerender(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} onOpenDetails={() => {}} usageCounts={{ models: 3, agents: 7 }} />)
+    expect(screen.getByText('3 models · 7 agents')).toBeInTheDocument()
+    rerender(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} onOpenDetails={() => {}} usageCounts={{ models: 1, agents: 1 }} />)
+    expect(screen.getByText('1 model · 1 agent')).toBeInTheDocument()
+  })
+
+  test.each([
+    ['accounting unsupported', ACCOUNTING_UNSUPPORTED],
+    ['storage unavailable', ACCOUNTING_UNAVAILABLE_NO_DATA],
+    ['no money', ACCOUNTING_OK_DATA_NO_MONEY],
+  ])('the entry stays available when %s (agent time does not depend on accounting)', (_name, accounting) => {
+    render(<CostPanel stages={[]} coverageIssues={[]} accounting={accounting} onOpenDetails={() => {}} />)
+    expect(screen.getByRole('button', { name: /models & agents/i })).toBeInTheDocument()
+  })
+})
+
+describe('CostPanel — no money when show_money is off', () => {
+  const stages = [makeStage('s1', makeCost(), 'Build')]
+
+  test('the heading drops "Cost"; with money it keeps it', () => {
+    const { rerender } = render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA_NO_MONEY} />)
+    expect(screen.getByRole('heading', { level: 2, name: 'Usage & time' })).toBeInTheDocument()
+    rerender(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(screen.getByRole('heading', { level: 2, name: 'Cost, usage & time' })).toBeInTheDocument()
+  })
+
+  test('unpriced gaps are not disclosed: full coverage badge, no unpriced text', () => {
+    const { container } = render(<CostPanel stages={stages} coverageIssues={[makeIssue()]} accounting={ACCOUNTING_OK_DATA_NO_MONEY} />)
+    expect(screen.getByText('Full coverage')).toBeInTheDocument()
+    expect(container.querySelector('details')).toBeNull()
+    expect(container.textContent).not.toMatch(/unpriced|rate configured/i)
+  })
+
+  test('unmetered gaps stay, counted without the unpriced ones', () => {
+    const issues = [makeIssue(), makeIssue({ kind: 'unmetered', reason: 'no usage reported' })]
+    const { container } = render(<CostPanel stages={stages} coverageIssues={issues} accounting={ACCOUNTING_OK_DATA_NO_MONEY} />)
+    expect(screen.getByText(/partial coverage · 1 gap$/i)).toBeInTheDocument()
+    expect(container.textContent).toMatch(/unmetered/)
+    expect(container.textContent).not.toMatch(/unpriced/i)
+  })
+
+  test('with money the unpriced gap is still disclosed', () => {
+    const { container } = render(<CostPanel stages={stages} coverageIssues={[makeIssue()]} accounting={ACCOUNTING_OK_DATA} />)
+    expect(container.textContent).toMatch(/unpriced/)
   })
 })

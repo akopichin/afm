@@ -1,8 +1,10 @@
 import { Fragment, useId, useState, type ReactElement } from 'react'
 import type { Stage } from '../../types'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
+import type { UsageCounts } from '../../types/usage-analytics'
+import { plural } from '../../lib/plural'
 import { formatStageDuration, type StageTimes, type StageTimeView } from '../../lib/stage-timing'
-import { summarizeCoverageGroups } from './coverage-summary'
+import { summarizeCoverageGroups, visibleCoverageIssues } from './coverage-summary'
 
 export type CostPanelProps = {
   stages: Stage[]
@@ -12,6 +14,10 @@ export type CostPanelProps = {
   runOverheadCost?: CostSummary
   coverageIssues: CoverageIssue[]
   accounting: AccountingState
+  // onOpenDetails — вход в «Models & agents»; без него (нет capability на сервере) вход не показывается.
+  onOpenDetails?: () => void
+  // usageCounts — число моделей и агентов из /api/status; без них (старый сервер) вход только с текстом.
+  usageCounts?: UsageCounts
 }
 
 type CostRow = {
@@ -31,7 +37,7 @@ function formatCacheHit(ratio: number | null): string {
   return ratio === null ? '—' : `${Math.round(ratio * 100)}%`
 }
 
-export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, coverageIssues, accounting }: CostPanelProps): ReactElement {
+export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, coverageIssues, accounting, onOpenDetails, usageCounts }: CostPanelProps): ReactElement {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const idBase = useId()
   const usage = accounting.supported && accounting.hasData
@@ -108,12 +114,12 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
       <div className="cost-panel-scroll">
         <header className="cost-panel-head">
           <div className="cost-panel-titles">
-            <h2 className="cost-panel-title">{usage ? 'Cost, usage & time' : 'Stage time'}</h2>
+            <h2 className="cost-panel-title">{usage ? (money ? 'Cost, usage & time' : 'Usage & time') : 'Stage time'}</h2>
             <p className="cost-panel-subtitle">
               {money ? 'Time, token usage and estimated cost by stage' : usage ? 'Time and token usage by stage' : 'Time by stage'}
             </p>
           </div>
-          {usage && <CoverageBadge issues={coverageIssues} unavailable={unavailable} />}
+          {usage && <CoverageBadge issues={visibleCoverageIssues(coverageIssues, money)} unavailable={unavailable} />}
         </header>
         <dl className="cost-time-summary">
           <TimeFigure label="Run elapsed" seconds={elapsedMs / 1000} />
@@ -123,6 +129,7 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
         </dl>
         <p className="cost-time-note">Run elapsed is the run’s duration. Stage work, waiting and pauses are added across stages and can overlap when stages run in parallel.</p>
         {times.partial && <p className="cost-time-incomplete">Time totals are incomplete: stages with incomplete timing are excluded.</p>}
+        {onOpenDetails !== undefined && <ModelsAgentsEntry onOpen={onOpenDetails} counts={usageCounts} />}
         <div className="cost-table-wrap">
           <table className={`cost-table${usage ? ' cost-table-usage' : ' cost-table-time-only'}${money ? ' cost-table-money' : ''}`}>
             <colgroup>
@@ -159,6 +166,23 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
         {usage && runCost !== undefined && <UsageBreakdown cost={runCost} />}
       </div>
     </div>
+  )
+}
+
+// ModelsAgentsEntry — компактный вход в детали по моделям и агентам; время agent jobs не зависит от учёта
+// токенов, поэтому вход есть и без usage.
+function ModelsAgentsEntry({ onOpen, counts }: { onOpen: () => void; counts?: UsageCounts }): ReactElement {
+  return (
+    <button type="button" className="usage-entry" onClick={onOpen}>
+      <span className="usage-entry-text">
+        <strong>Models & agents</strong>
+        <small>Compare usage and inspect agent jobs.</small>
+      </span>
+      {counts !== undefined && <span className="usage-entry-counts">{`${plural(counts.models, 'model')} · ${plural(counts.agents, 'agent')}`}</span>}
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="m9 5 7 7-7 7" />
+      </svg>
+    </button>
   )
 }
 

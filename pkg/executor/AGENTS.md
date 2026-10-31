@@ -40,6 +40,13 @@
 - Read-only гарантия зависит от адаптера и окружения: Codex verify на хосте
   использует sandbox, собственный Docker-ран — доверие контейнеру. Не-Claude
   команды и bare Claude нельзя объявлять read-only только на основании промпта.
+- `Config.Job` делает каждый `Run*` измеряемым agent job (`RunScript` и `RunJSONQuery` — нет).
+  ID выдаётся в начале вызова, `started` пишется сразу после `cmd.Start` и до `OnDelivered`,
+  конец фиксируется в `runJob` до любой записи на диск. Сбой до старта (logger, setup,
+  `Start`, отмена) — `start_failed`, не job. Порядок в конце хода один (`finishTurn`):
+  `OnUsage` с `JobID`, затем `finished`; обычный terminal CAS видит и usage, и закрытый job.
+  Ошибка журнала ход не роняет. Новый `Run*` обязан идти через `newJob`/`finishTurn`.
+  `JobConfig.Yielded` спрашивается только для исхода `ok`; финальный текст хода передаётся ему в памяти и в журнал не пишется.
 - MCP stdout предназначен только для JSON-RPC; диагностический вывод — stderr.
 
 Контракты завершения и режимов: [prompts](../../docs/internals/prompts.md),

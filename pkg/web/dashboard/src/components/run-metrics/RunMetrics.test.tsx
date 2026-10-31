@@ -400,4 +400,31 @@ describe('summarizeCoverageGroups', () => {
     expect(text).not.toContain('model-d')
     expect(text).not.toContain('model-e')
   })
+
+  describe('show_money off', () => {
+    it('keeps no cost tile, no marker and no hidden cost-reason node even with gaps and unavailable storage', () => {
+      const { container } = render(
+        <RunMetrics
+          {...baseTimeProps}
+          {...baseCostProps}
+          coverageIssues={[makeIssue()]}
+          accounting={{ ...okHealthyNoMoney, health: 'unavailable' }}
+          runCost={makeCostSummary('$1.23')}
+        />,
+      )
+      expect(container.querySelector('.metric-cost-reason')).toBeNull()
+      expect(container.querySelector('.metric-marker')).toBeNull()
+      expect(container.querySelector('[data-metric="cost"]')).toBeNull()
+      expect(container.querySelector('[data-tooltip]')).toBeNull()
+      expect(container.textContent).not.toMatch(/unpriced|\$1\.23|Est\. cost/)
+    })
+
+    it('with money the reason node and marker are still there', () => {
+      const { container } = render(
+        <RunMetrics {...baseTimeProps} {...baseCostProps} coverageIssues={[makeIssue()]} accounting={okHealthy} runCost={makeCostSummary('$1.23')} />,
+      )
+      expect(container.querySelector('.metric-cost-reason')?.textContent).toMatch(/unpriced/)
+      expect(container.querySelector('.metric-marker')).not.toBeNull()
+    })
+  })
 })

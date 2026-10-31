@@ -1,0 +1,366 @@
+{
+  "view": "breakdown",
+  "as_of": "2026-10-31T11:12:00Z",
+  "revision": "u7.j12.m3",
+  "mode": "full",
+  "metrics": [
+    "cost",
+    "agent_time",
+    "tokens"
+  ],
+  "health": {
+    "usage": "ok",
+    "jobs": "ok"
+  },
+  "completeness": {
+    "time": {
+      "status": "partial",
+      "known": 5,
+      "unknown": 1,
+      "reasons": [
+        "interrupted_job"
+      ]
+    },
+    "tokens": {
+      "status": "partial",
+      "known": 4,
+      "unknown": 2,
+      "reasons": [
+        "unmetered_job",
+        "pending_usage"
+      ]
+    },
+    "price": {
+      "status": "partial",
+      "known": 3,
+      "unknown": 3,
+      "reasons": [
+        "unmetered_job",
+        "pending_usage",
+        "unpriced_model"
+      ]
+    }
+  },
+  "query": {
+    "view": "breakdown",
+    "group": "agent",
+    "scope": "all",
+    "sort": "time",
+    "dir": "desc"
+  },
+  "totals": {
+    "jobs": 6,
+    "active_jobs": 1,
+    "agent_time": {
+      "duration_ms": 810000,
+      "measured_jobs": 5,
+      "unknown_jobs": 1
+    },
+    "tokens": {
+      "counts": {
+        "uncached_input": 10000,
+        "cache_read": 25000,
+        "cache_write_5m": 1400,
+        "cache_write_1h": 0,
+        "cache_write_other": 0,
+        "output": 4100,
+        "reasoning_output": 300,
+        "total": 40500
+      },
+      "metered_jobs": 4,
+      "unmetered_jobs": 1,
+      "pending_jobs": 1
+    },
+    "money": {
+      "estimated_cost_usd": 1.92,
+      "priced_jobs": 3,
+      "unpriced_jobs": 1
+    }
+  },
+  "outside_run_total": {
+    "jobs": 1,
+    "active_jobs": 0,
+    "agent_time": {
+      "duration_ms": 15000,
+      "measured_jobs": 1,
+      "unknown_jobs": 0
+    },
+    "tokens": {
+      "counts": null,
+      "metered_jobs": 0,
+      "unmetered_jobs": 1,
+      "pending_jobs": 0
+    },
+    "money": {
+      "estimated_cost_usd": null,
+      "priced_jobs": 0,
+      "unpriced_jobs": 0
+    }
+  },
+  "catalog": {
+    "stages": [
+      {
+        "id": "build",
+        "title": "Build"
+      },
+      {
+        "id": "review",
+        "title": "Review"
+      }
+    ],
+    "agents": [
+      {
+        "id": "stage:build",
+        "kind": "stage",
+        "title": "Build"
+      },
+      {
+        "id": "helper:t-1",
+        "kind": "helper",
+        "title": "Reviewer"
+      },
+      {
+        "id": "verify:review#0",
+        "kind": "verify",
+        "title": "Verify · review"
+      },
+      {
+        "id": "stage:review",
+        "kind": "stage",
+        "title": "Review"
+      },
+      {
+        "id": "side:run-1",
+        "kind": "assistant",
+        "title": "Assistant",
+        "outside_run_total": true
+      }
+    ],
+    "models": [
+      {
+        "key": "anthropic/claude-opus-4-8",
+        "channel": "anthropic",
+        "model": "claude-opus-4-8",
+        "color_ordinal": 0
+      },
+      {
+        "key": "codex/gpt-5.6-sol",
+        "channel": "codex",
+        "model": "gpt-5.6-sol",
+        "color_ordinal": 1
+      },
+      {
+        "key": "anthropic/glm-5.3",
+        "channel": "anthropic",
+        "model": "glm-5.3",
+        "color_ordinal": 2
+      }
+    ],
+    "scopes": {
+      "run_wide": true,
+      "unattributed": false
+    }
+  },
+  "breakdown": {
+    "group": "agent",
+    "rows": [
+      {
+        "key": "stage:build",
+        "label": "Build",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "Build"
+        },
+        "model": {
+          "key": "anthropic/claude-opus-4-8",
+          "channel": "anthropic",
+          "model": "claude-opus-4-8",
+          "color_ordinal": 0
+        },
+        "model_state": "single",
+        "model_source": "observed",
+        "jobs": 3,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 420000,
+          "measured_jobs": 2,
+          "unknown_jobs": 1
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 4000,
+            "cache_read": 25000,
+            "cache_write_5m": 1400,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 2600,
+            "reasoning_output": 0,
+            "total": 33000
+          },
+          "metered_jobs": 2,
+          "unmetered_jobs": 1,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 1.77,
+          "priced_jobs": 2,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "key": "stage:review",
+        "label": "Review",
+        "agent": {
+          "id": "stage:review",
+          "kind": "stage",
+          "title": "Review"
+        },
+        "model": {
+          "key": "anthropic/glm-5.3",
+          "channel": "anthropic",
+          "model": "glm-5.3",
+          "color_ordinal": 2
+        },
+        "model_state": "single",
+        "model_source": "hint",
+        "jobs": 1,
+        "active_jobs": 1,
+        "agent_time": {
+          "duration_ms": 240000,
+          "measured_jobs": 1,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": null,
+          "metered_jobs": 0,
+          "unmetered_jobs": 0,
+          "pending_jobs": 1
+        },
+        "money": {
+          "estimated_cost_usd": null,
+          "priced_jobs": 0,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "key": "helper:t-1",
+        "label": "Reviewer",
+        "agent": {
+          "id": "helper:t-1",
+          "kind": "helper",
+          "title": "Reviewer"
+        },
+        "model": {
+          "key": "codex/gpt-5.6-sol",
+          "channel": "codex",
+          "model": "gpt-5.6-sol",
+          "color_ordinal": 1
+        },
+        "model_state": "single",
+        "model_source": "observed",
+        "jobs": 1,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 90000,
+          "measured_jobs": 1,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 4000,
+            "cache_read": 0,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 1000,
+            "reasoning_output": 300,
+            "total": 5000
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": null,
+          "priced_jobs": 0,
+          "unpriced_jobs": 1
+        }
+      },
+      {
+        "key": "verify:review#0",
+        "label": "Verify · review",
+        "agent": {
+          "id": "verify:review#0",
+          "kind": "verify",
+          "title": "Verify · review"
+        },
+        "model": {
+          "key": "codex/gpt-5.6-sol",
+          "channel": "codex",
+          "model": "gpt-5.6-sol",
+          "color_ordinal": 1
+        },
+        "model_state": "single",
+        "model_source": "observed",
+        "jobs": 1,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 60000,
+          "measured_jobs": 1,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": {
+            "uncached_input": 2000,
+            "cache_read": 0,
+            "cache_write_5m": 0,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 500,
+            "reasoning_output": 0,
+            "total": 2500
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.15,
+          "priced_jobs": 1,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "key": "side:run-1",
+        "label": "Assistant",
+        "agent": {
+          "id": "side:run-1",
+          "kind": "assistant",
+          "title": "Assistant",
+          "outside_run_total": true
+        },
+        "model": null,
+        "model_state": "unknown",
+        "jobs": 1,
+        "active_jobs": 0,
+        "agent_time": {
+          "duration_ms": 15000,
+          "measured_jobs": 1,
+          "unknown_jobs": 0
+        },
+        "tokens": {
+          "counts": null,
+          "metered_jobs": 0,
+          "unmetered_jobs": 1,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": null,
+          "priced_jobs": 0,
+          "unpriced_jobs": 0
+        }
+      }
+    ]
+  }
+}

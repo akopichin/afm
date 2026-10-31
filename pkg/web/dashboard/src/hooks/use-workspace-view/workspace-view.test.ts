@@ -573,3 +573,52 @@ describe("workspaceReducer — 'assistant' view (T3.10)", () => {
     expect(reopened.activeStageId).toBe('a')
   })
 })
+
+describe('workspaceReducer — Cost subview (Models & agents)', () => {
+  it('starts on the overview', () => {
+    expect(initialWorkspaceState.costView).toBe('overview')
+  })
+
+  it('openCostDetails opens Cost on the details and remembers cost as the attention return view', () => {
+    const state = workspaceReducer(initialWorkspaceState, { type: 'openCostDetails' })
+    expect(state.view).toBe('cost')
+    expect(state.costView).toBe('details')
+    expect(state.returnView).toBe('cost')
+  })
+
+  it('closeCostDetails goes back to the overview and stays on Cost', () => {
+    const details = workspaceReducer(initialWorkspaceState, { type: 'openCostDetails' })
+    const state = workspaceReducer(details, { type: 'closeCostDetails' })
+    expect(state.view).toBe('cost')
+    expect(state.costView).toBe('overview')
+  })
+
+  it('closeCostDetails outside Cost does not move the workspace', () => {
+    const details = workspaceReducer(initialWorkspaceState, { type: 'openCostDetails' })
+    const feed = workspaceReducer(details, { type: 'openFeed' })
+    const state = workspaceReducer(feed, { type: 'closeCostDetails' })
+    expect(state.view).toBe('feed')
+    expect(state.costView).toBe('overview')
+  })
+
+  it('the subview survives leaving Cost and coming back', () => {
+    let state = workspaceReducer(initialWorkspaceState, { type: 'openCostDetails' })
+    for (const type of ['openFeed', 'openTeam', 'openBoard', 'openAssistant'] as const) {
+      state = workspaceReducer(state, { type })
+      expect(state.costView).toBe('details')
+    }
+    state = workspaceReducer(state, { type: 'openCost' })
+    expect(state.view).toBe('cost')
+    expect(state.costView).toBe('details')
+  })
+
+  it('an attention episode over the details returns to them', () => {
+    const details = workspaceReducer(initialWorkspaceState, { type: 'openCostDetails' })
+    const attn = sync(details, [item('a', 'question')])
+    expect(attn.view).toBe('attention')
+    expect(attn.costView).toBe('details')
+    const resolved = sync(attn, [])
+    expect(resolved.view).toBe('cost')
+    expect(resolved.costView).toBe('details')
+  })
+})

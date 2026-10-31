@@ -1,0 +1,4 @@
+{
+  "code": "stale_cursor",
+  "message": "cursor was issued for another revision, filter, sort or mode"
+}

@@ -144,6 +144,12 @@ func (o *Orchestrator) runnerFor(s flow.Stage, phase string) executor.Runner {
 	cfg := o.baseStageExecutorConfig(s, phase, cmd, executor.ResolveArgs(o.opts.Config.Client.ExtraArgs))
 	cfg.SessionID = sessionID
 	cfg.Resume = resume
+	if cfg.Job != nil {
+		cfg.Job.Meta.SessionID = sessionID
+		if resume {
+			cfg.Job.Meta.PrevJobID = o.lastSessionJob(sessionID)
+		}
+	}
 	return executor.New(cfg)
 }
 
@@ -185,6 +191,7 @@ func (o *Orchestrator) baseStageExecutorConfig(s flow.Stage, phase, cmd string, 
 		UsageHint:     o.usageHintFor(cmd),
 		Provider:      o.opts.Config.UsageLimitProvider(cmd),
 		OnUsage:       o.recordUsage(s.ID, phase, ""),
+		Job:           o.jobConfig(o.stageJobMeta(s, phase, cmd), meshStageParticipantID(s.ID)),
 		BrowserMCP:    o.browserForStage(s, cmd),
 		MeshClient:    o.meshClientFor(meshStageParticipantID(s.ID)),
 		StopHook:      o.stopHookFor(s, phase, cmd),
@@ -208,8 +215,8 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Ru
 }
 
 // runnerForVerify собирает *executor.Executor для ОДНОГО шага AI-verify. cmd — команда КОНКРЕТНОГО
-// verify-шага (VerifyStep.Command), может отличаться от Stage.Command.
-func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Executor {
+// verify-шага (VerifyStep.Command), может отличаться от Stage.Command; step — его номер среди шагов verify.
+func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string, step int) *executor.Executor {
 	cfg := executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
@@ -225,6 +232,7 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Execu
 		UsageHint:      o.usageHintFor(cmd),
 		Provider:       o.opts.Config.UsageLimitProvider(cmd),
 		OnUsage:        o.recordUsage(s.ID, verifyExecutionLabel, ""),
+		Job:            o.jobConfig(o.verifyJobMeta(s, step, cmd), ""),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
@@ -235,7 +243,7 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string) *executor.Execu
 // execVerifyAgent — продакшн-реализация seam'а o.runVerifyAgent (см. Orchestrator.runVerifyAgent): строит
 // свежий раннер под конкретную команду verify-шага и делегирует его RunVerifyAgent.
 func (o *Orchestrator) execVerifyAgent(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
-	return o.runnerForVerify(s, cmd).RunVerifyAgent(ctx, cmd, s.Name, prompt, logFile, resultFile)
+	return o.runnerForVerify(s, cmd, verifyStepOf(ctx)).RunVerifyAgent(ctx, cmd, s.Name, prompt, logFile, resultFile)
 }
 
 func uiActionPublisher(ui *bus.UIBus, stageID string) func(string, string) {

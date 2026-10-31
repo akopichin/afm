@@ -1,0 +1,282 @@
+/* pkg/web/dashboard/skins/base/usage-analytics.css Cost > Models & agents: the entry in the Cost overview and the
+   Breakdown / Agent jobs / Charts details. Semantic tokens only; the table turns into cards by the width of the
+   workspace (a container query), not of the viewport, because the stage rail takes a share of it. */
+
+.usage-entry {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 16px;
+  margin: 0 0 24px;
+  padding: 14px 16px;
+  text-align: left;
+  color: var(--text-primary);
+  background: var(--surface-tool);
+  border: 1px solid var(--separator-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.usage-entry:hover { background: var(--surface-raised); }
+.usage-entry-text { flex: 1; min-width: 0; }
+.usage-entry strong { display: block; font-size: 13px; font-weight: 600; }
+.usage-entry small { display: block; margin-top: 4px; color: var(--text-muted); font-size: 12px; }
+.usage-entry-counts { flex: none; font-size: 12px; color: var(--text-secondary); }
+.usage-entry > svg { flex: none; color: var(--text-secondary); }
+
+.usage-details {
+  container: usage / inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.usage-details :is(button, summary) { cursor: pointer; }
+:where(.usage-details button) { color: inherit; background: none; border: 0; border-radius: var(--radius-sm); padding: 0; text-align: left; }
+.usage-details button:disabled { color: var(--text-disabled); cursor: default; }
+
+.usage-details-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 0;
+}
+.usage-details-title { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
+.usage-details-subtitle { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+.usage-back { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; margin: 0 -12px; padding: 0 12px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.usage-back:hover { color: var(--text-primary); }
+.usage-back-arrow,
+.usage-chevron,
+.usage-drill-arrow,
+.usage-pager-arrow,
+.usage-sort-arrow {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+}
+.usage-back-arrow { transform: rotate(135deg); }
+
+.usage-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 20px 28px; }
+.usage-reading { max-width: 1200px; }
+
+.usage-views { display: flex; gap: 24px; margin-top: 16px; border-bottom: 1px solid var(--separator-subtle); }
+/* The side padding is the focus pill; the underline is drawn inside it so it spans the label only. */
+.usage-views button { position: relative; min-height: 44px; margin: 0 -12px; padding: 8px 12px; font-size: 13px; color: var(--text-muted); }
+.usage-views button::after { content: ""; position: absolute; inset: auto 12px 0; height: 2px; }
+.usage-views button:hover { color: var(--text-primary); }
+.usage-views button[aria-current="page"] { color: var(--text-primary); font-weight: 600; }
+.usage-views button[aria-current="page"]::after { background: var(--accent-primary); }
+
+.usage-state { margin: 12px 0 0; font-size: 12px; color: var(--text-muted); }
+.usage-state-error { color: var(--danger-text); }
+.usage-state-error p { margin: 0 0 8px; }
+.usage-state-error button { margin: 0 -12px; padding: 0 12px; text-decoration: underline; text-underline-offset: 3px; color: var(--text-primary); }
+
+.usage-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 24px; padding: 20px 0 12px; color: var(--text-muted); font-size: 12px; }
+.usage-summary > span, .usage-summary > button { white-space: nowrap; }
+.usage-summary strong { margin-right: 4px; font: 13px var(--font-mono); color: var(--text-primary); }
+.usage-summary button { margin: -4px -12px; padding: 4px 12px; color: var(--text-muted); font-size: 12px; }
+.usage-summary button:hover { color: var(--text-primary); }
+.usage-summary .usage-chevron { width: 5px; height: 5px; margin: 0 0 3px 4px; transform: rotate(45deg); }
+.usage-summary button[aria-expanded="true"] .usage-chevron { margin: 3px 0 0 4px; transform: rotate(-135deg); }
+
+.usage-token-mix { margin-bottom: 12px; padding: 12px 0; border-top: 1px solid var(--separator-subtle); border-bottom: 1px solid var(--separator-subtle); }
+.usage-token-mix[hidden] { display: none; }
+.usage-token-mix dl { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 0; }
+.usage-token-mix dt { font-size: 11px; color: var(--text-muted); }
+.usage-token-mix dd { margin: 4px 0 0; font: 12px var(--font-mono); color: var(--text-primary); }
+.usage-token-mix p { margin: 12px 0 0; font-size: 11px; color: var(--text-muted); }
+
+.usage-coverage { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; padding: 0; list-style: none; font-size: 12px; color: var(--text-secondary); }
+.usage-coverage strong { font-weight: 600; color: var(--text-primary); }
+.usage-outside-note { margin: 0 0 12px; font-size: 12px; color: var(--text-muted); }
+
+.usage-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px; margin: 0 0 16px; }
+.usage-toolbar > .usage-segmented { margin-right: auto; }
+.usage-toolbar-charts > .usage-segmented { margin-right: 0; }
+.usage-toolbar-charts > .usage-filters { margin-left: auto; }
+.usage-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.usage-filter { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-muted); }
+.usage-filter select {
+  width: 100%;
+  max-width: 196px;
+  min-height: 34px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+}
+.usage-clear { min-height: 34px; margin: 0 -12px; padding: 4px 12px; font-size: 12px; color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px; }
+.usage-clear:hover { color: var(--text-primary); }
+
+/* By model / By agent has no frame: the selected tint marks the choice. Only the Compare metric group is an outlined pill. */
+.usage-segmented, .usage-metric-switch { display: inline-flex; overflow: hidden; background: var(--surface-raised); }
+.usage-segmented { border-radius: var(--radius-sm); }
+.usage-metric-switch { border: 1px solid var(--control-border); border-radius: 999px; }
+.usage-segmented button, .usage-metric-switch button { min-height: 32px; padding: 4px 12px; border-radius: 0; font-size: 12px; white-space: nowrap; color: var(--text-secondary); }
+.usage-metric-switch button + button { border-left: 1px solid var(--control-border); }
+.usage-segmented button:hover, .usage-metric-switch button:hover { color: var(--text-primary); background: var(--surface-hover); }
+.usage-segmented button[aria-pressed="true"],
+.usage-metric-switch button[aria-pressed="true"] {
+  --text-muted: var(--text-secondary);
+  color: var(--text-primary);
+  font-weight: 600;
+  background-color: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
+
+.usage-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.usage-table th, .usage-table td { padding: 12px; vertical-align: middle; border-bottom: 1px solid var(--separator-subtle); }
+.usage-table th { position: sticky; top: 0; z-index: 1; font-weight: 500; text-align: left; color: var(--text-muted); background: var(--surface-tool); }
+.usage-table th button { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; margin: 0 -10px; padding: 0 10px; font-size: 11px; white-space: nowrap; color: inherit; }
+.usage-table th button:hover { color: var(--text-primary); }
+.usage-table .usage-numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-table th.usage-numeric button { justify-content: flex-end; }
+.usage-table td.usage-numeric { font: 12px var(--font-mono); white-space: nowrap; color: var(--text-primary); }
+.usage-table td small { display: block; margin-top: 4px; font: 10px var(--font-ui); color: var(--text-muted); }
+.usage-table tbody tr:hover { background: var(--surface-hover); }
+.usage-sort-arrow { visibility: hidden; transform: rotate(45deg) translate(-1px, -1px); }
+.usage-sort-arrow.is-active { visibility: visible; color: var(--text-primary); }
+.usage-sort-arrow.is-active.asc { transform: rotate(-135deg) translate(-1px, -1px); }
+
+.usage-breakdown th:first-child { width: 45%; }
+.usage-breakdown th:nth-child(2) { width: 9%; }
+.usage-breakdown th.usage-drill-head { width: 40px; padding-inline: 0; }
+.usage-identity { display: flex; align-items: center; gap: 12px; width: calc(100% + 24px); margin: 0 -12px; padding: 0 12px; }
+.usage-identity-text { min-width: 0; }
+.usage-identity strong { display: block; font-size: 13px; font-weight: 550; color: var(--text-primary); overflow-wrap: anywhere; }
+.usage-breakdown .usage-identity small { margin-top: 4px; font-size: 11px; }
+.usage-identity .usage-outside { color: var(--text-secondary); }
+.usage-avatar { display: grid; place-items: center; flex: none; width: 32px; height: 32px; font-size: 11px; color: var(--text-secondary); background: var(--surface-raised); border-radius: var(--radius-sm); }
+.usage-drill-cell { padding-inline: 0; text-align: center; }
+.usage-drill { display: inline-grid; place-items: center; width: 32px; height: 32px; color: var(--text-secondary); }
+.usage-drill:hover { color: var(--text-primary); }
+.usage-drill-arrow, .usage-pager-arrow { transform: rotate(-45deg); }
+
+.usage-jobs th:first-child { width: 36%; }
+.usage-jobs th:nth-child(2) { width: 22%; }
+.usage-jobs td { padding-block: 8px; }
+.usage-job-name strong { display: block; font-size: 12px; font-weight: 550; line-height: 1.5; color: var(--text-primary); overflow-wrap: anywhere; }
+.usage-jobs .usage-job-name small { margin-top: 2px; font-size: 10px; line-height: 1.5; }
+.usage-job-flag::before { content: " · "; }
+.usage-job-status.is-running, .usage-job-status.is-interrupted, .usage-job-status.is-error { color: var(--text-secondary); font-weight: 600; }
+.usage-job-model { font-size: 11px; color: var(--text-secondary); }
+.usage-jobs .usage-job-model small { display: inline; margin: 0; font-size: inherit; }
+.usage-jobs tr.is-highlighted { --text-muted: var(--text-secondary); background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
+.usage-jobs tr.is-highlighted:focus { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+.usage-model-dot { display: inline-block; flex: none; width: 8px; height: 8px; margin-right: 6px; vertical-align: middle; border-radius: 2px; background: var(--model-color); }
+
+.usage-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 11px; color: var(--text-muted); }
+.usage-pager { display: flex; align-items: center; gap: 8px; }
+.usage-pager-button { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; color: var(--text-secondary); }
+.usage-pager-button:hover:not(:disabled) { color: var(--text-primary); }
+.usage-pager-arrow.is-prev { transform: rotate(135deg); }
+.usage-caption { margin: 12px 0 0; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+
+.usage-empty { padding: 48px 16px; text-align: center; color: var(--text-muted); }
+.usage-empty h3 { margin: 0; font-size: 16px; color: var(--text-primary); }
+.usage-empty p { max-width: 40ch; margin: 12px auto 16px; font-size: 12px; }
+
+.usage-chart { margin-top: 24px; }
+.usage-chart + .usage-chart { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--separator-subtle); }
+.usage-chart-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.usage-chart-heading h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.usage-chart-heading > span { font-size: 11px; color: var(--text-muted); }
+.usage-bar-row { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) 120px; align-items: center; gap: 16px; min-height: 40px; width: calc(100% + 24px); margin: 0 -12px; padding: 4px 12px; }
+.usage-bar-row:hover { background: var(--surface-hover); }
+.usage-bar-label { min-width: 0; font-size: 12px; color: var(--text-primary); overflow-wrap: anywhere; }
+.usage-bar-label small { display: block; margin-top: 2px; font-size: 10px; color: var(--text-muted); }
+.usage-bar-track { height: 20px; }
+.usage-bar-fill { display: block; height: 100%; border-radius: 2px; background: var(--model-color); }
+.usage-bar-row:hover .usage-bar-fill, .usage-bar-row:focus-visible .usage-bar-fill { outline: 1px solid var(--text-secondary); outline-offset: 2px; }
+.usage-bar-value { text-align: right; white-space: nowrap; font: 12px var(--font-mono); color: var(--text-primary); }
+.usage-bar-value small { display: inline-block; width: 38px; margin-left: 8px; font: 11px var(--font-ui); color: var(--text-muted); }
+
+.usage-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 20px; padding: 0; list-style: none; font-size: 11px; color: var(--text-secondary); }
+.usage-legend li { display: flex; align-items: center; }
+.usage-timeline-axis, .usage-timeline-row { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 16px; }
+.usage-timeline-axis { margin-bottom: 8px; }
+.usage-timeline-axis > div { position: relative; height: 20px; }
+.usage-timeline-axis > div > span { position: absolute; transform: translateX(-50%); font: 10px var(--font-mono); color: var(--text-muted); }
+.usage-timeline-axis > div > span.first { transform: none; }
+.usage-timeline-axis > div > span.last { transform: translateX(-100%); }
+.usage-timeline-label { display: block; align-self: center; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.usage-timeline-track { position: relative; height: 32px; }
+.usage-timeline-grid { position: absolute; width: 1px; height: 100%; background: var(--separator-subtle); }
+.usage-timeline-job { position: absolute; top: 6px; min-width: 3px; height: 20px; border-radius: 2px; background: var(--model-color); }
+.usage-timeline-job:hover { outline: 1px solid var(--text-primary); outline-offset: 1px; }
+
+.usage-footer { margin-top: 24px; border-top: 1px solid var(--separator-subtle); }
+.usage-method summary { display: block; margin: 0 -12px; padding: 12px; border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary); }
+.usage-method > div { max-width: 70ch; font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+.usage-method strong { font-weight: 550; color: var(--text-secondary); }
+.usage-method p { margin: 0 0 8px; }
+
+.usage-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@container usage (max-width: 860px) {
+  .usage-summary { gap: 16px; }
+  .usage-table th, .usage-table td { padding-inline: 8px; }
+  .usage-table td.usage-numeric { font-size: 11px; }
+  .usage-jobs th:first-child { width: 31%; }
+  .usage-jobs th:nth-child(2) { width: 21%; }
+  .usage-breakdown th:first-child { width: 40%; }
+  .usage-bar-row { grid-template-columns: minmax(100px, 170px) minmax(0, 1fr) 110px; }
+}
+
+/* Cards: every metric keeps its label, so nothing needs a column and the page never scrolls sideways. */
+@container usage (max-width: 640px) {
+  .usage-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px 0 12px; font-size: 11px; }
+  .usage-summary strong { font-size: 12px; }
+  .usage-toolbar { gap: 12px; }
+  .usage-filters { display: grid; grid-template-columns: 1fr 1fr; width: 100%; gap: 8px 12px; }
+  .usage-filter select { max-width: none; min-height: 38px; }
+  .usage-toolbar-charts > .usage-filters { grid-template-columns: 1fr; margin-left: 0; }
+  .usage-toolbar-charts > .usage-compare { width: 100%; }
+  .usage-metric-switch { display: flex; }
+  .usage-metric-switch button { flex: 1; min-height: 38px; }
+  .usage-table, .usage-table tbody { display: block; }
+  .usage-table thead { display: none; }
+  .usage-table tr { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 8px; padding: 16px 0; border-bottom: 1px solid var(--separator-subtle); }
+  .usage-table tr:first-child { border-top: 1px solid var(--separator-subtle); }
+  .usage-table td, .usage-table td:first-child, .usage-table td:last-child { display: block; padding: 0; border: 0; }
+  .usage-table td:first-child { grid-column: 1 / -1; }
+  .usage-table td.usage-numeric { text-align: left; font-size: 11px; }
+  .usage-table td.usage-numeric::before { content: attr(data-label); display: block; margin-bottom: 4px; font: 10px var(--font-ui); color: var(--text-muted); }
+  .usage-breakdown td:first-child { padding-right: 32px; }
+  .usage-breakdown .usage-drill-cell { position: absolute; top: 16px; right: 0; width: auto; }
+  .usage-job-model { grid-column: 1 / -1; }
+  .usage-job-name strong { font-size: 13px; }
+  .usage-jobs .usage-job-name small { font-size: 11px; }
+  .usage-pagination { flex-wrap: wrap; }
+  .usage-start-note { order: 3; width: 100%; }
+  .usage-token-mix dl { display: grid; grid-template-columns: 1fr 1fr; }
+  .usage-bar-row { grid-template-columns: minmax(0, 1fr) 100px; gap: 4px 12px; padding-block: 8px; }
+  .usage-bar-label { grid-column: 1; }
+  .usage-bar-track { grid-column: 1; grid-row: 2; height: 12px; }
+  .usage-bar-value { grid-column: 2; grid-row: 2; font-size: 11px; }
+  .usage-bar-value small { width: 28px; margin-left: 4px; font-size: 10px; }
+  .usage-chart-heading { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .usage-timeline-axis, .usage-timeline-row { grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+  .usage-timeline-label { font-size: 11px; }
+  .usage-legend { gap: 8px 12px; font-size: 10px; }
+  .usage-entry { padding: 12px; }
+}
+
+/* Keyboard focus is a tint behind the control, not an outline around it. The tint is a background-image layer, so it
+   also shows over the selected/hover fills, and it stays stronger than the hover tint. Selects keep the native ring. */
+.usage-details, .usage-entry { --usage-focus-tint: color-mix(in srgb, var(--text-primary) 16%, transparent); }
+.usage-details :is(button, summary, tr[tabindex]):focus-visible,
+.usage-entry:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  background-image: linear-gradient(var(--usage-focus-tint), var(--usage-focus-tint));
+}

@@ -354,7 +354,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	// зависимости от исхода (pass/reject/exec-error). Чисто побочный эффект — ни на result, ни на err не
 	// влияет.
 	beforeFP, beforeOK := o.verifyTreeFingerprint()
-	outcome, err := o.runVerifyAgent(ctx, s, st.Command, prompt, agentLog, rawResult)
+	outcome, err := o.runVerifyAgent(withVerifyStep(ctx, idx), s, st.Command, prompt, agentLog, rawResult)
 	if afterFP, afterOK := o.verifyTreeFingerprint(); beforeOK && afterOK && beforeFP != afterFP {
 		o.emitVerifyTreeModified(s.ID, verID, idx, st.Command)
 	}
@@ -399,6 +399,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		}
 		formatCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
 		cfg := o.outputFormatterConfig(st.Command, s.ID)
+		cfg.Job = o.repairJob(o.verifyJobMeta(s, idx, st.Command), st.Command)
 		recovered, recoveryErr := recoverOutput(formatCtx, schema.VerifyResult, fmt.Sprintf("stage/%s/epoch/%d/verify/%s/step/%d", s.ID, epoch, verID, idx), raw, verifyOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, stepDir, "output", ""))
 		interrupted := stop()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

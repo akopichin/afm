@@ -110,6 +110,25 @@
   --task-done:             #66d6a5;
   --task-done-bg:          #102b27;
   --task-done-line:        #2c6b55;
+
+  /* === model colours === Marks of a model in Models & agents: bars, dots, timeline jobs. 12 fixed slots, then
+     the generated extension (src/lib/model-colors.ts). Every mark has a text label, so these are graphics
+     (3:1 on the surfaces, measured per skin x mode in model-palette.test.ts). */
+  --model-color-0:  #b0bacb;
+  --model-color-1:  #98a7ff;
+  --model-color-2:  #64cfa3;
+  --model-color-3:  #f2bf62;
+  --model-color-4:  #ed91c8;
+  --model-color-5:  #72c6ef;
+  --model-color-6:  #f38e72;
+  --model-color-7:  #c3a5f5;
+  --model-color-8:  #a8c96a;
+  --model-color-9:  #e9a765;
+  --model-color-10: #6ad0ca;
+  --model-color-11: #df9f9c;
+  --model-color-unknown: var(--text-muted);
+  --model-extra-lightness: 78%;
+  --model-extra-chroma:    0.13;
 }
 
 /* Light theme: darker foregrounds for AA contrast on the pale fills. No skin sets these tokens. */
@@ -123,6 +142,21 @@
   --task-done:             #17734e;
   --task-done-bg:          #e6f5ed;
   --task-done-line:        #9bcdb4;
+
+  --model-color-0:  #52677f;
+  --model-color-1:  #594fc4;
+  --model-color-2:  #17724d;
+  --model-color-3:  #8a5b00;
+  --model-color-4:  #a13b7a;
+  --model-color-5:  #08749c;
+  --model-color-6:  #a1472d;
+  --model-color-7:  #7943ac;
+  --model-color-8:  #4e6e17;
+  --model-color-9:  #94501a;
+  --model-color-10: #08726c;
+  --model-color-11: #924d49;
+  --model-extra-lightness: 48%;
+  --model-extra-chroma:    0.12;
 }
 
 /* Quote chip entrance: a bright accent glow that flashes on appear and eases down to rest, while the chip

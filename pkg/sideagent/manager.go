@@ -93,6 +93,8 @@ type Config struct {
 	SourceReply func(sourceMessageID string) (string, bool)
 	// OnUsage — приёмник учёта стоимости одного хода. nil → учёт выключен.
 	OnUsage func(accounting.Observation)
+	// Job measures every turn as an agent job in the Assistant's own journal. nil → turns are not measured.
+	Job *executor.JobConfig
 	// NewExecutor — фабрика AgentRunner из executor.Config (тест-шов). nil →
 	// NewExecutorRunner (реальный executor).
 	NewExecutor func(executor.Config) AgentRunner
@@ -129,6 +131,7 @@ type Manager struct {
 	ctxBuilder        ContextBuilder
 	secrets           func() []string
 	onUsage           func(accounting.Observation)
+	job               *executor.JobConfig
 	mentionResolve    func(string) (string, bool)
 	knownActionType   func(string) bool
 	meshClient        func() *executor.MeshClient
@@ -179,6 +182,7 @@ func New(cfg Config) *Manager {
 		ctxBuilder:        cfg.Context,
 		secrets:           cfg.Secrets,
 		onUsage:           cfg.OnUsage,
+		job:               cfg.Job,
 		mentionResolve:    cfg.MentionResolve,
 		knownActionType:   cfg.KnownActionType,
 		meshClient:        cfg.MeshClient,
@@ -336,6 +340,7 @@ func (m *Manager) runTurn(at *activeTurn, prompt, sourceMessageID string) {
 		Phase:       sideAgentType,
 		InterruptCh: at.interrupt,
 		OnUsage:     m.onUsage,
+		Job:         m.job,
 		Reasoning:   m.reasoning,
 		// Read at write time: MeshClient.Mint runs later in executor.run, so
 		// this includes the invocation token once stdout/stderr can contain it.

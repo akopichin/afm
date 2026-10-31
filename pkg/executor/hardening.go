@@ -92,16 +92,17 @@ type HelperOutcome struct {
 // task-admission time (T3.4); this method only implements the actual run-mode behavior for a profile that
 // was already admitted.
 func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt, logFile, resultFile string) (HelperOutcome, error) {
+	job := e.newJob()
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
-		return HelperOutcome{}, err
+		return HelperOutcome{}, job.abort(err)
 	}
 	defer lg.Close()
 
 	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
 	jf, err := os.OpenFile(jsonlFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return HelperOutcome{}, fmt.Errorf("open jsonl file: %w", err)
+		return HelperOutcome{}, job.abort(fmt.Errorf("open jsonl file: %w", err))
 	}
 	defer jf.Close()
 
@@ -150,7 +151,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(he.cfg.UsageHint)
 	limits := newUsageLimitScanner(he.clk().Now, he.cfg)
-	runErr := he.run(ctx, prompt, phase, stderr, func(line string) {
+	runErr := he.runJob(ctx, job, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		// Everything below reads the redacted line, so no field of the event — text, tool name, tool input —
 		// can carry a secret to a sink.
@@ -196,9 +197,8 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 	runErr = he.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
-	if he.cfg.OnUsage != nil {
-		he.cfg.OnUsage(collector.Finish(runErr))
-	}
+	job.noteFinalText(finalText.String())
+	he.finishTurn(job, collector, runErr)
 	if firstErr != "" {
 		lg.LogAction("helper-note", "process reported an error line; see log above: "+firstErr)
 	}

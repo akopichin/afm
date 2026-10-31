@@ -700,10 +700,18 @@ func TestExitOnFailBarrierRetryStage(t *testing.T) {
 	g.o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
 	g.requireStageFailedByHelper(t)
 	declStageSetup(t, g.o, assistantsTestStageID)
-	g.o.opts.Runner, g.o.runner = &fakeAgentRunner{}, &fakeAgentRunner{}
+	// The injected runner stands in only for a stage without its own command: the new attempt starts no real CLI.
+	g.o.graph.Replace([]flow.Stage{{ID: assistantsTestStageID}})
+	var started atomic.Bool
+	runner := &fakeAgentRunner{onAgent: func(string) { started.Store(true) }}
+	g.o.opts.Runner, g.o.runner = runner, runner
 
 	g.o.retryStage(context.Background(), assistantsTestStageID)
 	g.o.concurrency.WaitAgents()
+
+	if !started.Load() {
+		t.Fatal("the retried stage never started its agent")
+	}
 
 	if got := g.store.Snapshot().Assistants.RootGenerations[assistantsTestStageID]; got != 1 {
 		t.Fatalf("root generation after Retry = %d, want 1", got)

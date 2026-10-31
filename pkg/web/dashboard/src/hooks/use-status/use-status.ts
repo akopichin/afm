@@ -3,6 +3,7 @@ import type { Stage, StageStatus, StageVerify } from '../../types'
 import { STAGE_STATUSES, parseStageQuota } from '../../types'
 import { parseStageTiming } from '../../types/stage'
 import type { AccountingState, CostSummary, CoverageIssue } from '../../types/cost'
+import { parseUsageAnalyticsStatus, type UsageAnalyticsStatus } from '../../types/usage-analytics'
 
 // Периодический опрос состояния флоу.
 const POLL_INTERVAL_MS = 3000
@@ -53,6 +54,9 @@ export type FlowStatus = {
   // accounting — состояние учёта затрат: поддержано или нет на бэкенде.
   // Отсутствие поля трактуется как {supported: false} (старый бэкенд).
   accounting: AccountingState
+  // usageAnalytics — ревизия и режим деталей «Models & agents»; null, если эндпоинт не подключён (capability
+  // usage_analytics) или сервер старый: детали тогда недоступны и не запрашиваются.
+  usageAnalytics: UsageAnalyticsStatus | null
   // timeZone/utcOffsetMinutes — часовой пояс хоста afm (IANA-имя может быть пустым, offset — подписанные
   // минуты от UTC). Оба отсутствуют у старого бэкенда: timeZone '' и utcOffsetMinutes null сигналят
   // MessageTimeZoneProvider взять browser-local fallback.
@@ -81,6 +85,7 @@ const EMPTY_STATUS: FlowStatus = {
   collaborationMode: 'team',
   coverageIssues: [],
   accounting: { supported: false },
+  usageAnalytics: null,
   timeZone: '',
   utcOffsetMinutes: null,
 }
@@ -226,6 +231,8 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? toAccountingState(obj.accounting)
     : { supported: false }
 
+  const usageAnalytics = rawCapabilities.usage_analytics === true ? parseUsageAnalyticsStatus(obj.analytics) : null
+
   const timeZone = typeof obj.time_zone === 'string' ? obj.time_zone : ''
   const utcOffsetMinutes = typeof obj.utc_offset_minutes === 'number' && Number.isFinite(obj.utc_offset_minutes)
     ? obj.utc_offset_minutes
@@ -255,6 +262,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     runOverheadCost,
     coverageIssues,
     accounting,
+    usageAnalytics,
     timeZone,
     utcOffsetMinutes,
   }

@@ -1,9 +1,11 @@
 package accounting
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -410,5 +412,54 @@ func TestCostSnapshot_VerifyUsageAggregatesUnderParentStagePhaseWithoutDoubleCou
 		if got := b.Stages["build"].Phases["verify"]; got != 1 {
 			t.Fatalf(`reload %d: Phases["verify"] = %d, want 1 (must not double-count)`, i, got)
 		}
+	}
+}
+
+func TestStoreKeepsJobIDAndModelSource(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, NewResolver(PricingConfig{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := obsGLM()
+	obs.JobID, obs.ModelSource = "job-1", ModelSourceObserved
+	if err := s.Append(obs, "backend", "implementation", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendTask(obs, TaskMeta{TaskID: "t-1", RootStageID: "backend"}, "helper", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, rec := range l.recs {
+		if rec.JobID != "job-1" || rec.ModelSource != ModelSourceObserved {
+			t.Errorf("record %d lost its job link: job_id %q model_source %q", i, rec.JobID, rec.ModelSource)
+		}
+	}
+}
+
+func TestUsageRecordWithoutJobFieldsKeepsTheLegacyShape(t *testing.T) {
+	data, err := json.Marshal(BuildRecord(NewResolver(PricingConfig{}), obsGLM(), "backend", "implementation", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"job_id", "model_source"} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("%s must be omitted when empty: %s", key, data)
+		}
+	}
+
+	var legacy UsageRecord
+	if err := json.Unmarshal([]byte(`{"record_version":1,"stage_id":"backend","phase":"implementation","metered":true,"priced":false,"tokens":{"output":3}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.JobID != "" || legacy.ModelSource != "" {
+		t.Fatalf("a legacy line must parse with empty job fields: %+v", legacy)
 	}
 }

@@ -53,7 +53,8 @@ export function RunMetrics({
   // независимо от show_money.
   const showTokens = accounting.supported
   const showCost = accounting.supported && accounting.showMoney
-  const costMarker = hasCostMarker(coverageIssues, accounting)
+  // Без тайла Est. cost маркер и его скрытое пояснение не нужны: в DOM не остаётся текста про цену.
+  const costMarker = showCost && hasCostMarker(coverageIssues, accounting)
   const costReasonText = costMarker ? costReason(coverageIssues, accounting) : ''
   const costValue = runCost?.displayCost ?? '—'
   // Токены — компактный формат (1.2M/345K). Нет runCost (учёт ещё без данных) →

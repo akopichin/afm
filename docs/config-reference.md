@@ -69,6 +69,9 @@ accounting:
   show_money: false         # also show monetary ($) figures (Est. cost); OFF by default —
                             # tokens are always shown, money is opt-in. env
                             # AFM_ACCOUNTING_SHOW_MONEY overrides.
+                            # Both switches also pick what Models & agents shows (tokens,
+                            # money); agent jobs and their time are always recorded. The
+                            # data.analytics hook block ignores both and never has money.
 
 verify:
   max_failures: 1           # how many verify rejections (needs_changes) the author may
@@ -188,7 +191,10 @@ See [Docker mode](docker.md) for the full `docker:` section,
 [Dashboard → Themes](dashboard.md#themes) for `theme`/`skin_dir`, and
 [Cost accounting](accounting.md) for the `pricing:` overrides key (rate
 cards, precedence, and what "estimated cost" means) and the `accounting:`
-display switches (`AFM_ACCOUNTING`, `AFM_ACCOUNTING_SHOW_MONEY`), and
+display switches (`AFM_ACCOUNTING`, `AFM_ACCOUNTING_SHOW_MONEY`), which also
+decide what [Models & agents](dashboard.md#models-and-agents) shows (the
+`data.analytics` [hook block](lifecycle-hooks.md#stage-analytics) ignores them and
+never has money), and
 [AI-verify](verify.md) for the top-level `verify.max_failures` correction budget,
 `verify.review_patience` stalemate backstop, and `verify.fresh_correction` session
 setting.

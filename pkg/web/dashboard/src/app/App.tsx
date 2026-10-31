@@ -15,6 +15,7 @@ import { FeedWorkspace, meshDeliveries, type ComposerDraft, type MeshPick } from
 import { emptyComposerDraft } from '../components/feed-workspace/FeedComposer'
 import { sideAgentFailures } from '../components/feed-workspace/mesh-receipt'
 import { CostPanel } from '../components/cost-panel'
+import { UsageDetails } from '../components/usage-analytics'
 import { MaximizeProvider } from '../components/layout/Maximizable'
 import { DashboardShell } from '../components/layout/DashboardShell'
 import { WorkspaceTabs, WorkspaceHeader, AttentionBanner, type WorkspaceTabDescriptor } from '../components/workspace'
@@ -27,6 +28,7 @@ import { MessageTimeZoneProvider } from '../lib/message-time-zone'
 import { DialogOpenContext } from '../lib/focus-trap'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
+import { useUsageAnalytics } from '../hooks/use-usage-analytics'
 import { useMediaQuery } from '../hooks/use-media-query'
 import { useSelectedStage } from '../hooks/use-selected-stage'
 import { useAssistantMaxDepth, useAssistantProfiles } from '../hooks/use-assistant-profiles'
@@ -91,7 +93,7 @@ export function App(): ReactElement {
     flowName, stages, startedAt, endedAt, elapsedAccumulatedMs, elapsedSince,
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, collaborationMode, runCost,
-    runOverheadCost, coverageIssues, accounting, statusAvailable, refresh, runStatus,
+    runOverheadCost, coverageIssues, accounting, usageAnalytics, statusAvailable, refresh, runStatus,
     timeZone, utcOffsetMinutes,
   } = useStatus()
   const runEpoch = useRunEpoch(runId)
@@ -150,7 +152,7 @@ export function App(): ReactElement {
   const ownedHandledSigs = stages
     .filter((s) => s.status === 'paused' && pauseOnFocus.shouldSuppressAttention(s.id))
     .map((s) => sig({ stageId: s.id, kind: 'paused', episode: s.updatedAt }))
-  const { state: wsState, activeItem: attnItem, openFeed, openCost, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs, dialogOpenNow)
+  const { state: wsState, activeItem: attnItem, openFeed, openCost, openCostDetails, closeCostDetails, openAttention, openHistory, openAssistant, openTeam, openBoard } = useWorkspaceView(stages, editing, ownedHandledSigs, dialogOpenNow)
 
   // meshRoster (Agent Mesh, T7.3) — the ONE useMeshRoster poll for the whole dashboard; there is no
   // status.capabilities.mesh field (unlike collaboration/addStage/sideAgent below), so this hook's own
@@ -243,6 +245,13 @@ export function App(): ReactElement {
   // assistantProfiles — configured helper roles, for the "Attach helper…" dialog. Same collaboration gate as
   // the rest; empty list when the capability is off (no network calls).
   const assistantProfiles = useAssistantProfiles(capabilities.collaboration)
+
+  // Models & agents: выбор и данные живут здесь, выше условного рендера, поэтому переживают смену вкладок.
+  // Запросов нет, пока детали закрыты: счётчики входа в Cost приходят в /api/status.
+  const usage = useUsageAnalytics({ open: wsState.view === 'cost' && wsState.costView === 'details', status: usageAnalytics, runEpoch, statusAvailable })
+  useEffect(() => {
+    if (usageAnalytics === null && wsState.costView === 'details') closeCostDetails()
+  }, [usageAnalytics === null, wsState.costView])
 
   // If collaboration is disabled, a previously selected helper view returns to Feed.
   useEffect(() => {
@@ -742,7 +751,9 @@ export function App(): ReactElement {
                     }
                   />
                 )}
-                {wsState.view === 'cost' ? (
+                {wsState.view === 'cost' && wsState.costView === 'details' && usageAnalytics !== null ? (
+                  <UsageDetails analytics={usage} onBack={closeCostDetails} live={statusAvailable} />
+                ) : wsState.view === 'cost' ? (
                   <CostPanel
                     stages={stages}
                     times={times}
@@ -751,6 +762,8 @@ export function App(): ReactElement {
                     runOverheadCost={runOverheadCost}
                     coverageIssues={coverageIssues}
                     accounting={accounting}
+                    onOpenDetails={usageAnalytics !== null ? openCostDetails : undefined}
+                    usageCounts={usageAnalytics?.counts ?? undefined}
                   />
                 ) : wsState.view === 'team' ? (
                   // Team is global, like Cost: must be checked BEFORE the

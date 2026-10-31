@@ -3,6 +3,7 @@
 package lifecyclehooks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -152,6 +153,94 @@ type Event struct {
 	// Key — необязательный дискриминатор для не-FSM stage-событий, которые внутри одной активации стадии
 	// могут повториться с разной семантикой.
 	Key string
+	// Analytics — снимок стадии для stage_finished/stage_failed, собранный до Emit; Emit копирует его,
+	// поэтому поздние изменения у эмиттера в payload не попадают.
+	Analytics *StageAnalytics
+}
+
+// AnalyticsVersion — версия блока data.analytics, независимая от schema_version конверта.
+const AnalyticsVersion = 1
+
+// AnalyticsScopeStageCumulative — снимок копит все попытки стадии и её helper-потомков до этого события.
+const AnalyticsScopeStageCumulative = "stage_cumulative"
+
+// Nullable — значение или JSON null, когда итог неизвестен (null ≠ 0). Значимый тип вместо указателя:
+// копия снимка не делит память с оригиналом.
+type Nullable[T any] struct {
+	V     T
+	Valid bool
+}
+
+// Known — известное значение, включая настоящий ноль.
+func Known[T any](v T) Nullable[T] { return Nullable[T]{V: v, Valid: true} }
+
+// MarshalJSON пишет null для неизвестного значения.
+func (n Nullable[T]) MarshalJSON() ([]byte, error) {
+	if !n.Valid {
+		return []byte("null"), nil
+	}
+	return json.Marshal(n.V)
+}
+
+// StageAnalytics — блок data.analytics: накопительные время и токены стадии на момент terminal-перехода.
+// Денежных полей нет намеренно: хук не должен раскрывать скрытые цены.
+type StageAnalytics struct {
+	Version       int                `json:"version"`
+	AsOf          time.Time          `json:"as_of"`
+	StageEventSeq uint64             `json:"stage_event_seq"`
+	UsageRevision uint64             `json:"usage_revision"`
+	JobsRevision  uint64             `json:"jobs_revision"`
+	Scope         string             `json:"scope"`
+	Timing        AnalyticsTiming    `json:"timing"`
+	AgentJobs     AnalyticsAgentJobs `json:"agent_jobs"`
+	Usage         AnalyticsUsage     `json:"usage"`
+}
+
+// AnalyticsTiming — время стадии; WaitingMS = approval + helpers + backoff + scheduling.
+type AnalyticsTiming struct {
+	TotalMS      Nullable[int64] `json:"total_ms"`
+	WorkMS       Nullable[int64] `json:"work_ms"`
+	WaitingMS    Nullable[int64] `json:"waiting_ms"`
+	PausedMS     Nullable[int64] `json:"paused_ms"`
+	ApprovalMS   Nullable[int64] `json:"approval_ms"`
+	HelpersMS    Nullable[int64] `json:"helpers_ms"`
+	BackoffMS    Nullable[int64] `json:"backoff_ms"`
+	SchedulingMS Nullable[int64] `json:"scheduling_ms"`
+	Complete     bool            `json:"complete"`
+	Reason       string          `json:"reason,omitempty"`
+}
+
+// AnalyticsAgentJobs — AI-запуски стадии; DurationMS — их сумма, из-за параллельной работы она не равна WorkMS.
+type AnalyticsAgentJobs struct {
+	Count       Nullable[int]   `json:"count"`
+	Active      Nullable[int]   `json:"active"`
+	Measured    Nullable[int]   `json:"measured"`
+	UnknownTime Nullable[int]   `json:"unknown_time"`
+	DurationMS  Nullable[int64] `json:"duration_ms"`
+	Complete    bool            `json:"complete"`
+	Reason      string          `json:"reason,omitempty"`
+}
+
+// AnalyticsUsage — токены завершённых к моменту снимка запусков стадии.
+type AnalyticsUsage struct {
+	Health        string                    `json:"health"`   // ok | unavailable
+	Coverage      string                    `json:"coverage"` // full | partial | none, как accounting.Coverage
+	MeteredJobs   Nullable[int]             `json:"metered_jobs"`
+	UnmeteredJobs Nullable[int]             `json:"unmetered_jobs"`
+	PendingJobs   Nullable[int]             `json:"pending_jobs"`
+	Tokens        Nullable[AnalyticsTokens] `json:"tokens"`
+	Reason        string                    `json:"reason,omitempty"`
+}
+
+// AnalyticsTokens — разбивка токенов; Total = все входные + Output.
+type AnalyticsTokens struct {
+	UncachedInput   uint64 `json:"uncached_input"`
+	CacheRead       uint64 `json:"cache_read"`
+	CacheWrite5m    uint64 `json:"cache_write_5m"`
+	CacheWrite1h    uint64 `json:"cache_write_1h"`
+	CacheWriteOther uint64 `json:"cache_write_other"`
+	Output          uint64 `json:"output"`
+	Total           uint64 `json:"total"`
 }
 
 // DispatcherConfig — метаданные рана для payload/env.
@@ -228,6 +317,9 @@ func BuildPayload(cfg DispatcherConfig, ev Event, eventID string) Payload {
 			ID: ev.StageID, Name: ev.StageName,
 			From: ev.From, To: ev.To, Phase: ev.Phase,
 		}
+	}
+	if ev.Analytics != nil {
+		p.Data = map[string]any{"analytics": *ev.Analytics}
 	}
 	return p
 }

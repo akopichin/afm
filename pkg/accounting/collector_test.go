@@ -130,3 +130,49 @@ func TestCollectorMissingTerminalNoExitErr(t *testing.T) {
 		t.Fatalf("reason = %q", obs.Reason)
 	}
 }
+
+func TestCollectorModelSource(t *testing.T) {
+	tests := []struct {
+		name  string
+		hint  UsageHint
+		lines []string
+		exit  error
+		want  string
+		model string
+	}{
+		{
+			name:  "model seen in an assistant line is observed",
+			hint:  UsageHint{Model: "configured"},
+			lines: []string{`{"type":"assistant","message":{"model":"claude-opus-4-8","content":[]}}`},
+			want:  ModelSourceObserved, model: "claude-opus-4-8",
+		},
+		{
+			name:  "model in the adapter's terminal result is observed",
+			lines: []string{`{"type":"result","usage_contract_version":1,"usage_schema":"openai","channel":"codex","model":"gpt-x","usage":{"input_tokens":1,"output_tokens":1}}`},
+			want:  ModelSourceObserved, model: "gpt-x",
+		},
+		{
+			name: "only the configured model is a hint",
+			hint: UsageHint{Model: "configured"},
+			want: ModelSourceHint, model: "configured",
+		},
+		{
+			name: "an interrupted run that never named a model keeps the hint source",
+			hint: UsageHint{Model: "configured"}, exit: errTest,
+			want: ModelSourceHint, model: "configured",
+		},
+		{name: "no model anywhere has no source", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCollector(tc.hint)
+			for _, l := range tc.lines {
+				c.Observe([]byte(l))
+			}
+			obs := c.Finish(tc.exit)
+			if obs.ModelSource != tc.want || obs.Model != tc.model {
+				t.Fatalf("model %q source %q, want %q / %q", obs.Model, obs.ModelSource, tc.model, tc.want)
+			}
+		})
+	}
+}

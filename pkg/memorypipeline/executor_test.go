@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentjobs"
+	"github.com/akopichin/afm/pkg/executor"
 )
 
 // writeFakeAgentScript captures stdin in prompt.out and emits a successful Claude text result.
@@ -181,5 +183,39 @@ func TestNewExecRunner_UsageAttribution(t *testing.T) {
 		if calls[i] != w {
 			t.Errorf("call[%d] = %+v, want %+v", i, calls[i], w)
 		}
+	}
+}
+
+type recordingJobSink struct{ records []agentjobs.Record }
+
+func (s *recordingJobSink) Append(rec agentjobs.Record) error {
+	s.records = append(s.records, rec)
+	return nil
+}
+
+// Every memory agent call is a measured job with the identity the caller assigns to its spec.
+func TestNewExecRunner_MeasuresEachCallAsAJob(t *testing.T) {
+	sink := &recordingJobSink{}
+	var specs []AgentSpec
+	cfg := AgentConfig{
+		Command: writeUsageAgentScript(t),
+		RootDir: t.TempDir(),
+		Job: func(spec AgentSpec) *executor.JobConfig {
+			specs = append(specs, spec)
+			return &executor.JobConfig{Meta: agentjobs.JobMeta{AgentID: "stage:" + spec.StageID, Phase: spec.Phase}, Sink: sink}
+		},
+	}
+	spec := AgentSpec{Kind: KindReflect, StageName: "s1", StageID: "s1", Phase: PhaseReflect, LogFile: filepath.Join(t.TempDir(), "reflect.log")}
+	if err := NewExecRunner(cfg, Prompts{})(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0].StageID != "s1" {
+		t.Fatalf("Job called with %+v, want the reflect spec once", specs)
+	}
+	if len(sink.records) != 2 || sink.records[0].Type != agentjobs.TypeStarted || sink.records[1].Type != agentjobs.TypeFinished {
+		t.Fatalf("journal = %+v, want started and finished", sink.records)
+	}
+	if got := sink.records[0].JobMeta; got.AgentID != "stage:s1" || got.Phase != PhaseReflect || got.JobID == "" {
+		t.Fatalf("started meta = %+v", got)
 	}
 }

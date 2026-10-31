@@ -809,4 +809,18 @@ describe('useStatus', () => {
     expect(byId.get('h')?.timing).toEqual({ started: true, complete: false })
     expect(byId.get('i')?.timing?.open).toBeUndefined()
   })
+
+  test('normalizeStatus maps the usage analytics capability and status block', () => {
+    const result = normalizeStatus({
+      flow_name: 'demo', stages: [], capabilities: { usage_analytics: true }, analytics: { revision: 'u7.j12.m3', mode: 'no_money', models: 2, agents: 4 },
+    })
+    expect(result.usageAnalytics).toEqual({ revision: 'u7.j12.m3', mode: 'no_money', counts: { models: 2, agents: 4 } })
+  })
+
+  test('normalizeStatus has no usage analytics without the capability or with a broken block (old backend)', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).usageAnalytics).toBeNull()
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { usage_analytics: true } }).usageAnalytics).toBeNull()
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: { usage_analytics: true }, analytics: { revision: 'r', mode: 'free' } }).usageAnalytics).toBeNull()
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], capabilities: {}, analytics: { revision: 'r', mode: 'full' } }).usageAnalytics).toBeNull()
+  })
 })

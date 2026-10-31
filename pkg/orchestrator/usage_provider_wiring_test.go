@@ -62,7 +62,7 @@ func TestExecutorFactories_StampUsageProvider(t *testing.T) {
 			if verifyCmd == "" {
 				verifyCmd = o.opts.Config.Client.Command
 			}
-			if got := o.runnerForVerify(stage, verifyCmd).ProviderConfig(); got != tc.want {
+			if got := o.runnerForVerify(stage, verifyCmd, 1).ProviderConfig(); got != tc.want {
 				t.Errorf("runnerForVerify provider = %q, want %q", got, tc.want)
 			}
 		})

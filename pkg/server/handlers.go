@@ -88,6 +88,8 @@ type statusResponse struct {
 	RunOverheadCost *accounting.CostView       `json:"run_overhead_cost,omitempty"`
 	CoverageIssues  []accounting.CoverageIssue `json:"coverage_issues,omitempty"`
 	Accounting      *accountingHealth          `json:"accounting,omitempty"`
+	// Analytics — ревизия, режим и счётчики models/agents для обзора; данные деталей приходят из /api/usage/analytics.
+	Analytics *UsageAnalyticsStatus `json:"analytics,omitempty"`
 }
 
 // accountingHealth forwards provider health and data presence; healthy storage can still have no coverage.
@@ -107,6 +109,8 @@ type capabilities struct {
 	Collaboration bool `json:"collaboration"`
 	// AddStage (Этап 9) — whether POST /api/run/graph/{preview|commit} is wired.
 	AddStage bool `json:"add_stage"`
+	// UsageAnalytics — подключён ли GET /api/usage/analytics (не «есть ли данные»).
+	UsageAnalytics bool `json:"usage_analytics"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -144,6 +148,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	resp.Capabilities.SideAgent = s.sideAgent != nil
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil
 	resp.Capabilities.AddStage = s.graphActions != nil
+	if s.usageAnalytics != nil {
+		resp.Capabilities.UsageAnalytics = true
+		facts := s.usageAnalytics.Facts()
+		counts := facts.Counts()
+		resp.Analytics = &UsageAnalyticsStatus{Revision: facts.Revision(), Mode: s.usageMode, Models: counts.Models, Agents: counts.Agents}
+	}
 	if s.graphActions != nil {
 		resp.GraphRevision = s.graphActions.GraphRevision()
 	}

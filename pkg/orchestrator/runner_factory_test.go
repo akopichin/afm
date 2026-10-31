@@ -177,7 +177,7 @@ func TestRunnerForVerify_WiresInterruptChFromStage(t *testing.T) {
 	interruptCh := make(chan struct{}, 1)
 	o.interruptChans.Store(stage.ID, interruptCh)
 
-	ex := o.runnerForVerify(stage, scriptPath)
+	ex := o.runnerForVerify(stage, scriptPath, 1)
 	logFile := filepath.Join(runDir, "verify.log")
 	resultFile := filepath.Join(runDir, "verify-result.json")
 
@@ -293,7 +293,7 @@ func TestVerifyAndHelperConfigs_DoNotInheritStageCapabilities(t *testing.T) {
 	if o.baseStageExecutorConfig(stage, phaseImplementation, "claude", nil).BrowserMCP == nil {
 		t.Fatal("precondition: the stage turn must get the managed browser")
 	}
-	if execConfigHasBrowser(o.runnerForVerify(stage, "claude")) {
+	if execConfigHasBrowser(o.runnerForVerify(stage, "claude", 1)) {
 		t.Error("verify runner must not get the managed browser")
 	}
 	helper := o.helperExecutorConfig(assistants.TaskID("t-caps"), "claude")

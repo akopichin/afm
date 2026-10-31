@@ -1,0 +1,267 @@
+{
+  "view": "jobs",
+  "as_of": "2026-10-31T11:12:00Z",
+  "revision": "u7.j12.m3",
+  "mode": "full",
+  "metrics": [
+    "cost",
+    "agent_time",
+    "tokens"
+  ],
+  "health": {
+    "usage": "ok",
+    "jobs": "ok"
+  },
+  "completeness": {
+    "time": {
+      "status": "partial",
+      "known": 2,
+      "unknown": 1,
+      "reasons": [
+        "interrupted_job"
+      ]
+    },
+    "tokens": {
+      "status": "partial",
+      "known": 2,
+      "unknown": 1,
+      "reasons": [
+        "unmetered_job"
+      ]
+    },
+    "price": {
+      "status": "partial",
+      "known": 2,
+      "unknown": 1,
+      "reasons": [
+        "unmetered_job"
+      ]
+    }
+  },
+  "query": {
+    "view": "jobs",
+    "group": "model",
+    "scope": "all",
+    "agent": "stage:build",
+    "sort": "started",
+    "dir": "desc",
+    "limit": 10
+  },
+  "totals": {
+    "jobs": 3,
+    "active_jobs": 0,
+    "agent_time": {
+      "duration_ms": 420000,
+      "measured_jobs": 2,
+      "unknown_jobs": 1
+    },
+    "tokens": {
+      "counts": {
+        "uncached_input": 4000,
+        "cache_read": 25000,
+        "cache_write_5m": 1400,
+        "cache_write_1h": 0,
+        "cache_write_other": 0,
+        "output": 2600,
+        "reasoning_output": 0,
+        "total": 33000
+      },
+      "metered_jobs": 2,
+      "unmetered_jobs": 1,
+      "pending_jobs": 0
+    },
+    "money": {
+      "estimated_cost_usd": 1.77,
+      "priced_jobs": 2,
+      "unpriced_jobs": 0
+    }
+  },
+  "catalog": {
+    "stages": [
+      {
+        "id": "build",
+        "title": "Build"
+      },
+      {
+        "id": "review",
+        "title": "Review"
+      }
+    ],
+    "agents": [
+      {
+        "id": "stage:build",
+        "kind": "stage",
+        "title": "Build"
+      },
+      {
+        "id": "helper:t-1",
+        "kind": "helper",
+        "title": "Reviewer"
+      },
+      {
+        "id": "verify:review#0",
+        "kind": "verify",
+        "title": "Verify · review"
+      },
+      {
+        "id": "stage:review",
+        "kind": "stage",
+        "title": "Review"
+      },
+      {
+        "id": "side:run-1",
+        "kind": "assistant",
+        "title": "Assistant",
+        "outside_run_total": true
+      }
+    ],
+    "models": [
+      {
+        "key": "anthropic/claude-opus-4-8",
+        "channel": "anthropic",
+        "model": "claude-opus-4-8",
+        "color_ordinal": 0
+      },
+      {
+        "key": "codex/gpt-5.6-sol",
+        "channel": "codex",
+        "model": "gpt-5.6-sol",
+        "color_ordinal": 1
+      },
+      {
+        "key": "anthropic/glm-5.3",
+        "channel": "anthropic",
+        "model": "glm-5.3",
+        "color_ordinal": 2
+      }
+    ],
+    "scopes": {
+      "run_wide": true,
+      "unattributed": false
+    }
+  },
+  "jobs": {
+    "items": [
+      {
+        "id": "job-7",
+        "title": "Build · implementation",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "Build"
+        },
+        "stage_id": "build",
+        "model": {
+          "key": "anthropic/claude-opus-4-8",
+          "channel": "anthropic",
+          "model": "claude-opus-4-8",
+          "color_ordinal": 0
+        },
+        "model_source": "observed",
+        "status": "interrupted",
+        "started_at": "2026-10-31T11:10:00Z",
+        "run_offset_ms": null,
+        "duration_ms": null,
+        "tokens": {
+          "counts": null,
+          "metered_jobs": 0,
+          "unmetered_jobs": 1,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": null,
+          "priced_jobs": 0,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "id": "job-2",
+        "title": "Build · implementation",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "Build"
+        },
+        "stage_id": "build",
+        "model": {
+          "key": "anthropic/claude-opus-4-8",
+          "channel": "anthropic",
+          "model": "claude-opus-4-8",
+          "color_ordinal": 0
+        },
+        "model_source": "observed",
+        "status": "ok",
+        "started_at": "2026-10-31T11:02:10Z",
+        "run_offset_ms": 130000,
+        "duration_ms": 300000,
+        "tokens": {
+          "counts": {
+            "uncached_input": 3000,
+            "cache_read": 20000,
+            "cache_write_5m": 1000,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 2000,
+            "reasoning_output": 0,
+            "total": 26000
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 1.35,
+          "priced_jobs": 1,
+          "unpriced_jobs": 0
+        }
+      },
+      {
+        "id": "job-1",
+        "title": "Build · planning",
+        "agent": {
+          "id": "stage:build",
+          "kind": "stage",
+          "title": "Build"
+        },
+        "stage_id": "build",
+        "model": {
+          "key": "anthropic/claude-opus-4-8",
+          "channel": "anthropic",
+          "model": "claude-opus-4-8",
+          "color_ordinal": 0
+        },
+        "model_source": "observed",
+        "status": "ok",
+        "started_at": "2026-10-31T11:00:00Z",
+        "run_offset_ms": 0,
+        "duration_ms": 120000,
+        "tokens": {
+          "counts": {
+            "uncached_input": 1000,
+            "cache_read": 5000,
+            "cache_write_5m": 400,
+            "cache_write_1h": 0,
+            "cache_write_other": 0,
+            "output": 600,
+            "reasoning_output": 0,
+            "total": 7000
+          },
+          "metered_jobs": 1,
+          "unmetered_jobs": 0,
+          "pending_jobs": 0
+        },
+        "money": {
+          "estimated_cost_usd": 0.42,
+          "priced_jobs": 1,
+          "unpriced_jobs": 0
+        }
+      }
+    ],
+    "total": 3,
+    "limit": 10,
+    "focus": {
+      "status": "filtered_out",
+      "job_id": "job-4"
+    }
+  }
+}

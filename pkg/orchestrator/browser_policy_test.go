@@ -82,7 +82,7 @@ func TestRunnerFor_NonInteractiveGetsBrowser(t *testing.T) {
 
 func TestRunnerForVerify_NoBrowser(t *testing.T) {
 	o := newOrchWithBrowser(t, &browser.Descriptor{Endpoint: "127.0.0.1:1", Epoch: "ep1"})
-	if execConfigHasBrowser(o.runnerForVerify(normalClaudeStage("build"), "codex-as-claude")) {
+	if execConfigHasBrowser(o.runnerForVerify(normalClaudeStage("build"), "codex-as-claude", 1)) {
 		t.Fatal("verify runner must never receive the browser capability")
 	}
 }

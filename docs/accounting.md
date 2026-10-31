@@ -218,6 +218,91 @@ isn't priced yet) or `health: unavailable` with `coverage: full` (the priced
 prefix is fine, but afm knows further writes are failing). Neither axis
 implies the other.
 
+## Agent jobs and agent time
+
+Tokens say how much an agent used; **agent jobs** say who ran and for how long.
+An **agent job** is one run of an AI process — one turn of a stage author, a
+helper, a verify step, a run agent, a memory pass or the Assistant — measured from
+the process start to its exit. Shell and script commands are not jobs. An attempt
+that never started (the executable is missing, setup failed) is not a job either:
+it is counted separately and the dashboard says that such attempts are not in the
+totals.
+
+afm records every job in `.afm/runs/<run>/agent-jobs.jsonl`, next to
+`usage.jsonl`. Each job has its own ID, and its usage record carries the same
+`job_id`, so time and tokens of one run of an agent are joined exactly. The file
+holds labels and IDs only — never tokens, money, command lines, environment or
+message text. The Assistant writes its own `agent-jobs.jsonl` in its directory
+under `.afm/side-agent/`.
+
+The first line of the file is a header with `recording_started_at`: the moment afm
+began recording jobs for this run. Everything before it is unknown to afm.
+
+Three durations are easy to mix up:
+
+| Figure | What it measures |
+|---|---|
+| **Run elapsed** | Wall-clock duration of the run, as in the header. |
+| **Stage time** | One stage from its first start, including waiting and pauses (see [Stage time](dashboard.md#stage-time)). |
+| **Agent time** | The sum of the durations of agent jobs. |
+
+**Agent time can be longer than Run elapsed**: jobs of parallel stages and helpers
+run at the same time, and every one of them adds its own duration. Time spent
+waiting for you or paused is not agent time.
+
+Two jobs are never merged because they look alike: two helpers with the same
+profile are two rows, while several turns of one author are one row with several
+jobs. The model of a job comes from the usage record (`model_source` `observed`)
+or, while the job has not reported usage, from the configured hint
+(`configured`). Records written before afm kept the source show `legacy`, and an
+agent whose jobs used different models shows **Mixed models**.
+
+The **Assistant** is not part of a run. Its jobs and tokens appear in the details
+as a separate row marked **Outside run total** and are not added to the run's
+totals, so the figures still equal the run total shown in the header.
+
+### Legacy, partial and unknown
+
+Agent time never invents a zero. A figure is shown as `—` (unknown) rather than
+`0s` whenever afm cannot vouch for it, and a label says why:
+
+- **Interrupted job** — afm was killed (for example `kill -9`) while a job ran.
+  After a restart the job is `Interrupted` with an unknown duration, it is not
+  drawn on the timeline, and its time does not keep ticking. The resumed attempt
+  is a new job.
+- **Partial time / tokens / cost** — some of the jobs behind a figure are unknown
+  (an interrupted job, no usage reported, no price). The figure is a lower bound.
+- **Unknown** — nothing behind the figure is known.
+- **Legacy run** — a run recorded by an older afm has `usage.jsonl` but no
+  `agent-jobs.jsonl`. Its tokens are counted and attributed to their stages, but
+  its jobs and agent time are unknown. A run that is resumed by this version gets
+  the file at that moment; work before `recording_started_at` stays unknown.
+
+"No jobs and no tokens" is shown as a fact only when afm can prove it: the stage
+started after `recording_started_at` and both journals are readable. A script-only
+stage on a fresh run is a proven zero; the same stage on a legacy run is unknown.
+
+One limit remains. If a run is resumed by an older afm binary after recording
+began, that period is not recorded, and afm cannot detect the gap.
+
+### Where the figures appear
+
+- The dashboard's [Models & agents](dashboard.md#models-and-agents) details.
+- The `data.analytics` block of `stage_finished` and `stage_failed`
+  [lifecycle hook](lifecycle-hooks.md#stage-analytics)
+  payloads: time and tokens of the stage, never money.
+- `GET /api/usage/analytics`, the endpoint behind the details. `GET /api/status`
+  reports it as `capabilities.usage_analytics` and an `analytics` object with a
+  `revision` and the `mode` (`full`, `no_money` or `time_only`).
+
+Agent jobs are measured whether or not accounting is displayed.
+`accounting.enabled: false` hides tokens and money, and the details keep jobs
+and agent time (`time_only`). Without money (`accounting.show_money: false`) the
+details show tokens and time (`no_money`). In both modes the server leaves the
+hidden figures out of the response instead of only hiding them in the page.
+This is a display setting, not access control: `usage.jsonl` on disk still holds
+the estimated cost, and `AFM_ACCOUNTING_SHOW_MONEY=1 afm report` shows it.
+
 ## Where cost shows up
 
 **CLI:**
@@ -246,6 +331,10 @@ implies the other.
   (cache-read / cache-write / output / uncached) and the full figure
   breakdown, plus the same coverage line naming exactly which
   model/channel needs a `pricing:` entry.
+- **Models & agents** — a compact entry between the time summary and the stage
+  table of the Cost tab opens details by model and by agent, the list of agent jobs
+  and charts. See
+  [Models & agents](dashboard.md#models-and-agents).
 
 All three CLI and dashboard totals are computed from the same
 `pkg/accounting` helpers (`Coverage`, `DisplayCost`, `CoverageIssue`) — they
@@ -273,7 +362,8 @@ Priority is **env `AFM_ACCOUNTING` > config > default on** (the same shape as
 force-hides, empty/unset lets the config decide.
 
 This is a **display switch only** — collection into
-`.afm/runs/<run>/usage.jsonl` keeps running regardless. The data is still on
+`.afm/runs/<run>/usage.jsonl` and
+[`agent-jobs.jsonl`](#agent-jobs-and-agent-time) keeps running regardless. The data is still on
 disk, so switching display back on reveals past runs too:
 `AFM_ACCOUNTING=1 afm report <run>` renders a run recorded while the display
 was off. With the display off, the dashboard omits every cost field from
@@ -312,6 +402,8 @@ With money **off** (the default) but accounting on:
   format) is shown, placed before Est. cost; the **Est. cost** tile, the Cost
   tab's `Cost` column, and the per-stage rail's `$` figure are all hidden.
 - **`afm check`** — drops the `EST. COST` column but keeps `TOKENS`/`CACHE`.
+- **Models & agents** — shows tokens and agent time without the **Est. cost**
+  column, sort option, chart button or any price label.
 - **`afm report`** — omits every `$`/Est. Cost figure while still printing all
   token output (per-stage, overhead, totals, and the coverage appendix, which
   still notes reported-vs-estimated mismatches by fact even without the

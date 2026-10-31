@@ -21,6 +21,12 @@ import (
 // Оркестратор не запускается (Run не вызывается): для проверки capability и маршрутов графа агенты не нужны.
 func startGraphTestDashboard(t *testing.T, cfg config.Config) string {
 	t.Helper()
+	return startTestDashboard(t, cfg, nil)
+}
+
+// startTestDashboard is startGraphTestDashboard with a hook that completes the server config before the start.
+func startTestDashboard(t *testing.T, cfg config.Config, extend func(sc *server.Config, runDir string, store *state.Store, orch *orchestrator.Orchestrator)) string {
+	t.Helper()
 	runDir := t.TempDir()
 	stages := []flow.Stage{{ID: "work", Name: "Work", Agents: []flow.AgentType{flow.AgentAuto}}}
 	store, err := state.Open(runDir, []string{"work"})
@@ -43,9 +49,11 @@ func startGraphTestDashboard(t *testing.T, cfg config.Config) string {
 	}
 	cfg.Server.Port = &port
 
-	srv, err := startDashboard(cfg, server.Config{
-		RunDir: runDir, Store: store, Stages: registryStageProvider{orch: orch},
-	}, orch, false)
+	sc := server.Config{RunDir: runDir, Store: store, Stages: registryStageProvider{orch: orch}}
+	if extend != nil {
+		extend(&sc, runDir, store, orch)
+	}
+	srv, err := startDashboard(cfg, sc, orch, false)
 	if err != nil {
 		t.Fatalf("startDashboard: %v", err)
 	}

@@ -427,6 +427,9 @@ The dashboard surfaces the run's **estimated** cost in three places:
 - a quiet per-stage figure in the stage rail once a stage has a priced record — while
   an active stage's first estimate is still pending, a small spinner sits in its place.
 
+The Cost tab also opens [**Models & agents**](#models-and-agents), a breakdown by
+model and agent with the list of agent jobs.
+
 All three are a **list-price estimate**, not an invoice. To hide them entirely, set
 `accounting: { enabled: false }` (or `AFM_ACCOUNTING=0`) — cost is still collected
 into `usage.jsonl`, just not displayed. See [Cost accounting](accounting.md) for the
@@ -435,6 +438,67 @@ full model (token semantics, `pricing:` overrides, coverage, and the display swi
 With accounting off, or on a run with no usage data, the **Cost** tab is still
 available as **Stage time**: the same summary and **Time** column without the token
 and cost columns. The rail keeps showing stage time.
+
+## Models & agents { #models-and-agents }
+
+The **Cost** tab has a compact **Models & agents** entry between the time summary
+and the stage table. It shows how many models and agents the run used and opens
+details that answer which model or agent spent the tokens and time, and in which
+job. **Cost overview** returns to the tab. The entry is there whenever the server
+provides agent-job analytics, also when accounting is off. See
+[Agent jobs and agent time](accounting.md#agent-jobs-and-agent-time) for what the
+figures mean.
+
+The details have three views. Filters and sorting are kept while you switch
+views, tabs and stages, and they reset when you open another run.
+
+- **Breakdown** — **By model** or **By agent**. Every row shows **Jobs**,
+  **Agent time**, **Tokens** and **Est. cost** with its share of the total, and an
+  arrow that opens the matching jobs. By model, a row also shows the provider and
+  how many agents used the model. By agent, a row shows the role (**Stage agent**,
+  **Helper**, **Run agent**, **Verify**, **Assistant**, **Run overhead** or
+  **Unattributed**) and the model, or **Mixed models** / **Model unknown**. Two
+  helpers of one profile are two rows. Select the **Tokens** total above the
+  table to see uncached input, cache read, cache write and output. The **Assistant**
+  row is marked **Outside run total**.
+- **Agent jobs** — one row per job, ten per page, with **Job / stage**, **Model**,
+  **Start**, **Duration**, **Tokens** and **Est. cost**. **Start** is the time since
+  the run began, counted as active time (for example `+1m 05s`), not a clock time.
+  A failed or interrupted job is labelled (**Failed**, **Interrupted**, **Idle
+  timeout**, **Usage limit**, **Cancelled**). Use the **Agent**, **Model** and
+  **Stage** filters (**Run-wide** and **Unattributed** are stage choices too),
+  **Sort**, the **Previous jobs** / **Next jobs** buttons or the column headers.
+  Changing a filter or sort goes back to the first page; **Clear filters** resets
+  them.
+- **Charts** — the same data as bars. Choose **By model** or **By agent** and
+  compare **Estimated cost**, **Agent time** or **Tokens** (only the ones the mode
+  allows). **When agents worked** is a timeline of jobs on the run's active time.
+  Selecting a bar opens the matching jobs; selecting a timeline job opens the jobs
+  list on its page with the row highlighted. A job whose start cannot be placed,
+  such as one interrupted by a crash, is counted but not drawn.
+
+Each model keeps one colour in every view, and the colour is never the only
+sign: every bar, row and legend entry also has a text label. A collapsed **How
+usage is counted** note explains agent time, tokens and cost. On a narrow window
+the tables become cards with labelled values, without horizontal scrolling.
+
+The figures follow the same [display switches](accounting.md#turning-the-display-off)
+as the rest of the Cost tab:
+
+| Setting | What the details show |
+|---|---|
+| accounting on, `show_money: true` | tokens, agent time and **Est. cost** |
+| accounting on, `show_money: false` (default) | tokens and agent time; no cost column, sort, chart button or price label |
+| `accounting.enabled: false` | jobs and agent time only; no tokens, no metric switch |
+
+If you change these settings and restart while the page is open, a sort or chart
+metric that is no longer available switches to the first one that is. The details
+are loaded only while they are open and refresh when the run's usage changes. If
+an update fails, the last data stays with a notice that it may be out of date, and
+**Retry** appears after an error. Unknown values are shown as `—`, and partial
+data gets a label such as **Partial time** or **Partial tokens** with the reason
+(for example "a job was interrupted, its duration is unknown" or "this run has no
+agent jobs journal"), never a made-up `0s`.
 
 ## Inline plan comments
 

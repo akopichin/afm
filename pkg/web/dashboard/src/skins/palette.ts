@@ -85,7 +85,52 @@ function parseLiteral(value: string): Rgba {
   }
   const rgb = value.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/)
   if (rgb) return { r: +rgb[1]!, g: +rgb[2]!, b: +rgb[3]!, a: rgb[4] === undefined ? 1 : +rgb[4] }
+  const oklch = value.match(/^oklch\(\s*([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s*\)$/)
+  if (oklch) return oklchToRgba(+oklch[1]! / 100, +oklch[2]!, +oklch[3]!)
   throw new Error(`unsupported color: ${value}`)
+}
+
+// oklchToRgba converts through OKLab to sRGB (Björn Ottosson's matrices) and clips to the gamut.
+export function oklchToRgba(lightness: number, chroma: number, hueDeg: number): Rgba {
+  const hue = (hueDeg * Math.PI) / 180
+  const a = chroma * Math.cos(hue)
+  const b = chroma * Math.sin(hue)
+  const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+  const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+  const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3
+  const encode = (linear: number): number => {
+    const clipped = Math.min(1, Math.max(0, linear))
+    const gamma = clipped <= 0.0031308 ? 12.92 * clipped : 1.055 * clipped ** (1 / 2.4) - 0.055
+    return Math.round(gamma * 255)
+  }
+  return {
+    r: encode(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+    g: encode(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+    b: encode(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s),
+    a: 1,
+  }
+}
+
+// oklabDistance is the Euclidean distance in OKLab: about 0.02 is a just-noticeable difference.
+export function oklabDistance(x: Rgba, y: Rgba): number {
+  const lab = ({ r, g, b }: Rgba): [number, number, number] => {
+    const lin = (c: number): number => {
+      const v = c / 255
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+    }
+    const [lr, lg, lb] = [lin(r), lin(g), lin(b)]
+    const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb)
+    const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb)
+    const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb)
+    return [
+      0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+      1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+      0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+    ]
+  }
+  const [l1, a1, b1] = lab(x)
+  const [l2, a2, b2] = lab(y)
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2)
 }
 
 // parseColor understands the forms the dashboard CSS uses, including opaque color-mix(in srgb, A p%, B).

@@ -90,12 +90,12 @@ func (d *Dispatcher) Emit(ev Event) {
 		ev.Time = time.Now()
 	}
 	eventID := d.eventID(ev)
-	payload := BuildPayload(d.cfg, ev, eventID)
 	for i, rh := range d.hooks {
 		if !rh.MatchesEvent(ev) {
 			continue
 		}
-		dl := delivery{eventID: eventID, payload: payload}
+		// Payload строится на каждую доставку: Data и Stage — ссылочные, общий экземпляр делили бы воркеры.
+		dl := delivery{eventID: eventID, payload: BuildPayload(d.cfg, ev, eventID)}
 		select {
 		case d.queues[i] <- dl:
 			d.sent.Add(1)

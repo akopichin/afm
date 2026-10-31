@@ -108,7 +108,7 @@ func TestLimitWarning_VerifyAgentConfigPublishesNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := warningAgentScript(t)
-	_, _ = o.runnerForVerify(s, cmd).RunVerifyAgent(context.Background(), cmd, s.Name, "verify", filepath.Join(dir, "v.log"), filepath.Join(dir, "r.json"))
+	_, _ = o.runnerForVerify(s, cmd, 1).RunVerifyAgent(context.Background(), cmd, s.Name, "verify", filepath.Join(dir, "v.log"), filepath.Join(dir, "r.json"))
 	checkWarningNotice(t, o, "stage_id", "s1")
 }
 

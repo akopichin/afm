@@ -5,6 +5,25 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-31
 
+### Improvement: Models & agents — usage and agent time by model, agent and job
+
+The **Cost** tab has a **Models & agents** view with **Breakdown** (by model or by
+agent), **Agent jobs** (filters, sorting, pages) and **Charts**, including a timeline
+of when agents worked. afm now records every AI process start and finish in
+`agent-jobs.jsonl`, so agent time is measured for stage agents, helpers, verify,
+run agents and the Assistant, and tokens are tied to the exact job. The view works
+without money (tokens and time) and with accounting off (time only); unknown
+durations are shown as `—`, never `0s`. See
+[Dashboard](docs/dashboard.md#models-and-agents) and
+[Cost accounting](docs/accounting.md#agent-jobs-and-agent-time).
+
+### Improvement: stage time and tokens in `stage_finished` / `stage_failed` hooks
+
+The payload of these lifecycle events has a new `data.analytics` block with the
+stage's cumulative time, agent jobs and tokens, never money. An unknown figure is
+`null` with a `reason`, and a script-only stage reports a proven zero. See
+[Lifecycle hooks](docs/lifecycle-hooks.md#stage-analytics).
+
 ### Fix: Run elapsed after a crash stops at the last log record
 
 A run that died without a clean shutdown now counts its elapsed time up to the last

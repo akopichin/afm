@@ -10,6 +10,7 @@ import (
 
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/agentjobs"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
@@ -50,6 +51,7 @@ type sideAgentRuntime struct {
 	manager *sideagent.Manager
 	store   *sideagent.Store
 	acct    *accounting.Store
+	jobs    *agentjobs.Store
 	mesh    *sideAgentMeshBridge
 }
 
@@ -59,7 +61,7 @@ type sideAgentRuntime struct {
 // Service (Agent Mesh Phase 6, T6.7): сюда регистрируется собственная mesh-идентичность бокового агента
 // ("side:<runID>"), и отсюда же резолвится ростер для @-mentions — одна реализация адресации на всё дерево,
 // вместо собственного ad-hoc matching, который раньше жил здесь через registry.Resolve.
-func startSideAgent(runID string, cfg config.Config, env runEnvironment, registry *assistants.Registry, orch *orchestrator.Orchestrator) (*sideAgentRuntime, error) {
+func startSideAgent(runID string, cfg config.Config, env runEnvironment, registry *assistants.Registry, orch *orchestrator.Orchestrator, run *state.Store) (*sideAgentRuntime, error) {
 	store, err := sideagent.Open(fmDir(), runID)
 	if err != nil {
 		if store != nil {
@@ -93,6 +95,9 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		}
 	}
 
+	// Its jobs stay out of the run's journal: the Assistant is outside the run total.
+	jobs := openAgentJobs(store.Dir(), run)
+
 	// Набор редактируемых секретов резолвится один раз (окружение/конфиг статичны).
 	protected := sideAgentProtectedValues(cfg)
 
@@ -114,6 +119,7 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		},
 		Secrets: func() []string { return protected },
 		OnUsage: onUsage,
+		Job:     orch.AssistantJob(jobs),
 		// T6.7: the shared agentcomm.ResolveAlias against the run's LIVE roster — the same resolver every
 		// other mesh addressing path uses — instead of a second, ad-hoc match (assistants.Registry.Resolve)
 		// against the static profile registry alone, which could not see stage agents/helpers/run agents at
@@ -133,7 +139,7 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 			return registry != nil && assistants.KnownActionType(typ)
 		},
 	})
-	return &sideAgentRuntime{manager: mgr, store: store, acct: acct}, nil
+	return &sideAgentRuntime{manager: mgr, store: store, acct: acct, jobs: jobs}, nil
 }
 
 // sideAgentMentionResolve builds sideagent.Config.MentionResolve from a roster-fetcher closure — the same
@@ -161,6 +167,18 @@ func (r *sideAgentRuntime) service() server.SideAgentService {
 		return nil
 	}
 	return r.manager
+}
+
+// analyticsSources hands the Assistant's own ledger and journal to the usage analytics; nil without an Assistant.
+func (r *sideAgentRuntime) analyticsSources() *accounting.AssistantSources {
+	if r == nil {
+		return nil
+	}
+	src := &accounting.AssistantSources{Usage: r.acct}
+	if r.jobs != nil { // a nil *Store inside the interface would not be nil
+		src.Jobs = r.jobs
+	}
+	return src
 }
 
 // drainMesh closes only Mesh input for flow finalization. The manager still
@@ -231,6 +249,9 @@ func (r *sideAgentRuntime) closeStores(drained bool) {
 	_ = r.store.Close()
 	if r.acct != nil {
 		_ = r.acct.Close()
+	}
+	if r.jobs != nil {
+		_ = r.jobs.Close()
 	}
 }
 

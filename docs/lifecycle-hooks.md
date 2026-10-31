@@ -112,6 +112,9 @@ The full event is delivered as **JSON on stdin**:
 }
 ```
 
+`stage_finished` and `stage_failed` also carry the stage's time and tokens in
+`data.analytics`; see [Stage analytics](#stage-analytics).
+
 The common scalars are also passed as environment variables, so a small script
 needs no JSON parser:
 
@@ -137,6 +140,104 @@ The command is run through `sh -c` with the working directory set to the
 effective `flow.root_dir` (the same CWD agents use). Event values are never
 interpolated into the command string — pass a static command and read the event
 from stdin/env.
+
+## Stage analytics in `stage_finished` and `stage_failed` { #stage-analytics }
+
+The two terminal stage events add a `data.analytics` object, so a notifier can
+report how long a stage took and how many tokens it used without reading run
+files. Other events have no `data`. The object has its own `version` (currently
+`1`); the envelope's `schema_version` is unchanged, and a hook that ignores `data`
+keeps working.
+
+```json
+{
+  "schema_version": 1,
+  "event": "stage_finished",
+  "stage": { "id": "build", "name": "Build", "from": "running", "to": "done" },
+  "data": {
+    "analytics": {
+      "version": 1,
+      "as_of": "2026-10-31T14:31:07.412Z",
+      "stage_event_seq": 37,
+      "usage_revision": 12,
+      "jobs_revision": 24,
+      "scope": "stage_cumulative",
+      "timing": {
+        "total_ms": 103772, "work_ms": 99096, "waiting_ms": 4676, "paused_ms": 0,
+        "approval_ms": 0, "helpers_ms": 0, "backoff_ms": 4676, "scheduling_ms": 0,
+        "complete": true
+      },
+      "agent_jobs": {
+        "count": 4, "active": 1, "measured": 3, "unknown_time": 0,
+        "duration_ms": 102107, "complete": false, "reason": "active_jobs"
+      },
+      "usage": {
+        "health": "ok", "coverage": "partial",
+        "metered_jobs": 3, "unmetered_jobs": 0, "pending_jobs": 1,
+        "tokens": {
+          "uncached_input": 5200, "cache_read": 14100, "cache_write_5m": 800,
+          "cache_write_1h": 0, "cache_write_other": 0, "output": 3480, "total": 23580
+        },
+        "reason": "pending_usage"
+      }
+    }
+  }
+}
+```
+
+(Other envelope fields are omitted from the example.)
+
+- **Cumulative, not a delta.** `scope: "stage_cumulative"` means every attempt of
+  the stage and its helpers up to this event. After a **Retry**, the next
+  terminal event counts the earlier attempts as well, so subtract the previous
+  event's values if you need the increment. Its `event_id` is new; a redelivery
+  of the same event carries the same bytes.
+- **Time.** `timing.total_ms` is working plus waiting plus paused time, as in
+  [Stage time](dashboard.md#stage-time). `waiting_ms` is the sum of `approval_ms`,
+  `helpers_ms`, `backoff_ms` and `scheduling_ms`.
+- **Agent jobs.** `agent_jobs.duration_ms` adds the durations of the stage's
+  [agent jobs](accounting.md#agent-jobs-and-agent-time). Parallel helpers make it
+  larger than `work_ms`. A helper that is still running when the stage ends counts
+  in `active`.
+- **Tokens.** `usage.tokens` covers the jobs that had finished when the stage
+  ended, including helpers of the stage, and never includes money.
+- **Unknown is `null`, not `0`.** A figure afm cannot determine is `null`, and
+  `complete` is `false` (or `coverage` is `partial` or `none`) with a short
+  `reason`. A real zero stays `0`.
+
+| `reason` | Meaning |
+|---|---|
+| `active_jobs` | a job of the stage was still running at the event |
+| `pending_usage` | a running job has not reported its usage yet |
+| `pending_start` | a helper was starting; its job was not recorded yet |
+| `unmetered_job` | some jobs reported no usage |
+| `stage_advanced_before_snapshot` | the stage was retried before the snapshot was built: the numeric fields of `timing` are `null`, `timing.complete` is `false` and `timing.reason` is this value |
+| `started_before_recording`, `legacy_journal` | the stage's start is not covered by the record: its start cannot be placed in the event log (`timing`), or the agent-jobs journal began later or does not exist (jobs and tokens), see below |
+| `jobs_store_unavailable`, `usage_store_unavailable` | a journal could not be read |
+
+A **script-only** stage reports `agent_jobs.count: 0` and `usage.tokens.total: 0`
+with `coverage: "full"`, which is a proven zero. On a run recorded before afm
+kept the agent-jobs journal, the same stage reports `null` and a `reason`
+instead (`legacy_journal`, or `started_before_recording` when the journal was
+created on a run that was already going).
+
+The snapshot is built right after the transition succeeds, and no hook delays
+the stage. The tiny gap has one consequence: a job that starts in the
+microseconds before the transition and is recorded after the snapshot may be
+missing from it. `pending_start` covers most of those cases for helpers.
+A failed hook never changes the stage.
+
+Collection does not depend on the display settings. `accounting.enabled: false`
+and `show_money: false` hide figures in the dashboard, but the payload still has
+the tokens; it has no money fields in any mode.
+
+Read it from the JSON on stdin:
+
+```bash
+payload=$(cat)
+echo "$payload" | jq '.data.analytics.timing.total_ms'
+echo "$payload" | jq '.data.analytics.usage.tokens.total'
+```
 
 ## Secrets and the hook environment
 

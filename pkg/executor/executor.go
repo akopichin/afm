@@ -151,6 +151,9 @@ type Config struct {
 	// event is not an agent action and stops nothing, so OnAction does not carry it; may be called repeatedly (dedupe is the caller's).
 	OnLimitWarning func(LimitWarning)
 	OnUsage        func(accounting.Observation) // called exactly once per RunPlanning/RunAgent invocation with the collected usage (nil = accounting disabled); never called by RunScript
+	// Job, if set, makes every Run* call a measured agent job: its start, end and fail-to-start are published to
+	// Job.Sink and the job ID is stamped on the usage Observation. nil = no job journal.
+	Job *JobConfig
 	// InterruptCh, if set, is watched during RunAgent: a signal on this channel sends SIGINT to the
 	// subprocess — graceful, user-requested interrupt, distinct from idle timeout / full-run shutdown.
 	InterruptCh <-chan struct{}
@@ -487,16 +490,17 @@ func (e *Executor) scriptStderrSink(logFile string) (io.Writer, func()) {
 // RunPlanning runs the AI client with prompt via stdin, collects text output
 // into outFile, writes human-readable log to logFile, and raw stream to logFile+".jsonl".
 func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, logFile string) error {
+	job := e.newJob()
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
-		return err
+		return job.abort(err)
 	}
 	defer lg.Close()
 
 	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
 	jf, err := os.OpenFile(jsonlFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("open jsonl file: %w", err)
+		return job.abort(fmt.Errorf("open jsonl file: %w", err))
 	}
 	defer jf.Close()
 
@@ -529,7 +533,7 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 	}
 	collector := accounting.NewCollector(e.cfg.UsageHint)
 	limits := newUsageLimitScanner(e.clk().Now, e.cfg)
-	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
+	runErr := e.runJob(ctx, job, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
@@ -575,9 +579,7 @@ func (e *Executor) RunPlanning(ctx context.Context, stageName, prompt, outFile, 
 
 	runErr = e.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
-	if e.cfg.OnUsage != nil {
-		e.cfg.OnUsage(collector.Finish(runErr))
-	}
+	e.finishTurn(job, collector, runErr)
 	if limit, ok := runErr.(*UsageLimitError); ok {
 		return limit
 	}
@@ -644,16 +646,17 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	// JSON/stream redaction before any output reaches a file or action callback.
 	red := helperRedactor{redact: e.cfg.Redact, secrets: e.cfg.Secrets}
 	redactOutput := e.cfg.Redact != nil || e.cfg.Secrets != nil
+	job := e.newJob()
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
-		return err
+		return job.abort(err)
 	}
 	defer lg.Close()
 
 	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
 	jf, err := os.OpenFile(jsonlFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("open jsonl file: %w", err)
+		return job.abort(fmt.Errorf("open jsonl file: %w", err))
 	}
 	defer jf.Close()
 
@@ -689,7 +692,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	}
 	collector := accounting.NewCollector(e.cfg.UsageHint)
 	limits := newUsageLimitScanner(e.clk().Now, e.cfg)
-	runErr := e.run(ctx, prompt, phase, stderr, func(line string) {
+	runErr := e.runJob(ctx, job, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		if redactOutput {
 			line = red.jsonText(line)
@@ -738,9 +741,7 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 		logErr = errors.New(red.text(logErr.Error()))
 	}
 	lg.LogEnd(logErr)
-	if e.cfg.OnUsage != nil {
-		e.cfg.OnUsage(collector.Finish(runErr))
-	}
+	e.finishTurn(job, collector, runErr)
 	if limit, ok := runErr.(*UsageLimitError); ok {
 		return limit
 	}
@@ -754,16 +755,17 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 // RunVerifyAgent запускает один проход AI-verify: свежую read-only сессию и захватывает ФИНАЛЬНЫЙ
 // ассистентский текстовый блок как машинный ответ модели, а не весь лог.
 func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
+	job := e.newJob()
 	lg, err := progress.NewLogger(logFile)
 	if err != nil {
-		return verify.RunOutcome{}, err
+		return verify.RunOutcome{}, job.abort(err)
 	}
 	defer lg.Close()
 
 	jsonlFile := strings.TrimSuffix(logFile, ".log") + ".jsonl"
 	jf, err := os.OpenFile(jsonlFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return verify.RunOutcome{}, fmt.Errorf("open jsonl file: %w", err)
+		return verify.RunOutcome{}, job.abort(fmt.Errorf("open jsonl file: %w", err))
 	}
 	defer jf.Close()
 
@@ -792,7 +794,7 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(ve.cfg.UsageHint)
 	limits := newUsageLimitScanner(ve.clk().Now, ve.cfg)
-	runErr := ve.run(ctx, prompt, phase, stderr, func(line string) {
+	runErr := ve.runJob(ctx, job, prompt, phase, stderr, func(line string) {
 		collector.Observe([]byte(line))
 		limits.observe(line)
 		jf.WriteString(line + "\n") //nolint:errcheck
@@ -825,9 +827,7 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 
 	runErr = ve.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
-	if ve.cfg.OnUsage != nil {
-		ve.cfg.OnUsage(collector.Finish(runErr))
-	}
+	ve.finishTurn(job, collector, runErr)
 	if firstErr != "" {
 		lg.LogAction("verify-note", "process reported an error line; see log above: "+firstErr)
 	}
@@ -1015,11 +1015,17 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 	return filtered
 }
 
-// run spawns the AI client subprocess, feeds prompt via stdin, and calls
+// run is runJob for a call that is not an agent job (RunScript).
+func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) error {
+	return e.runJob(ctx, nil, prompt, phase, stderr, lineCallback)
+}
+
+// runJob spawns the AI client subprocess, feeds prompt via stdin, and calls
 // lineCallback for each stdout line. Respects idle timeout. lineCallback must not block for long: once the agent
-// has exited, run stops waiting for a callback stuck past pipeFlushPeriod after the group kill and returns; that
-// one call still finishes on its own, and no further call is made.
-func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writer, lineCallback func(string)) (runErr error) {
+// has exited, runJob stops waiting for a callback stuck past pipeFlushPeriod after the group kill and returns; that
+// one call still finishes on its own, and no further call is made. job (nil = untracked) gets the start and end
+// times; the caller publishes its outcome once the turn's result is known.
+func (e *Executor) runJob(ctx context.Context, job *jobRun, prompt, phase string, stderr io.Writer, lineCallback func(string)) (runErr error) {
 	e.logAgentInput(phase, prompt)
 	args := append([]string{}, e.cfg.ExtraArgs...)
 	if e.cfg.SessionID != "" {
@@ -1145,6 +1151,8 @@ func (e *Executor) run(ctx context.Context, prompt, phase string, stderr io.Writ
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrAgentStart, e.cfg.Command, err)
 	}
+	job.markStarted()
+	defer job.markEnded()
 	if e.cfg.OnDelivered != nil {
 		e.cfg.OnDelivered()
 	}

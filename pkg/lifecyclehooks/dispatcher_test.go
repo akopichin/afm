@@ -2,6 +2,7 @@ package lifecyclehooks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -263,5 +264,65 @@ func waitFor(t *testing.T, rec *recorder, n int) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The snapshot is frozen when Emit returns, and every delivery owns its payload: neither the emitter nor
+// another hook can change what a hook receives for the same event ID.
+func TestDispatcher_AnalyticsFrozenAndCopiedPerDelivery(t *testing.T) {
+	hooks := []RegisteredHook{
+		{Hook: Hook{ID: "a", Events: EventSelector{All: true}, Command: "true"}},
+		{Hook: Hook{ID: "b", Events: EventSelector{All: true}, Command: "true"}},
+	}
+	emitted := make(chan struct{})
+	aDone := make(chan struct{})
+	var mu sync.Mutex
+	received := map[string][]byte{}
+	d := New(DispatcherOptions{
+		Config: DispatcherConfig{RunID: "run-1"},
+		Hooks:  hooks,
+		LogDir: t.TempDir(),
+		RunFunc: func(ctx context.Context, h Hook, cfg DispatcherConfig, p Payload, logPath string) error {
+			<-emitted
+			if h.ID == "b" {
+				<-aDone
+			}
+			raw, err := json.Marshal(p)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			received[h.ID] = raw
+			mu.Unlock()
+			if h.ID == "a" {
+				p.Data["analytics"] = "tampered"
+				p.Stage.Name = "tampered"
+				close(aDone)
+			}
+			return nil
+		},
+	})
+	d.Start()
+	defer d.Stop()
+
+	snap := sampleAnalytics()
+	want, err := json.Marshal(BuildPayload(d.cfg, Event{Type: EventStageFinished, StageID: "build", StageName: "Build", Seq: 420, Time: snap.AsOf, Analytics: &snap}, "run-1:transition:420:stage_finished"))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	d.Emit(Event{Type: EventStageFinished, StageID: "build", StageName: "Build", Seq: 420, Time: snap.AsOf, Analytics: &snap})
+	snap.Timing.TotalMS = Known[int64](1)
+	snap.Usage.Tokens = Nullable[AnalyticsTokens]{}
+	close(emitted)
+	if !d.Flush(2 * time.Second) {
+		t.Fatal("flush timeout")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range []string{"a", "b"} {
+		if string(received[id]) != string(want) {
+			t.Errorf("hook %s got\n%s\nwant\n%s", id, received[id], want)
+		}
 	}
 }

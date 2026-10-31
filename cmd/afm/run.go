@@ -17,6 +17,7 @@ import (
 	"github.com/akopichin/afm/assets"
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/agentcomm"
+	"github.com/akopichin/afm/pkg/agentjobs"
 	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
@@ -174,6 +175,18 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
+// openAgentJobs opens the agent jobs journal in dir. A new journal records when recording began and how much
+// active run time came before it; a broken one only leaves the agents unmeasured.
+func openAgentJobs(dir string, run *state.Store) *agentjobs.Store {
+	var base int64
+	run.View(func(rs *state.RunState) { base = rs.ElapsedAccumulatedMs })
+	jobs, err := agentjobs.Open(dir, agentjobs.Header{RecordingStartedAt: time.Now(), BaseOffsetMS: base})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: agent jobs journal: %v\n", err)
+	}
+	return jobs
+}
+
 func resolveExitOnFail(flagValue, flagSet bool, env string) (bool, error) {
 	if flagSet {
 		return flagValue, nil
@@ -209,6 +222,9 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	if acct != nil {
 		defer acct.Close()
 	}
+	// Closed after orch.Run returned, which has already cancelled and waited for every agent.
+	jobs := openAgentJobs(runDir, store)
+	defer jobs.Close()
 
 	store.SetFlowName(f.Name)
 	stageNames := make(map[string]string, len(f.Stages))
@@ -321,6 +337,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		Memory:             f.Memory,
 		MemoryDir:          env.MemoryDir,
 		Accounting:         acct,
+		Jobs:               jobs,
 		FlowName:           f.Name,
 		RunID:              runID,
 		Resumed:            resumed,
@@ -348,7 +365,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	var side *sideAgentRuntime
 	var sideDrained bool
 	if cfg.Server.GetPort() > 0 && sideAgentEnabled(cfg, f) {
-		side, err = startSideAgent(runID, cfg, env, collab.registry, orch)
+		side, err = startSideAgent(runID, cfg, env, collab.registry, orch, store)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: Assistant disabled: %v\n", err)
 		}
@@ -366,6 +383,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		Store:             store,
 		Workspace:         ws,
 		Accounting:        serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
+		UsageAnalytics:    newUsageAnalytics(acct, acctErr, jobs, orch, side),
 		SideAgent:         side.service(),
 		AssistantProfiles: collab.service(),
 		CollaborationMode: resolveCollaborationMode(cfg, f),

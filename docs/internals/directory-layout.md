@@ -9,6 +9,8 @@
     <run-name>-<ts>-<rand>/    # data for a single run (rand — avoids collisions)
       events.jsonl   # event log of transitions — SOURCE OF TRUTH (append + fsync)
       state.json     # derived status snapshot (cache; readers take the truth from the log)
+      usage.jsonl    # token usage per agent run (cost accounting)
+      agent-jobs.jsonl  # who ran and when: one line per AI process start/finish; header marks when recording began
       .lock          # flock of the active afm run
       <stage-id>/
         plan.md          # stage plan
@@ -31,6 +33,7 @@
     <run-name>-<ts>-<rand>/    # dashboard side-agent chat, keyed by run id
       chat.jsonl     # side conversation journal — its own seq, not part of events.jsonl
       usage.jsonl    # side-agent cost accounting
+      agent-jobs.jsonl  # side-agent jobs, same format as the run's
       .lock          # flock of the active side-agent writer
   config.yaml      # project config (optional)
 ```

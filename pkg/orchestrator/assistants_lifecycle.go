@@ -54,6 +54,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 		Secrets:        o.secretValues,
 		MeshClient:     o.meshClientFor(participant),
 		OnDelivered:    o.deliverRenderedInbox(participant),
+		Job:            o.jobConfig(o.taskJobMeta(o.opts.Store.Snapshot(), taskID, cmd), participant),
 	}
 }
 
@@ -442,6 +443,7 @@ func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistant
 	}
 	cfg := o.outputFormatterConfig(task.ProfileSnapshot.Command, task.RootStageID)
 	cfg.OnUsage = o.recordTaskUsage(taskID, task.ProfileID)
+	cfg.Job = o.repairJob(o.taskJobMeta(o.opts.Store.Snapshot(), taskID, task.ProfileSnapshot.Command), task.ProfileSnapshot.Command)
 	cfg.OnLimitWarning = o.limitWarningSink(task.RootStageID, taskID)
 	prefix := fmt.Sprintf("turn-%d-output", turn.number)
 	if err := memory.AtomicWrite(filepath.Join(turn.dir, prefix+".raw.json"), raw); err != nil {

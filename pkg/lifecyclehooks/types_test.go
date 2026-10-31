@@ -214,3 +214,128 @@ func TestAllEventsCatalog_IncludesQuotaEvents(t *testing.T) {
 		}
 	}
 }
+
+func sampleAnalytics() StageAnalytics {
+	return StageAnalytics{
+		Version:       AnalyticsVersion,
+		AsOf:          time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC),
+		StageEventSeq: 420,
+		UsageRevision: 34,
+		JobsRevision:  68,
+		Scope:         AnalyticsScopeStageCumulative,
+		Timing: AnalyticsTiming{
+			TotalMS: Known[int64](684000), WorkMS: Known[int64](512000), WaitingMS: Known[int64](112000),
+			PausedMS: Known[int64](60000), ApprovalMS: Known[int64](47000), HelpersMS: Known[int64](65000),
+			BackoffMS: Known[int64](0), SchedulingMS: Known[int64](0), Complete: true,
+		},
+		AgentJobs: AnalyticsAgentJobs{
+			Count: Known(29), Active: Known(0), Measured: Known(29), UnknownTime: Known(0),
+			DurationMS: Known[int64](1272000), Complete: true,
+		},
+		Usage: AnalyticsUsage{
+			Health: "ok", Coverage: "full",
+			MeteredJobs: Known(29), UnmeteredJobs: Known(0), PendingJobs: Known(0),
+			Tokens: Known(AnalyticsTokens{
+				UncachedInput: 210000, CacheRead: 950000, CacheWrite5m: 28000, Output: 52000, Total: 1240000,
+			}),
+		},
+	}
+}
+
+func TestBuildPayload_AnalyticsInData(t *testing.T) {
+	cfg := DispatcherConfig{FlowName: "release", RunID: "run-1", RunDir: "/r", RootDir: "/p"}
+	snap := sampleAnalytics()
+	ev := Event{Type: EventStageFinished, StageID: "build", StageName: "Build", From: "running", To: "done", Reason: "ok", Seq: 420, Time: snap.AsOf, Analytics: &snap}
+
+	p := BuildPayload(cfg, ev, "run-1:transition:420:stage_finished")
+	if p.SchemaVersion != 1 || p.Event != EventStageFinished || p.Stage == nil || p.Stage.ID != "build" || p.Reason != "ok" {
+		t.Fatalf("envelope must stay unchanged next to analytics: %+v", p)
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	a := decoded["data"].(map[string]any)["analytics"].(map[string]any)
+	if a["version"] != float64(1) || a["scope"] != "stage_cumulative" || a["stage_event_seq"] != float64(420) || a["as_of"] != "2026-10-31T12:00:00Z" {
+		t.Fatalf("analytics header: %s", raw)
+	}
+	timing := a["timing"].(map[string]any)
+	complete, _ := timing["complete"].(bool)
+	if timing["total_ms"] != float64(684000) || timing["backoff_ms"] != float64(0) || !complete {
+		t.Fatalf("timing: %s", raw)
+	}
+	if _, has := timing["reason"]; has {
+		t.Fatalf("complete timing must not carry a reason: %s", raw)
+	}
+	tokens := a["usage"].(map[string]any)["tokens"].(map[string]any)
+	if tokens["total"] != float64(1240000) || tokens["cache_write_1h"] != float64(0) {
+		t.Fatalf("tokens: %s", raw)
+	}
+}
+
+func TestBuildPayload_NoAnalyticsKeepsDataAbsent(t *testing.T) {
+	p := BuildPayload(DispatcherConfig{RunID: "run-1"}, Event{Type: EventStageFinished, StageID: "build"}, "id")
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"data"`) {
+		t.Fatalf("payload without analytics must not grow a data block: %s", raw)
+	}
+}
+
+func TestStageAnalytics_UnknownIsNullNotZero(t *testing.T) {
+	snap := StageAnalytics{
+		Version: AnalyticsVersion,
+		Timing:  AnalyticsTiming{Reason: "stage_advanced_before_snapshot"},
+		AgentJobs: AnalyticsAgentJobs{
+			Count: Known(0), Active: Known(0), Measured: Known(0), UnknownTime: Known(0), DurationMS: Known[int64](0), Complete: true,
+		},
+		Usage: AnalyticsUsage{Health: "unavailable", Coverage: "none", Reason: "usage_store_unavailable"},
+	}
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(raw)
+	for _, want := range []string{
+		`"total_ms":null`, `"work_ms":null`, `"complete":false`, `"reason":"stage_advanced_before_snapshot"`,
+		`"count":0`, `"duration_ms":0`, `"tokens":null`, `"metered_jobs":null`, `"reason":"usage_store_unavailable"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+}
+
+// Hook payloads never carry money, whatever accounting.show_money says: the DTO has no place for it.
+func TestStageAnalytics_HasNoMoneyKeys(t *testing.T) {
+	raw, err := json.Marshal(sampleAnalytics())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return
+		}
+		for key, child := range obj {
+			for _, banned := range []string{"cost", "usd", "price", "money"} {
+				if strings.Contains(strings.ToLower(key), banned) {
+					t.Errorf("money key %s.%s in hook analytics", path, key)
+				}
+			}
+			walk(path+"."+key, child)
+		}
+	}
+	walk("analytics", tree)
+}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/agentjobs"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
@@ -54,6 +55,14 @@ type registryStageProvider struct {
 // StageConfigs implements server.RuntimeStageProvider.
 func (p registryStageProvider) StageConfigs() map[string]server.StageConfig {
 	return dashboardStageConfig(p.orch.Stages())
+}
+
+// newUsageAnalytics is the read model behind the "Models & agents" view. The Assistant's ledger and journal live in
+// their own namespace and join it as outside the run total.
+func newUsageAnalytics(acct *accounting.Store, acctErr error, jobs *agentjobs.Store, orch *orchestrator.Orchestrator, side *sideAgentRuntime) *accounting.Analytics {
+	return accounting.NewAnalytics(accounting.AnalyticsSources{
+		Usage: acct, UsageOpenFailed: acct == nil && acctErr != nil, Jobs: jobs, Meta: orch.AnalyticsMeta, Assistant: side.analyticsSources(),
+	})
 }
 
 // ownerTokenFDEnv names an output descriptor (the write end of a private pipe whose reader is the operator) that
@@ -166,6 +175,8 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	sc.Version = version
 	sc.SkinDir = cfg.SkinDir
 	sc.ShowMoney = cfg.Accounting.ShowMoneyEnabled()
+	// The analytics provider does not depend on the cost display gate: with accounting hidden it still serves time.
+	sc.UsageMode = server.UsageModeFor(cfg.Accounting.IsEnabled(), cfg.Accounting.ShowMoneyEnabled())
 	sc.UIBus = orch.UIBus()
 	sc.Actions, sc.Secondary, sc.FlowActions = orch, orch, orch
 	// Выключенный add_stage: GraphActions остаётся nil-интерфейсом (capability=false, маршруты графа 404).

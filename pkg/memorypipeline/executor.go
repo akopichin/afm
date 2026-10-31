@@ -15,6 +15,10 @@ func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 		if cfg.OnUsage != nil {
 			onUsage = cfg.OnUsage(spec.StageID, spec.Phase, spec.Scope)
 		}
+		var job *executor.JobConfig
+		if cfg.Job != nil {
+			job = cfg.Job(spec)
+		}
 		ex := executor.New(executor.Config{
 			Command:     cfg.Command,
 			ExtraArgs:   executor.ResolveArgs(cfg.ExtraArgs),
@@ -26,6 +30,7 @@ func NewExecRunner(cfg AgentConfig, prompts Prompts) AgentRunner {
 			StageID:     spec.StageID,
 			Phase:       spec.Phase,
 			OnUsage:     onUsage,
+			Job:         job,
 			Reasoning:   cfg.Reasoning,
 			// fresh context: SessionID/Resume/StageDir intentionally unset
 			// (AFM_STAGE_DIR is stripped by the executor even if inherited).

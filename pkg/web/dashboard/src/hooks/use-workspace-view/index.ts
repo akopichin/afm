@@ -11,6 +11,7 @@ export {
 } from './workspace-view'
 export type {
   WorkspaceView,
+  CostView,
   WorkspaceState,
   WorkspaceAction,
   AttentionKind,

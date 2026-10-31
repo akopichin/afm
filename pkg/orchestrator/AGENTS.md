@@ -25,6 +25,16 @@
 - `result.json` должен быть на диске до видимого commit результата helper; отвергнутый commit восстанавливает прежние байты или отсутствие файла, сохраняя per-turn артефакты.
 - `runnerFor` привязывает `OnAction` к stage ID. Инъектированный тестовый runner
   не должен подменять production-runner стадии с собственной командой.
+- Новый AI-путь получает `executor.Config.Job` через `jobConfig` (`agent_jobs.go`): ключ — participant ID
+  (`meshParticipantForTask`), verify — `verify:<stage>#<шаг>`, format repair — владелец ответа. Инъектированный
+  runner jobs не пишет; `Options.Jobs` закрывает вызывающий после возврата `Run`. Исход `yielded` решает то же
+  правило, что и runtime (`turnEpisode` автора, `turnYielded` helper) по ожиданиям до старта процесса: ответ на
+  ожидание до выхода процесса не делает ход `ok`.
+- `AnalyticsMeta.LiveSince` не сбрасывается с концом флоу: Assistant работает и после него. Usage без job
+  атрибутируется через метаданные (задача → участник, Assistant), поэтому Assistant в них назван всегда.
+- `data.analytics` terminal-хука собирается в `emitLifecycleTransition` после CAS и до `Emit`, всё режется по времени
+  перехода с этим seq; usage — только через jobs замороженного журнала (по полям — лишь legacy без `job_id`). Стадия,
+  ушедшая дальше, даёт неизвестный timing. Живая работа — partial, без нового FSM-гейта.
 
 ## Paused Stage Status
 

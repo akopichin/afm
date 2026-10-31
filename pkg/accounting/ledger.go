@@ -48,6 +48,9 @@ type UsageRecord struct {
 	Channel string `json:"channel,omitempty"`
 	Schema  Schema `json:"schema,omitempty"`
 	Model   string `json:"model,omitempty"`
+	// ModelSource and JobID are absent on records written before agent jobs existed.
+	ModelSource string `json:"model_source,omitempty"`
+	JobID       string `json:"job_id,omitempty"`
 
 	Metered bool `json:"metered"`
 	Priced  bool `json:"priced"`
@@ -73,6 +76,8 @@ func BuildRecord(r *Resolver, obs Observation, stageID, phase, scope string) Usa
 		Channel:         obs.Channel,
 		Schema:          obs.Schema,
 		Model:           obs.Model,
+		ModelSource:     obs.ModelSource,
+		JobID:           obs.JobID,
 		Metered:         obs.Metered,
 		Tokens:          obs.Tokens,
 		ReportedCostUSD: obs.ReportedCostUSD,

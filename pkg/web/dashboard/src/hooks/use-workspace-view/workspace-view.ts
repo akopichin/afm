@@ -55,8 +55,13 @@ export function sig(item: AttentionItem): string {
   return `${item.stageId}:${item.kind}:${item.episode}`
 }
 
+// CostView — подвид глобального Cost: сводка или детали «Models & agents». Живёт здесь, а не в CostPanel: детали
+// переживают переключение вкладок и attention-эпизод.
+export type CostView = 'overview' | 'details'
+
 export interface WorkspaceState {
   view: WorkspaceView
+  costView: CostView
   items: AttentionItem[]
   // activeStageId — на каком элементе очереди сфокусирован воркспейс, когда
   // view === 'attention'. null — очередь пуста / attention не открыт.
@@ -70,6 +75,7 @@ export interface WorkspaceState {
 
 export const initialWorkspaceState: WorkspaceState = {
   view: 'feed',
+  costView: 'overview',
   items: [],
   activeStageId: null,
   handledSignatures: [],
@@ -86,6 +92,9 @@ export type WorkspaceAction =
   | { type: 'openFeed' }
   // openCost — пользователь открыл постоянный вид учёта стоимости (increment 2).
   | { type: 'openCost' }
+  // openCostDetails/closeCostDetails — вход «Models & agents» из Cost и возврат к его сводке.
+  | { type: 'openCostDetails' }
+  | { type: 'closeCostDetails' }
   // openHistory — read-only просмотр плана/диалога завершённой стадии (rule 13).
   | { type: 'openHistory'; view: 'plan-history' | 'dialog-history' }
   // openAssistant — пользователь выбрал в рейле задачу помощника (какую именно — хранит Selection на
@@ -183,7 +192,7 @@ function reduceSync(
     if (active && !handled.includes(sig(active))) handled.push(sig(active))
   }
 
-  return { view, items, activeStageId, handledSignatures: handled, returnView }
+  return { ...state, view, items, activeStageId, handledSignatures: handled, returnView }
 }
 
 export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
@@ -215,6 +224,10 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       return { ...state, view: 'feed', returnView: 'feed' }
     case 'openCost':
       return { ...state, view: 'cost', returnView: 'cost' }
+    case 'openCostDetails':
+      return { ...state, view: 'cost', costView: 'details', returnView: 'cost' }
+    case 'closeCostDetails':
+      return { ...state, costView: 'overview' }
     case 'openHistory':
       return { ...state, view: action.view }
     case 'openAssistant':

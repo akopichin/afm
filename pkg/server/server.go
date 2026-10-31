@@ -89,6 +89,9 @@ type Server struct {
 	uiBus             *bus.UIBus
 	accounting        accounting.CostProvider      // nil = accounting unsupported (server built without it); see handleStatus
 	showMoney         bool                         // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
+	usageAnalytics    UsageAnalyticsSource         // nil = capability off (GET /api/usage/analytics не регистрируется)
+	usageMode         UsageAnalyticsMode           // режим показа аналитики; никогда не пустой (New подставляет time_only)
+	usageNow          func() time.Time             // as_of ответа аналитики; подменяется в тестах
 	actions           StageActions                 // never nil in practice — see StageActions doc
 	secondary         SecondaryActions             // may be nil — see SecondaryActions doc
 	flowActions       FlowActions                  // review-pause commands; nil = respond 404 (see routeFlow)
@@ -194,7 +197,12 @@ type Config struct {
 	Accounting accounting.CostProvider
 	// ShowMoney включает показ денежных ($) величин в дашборде
 	// (accounting.show_money). Токены отображаются всегда, независимо от флага.
-	ShowMoney   bool
+	ShowMoney bool
+	// UsageAnalytics — read model «Models & agents»; nil = capability off. Не зависит от Accounting: при
+	// выключенном accounting доступно время (UsageModeTimeOnly).
+	UsageAnalytics UsageAnalyticsSource
+	// UsageMode — режим показа аналитики (см. UsageModeFor); пустое значение читается как time_only.
+	UsageMode   UsageAnalyticsMode
 	UIBus       *bus.UIBus
 	Actions     StageActions
 	Secondary   SecondaryActions
@@ -264,6 +272,9 @@ func New(cfg Config) *Server {
 		uiBus:             cfg.UIBus,
 		accounting:        cfg.Accounting,
 		showMoney:         cfg.ShowMoney,
+		usageAnalytics:    cfg.UsageAnalytics,
+		usageMode:         usageModeOrClosed(cfg.UsageMode),
+		usageNow:          time.Now,
 		actions:           cfg.Actions,
 		secondary:         cfg.Secondary,
 		flowActions:       cfg.FlowActions,
@@ -352,6 +363,9 @@ func New(cfg Config) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/events", s.handleEvents)
+	if s.usageAnalytics != nil {
+		mux.HandleFunc("/api/usage/analytics", s.handleUsageAnalytics)
+	}
 	mux.HandleFunc("/api/stages/", s.routeStages)
 	mux.HandleFunc("/api/files/", s.routeFiles)
 	mux.HandleFunc("/api/flow/", s.routeFlow)

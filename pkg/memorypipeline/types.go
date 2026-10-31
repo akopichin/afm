@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/akopichin/afm/pkg/accounting"
+	"github.com/akopichin/afm/pkg/executor"
 )
 
 // Kind* — значения AgentSpec.Kind, общие с switch в BuildPrompt (ниже) и с конвейером в
@@ -53,6 +54,8 @@ type AgentConfig struct {
 	// OnUsage, if set, builds the executor.Config.OnUsage callback for one agent call given its attribution —
 	// the exact signature of.recordUsage, which is what production wires in.
 	OnUsage func(stageID, phase, scope string) func(accounting.Observation)
+	// Job, if set, gives one agent call its job identity in the run's agent jobs journal; nil = not measured.
+	Job func(spec AgentSpec) *executor.JobConfig
 }
 
 // AgentSpec — единый параметр для запуска одного агента конвейера памяти. Заполняются только поля,

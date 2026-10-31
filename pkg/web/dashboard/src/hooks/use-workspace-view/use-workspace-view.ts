@@ -16,6 +16,8 @@ export interface UseWorkspaceView {
   activeItem: ReturnType<typeof activeItem>
   openFeed: () => void
   openCost: () => void
+  openCostDetails: () => void
+  closeCostDetails: () => void
   openAttention: (stageId?: string) => void
   openHistory: (view: 'plan-history' | 'dialog-history') => void
   openAssistant: () => void
@@ -45,6 +47,8 @@ export function useWorkspaceView(
 
   const openFeed = useCallback(() => dispatch({ type: 'openFeed' }), [])
   const openCost = useCallback(() => dispatch({ type: 'openCost' }), [])
+  const openCostDetails = useCallback(() => dispatch({ type: 'openCostDetails' }), [])
+  const closeCostDetails = useCallback(() => dispatch({ type: 'closeCostDetails' }), [])
   const openAttention = useCallback((stageId?: string) => dispatch({ type: 'openAttention', stageId }), [])
   const openHistory = useCallback(
     (view: 'plan-history' | 'dialog-history') => dispatch({ type: 'openHistory', view }),
@@ -54,7 +58,10 @@ export function useWorkspaceView(
   const openTeam = useCallback(() => dispatch({ type: 'openTeam' }), [])
   const openBoard = useCallback(() => dispatch({ type: 'openBoard' }), [])
 
-  return { state, activeItem: activeItem(state), openFeed, openCost, openAttention, openHistory, openAssistant, openTeam, openBoard }
+  return {
+    state, activeItem: activeItem(state), openFeed, openCost, openCostDetails, closeCostDetails, openAttention, openHistory,
+    openAssistant, openTeam, openBoard,
+  }
 }
 
 export type { WorkspaceState, WorkspaceView }

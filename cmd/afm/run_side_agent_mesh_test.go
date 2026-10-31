@@ -1086,7 +1086,7 @@ func TestSideAgentMesh_CorruptSideStoreDoesNotStartRuntimeOrHoldLock(t *testing.
 	if err := os.WriteFile(path, []byte("{broken}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := startSideAgent("corrupt-side", config.Default(), runEnvironment{}, nil, nil)
+	runtime, err := startSideAgent("corrupt-side", config.Default(), runEnvironment{}, nil, nil, nil)
 	if err == nil || runtime != nil {
 		t.Fatalf("corrupt store started runtime: %v, %v", runtime, err)
 	}

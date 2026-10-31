@@ -21,6 +21,14 @@ const (
 	ReasonParse = "parse_error"
 )
 
+// Where an Observation's model came from. Records written before this field existed have neither.
+const (
+	// ModelSourceObserved means the agent's own stream named the model.
+	ModelSourceObserved = "observed"
+	// ModelSourceHint means only the configured model was known.
+	ModelSourceHint = "hint"
+)
+
 // usageContractVersion is the only synthetic adapter-envelope version this
 // build understands (see docs/superpowers/plans/2026-09-14-stage-and-run-pricing.md).
 const usageContractVersion = 1
@@ -36,6 +44,10 @@ type Observation struct {
 	ReportedCostUSD *float64
 	Reason          string
 	Warnings        []string
+	// ModelSource says whether Model was observed or only configured ("" when no model is known).
+	ModelSource string
+	// JobID links the usage to the agent job that produced it; the executor sets it, the collector never does.
+	JobID string
 }
 
 // Collector reduces one agent process's stream-json lines, observed in
@@ -223,12 +235,15 @@ func (c *Collector) commit(schema Schema, tokens Tokens, warn []string, reported
 
 // Finish closes the collector out.
 func (c *Collector) Finish(exitErr error) Observation {
-	model := c.model
+	model, modelSource := c.model, ModelSourceObserved
 	if model == "" {
 		model = c.discoveredModel
 	}
 	if model == "" {
-		model = c.hint.Model
+		model, modelSource = c.hint.Model, ModelSourceHint
+	}
+	if model == "" {
+		modelSource = ""
 	}
 	channel := c.channel
 	if channel == "" {
@@ -244,6 +259,7 @@ func (c *Collector) Finish(exitErr error) Observation {
 			Tokens:          c.tokens,
 			ReportedCostUSD: c.reportedCost,
 			Warnings:        c.warnings,
+			ModelSource:     modelSource,
 		}
 	}
 
@@ -256,10 +272,11 @@ func (c *Collector) Finish(exitErr error) Observation {
 		}
 	}
 	return Observation{
-		Metered:  false,
-		Channel:  channel,
-		Model:    model,
-		Reason:   reason,
-		Warnings: c.warnings,
+		Metered:     false,
+		Channel:     channel,
+		Model:       model,
+		Reason:      reason,
+		Warnings:    c.warnings,
+		ModelSource: modelSource,
 	}
 }

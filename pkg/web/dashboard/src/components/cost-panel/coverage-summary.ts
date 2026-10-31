@@ -3,6 +3,11 @@ import type { AccountingState, Attribution, CoverageIssue } from '../../types/co
 // Вынесено из RunMetrics.tsx: и тайл Est.
 const MAX_COVERAGE_GROUPS_SHOWN = 3
 
+// visibleCoverageIssues — без денег пробелы цены (unpriced) не показываются: они объясняют только стоимость.
+export function visibleCoverageIssues(issues: CoverageIssue[], showMoney: boolean): CoverageIssue[] {
+  return showMoney ? issues : issues.filter((issue) => issue.kind !== 'unpriced')
+}
+
 // summarizeCoverageGroups ограничивает число групп; остаток суммирует как число скрытых групп и их
 // invocations.
 export function summarizeCoverageGroups(issues: CoverageIssue[]): string {
