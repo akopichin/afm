@@ -346,8 +346,8 @@
   color: var(--surface-canvas);
 }
 
-/* Значок комментария у правого края каждой строки. Он стоит на строке, где заканчивается текст элемента, поэтому
-   у блоков с вложенными блоками (списки, цитаты, код) значок рисует обёртка первой строки .md-first-line. */
+/* Значок комментария у правого края строки: виден на hover/фокусе, у прокомментированной и активной строки,
+   иначе столбец значков шумит. Он стоит на строке, где заканчивается текст элемента, поэтому у блоков с вложенными блоками (списки, цитаты, код) значок рисует обёртка первой строки .md-first-line. */
 .line-commented :where(h1, h2, h3, h4, h5, h6, hr, p, li, blockquote, .md-cont-line, .md-code-line, .md-line-row)[data-line]:where(:not(:has(> :is(.md-first-line, ul, ol, blockquote, p, pre))))::after,
 .line-commented .md tr[data-line] > :last-child::after,
 .line-commented .md-first-line::after {
@@ -358,7 +358,7 @@
   height: 14px;
   margin-top: calc((var(--row-h) - 14px) / 2);
   background: var(--text-muted);
-  opacity: 0.55;
+  opacity: 0;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z'/%3E%3C/svg%3E") center / contain no-repeat;
   pointer-events: none;
   transition: background var(--motion-fast), opacity var(--motion-fast);
@@ -370,7 +370,9 @@
 .line-commented [data-line]:is(.is-hover, :focus-visible)::after,
 .line-commented [data-line].is-hover > .md-first-line::after,
 .line-commented [data-line].is-hover > p > .md-first-line::after,
-.line-commented .md tr.is-hover > :last-child::after {
+.line-commented [data-line]:focus-visible > .md-first-line::after,
+.line-commented [data-line]:focus-visible > p > .md-first-line::after,
+.line-commented .md tr:is(.is-hover, :focus-visible) > :last-child::after {
   background: var(--accent-primary);
   opacity: 1;
 }
@@ -650,12 +652,13 @@
 }
 /* Title, then its Draft / status label next to it; only the close button is pushed to the right edge. */
 .line-comment-form .comment-display-header .comment-title { margin-right: 0; }
+/* Draft — акцентом темы, как пометка строки с комментарием: неотправленный черновик должен бросаться в глаза. */
 .line-comment-form .comment-draft-badge {
   padding: 0;
   border: 0;
-  color: var(--text-muted);
+  color: var(--attention-text);
   font-size: 11px;
-  font-weight: 400;
+  font-weight: 600;
 }
 
 /* Закрыть/удалить комментарий без открытия редактора. */

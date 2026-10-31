@@ -5,6 +5,12 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-10-31
 
+### Improvement: quieter comment icons and a visible Draft label
+
+In a plan or question, the comment icon at the right edge of a line now appears only
+when you hover or focus the line, or when the line already has a comment. The
+**Draft** label of an unsaved comment uses the theme's accent color.
+
 ### Fix: Run elapsed after a crash stops at the last log record
 
 A run that died without a clean shutdown now counts its elapsed time up to the last
