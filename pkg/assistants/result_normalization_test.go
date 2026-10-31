@@ -122,3 +122,53 @@ func TestResultRecoveryProvenanceAndIssues(t *testing.T) {
 		}
 	}
 }
+
+// rawFinding keeps a finding's detail in the shape the model wrote it.
+type rawFinding struct {
+	ID     string          `json:"id"`
+	Detail json.RawMessage `json:"detail"`
+}
+
+// A live consultation answered three of its findings' detail as a list of lines; the whole 29 KB review was
+// rejected and a formatter had to rewrite it. The decoder takes it as written.
+func TestDecodeResult_FindingDetailLinesFromLiveRun(t *testing.T) {
+	raw, err := os.ReadFile("testdata/detail-lines-result.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original struct {
+		Findings []rawFinding `json:"findings"`
+	}
+	if err := json.Unmarshal(raw, &original); err != nil {
+		t.Fatal(err)
+	}
+	env, candidate, kind, err := assistants.RecoverResult(raw)
+	if err != nil || kind != "" || !bytes.Equal(candidate, raw) {
+		t.Fatalf("RecoverResult: kind=%q err=%v, want the raw answer accepted as is", kind, err)
+	}
+	lists := 0
+	for i, f := range original.Findings {
+		var lines []string
+		if json.Unmarshal(f.Detail, &lines) != nil {
+			continue
+		}
+		lists++
+		if got, want := env.Result.Findings[i].Detail, strings.Join(lines, "\n"); got != want {
+			t.Errorf("finding %s detail = %q, want %q", f.ID, got, want)
+		}
+	}
+	if lists != 3 || len(env.Result.Findings) != 17 {
+		t.Fatalf("fixture changed: %d list details, %d findings", lists, len(env.Result.Findings))
+	}
+}
+
+func TestResultNormalizationFoldsRecommendationIntoDetailLines(t *testing.T) {
+	raw := []byte(`{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"review","findings":[{"id":"f","severity":"major","detail":["one","two"],"suggested_change":"fix"}]}`)
+	env, repaired, err := assistants.DecodeResultWithRepair(raw)
+	if err != nil || !repaired {
+		t.Fatalf("repaired=%v err=%v", repaired, err)
+	}
+	if got := env.Result.Findings[0].Detail; got != "one\ntwo\n\nSuggested change:\nfix" {
+		t.Fatalf("detail = %q", got)
+	}
+}

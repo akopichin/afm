@@ -71,7 +71,7 @@
           "minimum": 1
         },
         "detail": {
-          "type": "string"
+          "$ref": "#/definitions/freeText"
         }
       }
     },

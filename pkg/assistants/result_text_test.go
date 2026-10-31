@@ -44,6 +44,15 @@ func TestDecodeResult_FreeTextFieldsAcceptStringOrList(t *testing.T) {
 			want: assistants.Result{Verdict: assistants.VerdictPass, Summary: "ok", Evidence: []string{}},
 		},
 		{
+			name: "finding detail as an array (the live-run answer)",
+			raw: `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"ok",` +
+				`"findings":[{"id":"f1","severity":"major","detail":["First line.","Second line."]}]}`,
+			want: assistants.Result{
+				Verdict: assistants.VerdictNeedsChanges, Summary: "ok",
+				Findings: []assistants.Finding{{ID: "f1", Severity: "major", Detail: "First line.\nSecond line."}},
+			},
+		},
+		{
 			name: "canonical shapes unchanged",
 			raw:  `{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok","evidence":["a","b"],"limitations":"none"}`,
 			want: assistants.Result{Verdict: assistants.VerdictPass, Summary: "ok", Evidence: []string{"a", "b"}, Limitations: "none"},
@@ -125,6 +134,10 @@ func TestFreeTextShapes_SchemaMatchesDecoder(t *testing.T) {
 		{"null in an evidence list", fmt.Sprintf(result, `"evidence":["a",null]`), false},
 		{"null in a limitations list", fmt.Sprintf(result, `"limitations":[null]`), false},
 		{"null delegate summary", fmt.Sprintf(delegate, `"summary":null`), false},
+		{"finding detail as an array", fmt.Sprintf(result, `"findings":[{"id":"f","severity":"info","detail":["a","b"]}]`), true},
+		{"finding detail as a number", fmt.Sprintf(result, `"findings":[{"id":"f","severity":"info","detail":1}]`), false},
+		{"null finding detail", fmt.Sprintf(result, `"findings":[{"id":"f","severity":"info","detail":null}]`), false},
+		{"unknown finding field", fmt.Sprintf(result, `"findings":[{"id":"f","severity":"info","detail":"a","note":"x"}]`), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

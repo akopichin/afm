@@ -66,17 +66,38 @@ func (e Envelope) ClosesRequiredGate() bool {
 }
 
 // resultEnvelope — JSON-форма kind:"result" (зеркало definitions.result схемы). Свободный текст (summary,
-// evidence, suggested_change, limitations) принимается и строкой, и списком строк (freetext.go).
+// evidence, suggested_change, limitations, detail находки) принимается и строкой, и списком строк (freetext.go).
 type resultEnvelope struct {
 	SchemaVersion   jsonstrict.Integer `json:"schema_version"`
 	Kind            Kind               `json:"kind"`
 	Verdict         Verdict            `json:"verdict"`
 	Summary         textField          `json:"summary"`
-	Findings        []Finding          `json:"findings,omitempty"`
+	Findings        []findingWire      `json:"findings,omitempty"`
 	Evidence        textListField      `json:"evidence,omitempty"`
 	ContextVersion  string             `json:"context_version,omitempty"`
 	SuggestedChange textField          `json:"suggested_change,omitempty"`
 	Limitations     textField          `json:"limitations,omitempty"`
+}
+
+// findingWire — JSON-форма находки: detail тоже свободный текст.
+type findingWire struct {
+	ID        string    `json:"id"`
+	Severity  string    `json:"severity"`
+	Path      *string   `json:"path,omitempty"`
+	LineStart *int      `json:"line_start,omitempty"`
+	LineEnd   *int      `json:"line_end,omitempty"`
+	Detail    textField `json:"detail"`
+}
+
+func decodedFindings(wire []findingWire) []Finding {
+	if wire == nil {
+		return nil
+	}
+	findings := make([]Finding, len(wire))
+	for i, f := range wire {
+		findings[i] = Finding{ID: f.ID, Severity: f.Severity, Path: f.Path, LineStart: f.LineStart, LineEnd: f.LineEnd, Detail: string(f.Detail)}
+	}
+	return findings
 }
 
 // delegateEnvelope — JSON-форма kind:"delegate" (зеркало definitions.delegate схемы).
@@ -167,7 +188,8 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 	default:
 		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("invalid verdict value %q", e.Verdict))
 	}
-	if err := validateVerdictConsistency(e.Verdict, e.Findings); err != nil {
+	findings := decodedFindings(e.Findings)
+	if err := validateVerdictConsistency(e.Verdict, findings); err != nil {
 		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, err)
 	}
 	if err := schema.Validate(schema.AssistantResult, raw); err != nil {
@@ -177,7 +199,7 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 	result := &Result{
 		Verdict:         e.Verdict,
 		Summary:         string(e.Summary),
-		Findings:        e.Findings,
+		Findings:        findings,
 		Evidence:        e.Evidence,
 		ContextVersion:  ContextVersion(e.ContextVersion),
 		SuggestedChange: string(e.SuggestedChange),

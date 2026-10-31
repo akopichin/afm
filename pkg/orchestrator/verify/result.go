@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/akopichin/afm/pkg/jsonstrict"
@@ -98,18 +99,66 @@ func RecoverModelResult(raw []byte) (ModelResult, []byte, jsonstrict.RepairKind,
 	return ModelResult{}, nil, "", err
 }
 
+// text — свободный текст ответа: строка или список строк (склеивается через перевод строки). null, как и для
+// обычной строки, оставляет поле пустым; остальное — ошибка разбора.
+type text string
+
+func (t *text) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		return nil
+	}
+	lines, err := jsonstrict.StringOrList(data, reflect.TypeFor[string]())
+	if err != nil {
+		return err
+	}
+	*t = text(strings.Join(lines, "\n"))
+	return nil
+}
+
+// modelResultWire — JSON-форма ModelResult со свободным текстом в summary и текстовых полях находок.
+type modelResultWire struct {
+	SchemaVersion jsonstrict.Integer `json:"schema_version"`
+	Verdict       Verdict            `json:"verdict"`
+	Summary       text               `json:"summary"`
+	Findings      []findingWire      `json:"findings"`
+}
+
+type findingWire struct {
+	Blocking    bool    `json:"blocking"`
+	Title       text    `json:"title"`
+	Path        *string `json:"path"`
+	LineStart   *int    `json:"line_start"`
+	LineEnd     *int    `json:"line_end"`
+	Requirement text    `json:"requirement"`
+	Evidence    text    `json:"evidence"`
+	MinimalFix  text    `json:"minimal_fix"`
+}
+
+func (w modelResultWire) result() ModelResult {
+	r := ModelResult{SchemaVersion: w.SchemaVersion, Verdict: w.Verdict, Summary: string(w.Summary)}
+	if w.Findings != nil {
+		r.Findings = make([]Finding, len(w.Findings))
+	}
+	for i, f := range w.Findings {
+		r.Findings[i] = Finding{Blocking: f.Blocking, Title: string(f.Title), Path: f.Path, LineStart: f.LineStart, LineEnd: f.LineEnd,
+			Requirement: string(f.Requirement), Evidence: string(f.Evidence), MinimalFix: string(f.MinimalFix)}
+	}
+	return r
+}
+
 // decodeStrict — строгий конвейер разбора ОДНОГО JSON-документа без репейра.
 func decodeStrict(trimmed []byte) (ModelResult, error) {
 	if err := jsonstrict.DecodeNoDuplicates(trimmed); err != nil {
 		return ModelResult{}, fmt.Errorf("parse verification result JSON: %w", err)
 	}
-	var r ModelResult
-	if err := jsonstrict.DecodeDisallowUnknown(trimmed, &r); err != nil {
+	var wire modelResultWire
+	if err := jsonstrict.DecodeDisallowUnknown(trimmed, &wire); err != nil {
 		if errors.Is(err, jsonstrict.ErrTrailingContent) {
 			return ModelResult{}, fmt.Errorf("%w in verification result (extra data or multiple documents)", err)
 		}
 		return ModelResult{}, fmt.Errorf("failed to parse verification result JSON: %w", err)
 	}
+	r := wire.result()
 
 	if r.SchemaVersion != SupportedSchemaVersion {
 		return ModelResult{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("unsupported schema_version %d (expected %d)", r.SchemaVersion, SupportedSchemaVersion))

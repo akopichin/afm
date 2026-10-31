@@ -33,7 +33,7 @@ import (
 
 const recoveryHelperRaw = `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"Fix this","findings":{"id":"f1","severity":"major","detail":"Keep this finding"},"evidence":["proof"],"suggested_change":"Fix it"}`
 const recoveryHelperFixed = `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"Fix this","findings":[{"id":"f1","severity":"major","detail":"Keep this finding"}],"evidence":["proof"],"suggested_change":"Fix it"}`
-const recoveryVerifyRaw = `{"schema_version":1,"verdict":"needs_changes","summary":["Fix this"],"findings":[{"blocking":true,"title":"Bug","evidence":"proof","minimal_fix":"Fix it"}]}`
+const recoveryVerifyRaw = `{"schema_version":1,"verdict":"needs_changes","summary":"Fix this","findings":{"blocking":true,"title":"Bug","evidence":"proof","minimal_fix":"Fix it"}}`
 const recoveryVerifyFixed = `{"schema_version":1,"verdict":"needs_changes","summary":"Fix this","findings":[{"blocking":true,"title":"Bug","evidence":"proof","minimal_fix":"Fix it"}]}`
 
 func TestOutputRecovery_PreservationAndBudget(t *testing.T) {
@@ -76,6 +76,32 @@ func TestOutputRecovery_PreservationAndBudget(t *testing.T) {
 				t.Fatalf("provenance=%+v", got.Provenance)
 			}
 		})
+	}
+}
+
+// Joining a finding's detail lines is a lossless shape change, like the other free-text fields.
+func TestOutputRecovery_FindingDetailLinesJoinedByFormatter(t *testing.T) {
+	raw := strings.Replace(recoveryHelperRaw, `"detail":"Keep this finding"`, `"detail":["Keep this","finding"]`, 1)
+	candidate := strings.Replace(recoveryHelperFixed, `"detail":"Keep this finding"`, `"detail":"Keep this\nfinding"`, 1)
+	got, err := recoverOutput(context.Background(), schema.AssistantResult, "t", []byte(raw), assistantOutputValidator, 1, func(context.Context, schema.Contract, string, int) ([]byte, error) {
+		return []byte(candidate), nil
+	})
+	if err != nil || got.Provenance.Source != "model_format" {
+		t.Fatalf("err=%v provenance=%+v", err, got.Provenance)
+	}
+}
+
+// The formatter is told what exactly failed, not only the class of the issue.
+func TestOutputRecovery_FormatterPromptNamesTheValidationError(t *testing.T) {
+	raw := strings.Replace(recoveryHelperRaw, `"detail":"Keep this finding"`, `"detail":{"text":"Keep this finding"}`, 1)
+	_, _, wantErr := assistantOutputValidator([]byte(raw))
+	var prompt string
+	_, _ = recoverOutput(context.Background(), schema.AssistantResult, "t", []byte(raw), assistantOutputValidator, 1, func(_ context.Context, _ schema.Contract, p string, _ int) ([]byte, error) {
+		prompt = p
+		return nil, errors.New("stop")
+	})
+	if wantErr == nil || !strings.Contains(prompt, "Validation error: "+wantErr.Error()) {
+		t.Fatalf("formatter prompt lacks the validation error:\n%s", prompt)
 	}
 }
 

@@ -228,7 +228,11 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 	var runErr *outputRunError
-	if errors.As(end.err, &runErr) {
+	var limit *executor.UsageLimitError
+	if errors.As(end.err, &runErr) && !errors.As(runErr.err, &limit) {
+		// The helper did answer; only its repair failed, so it is the answer's protocol error, not a crash.
+		end.err = fmt.Errorf("%w (%v)", runErr.rejected, runErr)
+	} else if runErr != nil {
 		if err := persistOutputRecovery(turn.dir, fmt.Sprintf("turn-%d-output", turn.number), end.recovery); err != nil {
 			if o.helperOutputCommitHook != nil {
 				o.helperOutputCommitHook()
@@ -412,7 +416,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	}
 	if outcome.ProtocolErr != nil {
 		beforeCommit()
-		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error(), guard))
+		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error(), unacceptedAnswer{}, guard))
 		return true
 	}
 	return false
@@ -520,7 +524,8 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 			o.helperOutputCommitHook()
 		}
 		if answered {
-			interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, reason, guard))
+			answer := unacceptedAnswer{text: end.outcome.RawText, path: filepath.Join(turn.dir, fmt.Sprintf("turn-%d-output.raw.json", turn.number))}
+			interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, reason, answer, guard))
 		} else {
 			interruptIfSuperseded(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil))
 		}
@@ -723,21 +728,26 @@ func taskQuotaReason(q state.QuotaWait) string {
 
 // failAnsweredTurn ends a turn that ran to its end but whose answer cannot be accepted (reason says why). A
 // helper task fails; retrying it is the human's call. A run agent is a standing role, and one bad answer must
-// not end it: it goes back to idle, reachable for the next message, and the message that woke the turn gets a
-// passive reply saying why there is no result — so a colleague waiting for that reply is answered, not left
-// waiting on an agent that will never write again.
-func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string, guard func(*state.RunState) error) error {
+// not end it: it goes back to idle, reachable for the next message. Either way the message that woke the turn
+// gets a passive reply saying why there is no result, with the unvalidated answer — so a colleague waiting for
+// that reply is answered and keeps the work, not left waiting on an agent that will never write again.
+func (o *Orchestrator) failAnsweredTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn uint64, reason string, answer unacceptedAnswer, guard func(*state.RunState) error) error {
 	reason = o.sanitizeTaskReason(reason) // the reply and the idle reason below use the same recorded value
+	standing := task.Scope == assistants.ScopeRun
 	// turn 0 consumed nothing: going idle would hand the same input straight back to a new turn.
-	if task.Scope != assistants.ScopeRun || turn == 0 {
+	if turn == 0 || (!standing && task.CreatedBy != assistants.OriginStageAgent) {
 		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil)
 	}
 	agent := task.Title
 	if agent == "" {
 		agent = string(task.ProfileID)
 	}
-	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason)
+	answer.text = o.RedactSecrets(answer.text)
+	body := turnFailureBody(taskID, turn, o.RedactSecrets(agent), reason, standing, answer)
 	replies := o.planTurnReplies(taskID, turn, body)
+	if !standing {
+		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed, reason, replies, guard, nil)
+	}
 	if err := o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusQueued, runAgentIdleAfterFailure(reason), replies, guard, nil); err != nil {
 		return err
 	}
