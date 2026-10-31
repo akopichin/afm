@@ -13,9 +13,9 @@ import (
 	"github.com/akopichin/afm/pkg/state"
 )
 
-// withSkillLibraries settles skills_dir for every stage and member on copies: the nearest explicit value
-// (stage or member, flow, config) wins whole and a relative path is taken from base. The results are frozen
-// into the registry and the agents' tasks, which keeps a resumed run on the library it started with.
+// withSkillLibraries settles skills_dir for every stage, its helpers and every member on copies: the nearest
+// explicit value (stage, helper or member, flow, config) wins whole and a relative path is taken from base. The
+// results are frozen into the registry and the agents' tasks, which keeps a resumed run on the library it started with.
 func withSkillLibraries(stages []flow.Stage, team flow.Team, f *flow.Flow, cfg config.Config, base string) ([]flow.Stage, flow.Team) {
 	settle := func(own skills.Dir) skills.Dir {
 		return skills.Dir(skills.FirstDir(own, f.SkillsDir, cfg.SkillsDir).Resolve(base))
@@ -23,6 +23,10 @@ func withSkillLibraries(stages []flow.Stage, team flow.Team, f *flow.Flow, cfg c
 	stages = slices.Clone(stages)
 	for i := range stages {
 		stages[i].SkillsDir = settle(stages[i].SkillsDir)
+		stages[i].Assistants = slices.Clone(stages[i].Assistants)
+		for j := range stages[i].Assistants {
+			stages[i].Assistants[j].SkillsDir = settle(stages[i].Assistants[j].SkillsDir)
+		}
 	}
 	team = slices.Clone(team)
 	for i := range team {
@@ -82,6 +86,11 @@ func checkSkillLibraries(stages []flow.Stage, team flow.Team) error {
 		if err := check(fmt.Sprintf("stage %q", s.ID), s.SkillsDir); err != nil {
 			return err
 		}
+		for _, a := range s.Assistants {
+			if err := check(fmt.Sprintf("stage %q assistant %q", s.ID, a.Profile), a.SkillsDir); err != nil {
+				return err
+			}
+		}
 	}
 	for _, m := range team {
 		if err := check(fmt.Sprintf("team member %q", m.ID), m.SkillsDir); err != nil {
@@ -89,6 +98,16 @@ func checkSkillLibraries(stages []flow.Stage, team flow.Team) error {
 		}
 	}
 	return nil
+}
+
+// withoutHelperLibraries drops the helpers' libraries: without collaboration no helper is attached, so its
+// library is neither read nor mounted.
+func withoutHelperLibraries(stages []flow.Stage) []flow.Stage {
+	stages = slices.Clone(stages)
+	for i := range stages {
+		stages[i].Assistants = nil
+	}
+	return stages
 }
 
 // unfinishedStages drops the stages already done in snap: a library a finished stage used no longer matters,

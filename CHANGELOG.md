@@ -24,6 +24,19 @@ stage's cumulative time, agent jobs and tokens, never money. An unknown figure i
 `null` with a `reason`, and a script-only stage reports a proven zero. See
 [Lifecycle hooks](docs/lifecycle-hooks.md#stage-analytics).
 
+### Improvement: skills for helpers declared on a stage
+
+A helper in a stage's `assistants:` list now accepts `skills` and `skills_dir`,
+like a stage or a `team` member. The helper loads its own skills; it still does not
+inherit the stage's. A helper without `skills_dir` uses the flow's or the config's
+library. See [Flow reference](docs/flow-reference.md#declared-helpers).
+
+### Improvement: quieter comment icons and a visible Draft label
+
+In a plan or question, the comment icon at the right edge of a line now appears only
+when you hover or focus the line, or when the line already has a comment. The
+**Draft** label of an unsaved comment uses the theme's accent color.
+
 ### Fix: Run elapsed after a crash stops at the last log record
 
 A run that died without a clean shutdown now counts its elapsed time up to the last

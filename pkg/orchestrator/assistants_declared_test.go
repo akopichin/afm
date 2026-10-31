@@ -7,6 +7,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/skills"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -503,4 +507,63 @@ func TestRevisingKind_NonInteractiveWithoutSessionFile(t *testing.T) {
 			t.Fatalf("ByRootStage[%s] = %v, want none (attach is gated out during planning)", id, ids)
 		}
 	})
+}
+
+// A declared helper gets its own skills and library in the task and in its prompt; another helper of the
+// same stage gets none, even though the stage itself has skills.
+func TestDeclaredAssistants_SkillsReachTaskAndPrompt(t *testing.T) {
+	const id = "decl"
+	lib := t.TempDir()
+	writeSkillLibrary(t, lib, map[string]string{"review-checklist": "how to review"})
+	stage := flow.Stage{ID: id, Skills: skills.Names{"tdd"}, Assistants: flow.StageAssistants{
+		{Profile: "reviewer", Skills: skills.Names{"review-checklist"}, SkillsDir: skills.Dir(lib)},
+		{Profile: "qa"},
+	}}
+	o, store := newAssistantsTestOrchestrator(t, true, stage)
+	t.Cleanup(o.concurrency.WaitAgents) // registered after store.Close (LIFO): drains agents before the store closes
+	declStageSetup(t, o, id)
+	o.opts.Runner = &fakeAgentRunner{}
+	o.runner = &fakeAgentRunner{}
+	var mu sync.Mutex
+	promptsByProfile := map[string]string{}
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		mu.Lock()
+		promptsByProfile[profileID] = prompt
+		mu.Unlock()
+		return passResultOutcome(), nil
+	}
+
+	readyAndStart(t, o, id, stage)
+
+	byProfile := map[assistants.ProfileID]assistants.Task{}
+	for _, taskID := range waitForAssistantCount(t, store, id, 2, 2*time.Second) {
+		task := store.Snapshot().Assistants.Tasks[taskID].Task
+		byProfile[task.ProfileID] = task
+	}
+	if got := byProfile["reviewer"]; !slices.Equal(got.Skills, []string{"review-checklist"}) || got.SkillsDir != lib {
+		t.Errorf("reviewer task: skills %v dir %q, want its declared ones", got.Skills, got.SkillsDir)
+	}
+	if got := byProfile["qa"]; len(got.Skills) != 0 || got.SkillsDir != "" {
+		t.Errorf("qa task: skills %v dir %q, want none — a helper does not inherit the stage's skills", got.Skills, got.SkillsDir)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		reviewer, qa := promptsByProfile["reviewer"], promptsByProfile["qa"]
+		mu.Unlock()
+		if reviewer != "" && qa != "" {
+			if !strings.Contains(reviewer, "Required skills, in this order: review-checklist.") || !strings.Contains(reviewer, "how to review") {
+				t.Errorf("reviewer prompt has no skills block with its skill and library:\n%s", reviewer)
+			}
+			if strings.Contains(qa, "<skills>") {
+				t.Errorf("qa prompt has a skills block:\n%s", qa)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("helper prompts not captured: reviewer %t, qa %t", reviewer != "", qa != "")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

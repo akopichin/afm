@@ -129,8 +129,12 @@ stages:
 
 A single name (`assistants: reviewer`) or a single object also works. List order
 is preserved. The object accepts `profile` plus optional `title`, `instruction`,
-`mode`, and `trigger`. Defaults are `advisory` and `one_shot`; the mode and trigger
-choices have the same meaning as in the dashboard below. For stages with planning,
+`mode`, `trigger`, `skills`, and `skills_dir`. Defaults are `advisory` and
+`one_shot`; the mode and trigger choices have the same meaning as in the dashboard
+below. `skills` and `skills_dir` work as for
+[stage agents](flow-reference.md#agent-skills); a helper does not inherit its
+stage's skills or the stage's `skills_dir`, and a library outside the project
+needs the same config opt-in under Docker. For stages with planning,
 helpers attach when execution begins, after plan approval. Retries and crash
 recovery do not duplicate an attachment; a new revision can attach a fresh task.
 

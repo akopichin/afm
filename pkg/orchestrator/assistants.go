@@ -43,6 +43,9 @@ type AttachRequest struct {
 	Mode        assistants.Mode
 	Trigger     assistants.Trigger
 	Actor       state.Actor
+	// Skills and SkillsDir — see topLevelTaskRequest; only a helper declared in flow.yaml sets them.
+	Skills    []string
+	SkillsDir string
 }
 
 // holdOwnerManual is the hold owner key used by PauseTask/ContinueTask — mirrors the stage-level manual
@@ -235,6 +238,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 	treq := topLevelTaskRequest{
 		OperationID: req.OperationID, ProfileID: req.ProfileID, Scope: assistants.ScopeStage, StageID: req.StageID,
 		Title: req.Title, Instruction: req.Instruction, Mode: req.Mode, Trigger: req.Trigger, Actor: req.Actor,
+		Skills: req.Skills, SkillsDir: req.SkillsDir,
 	}
 	// A retry of an already-committed attach replays it, whatever changed since (the stage finished, the
 	// profile went away).

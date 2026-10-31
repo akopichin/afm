@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/akopichin/afm/pkg/assistants"
 	"gopkg.in/yaml.v3"
+
+	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/skills"
 )
 
 // StageAssistant declares one helper profile a stage auto-attaches at the start of its execution phase, the
@@ -18,6 +20,10 @@ type StageAssistant struct {
 	Instruction string
 	Mode        assistants.Mode
 	Trigger     assistants.Trigger
+	// Skills are the skills the helper must load before work; SkillsDir overrides the flow's library.
+	// The helper does not inherit its stage's skills.
+	Skills    skills.Names
+	SkillsDir skills.Dir
 }
 
 // StageAssistants is a stage's assistants: field — one or more StageAssistant, parsed from a profile name
@@ -88,9 +94,14 @@ func decodeProfileName(value *yaml.Node) (string, error) {
 // UnmarshalYAML/verifyStepFromMapping's pattern rather than a lenient `type plain` Decode, so a typo'd key
 // (e.g. "triger") fails loudly instead of being silently ignored.
 func (a *StageAssistant) unmarshalMapping(value *yaml.Node) error {
+	seen := make(map[string]bool, len(value.Content)/2)
 	for i := 0; i+1 < len(value.Content); i += 2 {
 		key := value.Content[i].Value
 		val := value.Content[i+1]
+		if seen[key] {
+			return fmt.Errorf("assistants: duplicate field %q", key)
+		}
+		seen[key] = true
 		switch key {
 		case keyProfile:
 			if err := val.Decode(&a.Profile); err != nil {
@@ -116,8 +127,20 @@ func (a *StageAssistant) unmarshalMapping(value *yaml.Node) error {
 				return fmt.Errorf("assistants: trigger: %w", err)
 			}
 			a.Trigger = assistants.Trigger(v)
+		case keySkills:
+			names, err := skills.ParseNames(val)
+			if err != nil {
+				return fmt.Errorf("assistants: %w", err)
+			}
+			a.Skills = names
+		case keySkillsDir:
+			dir, err := skills.ParseDir(val)
+			if err != nil {
+				return fmt.Errorf("assistants: %w", err)
+			}
+			a.SkillsDir = dir
 		default:
-			return fmt.Errorf("assistants: unknown field %q; use \"profile\"", key)
+			return fmt.Errorf("assistants: unknown field %q; use profile, title, instruction, mode, trigger, skills, skills_dir", key)
 		}
 	}
 	return nil

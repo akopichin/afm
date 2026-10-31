@@ -80,9 +80,22 @@ func TestSkills_Rejected(t *testing.T) {
 	team := func(line string) string {
 		return "name: t\nteam:\n  - id: m\n    profile: p\n    title: M\n    " + line + "\n" + tail
 	}
+	helper := func(line string) string {
+		return "name: t\nstages:\n  - id: s\n    agents: [auto]\n    assistants:\n      - profile: p\n        " + line + "\n"
+	}
 	tests := []struct {
 		name, doc, wantErr string
 	}{
+		{"helper empty name", helper(`skills: ""`), "must not be empty"},
+		{"helper null", helper("skills: null"), "must be a string"},
+		{"helper bare key", helper("skills:"), "must be a string"},
+		{"helper number", helper("skills: 5"), "must be a string"},
+		{"helper object", helper("skills: {a: b}"), "skill name or a list"},
+		{"helper dir empty", helper(`skills_dir: ""`), "must not be empty"},
+		{"helper dir null", helper("skills_dir: null"), "must be a string"},
+		{"helper dir tilde", helper("skills_dir: ~/lib"), "not expanded"},
+		{"helper skills twice", helper("skills: tdd\n        skills: docs"), "duplicate"},
+		{"helper typo", helper("skill: tdd"), "unknown field"},
 		{"stage empty name", stage(`skills: ""`), "must not be empty"},
 		{"stage null", stage("skills: null"), "must not be empty or null"},
 		{"stage bare key", stage("skills:"), "must not be empty or null"},
@@ -125,6 +138,36 @@ func TestSkills_Rejected(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSkills_StageAssistants(t *testing.T) {
+	f, err := flow.ParseFile(writeTemp(t, `
+name: t
+stages:
+  - id: s
+    agents: [auto]
+    skills: tdd
+    assistants:
+      - profile: reviewer
+        skills: [review, docs, review]
+        skills_dir: ./helper-lib
+      - profile: qa
+        skills: qa-checklist
+      - plain
+`))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	got := f.Stages[0].Assistants
+	if !reflect.DeepEqual(got[0].Skills, skills.Names{"review", "docs"}) || got[0].SkillsDir != "./helper-lib" {
+		t.Errorf("reviewer = %+v", got[0])
+	}
+	if !reflect.DeepEqual(got[1].Skills, skills.Names{"qa-checklist"}) || got[1].SkillsDir != "" {
+		t.Errorf("qa = %+v", got[1])
+	}
+	if got[2].Skills != nil || got[2].SkillsDir != "" {
+		t.Errorf("plain helper inherited something: %+v", got[2])
 	}
 }
 

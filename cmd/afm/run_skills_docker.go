@@ -29,13 +29,18 @@ func effectiveRoot(afmRoot, worktreeDir string, f *flow.Flow) (string, error) {
 	return worktreeBase(afmRoot, f)
 }
 
-// skillLibraryDirs lists the distinct libraries of stages and members, sorted. Stages and members are
+// skillLibraryDirs lists the distinct libraries of stages, their helpers and members, sorted. They are
 // expected to carry resolved (absolute) skills_dir values.
 func skillLibraryDirs(stages []flow.Stage, team flow.Team) []string {
 	dirs := map[string]bool{}
 	for _, s := range stages {
 		if s.SkillsDir != "" {
 			dirs[string(s.SkillsDir)] = true
+		}
+		for _, a := range s.Assistants {
+			if a.SkillsDir != "" {
+				dirs[string(a.SkillsDir)] = true
+			}
 		}
 	}
 	for _, m := range team {
@@ -278,7 +283,7 @@ func plannedSkillRun(f *flow.Flow, cfg config.Config, base string, saved *savedR
 		stages = unfinishedStages(stages, saved.state)
 	}
 	if !resolveCollaboration(cfg, f).Enabled {
-		return stages, nil // without collaboration no team agent is added or woken
+		return withoutHelperLibraries(stages), nil // without collaboration no team agent or helper is added or woken
 	}
 	if saved == nil {
 		return stages, team

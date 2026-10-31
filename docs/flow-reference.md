@@ -111,11 +111,14 @@ stages:
         instruction: Check test coverage.
         mode: required
         trigger: on_completion
+        skills: [qa-checklist]
 ```
 
 Object fields are `profile` (required), `title`, `instruction`, `mode`
-(`advisory` or `required`), and `trigger` (`one_shot`, `checkpoints`, or
-`on_completion`). Omitted mode and trigger default to `advisory` and `one_shot`.
+(`advisory` or `required`), `trigger` (`one_shot`, `checkpoints`, or
+`on_completion`), `skills`, and `skills_dir`. Omitted mode and trigger default to
+`advisory` and `one_shot`. `skills` and `skills_dir` follow the
+[agent skills](#agent-skills) rules; a helper does not inherit its stage's skills.
 Profiles must be defined in `collaboration.profiles`; an unknown profile stops
 `afm run` at preflight. Each profile can appear only once per stage. The field is
 valid on execution stages (including `agents: [auto]`), but not on `script:` or
@@ -134,16 +137,18 @@ directory; see below),
 
 ### Agent skills
 
-Use `skills` on a stage or a `team` member to require named skills. It accepts a
+Use `skills` on a stage, a [declared helper](#declared-helpers) or a `team`
+member to require named skills. It accepts a
 single string or a list. The list order is the loading order; exact duplicates
 are removed without changing the spelling or order of the remaining names.
 Namespaced names such as `superpowers:test-driven-development` remain intact.
 Omitting `skills` or using `[]` requires none. Empty names, `null`, numbers,
 objects, and mixed lists are invalid.
 
-`skills_dir` selects one additional local library. Set it on a stage or team
-member, at the top of `flow.yaml`, or in `config.yaml`. The nearest setting wins
-as a whole: stage or member → flow → merged project/global config. Libraries
+`skills_dir` selects one additional local library. Set it on a stage, declared
+helper or team member, at the top of `flow.yaml`, or in `config.yaml`. The
+nearest setting wins as a whole: stage, helper or member → flow → merged
+project/global config. A helper skips its stage's `skills_dir`. Libraries
 are not combined. Its value must be a non-empty path string; `null` and a
 leading `~` are invalid. For a shared library in a global config, use an
 absolute path.
@@ -191,13 +196,15 @@ prompt instructions to the model, not a programmatic guarantee that it invoked
 a skill loader. afm validates the local library but cannot determine whether a
 native skill is installed in the client's environment.
 
-The resolved settings are saved for stages and created team agents. Resume
+The resolved settings are saved for stages, their declared helpers and created
+team agents. Resume
 keeps those settings even if YAML or config changes; library file contents are
 read again and are not snapshotted. Old runs without these fields remain
 readable. Stages added through the dashboard do not inherit the flow's
 `skills_dir`. Skills do not grant extra permissions or change the stage
 completion contract; verify agents, helpers, delegated tasks and the dashboard
-Assistant do not inherit their author's skills.
+Assistant do not inherit their author's skills. A helper declared in
+`assistants:` gets only the skills declared on it.
 
 `side_agent: true|false` overrides the dashboard
 [Assistant](dashboard.md#assistant-a-free-form-chat-alongside-the-run) toggle for

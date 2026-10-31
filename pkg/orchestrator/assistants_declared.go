@@ -38,6 +38,8 @@ func (o *Orchestrator) attachDeclaredAssistants(ctx context.Context, s flow.Stag
 			Instruction: a.Instruction,
 			Mode:        a.Mode,
 			Trigger:     a.Trigger,
+			Skills:      a.Skills,
+			SkillsDir:   string(a.SkillsDir),
 			Actor:       state.Actor{Kind: "system", ID: "flow"},
 		})
 		if err != nil {

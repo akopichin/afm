@@ -1070,7 +1070,6 @@ describe('skins CSS contract — no whole-element fade on text', () => {
     [/-spinner$/, 'spinner ring: no text'],
     [/^\.pasteable-attachment\.(uploading|failed) img$/, 'thumbnail image: no text'],
     [/^\.assistant-mention-item\.is-unavailable$/, 'its button is disabled'],
-    [/^\.line-commented .*::after$/, 'plan comment icon: a mask with no text, never a control'],
   ]
   const unexplained = (d: Declaration): boolean =>
     !splitSelectors(d.selector).every((part) => FADE_OK.some(([pattern]) => pattern.test(part)))
@@ -1183,10 +1182,10 @@ describe('skins CSS contract — plan line numbers share one style', () => {
     expect(offsets.map((d) => d.value)).toEqual(['calc((var(--row-h) - 16px) / 2)'])
   })
 
-  it('the comment icon has one size and column for every row type', () => {
+  it('the comment icon has one size and column for every row type and stays hidden until the row is hovered', () => {
     for (const property of ['width', 'height', 'right']) expect(preludesSetting(icons, property).length, property).toBeLessThanOrEqual(1)
     const resting = icons.filter((d) => d.property === 'opacity').map((d) => d.value)
-    expect(Array.from(new Set(resting)).sort()).toEqual(['0.55', '1'])
+    expect(Array.from(new Set(resting)).sort()).toEqual(['0', '1'])
   })
 })
 
