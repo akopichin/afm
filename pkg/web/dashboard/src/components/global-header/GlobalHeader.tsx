@@ -26,6 +26,8 @@ type GlobalHeaderProps = {
   onRequestEnableNotifications?: () => void
   onDisableNotifications?: () => void
   capabilities?: { fileBrowser: boolean }
+  // hidden — режим фокуса Feed: шапка остаётся смонтированной, CSS её скрывает.
+  hidden?: boolean
 }
 
 // GlobalHeader — компактная шапка дашборда. Данные и хуки те же, что были у FlowHeader/Footer — меняется
@@ -47,12 +49,13 @@ export function GlobalHeader({
   onRequestEnableNotifications,
   onDisableNotifications,
   capabilities = { fileBrowser: false },
+  hidden = false,
 }: GlobalHeaderProps): ReactElement {
   const hasDescription = description !== undefined && description.trim() !== ''
   const { mode, toggle } = useThemeMode()
 
   return (
-    <header id="header" className="global-header">
+    <header id="header" className="global-header" hidden={hidden}>
       <div className="gh-left">
         <span className="gh-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
@@ -62,7 +65,7 @@ export function GlobalHeader({
         </span>
         <span className="gh-wordmark">afm</span>
         <span className="gh-flow">
-          <span id="flow-name" className="gh-flow-name">{flowName}</span>
+          <span id="flow-name" className="gh-flow-name" title={flowName}>{flowName}</span>
           {hasDescription && <span id="flow-description" className="gh-flow-desc">{description}</span>}
         </span>
       </div>

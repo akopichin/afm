@@ -40,7 +40,7 @@
   padding-top: 14px;
   border-top: 1px solid var(--separator-subtle);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.4;
   color: var(--text-muted);
   white-space: nowrap;
@@ -81,8 +81,10 @@
   padding: 0 11px;
 }
 #stages-panel h2 {
-  font-size: 13px;
-  font-weight: 650;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 .rail-progress-text {
@@ -159,15 +161,15 @@
   min-height: 26px;
 }
 .stage-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 580;
   color: var(--text-primary);
-  line-height: 1.45;
+  line-height: 1.55;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .stage-status {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   line-height: 1.2;
 }
@@ -423,4 +425,4 @@
 .stage-status-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .stage-status-line .stage-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Time hangs on the row's right edge, at the same inset as .stage-actions: an even column that takes no width from the status. */
-.stage-time { position: absolute; right: 8px; color: var(--text-muted); font: 10px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stage-time { position: absolute; right: 8px; color: var(--text-muted); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }

@@ -55,6 +55,7 @@ import { useFaviconPulse } from '../hooks/use-favicon-pulse'
 import { useDesktopNotifications } from '../hooks/use-desktop-notifications'
 import { usePauseOnFocus } from '../hooks/use-pause-on-focus'
 import { useIsEditing } from '../hooks/use-is-editing'
+import { useFeedFocus } from '../hooks/use-feed-focus'
 import { SIGNIFICANT_EVENT_TYPES } from '../types'
 
 // Подписи контекстной вкладки воркспейса по виду attention (Approval/Question/…).
@@ -306,6 +307,24 @@ export function App(): ReactElement {
   const workspaceStageId = wsState.view === 'attention' && attnItem !== null ? attnItem.stageId : selectedStageId
   const workspaceStage = stages.find((stage) => stage.id === workspaceStageId) ?? null
 
+  // Focus mode is offered on the Feed and on the Plan / Question views of a stage (their own waiting view or the
+  // history). Any other view or a helper ends it. Overlays, including the Stages drawer DashboardShell reports,
+  // keep F and Escape for themselves.
+  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage)
+  const isStageDetailView = wsState.view === 'plan-history' || wsState.view === 'dialog-history'
+  const stageFeedShown = wsState.view === 'feed' && selection?.kind === 'stage' && workspaceStage !== null
+  const focusAvailable =
+    stageFeedShown ||
+    (isStageDetailView && selection?.kind === 'stage' && workspaceStage !== null) ||
+    (wsState.view === 'attention' && (contextKind === 'approval' || contextKind === 'question'))
+  const [railDrawerOpen, setRailDrawerOpen] = useState(false)
+  const feedFocus = useFeedFocus({ available: focusAvailable, blocked: anyModalOpen || railDrawerOpen })
+  // Focus mode hides People: an open People drawer would stay as an invisible modal, so entering closes it.
+  // The wide panel keeps its choice and comes back on exit.
+  useEffect(() => {
+    if (feedFocus.active) setPeopleShown((shown) => (shown.drawer ? { ...shown, drawer: false } : shown))
+  }, [feedFocus.active])
+
   // Keep Hold's resume route until polling leaves the paused episode, even after its request settles.
   const heldPauseEpisodes = useMemo(() => new Map<string, string>(), [runId])
   for (const stage of stages) {
@@ -490,7 +509,6 @@ export function App(): ReactElement {
   }
 
   const inAttention = wsState.view === 'attention'
-  const contextKind = workspaceStage === null ? null : attentionKindForStatus(workspaceStage)
 
   // Первый нерешённый элемент очереди (для маяка/шортката). В attention-виде это
   // активный элемент; иначе — голова очереди.
@@ -538,17 +556,18 @@ export function App(): ReactElement {
       })
     }
   }
-  // Отдельный маяк ожидания — когда очередь непуста и мы НЕ в attention-виде
-  // (в attention-виде ожидание уже показано detail-вкладкой). Никогда не active.
-  const showBeacon = !inAttention && attentionTabItem !== null
-  if (showBeacon && attentionTabItem !== null) {
-    tabs.push({
-      id: 'beacon',
-      label: ATTENTION_TAB_LABEL[attentionTabItem.kind],
-      kind: attentionTabItem.kind,
-      count: countByKind(attnItems, attentionTabItem.kind),
-      glow: true,
-    })
+  // Отдельный маяк ожидания, никогда не active — вне attention-вида (там ожидание показывает detail-вкладка).
+  // В фокусе Feed полоса вкладок скрыта, и то же ожидание с тем же действием показывает кнопка в шапке стадии.
+  const beacon = !inAttention && attentionTabItem !== null
+    ? {
+        label: ATTENTION_TAB_LABEL[attentionTabItem.kind],
+        kind: attentionTabItem.kind,
+        count: countByKind(attnItems, attentionTabItem.kind),
+        onOpen: () => onSelectTab('beacon'),
+      }
+    : null
+  if (beacon !== null) {
+    tabs.push({ id: 'beacon', label: beacon.label, kind: beacon.kind, count: beacon.count, glow: true })
   }
   // Team — ГЛОБАЛЬНАЯ вкладка ростера/бесед Agent Mesh (T7.3), не привязана к выбранной стадии (как Cost
   // ниже), видна когда meshRoster.enabled (пробный запрос — см. его комментарий, у мэша нет своего поля в
@@ -645,6 +664,7 @@ export function App(): ReactElement {
         onRequestEnableNotifications={onRequestEnableNotifications}
         onDisableNotifications={onDisableNotifications}
         capabilities={capabilities}
+        hidden={feedFocus.active}
       />
 
       <ReviewBanner
@@ -657,6 +677,8 @@ export function App(): ReactElement {
       <main id="main">
         <MaximizeProvider>
           <DashboardShell
+            feedFocus={feedFocus.active}
+            onRailDrawerChange={setRailDrawerOpen}
             rail={
               <StagesList
                 stages={stages}
@@ -720,6 +742,8 @@ export function App(): ReactElement {
                     showStageButtons={selection?.kind === 'stage'}
                     controlsEnabled={flowPauseState === 'none' && (!pauseOnFocus.hasActiveOp(workspaceStage.id) || (workspaceStage.status === 'paused' && pauseOnFocus.isOwned(workspaceStage.id)))}
                     onContinue={heldContinue}
+                    feedFocus={focusAvailable ? { active: feedFocus.active, onToggle: feedFocus.toggle, target: stageFeedShown ? 'feed' : 'view', onShowFeed: stageFeedShown ? undefined : openFeed } : undefined}
+                    pendingAttention={beacon ?? undefined}
                     replyNeeded={wsState.view === 'feed' && feedReplies.stageId === workspaceStage.id ? feedReplies.count : 0}
                     attentionNav={
                       inAttention && attnIndex >= 0 && attnItems.length > 1
@@ -905,6 +929,7 @@ export function App(): ReactElement {
                 <RunConversationsPanel
                   key={runId}
                   open={runConversationsOpen}
+                  hidden={feedFocus.active}
                   onClose={closeRunConversations}
                   participants={meshParticipants}
                   threads={meshRoster.threads}

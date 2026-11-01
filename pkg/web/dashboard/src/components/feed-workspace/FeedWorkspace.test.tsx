@@ -673,6 +673,34 @@ describe('FeedWorkspace', () => {
     items,
   })
 
+  describe('FeedGroupView — reading-position marker', () => {
+    // Focus mode holds the message in the middle of the Feed by this marker: every row kind must carry it.
+    it('every row kind is marked as one Feed item', () => {
+      const rows: FeedItem[] = [
+        thoughtItem({ key: 'thought' }),
+        thoughtItem({ key: 'status', kind: 'status', markdown: false, text: 'status row' }),
+        thoughtItem({ key: 'dialog', kind: 'dialog', markdown: false, navigable: true, phase: 'planning', id: 'q1', text: 'dialog row' }),
+        thoughtItem({ key: 'tool', kind: 'tool', markdown: false, mono: true, text: 'Read src/a.ts' }),
+      ]
+      const { container } = render(
+        <FeedGroupView group={groupOf(rows)} showStageBadges={false} onReplyToThought={vi.fn()} onOpenDialog={vi.fn()} />,
+      )
+      const children = Array.from(container.querySelector('.feed-rows')?.children ?? [])
+      expect(children.length).toBeGreaterThanOrEqual(4)
+      // A tool run is a container: its summary and every call row are the items.
+      for (const child of children) {
+        if (child.matches('details')) {
+          expect(child.querySelector('summary')).toHaveAttribute('data-feed-item')
+          const calls = child.querySelectorAll('.feed-tool-rows > .feed-item')
+          expect(calls.length).toBeGreaterThan(0)
+          for (const call of Array.from(calls)) expect(call).toHaveAttribute('data-feed-item')
+        } else {
+          expect(child).toHaveAttribute('data-feed-item')
+        }
+      }
+    })
+  })
+
   describe('FeedGroupView — repliable thoughts', () => {
     it('the author row names the stage agent when the caller knows its name', () => {
       const { container } = render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} agentName="Checkout executor" />)

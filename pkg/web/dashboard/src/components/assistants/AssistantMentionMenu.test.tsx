@@ -32,13 +32,23 @@ describe('AssistantMentionMenu', () => {
     const menu = screen.getByRole('listbox')
     expect(menu.style.top).toBe('391px')
     expect(menu.style.left).toBe('300px')
-    expect(menu.style.width).toBe('360px')
+    expect(menu.style.width).toBe('420px')
+    expect(menu.style.maxHeight).toBe('560px')
     const oldWidth = window.innerWidth
     Object.defineProperty(window, 'innerWidth', { value: 320, configurable: true })
     fireEvent(window, new Event('resize'))
     expect(menu.style.width).toBe('296px')
     expect(menu.style.left).toBe('12px')
     Object.defineProperty(window, 'innerWidth', { value: oldWidth, configurable: true })
+    bounds.mockRestore()
+  })
+
+  it('caps the height at the space above the composer when that is below the 560px limit', () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 300, left: 40, width: 500, height: this.matches('[role="listbox"]') ? 200 : 100 } as DOMRect
+    })
+    render(<div className="chat-composer-row"><AssistantMentionMenu profiles={PROFILES} highlightIndex={0} onHover={vi.fn()} onSelect={vi.fn()} /></div>)
+    expect(screen.getByRole('listbox').style.maxHeight).toBe('279px')
     bounds.mockRestore()
   })
 

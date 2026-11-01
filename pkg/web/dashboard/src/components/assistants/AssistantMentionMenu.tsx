@@ -44,8 +44,8 @@ export type MentionMenuProps<T extends MentionItem> = {
 
 const MENU_GAP = 9
 const VIEWPORT_MARGIN = 12
-const MAX_MENU_HEIGHT = 380
-const MENU_WIDTH = 360
+const MAX_MENU_HEIGHT = 560
+const MENU_WIDTH = 420
 
 // mentionText — the text written after `@` for an item: its handle, else its id.
 export function mentionText(item: MentionItem): string {

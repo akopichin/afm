@@ -119,8 +119,10 @@
   background: var(--surface-raised);
   color: var(--text-secondary);
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: 16px;
+  line-height: 24px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   cursor: pointer;
 }
 .run-conversations-toggle:hover {
@@ -172,10 +174,10 @@
 .workspace-tabs {
   display: flex;
   align-items: stretch;
-  gap: 24px;
+  gap: 30px;
   flex-shrink: 0;
-  min-height: 40px;
-  padding: 0 20px;
+  min-height: 44px;
+  padding: 0 26px;
   border-bottom: 1px solid var(--separator-subtle);
   background: var(--surface-raised);
 }
@@ -190,15 +192,15 @@
   border: 0;
   color: var(--text-muted);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   cursor: pointer;
   transition: color 0.15s ease;
 }
 .workspace-tab:hover { color: var(--text-primary); }
-.workspace-tab.active {
-  color: var(--text-primary);
-  font-weight: 650;
-}
+.workspace-tab.active { color: var(--text-primary); }
 .workspace-tab.active::after {
   content: "";
   position: absolute;
@@ -218,26 +220,34 @@
   white-space: nowrap;
 }
 
-/* Square count badge ("Approval 1"); an attention tab tints it and the label with its tone, nothing glows. */
+/* Square count badge ("Approval 1"); an attention tab tints it and the label with its tone, nothing glows.
+   Feed focus hides the tabs, and the stage bar's waiting-item button repeats the beacon with the same look. */
+.feed-focus-wait-count,
 .workspace-tab-count {
   padding: 0 5px;
   border-radius: 4px;
   background: var(--surface-hover);
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 18px;
   font-variant-numeric: tabular-nums;
 }
-.workspace-tab.workspace-tab-attention { color: var(--attention-text); }
-.workspace-tab-attention .workspace-tab-count {
+.workspace-tab.workspace-tab-attention,
+.workspace-action.feed-focus-wait { color: var(--attention-text); }
+.workspace-tab-attention .workspace-tab-count,
+.feed-focus-wait-count {
   background: rgba(var(--attention-rgb), 0.16);
   color: var(--attention-text);
 }
 .workspace-tab.workspace-tab-attention[data-kind="failed"],
-.workspace-tab.workspace-tab-attention[data-kind="hook_failed"] { color: var(--danger-text); }
+.workspace-tab.workspace-tab-attention[data-kind="hook_failed"],
+.workspace-action.feed-focus-wait[data-kind="failed"],
+.workspace-action.feed-focus-wait[data-kind="hook_failed"] { color: var(--danger-text); }
 .workspace-tab-attention[data-kind="failed"] .workspace-tab-count,
-.workspace-tab-attention[data-kind="hook_failed"] .workspace-tab-count {
+.workspace-tab-attention[data-kind="hook_failed"] .workspace-tab-count,
+.feed-focus-wait[data-kind="failed"] .feed-focus-wait-count,
+.feed-focus-wait[data-kind="hook_failed"] .feed-focus-wait-count {
   background: rgba(var(--danger-rgb), 0.16);
   color: var(--danger-text);
 }
@@ -327,7 +337,7 @@
 .workspace-header {
   display: flex;
   align-items: center;
-  min-height: 44px;
+  min-height: 50px;
   gap: 9px;
   flex-shrink: 0;
   padding: 6px 8px;
@@ -341,9 +351,9 @@
   flex-shrink: 0;
 }
 .workspace-title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 650;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.015em;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -378,7 +388,7 @@
   background: var(--surface-raised);
   color: var(--text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 550;
   line-height: 1.3;
   white-space: nowrap;
@@ -393,12 +403,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 5px;
   --status-tone: var(--text-secondary);
   background: color-mix(in srgb, var(--status-tone) 9%, var(--surface-canvas));
   color: color-mix(in srgb, var(--status-tone) var(--tone-text-mix), var(--text-primary));
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 550;
   white-space: nowrap;
 }
@@ -463,7 +473,7 @@
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 550;
   cursor: pointer;
 }
@@ -485,11 +495,27 @@
   align-items: center;
   gap: 6px;
   color: var(--attention-text);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .workspace-reply-needed svg { width: 14px; height: 14px; }
 .workspace-action-error { color: var(--danger-text); font-size: 12px; overflow-wrap: anywhere; }
+/* Focus / Exit focus and, in focus mode, the waiting item: text actions whose label never wraps inside 28px. */
+.feed-focus-toggle,
+.feed-focus-feed,
+.feed-focus-wait { padding: 4px 6px; white-space: nowrap; }
+.feed-focus-toggle svg { width: 16px; height: 16px; }
+.feed-focus-toggle kbd {
+  padding: 0 4px;
+  border: 1px solid var(--control-border);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font: 10px var(--font-ui);
+}
+/* Narrower windows keep only the Focus icon; aria-label and title still name it. Focus mode shows the label again. */
+@media (max-width: 1180px) {
+  .feed-focus-toggle-label { display: none; }
+}
 
 /* Column of stacked detail panels (plan / dialog). */
 .detail-panels {
@@ -822,11 +848,32 @@
   .workspace-header:has(.stage-buttons) .workspace-header-actions { grid-row: 2; grid-column: 4; }
   .workspace-header:has(.stage-buttons) .workspace-action-error { grid-column: 1 / -1; }
   .stage-buttons { grid-row: 2; grid-column: 1 / 4; margin-inline-start: 0; padding-inline-start: 8px; border-inline-start: 0; }
-  .workspace-reply-needed { font-size: 10px; }
+  .workspace-reply-needed { font-size: 11px; }
+  .workspace-title { font-size: 15px; }
   .workspace-action, .workspace-header .stage-people-toggle { height: 32px; }
   .workspace-action-icon { width: 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .rail-slot { transition: none; }
+}
+
+/* === Feed focus === Only the stage bar, filters, Feed and composer stay. Everything else is hidden with CSS and
+   stays mounted, so the draft, reading position and panel widths survive the switch. */
+.global-header[hidden] { display: none; }
+.dashboard-body.dashboard-body--feed-focus { grid-template-columns: minmax(0, 1fr); }
+.dashboard-body--feed-focus .rail-slot,
+.dashboard-body--feed-focus .rail-resizer,
+.dashboard-body--feed-focus .rail-scrim,
+.dashboard-body--feed-focus .rail-toggle,
+.dashboard-body--feed-focus .workspace-tabs,
+.dashboard-body--feed-focus .run-conversations-toggle,
+.dashboard-body--feed-focus .workspace-header .stage-people-toggle {
+  display: none;
+}
+.dashboard-body--feed-focus .feed-focus-toggle-label { display: inline; }
+@media (max-width: 600px) {
+  .dashboard-body--feed-focus .workspace-body { padding-inline: 16px; }
+  .dashboard-body--feed-focus .workspace-header-actions { max-width: 100%; }
+  .dashboard-body--feed-focus .feed-focus-toggle kbd { display: none; }
 }

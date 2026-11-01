@@ -810,6 +810,48 @@ A message whose post the server refuses — for example because someone you name
 can no longer read it — keeps its draft and shows the server's reason under the
 input (*"@qa cannot read this post (…) — remove the mention and send again"*).
 
+## Feed focus
+
+Focus mode gives one stage's conversation the whole window. It is on the stage
+toolbar, above the Feed: **Focus** (an icon only in windows up to 1180 px wide —
+its name and the **F** shortcut are in the tooltip and accessible name). The button
+is offered on the stage's **Feed** and on its **Approval** or **Question** view and
+plan or dialog history; it is not offered in the **Paused**, **Failed**, **Hook
+failed** and **Helpers** views, for a helper, or in **Team**, **Board** and **Cost**.
+
+In focus mode the run header, the tab strip, **Stages**, the [People
+panel](#people-panel), the run conversations button and the dividers between the
+panels are hidden. What stays is the stage toolbar (stage name and status,
+**Pause**, **Continue**, **Retry**, [stage buttons](#stage-buttons)), the Feed
+filters, the Feed and its composer. If another stage is waiting for you, the toolbar
+also shows a button with that wait's tab label and count (**Approval**,
+**Question**, …): it opens that Approval or Question view and keeps focus mode on.
+From an Approval or Question view, **Feed** in the toolbar opens the stage's Feed and
+also keeps focus mode on.
+
+Nothing is reloaded when you switch: the composer draft with its selection, recipients,
+reply and attachments, the reading position in the Feed (a Feed scrolled to the bottom
+keeps following new messages) and the widths of Stages and People are the same as before.
+
+**Turn on:** click **Focus**, or press **F** (the physical key, so it works on any
+keyboard layout). **F** is ignored while you type in a field, with **Shift**, **Ctrl**,
+**Alt** or **Cmd** held, when a key is held down, and while a dialog, the Assistant or a
+Stages or People drawer is open. Opening focus mode closes an open People drawer.
+
+**Turn off:** click **Exit focus**, press **F** or press **Escape**. **Escape**
+closes the topmost thing first: an open `@` menu, the attachment menu, the Assistant
+or another dialog. Only when none is open does it end focus mode, also from the
+composer, where the draft and the cursor stay.
+
+Focus mode stays on while you move between the views that offer it: a stage's Feed,
+its Approval or Question view and plan or dialog history, including when an
+approval or question of another stage opens by itself. It ends when the view changes
+to one that does not offer it: a stage failing, pausing or failing a lifecycle hook
+opens its **Failed**, **Paused** or **Hook failed** view (a click on **Pause** opens
+the Paused view too), and **Team**, **Board** and **Cost** have no focus mode. Such
+a view opens by itself only when you are not typing. Focus mode is not turned on
+again when you return to the Feed, and it is not kept after a page reload.
+
 ## Images in the feed (agent → you)
 
 An agent can show you an image it produced — a chart, a rendered diagram, a

@@ -4,6 +4,7 @@ import { STAGE_STATUS_LABELS } from '../../types'
 import { QuotaCountdown } from '../stages-list/QuotaCountdown'
 import { useStageAction } from '../../hooks/use-stage-retry'
 import { continueStage, pauseStage, retryHookStage, retryStage, triggerStageButton } from '../../api/run-client'
+import type { AttentionKind } from '../../hooks/use-workspace-view'
 
 const PAUSABLE_STATUSES: ReadonlySet<Stage['status']> = new Set(['running', 'planning', 'revising', 'retrying', 'awaiting_peer', 'awaiting_quota'])
 
@@ -17,6 +18,30 @@ export type AttentionNav = {
   total: number
   onPrev: () => void
   onNext: () => void
+}
+
+// FeedFocusControl — the Focus / Exit focus button; passed only where focus mode is available.
+export type FeedFocusControl = {
+  active: boolean
+  onToggle: () => void
+  // target — what the mode is on: the Feed, or the Plan / Question view.
+  target?: 'feed' | 'view'
+  // onShowFeed — focus mode hides the tab strip, so a view other than the Feed brings the way back to the Feed.
+  onShowFeed?: () => void
+}
+
+const FOCUS_NAMES = {
+  feed: { enter: 'Focus on Feed', exit: 'Exit Feed focus' },
+  view: { enter: 'Focus on this view', exit: 'Exit focus' },
+}
+
+// PendingAttention — the waiting item the beacon tab points at. Focus mode hides the tab strip, so the toolbar
+// shows it as a button with the beacon's label, count and tone.
+export type PendingAttention = {
+  label: string
+  kind: AttentionKind
+  count: number
+  onOpen: () => void
 }
 
 type WorkspaceHeaderProps = {
@@ -33,6 +58,8 @@ type WorkspaceHeaderProps = {
   // showStageButtons — false, когда в воркспейсе выбран helper, а не сама стадия: кнопки принадлежат стадии.
   showStageButtons?: boolean
   onContinue?: () => void
+  feedFocus?: FeedFocusControl
+  pendingAttention?: PendingAttention
 }
 
 // Иконки шапки — те же линейные SVG на currentColor, что в прототипе.
@@ -47,10 +74,13 @@ const REPLY_ICON = icon(<path d="m9 5-6 6 6 6M3 11h11a6 6 0 0 1 6 6v3" />)
 const REFRESH_ICON = icon(<path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" />)
 const PAUSE_ICON = icon(<path d="M8 5v14M16 5v14" />)
 const PLAY_ICON = icon(<path d="m8 4 12 8-12 8Z" />)
+const EXPAND_ICON = icon(<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />)
+const COLLAPSE_ICON = icon(<path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5" />)
 
 // WorkspaceHeader — компактный заголовок воркспейса выбранной стадии: имя + чип статуса (точка, слово,
-// «thinking» во время running) и справа действия: ответ ждут, People, Retry, Pause/Continue иконкой.
-export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue }: WorkspaceHeaderProps): ReactElement {
+// «thinking» во время running) и справа действия: ответ ждут, People, ожидание (в фокусе), Retry,
+// Pause/Continue иконкой, Focus.
+export function WorkspaceHeader({ stage, connected, attentionNav, actions, statusAvailable = true, replyNeeded = 0, controlsEnabled = true, showControls = true, showStageButtons = true, onContinue, feedFocus, pendingAttention }: WorkspaceHeaderProps): ReactElement {
   const action = useStageAction(stage)
   const paused = stage.status === 'paused'
   const buttonsShown = showStageButtons && !stage.isScript && BUTTON_STATUSES.has(stage.status) && stage.buttons.length > 0
@@ -101,6 +131,12 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
       <span className="workspace-header-actions">
         {replyNeeded > 0 && <span className="workspace-reply-needed" role="status">{REPLY_ICON}{replyNeeded} {replyNeeded === 1 ? 'reply' : 'replies'} needed</span>}
         {actions}
+        {feedFocus?.active === true && pendingAttention !== undefined && (
+          <button type="button" className="workspace-action feed-focus-wait" data-kind={pendingAttention.kind} onClick={pendingAttention.onOpen}>
+            <span className="feed-focus-wait-label">{pendingAttention.label}</span>
+            {pendingAttention.count > 0 && <span className="feed-focus-wait-count">{pendingAttention.count}</span>}
+          </button>
+        )}
         {showControls && (stage.status === 'failed' || stage.status === 'hook_failed') && (
           <button type="button" className="workspace-action workspace-action-retry" disabled={action.locked || !statusAvailable || !controlsEnabled} onClick={() => void action.send(stage.status === 'hook_failed' ? retryHookStage : retryStage)}>{REFRESH_ICON}Retry</button>
         )}
@@ -114,6 +150,24 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
             onClick={() => paused && onContinue !== undefined ? onContinue() : void action.send(paused ? continueStage : pauseStage)}
           >
             {paused ? PLAY_ICON : PAUSE_ICON}
+          </button>
+        )}
+        {feedFocus?.active === true && feedFocus.onShowFeed !== undefined && (
+          <button type="button" className="workspace-action feed-focus-feed" onClick={feedFocus.onShowFeed}>Feed</button>
+        )}
+        {feedFocus !== undefined && (
+          <button
+            type="button"
+            className="workspace-action feed-focus-toggle"
+            aria-pressed={feedFocus.active}
+            aria-label={feedFocus.active ? FOCUS_NAMES[feedFocus.target ?? 'feed'].exit : FOCUS_NAMES[feedFocus.target ?? 'feed'].enter}
+            aria-keyshortcuts={feedFocus.active ? 'F Escape' : 'F'}
+            title={`${feedFocus.active ? FOCUS_NAMES[feedFocus.target ?? 'feed'].exit : FOCUS_NAMES[feedFocus.target ?? 'feed'].enter} · ${feedFocus.active ? 'F or Esc' : 'F'}`}
+            onClick={feedFocus.onToggle}
+          >
+            {feedFocus.active ? COLLAPSE_ICON : EXPAND_ICON}
+            <span className="feed-focus-toggle-label">{feedFocus.active ? 'Exit focus' : 'Focus'}</span>
+            {feedFocus.active && <kbd>Esc</kbd>}
           </button>
         )}
       </span>

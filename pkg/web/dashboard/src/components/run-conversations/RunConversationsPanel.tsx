@@ -16,6 +16,9 @@ export type RunConversationsPanelProps = {
   // open — on a wide screen the panel sits beside the workspace, on a narrow one it is a drawer over it. It is
   // always rendered: a closed panel is only slid out and inert, so its conversation and draft survive.
   open: boolean
+  // hidden — Feed focus hides the panel without closing it: it keeps the open choice, conversation and draft, but
+  // an invisible drawer must not trap the focus, take Escape or count as an open dialog.
+  hidden?: boolean
   onClose: () => void
   // participants/threads/summaries — the SAME roster poll App.tsx owns (useMeshRoster), not a second one.
   participants: MeshParticipant[]
@@ -52,7 +55,7 @@ const IGNORE_SEEN = (): void => {}
 // RunConversationsPanel — the right-hand panel with the run's own conversations (see runConversationThreads),
 // readable and answerable from every workspace view. List -> history -> Back; the selection and each draft live
 // here, so a view switch (which does not unmount the panel) keeps them.
-export function RunConversationsPanel({ open, onClose, participants, threads, summaries, unreadThreadIds = NO_UNREAD, seenSeqs = NO_SEEN, onSeen = IGNORE_SEEN }: RunConversationsPanelProps): ReactElement {
+export function RunConversationsPanel({ open, hidden = false, onClose, participants, threads, summaries, unreadThreadIds = NO_UNREAD, seenSeqs = NO_SEEN, onSeen = IGNORE_SEEN }: RunConversationsPanelProps): ReactElement {
   const rootRef = useRef<HTMLElement | null>(null)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
   const backRef = useRef<HTMLButtonElement | null>(null)
@@ -65,7 +68,7 @@ export function RunConversationsPanel({ open, onClose, participants, threads, su
     storageKey: 'afm.runConversationsWidth', defaultWidth: 340, container: 'parent', direction: -1,
     drawerQuery: '(max-width: 1180px)', toggleSelector: RUN_CONVERSATIONS_TOGGLE,
   })
-  const drawerOpen = open && resize.isDrawer
+  const drawerOpen = open && !hidden && resize.isDrawer
 
   const visible = useMemo(() => orderInboxThreads(runConversationThreads(threads, participants), summaries), [threads, participants, summaries])
   const selected = visible.find((t) => t.id === selectedId) ?? null

@@ -8,12 +8,16 @@ type DashboardShellProps = {
   tabs: ReactNode
   // workspace — активный воркспейс (Feed / attention / history) под вкладками.
   workspace: ReactNode
+  // feedFocus — режим фокуса Feed: CSS скрывает рейл и полосу вкладок, узлы остаются смонтированными.
+  feedFocus?: boolean
+  // onRailDrawerChange — открыта ли шторка Stages: под ней F не меняет раскладку.
+  onRailDrawerChange?: (open: boolean) => void
 }
 
 // DashboardShell — оболочка тела дашборда: слева рейл стадий, справа единый воркспейс. Раскладка — CSS
 // grid. Ширина рейла и мобильная шторка (≤900px) — тот же usePanelResize, что у People и Team: ширина
 // клампится так, чтобы воркспейсу осталось место, и горизонтального скролла нет.
-export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): ReactElement {
+export function DashboardShell({ rail, tabs, workspace, feedFocus = false, onRailDrawerChange }: DashboardShellProps): ReactElement {
   const [railOpen, setRailOpen] = useState(false)
   const resize = usePanelResize({
     storageKey: 'afm.railWidth', defaultWidth: 300, container: 'self', direction: 1,
@@ -31,6 +35,16 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
     if (el === null) return
     el.inert = isMobile && !railOpen
   }, [isMobile, railOpen])
+
+  const drawerOpen = isMobile && railOpen
+  useEffect(() => {
+    onRailDrawerChange?.(drawerOpen)
+  }, [drawerOpen, onRailDrawerChange])
+
+  // В фокусе рейл скрыт: открытая шторка закрывается, иначе она осталась бы невидимой ловушкой фокуса.
+  useEffect(() => {
+    if (feedFocus) setRailOpen(false)
+  }, [feedFocus])
 
   // Открытие шторки фокусирует первую стадию (до первого /api/status стадий нет — тогда первый контрол или
   // сам рейл), закрытие возвращает фокус на тумблер.
@@ -76,7 +90,7 @@ export function DashboardShell({ rail, tabs, workspace }: DashboardShellProps): 
 
   return (
     <div
-      className={`dashboard-body${railOpen ? ' rail-open' : ''}`}
+      className={`dashboard-body${railOpen ? ' rail-open' : ''}${feedFocus ? ' dashboard-body--feed-focus' : ''}`}
       ref={resize.targetRef}
       style={{ '--rail-width': `${resize.effectiveWidth}px` } as CSSProperties}
     >

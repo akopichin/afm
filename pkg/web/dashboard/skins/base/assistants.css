@@ -690,7 +690,7 @@
   /* Positioning (above the composer row) lives in public/chat-composer.css — it must survive a skin_dir. */
   list-style: none;
   margin: 0;
-  padding: 7px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -709,9 +709,9 @@
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   min-height: 54px;
-  padding: 9px;
+  padding: 13px 12px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -726,24 +726,27 @@
 }
 .assistant-mention-id {
   margin-left: auto;
-  max-width: 40%;
+  max-width: 30%;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--accent-text);
   font-family: var(--font-mono);
 }
 .assistant-mention-title {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
+  line-height: 1.45;
 }
-.assistant-mention-heading { padding: 8px 10px; font-size: 11px; color: var(--text-muted); border-bottom: 1px solid var(--separator-subtle); }
-.assistant-mention-person { display: flex; flex-direction: column; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
-.assistant-mention-description { color: var(--text-muted); font-size: 10px; }
-.assistant-mention-option .mesh-avatar { width: 30px; height: 30px; font-size: 10px; border-radius: 8px; }
+.assistant-mention-heading { padding: 10px 12px 12px; font-size: 12px; color: var(--text-muted); border-bottom: 1px solid var(--separator-subtle); }
+.assistant-mention-item { margin-block: 3px; }
+.assistant-mention-person { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
+.assistant-mention-description { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.assistant-mention-option .mesh-avatar { width: 34px; height: 34px; font-size: 11px; border-radius: 8px; }
 .assistant-mention-item.is-unavailable { opacity: .55; }
 .assistant-mention-option:disabled { cursor: default; }
-.assistant-mention-empty { padding: 20px 12px; font-size: 12px; color: var(--text-muted); }
+.assistant-mention-empty { padding: 24px 12px; font-size: 13px; color: var(--text-muted); }
 @keyframes mentionPopIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
@@ -752,14 +755,14 @@
   .assistant-mention-menu { animation: none; }
 }
 .assistant-mention-unavailable {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 /* .assistant-mention-group-label — section heading row (T7.4's "This run"/"This stage"/"Attach to stage").
    The side agent's own single ungrouped list never renders one of these (empty group label). */
 .assistant-mention-group-label {
   padding: 4px 8px 2px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;

@@ -491,6 +491,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
                 key={item.key}
                 type="button"
                 className={`${className} feed-item-navigable`}
+                data-feed-item=""
                 title="Open in dialog"
                 onClick={() => onOpenDialog(item.stageId, item.phase ?? '', item.id ?? '')}
                 onAnimationEnd={onAnimEnd}
@@ -504,7 +505,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
           if (onReplyToThought !== undefined && isThought) {
             const selected = item.key === activeReplyKey
             return (
-              <div key={item.key} className="feed-thought-row">
+              <div key={item.key} className="feed-thought-row" data-feed-item="">
                 <div
                   className={`${className} feed-item-thought${selected ? ' is-reply-target' : ''}`}
                   onClick={(e) => {
@@ -528,7 +529,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
           // reportVerificationId — только verify_result-строки с отчётом: рендерим ссылку "Show full
           // report" ПОД самим item, а не внутри него — тот же приём, что и feed-item-segments.
           return (
-            <div key={item.key} className="feed-item-with-report">
+            <div key={item.key} className="feed-item-with-report" data-feed-item="">
               <div className={className} onAnimationEnd={onAnimEnd}>{content}</div>
               {item.reportVerificationId !== undefined && (
                 <VerifyReportLink stageId={item.stageId} verificationId={item.reportVerificationId} />
@@ -573,7 +574,7 @@ function ToolRun({ items, countScope = '' }: { items: FeedItem[]; countScope?: s
   const { bump, playing, onBumpEnd } = useToolCountBump(count, countScope)
   return (
     <details className="feed-tool-group">
-      <summary>
+      <summary data-feed-item="">
         <strong>
           <span key={bump} className={`feed-tool-count${playing ? ' feed-tool-count--bump' : ''}`} onAnimationEnd={onBumpEnd}>{count}</span> {label}
         </strong>
@@ -583,7 +584,7 @@ function ToolRun({ items, countScope = '' }: { items: FeedItem[]; countScope?: s
         {items.map((item) => {
           const { name, detail } = toolCall(item)
           return (
-            <div key={item.key} className="feed-item feed-kind-tool tone-neutral mono">
+            <div key={item.key} className="feed-item feed-kind-tool tone-neutral mono" data-feed-item="">
               <span className="feed-item-text">
                 <span className="feed-tool-name">{name}</span>
                 {detail !== '' && ` ${detail}`}

@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 const STICK_THRESHOLD_PX = 40
 
-function isNearBottom(node: HTMLElement): boolean {
+export function isNearBottom(node: HTMLElement): boolean {
   return node.scrollHeight - node.scrollTop - node.clientHeight < STICK_THRESHOLD_PX
 }
 

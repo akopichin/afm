@@ -3,6 +3,23 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-01
+
+### Improvement: larger text and compact panels in the dashboard
+
+Feed messages and the composer are set at 15 px; **Stages**, the workspace tabs and
+**People** use 16 px headings; the run header, tab strip, stage toolbar, Feed filters
+and composer take less height, and the `@` mention menu has larger rows and avatars.
+On phones (up to 600 px wide) the text and header are sized separately. Theme colors
+are unchanged.
+
+### Improvement: Feed focus mode
+
+**Focus** on the stage toolbar (or **F**) hides the run header, tabs, **Stages** and
+**People**, leaving the stage toolbar, the Feed and its composer; **Exit focus**, **F**
+or **Escape** brings the layout back. The draft, reading position and panel widths are
+kept. See [Dashboard](docs/dashboard.md#feed-focus).
+
 ## 2026-10-31
 
 ### Improvement: Models & agents — usage and agent time by model, agent and job

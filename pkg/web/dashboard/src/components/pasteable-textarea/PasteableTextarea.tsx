@@ -237,7 +237,10 @@ function AttachMenu({
       if (wrapRef.current !== null && !wrapRef.current.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: globalThis.KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      // Поглощаем Escape: тем же нажатием не выходим из фокуса Feed.
+      e.preventDefault()
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)

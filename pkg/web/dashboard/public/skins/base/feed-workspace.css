@@ -67,15 +67,15 @@
 .feed-authored > .mesh-avatar { width: 30px; height: 30px; border-radius: 8px; }
 .feed-authored-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .feed-author-row { gap: 8px; min-height: 25px; padding: 0; font-size: 12.5px; }
-.feed-author-row .feed-actor { color: var(--text-primary); font-weight: 650; font-size: 14px; }
-.feed-role { color: var(--text-muted); font-size: 11px; }
+.feed-author-row .feed-actor { color: var(--text-primary); font-weight: 600; font-size: 14px; }
+.feed-role { color: var(--text-muted); font-size: 12px; }
 .feed-author-row .message-time { margin-left: auto; }
 .feed-rows { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; }
 
 /* Flow lines (status changes, hooks): quiet one-line rows without a label or frame. */
 .feed-flow { max-width: 100%; }
 .feed-flow .feed-rows { gap: 0; }
-.feed-flow .feed-item { font-size: 12.5px; }
+.feed-flow .feed-item { font-size: 12.5px; line-height: 1.5; }
 .feed-authored .feed-item { padding-left: 0; }
 
 .feed-bubble {
@@ -111,8 +111,8 @@
   gap: 12px;
   padding: 3px 4px;
   color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.8;
   border-radius: var(--radius-sm);
 }
 /* The newest message only. The row clears this class on animationend so a later remount never replays.
@@ -140,6 +140,7 @@
 .feed-item.mono .feed-item-text {
   font-family: var(--font-mono);
   font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text-muted);
 }
 .feed-item.mono {
@@ -148,10 +149,9 @@
 }
 
 /* Нарратив агента — «голос» агента: он должен выделяться от механических mono-строк команд. Ярче (полная
-   text-primary), средний вес и чуть крупнее. */
+   text-primary) и средний вес; размер — общий размер строки ленты. */
 .feed-group[data-actor="agent"] .feed-item.feed-kind-message {
   font-weight: 500;
-  font-size: 15px;
   color: var(--text-primary);
 }
 
@@ -491,10 +491,10 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
+  min-height: 28px;
   color: var(--text-secondary);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
 }
 .feed-composer-mode-option input {
@@ -545,7 +545,7 @@
 .mesh-message-composer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .mesh-message-error { color: var(--danger-text); font-size: 12px; }
@@ -619,19 +619,19 @@
   justify-content: space-between;
   gap: 12px;
   flex: 0 0 auto;
-  padding: 4px 8px 8px;
+  padding: 0 8px 6px;
   border-bottom: 1px solid var(--separator-subtle);
 }
 .feed-filter-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
 }
 .feed-filter-chip {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
-  padding: 5px 9px;
+  padding: 4px 9px;
   border-radius: 5px;
   border: 0;
   background: none;
@@ -654,7 +654,7 @@
   overflow: hidden;
   clip-path: inset(50%);
 }
-.feed-filter-context { color: var(--text-muted); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
+.feed-filter-context { color: var(--text-muted); font-size: 11px; text-align: right; overflow-wrap: anywhere; }
 
 .feed-conversation {
   width: 100%;
@@ -666,9 +666,9 @@
 .feed-message.from-you .feed-message-card { background: var(--surface-user-message); border-color: transparent; }
 .feed-message.is-waiting-for-you .feed-message-card { border-color: color-mix(in srgb, var(--attention) 40%, var(--separator-subtle)); }
 .feed-message .team-conversation-message-header { gap: 4px 8px; min-height: 25px; margin-bottom: 0; }
-.feed-message .team-conversation-message-route { order: 1; flex-basis: 100%; font-size: 11px; }
-.feed-message .conversation-role-chip { padding: 0; border: 0; background: none; font-size: 10px; color: var(--text-muted); }
-.feed-message .conversation-command-chip { font-size: 10px; }
+.feed-message .team-conversation-message-route { order: 1; flex-basis: 100%; font-size: 12px; }
+.feed-message .conversation-role-chip { padding: 0; border: 0; background: none; font-size: 12px; color: var(--text-muted); }
+.feed-message .conversation-command-chip { font-size: 11px; }
 .feed-conversation .feed-message .team-conversation-message-body,
 .feed-conversation .feed-message.from-you .team-conversation-message-body {
   margin: 8px 0 0;
@@ -677,17 +677,17 @@
   border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 1.8;
 }
 .feed-message .team-conversation-message-body .md { font: inherit; }
 .feed-message .team-conversation-reply-quote { margin: 0 0 8px; padding: 8px 10px; border: 0; border-radius: 5px; background: var(--surface-canvas); }
 .feed-message .team-conversation-reply-quote-author,
-.feed-message .team-conversation-reply-quote-text { display: inline; font-size: 11px; font-weight: 400; }
+.feed-message .team-conversation-reply-quote-text { display: inline; font-size: 12px; font-weight: 400; }
 .feed-message .team-conversation-reply-quote-author::after { content: ' · '; }
 .feed-message .conversation-quote-jump { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feed-message .conversation-message-actions { display: flex; align-items: center; gap: 11px; margin-top: 9px; font-size: 10px; color: var(--text-muted); }
-.feed-message .conversation-reply-link { padding: 3px 0; font-size: 11px; color: var(--text-muted); }
+.feed-message .conversation-message-actions { display: flex; align-items: center; gap: 11px; margin-top: 9px; font-size: 11px; color: var(--text-muted); }
+.feed-message .conversation-reply-link { padding: 3px 0; font-size: 12px; color: var(--text-muted); }
 .feed-message .conversation-reply-link:hover { color: var(--accent-text); }
 .feed-message-delivery { margin-left: auto; }
 .message-mention { color: var(--accent-text); background: rgba(var(--accent-primary-rgb), 0.16); border-radius: 4px; padding: 1px 4px; font-weight: 550; font-size: .92em; }
@@ -728,11 +728,11 @@
 .feed-scroll { padding: 14px 8px 20px; gap: 18px; overflow-anchor: auto; }
 .feed-group { width: 100%; max-width: 100%; flex-shrink: 0; }
 .feed-bubble { border-radius: var(--radius-lg); padding: 10px 12px; }
-.feed-composer { margin-top: 0; padding: 8px; gap: 6px; }
+.feed-composer { margin-top: 0; padding: 8px 8px 10px; gap: 6px; }
 .feed-composer .chat-composer-row { border-radius: 12px; min-height: 76px; }
-.feed-composer .chat-composer-input { min-height: 64px; }
+.feed-composer .chat-composer-card .chat-composer-input { min-height: 60px; padding: 6px 0; }
 .feed-composer-modes { gap: 4px; }
-.feed-composer-mode { min-height: 30px; padding: 5px 10px; }
+.feed-composer-mode { min-height: 28px; padding: 4px 10px; font-size: 13px; }
 .feed-tool-group { background: var(--surface-tool); border-radius: var(--radius-md); color: var(--text-muted); font-size: 12px; }
 .feed-tool-group > summary { display: flex; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer; list-style: none; border-radius: var(--radius-md); }
 .feed-tool-group > summary::-webkit-details-marker { display: none; }
@@ -756,16 +756,17 @@
 }
 @media (max-width: 600px) {
   .feed-scroll { padding: 10px 0 16px; }
-  .feed-composer { padding: 8px 0; }
+  .feed-composer { padding: 8px 0 10px; }
+  .feed-item { font-size: 14px; }
   .feed-filter-row { padding-inline: 0; }
-  .feed-filter-chip { min-height: 44px; padding: 5px 7px; font-size: 11px; }
+  .feed-filter-chip { min-height: 44px; padding: 5px 7px; font-size: 12px; }
   .feed-filter-context { display: none; }
   .feed-conversation .feed-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .feed-message > .mesh-avatar { width: 25px; height: 25px; border-radius: 7px; font-size: 9px; }
   .feed-message-card { padding: 10px 12px; }
   .feed-message .team-conversation-message-header { gap: 4px 5px; }
-  .feed-message .conversation-role-chip, .feed-message .team-conversation-message-header time { font-size: 9px; }
-  .feed-conversation .feed-message .team-conversation-message-body { font-size: 13px; }
+  .feed-message .conversation-role-chip, .feed-message .team-conversation-message-header time { font-size: 11px; }
+  .feed-conversation .feed-message .team-conversation-message-body { font-size: 14px; }
   .feed-message .conversation-reply-link { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {

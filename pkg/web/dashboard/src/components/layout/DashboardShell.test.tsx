@@ -269,3 +269,53 @@ describe('DashboardShell rail drawer — mobile a11y', () => {
     expect(rail.inert).toBe(false)
   })
 })
+
+describe('DashboardShell Feed focus', () => {
+  afterEach(() => {
+    mockMobile(false)
+    localStorage.clear()
+  })
+
+  test('focus mode marks the layout without remounting the rail or the workspace, and keeps the rail width', () => {
+    localStorage.setItem('afm.railWidth', '360')
+    const shell = (feedFocus: boolean) => (
+      <DashboardShell feedFocus={feedFocus} rail={<button type="button">rail</button>} tabs={<div>tabs</div>} workspace={<textarea aria-label="draft" />} />
+    )
+    const { container, rerender } = render(shell(false))
+    const body = container.querySelector('.dashboard-body') as HTMLElement
+    const rail = screen.getByRole('button', { name: 'rail' })
+    const draft = screen.getByRole('textbox', { name: 'draft' })
+
+    rerender(shell(true))
+    expect(body).toHaveClass('dashboard-body--feed-focus')
+    rerender(shell(false))
+    expect(body).not.toHaveClass('dashboard-body--feed-focus')
+    expect(screen.getByRole('button', { name: 'rail' })).toBe(rail)
+    expect(screen.getByRole('textbox', { name: 'draft' })).toBe(draft)
+    expect(body.style.getPropertyValue('--rail-width')).toBe('360px')
+    expect(container.querySelector('#rail-slot')).toHaveProperty('inert', false)
+  })
+
+  test('entering focus mode closes the Stages drawer', () => {
+    const { container, rerender } = render(<DashboardShell rail={<div />} tabs={<div />} workspace={<div />} />)
+    fireEvent.click(screen.getByLabelText('Toggle stages'))
+    rerender(<DashboardShell feedFocus rail={<div />} tabs={<div />} workspace={<div />} />)
+    expect(container.querySelector('.dashboard-body')).not.toHaveClass('rail-open')
+  })
+
+  test('reports the open Stages drawer, so F cannot change the layout under it', () => {
+    mockMobile(true)
+    const reported: boolean[] = []
+    render(<DashboardShell onRailDrawerChange={(open) => reported.push(open)} rail={<div />} tabs={<div />} workspace={<div />} />)
+    fireEvent.click(screen.getByLabelText('Toggle stages'))
+    fireEvent.click(screen.getByLabelText('Close stages'))
+    expect(reported).toEqual([false, true, false])
+  })
+
+  test('an open rail on desktop is not a drawer', () => {
+    const reported: boolean[] = []
+    render(<DashboardShell onRailDrawerChange={(open) => reported.push(open)} rail={<div />} tabs={<div />} workspace={<div />} />)
+    fireEvent.click(screen.getByLabelText('Toggle stages'))
+    expect(reported).toEqual([false])
+  })
+})

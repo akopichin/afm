@@ -308,7 +308,7 @@ describe('skins CSS contract — shared chat composer (feed, Team, side agent)',
     const r = rule(chatComposerCss, '.assistant-mention-menu')
     expect(r).toMatch(/position:\s*fixed/)
     expect(r).toMatch(/z-index:\s*200/)
-    expect(r).toMatch(/max-height:\s*380px/)
+    expect(r).toMatch(/max-height:\s*min\(560px, calc\(100dvh - 120px\)\)/)
     expect(r, 'the width has one source of truth: the inline style from AssistantMentionMenu').not.toMatch(/(^|[\s;{])width:/)
   })
   it('recipient chip variants carry the card prefix so they outrank the base chip rule', () => {
@@ -663,7 +663,7 @@ describe('skins CSS contract — global typography', () => {
   // Mono is reserved for ids, numbers and code; every other selector in these files reads as UI text.
   const MONO_ALLOWED = new Set([
     '.rail-foot',
-    '.workspace-tab-count',
+    '.feed-focus-wait-count,\n.workspace-tab-count',
     '.quota-badge',
     '.stage-cost',
     '.stage-time',
@@ -716,7 +716,7 @@ describe('skins CSS contract — shell parity (rail, header, tabs, stage header,
 
   it('keeps Assistant and Files quiet (no outline) in the header', () => {
     expect(headerCss).toMatch(/\.header-actions \.icon-btn\.gh-files-btn,\s*\n\.header-actions \.icon-btn\.gh-side-agent-btn \{\s*border-color:\s*transparent/)
-    expect(rule(headerCss, '.global-header')).toMatch(/min-height:\s*64px/)
+    expect(rule(headerCss, '.global-header')).toMatch(/min-height:\s*72px/)
   })
 
   it('shows every metric as a label over its value, without icons', () => {
@@ -1103,6 +1103,8 @@ describe('skins CSS contract — neutral text inside a tone wash', () => {
     '.workspace-tab-attention .workspace-tab-count',
     '.workspace-tab-attention[data-kind="failed"] .workspace-tab-count',
     '.workspace-tab-attention[data-kind="hook_failed"] .workspace-tab-count',
+    '.feed-focus-wait-count',
+    '.feed-focus-wait .feed-focus-wait-count',
     '.message-mention',
     '.feed-composer-mode.active',
     '.pause-banner-resume:hover',

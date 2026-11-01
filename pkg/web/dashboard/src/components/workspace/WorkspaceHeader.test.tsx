@@ -210,3 +210,61 @@ describe('WorkspaceHeader stage buttons', () => {
     expect(trigger).toHaveBeenCalledOnce()
   })
 })
+
+describe('WorkspaceHeader Feed focus', () => {
+  const approval = { label: 'Approval', kind: 'approval', count: 2, onOpen: () => {} } as const
+
+  it('offers no Focus button where focus mode is unavailable', () => {
+    render(<WorkspaceHeader stage={stage({ status: 'running' })} connected />)
+    expect(screen.queryByRole('button', { name: 'Focus on Feed' })).toBeNull()
+  })
+
+  it('shows Focus next to Pause and announces its shortcut', () => {
+    const onToggle = vi.fn()
+    render(<WorkspaceHeader stage={stage({ status: 'running' })} connected feedFocus={{ active: false, onToggle }} />)
+    const toggle = screen.getByRole('button', { name: 'Focus on Feed' })
+    expect(toggle).toHaveClass('feed-focus-toggle')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveAttribute('aria-keyshortcuts', 'F')
+    expect(toggle).toHaveAttribute('title', 'Focus on Feed · F')
+    expect(toggle).toHaveTextContent(/^Focus$/)
+    expect(screen.getByRole('button', { name: 'Pause' }).nextElementSibling).toBe(toggle)
+
+    fireEvent.click(toggle)
+    expect(onToggle).toHaveBeenCalledOnce()
+  })
+
+  it('reads Exit focus with an Esc hint while focus mode is on', () => {
+    render(<WorkspaceHeader stage={stage({ status: 'running' })} connected feedFocus={{ active: true, onToggle: () => {} }} />)
+    const toggle = screen.getByRole('button', { name: 'Exit Feed focus' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveAttribute('aria-keyshortcuts', 'F Escape')
+    expect(toggle).toHaveAttribute('title', 'Exit Feed focus · F or Esc')
+    expect(toggle).toHaveTextContent('Exit focus')
+    expect(toggle.querySelector('kbd')).toHaveTextContent('Esc')
+  })
+
+  it.each([
+    ['running', 'Pause'],
+    ['paused', 'Continue'],
+    ['failed', 'Retry'],
+  ] as const)('keeps %s lifecycle control %s in focus mode', (status, action) => {
+    render(<WorkspaceHeader stage={stage({ status })} connected feedFocus={{ active: true, onToggle: () => {} }} />)
+    expect(screen.getByRole('button', { name: action })).toBeEnabled()
+  })
+
+  it('shows the waiting attention item only in focus mode, where the tab strip is hidden', () => {
+    const onOpen = vi.fn()
+    const pending = { ...approval, onOpen }
+    const { rerender } = render(<WorkspaceHeader stage={stage({ status: 'running' })} connected feedFocus={{ active: false, onToggle: () => {} }} pendingAttention={pending} />)
+    expect(document.querySelector('.feed-focus-wait')).toBeNull()
+
+    rerender(<WorkspaceHeader stage={stage({ status: 'running' })} connected feedFocus={{ active: true, onToggle: () => {} }} pendingAttention={pending} />)
+    const wait = screen.getByRole('button', { name: /Approval/ })
+    expect(wait).toHaveClass('feed-focus-wait')
+    expect(wait).toHaveAttribute('data-kind', 'approval')
+    expect(wait).toHaveTextContent('Approval2')
+    fireEvent.click(wait)
+    expect(onOpen).toHaveBeenCalledOnce()
+  })
+})
