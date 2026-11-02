@@ -178,9 +178,7 @@ export function App(): ReactElement {
   // meshBoard — the ONE useMeshBoard poll: Team's Board tab and the run-wide Board tab read the same value, so
   // switching between them never refetches. It starts only once teamViewsAvailable.
   const meshBoard = useMeshBoard(teamViewsAvailable, runId)
-  // runConversationsAvailable — the right-hand Run conversations panel replaces Team in `assistants` mode: the
-  // same mesh probe and run id, the other mode. Its open state lives here because the opener sits in the tab strip.
-  const runConversationsAvailable = meshRoster.enabled && runId !== '' && collaborationMode === 'assistants'
+  // Its open state lives here because the opener sits in the tab strip.
   const [runConversationsOpen, setRunConversationsOpen] = useState(false)
   const closeRunConversations = useCallback(() => setRunConversationsOpen(false), [])
   // The stage Feed's people panel: the wide panel (open by default) and the narrow drawer (closed) keep separate
@@ -204,12 +202,15 @@ export function App(): ReactElement {
   const addedParticipants = added.runId === runId ? added.participants : NO_PARTICIPANTS
   const meshParticipants = useMemo(() => mergeById(meshRoster.participants, addedParticipants), [meshRoster.participants, addedParticipants])
   const mergedRoster = useMemo(() => ({ ...meshRoster, participants: meshParticipants }), [meshRoster, meshParticipants])
-  // runSeen — which run conversations hold an agent message to the human that was not seen yet. App owns it
-  // because the opener (tab strip) and the panel show the same state; the cursor survives a reload.
+  // runConversations — the run's conversations with the human. The Run conversations panel (it replaces Team in
+  // `assistants` mode) exists only while there is one; the roster polls without it, so the first one shows up.
+  // runSeen — which of them hold an unseen agent message; App owns it because the opener and the panel share it.
+  const runConversationsMode = meshRoster.enabled && runId !== '' && collaborationMode === 'assistants'
   const runConversations = useMemo(
-    () => (runConversationsAvailable ? runConversationThreads(meshRoster.threads, meshParticipants) : NO_THREADS),
-    [runConversationsAvailable, meshRoster.threads, meshParticipants],
+    () => (runConversationsMode ? runConversationThreads(meshRoster.threads, meshParticipants) : NO_THREADS),
+    [runConversationsMode, meshRoster.threads, meshParticipants],
   )
+  const runConversationsAvailable = runConversations.length > 0
   const runSeen = useRunConversationsSeen(runId, runConversations, meshRoster.summaries ?? NO_SUMMARIES)
   const runUnreadCount = runSeen.unreadThreadIds.size
   const addParticipant = useCallback(
@@ -282,6 +283,20 @@ export function App(): ReactElement {
     }
     teamUiShown.current = teamViewsAvailable
   }, [collaborationMode, teamViewsAvailable])
+
+  // Без диалогов Conversations исчезает целиком: следующий диалог (или новый ран) начинается с закрытой панели.
+  useEffect(() => {
+    if (!runConversationsAvailable) setRunConversationsOpen(false)
+  }, [runConversationsAvailable])
+
+  // Фокус стоял на пропавшей кнопке/панели Conversations — браузер уронил его на body: возвращаем на текущую вкладку.
+  const runConversationsShown = useRef(false)
+  useEffect(() => {
+    if (!runConversationsAvailable && runConversationsShown.current && document.activeElement === document.body) {
+      document.querySelector<HTMLElement>('.workspace-tabs [aria-selected="true"]')?.focus()
+    }
+    runConversationsShown.current = runConversationsAvailable
+  }, [runConversationsAvailable])
 
   // Клик по строке помощника в рейле: выбираем задачу и открываем её ленту.
   function handleSelectAssistantTask(stageId: string, taskId: string): void {

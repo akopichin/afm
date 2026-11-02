@@ -3632,7 +3632,7 @@ describe('App', () => {
   const runConversationsOpener = () => screen.getByRole('button', { name: 'Run conversations' })
   const runConversationsPanel = () => document.getElementById('run-conversations') as HTMLElement
 
-  test('Run conversations: assistants + mesh shows the opener and a closed panel; team and mesh-off show none', async () => {
+  test('Run conversations: assistants + mesh + a run conversation shows the opener and a closed panel; team and mesh-off show none', async () => {
     mockRunConversationsRun(() => 'assistants')
     const view = render(<App />)
 
@@ -3670,6 +3670,259 @@ describe('App', () => {
       return { ok: true, json: async () => [] } as Response
     })
   }
+
+  // RunConvScenario — a mesh-on `assistants` run whose roster the test edits between polls. requests records every
+  // mesh request, so a test can wait for completed roster polls before asserting that something is absent.
+  type RunConvScenario = {
+    runId: string
+    stageStatus: string
+    participants: unknown[]
+    threads: unknown[]
+    threadsFail: boolean
+    requests: string[]
+  }
+  const SCENARIO_USER = { id: 'user', kind: 'user', scope: 'run', reachable: true }
+  const SCENARIO_QA = { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true }
+  const SCENARIO_ASSISTANT = { id: 'side:r1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'Assistant', reachable: true }
+  const SCENARIO_STAGE_AGENT = { id: 'stage:s1', kind: 'stage_agent', scope: 'stage', stage_id: 's1', alias: 's1', display_name: 'Propose', reachable: true }
+  const SCENARIO_STAGE_HELPER = { id: 'task:t1', kind: 'helper', scope: 'run', stage_id: 's1', alias: 'h1', display_name: 'Stage helper', reachable: true }
+  const scenarioThread = (id: string, members: string[], extra: Record<string, unknown> = {}) => ({ id, title: 'Run question', scope: 'run', members, status: 'open', ...extra })
+  const RUN_THREAD = scenarioThread('mt-run', ['user', 'run:t-1'])
+
+  function mockRunConvScenario(initial: Partial<RunConvScenario> = {}): RunConvScenario {
+    const scenario: RunConvScenario = {
+      runId: 'app-run-conv', stageStatus: 'running', participants: [SCENARIO_USER, SCENARIO_QA], threads: [], threadsFail: false, requests: [], ...initial,
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/mesh/')) scenario.requests.push(url)
+      if (url.includes('/api/status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            flow_name: 'demo', run_id: scenario.runId, collaboration_mode: 'assistants',
+            stages: [stageView('s1', 'Propose', scenario.stageStatus), stageView('s2', 'Review', scenario.stageStatus)],
+            capabilities: { collaboration: true },
+            accounting: { health: 'ok', has_data: false, show_money: true },
+          }),
+        } as Response
+      }
+      if (url.includes('/api/mesh/participants')) return { ok: true, json: async () => ({ participants: scenario.participants }) } as Response
+      if (url.includes('/api/mesh/stages/')) return { ok: true, json: async () => ({ messages: [], threads: [], next_cursor: 0, has_more: false }) } as Response
+      if (/\/api\/mesh\/threads\/[^/?]+/.test(url)) return { ok: true, json: async () => ({ messages: [], next_cursor: 0 }) } as Response
+      if (url.includes('/api/mesh/threads')) {
+        if (scenario.threadsFail) return { ok: false, status: 500, json: async () => ({}) } as Response
+        const summaries = Object.fromEntries((scenario.threads as { id: string }[]).map((t) => [t.id, { last_message: { id: `m-${t.id}`, seq: 1, created_at: '2026-10-22T10:00:00Z', sender_id: 'run:t-1', preview: 'hi' }, last_other_message_seq: 0, title_seq: 0 }]))
+        return { ok: true, json: async () => ({ threads: scenario.threads, summaries }) } as Response
+      }
+      if (url.includes('/plan')) return { ok: true, text: async () => '' } as Response
+      return { ok: true, json: async () => [] } as Response
+    })
+    return scenario
+  }
+
+  const rosterPolls = (scenario: RunConvScenario) => scenario.requests.filter((r) => r.endsWith('/api/mesh/threads')).length
+  // Roster poll N+1 starts only after poll N was applied, so waiting for two more requests proves that the snapshot
+  // of the first one reached the UI; an absence assertion before that would pass on the pre-poll state. The status
+  // is awaited first: before it the roster polls without a run id and its snapshot is dropped.
+  async function waitForAppliedRosterPoll(scenario: RunConvScenario): Promise<void> {
+    await screen.findByText('demo')
+    await waitForMoreRosterPolls(scenario, 2)
+  }
+  async function waitForMoreRosterPolls(scenario: RunConvScenario, more: number): Promise<void> {
+    const target = rosterPolls(scenario) + more
+    await waitFor(() => expect(rosterPolls(scenario)).toBeGreaterThanOrEqual(target), { timeout: 8000 })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  }
+
+  function expectNoRunConversationsUi(): void {
+    expect(screen.queryByRole('button', { name: /^Run conversations/ })).toBeNull()
+    expect(document.querySelector('.run-conversations-announce')).toBeNull()
+    expect(document.getElementById('run-conversations')).toBeNull()
+    expect(document.querySelector('.run-conversations-resizer')).toBeNull()
+    expect(document.querySelector('.run-conversations-scrim')).toBeNull()
+    expect(document.querySelector('.workspace-split')).not.toHaveClass('with-run-conversations')
+    expect(screen.queryByText('No run conversations yet')).toBeNull()
+  }
+  const activeStageId = () => document.querySelector('[data-stage-id].active')?.getAttribute('data-stage-id')
+  const activeTab = () => document.querySelector('.workspace-tabs [aria-selected="true"]')
+
+  test('Run conversations: with no thread there is no opener, live region, panel, resizer, scrim or layout class', async () => {
+    const scenario = mockRunConvScenario()
+    render(<App />)
+    await waitForAppliedRosterPoll(scenario)
+
+    expect(document.querySelector('.workspace-split')).not.toBeNull()
+    expectNoRunConversationsUi()
+  }, 15000)
+
+  test('Run conversations: run agents, the Assistant and a stage helper without a conversation add nothing', async () => {
+    const scenario = mockRunConvScenario({ participants: [SCENARIO_USER, SCENARIO_QA, SCENARIO_ASSISTANT, SCENARIO_STAGE_AGENT, SCENARIO_STAGE_HELPER] })
+    render(<App />)
+    await waitForAppliedRosterPoll(scenario)
+
+    expectNoRunConversationsUi()
+  }, 15000)
+
+  test('Run conversations: stage-origin, stage-agent, stage-helper, agent-only and human-only threads do not qualify', async () => {
+    const scenario = mockRunConvScenario({
+      participants: [SCENARIO_USER, SCENARIO_QA, SCENARIO_ASSISTANT, SCENARIO_STAGE_AGENT, SCENARIO_STAGE_HELPER],
+      threads: [
+        scenarioThread('mt-origin', ['user', 'run:t-1'], { origin_stage: 's1' }),
+        scenarioThread('mt-stage-agent', ['user', 'stage:s1']),
+        scenarioThread('mt-stage-helper', ['user', 'task:t1']),
+        scenarioThread('mt-agents', ['run:t-1', 'side:r1']),
+        scenarioThread('mt-human-only', ['user']),
+      ],
+    })
+    render(<App />)
+    await waitForAppliedRosterPoll(scenario)
+
+    expectNoRunConversationsUi()
+  }, 15000)
+
+  test('Run conversations: the first qualifying thread adds a closed opener on the next poll without moving the view or focus', async () => {
+    const scenario = mockRunConvScenario()
+    render(<App />)
+    await waitForAppliedRosterPoll(scenario)
+    expectNoRunConversationsUi()
+    expect(scenario.requests.some((r) => r.includes('/api/mesh/participants'))).toBe(true)
+    const tab = activeTab()
+    const stage = activeStageId()
+    const focused = document.activeElement
+
+    scenario.threads = [RUN_THREAD]
+    const opener = await screen.findByRole('button', { name: 'Run conversations' }, { timeout: 8000 })
+
+    expect(opener).toHaveAttribute('aria-expanded', 'false')
+    expect(runConversationsPanel()).not.toHaveClass('open')
+    expect(runConversationsPanel().inert).toBe(true)
+    expect(document.querySelector('.workspace-split')).toHaveClass('with-run-conversations')
+    expect(activeTab()).toBe(tab)
+    expect(activeStageId()).toBe(stage)
+    expect(document.activeElement).toBe(focused)
+  }, 20000)
+
+  test('Run conversations: a closed thread and an unreachable agent keep the history available', async () => {
+    const scenario = mockRunConvScenario({
+      participants: [SCENARIO_USER, { ...SCENARIO_QA, reachable: false }],
+      threads: [scenarioThread('mt-run', ['user', 'run:t-1'], { status: 'closed' })],
+    })
+    render(<App />)
+    await waitForAppliedRosterPoll(scenario)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run conversations' }))
+    expect(await within(runConversationsPanel()).findByText('Run question')).toBeInTheDocument()
+  }, 15000)
+
+  test('Run conversations: a failed roster poll keeps the open panel, its conversation and draft', async () => {
+    const scenario = mockRunConvScenario({ threads: [RUN_THREAD] })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Run conversations' }))
+    fireEvent.click(await within(runConversationsPanel()).findByText('Run question'))
+    const composer = await within(runConversationsPanel()).findByPlaceholderText(/^Message /)
+    fireEvent.change(composer, { target: { value: 'my answer' } })
+
+    scenario.threadsFail = true
+    await waitForMoreRosterPolls(scenario, 2)
+
+    expect(runConversationsPanel()).toHaveClass('open')
+    expect(within(runConversationsPanel()).getByPlaceholderText(/^Message /)).toHaveValue('my answer')
+    expect(screen.getByRole('button', { name: 'Run conversations' })).toHaveAttribute('aria-expanded', 'true')
+  }, 20000)
+
+  test('Run conversations: when the last thread disappears the whole UI goes; a thread that comes back starts closed', async () => {
+    const scenario = mockRunConvScenario({ threads: [RUN_THREAD] })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Run conversations' }))
+    expect(runConversationsPanel()).toHaveClass('open')
+
+    scenario.threads = []
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Run conversations/ })).toBeNull(), { timeout: 8000 })
+    expectNoRunConversationsUi()
+
+    scenario.threads = [RUN_THREAD]
+    const opener = await screen.findByRole('button', { name: 'Run conversations' }, { timeout: 8000 })
+    expect(opener).toHaveAttribute('aria-expanded', 'false')
+    expect(runConversationsPanel()).not.toHaveClass('open')
+  }, 30000)
+
+  test('Run conversations: focus that sat on the vanished opener or panel goes to the current tab; focus in the Feed stays', async () => {
+    const scenario = mockRunConvScenario({ threads: [RUN_THREAD] })
+    render(<App />)
+    const opener = await screen.findByRole('button', { name: 'Run conversations' })
+    opener.focus()
+    expect(document.activeElement).toBe(opener)
+
+    scenario.threads = []
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Run conversations/ })).toBeNull(), { timeout: 8000 })
+    expect(document.activeElement).toBe(activeTab())
+
+    scenario.threads = [RUN_THREAD]
+    fireEvent.click(await screen.findByRole('button', { name: 'Run conversations' }, { timeout: 8000 }))
+    const row = await within(runConversationsPanel()).findByText('Run question')
+    ;(row.closest('button') as HTMLElement).focus()
+    expect(runConversationsPanel().contains(document.activeElement)).toBe(true)
+
+    scenario.threads = []
+    await waitFor(() => expect(document.getElementById('run-conversations')).toBeNull(), { timeout: 8000 })
+    expect(document.activeElement).toBe(activeTab())
+
+    scenario.threads = [RUN_THREAD]
+    await screen.findByRole('button', { name: 'Run conversations' }, { timeout: 8000 })
+    const note = screen.getByPlaceholderText(/note to agent|ask or tell — type @/i)
+    note.focus()
+    expect(document.activeElement).toBe(note)
+
+    scenario.threads = []
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Run conversations/ })).toBeNull(), { timeout: 8000 })
+    expect(document.activeElement).toBe(note)
+  }, 45000)
+
+  test('Run conversations: an open drawer that vanishes leaves no scrim or dialog, and an attention item may switch the view again', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }))
+    const scenario = mockRunConvScenario({ threads: [RUN_THREAD] })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Run conversations' }))
+    expect(runConversationsPanel()).toHaveAttribute('role', 'dialog')
+    expect(document.querySelector('.run-conversations-scrim')).not.toBeNull()
+
+    scenario.threads = []
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Run conversations/ })).toBeNull(), { timeout: 8000 })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expectNoRunConversationsUi()
+    expect(document.activeElement).toBe(activeTab())
+    expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
+
+    // With the drawer's dialog registration gone, the question is allowed to take the view.
+    scenario.stageStatus = 'awaiting_approval'
+    emitStageStatus('s1', 'awaiting_approval')
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'false'))
+  }, 30000)
+
+  test('Run conversations: a new run starts without the old threads, selection and draft, and its first thread opens closed', async () => {
+    const scenario = mockRunConvScenario({ threads: [RUN_THREAD] })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Run conversations' }))
+    fireEvent.click(await within(runConversationsPanel()).findByText('Run question'))
+    fireEvent.change(await within(runConversationsPanel()).findByPlaceholderText(/^Message /), { target: { value: 'old draft' } })
+
+    scenario.runId = 'app-run-2'
+    scenario.threads = []
+    emitStageStatus('s1', 'running')
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Run conversations/ })).toBeNull(), { timeout: 8000 })
+    // The new run's roster is empty until its first poll; the absence only counts once that poll was applied.
+    await waitForMoreRosterPolls(scenario, 2)
+    expectNoRunConversationsUi()
+
+    scenario.threads = [RUN_THREAD]
+    const opener = await screen.findByRole('button', { name: 'Run conversations' }, { timeout: 8000 })
+    expect(opener).toHaveAttribute('aria-expanded', 'false')
+    expect(runConversationsPanel()).not.toHaveClass('open')
+    fireEvent.click(opener)
+    expect(await within(runConversationsPanel()).findByText('Run question')).toBeInTheDocument()
+    expect(within(runConversationsPanel()).queryByPlaceholderText(/^Message /)).toBeNull()
+  }, 40000)
 
   test('Run conversations: the list holds only run conversations, and opening it keeps the current view', async () => {
     mockRunConversationsRun(() => 'assistants')

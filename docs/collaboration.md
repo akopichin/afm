@@ -184,10 +184,14 @@ their existing gates. Run agents declared in `team:` still start, and agents can
 still exchange messages and use the board. **Add run agent** and human **New
 task** / **Post task** controls are available in `team` mode only.
 
-With Agent Mesh available, `assistants` mode shows a closed **Run conversations**
-panel beside the workspace. It contains conversations that include you, have no
-stage origin, and contain no stage agent or stage helper. Agent-started run-wide
-conversations can therefore appear here; stage conversations stay in their Feed.
+With Agent Mesh available, `assistants` mode shows a **Run conversations** button
+and a closed panel beside the workspace only while the run has a conversation that
+includes you and someone else, has no stage origin, and contains no stage agent or
+stage helper. Without such a conversation the dashboard looks as usual: no button,
+no panel and no extra space. Profiles, the Assistant and stage helpers do not add
+one. A run agent, whether declared in `team:` or started from the dashboard, already
+has a conversation with you, so the button is there from the start; agent-started
+run-wide conversations also appear here. Stage conversations stay in their Feed.
 See [Run conversations](dashboard.md#run-conversations) for reading, replies,
 resizing, and new-message signals.
 
