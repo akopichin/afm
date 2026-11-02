@@ -60,10 +60,10 @@ describe('composerRecipients', () => {
   it('a stage agent that waits for its helpers reads only a Revise; it is not the default then', () => {
     const waiting = [{ id: 'impl', status: 'awaiting_assistants' }]
     const typed = composerRecipients({ participants, stages: waiting, stageId: 'impl', picked: [], draft: '@impl hi' })
-    expect(typed.recipients[0]?.problem).toMatch(/reads a note only as a Revise/)
+    expect(typed.recipients[0]?.problem).toMatch(/reads a note only through Restart with note/)
     const implicit = composerRecipients({ participants, stages: waiting, stageId: 'impl', picked: [], draft: 'hi' })
     expect(implicit.recipients).toEqual([])
-    expect(implicit.defaultProblem).toMatch(/reads a note only as a Revise/)
+    expect(implicit.defaultProblem).toMatch(/reads a note only through Restart with note/)
   })
 
   it('a finished stage agent is no default: a recipient is required', () => {

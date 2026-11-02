@@ -179,7 +179,7 @@ In `team` mode, the dashboard shows **Team**, **Board**, and the stage Feed's
 **People** panel when their usual capabilities are available. In `assistants`
 mode, those views and People controls are hidden and the Feed uses their space.
 Stage helpers remain under their stages; **⋯ → Attach helper…**, the Assistant,
-stage Feed conversations, and **Message** / **Revise** remain available under
+stage Feed conversations, and **Chat** / **Restart with note** remain available under
 their existing gates. Run agents declared in `team:` still start, and agents can
 still exchange messages and use the board. **Add run agent** and human **New
 task** / **Post task** controls are available in `team` mode only.
@@ -351,8 +351,8 @@ recording a reason. Required tasks with `needs_changes` or `inconclusive` do not
 pass the gate; a `pass` verdict does.
 
 Your conversation with a stage's agent lives in the stage's **Feed**: write a
-**Message** to the stage agent from its composer (see
-[Message](dashboard.md#message)); replies appear in the same feed, and authors are
+**Chat** to the stage agent from its composer (see
+[Chat](dashboard.md#chat)); replies appear in the same feed, and authors are
 named as in the Team roster. Posting does not change the stage's status. A post normally waits until the
 stage agent next reads its inbox or ends its turn. Agents are asked to answer
 every message from you, even with a short status update, but this is not
@@ -421,7 +421,7 @@ task or unavailable activity reader returns HTTP 404.
 
 ## Repeating prompts
 
-Use `/loop 5m @watcher Check the latest logs` in a stage's **Feed → Message**
+Use `/loop 5m @watcher Check the latest logs` in a stage's **Feed → Chat**
 to schedule a prompt for an existing run agent or a helper of that stage.
 `/loop list` shows the run's schedules; `/loop stop L1` stops one from any Feed.
 Run-agent loops continue across stages unless you add `--until-stage-end`;
@@ -895,8 +895,8 @@ left as they are: they cannot be meaningful credentials, and replacing them woul
 garble ordinary text.
 
 A stage's [Feed composer](dashboard.md#writing-to-a-stage-from-its-feed) sends a
-**Message** — one message to one or several participants, the stage's agent by
-default — or attaches a configured helper through a preview. Its **Revise** mode
+**Chat** — one message to one or several participants, the stage's agent by
+default — or attaches a configured helper through a preview. Its **Restart with note** mode
 continues to send stage feedback through the existing revision path. In the Assistant, an `@` mention records a role with
 the chat message; it still does not attach a helper by itself.
 

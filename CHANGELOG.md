@@ -16,6 +16,14 @@ stays easy to `grep`. With `repeat`, every cycle prints the block. In Docker mod
 host `NO_COLOR` is passed into the container. See
 [Web dashboard](docs/dashboard.md).
 
+### Improvement: clearer Feed composer modes
+
+The stage Feed composer modes are renamed from **Message** / **Revise** to
+**Chat** / **Restart with note**, and their hints say what happens to the agent:
+in Chat it keeps working on its task, while Restart with note stops it and
+restarts its current phase with your note. The API, CLI (`afm revise`) and
+event names are unchanged.
+
 ### Fix: shell verify steps receive `AFM_STAGE_DIR`
 
 A shell `verify` step now gets the absolute directory of the verified stage in

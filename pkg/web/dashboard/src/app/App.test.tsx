@@ -2854,7 +2854,7 @@ describe('App', () => {
     const composer = (await screen.findByRole('combobox', { name: /message the mesh/i })) as HTMLTextAreaElement
     expect(composer.value).toBe('')
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('button', { name: 'Show people' })).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -2904,7 +2904,7 @@ describe('App', () => {
 
     await screen.findByRole('combobox', { name: /message the mesh/i })
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getAllByText('Found a bug in parse()').length).toBeGreaterThan(1) // the bubble and the reply chip
   })
 
@@ -3105,13 +3105,13 @@ describe('App', () => {
   test('composer gate: a pending stage gets Message only', async () => {
     await renderGate('pending', 'running')
     await screen.findByRole('combobox', { name: /message the mesh/i })
-    expect(screen.getAllByRole('tab', { name: /^(Message|Revise)$/ }).map((t) => t.textContent)).toEqual(['Message'])
+    expect(screen.getAllByRole('tab', { name: /^(Chat|Restart with note)$/ }).map((t) => t.textContent)).toEqual(['Chat'])
   })
 
   test('composer gate: awaiting_assistants also gets Revise', async () => {
     await renderGate('awaiting_assistants', 'running')
-    expect(await screen.findByRole('tab', { name: 'Revise' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('tab', { name: 'Restart with note' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
   })
 
   test('composer gate: no composer once the run has ended', async () => {
@@ -3185,7 +3185,7 @@ describe('App', () => {
     expect(screen.queryByRole('group', { name: 'Show in the feed' })).toBeNull()
     expect(screen.queryByText('Found a bug in parse()')).toBeNull()
     expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
-    expect(screen.queryByRole('tab', { name: 'Message' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull()
     expect(screen.queryByRole('combobox', { name: /message the mesh/i })).toBeNull()
     expect(screen.queryByText('Pick someone with @ or press Reply')).toBeNull()
     expect(requests.some((r) => r.includes('/api/mesh/stages/'))).toBe(false)
@@ -3506,8 +3506,8 @@ describe('App', () => {
     render(<App />)
     await screen.findByText('Found a bug in parse()')
 
-    expect(screen.getAllByRole('tab', { name: /^(Message|Revise)$/ }).map((t) => t.textContent)).toEqual(['Message', 'Revise'])
-    expect(screen.getByRole('tab', { name: 'Message' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('tab', { name: /^(Chat|Restart with note)$/ }).map((t) => t.textContent)).toEqual(['Chat', 'Restart with note'])
+    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true')
   })
 
   test('assistants arriving while Team is open: Feed shown, stage kept, Team unmounted, board polling stopped', async () => {
@@ -3742,7 +3742,7 @@ describe('App', () => {
     fireEvent.click(runConversationsOpener())
     await within(runConversationsPanel()).findByText('Run question')
 
-    fireEvent.keyDown(screen.getByPlaceholderText(/note to agent|write a message, or type @/i), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByPlaceholderText(/note to agent|ask or tell — type @/i), { key: 'Escape' })
     expect(runConversationsPanel()).toHaveClass('open')
 
     fireEvent.keyDown(within(runConversationsPanel()).getByText('Run question'), { key: 'Escape' })

@@ -11,7 +11,7 @@ uses its usual tools, permissions and concurrency limits.
 
 ## Create a loop in the dashboard
 
-Open a non-script stage's **Feed → Message** and enter:
+Open a non-script stage's **Feed → Chat** and enter:
 
 ```text
 /loop 5m @watcher Check the latest logs and report new errors
@@ -37,7 +37,7 @@ to retrieve them again after switching stages or reloading.
 
 A loop command has its own target and bypasses ordinary message recipients,
 reply chips and helper attachment. It does not interrupt or revise the stage.
-In **Revise**, a `/loop` draft shows **Slash commands run in Message** and cannot
+In **Restart with note**, a `/loop` draft shows **Slash commands run in Chat** and cannot
 be submitted. Malformed commands and server failures keep your draft and show
 the reason. Text beginning `/loops`, or mentioning `/loop` later in a message,
 stays an ordinary message.
@@ -73,7 +73,7 @@ parent attempt, or a closed/full loop conversation ends the relevant loop.
 
 ## Inspect and stop
 
-From any non-script stage's **Feed → Message**, including a completed stage
+From any non-script stage's **Feed → Chat**, including a completed stage
 while the run is still open:
 
 ```text
