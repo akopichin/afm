@@ -34,6 +34,10 @@ describe('runConversationThreads', () => {
     expect(ids([thread('a', ['user', 'run:qa'], { origin_stage: 'impl' })])).toEqual([])
   })
 
+  test('hides a thread with only the human', () => {
+    expect(ids([thread('a', ['user'])])).toEqual([])
+  })
+
   test('hides an agent-only thread without the human', () => {
     expect(ids([thread('a', ['run:qa', 'side:r1'])])).toEqual([])
   })

@@ -35,6 +35,17 @@ in Chat it keeps working on its task, while Restart with note stops it and
 restarts its current phase with your note. The API, CLI (`afm revise`) and
 event names are unchanged.
 
+### Fix: Run conversations appears only when there is a conversation
+
+In `assistants` mode the **Run conversations** button, panel and the space it
+takes are shown only while the run has a conversation with you and someone else
+that does not belong to a stage. Without one, the dashboard looks as usual; the
+panel starts closed when the first conversation appears and is closed again when
+the conversations disappear or a new run starts. Run agents declared in `team:`
+or started from the dashboard already have a conversation with you, so the button
+is shown for them from the start. History stays readable after agents finish and
+after the run ends. See [Web dashboard](docs/dashboard.md#run-conversations).
+
 ### Fix: shell verify steps receive `AFM_STAGE_DIR`
 
 A shell `verify` step now gets the absolute directory of the verified stage in
