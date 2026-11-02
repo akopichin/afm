@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-02
 
+### Fix: shell verify steps receive `AFM_STAGE_DIR`
+
+A shell `verify` step now gets the absolute directory of the verified stage in
+`AFM_STAGE_DIR`, like agents and script stages. Previously the variable was
+unset, so a step that checked the stage's artifacts failed with
+`AFM_STAGE_DIR: parameter not set`.
+
 ### Improvement: agents ask questions with `afm stage ask` and `afm stage wait-answer`
 
 A stage agent no longer writes question and answer files by hand. `afm stage ask`

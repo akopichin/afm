@@ -23,7 +23,7 @@ func TestRunVerification_ShellStep_PreSignalledInterrupt_NeverStarts(t *testing.
 	o.interruptChans.Store(stage.ID, interruptCh)
 
 	var calls int
-	o.runVerifyShell = func(context.Context, string, string) (string, error) {
+	o.runVerifyShell = func(context.Context, string, string, string) (string, error) {
 		calls++
 		return "", nil
 	}
@@ -58,7 +58,7 @@ func TestRunVerification_ShellStep_AlreadyPausedStatus_NeverStarts(t *testing.T)
 	}
 
 	var calls int
-	o.runVerifyShell = func(context.Context, string, string) (string, error) {
+	o.runVerifyShell = func(context.Context, string, string, string) (string, error) {
 		calls++
 		return "", nil
 	}

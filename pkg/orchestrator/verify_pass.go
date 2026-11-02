@@ -195,7 +195,7 @@ func (p *verificationPass) runShellVerifyStep(ctx context.Context, st flow.Verif
 	// Shell-шаг: отменяемый процесс в корне проекта агентов, иначе `go test ./...` проверял бы не тот код,
 	// который меняли агенты.
 	shellCtx, stop := o.pauseAwareVerifyCtx(stepCtx, s.ID)
-	out, runErr := o.runVerifyShell(shellCtx, o.projectDir(), st.Run)
+	out, runErr := o.runVerifyShell(shellCtx, o.projectDir(), o.stageDir(s.ID), st.Run)
 	interruptedByPause := stop()
 
 	stepDir := stagefiles.StepDir(stageDir, verID, idx)

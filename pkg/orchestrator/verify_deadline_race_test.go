@@ -69,7 +69,7 @@ func TestRunVerification_DeadlineRaceMasksPass(t *testing.T) {
 				{Kind: flow.VerifyShell, Run: "first"}, step,
 			}}}
 			o, _ := newVerifyTestOrchestrator(t, stage)
-			o.runVerifyShell = func(ctx context.Context, _, command string) (string, error) {
+			o.runVerifyShell = func(ctx context.Context, _, _, command string) (string, error) {
 				if command == "check" {
 					<-ctx.Done()
 				}

@@ -15,7 +15,7 @@ func TestRunVerifyShellCommand_StripsCrossAgentTransportSecrets(t *testing.T) {
 	t.Setenv("AFM_SYSPROMPT_GLM51", "leaked-system-prompt")
 	t.Setenv("SHELL_VERIFY_OWN_VAR", "own-legit-value")
 
-	out, err := runVerifyShellCommand(context.Background(), ".", "env")
+	out, err := runVerifyShellCommand(context.Background(), ".", "/stage", "env")
 	if err != nil {
 		t.Fatalf("runVerifyShellCommand: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestRunVerifyShellCommand_PreCancelledCtxNeverStarts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // уже отменён до вызова
 
-	_, err := runVerifyShellCommand(ctx, dir, "touch "+marker)
+	_, err := runVerifyShellCommand(ctx, dir, dir, "touch "+marker)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("runVerifyShellCommand error = %v, want errors.Is(err, context.Canceled)", err)
 	}

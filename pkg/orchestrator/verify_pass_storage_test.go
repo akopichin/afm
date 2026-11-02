@@ -174,7 +174,7 @@ func TestRunVerification_ShellStorageOutcomes(t *testing.T) {
 			}}}
 			o, stageDir := newVerifyTestOrchestrator(t, stage)
 			var verID string
-			o.runVerifyShell = func(context.Context, string, string) (string, error) {
+			o.runVerifyShell = func(context.Context, string, string, string) (string, error) {
 				started := noticesOfType(readVerifyNotices(t, o.opts.RunDir), bus.EventVerifyStarted)
 				verID = started[0].Data[keyVerificationID].(string)
 				stepDir := stagefiles.StepDir(stageDir, verID, 1)
