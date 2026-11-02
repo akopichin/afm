@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-02
 
+### Improvement: the dashboard labels stages by id
+
+The stage rail, the workspace header, its stage tab, Feed author rows, Team,
+Cost and analytics show the stage `id` from `flow.yaml` again instead of the
+long `name`; the name stays as a tooltip on the rail row and the header.
+Keyboard focus on tabs is an underline instead of a box.
+
 ### Improvement: helpers run the executor of their stage
 
 A helper profile can be a role only: without `command` the helper runs the

@@ -31,7 +31,7 @@ describe('commentRecipients', () => {
   it('lists the Assistant, stage agents, helpers and run agents with their roles', () => {
     expect(commentRecipients(input()).map((r) => [r.id, r.label, r.role, r.route])).toEqual([
       ['side:r1', 'Assistant', 'Assistant', 'assistant'],
-      ['stage:impl', 'Backend', 'Stage executor', 'mesh'],
+      ['stage:impl', 'impl', 'Stage executor', 'mesh'],
       ['stage:docs', 'docs', 'Stage executor', 'mesh'],
       ['task:h1', 'reviewer', 'Helper', 'mesh'],
       ['run:t-1', 'QA', 'Run agent', 'mesh'],

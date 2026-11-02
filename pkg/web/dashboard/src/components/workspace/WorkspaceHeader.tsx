@@ -86,7 +86,7 @@ export function WorkspaceHeader({ stage, connected, attentionNav, actions, statu
   const buttonsShown = showStageButtons && !stage.isScript && BUTTON_STATUSES.has(stage.status) && stage.buttons.length > 0
   return (
     <div className="workspace-header">
-      <h2 id="detail-title" className="workspace-title">{stage.name !== '' ? stage.name : stage.id}</h2>
+      <h2 id="detail-title" className="workspace-title" title={stage.name !== '' ? stage.name : undefined}>{stage.id}</h2>
       <span className="status-badge-wrap">
         <span
           id="detail-status"

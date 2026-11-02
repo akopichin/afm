@@ -940,7 +940,7 @@ describe('TeamView', () => {
     const peopleSearch = screen.getByRole('searchbox', { name: 'Search people' })
     fireEvent.change(peopleSearch, { target: { value: 'reviewer' } })
     expect(within(screen.getByRole('navigation', { name: 'Team roster' })).getByText('@reviewer')).toBeInTheDocument()
-    expect(screen.queryByText('Implement agent')).toBeNull()
+    expect(screen.queryByText('implement')).toBeNull()
   })
 
   test('offers the current list action and returns focus after cancelling creation', () => {
@@ -1038,7 +1038,7 @@ describe('TeamView', () => {
     renderTeamView()
     expect(screen.getByRole('region', { name: 'Conversations' })).toBeInTheDocument()
     expect(peopleRegion('This run')).toBeInTheDocument()
-    expect(within(peopleRegion('Stages')).getByText('Implement agent')).toBeInTheDocument()
+    expect(within(peopleRegion('Stages')).getByText('implement')).toBeInTheDocument()
   })
 
   test('the conversation header names the selected person and what they are', async () => {
@@ -1056,7 +1056,7 @@ describe('TeamView', () => {
     renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Hand-off'))
     expect(screen.getByRole('heading', { name: 'Hand-off' })).toBeInTheDocument()
-    expect(screen.getByText('QA reviewer, Implement agent · Run agent / Stage executor')).toBeInTheDocument()
+    expect(screen.getByText('QA reviewer, implement · Run agent / Stage executor')).toBeInTheDocument()
   })
 
   test('a conversation agents started between themselves lists only the agents', () => {
@@ -1064,7 +1064,7 @@ describe('TeamView', () => {
     const thread: meshClient.MeshThread = { id: 'mt-8', title: 'Pairing', scope: 'run', members: ['run:qa', 'stage:implement'], status: 'open' }
     renderTeamView([makeStage()], [], enabledRoster({ threads: [thread] }))
     fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Pairing'))
-    expect(screen.getByText('QA reviewer, Implement agent · Run agent / Stage executor')).toBeInTheDocument()
+    expect(screen.getByText('QA reviewer, implement · Run agent / Stage executor')).toBeInTheDocument()
   })
 
   test('tabs are "Messages", "Board", "Activity"', () => {
@@ -1259,10 +1259,10 @@ describe('TeamView', () => {
     renderTeamView([makeStage()], [], enabledRoster({ threads: [existing] }))
     clickCreateConversation()
     fireEvent.click(screen.getByText('QA reviewer', { selector: 'label span' }))
-    fireEvent.click(screen.getByText('Implement agent', { selector: 'label span' }))
+    fireEvent.click(screen.getByText('implement', { selector: 'label span' }))
     clickCreateConversation()
     await waitFor(() => expect(openSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '', memberIds: ['run:qa', 'stage:implement'] })))
-    expect(screen.getByRole('heading', { name: 'QA reviewer, Implement agent' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'QA reviewer, implement' })).toBeInTheDocument()
   })
 
   test('repeated unnamed single-person creation returns the newest DM without opening another thread', async () => {
@@ -1327,7 +1327,7 @@ describe('TeamView', () => {
     const sideRow = run.getByText('claude').closest('button') as HTMLElement
     expect(within(sideRow).getByText('@assistant')).toBeInTheDocument()
     expect(within(sideRow).getByText('Assistant')).toBeInTheDocument()
-    const stageRow = within(screen.getByRole('region', { name: 'Stages' })).getByText('Smoke').closest('button') as HTMLElement
+    const stageRow = within(screen.getByRole('region', { name: 'Stages' })).getByText('assistant').closest('button') as HTMLElement
     expect(within(stageRow).getByText('@assistant-2')).toBeInTheDocument()
     expect(screen.queryByText(/Side agent/)).toBeNull()
 
@@ -1448,7 +1448,7 @@ describe('TeamView', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('boom'))
 
     // Leave and come back before any roster poll: the thread opened by the failed attempt must be reused.
-    fireEvent.click(within(peopleRegion('Stages')).getByRole('button', { name: /^Implement agent/ }))
+    fireEvent.click(within(peopleRegion('Stages')).getByRole('button', { name: /^implement/ }))
     fireEvent.click(within(runRegion()).getByRole('button', { name: /^QA reviewer/ }))
     fireEvent.change(await screen.findByPlaceholderText('Message QA reviewer…'), { target: { value: 'second' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -1470,7 +1470,7 @@ describe('TeamView', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'))
 
     // The successful open is still local; the roster has not reported this thread yet.
-    fireEvent.click(within(peopleRegion('Stages')).getByRole('button', { name: /^Implement agent/ }))
+    fireEvent.click(within(peopleRegion('Stages')).getByRole('button', { name: /^implement/ }))
     pickRunPerson(/^QA reviewer/)
     expect(screen.getByPlaceholderText('Message QA reviewer…')).toHaveValue('please review')
 

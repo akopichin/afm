@@ -559,7 +559,7 @@ export function App(): ReactElement {
       // (!isGlobalView) таб нужен всегда — он и есть активная вкладка истории.
       tabs.push({
         id: 'detail',
-        label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,
+        label: workspaceStage.id,
       })
     }
   }
@@ -645,7 +645,7 @@ export function App(): ReactElement {
       onOpenChange={setSideAgentOpen}
       attentionShortcut={attentionShortcut}
       currentStageId={selectedStageId ?? ''}
-      stages={stages.map((s) => ({ id: s.id, title: s.name }))}
+      stages={stages.map((s) => ({ id: s.id, title: s.id }))}
       mentionsEnabled={capabilities.collaboration}
     >
       {/* CommentProvider выше FileBrowserProvider, PlanPanel и DialogChannel: черновики и отправка
@@ -959,7 +959,7 @@ export function App(): ReactElement {
       {attachHelperStageId !== null && (
         <AttachHelperDialog
           stageId={attachHelperStageId}
-          stageTitle={stages.find((s) => s.id === attachHelperStageId)?.name || attachHelperStageId}
+          stageTitle={attachHelperStageId}
           profiles={attachHelperStageId === workspaceStage?.id ? stageProfiles : []}
           onAttached={() => setAttachHelperStageId(null)}
           onCancel={() => setAttachHelperStageId(null)}
@@ -970,7 +970,7 @@ export function App(): ReactElement {
         <AddStageDialog
           capabilityEnabled={capabilities.addStage}
           graphRevision={graphRevision}
-          stages={stages.map((s) => ({ id: s.id, title: s.name || s.id }))}
+          stages={stages.map((s) => ({ id: s.id, title: s.id }))}
           onCommitted={() => { setAddStageOpen(false); refresh() }}
           onCancel={() => setAddStageOpen(false)}
         />

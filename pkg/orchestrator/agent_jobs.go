@@ -78,27 +78,13 @@ func stageAgentMeta(stageID, title string) agentjobs.JobMeta {
 	}
 }
 
-func stageLabel(s flow.Stage) string {
-	if s.Name != "" {
-		return s.Name
-	}
-	return s.ID
-}
-
-func (o *Orchestrator) stageLabelByID(stageID string) string {
-	if s := o.reg().Stage(stageID); s != nil {
-		return stageLabel(*s)
-	}
-	return stageID
-}
-
-// stageJobMeta is one author turn of a stage: "<Stage> · <Phase>", e.g. "Build · Autonomous execution".
+// stageJobMeta is one author turn of a stage: "<stage id> · <Phase>", e.g. "build · Autonomous execution".
 func (o *Orchestrator) stageJobMeta(s flow.Stage, phase, cmd string) agentjobs.JobMeta {
 	label := strings.ReplaceAll(phase, "_", " ")
 	if label != "" {
 		label = strings.ToUpper(label[:1]) + label[1:]
 	}
-	meta := stageAgentMeta(s.ID, stageLabel(s)+" · "+label)
+	meta := stageAgentMeta(s.ID, s.ID+" · "+label)
 	meta.Phase = phase
 	return o.withHint(meta, cmd)
 }
@@ -282,8 +268,8 @@ func (o *Orchestrator) buildAnalyticsMeta() accounting.AnalyticsMeta {
 		participants = participantsMeta(rs, o.SideAgentParticipantID())
 	})
 	for _, s := range o.reg().Stages() {
-		meta.Stages = append(meta.Stages, accounting.StageMeta{ID: s.ID, Title: stageLabel(s), StartedAt: firstStart[s.ID], StartUnknown: unrecorded[s.ID]})
-		meta.Agents = append(meta.Agents, accounting.AgentMeta{ID: string(meshStageParticipantID(s.ID)), Kind: accounting.AgentKindStage, Title: stageLabel(s)})
+		meta.Stages = append(meta.Stages, accounting.StageMeta{ID: s.ID, Title: s.ID, StartedAt: firstStart[s.ID], StartUnknown: unrecorded[s.ID]})
+		meta.Agents = append(meta.Agents, accounting.AgentMeta{ID: string(meshStageParticipantID(s.ID)), Kind: accounting.AgentKindStage, Title: s.ID})
 	}
 	for _, a := range participants {
 		a.Title = o.RedactSecrets(a.Title)

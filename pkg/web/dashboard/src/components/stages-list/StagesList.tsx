@@ -243,10 +243,10 @@ export function StagesList({
                 </span>
                 <span className="dot-num" aria-hidden="true">{index + 1}</span>
               </span>
-              {/* Две строки: имя стадии жирным (id — только если имени нет) и слово статуса под ним; статус
+              {/* Две строки: id стадии жирным (длинный name — в подсказке) и слово статуса под ним; статус
                   читается и скринридером из accessible name кнопки. */}
               <span className="stage-label">
-                <span className="stage-name">{stage.name !== '' ? stage.name : stage.id}</span>
+                <span className="stage-name" title={stage.name !== '' ? stage.name : undefined}>{stage.id}</span>
                 <span className="stage-status-line">
                   <span className="stage-status" data-status={stage.status}>{STAGE_STATUS_LABELS[stage.status]}</span>
                   <span className="stage-time" aria-hidden="true">{time}</span>

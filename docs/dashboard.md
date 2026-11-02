@@ -21,7 +21,7 @@ The layout is a **stage rail** on the left plus one **tabbed workspace** on the
 right. The selected stage's Feed can also show a People panel on wide screens.
 
 - **Stage rail** — a compact vertical timeline of the run: status nodes (filled
-  for completed stages), each stage's `name` (or `id`), a human-readable status
+  for completed stages), each stage's `id` (its `name` as a tooltip), a human-readable status
   line, and, in the rail head, the
   run progress (`done / total`). Attached helper tasks appear beneath their stage;
   **+ Stage** is available when a live stage can be added. A stage using

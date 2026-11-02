@@ -24,7 +24,8 @@ describe('mesh-roster', () => {
     expect(participantInitials('claude')).toBe('CL')
   })
 
-  test('participantLabel prefers display_name, then alias, then id', () => {
+  test('participantLabel names a stage agent by its stage id, others by display_name, then alias, then id', () => {
+    expect(participantLabel(commit)).toBe('commit')
     expect(participantLabel(side)).toBe('claude')
     expect(participantLabel({ ...side, display_name: '' })).toBe('assistant')
     expect(participantLabel(bare)).toBe('stage:x')
@@ -58,9 +59,9 @@ describe('mesh-roster', () => {
 
   test('an untitled direct thread is named after the other members, never its mt- id', () => {
     const direct: MeshThread = { id: 'mt-e95e00425b9b4640a0bc', title: '', scope: 'run', members: ['user', commit.id], status: 'open' }
-    expect(threadLabel(direct, [commit])).toBe('Commit & cleanup')
+    expect(threadLabel(direct, [commit])).toBe('commit')
     const group: MeshThread = { id: 'mt-2', scope: 'run', members: ['user', commit.id, side.id], status: 'open' }
-    expect(threadLabel(group, [commit, side])).toBe('Commit & cleanup, claude')
+    expect(threadLabel(group, [commit, side])).toBe('commit, claude')
   })
 
   test('an untitled thread with no other members falls back to its id', () => {

@@ -7,11 +7,11 @@ import { STAGE_STATUS_LABELS, type Stage, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
 import { TabList, tabPanelProps } from '../tab-list'
 
-export type RunTeamListStage = { id: string; title: string; status: string }
+export type RunTeamListStage = { id: string; status: string }
 
 // teamStagesOf — the live stage list (/api/status, flow order) as the roster's stage rows.
 export function teamStagesOf(stages: Stage[]): RunTeamListStage[] {
-  return stages.map((s) => ({ id: s.id, title: s.name !== '' ? s.name : s.id, status: s.status }))
+  return stages.map((s) => ({ id: s.id, status: s.status }))
 }
 
 export type RunTeamListProps = {

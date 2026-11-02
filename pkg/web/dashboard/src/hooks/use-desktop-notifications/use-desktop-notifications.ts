@@ -41,7 +41,7 @@ function showNotification(title: string, body: string, tag: string, onClick?: ()
 
 function fireNotification(entry: AttentionEntry, onFocusStage: (stageId: string) => void): void {
   const time = new Date().toLocaleTimeString()
-  showNotification(TITLES[entry.kind], `${entry.stage.name} — click to view\n${time}`, `afm-stage-${entry.stage.id}`, () =>
+  showNotification(TITLES[entry.kind], `${entry.stage.id} — click to view\n${time}`, `afm-stage-${entry.stage.id}`, () =>
     onFocusStage(entry.stage.id),
   )
 }

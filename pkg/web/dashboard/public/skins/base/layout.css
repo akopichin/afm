@@ -210,10 +210,16 @@
   height: 2px;
   background: var(--accent-primary);
 }
-.workspace-tab:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
-  border-radius: var(--radius-sm);
+/* Фокус с клавиатуры — та же полоса снизу, что у активного таба, цветом фокуса вместо рамки. */
+.workspace-tab:focus-visible { outline: none; }
+.workspace-tab:focus-visible::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--focus-ring);
 }
 
 .workspace-tab-label {

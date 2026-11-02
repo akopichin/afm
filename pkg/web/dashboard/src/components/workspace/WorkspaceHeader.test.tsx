@@ -15,9 +15,10 @@ function stage(overrides: Partial<Stage> = {}): Stage {
 afterEach(() => vi.restoreAllMocks())
 
 describe('WorkspaceHeader', () => {
-  it('shows the stage name and status', () => {
+  it('shows the stage id with its name in a tooltip, and the status', () => {
     render(<WorkspaceHeader stage={stage()} connected={false} />)
-    expect(document.getElementById('detail-title')).toHaveTextContent('Build')
+    expect(document.getElementById('detail-title')).toHaveTextContent('s1')
+    expect(document.getElementById('detail-title')).toHaveAttribute('title', 'Build')
     expect(document.getElementById('detail-status')).toHaveTextContent('Awaiting approval')
   })
 

@@ -42,7 +42,7 @@ describe('CommentRecipientSelect', () => {
     expect(Array.from(select().options).map((o) => o.textContent)).toEqual([
       'Choose an agent',
       'Assistant · Assistant',
-      'Backend · Stage executor',
+      'impl · Stage executor',
       'QA · Run agent',
     ])
   })

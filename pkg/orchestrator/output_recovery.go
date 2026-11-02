@@ -299,7 +299,7 @@ func (o *Orchestrator) outputFormatterConfig(cmd, stageID string) executor.Confi
 		IdleTimeout: o.opts.Config.Executor.IdleTimeout, TruncateOutput: o.opts.Config.Executor.TruncateOutput,
 		UsageHint: o.usageHintFor(cmd), Provider: o.opts.Config.UsageLimitProvider(cmd),
 		Reasoning: o.opts.Config.Client.Reasoning, OnUsage: o.recordUsage(stageID, phaseJSONFix, ""),
-		Job:    o.repairJob(stageAgentMeta(stageID, o.stageLabelByID(stageID)), cmd),
+		Job:    o.repairJob(stageAgentMeta(stageID, stageID), cmd),
 		Redact: o.RedactSecrets, Secrets: o.secretValues, Debug: o.opts.Debug}
 }
 

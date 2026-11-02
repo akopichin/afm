@@ -119,11 +119,12 @@ describe('App', () => {
       expect(screen.getByText('demo')).toBeInTheDocument()
     })
 
-    // Автовыбор: s1 (running) выбран автоматически → заголовок панели деталей показывает 'Propose'.
-    // 'Propose' также есть в списке стадий, поэтому проверяем именно заголовок деталей по id.
+    // Автовыбор: s1 (running) выбран автоматически → заголовок панели деталей показывает id 's1',
+    // а имя стадии — в подсказке. 's1' есть и в списке стадий, поэтому проверяем именно заголовок деталей.
     await waitFor(() => {
-      expect(document.getElementById('detail-title')).toHaveTextContent('Propose')
+      expect(document.getElementById('detail-title')).toHaveTextContent('s1')
     })
+    expect(document.getElementById('detail-title')).toHaveAttribute('title', 'Propose')
 
     expect(screen.getByText('Offline')).toBeInTheDocument()
   })
@@ -241,7 +242,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(document.getElementById('detail-title')).toHaveTextContent('Autonomous stage')
+      expect(document.getElementById('detail-title')).toHaveTextContent('s1')
     })
 
     expect(document.getElementById('plan-section')).toBeNull()
@@ -256,7 +257,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(document.getElementById('detail-title')).toHaveTextContent('Silent stage')
+      expect(document.getElementById('detail-title')).toHaveTextContent('s1')
     })
 
     openDetail()
@@ -275,7 +276,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(document.getElementById('detail-title')).toHaveTextContent('Auto-answered stage')
+      expect(document.getElementById('detail-title')).toHaveTextContent('s1')
     })
 
     openDetail()
@@ -290,7 +291,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
 
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
     fireEvent.click(feedTab)
@@ -312,7 +313,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Gamma'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // Уходим в Feed.
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
@@ -364,7 +365,7 @@ describe('App', () => {
 
     // The waiting stage is initially auto-opened as Attention. Return to Feed first so the rail click is
     // tested in the global workspace, like the live dashboard scenario.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Waiting for answer'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s5'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     fireEvent.click(document.querySelector('[data-stage-id="s4"] .stage-row') as HTMLElement)
@@ -389,7 +390,7 @@ describe('App', () => {
 
     render(<App />)
     // Воркспейс авто-открывает ожидание s2.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
 
     // Выбираем s1 — завершённая стадия не открывает историю автоматически.
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
@@ -397,7 +398,7 @@ describe('App', () => {
     await waitFor(() => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-      expect(labels.some((l) => l === 'Alpha')).toBe(true) // detail-вкладка завершённой s1
+      expect(labels.some((l) => l === 's1')).toBe(true) // detail-вкладка завершённой s1
       expect(labels.some((l) => /Approval/.test(l))).toBe(true) // и маяк чужого ожидания
     })
   })
@@ -415,7 +416,7 @@ describe('App', () => {
 
     render(<App />)
     // Воркспейс авто-открывает ожидание s2.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Waiter'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
 
     // Кликаем по s1 — история завершённой стадии не открывается автоматически,
     // но detail-вкладка «Done stage» становится доступной как точка входа.
@@ -423,7 +424,7 @@ describe('App', () => {
 
     const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-    expect(labels.some((l) => /Done stage/.test(l))).toBe(true)
+    expect(labels.some((l) => l === 's1')).toBe(true)
     expect(labels.some((l) => /Approval/.test(l))).toBe(true)
   })
 
@@ -436,7 +437,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Both')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-name')).toHaveTextContent('s1'))
 
     // Выбираем завершённую стадию кликом по её строке.
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
@@ -444,7 +445,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
       // detail-вкладка появилась (точка входа в историю), но история не открыта.
-      expect(screen.getAllByRole('tab').some((t) => t.textContent === 'Both')).toBe(true)
+      expect(screen.getAllByRole('tab').some((t) => t.textContent === 's1')).toBe(true)
       expect(screen.queryByRole('group', { name: /history view/i })).not.toBeInTheDocument()
       expect(document.getElementById('dialog-section')).toBeNull()
       expect(document.getElementById('plan-section')).toBeNull()
@@ -460,10 +461,10 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-name')).toHaveTextContent('s1'))
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
 
-    const detailTab = await screen.findByRole('tab', { name: 'Alpha' })
+    const detailTab = await screen.findByRole('tab', { name: 's1' })
     fireEvent.click(detailTab)
 
     await waitFor(() => {
@@ -481,10 +482,10 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-name')).toHaveTextContent('s1'))
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
 
-    const detailTab = await screen.findByRole('tab', { name: 'Alpha' })
+    const detailTab = await screen.findByRole('tab', { name: 's1' })
     fireEvent.click(detailTab)
 
     await waitFor(() => {
@@ -500,10 +501,10 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Both')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-name')).toHaveTextContent('s1'))
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
 
-    const detailTab = await screen.findByRole('tab', { name: 'Both' })
+    const detailTab = await screen.findByRole('tab', { name: 's1' })
     fireEvent.click(detailTab)
 
     // По умолчанию открывается диалог (showDialog → dialog-history), а рядом есть
@@ -526,10 +527,10 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('Auto')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-name')).toHaveTextContent('s1'))
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
 
-    const detailTab = await screen.findByRole('tab', { name: 'Auto' })
+    const detailTab = await screen.findByRole('tab', { name: 's1' })
     fireEvent.click(detailTab)
 
     await waitFor(() => expect(document.getElementById('plan-section')).not.toBeNull())
@@ -544,10 +545,10 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(screen.getByText('AutoBoth')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-stage-id="s1"] .stage-name')).toHaveTextContent('s1'))
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
 
-    const detailTab = await screen.findByRole('tab', { name: 'AutoBoth' })
+    const detailTab = await screen.findByRole('tab', { name: 's1' })
     fireEvent.click(detailTab)
 
     await waitFor(() => {
@@ -571,7 +572,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Worker'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
@@ -592,7 +593,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(document.getElementById('detail-title')).toHaveTextContent('Autonomous stage')
+      expect(document.getElementById('detail-title')).toHaveTextContent('s1')
     })
 
     openDetail()
@@ -616,7 +617,7 @@ describe('App', () => {
     )
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // s1 завершилась, s2 стала активной; значимое WS-событие триггерит рефетч статуса.
     done = true
@@ -625,7 +626,7 @@ describe('App', () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
     })
 
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Plan'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
   })
 
   test('CRITICAL: a pending action on a NON-selected stage surfaces itself (Finding #1)', async () => {
@@ -645,7 +646,7 @@ describe('App', () => {
     )
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     awaiting = true
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
@@ -654,7 +655,7 @@ describe('App', () => {
     })
 
     // Воркспейс переключился на ожидание B и показал баннер аппрува.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(screen.getByText('Plan needs your approval')).not.toBeNull()
   })
 
@@ -667,7 +668,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     await waitFor(() => expect(document.getElementById('dialog-section')).not.toBeNull())
     // Исторической панели плана рядом с вопросом быть НЕ должно.
     expect(document.getElementById('plan-section')).toBeNull()
@@ -684,18 +685,18 @@ describe('App', () => {
 
     render(<App />)
     // Автовыбор активной s2.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Plan'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
 
     // Клик по завершённой s1 — выбор должен «прилипнуть», а не отскочить обратно на s2.
     // Кликаем по строке-кнопке (её текст), а не по <li>: интерактивен теперь .stage-row.
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // Даём эффектам/поллингу шанс (ошибочно) перекинуть выбор — он обязан остаться на s1.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 30))
     })
-    expect(document.getElementById('detail-title')).toHaveTextContent('Propose')
+    expect(document.getElementById('detail-title')).toHaveTextContent('s1')
   })
 
   test('CRITICAL: keeps retrying auto-advance across polls instead of sticking forever (fast back-to-back script stages)', async () => {
@@ -724,7 +725,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Script 1'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
 
@@ -733,14 +734,14 @@ describe('App', () => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'done' }, stage_id: 's1' }) })
     })
     // Nothing downstream is active yet — selection correctly stays on s1 (not an error state).
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Script 1'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     phase = 'caught-up'
     act(() => {
       ws?.onmessage?.({ data: JSON.stringify({ type: 'stage_status_changed', data: { status: 'running' }, stage_id: 's3' }) })
     })
     // The old one-shot check would stay stuck on s1 forever here — this is the fix under test.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Script 3'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s3'))
   })
 
   test('sets the browser tab title from the flow description', async () => {
@@ -794,7 +795,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // Композер живёт только в ленте — открываем её.
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
@@ -835,7 +836,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     const header = within(document.querySelector('.workspace-header') as HTMLElement)
     fireEvent.click(header.getByRole('button', { name: 'Pause' }))
@@ -872,7 +873,7 @@ describe('App', () => {
       const posts: { url: string; body: unknown }[] = []
       mockButtonRun([withButtons(stageView('s1', 'Propose', 'running'))], posts)
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
       const group = within(document.querySelector('.workspace-header') as HTMLElement).getByRole('group', { name: 'Stage buttons' })
       expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Run linter', 'Rebuild'])
@@ -884,7 +885,7 @@ describe('App', () => {
     test('the Approval view of an awaiting_approval stage keeps the buttons in the header', async () => {
       mockButtonRun([withButtons(stageView('s1', 'Propose', 'awaiting_approval'))], [])
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
       expect(screen.getByRole('tab', { name: /Approval/ })).toHaveAttribute('aria-selected', 'true')
       expect(within(document.querySelector('.workspace-header') as HTMLElement).getByRole('group', { name: 'Stage buttons' })).toBeInTheDocument()
@@ -897,10 +898,10 @@ describe('App', () => {
       ], [])
       render(<App />)
       // The running script is auto-selected; its header has no button group.
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Lint'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
       expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
-      fireEvent.click(screen.getByRole('button', { name: /Propose/ }))
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+      fireEvent.click(screen.getByRole('button', { name: /^s1 / }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       expect(screen.queryByRole('group', { name: 'Stage buttons' })).toBeNull()
     })
 
@@ -908,7 +909,7 @@ describe('App', () => {
       const posts: { url: string; body: unknown }[] = []
       mockButtonRun([stageView('s1', 'Propose', 'running')], posts)
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       fireEvent.click(within(document.querySelector('.workspace-header') as HTMLElement).getByRole('button', { name: 'Pause' }))
       await waitFor(() => expect(posts.map((p) => p.url)).toEqual(['/api/stages/s1/pause']))
     })
@@ -952,9 +953,9 @@ describe('App', () => {
 
     async function openBeta(): Promise<void> {
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
-      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
+      fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     }
 
     const noteRegion = () => screen.queryByRole('region', { name: 'Stage note' })
@@ -966,8 +967,8 @@ describe('App', () => {
       expect(within(region).getByRole('button', { name: 'Add note' })).toBeInTheDocument()
       const feed = document.getElementById('feed-content') as HTMLElement
       expect(region.compareDocumentPosition(feed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      fireEvent.click(screen.getByRole('button', { name: /^s1 / }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       expect(noteRegion()).toBeNull()
     })
 
@@ -1004,11 +1005,11 @@ describe('App', () => {
     test('an unsaved draft survives a stage change and a tab change, and leaves the composer draft alone', async () => {
       mockNoteRun([])
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       const composer = await screen.findByPlaceholderText('Note to agent…')
       fireEvent.change(composer, { target: { value: 'revise alpha' } })
 
-      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
       fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
       fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'unsaved words' } })
 
@@ -1017,12 +1018,12 @@ describe('App', () => {
       fireEvent.click(within(screen.getByRole('tablist', { name: 'Workspace' })).getByRole('tab', { name: 'Feed' }))
       expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
 
-      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      fireEvent.click(screen.getByRole('button', { name: /^s1 / }))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       expect(noteRegion()).toBeNull()
       expect(await screen.findByPlaceholderText('Note to agent…')).toHaveValue('revise alpha')
 
-      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
       expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
     })
 
@@ -1034,8 +1035,8 @@ describe('App', () => {
       fireEvent.keyDown(screen.getByRole('textbox', { name: 'Stage note' }), { key: 'Escape' })
       expect(screen.getByRole('button', { name: 'Add note' })).toHaveFocus()
 
-      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
-      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^s1 / }))
+      fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
       expect(await screen.findByRole('button', { name: 'Add note' })).toBeInTheDocument()
       expect(screen.queryByRole('textbox', { name: 'Stage note' })).toBeNull()
     })
@@ -1048,8 +1049,8 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
       expect(await screen.findByRole('alert')).toHaveTextContent('Could not save the note. Try again.')
 
-      fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
-      fireEvent.click(screen.getByRole('button', { name: /Beta/ }))
+      fireEvent.click(screen.getByRole('button', { name: /^s1 / }))
+      fireEvent.click(screen.getByRole('button', { name: /^s2 / }))
       expect(await screen.findByRole('textbox', { name: 'Stage note' })).toHaveValue('keep me')
     })
 
@@ -1114,20 +1115,20 @@ describe('App', () => {
     async function openMeshRun(state: RunState): Promise<void> {
       mockMeshRun(state)
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       await screen.findByRole('combobox', { name: 'Message the mesh' })
     }
 
     test('a pending draft is not shown on a running stage and returns once with its text', async () => {
       await openMeshRun({ s1: 'running', s2: 'pending', s1Note: '', s2Note: '' })
-      await selectStage(/Beta/, 'Beta')
+      await selectStage(/^s2 /, 's2')
       fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
       fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'unsaved words' } })
 
-      await selectStage(/Alpha/, 'Alpha')
+      await selectStage(/^s1 /, 's1')
       expect(regions()).toHaveLength(0)
 
-      await selectStage(/Beta/, 'Beta')
+      await selectStage(/^s2 /, 's2')
       await waitFor(() => expect(regions()).toHaveLength(1))
       expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved words')
     })
@@ -1137,9 +1138,9 @@ describe('App', () => {
       expect(regions()).toHaveLength(1)
       expect(within(regions()[0]!).getByText('mind the limits')).toBeInTheDocument()
 
-      await selectStage(/Beta/, 'Beta')
+      await selectStage(/^s2 /, 's2')
       expect(regions()).toHaveLength(0)
-      await selectStage(/Alpha/, 'Alpha')
+      await selectStage(/^s1 /, 's1')
       expect(regions()).toHaveLength(1)
       expect(within(regions()[0]!).getByText('Read only')).toBeInTheDocument()
     })
@@ -1147,11 +1148,11 @@ describe('App', () => {
     test('an open editor of a stage that starts becomes one read-only block that keeps the draft', async () => {
       const state: RunState = { s1: 'running', s2: 'pending', s1Note: '', s2Note: '' }
       await openMeshRun(state)
-      await selectStage(/Beta/, 'Beta')
+      await selectStage(/^s2 /, 's2')
       fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
       fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'late draft' } })
-      await selectStage(/Alpha/, 'Alpha')
-      await selectStage(/Beta/, 'Beta')
+      await selectStage(/^s1 /, 's1')
+      await selectStage(/^s2 /, 's2')
       await waitFor(() => expect(regions()).toHaveLength(1))
 
       state.s2 = 'running'
@@ -1171,7 +1172,7 @@ describe('App', () => {
       const state: RunState = { s1: 'running', s2: 'pending', s1Note: 'legacy note', s2Note: '' }
       mockMeshRun(state, { mesh: false })
       render(<App />)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       await screen.findByRole('region', { name: 'Stage note' })
       for (let i = 0; i < 3; i += 1) await pollStatus()
       expect(regions()).toHaveLength(1)
@@ -1186,7 +1187,7 @@ describe('App', () => {
 
     render(<App />)
 
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // WS никогда не открывался в этом тесте — connected остаётся false.
     expect(screen.getByText('Offline')).toBeInTheDocument()
@@ -1212,7 +1213,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:05'))
 
     idleSince = '2026-07-29T10:00:00.000Z'
@@ -1254,12 +1255,12 @@ describe('App', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
     const railTime = () => document.querySelector('[data-stage-id="s1"] .stage-time')?.textContent
-    const costTime = () => within(screen.getByRole('table')).getByText('Timed stage').closest('tr')?.querySelector('.cost-col-time')?.textContent
+    const costTime = () => within(screen.getByRole('table')).getByText('s1').closest('tr')?.querySelector('.cost-col-time')?.textContent
     await act(async () => { await vi.advanceTimersByTimeAsync(61000) })
     expect(railTime()).toBe('1m 01s')
     expect(costTime()).toBe(railTime())
     expect(document.querySelector('[data-stage-id="s2"] .stage-time')).toHaveTextContent('—')
-    expect(within(screen.getByRole('table')).getByText('Pending stage').closest('tr')?.querySelector('.cost-col-time')).toHaveTextContent('—')
+    expect(within(screen.getByRole('table')).getByText('s2').closest('tr')?.querySelector('.cost-col-time')).toHaveTextContent('—')
     expect(document.getElementById('elapsed')).toHaveTextContent('01:01')
     expect(screen.getByText('Run elapsed').parentElement).toHaveTextContent('1m 01s')
     stale = true
@@ -1313,7 +1314,7 @@ describe('App', () => {
     render(<App />)
     // Воркспейс авто-открывает стадию, ждущую действия: 'Downstream' — это attention-элемент и всплывает
     // сам, а не 'Upstream'.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Downstream'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     await waitFor(() => expect(document.getElementById('idle')).toHaveTextContent('00:00'))
   })
 
@@ -1365,7 +1366,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(document.getElementById('detail-title')).toHaveTextContent('Failed stage')
+      expect(document.getElementById('detail-title')).toHaveTextContent('s2')
     })
   })
 
@@ -1377,7 +1378,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     const tabs = screen.getAllByRole('tab')
     expect(tabs[tabs.length - 1]).toHaveTextContent('Cost')
@@ -1392,7 +1393,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // agent_action не значим (не триггерит рефетч и смену выбора) — набиваем ленту.
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
@@ -1417,7 +1418,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'This stage' })).not.toBeInTheDocument()
@@ -1436,7 +1437,7 @@ describe('App', () => {
     )
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     swapped = true
     const ws = StubWebSocket.instances[StubWebSocket.instances.length - 1]
@@ -1458,7 +1459,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
 
@@ -1474,7 +1475,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
     expect(labels).toContain('Cost')
@@ -1497,7 +1498,7 @@ describe('App', () => {
 
     render(<App />)
     // Воркспейс авто-открывает ожидание s2.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Approve'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
 
     // Выбираем s1 — одновременно остаются Feed и маяк чужого ожидания.
     fireEvent.click(document.querySelector('[data-stage-id="s1"] .stage-row') as HTMLElement)
@@ -1506,7 +1507,7 @@ describe('App', () => {
       const labels = screen.getAllByRole('tab').map((t) => t.textContent ?? '')
       expect(labels[0]).toBe('Feed')
       expect(labels[labels.length - 1]).toBe('Cost')
-      expect(labels).toContain('Greet') // detail-вкладка завершённой s1
+      expect(labels).toContain('s1') // detail-вкладка завершённой s1
       expect(labels.some((l) => /Approval/.test(l))).toBe(true)
     })
 
@@ -1523,7 +1524,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
 
@@ -1542,7 +1543,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     fireEvent.click(screen.getByRole('button', { name: /show all run metrics/i }))
     const popover = screen.getByRole('group', { name: /all run metrics/i })
@@ -1616,7 +1617,7 @@ describe('App', () => {
 
     // Раскрываем несколько строк ВНУТРИ таблицы, а не любую кнопку с именем "Stage N" — в рейле слева тоже
     // есть кнопки-строки с такими же именами.
-    const expandButtons = within(table).getAllByRole('button', { name: /Stage \d+/ })
+    const expandButtons = within(table).getAllByRole('button', { name: /^s\d+$/ })
     fireEvent.click(expandButtons[0] as HTMLElement)
     fireEvent.click(expandButtons[5] as HTMLElement)
     fireEvent.click(expandButtons[10] as HTMLElement)
@@ -1641,7 +1642,7 @@ describe('App', () => {
     render(<App />)
     // s2 — единственная стадия с attention-статусом → авто-открытие на маунте
     // (rule 9) сразу фокусирует воркспейс на её live-вопросе.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
 
     // Возвращаемся в Feed вручную — сигнатура авто-открытия для s2 уже потрачена (rule 9: ровно один раз
@@ -1664,7 +1665,7 @@ describe('App', () => {
     const feedButton = await screen.findByRole('button', { name: /what next\?/ })
     fireEvent.click(feedButton)
 
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Ask'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
     expect(screen.getByText('Agent needs your input')).not.toBeNull()
   })
@@ -1680,7 +1681,7 @@ describe('App', () => {
 
     render(<App />)
     // s2 не в attention-статусе → авто-выбор оставляет активную s1, Feed открыт.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     expect(document.getElementById('dialog-section')).toBeNull()
 
     fireEvent.click(document.querySelector('[data-stage-id="s2"] .stage-row') as HTMLElement)
@@ -1699,7 +1700,7 @@ describe('App', () => {
     const feedButton = await screen.findByRole('button', { name: /reply text/ })
     fireEvent.click(feedButton)
 
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Done'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
     // История, не live-вопрос — баннер ожидания ответа не должен показываться.
     expect(screen.queryByText('Agent needs your input')).not.toBeInTheDocument()
@@ -1776,14 +1777,14 @@ describe('App', () => {
 
       // Клик по вопросу открывает диалог стадии s1.
       fireEvent.click(questionBtn)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Archive'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       expect(document.getElementById('dialog-section')).not.toBeNull()
 
       // Возврат в Feed и клик по авто-ответу открывает ТОТ ЖЕ диалог.
       fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
       const answerBtnAgain = await screen.findByRole('button', { name: /Use Postgres/ })
       fireEvent.click(answerBtnAgain)
-      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Archive'))
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
       expect(document.getElementById('dialog-section')).not.toBeNull()
     }
 
@@ -1841,7 +1842,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     // Композер живёт в ленте — открываем её.
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
@@ -1896,7 +1897,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
 
     const feedTab = screen.getAllByRole('tab').find((t) => t.textContent === 'Feed')!
     fireEvent.click(feedTab)
@@ -1948,7 +1949,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     // Фокус composer'а через РЕАЛЬНЫЙ .focus() → useIsEditing=true (suppression).
@@ -1968,7 +1969,7 @@ describe('App', () => {
 
     // Снятие фокуса — всё ещё актуальный вопрос авто-открывается.
     act(() => composer.blur())
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
@@ -1983,7 +1984,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     const composer = screen.getByPlaceholderText(/note to agent/i)
@@ -2006,7 +2007,7 @@ describe('App', () => {
     act(() => composer.blur())
     await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-    expect(document.getElementById('detail-title')).toHaveTextContent('Alpha')
+    expect(document.getElementById('detail-title')).toHaveTextContent('s1')
     expect(document.getElementById('dialog-section')).toBeNull()
   })
 
@@ -2026,7 +2027,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
     fireEvent.click(screen.getByRole('button', { name: 'Open project files' }))
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
@@ -2051,7 +2052,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     // Открываем модалку Files — anyModalOpen=true. Проводка App→hook, которую
@@ -2069,7 +2070,7 @@ describe('App', () => {
 
     // Закрываем overlay — актуальный вопрос авто-открывается.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
@@ -2106,7 +2107,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     // Фокус composer'а на A ставит НАШУ паузу (self-owned) и заносит черновик.
@@ -2142,7 +2143,7 @@ describe('App', () => {
     // Авторитетный статус: A снова running (владения нет), B всё ещё ждёт — отдельное событие (дедуп ленты
     // схлопнул бы повтор того же status s2) → B авто-открывается.
     emitStageStatus('s1', 'running')
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
@@ -2170,7 +2171,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     const composer = screen.getByPlaceholderText(/note to agent/i)
@@ -2202,7 +2203,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     // Фокус на checkbox тумблера паузы — клик сам по себе фокус в jsdom не
@@ -2214,7 +2215,7 @@ describe('App', () => {
     // Вопрос приходит — suppression'а нет, авто-открытие сразу.
     asking = true
     emitStageStatus('s2', 'awaiting_user_input')
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
@@ -2231,7 +2232,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Alpha'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     const composer = screen.getByPlaceholderText(/note to agent/i)
@@ -2249,7 +2250,7 @@ describe('App', () => {
     // Открываем маяк вручную (это ПОМЕЧАЕТ эпизод handled). Клик уводит фокус с
     // composer'а — suppression от ввода снимается.
     fireEvent.click(beacon)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
 
     // Возвращаемся в Feed вручную.
@@ -2277,7 +2278,7 @@ describe('App', () => {
     }))
 
     render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
 
     const composer = screen.getByPlaceholderText(/note to agent/i)
@@ -2290,7 +2291,7 @@ describe('App', () => {
     emitStageStatus('s1', 'awaiting_user_input')
 
     // Reconcile-эффект схлопывает editing → вопрос B авто-открывается (не виснет).
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
     expect(screen.getByText('Agent needs your input')).not.toBeNull()
   })
@@ -2312,7 +2313,7 @@ describe('App', () => {
 
     render(<App />)
     // (1) B входит awaiting t1 БЕЗ фокуса → авто-открытие attention на B/t1.
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('sB'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
 
     // (2) Выбираем A, открываем Feed, фокусируем её composer (suppression).
@@ -2333,11 +2334,11 @@ describe('App', () => {
     emitStageStatus('sB', 'awaiting_user_input')
     await waitFor(() => expect(screen.getAllByRole('tab').some((t) => /Question/.test(t.textContent ?? ''))).toBe(true))
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
-    expect(document.getElementById('detail-title')).toHaveTextContent('Alpha')
+    expect(document.getElementById('detail-title')).toHaveTextContent('sA')
 
     // (4) Снятие фокуса — новый эпизод t2 авто-открывается.
     act(() => composer.blur())
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Bravo'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('sB'))
     expect(document.getElementById('dialog-section')).not.toBeNull()
   })
 
@@ -3488,15 +3489,15 @@ describe('App', () => {
   test('the header has no Attach helper… when collaboration is off or the stage is done', async () => {
     mockFetchForStatus(() => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }))
     const { unmount } = render(<App />)
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
     unmount()
 
     vi.restoreAllMocks()
     mockFetchForStatus(() => ({ flow_name: 'demo', capabilities: { collaboration: true }, stages: [stageView('s1', 'Propose', 'done')] }))
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: /Propose/ }))
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Propose'))
+    fireEvent.click(await screen.findByRole('button', { name: /s1/ }))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
     expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
   })
 
@@ -3527,7 +3528,7 @@ describe('App', () => {
     expect(screen.getByRole('tab', { name: 'Feed' })).toHaveAttribute('aria-selected', 'true')
     expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
     // The previously selected stage stays selected (the Feed header shows it).
-    expect(document.querySelector('.workspace-header')).toHaveTextContent('Propose')
+    expect(document.querySelector('.workspace-header')).toHaveTextContent('s1')
     const boardCallsAfterSwitch = requests.filter((r) => r.includes('/api/mesh/board')).length
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
     expect(requests.filter((r) => r.includes('/api/mesh/board'))).toHaveLength(boardCallsAfterSwitch)
@@ -3696,7 +3697,7 @@ describe('App', () => {
     await screen.findByRole('button', { name: 'Run conversations' })
     fireEvent.click(document.querySelector('.stage-row') as HTMLElement)
     const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
-    for (const name of ['Propose', 'Cost']) {
+    for (const name of ['s1', 'Cost']) {
       fireEvent.click(await tabs.findByRole('tab', { name }))
       fireEvent.click(runConversationsOpener())
       expect(runConversationsPanel()).toHaveClass('open')
@@ -3719,7 +3720,7 @@ describe('App', () => {
     await waitFor(() => expect(replyChip()).toHaveTextContent('Which database?'))
 
     const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
-    fireEvent.click(await tabs.findByRole('tab', { name: 'Propose' }))
+    fireEvent.click(await tabs.findByRole('tab', { name: 's1' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
     fireEvent.click(await tabs.findByRole('tab', { name: 'Feed' }))
 
@@ -3791,7 +3792,7 @@ describe('App', () => {
       expect(screen.getByRole('status')).toHaveTextContent('1 conversation with new messages')
 
       fireEvent.click(document.querySelector('.stage-row') as HTMLElement)
-      fireEvent.click(await within(screen.getByRole('tablist', { name: 'Workspace' })).findByRole('tab', { name: 'Propose' }))
+      fireEvent.click(await within(screen.getByRole('tablist', { name: 'Workspace' })).findByRole('tab', { name: 's1' }))
       expect(opener()).toHaveClass('is-pulsing')
       expect(runConversationsPanel()).not.toHaveClass('open')
     })
@@ -3872,7 +3873,7 @@ describe('App', () => {
       fireEvent.change(panel().getByPlaceholderText(/^Message /), { target: { value: 'Postgres' } })
 
       const tabs = within(screen.getByRole('tablist', { name: 'Workspace' }))
-      fireEvent.click(await tabs.findByRole('tab', { name: 'Propose' }))
+      fireEvent.click(await tabs.findByRole('tab', { name: 's1' }))
       fireEvent.click(screen.getByRole('tab', { name: 'Feed' }))
       expect(panel().getByPlaceholderText(/^Message /)).toHaveValue('Postgres')
       expect(runConversationsPanel().querySelector('.feed-reply-chip--conversation')).toHaveTextContent('Which database?')
@@ -4029,7 +4030,7 @@ describe('App', () => {
 
     // Closing the dialog releases the waiting question.
     fireEvent.click(within(screen.getByRole('dialog', { name: 'New task' })).getByRole('button', { name: 'Cancel' }))
-    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('Beta'))
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s2'))
   })
 
   test("Team's Board: a question waits behind the open task details with focus on its Close button", async () => {
