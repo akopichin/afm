@@ -189,7 +189,7 @@ func verifyReportPath(stageDir, verID string) string {
 type verifyAgentRunner func(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error)
 
 // verifyShellRunner — сигнатура функции, реально исполняющей один shell-шаг AI-verify.
-type verifyShellRunner func(ctx context.Context, dir, command string) (string, error)
+type verifyShellRunner func(ctx context.Context, dir, stageDir, command string) (string, error)
 
 // RunVerification выполняет ОДИН последовательный fail-fast проход по s.Verify.Steps для стадии, уже
 // прошедшей file-probe.
@@ -620,26 +620,28 @@ func shellRejectionResult(command, tail string) verify.ModelResult {
 }
 
 // sanitizedShellVerifyEnv удаляет чужие транспортные секреты тем же фильтром, что executor.VerifyMode.
-func sanitizedShellVerifyEnv() []string {
+// AFM_STAGE_DIR задаётся заново: шаг проверяет файлы своей стадии, а унаследованное значение — чужое.
+func sanitizedShellVerifyEnv(stageDir string) []string {
 	env := os.Environ()
-	filtered := make([]string, 0, len(env))
+	filtered := make([]string, 0, len(env)+1)
 	for _, kv := range env {
-		if executor.IsCrossAgentTransportSecret(kv) || executor.IsBrowserTransportEnv(kv) {
+		if executor.IsCrossAgentTransportSecret(kv) || executor.IsBrowserTransportEnv(kv) ||
+			strings.HasPrefix(kv, "AFM_STAGE_DIR=") {
 			continue
 		}
 		filtered = append(filtered, kv)
 	}
-	return filtered
+	return append(filtered, "AFM_STAGE_DIR="+stageDir)
 }
 
 // runVerifyShellCommand запускает shell-verify команду отменяемо — в отличие от legacy
 // stagefiles.RunVerify, движок обязан уметь прервать зависшую команду по отмене контекста рана.
-func runVerifyShellCommand(ctx context.Context, dir, command string) (string, error) {
+func runVerifyShellCommand(ctx context.Context, dir, stageDir, command string) (string, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
 	// Shell-verify не наследует транспортные секреты агентов и хуков; собственного recipe-секрета у shell
 	// нет.
-	cmd.Env = sanitizedShellVerifyEnv()
+	cmd.Env = sanitizedShellVerifyEnv(stageDir)
 	setProcessGroup(cmd)
 
 	var out bytes.Buffer

@@ -156,7 +156,7 @@ func TestBrowserForStage_EmptyRootDirUsesCWD(t *testing.T) {
 func TestSanitizedShellVerifyEnv_StripsBrowserTransport(t *testing.T) {
 	t.Setenv("AFM_BROWSER_TRANSPORT_TOKEN", "x")
 	t.Setenv("AFM_BROWSER_ENDPOINT", "y")
-	for _, kv := range sanitizedShellVerifyEnv() {
+	for _, kv := range sanitizedShellVerifyEnv("/stage") {
 		if strings.HasPrefix(kv, "AFM_BROWSER_") {
 			t.Fatalf("shell verify env must strip AFM_BROWSER_*: %q", kv)
 		}

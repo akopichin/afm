@@ -17,7 +17,7 @@ func TestRunVerifyShellCommand_KillsProcessGroupOnCancel(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := runVerifyShellCommand(ctx, ".", "sleep 30 & exit 0")
+	_, err := runVerifyShellCommand(ctx, ".", "/stage", "sleep 30 & exit 0")
 	elapsed := time.Since(start)
 
 	if elapsed > 5*time.Second {

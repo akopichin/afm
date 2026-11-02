@@ -28,7 +28,7 @@ func TestRunVerification_ShellStepRunsInProjectRoot(t *testing.T) {
 			o, _ := newVerifyTestOrchestrator(t, stage)
 			o.opts.RootDir = tc.rootDir
 			var gotDir string
-			o.runVerifyShell = func(_ context.Context, dir, _ string) (string, error) {
+			o.runVerifyShell = func(_ context.Context, dir, _, _ string) (string, error) {
 				gotDir = dir
 				return "ok", nil
 			}
@@ -57,5 +57,25 @@ func TestRunVerification_RealShellStepSeesProjectRootFiles(t *testing.T) {
 
 	if err := o.RunVerification(context.Background(), stage, phaseImplementation); err != nil {
 		t.Fatalf("shell verify must run in the project root and find the marker: %v", err)
+	}
+}
+
+// Script stages and agents get their stage directory; a shell verify step checks the same stage's files, so it
+// must see the absolute directory of the verified stage, not one inherited from afm's own environment.
+func TestRunVerification_RealShellStepSeesAbsoluteStageDir(t *testing.T) {
+	t.Setenv("AFM_STAGE_DIR", "/stale/inherited")
+	stage := flow.Stage{
+		ID:     verifyTestStageID,
+		Verify: flow.VerifySpec{Steps: []flow.VerifyStep{{Kind: flow.VerifyShell, Run: `test -f "$AFM_STAGE_DIR/stage.marker"`}}},
+	}
+	o, stageDir := newVerifyTestOrchestrator(t, stage)
+	o.absRunDir = o.opts.RunDir
+	o.opts.RootDir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(stageDir, "stage.marker"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := o.RunVerification(context.Background(), stage, phaseImplementation); err != nil {
+		t.Fatalf("shell verify must see AFM_STAGE_DIR of the verified stage: %v", err)
 	}
 }

@@ -512,7 +512,9 @@ purely informational — the step's verdict and the stage outcome are unaffected
 - **Shell verify runs where the agents run**: the run's worktree, else
   `flow.root_dir`, else the afm process's working directory. Project artifacts
   (paths without `./`) and a stage's `plan:` resolve from the same root. A shell step and an agent verify step
-  therefore see the same project directory.
+  therefore see the same project directory. `AFM_STAGE_DIR` holds the absolute
+  directory of the verified stage, as it does for agents and script stages, so a
+  step can check that stage's artifacts.
 - **The correction budget is an independent, in-memory counter**
   (`verify.max_failures`, default 1 — see
   [The correction budget](#the-correction-budget-verifymax_failures)), separate
