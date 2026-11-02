@@ -355,6 +355,22 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 	// влияет.
 	beforeFP, beforeOK := o.verifyTreeFingerprint()
 	outcome, err := o.runVerifyAgent(withVerifyStep(ctx, idx), s, st.Command, prompt, agentLog, rawResult)
+	origin := nativeOrigin{started: outcome.NativeStarted, fallback: outcome.NativeFallback, enforced: outcome.NativeEnforced}
+	// Отказ провайдера от native-режима или вынужденный ответ получают один prompt-only перезапуск в том же шаге:
+	// тот же lease и дедлайн, бюджет verify (max_failures, transient-ретраи) он не тратит.
+	if fallback := verifyNativeRerun(outcome, err); fallback != "" && ctx.Err() == nil {
+		if keepErr := keepNativeEvidence(agentLog, rawResult); keepErr != nil {
+			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify storage failure: " + keepErr.Error(), Step: idx}
+		}
+		if aborted, abortErr := o.verifyLaunchAborted(ctx, s.ID, idx); aborted {
+			return verify.ModelResult{}, st.Command, abortErr
+		}
+		if hold := o.admitProvider(o.opts.Config.UsageLimitProvider(st.Command), s.ID); hold != nil {
+			return verify.ModelResult{}, st.Command, hold
+		}
+		origin = nativeOrigin{fallback: fallback, enforced: origin.enforced}
+		outcome, err = o.runVerifyAgent(withPromptOnlyVerify(withVerifyStep(ctx, idx)), s, st.Command, prompt, agentLog, rawResult)
+	}
 	if afterFP, afterOK := o.verifyTreeFingerprint(); beforeOK && afterOK && beforeFP != afterFP {
 		o.emitVerifyTreeModified(s.ID, verID, idx, st.Command)
 	}
@@ -400,7 +416,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		formatCtx, stop := o.pauseAwareVerifyCtx(ctx, s.ID)
 		cfg := o.outputFormatterConfig(st.Command, s.ID)
 		cfg.Job = o.repairJob(o.verifyJobMeta(s, idx, st.Command), st.Command)
-		recovered, recoveryErr := recoverOutput(formatCtx, schema.VerifyResult, fmt.Sprintf("stage/%s/epoch/%d/verify/%s/step/%d", s.ID, epoch, verID, idx), raw, verifyOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, stepDir, "output", ""))
+		recovered, recoveryErr := recoverOutput(formatCtx, schema.VerifyResult, fmt.Sprintf("stage/%s/epoch/%d/verify/%s/step/%d", s.ID, epoch, verID, idx), raw, nativeValidator(schema.VerifyResult, origin, verifyOutputValidator), outputFormatAttempts, o.outputFormatter(cfg, stepDir, "output", ""))
 		interrupted := stop()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: verifyTimedOutReason, Step: idx}
@@ -414,6 +430,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		if o.opts.Store != nil && o.opts.Store.Snapshot().Stages[s.ID].Epoch != epoch {
 			return verify.ModelResult{}, st.Command, executor.ErrUserInterrupted
 		}
+		recovered.noteNative(origin)
 		if storageErr := persistOutputRecovery(stepDir, "output", recovered); storageErr != nil {
 			return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify storage failure: " + storageErr.Error(), Step: idx}
 		}
@@ -439,6 +456,27 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		return verify.ModelResult{}, st.Command, &VerifyExecError{Reason: "verify produced no result", Step: idx}
 	}
 	return *outcome.Result, st.Command, nil
+}
+
+// verifyPromptOnlyKey помечает в ctx prompt-only перезапуск verify-шага: execVerifyAgent не запрашивает
+// native-режим схемы.
+type verifyPromptOnlyKey struct{}
+
+func withPromptOnlyVerify(ctx context.Context) context.Context {
+	return context.WithValue(ctx, verifyPromptOnlyKey{}, true)
+}
+
+func verifyPromptOnly(ctx context.Context) bool {
+	promptOnly, _ := ctx.Value(verifyPromptOnlyKey{}).(bool)
+	return promptOnly
+}
+
+// verifyNativeRerun — общее правило nativeRerunReason для verify-запуска.
+func verifyNativeRerun(outcome verify.RunOutcome, err error) string {
+	if err == nil {
+		err = runFailure(outcome.Interrupted, outcome.TimedOut, outcome.ProcessOK, nil)
+	}
+	return nativeRerunReason(outcome.NativeStarted, err, outcome.NativeEnforced, outcome.Result == nil || outcome.Result.Verdict == verify.VerdictPass)
 }
 
 // pauseAwareVerifyCtx отменяется родителем или interruptCh. Вызови stop до передачи канала subprocess: он

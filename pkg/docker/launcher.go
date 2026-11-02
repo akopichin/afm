@@ -293,7 +293,7 @@ func UsedRecipes(f *flow.Flow, globalCmd string, all map[string]config.AgentReci
 }
 
 // codexAdapterCommand — имя команды-адаптера codex CLI → claude stream-json, baked в образ рядом с
-// openai-as-claude/ cursor-as-claude.
+// openai-as-claude/ cursor-agent-as-claude.
 const codexAdapterCommand = "codex-as-claude"
 
 // UsesCodex gates mounting host OAuth state; usedRecipes must contain only recipes referenced by the flow.

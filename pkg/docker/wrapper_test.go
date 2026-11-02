@@ -301,9 +301,8 @@ func TestCreateWrappers_CursorTemplate(t *testing.T) {
 		"#!/bin/sh",
 		`export CURSOR_API_KEY="$AFM_SECRET_CURSOR"`,
 		"unset AFM_SECRET_CURSOR",
-		`export CURSOR_BASE_URL="https://api.cursor.com/v1"`,
 		`export CURSOR_MODEL="auto"`,
-		"exec /usr/local/bin/cursor-as-claude \"$@\"",
+		"exec /usr/local/bin/cursor-agent-as-claude \"$@\"",
 	}
 	for _, w := range wantSubstrings {
 		if !strings.Contains(s, w) {
@@ -311,10 +310,20 @@ func TestCreateWrappers_CursorTemplate(t *testing.T) {
 		}
 	}
 	// не должно быть claude/openai-специфичных строк
-	for _, bad := range []string{"ANTHROPIC_DEFAULT", "ANTHROPIC_BASE_URL", "OPENAI_", "openai-as-claude"} {
+	// url из старого рецепта Cloud Agents API принимается и игнорируется.
+	for _, bad := range []string{"ANTHROPIC_DEFAULT", "ANTHROPIC_BASE_URL", "OPENAI_", "openai-as-claude", "CURSOR_BASE_URL", "api.cursor.com", "cursor-as-claude"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("cursor wrapper must not contain %q:\n%s", bad, s)
 		}
+	}
+}
+
+// Без модели в рецепте адаптер сам берёт auto: враппер не выставляет CURSOR_MODEL.
+func TestCreateWrappers_CursorWithoutModelLeavesDefaultToAdapter(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	s := wrapperScript(t, WrapperSpec{Type: config.RecipeTypeCursor, Command: "cursor", AuthTo: "CURSOR_API_KEY"})
+	if strings.Contains(s, "CURSOR_MODEL") {
+		t.Errorf("wrapper without a recipe model must not export CURSOR_MODEL:\n%s", s)
 	}
 }
 

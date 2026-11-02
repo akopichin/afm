@@ -135,10 +135,7 @@ func (o *Orchestrator) outputContractBlock(task assistants.Task) string {
 	}
 	var b strings.Builder
 	b.WriteString("## Output contract\n\n")
-	contract := schema.AssistantResultOnly
-	if task.ProfileSnapshot.Capabilities.Delegate {
-		contract = schema.AssistantResult
-	}
+	contract := helperContract(task)
 	body := strings.ReplaceAll(o.opts.Prompts.HelperResult, schema.JSON(schema.AssistantResultOnly), schema.JSON(contract))
 	b.WriteString(body)
 	if !strings.Contains(body, schema.JSON(contract)) {

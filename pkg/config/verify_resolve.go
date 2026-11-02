@@ -10,6 +10,9 @@ import (
 // recipe в docker.agents.
 const codexAdapterCommand = "codex-as-claude"
 
+// openAIAgentAdapterCommand — имя адаптера openai-agent, когда команда указывает на него без recipe.
+const openAIAgentAdapterCommand = "openai-agent-as-claude"
+
 // ResolveAgentCommand resolves recipes or host binaries; supported marks known recipes/Claude. Empty
 // command uses ClaudeCommand, not Client.Command.
 func ResolveAgentCommand(cmd string, cfg Config) (resolved string, supported bool) {
@@ -26,8 +29,8 @@ func ResolveAgentCommand(cmd string, cfg Config) (resolved string, supported boo
 }
 
 // VerifyCommandRejection returns a non-empty reason if cmd provably cannot act as a verify adapter, and ""
-// if it can. We reject only text-only recipes: they don't guarantee strict JSON, and DecodeModelResult
-// would fail at the end of an expensive pass.
+// if it can. We reject text-only recipes and cursor, whose JSON verdict is not verified: DecodeModelResult would
+// fail at the end of an expensive pass.
 func VerifyCommandRejection(cmd string, cfg Config) string {
 	resolved, _ := ResolveAgentCommand(cmd, cfg)
 	recipe, ok := cfg.Docker.Agents[resolved]
@@ -35,11 +38,33 @@ func VerifyCommandRejection(cmd string, cfg Config) string {
 		return ""
 	}
 	switch recipe.Type {
-	case RecipeTypeOpenAI, RecipeTypeCursor:
+	case RecipeTypeOpenAI:
 		return fmt.Sprintf("recipe type %q is text-only (no tool loop, no guaranteed JSON output)", recipe.Type)
+	case RecipeTypeCursor:
+		return fmt.Sprintf("recipe type %q: structured verdict unverified (its JSON output has not been checked against the verify contract)", recipe.Type)
 	default:
 		return ""
 	}
+}
+
+// IsClaudeFamilyCommand reports whether a command runs the claude CLI: bare claude (or empty), or a docker.agents
+// recipe of type ""/claude, whatever provider the recipe points it at.
+func (c Config) IsClaudeFamilyCommand(cmd string) bool {
+	resolved, _ := ResolveAgentCommand(cmd, c)
+	if recipe, ok := c.Docker.Agents[resolved]; ok {
+		return recipe.Type == "" || recipe.Type == ClaudeCommand
+	}
+	return resolved == ClaudeCommand
+}
+
+// IsOpenAIAgentCommand reports whether a command runs the openai-agent adapter: a recipe of type openai-agent, or
+// the bare adapter name.
+func (c Config) IsOpenAIAgentCommand(cmd string) bool {
+	resolved, _ := ResolveAgentCommand(cmd, c)
+	if recipe, ok := c.Docker.Agents[resolved]; ok {
+		return recipe.Type == RecipeTypeOpenAIAgent
+	}
+	return resolved == openAIAgentAdapterCommand
 }
 
 // IsCodexCommand reports whether a command resolves to the codex read-only adapter — the bare shim name

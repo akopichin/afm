@@ -159,7 +159,7 @@ Supported recipe `type`s:
 | `claude` (default) | Anthropic-compatible endpoints (z.ai, DeepSeek's anthropic API, …) |
 | `openai` | OpenAI-compatible `/chat/completions` — text only (planning/review) |
 | `openai-agent` | OpenAI-compatible providers with a real tool-loop (autonomous/interactive) |
-| `cursor` | Cursor Cloud Agents API |
+| `cursor` | The local `cursor-agent` CLI baked into the image — agentic (autonomous/interactive), authenticated with `CURSOR_API_KEY` |
 | `codex` | OpenAI Codex CLI — auth via a mounted `~/.codex` OAuth state, no secret in config |
 
 For a `claude` recipe, its explicit `model` is passed as `--model` on every
@@ -168,6 +168,25 @@ invocation, including resumed sessions. It takes precedence over Claude Code's
 `client.extra_args`. The wrapper also maps the Haiku, Sonnet and Opus aliases to
 the recipe's model. A Claude proxy wrapper without a model keeps Claude Code's
 normal model selection. These overrides apply to generated Docker wrappers.
+
+A `cursor` recipe runs the real `cursor-agent` CLI inside the container. The image
+installs a pinned version (`2026.10.22-27dcf5f`) with `scripts/install-cursor-agent.sh`,
+which checks the archive's sha256 for Linux x64 and arm64 before unpacking. The
+generated wrapper starts `cursor-agent -p --force --output-format stream-json
+--model <model>` and translates its events for afm; `model` defaults to `auto`.
+The recipe's `auth` must target `CURSOR_API_KEY`, which reaches `cursor-agent` only
+through the environment — never argv or logs. `url` is not used and is ignored (older
+recipes that set it keep working). A run that ends without a successful result, or with
+a non-zero exit, fails honestly. `cursor` recipes cannot be used as an
+[AI verify](verify.md#choosing-a-verifier) command: their structured verdict is
+unverified. The Cursor Cloud Agents API adapter is gone.
+
+An `openai-agent` recipe also checks its final answer when afm asks for a structured
+one (for verify and helpers): the adapter validates it with `afm schema validate` and
+asks the model to correct a schema violation up to twice, and it returns a tool error
+instead of running a command when the model's tool-call `arguments` are not a valid
+`{"command": string}`. The adapter also defaults `AFM_WAIT_ANSWER_TIMEOUT` to 600 (when unset), so one
+`afm stage wait-answer` holds for up to ten minutes.
 
 Each recipe can also set a per-recipe **`reasoning`** level (`minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`):
@@ -184,8 +203,8 @@ docker:
 
 afm clamps the level to each family's native control and bakes it into the generated
 wrapper: `claude` recipes get `--effort`, `codex` gets `model_reasoning_effort`, and
-`openai`/`openai-agent` get `reasoning_effort` in the request body. `cursor` has no
-such control and ignores the field. Because the wrappers are generated inside the
+`openai`/`openai-agent` get `reasoning_effort` in the request body. `cursor-agent` has
+no such control, so `cursor` ignores the field. Because the wrappers are generated inside the
 container, `reasoning` on a recipe is **Docker-only**. As with the top-level
 [`client.reasoning`](config-reference.md#reasoning-effort), an unrecognized value is
 not rejected by afm's `afm run` preflight — it is forwarded to the wrapper as-is and

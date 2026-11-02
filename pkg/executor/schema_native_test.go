@@ -33,10 +33,6 @@ func fakeClaudeOnPath(t *testing.T, body string) (argsFile string) {
 	argsFile = filepath.Join(dir, "args.txt")
 	writeScript(t, dir, "claude", `printf '%s\n' "$@" > `+argsFile+"\n"+body+"\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	userClaudeHome(t)
-	for _, name := range thirdPartyProviderEnv {
-		t.Setenv(name, "")
-	}
 	return argsFile
 }
 
@@ -75,8 +71,8 @@ func TestNativeSchema_ClaudeTakesTheStructuredPayload(t *testing.T) {
 	if i := slices.Index(args, "--json-schema"); i < 0 || i+1 >= len(args) || args[i+1] != objectSchema {
 		t.Fatalf("args = %q, want --json-schema followed by the schema", args)
 	}
-	if !got.outcome.ProcessOK || got.outcome.RawText != payloadJSON || !got.outcome.StructuredPayload || got.outcome.NativeFallback != "" {
-		t.Fatalf("outcome = %+v, want the payload as RawText from native mode", got.outcome)
+	if !got.outcome.ProcessOK || got.outcome.RawText != payloadJSON || !got.outcome.StructuredPayload || got.outcome.NativeFallback != "" || got.outcome.NativeEnforced {
+		t.Fatalf("outcome = %+v, want the volunteered payload as RawText from native mode", got.outcome)
 	}
 	if got.result != payloadJSON {
 		t.Fatalf("result file = %q, want the payload", got.result)
@@ -124,113 +120,156 @@ exit 1`)
 	}
 }
 
-// Anything not verified keeps the schema in the prompt only: no flag, the usual text answer, and the reason is
-// reported instead of being silently dropped.
-func TestNativeSchema_FallsBackWhenNotVerified(t *testing.T) {
+// A schema the CLI's mode cannot take, or a runtime nobody named, keeps the schema in the prompt only: no flag,
+// the usual text answer, and the reason is reported instead of being silently dropped.
+func TestNativeSchema_FallsBackForUnsupportedRequests(t *testing.T) {
 	textAnswer := `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"{\"verdict\":\"pass\"}"}]}}'
 echo '{"type":"result","subtype":"success"}'`
 	tests := []struct {
 		name   string
 		schema NativeSchema
-		cfg    func(t *testing.T, cfg *Config, argsFile string)
 		want   NativeSchemaFallback
 	}{
 		{name: "unknown runtime", schema: NativeSchema{Schema: objectSchema}, want: NativeSchemaUnknownRuntime},
-		{
-			name:   "recipe command such as GLM",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, cfg *Config, argsFile string) {
-				cfg.Command = writeScript(t, t.TempDir(), "glm-agent", `printf '%s\n' "$@" > `+argsFile+"\n"+textAnswer+"\n")
-			},
-			want: NativeSchemaUnverifiedCommand,
-		},
-		{
-			name:   "claude shadowed by a generated wrapper",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, cfg *Config, argsFile string) {
-				cfg.WrapperDir = t.TempDir()
-				writeScript(t, cfg.WrapperDir, "claude", `printf '%s\n' "$@" > `+argsFile+"\n"+textAnswer+"\n")
-			},
-			want: NativeSchemaUnverifiedCommand,
-		},
-		{
-			name:   "third-party provider endpoint",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, _ *Config, _ string) {
-				t.Setenv("ANTHROPIC_BASE_URL", "https://glm.example/api/anthropic")
-			},
-			want: NativeSchemaUnverifiedProvider,
-		},
-		{
-			name:   "provider endpoint only in the user's Claude settings",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, _ *Config, _ string) {
-				writeClaudeSettings(t, filepath.Join(userClaudeHome(t), ".claude"), "settings.json", `{"env":{"ANTHROPIC_BASE_URL":"https://glm.example/api/anthropic"}}`)
-			},
-			want: NativeSchemaUnverifiedProvider,
-		},
-		{
-			name:   "provider endpoint only in CLAUDE_CONFIG_DIR",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, _ *Config, _ string) {
-				configDir := t.TempDir()
-				writeClaudeSettings(t, configDir, "settings.json", `{"env":{"ANTHROPIC_BASE_URL":"https://glm.example/api/anthropic"}}`)
-				t.Setenv("CLAUDE_CONFIG_DIR", configDir)
-			},
-			want: NativeSchemaUnverifiedProvider,
-		},
-		{
-			name:   "provider endpoint only in the project's local Claude settings",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, cfg *Config, _ string) {
-				userClaudeHome(t)
-				cfg.Dir = t.TempDir()
-				writeClaudeSettings(t, filepath.Join(cfg.Dir, ".claude"), "settings.local.json", `{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}`)
-			},
-			want: NativeSchemaUnverifiedProvider,
-		},
-		{
-			name:   "Claude settings that cannot be read",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema},
-			cfg: func(t *testing.T, _ *Config, _ string) {
-				writeClaudeSettings(t, filepath.Join(userClaudeHome(t), ".claude"), "settings.json", `{"env":`)
-			},
-			want: NativeSchemaUnverifiedProvider,
-		},
-		{
-			name:   "claude schema without an object root",
-			schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: `{"oneOf":[{"type":"object"}]}`},
-			want:   NativeSchemaUnsupportedShape,
-		},
-		{
-			name:   "codex schema with an optional property",
-			schema: NativeSchema{Runtime: SchemaRuntimeCodex, Schema: optionalField},
-			want:   NativeSchemaUnsupportedShape,
-		},
+		{name: "claude schema without an object root", schema: NativeSchema{Runtime: SchemaRuntimeClaude, Schema: `{"oneOf":[{"type":"object"}]}`}, want: NativeSchemaUnsupportedShape},
+		{name: "codex schema with an optional property", schema: NativeSchema{Runtime: SchemaRuntimeCodex, Schema: optionalField}, want: NativeSchemaUnsupportedShape},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := fakeClaudeOnPath(t, textAnswer)
-			cfg := Config{NativeSchema: &tt.schema}
-			if tt.cfg != nil {
-				tt.cfg(t, &cfg, argsFile)
-			}
-			got := runHelper(t, cfg)
+			got := runHelper(t, Config{NativeSchema: &tt.schema})
 
 			if got.outcome.NativeFallback != tt.want {
 				t.Fatalf("NativeFallback = %q, want %q", got.outcome.NativeFallback, tt.want)
 			}
 			if args, _ := os.ReadFile(argsFile); strings.Contains(string(args), "--json-schema") {
-				t.Fatalf("args = %q: no native flag without a verified capability", args)
+				t.Fatalf("args = %q: no native flag for an unsupported request", args)
 			}
-			if got.outcome.RawText != payloadJSON || got.outcome.StructuredPayload {
+			if got.outcome.RawText != payloadJSON || got.outcome.StructuredPayload || got.outcome.NativeStarted {
 				t.Fatalf("outcome = %+v, want the text answer as before", got.outcome)
 			}
 		})
 	}
 }
 
-// Author, verify and planning runs never get the native mode: only the isolated format-only call does.
+// Any claude-family command takes native mode, whatever provider it points the CLI at: a recipe wrapper, a
+// generated wrapper shadowing claude, or a third-party endpoint. A provider that refuses fails the process,
+// and the caller reruns prompt-only.
+func TestNativeSchema_ClaudeFamilyCommandsTakeNativeMode(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, cfg *Config, argsFile string)
+	}{
+		{"recipe command such as GLM", func(t *testing.T, cfg *Config, argsFile string) {
+			cfg.Command = writeScript(t, t.TempDir(), "glm-agent", `printf '%s\n' "$@" > `+argsFile+"\n"+claudeStructuredStream+"\n")
+		}},
+		{"claude shadowed by a generated wrapper", func(t *testing.T, cfg *Config, argsFile string) {
+			cfg.WrapperDir = t.TempDir()
+			writeScript(t, cfg.WrapperDir, "claude", `printf '%s\n' "$@" > `+argsFile+"\n"+claudeStructuredStream+"\n")
+		}},
+		{"third-party provider endpoint", func(t *testing.T, _ *Config, _ string) {
+			t.Setenv("ANTHROPIC_BASE_URL", "https://glm.example/api/anthropic")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argsFile := fakeClaudeOnPath(t, claudeStructuredStream)
+			cfg := Config{NativeSchema: &NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema}}
+			tt.setup(t, &cfg, argsFile)
+
+			got := runHelper(t, cfg)
+
+			if got.outcome.NativeFallback != "" || !got.outcome.NativeStarted || got.outcome.RawText != payloadJSON {
+				t.Fatalf("outcome = %+v, want native mode and the structured payload", got.outcome)
+			}
+			if args := fileLines(t, argsFile); !slices.Contains(args, "--json-schema") {
+				t.Fatalf("args = %q, want --json-schema", args)
+			}
+		})
+	}
+}
+
+// The CLI injects an enforcement message when a native turn ended in text; the payload it then forces is flagged,
+// so a gate never takes an invented answer for a volunteered one.
+func TestNativeSchema_ForcedPayloadIsFlaggedAsEnforced(t *testing.T) {
+	fakeClaudeOnPath(t, claudeEnforcedStream(payloadJSON))
+	got := runHelper(t, Config{NativeSchema: &NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema}})
+
+	if !got.outcome.NativeEnforced || !got.outcome.StructuredPayload || got.outcome.RawText != payloadJSON {
+		t.Fatalf("outcome = %+v, want the forced payload flagged as enforced", got.outcome)
+	}
+}
+
+// Without Claude's native mode the same message is ordinary stream content and flags nothing.
+func TestNativeSchema_EnforcementMessageMattersOnlyInClaudeNativeMode(t *testing.T) {
+	fakeClaudeOnPath(t, claudeEnforcedStream(payloadJSON))
+	got := runHelper(t, Config{})
+
+	if got.outcome.NativeEnforced || got.outcome.StructuredPayload || got.outcome.RawText != "hi" {
+		t.Fatalf("outcome = %+v, want the plain text answer and no enforcement", got.outcome)
+	}
+}
+
+// The model's own last text before the CLI forced a payload is kept beside the payload, so the caller can tell a
+// forced payload that repeats the model's answer from one the model never gave.
+func TestNativeSchema_ForcedPayloadKeepsTheModelsLastOwnText(t *testing.T) {
+	text := func(s string) string {
+		return `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"` + s + `"}]}}'` + "\n"
+	}
+	forced := `echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"StructuredOutput","input":` + payloadJSON + `}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"structured_output":` + payloadJSON + `}'`
+	for _, tc := range []struct {
+		name, stream, want string
+		enforced           bool
+	}{
+		{"the last text before the enforcement", text("draft") + text("own answer") + claudeEnforcementEcho + text("after the nudge") + forced, "own answer", true},
+		{"no text before the enforcement", claudeEnforcementEcho + text("after the nudge") + forced, "", true},
+		{"a second enforcement keeps the first text", text("own answer") + claudeEnforcementEcho + text("second try") + claudeEnforcementEcho + forced, "own answer", true},
+		{"a volunteered payload", text("own answer") + forced, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClaudeOnPath(t, tc.stream)
+			got := runHelper(t, Config{NativeSchema: &NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema}})
+
+			if got.outcome.NativeEnforced != tc.enforced || got.outcome.RawText != payloadJSON || got.outcome.TextBeforeEnforcement != tc.want {
+				t.Fatalf("outcome = %+v, want enforced=%v, the payload and the text before the enforcement %q", got.outcome, tc.enforced, tc.want)
+			}
+		})
+	}
+}
+
+// claudeEnforcementEcho prints the message the claude CLI injects to force a StructuredOutput call.
+const claudeEnforcementEcho = `echo '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now."}]},"isSynthetic":true}'
+`
+
+// claudeEnforcedStream is the CLI 2.1.304 stream of probe P1: the model answers in text, the CLI injects the
+// enforcement message, and the model then calls StructuredOutput with payload.
+func claudeEnforcedStream(payload string) string {
+	return `echo '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}'
+` + claudeEnforcementEcho + `echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"StructuredOutput","input":` + payload + `}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"structured_output":` + payload + `}'`
+}
+
+// openai-agent validates its final answer itself with the full original schema, so it gets the schema file
+// whatever constructs the schema uses: there is no shape guard for it.
+func TestNativeSchema_OpenAIAgentGetsTheOriginalSchemaFile(t *testing.T) {
+	dir := t.TempDir()
+	copyFile := filepath.Join(dir, "schema-copy.json")
+	script := writeScript(t, dir, "openai-agent", `cp "$`+OutputSchemaFileEnv+`" `+copyFile+"\n"+
+		`echo '{"type":"assistant","message":{"content":[{"type":"text","text":"{\"verdict\":\"pass\"}"}]}}'`+"\n"+
+		`echo '{"type":"result","subtype":"success"}'`+"\n")
+	original := schema.JSON(schema.VerifyResult)
+	got := runHelper(t, Config{Command: script, NativeSchema: &NativeSchema{Runtime: SchemaRuntimeOpenAIAgent, Schema: original}})
+
+	if got.outcome.NativeFallback != "" || !got.outcome.NativeStarted || got.outcome.RawText != payloadJSON || got.outcome.StructuredPayload {
+		t.Fatalf("outcome = %+v, want native mode with the final message as the answer", got.outcome)
+	}
+	if data, err := os.ReadFile(copyFile); err != nil || string(data) != original {
+		t.Fatalf("schema file = %q (%v), want the original schema", data, err)
+	}
+}
+
+// Author and planning runs never get the native mode: only the isolated verify, helper and format calls do.
 func TestNativeSchema_AuthorRunIgnoresTheRequest(t *testing.T) {
 	argsFile := fakeClaudeOnPath(t, `echo '{"type":"result","subtype":"success"}'`)
 	runAuthor(t, Config{NativeSchema: &NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema}, IdleTimeout: 30 * time.Second})
@@ -310,9 +349,21 @@ func TestNativeSchema_CapabilityOfTheRealContracts(t *testing.T) {
 	}
 }
 
+// Every derived native variant passes the guard of its own mode, so it never costs a prompt-only fallback.
+func TestNativeSchema_DerivedVariantsPassTheShapeGuards(t *testing.T) {
+	for _, contract := range []schema.Contract{schema.VerifyResult, schema.AssistantResultOnly, schema.Question} {
+		claude, _ := schema.NativeJSON(contract, schema.DialectClaude)
+		if !objectRootSchema(claude) {
+			t.Errorf("%s: claude variant fails objectRootSchema: %s", contract, claude)
+		}
+		strict, _ := schema.NativeJSON(contract, schema.DialectStrict)
+		if !strictSchema(strict) {
+			t.Errorf("%s: strict variant fails strictSchema: %s", contract, strict)
+		}
+	}
+}
+
 func TestNativeSchema_ClaudeRootCombinators(t *testing.T) {
-	fakeClaudeOnPath(t, "")
-	e := New(Config{Command: "claude", Dir: t.TempDir()})
 	for _, tc := range []struct {
 		name, raw string
 		want      NativeSchemaFallback
@@ -325,7 +376,7 @@ func TestNativeSchema_ClaudeRootCombinators(t *testing.T) {
 		{"nested allOf", `{"type":"object","properties":{"a":{"allOf":[{"type":"string"}]}}}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := e.nativeSchemaFallback(&NativeSchema{Runtime: SchemaRuntimeClaude, Schema: tc.raw}); got != tc.want {
+			if got := nativeSchemaFallback(&NativeSchema{Runtime: SchemaRuntimeClaude, Schema: tc.raw}); got != tc.want {
 				t.Fatalf("fallback = %q, want %q", got, tc.want)
 			}
 		})
@@ -344,6 +395,9 @@ func TestStrictSchema(t *testing.T) {
 		{"nested object not closed", `{"type":"object","properties":{"a":{"type":"object","properties":{"b":{"type":"string"}},"required":["b"]}},"required":["a"],"additionalProperties":false}`, false},
 		{"one-of", `{"type":"object","properties":{"a":{"oneOf":[{"type":"string"}]}},"required":["a"],"additionalProperties":false}`, false},
 		{"reference", `{"type":"object","properties":{"a":{"$ref":"#/definitions/a"}},"required":["a"],"additionalProperties":false}`, false},
+		{"contains is not in the allowlist", `{"type":"object","properties":{"a":{"type":"array","contains":{"type":"string"}}},"required":["a"],"additionalProperties":false}`, false},
+		{"const is not in the allowlist", `{"type":"object","properties":{"a":{"const":1}},"required":["a"],"additionalProperties":false}`, false},
+		{"root $schema", `{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{},"required":[],"additionalProperties":false}`, false},
 		{"not an object root", `{"type":"string"}`, false},
 		{"not JSON", `{`, false},
 	}
@@ -380,66 +434,6 @@ func TestCodexAsClaude_ForwardsOutputSchemaOnlyInFormatOnlyMode(t *testing.T) {
 			}
 			if !tt.want && i >= 0 {
 				t.Fatalf("args = %q, want no --output-schema", args)
-			}
-		})
-	}
-}
-
-// userClaudeHome points the CLI's user configuration at an empty directory, so the developer's own
-// ~/.claude/settings.json never decides a test.
-func userClaudeHome(t *testing.T) string {
-	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	return home
-}
-
-func writeClaudeSettings(t *testing.T, dir, name, content string) {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Settings files without a provider override, even with an empty one, leave the verified Anthropic pair intact.
-// The CLI's config home is chosen after the fake CLI is installed, which resets it.
-func TestNativeSchema_ClaudeSettingsWithoutProviderKeepNativeMode(t *testing.T) {
-	const providerFree = `{"env":{"DEBUG":"1","ANTHROPIC_BASE_URL":"","CLAUDE_CODE_USE_BEDROCK":null},"model":"opus"}`
-	tests := []struct {
-		name  string
-		setup func(t *testing.T, cfg *Config)
-	}{
-		{"no settings at all", func(*testing.T, *Config) {}},
-		{"user settings", func(t *testing.T, _ *Config) {
-			writeClaudeSettings(t, filepath.Join(userClaudeHome(t), ".claude"), "settings.json", providerFree)
-		}},
-		{"project settings", func(t *testing.T, cfg *Config) {
-			cfg.Dir = t.TempDir()
-			writeClaudeSettings(t, filepath.Join(cfg.Dir, ".claude"), "settings.json", providerFree)
-			writeClaudeSettings(t, filepath.Join(cfg.Dir, ".claude"), "settings.local.json", `{}`)
-		}},
-		{"override only in the ignored ~/.claude when CLAUDE_CONFIG_DIR is set", func(t *testing.T, _ *Config) {
-			writeClaudeSettings(t, filepath.Join(userClaudeHome(t), ".claude"), "settings.json", `{"env":{"ANTHROPIC_BASE_URL":"https://glm.example/api/anthropic"}}`)
-			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			argsFile := fakeClaudeOnPath(t, claudeStructuredStream)
-			cfg := Config{Dir: t.TempDir(), NativeSchema: &NativeSchema{Runtime: SchemaRuntimeClaude, Schema: objectSchema}}
-			tt.setup(t, &cfg)
-
-			got := runHelper(t, cfg)
-
-			if got.outcome.NativeFallback != "" {
-				t.Fatalf("NativeFallback = %q, want native mode", got.outcome.NativeFallback)
-			}
-			if args, _ := os.ReadFile(argsFile); !strings.Contains(string(args), "--json-schema") {
-				t.Fatalf("args = %q, want --json-schema", args)
 			}
 		})
 	}

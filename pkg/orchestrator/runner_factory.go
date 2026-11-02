@@ -13,6 +13,7 @@ import (
 	"github.com/akopichin/afm/pkg/orchestrator/stagefiles"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
 	"github.com/akopichin/afm/pkg/prompts"
+	"github.com/akopichin/afm/schema"
 )
 
 // usageHintFor returns a best-effort accounting.UsageHint for the given agent command, taken from the
@@ -200,6 +201,10 @@ func (o *Orchestrator) baseStageExecutorConfig(s flow.Stage, phase, cmd string, 
 		RunID:         o.opts.RunID,
 		OnObservation: o.observationSink(s.ID),
 	}
+	// The phase names the dialog files `afm stage ask` writes, so only a real dialog phase is passed.
+	if flow.IsValidPhase(phase) {
+		cfg.DialogPhase = phase
+	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
 	}
@@ -217,6 +222,11 @@ func (o *Orchestrator) runnerForFallback(s flow.Stage, phase string) executor.Ru
 // runnerForVerify собирает *executor.Executor для ОДНОГО шага AI-verify. cmd — команда КОНКРЕТНОГО
 // verify-шага (VerifyStep.Command), может отличаться от Stage.Command; step — его номер среди шагов verify.
 func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string, step int) *executor.Executor {
+	return executor.New(o.verifyExecutorConfig(s, cmd, step))
+}
+
+// verifyExecutorConfig — конфигурация verify-запуска; native-режим схемы запрашивается по семейству команды.
+func (o *Orchestrator) verifyExecutorConfig(s flow.Stage, cmd string, step int) executor.Config {
 	cfg := executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
@@ -233,17 +243,23 @@ func (o *Orchestrator) runnerForVerify(s flow.Stage, cmd string, step int) *exec
 		Provider:       o.opts.Config.UsageLimitProvider(cmd),
 		OnUsage:        o.recordUsage(s.ID, verifyExecutionLabel, ""),
 		Job:            o.jobConfig(o.verifyJobMeta(s, step, cmd), ""),
+		NativeSchema:   o.nativeSchemaFor(cmd, schema.VerifyResult),
 	}
 	if ch, ok := o.interruptChans.Load(s.ID); ok {
 		cfg.InterruptCh = ch.(chan struct{})
 	}
-	return executor.New(cfg)
+	return cfg
 }
 
 // execVerifyAgent — продакшн-реализация seam'а o.runVerifyAgent (см. Orchestrator.runVerifyAgent): строит
-// свежий раннер под конкретную команду verify-шага и делегирует его RunVerifyAgent.
+// свежий раннер под конкретную команду verify-шага и делегирует его RunVerifyAgent. Prompt-only перезапуск
+// шага (withPromptOnlyVerify) идёт без native-режима.
 func (o *Orchestrator) execVerifyAgent(ctx context.Context, s flow.Stage, cmd, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
-	return o.runnerForVerify(s, cmd, verifyStepOf(ctx)).RunVerifyAgent(ctx, cmd, s.Name, prompt, logFile, resultFile)
+	cfg := o.verifyExecutorConfig(s, cmd, verifyStepOf(ctx))
+	if verifyPromptOnly(ctx) {
+		cfg.NativeSchema = nil
+	}
+	return executor.New(cfg).RunVerifyAgent(ctx, cmd, s.Name, prompt, logFile, resultFile)
 }
 
 func uiActionPublisher(ui *bus.UIBus, stageID string) func(string, string) {

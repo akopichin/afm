@@ -1043,9 +1043,12 @@ func TestP11_StagePrompts_CarryPhaseInputs(t *testing.T) {
 					t.Errorf("prompt contains %q = %t, want %t", name, got, present[name])
 				}
 			}
-			// Имя фазы видно только в префиксе файлов диалога: стадия интерактивна, блок есть в каждой фазе.
+			// Имя фазы видно только в префиксе резервных файлов диалога: стадия интерактивна, блок есть в каждой фазе.
 			if dialogFile := string(want.phase) + ".q<N>.question.json"; !strings.Contains(prompt, dialogFile) {
 				t.Errorf("prompt lacks the dialog prefix %q", dialogFile)
+			}
+			if !strings.Contains(prompt, "afm stage ask") || !strings.Contains(prompt, "afm stage wait-answer") {
+				t.Error("prompt lacks the dialog commands")
 			}
 		})
 	}

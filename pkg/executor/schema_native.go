@@ -3,15 +3,13 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 
-	"github.com/akopichin/afm/pkg/config"
+	"github.com/akopichin/afm/schema"
 )
 
 const (
@@ -19,20 +17,21 @@ const (
 	schemaTypeObject  = "object" // JSON Schema "type" of an object
 )
 
-// SchemaRuntime is the CLI family whose own structured-output mode a format-only call may use. Only the families
-// checked against the installed CLIs are listed; any other command keeps the schema in the prompt.
+// SchemaRuntime is the CLI family whose own structured-output mode a verify, helper or format call may use. Any
+// other command keeps the schema in the prompt.
 type SchemaRuntime string
 
 const (
-	SchemaRuntimeClaude SchemaRuntime = "claude" // claude CLI: --json-schema, the answer arrives in result.structured_output
-	SchemaRuntimeCodex  SchemaRuntime = "codex"  // codex-as-claude: --output-schema, the answer is the final message
+	SchemaRuntimeClaude      SchemaRuntime = "claude"       // claude CLI: --json-schema, the answer arrives in result.structured_output
+	SchemaRuntimeCodex       SchemaRuntime = "codex"        // codex-as-claude: --output-schema, the answer is the final message
+	SchemaRuntimeOpenAIAgent SchemaRuntime = "openai-agent" // openai-agent-as-claude: checks its final message against the schema file itself
 )
 
-// NativeSchema asks one format-only call to constrain its final answer with the CLI's own schema mode. It is an
+// NativeSchema asks one isolated call to constrain its final answer with the CLI's own schema mode. It is an
 // extra on top of the schema in the prompt and of the server-side validation, never a replacement for either.
 type NativeSchema struct {
 	Runtime SchemaRuntime // set by the caller, who knows the command's family
-	Schema  string        // JSON Schema of the answer
+	Schema  string        // JSON Schema of the answer, in the form the runtime takes
 }
 
 // NativeSchemaFallback says why a requested native schema mode was not used. The call then runs with the schema
@@ -40,66 +39,20 @@ type NativeSchema struct {
 type NativeSchemaFallback string
 
 const (
-	NativeSchemaUnknownRuntime     NativeSchemaFallback = "unknown_runtime"     // the caller did not name a verified CLI family
-	NativeSchemaUnverifiedCommand  NativeSchemaFallback = "unverified_command"  // a recipe or wrapper, not the claude CLI itself (GLM)
-	NativeSchemaUnverifiedProvider NativeSchemaFallback = "unverified_provider" // claude is pointed at a provider other than Anthropic
-	NativeSchemaUnsupportedShape   NativeSchemaFallback = "unsupported_shape"   // the schema uses constructs the provider API does not take
+	NativeSchemaUnknownRuntime   NativeSchemaFallback = "unknown_runtime"   // the caller did not name a supported CLI family
+	NativeSchemaUnsupportedShape NativeSchemaFallback = "unsupported_shape" // the schema uses constructs the provider API does not take
 )
 
-// OutputSchemaFileEnv names the file with the JSON Schema the shim passes to `codex exec --output-schema`.
+// OutputSchemaFileEnv names the file with the JSON Schema for the shims: codex passes it to `codex exec
+// --output-schema`, openai-agent checks its final message against it.
 const OutputSchemaFileEnv = "AFM_OUTPUT_SCHEMA_FILE"
 
-// thirdPartyProviderEnv switches the claude CLI to a provider whose structured-output support is not verified.
-var thirdPartyProviderEnv = []string{"ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
-
-// claudeSettingsSelectProvider reports whether a settings file the claude CLI reads may redirect it to another
-// provider through its "env" block: the user's, the project's (under the agent's directory) and the managed one.
-// A file that exists but cannot be understood counts as a redirect: the provider is then unverified.
-func claudeSettingsSelectProvider(agentDir string) bool {
-	userDir := os.Getenv("CLAUDE_CONFIG_DIR")
-	if home, err := os.UserHomeDir(); userDir == "" && err == nil {
-		userDir = filepath.Join(home, ".claude")
-	}
-	files := []string{
-		filepath.Join(userDir, "settings.json"),
-		filepath.Join(agentDir, ".claude", "settings.json"),
-		filepath.Join(agentDir, ".claude", "settings.local.json"),
-		"/etc/claude-code/managed-settings.json",
-		"/Library/Application Support/ClaudeCode/managed-settings.json",
-	}
-	return slices.ContainsFunc(files, settingsFileSelectsProvider)
-}
-
-func settingsFileSelectsProvider(path string) bool {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return false
-	}
-	var settings struct {
-		Env map[string]any `json:"env"`
-	}
-	if err != nil || json.Unmarshal(data, &settings) != nil {
-		return true
-	}
-	return slices.ContainsFunc(thirdPartyProviderEnv, func(name string) bool {
-		value, set := settings.Env[name]
-		return set && value != "" && value != nil
-	})
-}
-
-// nativeSchemaFallback reports why the requested native mode cannot be used, or "" when it can. Verified means
-// the CLI/provider pair was exercised end to end; anything unknown is a fallback.
-func (e *Executor) nativeSchemaFallback(ns *NativeSchema) NativeSchemaFallback {
+// nativeSchemaFallback reports why the requested native mode cannot be used, or "" when it can. Only the schema's
+// shape is checked: a provider behind the CLI that refuses the mode fails the process, and the caller reruns the
+// call prompt-only.
+func nativeSchemaFallback(ns *NativeSchema) NativeSchemaFallback {
 	switch ns.Runtime {
 	case SchemaRuntimeClaude:
-		// A recipe (GLM and the like) is a wrapper around claude, and the wrapper decides the provider.
-		if e.cfg.Command != config.ClaudeCommand || e.commandPath() != e.cfg.Command {
-			return NativeSchemaUnverifiedCommand
-		}
-		if slices.ContainsFunc(thirdPartyProviderEnv, func(name string) bool { return os.Getenv(name) != "" }) ||
-			claudeSettingsSelectProvider(e.cfg.Dir) {
-			return NativeSchemaUnverifiedProvider
-		}
 		if !objectRootSchema(ns.Schema) {
 			return NativeSchemaUnsupportedShape
 		}
@@ -107,19 +60,21 @@ func (e *Executor) nativeSchemaFallback(ns *NativeSchema) NativeSchemaFallback {
 		if !strictSchema(ns.Schema) {
 			return NativeSchemaUnsupportedShape
 		}
+	case SchemaRuntimeOpenAIAgent:
+		// The shim's own validator takes every construct of the original schema.
 	default:
 		return NativeSchemaUnknownRuntime
 	}
 	return ""
 }
 
-// selectNativeSchema decides, once per helper call, whether the requested native mode is used; the result is
+// selectNativeSchema decides, once per isolated call, whether the requested native mode is used; the result is
 // kept in cfg for run. It returns the fallback reason, "" when native mode is used or was not requested.
 func (e *Executor) selectNativeSchema() NativeSchemaFallback {
 	if e.cfg.NativeSchema == nil {
 		return ""
 	}
-	if reason := e.nativeSchemaFallback(e.cfg.NativeSchema); reason != "" {
+	if reason := nativeSchemaFallback(e.cfg.NativeSchema); reason != "" {
 		return reason
 	}
 	e.cfg.nativeSchemaOn = true
@@ -127,13 +82,13 @@ func (e *Executor) selectNativeSchema() NativeSchemaFallback {
 }
 
 // claudeNativeSchema reports whether the call runs in Claude's native mode, where the answer is the payload of the
-// result event. In Codex's mode the final message is the answer, so there is nothing separate to take.
+// result event. In the shims' modes the final message is the answer, so there is nothing separate to take.
 func (c Config) claudeNativeSchema() bool {
 	return c.nativeSchemaOn && c.NativeSchema.Runtime == SchemaRuntimeClaude
 }
 
 // nativeSchemaRun is what native mode adds to one process: command-line flags (claude) or an environment variable
-// naming a schema file (the codex shim). The zero value adds nothing.
+// naming a schema file (the codex and openai-agent shims). The zero value adds nothing.
 type nativeSchemaRun struct {
 	args, env []string
 	cleanup   func()
@@ -183,9 +138,9 @@ func structuredPayload(line string) (string, bool) {
 
 // Claude's structured-output tool rejects root combinators even alongside type: object.
 // Nested combinators do not impose that restriction on the tool's input schema.
-func objectRootSchema(schema string) bool {
+func objectRootSchema(raw string) bool {
 	var root map[string]any
-	if json.Unmarshal([]byte(schema), &root) != nil || root["type"] != schemaTypeObject {
+	if json.Unmarshal([]byte(raw), &root) != nil || root["type"] != schemaTypeObject {
 		return false
 	}
 	for _, key := range []string{"oneOf", "allOf", "anyOf"} {
@@ -196,15 +151,11 @@ func objectRootSchema(schema string) bool {
 	return true
 }
 
-// strictKeywords are the constructs OpenAI's strict structured output does not take; a schema using one stays
-// in the prompt.
-var strictKeywords = []string{"oneOf", "allOf", "not", "if", "then", "else", "patternProperties", "$ref"}
-
 // strictSchema reports whether the schema fits OpenAI's strict mode, which `codex exec --output-schema` always
-// uses: every object is closed and lists all its properties as required.
-func strictSchema(schema string) bool {
+// uses: only keywords from the strict allowlist, and every object is closed and lists all its properties as required.
+func strictSchema(raw string) bool {
 	var root map[string]any
-	return json.Unmarshal([]byte(schema), &root) == nil && root["type"] == schemaTypeObject && strictNode(root)
+	return json.Unmarshal([]byte(raw), &root) == nil && root["type"] == schemaTypeObject && strictNode(root)
 }
 
 // strictNode checks one schema node and the schemas nested in it. Only schema positions are walked, so a property
@@ -214,18 +165,16 @@ func strictNode(node any) bool {
 	if !ok {
 		return true
 	}
-	if slices.ContainsFunc(strictKeywords, func(keyword string) bool { _, found := n[keyword]; return found }) {
-		return false
+	for key := range n {
+		if !schema.IsStrictKeyword(key) {
+			return false
+		}
 	}
 	properties, _ := n["properties"].(map[string]any)
 	if allowsObject(n["type"]) && !closedWithAllRequired(n, properties) {
 		return false
 	}
-	nested := []any{n["items"]}
-	for _, key := range []string{"properties", "definitions", "$defs"} {
-		group, _ := n[key].(map[string]any)
-		nested = slices.AppendSeq(nested, maps.Values(group))
-	}
+	nested := slices.AppendSeq([]any{n["items"]}, maps.Values(properties))
 	anyOf, _ := n["anyOf"].([]any)
 	nested = append(nested, anyOf...)
 	return !slices.ContainsFunc(nested, func(child any) bool { return !strictNode(child) })

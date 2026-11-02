@@ -131,8 +131,10 @@ behavior change: no extra runs, no extra files, no new defaults.
 Any command that runs as an agent can act as a verify adapter — a bare
 `claude`, `codex-as-claude`, a `docker.agents` recipe, or a compatible custom binary
 on `PATH`. The only agent commands rejected at preflight are **text-only recipes**
-(`type: openai`, `type: cursor`): they have no tool loop or guaranteed-JSON
-contract. `DecodeModelResult` would fail at the end of an expensive verify pass.
+(`type: openai`) — they have no tool loop or guaranteed-JSON contract — and
+`type: cursor`, whose structured verdict is unverified (the local `cursor-agent`
+adapter's JSON output has not been checked against the verify contract).
+`DecodeModelResult` would fail at the end of an expensive verify pass.
 Rejection happens at **preflight**, before the flow even starts, with an error
 naming the stage, step index, and recipe type. Other commands must produce the
 expected agent output and a valid JSON verdict when run; preflight does not
@@ -237,6 +239,49 @@ Every candidate must pass the same
 strict schema and verdict checks and preserve the original findings. A changed
 verdict or lost finding is rejected. The original answer remains in
 `raw-result.json`; repair does not spend the author's verify correction budget.
+
+### Native schema mode
+
+Besides the schema in the prompt, afm asks the verifier's CLI for its own
+structured-output mode, so a format mistake is caught while the verifier is still
+answering. Which mode depends on the command:
+
+| Command | Native mode | The answer is |
+|---------|-------------|---------------|
+| bare `claude`, a `docker.agents` recipe of `type: claude` (or no type), whatever provider it points at | `--json-schema` | the `structured_output` payload of the final result |
+| `codex-as-claude`, a `type: codex` recipe | `--output-schema` | the final message |
+| `openai-agent-as-claude`, a `type: openai-agent` recipe | the adapter checks its final message against the schema file (`AFM_OUTPUT_SCHEMA_FILE`) with `afm schema validate` and asks the model to correct it, up to twice | the final message |
+
+afm derives the native form of the verdict schema in code (for `codex` a strict
+variant with closed objects) and turns the answer back into the verdict contract.
+The original contract stays the only gate: every answer still goes through the
+strict schema and verdict checks described above, and a native answer is never
+accepted on the CLI's word alone. A custom command or a schema shape the CLI
+cannot take keeps the schema in the prompt only.
+
+If the provider refuses native mode and the verifier process fails, or the CLI had
+to force the verifier into producing a result (the final message carries a
+`[structured-output-enforce]` marker), afm re-runs the **same step once** with the
+schema in the prompt only. The rerun keeps the step's command slot and deadline and
+does not spend the correction budget or a transient retry. A forced
+`needs_changes` or `inconclusive` verdict stands, but a forced `pass` (or a forced
+answer that does not decode) is never accepted as it is: a payload extracted under
+pressure may be made up, so the verifier answers again in prompt-only mode. An
+interrupt, an idle timeout, a usage limit or a cancellation is not rerun. The files of the native
+run stay beside the rerun's as `*.native.*`.
+
+Every AI step writes a receipt `output.recovery.json` in its step directory, also
+when the answer was clean. It records how the accepted answer was obtained:
+
+| Field | Meaning |
+|-------|---------|
+| `source` | `native` (the native run gave it as is), `prompt` (a prompt-only run gave it as is), `repair` (afm's local repair fixed it) or `format_agent` (the format-only call rewrote it) |
+| `repair_kind` | the local repair applied, when `source` is `repair` |
+| `native_fallback` | why native mode did not give the answer: `native_rejected` (the native run failed and the rerun answered), `enforced_answer` (a forced `pass` was not accepted), `unknown_runtime`, `unsupported_shape` |
+| `native_enforced` | `true` when the CLI forced the verifier to give its payload |
+| `validation`, `raw_sha256`, `candidate_sha256`, `attempts` | the validation result, hashes of the raw and the accepted answer, and the number of format-only attempts |
+
+`output.candidate.json` is kept only when the accepted answer differs from the raw one.
 
 A recognized provider usage limit is an exception to a non-zero verifier exit:
 the stage enters [`awaiting_quota`](stage-lifecycle.md) and resumes at the same
@@ -421,6 +466,7 @@ Every verification pass writes to `<stageDir>/verify/`:
       agent.log
       agent.jsonl
       raw-result.json             # the verifier's raw final answer, before validation
+      output.recovery.json        # how the answer was obtained: native, prompt, repair, format_agent
       result.json                 # accepted, validated outcome
 ```
 

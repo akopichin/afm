@@ -1202,13 +1202,13 @@ func TestAgentRecipe_CursorType(t *testing.T) {
 			errSub: "model is required",
 		},
 		{
-			name: "cursor: missing url",
+			// cursor-agent — локальный CLI: url не нужен (старые рецепты Cloud Agents API с url остаются валидными).
+			name: "cursor: url is optional",
 			recipe: config.AgentRecipe{
 				Type:  "cursor",
 				Model: "auto",
 				Auth:  config.RecipeAuth{From: "file:t", To: "env:CURSOR_API_KEY"},
 			},
-			errSub: "url is required",
 		},
 		{
 			name: "cursor: any env: var allowed (not restricted to ClaudeAuthEnvVars)",

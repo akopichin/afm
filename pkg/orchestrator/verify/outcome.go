@@ -16,4 +16,15 @@ type RunOutcome struct {
 	// Result — разобранный и провалидированный ответ модели. Заполняется
 	// ТОЛЬКО когда ProtocolErr == nil и ответ успешно прошёл DecodeModelResult.
 	Result *ModelResult
+	// NativeFallback — почему запрошенный native-режим схемы не использован ("" — использован или не
+	// запрошен). Строка, а не тип executor: executor импортирует этот пакет.
+	NativeFallback string
+	// NativeStarted — процесс действительно стартовал в native-режиме: только такой запуск мог получить отказ
+	// провайдера от этого режима.
+	NativeStarted bool
+	// StructuredPayload — ответ взят из structured payload Claude, а не из текстового блока.
+	StructuredPayload bool
+	// NativeEnforced — CLI заставил модель вызвать StructuredOutput после хода, закончившегося текстом:
+	// payload вынужденный и может быть выдуманным.
+	NativeEnforced bool
 }

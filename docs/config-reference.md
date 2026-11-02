@@ -100,6 +100,10 @@ docker:
   #            auth: { from: "file:~/.ai-free/claude-glm/token", to: "env:ANTHROPIC_AUTH_TOKEN" } }
 ```
 
+A recipe of `type: cursor` runs the local `cursor-agent` CLI from the Docker image: it
+needs no `url` (a value is ignored), its `auth.to` is `env:CURSOR_API_KEY` and `model`
+defaults to `auto`. See [Docker mode](docker.md#non-claude-agents-in-docker-autoshim).
+
 `collaboration.mode` selects the dashboard presentation: `team` (the default for
 existing configs) or `assistants`. The value in `flow.yaml` takes precedence over
 project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not

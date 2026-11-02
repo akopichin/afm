@@ -29,7 +29,7 @@ func envName(cmd string) string {
 // WrapperSpec describes one wrapper script to generate in the wrapper-dir. Model == "" with Type ""
 // selects the claude proxy-shim (BASE_URL only, no model vars).
 type WrapperSpec struct {
-	Type         string // "" | "claude" = claude template; "openai" = openai-compatible; "openai-agent" = openai-compatible tool-loop; "cursor" = Cursor Cloud Agents
+	Type         string // "" | "claude" = claude template; "openai" = openai-compatible; "openai-agent" = openai-compatible tool-loop; "cursor" = local cursor-agent CLI
 	Command      string
 	AuthTo       string // auth env var name ("" for claude proxy-shim)
 	BaseURL      string // baked gateway URL; "" → omit
@@ -152,19 +152,16 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	}
 
 	if s.Type == config.RecipeTypeCursor {
-		// cursor Cloud Agents API: CURSOR_* vars + exec cursor-as-claude.
-		// realClaude не нужен — cursor-as-claude не вызывает claude.
+		// Локальный cursor-agent: ключ из auth.to, модель из рецепта; url не нужен и игнорируется.
+		// realClaude не нужен — cursor-agent-as-claude не вызывает claude.
 		if s.AuthTo != "" {
 			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
 			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
 		}
-		if s.BaseURL != "" {
-			fmt.Fprintf(&b, "export CURSOR_BASE_URL=%q\n", s.BaseURL)
-		}
 		if s.Model != "" {
 			fmt.Fprintf(&b, "export CURSOR_MODEL=%q\n", s.Model)
 		}
-		b.WriteString("exec /usr/local/bin/cursor-as-claude \"$@\"\n")
+		b.WriteString("exec /usr/local/bin/cursor-agent-as-claude \"$@\"\n")
 		return b.String(), nil
 	}
 

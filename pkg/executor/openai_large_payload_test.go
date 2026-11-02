@@ -62,7 +62,7 @@ func runAdapterHTTP(t *testing.T, script, prompt, dir string, responses ...strin
 	tmp := t.TempDir()
 	cmd := exec.CommandContext(ctx, "bash", script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=test", "OPENAI_BASE_URL="+server.URL,
+	cmd.Env = append(os.Environ(), "AFM_OUTPUT_SCHEMA_FILE=", "AFM_WAIT_ANSWER_TIMEOUT=", "OPENAI_API_KEY=test", "OPENAI_BASE_URL="+server.URL,
 		"OPENAI_MODEL=test", "OPENAI_AGENT_MAX_TURNS=5", "TMPDIR="+tmp,
 		"NO_PROXY=127.0.0.1", "no_proxy=127.0.0.1")
 	cmd.Stdin = strings.NewReader(prompt)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,14 +36,70 @@ type outputFormatRunner func(context.Context, executor.Config, string, string, s
 // outputFormatCall runs one formatter attempt for a contract and returns the candidate it produced.
 type outputFormatCall func(ctx context.Context, contract schema.Contract, prompt string, attempt int) ([]byte, error)
 
+// outputProvenance is the receipt of one recovered answer, written for every verify step and helper turn.
 type outputProvenance struct {
-	Contract      schema.Contract `json:"contract"`
-	Owner         string          `json:"owner"`
-	Source        string          `json:"source,omitempty"`
-	Validation    string          `json:"validation"`
-	RawHash       string          `json:"raw_sha256"`
-	CandidateHash string          `json:"candidate_sha256,omitempty"`
-	Attempts      int             `json:"attempts"`
+	Contract       schema.Contract `json:"contract"`
+	Owner          string          `json:"owner"`
+	Source         string          `json:"source,omitempty"`      // how the accepted answer was obtained: source* below
+	RepairKind     string          `json:"repair_kind,omitempty"` // the local repair, when Source is repair
+	NativeFallback string          `json:"native_fallback,omitempty"`
+	NativeEnforced bool            `json:"native_enforced,omitempty"`
+	Validation     string          `json:"validation"`
+	RawHash        string          `json:"raw_sha256"`
+	CandidateHash  string          `json:"candidate_sha256,omitempty"`
+	Attempts       int             `json:"attempts"`
+}
+
+// Sources of an accepted answer.
+const (
+	sourceNative      = "native"       // a run in the CLI's native schema mode gave it as is
+	sourcePrompt      = "prompt"       // a run with the schema in the prompt alone gave it as is
+	sourceRepair      = "repair"       // afm's local repair fixed it (RepairKind)
+	sourceFormatAgent = "format_agent" // the format agent rewrote it
+)
+
+// Why native mode did not give the answer when the run itself decided against it; the executor's own reasons
+// (executor.NativeSchemaFallback) are recorded as they are.
+const (
+	nativeFallbackRejected = "native_rejected" // the native run failed, a prompt-only rerun answered
+	nativeFallbackEnforced = "enforced_answer" // the CLI forced an answer that could pass the gate, a prompt-only rerun answered
+)
+
+// nativeOrigin is what native schema mode did for the run whose answer is recovered.
+type nativeOrigin struct {
+	started  bool   // the answer comes from a run that started in native mode
+	fallback string // why native mode did not give the answer; "" when it did or was not requested
+	enforced bool   // the CLI forced the model to give its payload
+}
+
+// noteNative records the native origin in the provenance: an answer a native run gave and afm used as is is the
+// native source.
+func (r *outputRecovery) noteNative(origin nativeOrigin) {
+	if origin.started && r.Provenance.Source == sourcePrompt {
+		r.Provenance.Source = sourceNative
+	}
+	r.Provenance.NativeFallback = origin.fallback
+	r.Provenance.NativeEnforced = origin.enforced
+}
+
+// nativeAnswer turns the answer of a native run into the contract's form (schema.NormalizeNative). An answer over
+// the size cap stays as sent: dropping its nulls and spaces must not shrink it into acceptance.
+func nativeAnswer(contract schema.Contract, raw []byte) []byte {
+	if jsonstrict.EnforceMaxBytes(raw, assistants.MaxResultBytes) != nil {
+		return raw
+	}
+	return schema.NormalizeNative(contract, raw)
+}
+
+// nativeValidator checks the answer of a run that started in native mode in the contract's form. Only the
+// candidate is normalized: the raw answer stays the model's own bytes for the record, its hash and the size cap.
+func nativeValidator(contract schema.Contract, origin nativeOrigin, validate outputValidator) outputValidator {
+	if !origin.started {
+		return validate
+	}
+	return func(raw []byte) ([]byte, jsonstrict.RepairKind, error) {
+		return validate(nativeAnswer(contract, raw))
+	}
 }
 
 type outputRecovery struct {
@@ -78,9 +135,13 @@ func recoverOutput(ctx context.Context, contract schema.Contract, owner string, 
 	if err := jsonstrict.EnforceMaxBytes(raw, assistants.MaxResultBytes); err != nil {
 		return result, err
 	}
-	candidate, source, original := validate(raw)
+	candidate, repair, original := validate(raw)
 	if original == nil {
-		return accept(candidate, string(source))
+		if repair == "" {
+			return accept(candidate, sourcePrompt)
+		}
+		result.Provenance.RepairKind = string(repair)
+		return accept(candidate, sourceRepair)
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -120,7 +181,7 @@ func recoverOutput(ctx context.Context, contract schema.Contract, owner string, 
 		if compareErr != nil || !reflect.DeepEqual(baseline, comparison) {
 			continue
 		}
-		return accept(fixed, "model_format")
+		return accept(fixed, sourceFormatAgent)
 	}
 	return result, fmt.Errorf("output recovery rejected candidates: %w", original)
 }
@@ -174,6 +235,8 @@ func comparableOutput(contract schema.Contract, raw []byte, repairSyntax bool) (
 	if root == nil {
 		return nil, errors.New("output must be an object")
 	}
+	// A strict-mode formatter sends every optional property, as null; for the decoders null is "absent".
+	dropNullMembers(root)
 	if number, ok := root["schema_version"].(json.Number); ok {
 		var integer jsonstrict.Integer
 		if integer.UnmarshalJSON([]byte(number)) == nil {
@@ -210,6 +273,26 @@ func comparableOutput(contract schema.Contract, raw []byte, repairSyntax bool) (
 		}
 	}
 	return root, nil
+}
+
+// dropNullMembers removes null-valued object members at any depth; array elements stay as they are.
+func dropNullMembers(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			if item == nil {
+				delete(v, key)
+			} else {
+				dropNullMembers(item)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			dropNullMembers(item)
+		}
+	default:
+		// A scalar has no members.
+	}
 }
 
 // A doubled escape before an interior quote cannot terminate a JSON value followed by ordinary text.
@@ -277,11 +360,10 @@ Source JSON, encoded as a JSON string:
 `, issue, reason, schema.JSON(contract), quoted)
 }
 
+// persistOutputRecovery writes the receipt of every answer, a clean one too, so how often each source answers
+// can be counted. The candidate is kept only when it differs from the raw answer.
 func persistOutputRecovery(dir, prefix string, result outputRecovery) error {
-	if result.Provenance.Source == "" && result.Provenance.Attempts == 0 {
-		return nil
-	}
-	if result.Candidate != nil {
+	if result.Candidate != nil && result.Provenance.CandidateHash != result.Provenance.RawHash {
 		if err := memory.AtomicWrite(filepath.Join(dir, prefix+".candidate.json"), result.Candidate); err != nil {
 			return err
 		}
@@ -303,15 +385,90 @@ func (o *Orchestrator) outputFormatterConfig(cmd, stageID string) executor.Confi
 		Redact: o.RedactSecrets, Secrets: o.secretValues, Debug: o.opts.Debug}
 }
 
-// nativeSchemaFor asks for the CLI's own schema mode when the command is a family verified for it; the executor
-// still rejects the pairs it has not checked (recipes, wrappers, other providers, unsupported schema shapes).
+// nativeSchemaFor asks for the CLI's own schema mode by the command's family, with the form of the contract that
+// mode takes: the strict variant for codex, the claude variant for the claude CLI, the original for openai-agent,
+// whose own validator takes every construct. A contract without a variant (delegation) stays in the prompt.
 func (o *Orchestrator) nativeSchemaFor(cmd string, contract schema.Contract) *executor.NativeSchema {
 	cfg := o.opts.Config
+	variant := func(runtime executor.SchemaRuntime, dialect schema.Dialect) *executor.NativeSchema {
+		raw, ok := schema.NativeJSON(contract, dialect)
+		if !ok {
+			return nil
+		}
+		return &executor.NativeSchema{Runtime: runtime, Schema: raw}
+	}
 	switch {
 	case cfg.IsCodexCommand(cmd):
-		return &executor.NativeSchema{Runtime: executor.SchemaRuntimeCodex, Schema: schema.JSON(contract)}
-	case cfg.BrowserSupportedFor(cmd): // claude-family: the commands that run the Claude CLI
-		return &executor.NativeSchema{Runtime: executor.SchemaRuntimeClaude, Schema: schema.JSON(contract)}
+		return variant(executor.SchemaRuntimeCodex, schema.DialectStrict)
+	case cfg.IsClaudeFamilyCommand(cmd):
+		return variant(executor.SchemaRuntimeClaude, schema.DialectClaude)
+	case cfg.IsOpenAIAgentCommand(cmd):
+		return &executor.NativeSchema{Runtime: executor.SchemaRuntimeOpenAIAgent, Schema: schema.JSON(contract)}
+	default:
+		return nil
+	}
+}
+
+// nativeRerunNeeded reports a failure the provider's refusal of native schema mode may explain: the run started in
+// native mode and failed on its own. A limit, an interrupt, a timeout or a cancellation is never one: a
+// prompt-only rerun would not fix it.
+func nativeRerunNeeded(started bool, err error) bool {
+	var limit *executor.UsageLimitError
+	return started && err != nil && !errors.As(err, &limit) &&
+		!errors.Is(err, executor.ErrUserInterrupted) && !errors.Is(err, executor.ErrIdleTimeout) &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// nativeRerunReason names why a verify or helper run gets one prompt-only rerun, or "" when its outcome stands: the
+// provider refused native mode, or the CLI forced an answer that could open a gate. A forced pass may be made up and
+// a forced answer that does not decode could become a pass in the formatter; a forced non-pass verdict stands.
+func nativeRerunReason(started bool, failure error, enforced, forcedMayPass bool) string {
+	switch {
+	case nativeRerunNeeded(started, failure):
+		return nativeFallbackRejected
+	case failure == nil && enforced && forcedMayPass:
+		return nativeFallbackEnforced
+	default:
+		return ""
+	}
+}
+
+// errAgentProcessFailed is a process that failed without an interrupt, a timeout or an error of its own.
+var errAgentProcessFailed = errors.New("agent process failed")
+
+// runFailure is the error of an agent run that did not end cleanly; nil for a clean run.
+func runFailure(interrupted, timedOut, processOK bool, processErr error) error {
+	switch {
+	case interrupted:
+		return executor.ErrUserInterrupted
+	case timedOut:
+		return executor.ErrIdleTimeout
+	case processErr != nil:
+		return processErr
+	case !processOK:
+		return errAgentProcessFailed
+	default:
+		return nil
+	}
+}
+
+// keepNativeEvidence moves the files of a native run aside as *.native.* before its prompt-only rerun writes its
+// own, so the rerun's answer is never mistaken for the native one: the log with its .jsonl and .stderr.log siblings
+// (logFile "" leaves a log that collects every run in place) and the answer file.
+func keepNativeEvidence(logFile, resultFile string) error {
+	moves := map[string]string{}
+	if logFile != "" {
+		stem := strings.TrimSuffix(logFile, ".log")
+		for _, suffix := range []string{".log", ".jsonl", ".stderr.log"} {
+			moves[stem+suffix] = stem + ".native" + suffix
+		}
+	}
+	ext := filepath.Ext(resultFile)
+	moves[resultFile] = strings.TrimSuffix(resultFile, ext) + ".native" + ext
+	for from, to := range moves {
+		if err := os.Rename(from, to); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("keep native run evidence: %w", err)
+		}
 	}
 	return nil
 }
@@ -341,17 +498,19 @@ func (o *Orchestrator) outputFormatter(cfg executor.Config, dir, prefix string, 
 		if bounded.Err() != nil {
 			return nil, bounded.Err()
 		}
-		var limit *executor.UsageLimitError
-		var nativeErr *nativeSchemaError
-		if errors.As(err, &nativeErr) && !errors.As(err, &limit) &&
-			!errors.Is(err, executor.ErrUserInterrupted) && !errors.Is(err, executor.ErrIdleTimeout) &&
-			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if err == nil && attemptCfg.NativeSchema != nil {
+			return nativeAnswer(contract, candidate), nil
+		}
+		if nativeRerunNeeded(errors.As(err, new(*nativeSchemaError)), err) {
+			if keepErr := keepNativeEvidence(stem+".log", stem+".raw.json"); keepErr != nil {
+				return nil, keepErr
+			}
 			if hold := o.admitAgent(cfg.Provider, cfg.StageID, taskID); hold != nil {
 				return nil, hold
 			}
 			attemptCfg.NativeSchema = nil
-			// Keep native failure evidence and share the attempt's original deadline.
-			candidate, err = runner(bounded, attemptCfg, prompt, stem+".prompt-only.log", stem+".prompt-only.raw.json")
+			// The rerun shares the attempt's original deadline.
+			candidate, err = runner(bounded, attemptCfg, prompt, stem+".log", stem+".raw.json")
 			if bounded.Err() != nil {
 				return nil, bounded.Err()
 			}
@@ -371,19 +530,9 @@ func execOutputFormat(ctx context.Context, cfg executor.Config, prompt, logFile,
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case outcome.Interrupted:
-		err = executor.ErrUserInterrupted
-	case outcome.TimedOut:
-		err = executor.ErrIdleTimeout
-	case outcome.ProcessErr != nil:
-		err = outcome.ProcessErr
-	case !outcome.ProcessOK:
-		err = errors.New("formatter process failed")
-	case outcome.ProtocolErr != nil:
+	err = runFailure(outcome.Interrupted, outcome.TimedOut, outcome.ProcessOK, outcome.ProcessErr)
+	if err == nil {
 		err = outcome.ProtocolErr
-	default:
-		// A clean outcome keeps err nil.
 	}
 	if err != nil {
 		// Only a process that really started in native mode can have been rejected for it.

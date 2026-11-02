@@ -17,6 +17,7 @@ Rules:
 - Optional finding locations, `findings`, and `context_version` may be null. Line numbers, when supplied, must be positive integers.
 - Any field not listed here is rejected outright — do not add your own.
 - Prose inside `summary`/`detail`/`suggested_change`/`limitations` may be in any language, but the JSON keys and the enum values (`verdict`, `severity`) must be exactly as written here.
+- If a turn ends by yielding into `afm agent wait`, any StructuredOutput call that turn is forced into is ignored: afm resumes you when the wait ends, and you give your result then.
 
 Exact JSON Schema for the `kind:"result"` form:
 

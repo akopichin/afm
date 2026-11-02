@@ -84,6 +84,11 @@ type HelperOutcome struct {
 	// NativeStarted is true only when the process really started in native mode: a failure before the start
 	// cannot be the provider rejecting it.
 	NativeStarted bool
+	// NativeEnforced is true when the CLI forced the model to give the payload after its turn ended in text.
+	NativeEnforced bool
+	// TextBeforeEnforcement is the model's own last text when the CLI forced the payload (NativeEnforced): the
+	// answer the forced payload replaced. Empty when the model wrote no text first or nothing was forced.
+	TextBeforeEnforcement string
 }
 
 // RunHelperAgent runs one helper-agent turn: a fresh, isolated session (no --resume, no AFM_STAGE_DIR, no
@@ -131,6 +136,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	helperCfg.SessionID = ""
 	helperCfg.Resume = false
 	helperCfg.StageDir = ""
+	helperCfg.DialogPhase = ""
 	helperCfg.VerifyMode = false
 	helperCfg.runMode = ModeHelper
 	helperCfg.BrowserMCP = nil // helpers never get the managed browser capability (§7.4)
@@ -145,8 +151,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	he := &Executor{cfg: helperCfg}
 	nativeFallback := he.selectNativeSchema()
 
-	var finalText strings.Builder
-	var haveFinalText, hasPayload bool
+	final := finalAnswer{claudeNative: he.cfg.claudeNativeSchema()}
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(he.cfg.UsageHint)
@@ -160,12 +165,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
-			if payload, found := structuredPayload(line); found && he.cfg.claudeNativeSchema() {
-				// The payload arrives only in the result event, after every text block: it is the answer.
-				finalText.Reset()
-				finalText.WriteString(payload)
-				haveFinalText, hasPayload = true, true
-			} else if isErrorLine(line) {
+			if !final.observeLine(line) && isErrorLine(line) {
 				lg.LogAction("error", line)
 				if firstErr == "" {
 					firstErr = line
@@ -175,10 +175,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		}
 		for _, c := range ev.Message.Content {
 			if c.Type == contentTypeText {
-				// Same "replace, don't append" rule as RunVerifyAgent: only the LAST text block is the answer.
-				finalText.Reset()
-				finalText.WriteString(c.Text)
-				haveFinalText = true
+				final.observeText(c.Text)
 			}
 			if tool, detail, actionOK := contentToAction(c, he.cfg.TruncateOutput); actionOK {
 				tool, detail = red.text(tool), red.text(detail)
@@ -197,7 +194,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	}
 	runErr = he.turnOutcome(limits, runErr, logFile, stderrFrom)
 	lg.LogEnd(runErr)
-	job.noteFinalText(finalText.String())
+	job.noteFinalText(final.answer())
 	he.finishTurn(job, collector, runErr)
 	if firstErr != "" {
 		lg.LogAction("helper-note", "process reported an error line; see log above: "+firstErr)
@@ -207,8 +204,9 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		return HelperOutcome{ProcessErr: limit}, limit
 	}
 
-	outcome := HelperOutcome{StructuredPayload: hasPayload, NativeFallback: nativeFallback, NativeStarted: started && he.cfg.nativeSchemaOn}
-	if he.cfg.claudeNativeSchema() && !hasPayload && runErr == nil {
+	outcome := HelperOutcome{StructuredPayload: final.structured, NativeEnforced: final.enforced, NativeFallback: nativeFallback, NativeStarted: started && he.cfg.nativeSchemaOn}
+	outcome.TextBeforeEnforcement = red.jsonText(final.textBeforeEnforcement)
+	if final.payloadMissing(runErr) {
 		lg.LogAction("helper-note", "native schema mode returned no structured payload; the text answer is validated as usual")
 	}
 	switch {
@@ -224,8 +222,9 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		outcome.ProcessErr = runErr
 	}
 
-	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
-		outcome.RawText = red.jsonText(finalText.String())
+	answered := strings.TrimSpace(final.answer()) != ""
+	if answered {
+		outcome.RawText = red.jsonText(final.answer())
 		if werr := os.WriteFile(resultFile, []byte(outcome.RawText), 0644); werr != nil {
 			return outcome, fmt.Errorf("write result file: %w", werr)
 		}
@@ -234,7 +233,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 	if !outcome.ProcessOK {
 		return outcome, nil
 	}
-	if !haveFinalText || strings.TrimSpace(finalText.String()) == "" {
+	if !answered {
 		outcome.ProtocolErr = errors.New("helper produced no final answer")
 	}
 	return outcome, nil

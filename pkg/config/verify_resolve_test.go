@@ -93,7 +93,7 @@ func TestVerifyCommandRejection_TextOnlyRecipes(t *testing.T) {
 		wantType string
 	}{
 		{"type: openai recipe is text-only, no guaranteed JSON", "mytextonly", config.RecipeTypeOpenAI},
-		{"type: cursor recipe is text-only, no guaranteed JSON", "mycursor", config.RecipeTypeCursor},
+		{"type: cursor recipe has no verified structured verdict", "mycursor", config.RecipeTypeCursor},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,6 +103,46 @@ func TestVerifyCommandRejection_TextOnlyRecipes(t *testing.T) {
 			}
 			if !strings.Contains(got, tt.wantType) {
 				t.Errorf("rejection reason %q does not mention recipe type %q", got, tt.wantType)
+			}
+		})
+	}
+}
+
+// cursor-agent runs a real tool loop now; it stays out of verify only because its structured verdict is unchecked.
+func TestVerifyCommandRejection_CursorReasonIsAnUnverifiedVerdict(t *testing.T) {
+	got := config.VerifyCommandRejection("mycursor", verifyRejectionCfg())
+	if !strings.Contains(got, "structured verdict unverified") || strings.Contains(got, "text-only") {
+		t.Fatalf("VerifyCommandRejection(cursor) = %q, want the unverified structured verdict as the reason", got)
+	}
+}
+
+// The native schema runtime is chosen by these families, never by the browser predicate (which also takes codex).
+func TestCommandFamilies(t *testing.T) {
+	cfg := verifyRejectionCfg()
+	tests := []struct {
+		name                string
+		cmd                 string
+		claude, openAIAgent bool
+	}{
+		{"empty resolves to claude", "", true, false},
+		{"bare claude", config.ClaudeCommand, true, false},
+		{"claude recipe", "myclaude", true, false},
+		{"claude recipe with an implicit type", "implicitclaude", true, false},
+		{"codex recipe", "mycodex", false, false},
+		{"bare codex shim", "codex-as-claude", false, false},
+		{"cursor recipe", "mycursor", false, false},
+		{"text-only openai recipe", "mytextonly", false, false},
+		{"openai-agent recipe", "myagent", false, true},
+		{"bare openai-agent shim", "openai-agent-as-claude", false, true},
+		{"custom command", "my-wrapper", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cfg.IsClaudeFamilyCommand(tt.cmd); got != tt.claude {
+				t.Errorf("IsClaudeFamilyCommand(%q) = %v, want %v", tt.cmd, got, tt.claude)
+			}
+			if got := cfg.IsOpenAIAgentCommand(tt.cmd); got != tt.openAIAgent {
+				t.Errorf("IsOpenAIAgentCommand(%q) = %v, want %v", tt.cmd, got, tt.openAIAgent)
 			}
 		})
 	}

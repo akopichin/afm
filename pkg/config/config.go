@@ -218,7 +218,7 @@ const ClaudeCommand = "claude"
 const (
 	RecipeTypeOpenAI      = "openai"
 	RecipeTypeOpenAIAgent = "openai-agent" // OpenAI-совместимый function calling + реальный tool-loop (см. scripts/openai-agent-as-claude.sh)
-	RecipeTypeCursor      = "cursor"       // Cursor Cloud Agents API (async run-based, не chat completions)
+	RecipeTypeCursor      = "cursor"       // локальный cursor-agent CLI через cursor-agent-as-claude (см. scripts/cursor-agent-as-claude.sh)
 	RecipeTypeCodex       = "codex"        // codex CLI через codex-as-claude (см. scripts/codex-as-claude.sh)
 )
 
@@ -226,15 +226,15 @@ const (
 const AfmDir = ".afm"
 
 type AgentRecipe struct {
-	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "openai-agent" = OpenAI-compatible + real tool-loop; "cursor" = Cursor Cloud Agents API
+	Type         string     `yaml:"type"`          // "" | "claude" = claude (default); "openai" = OpenAI-compatible; "openai-agent" = OpenAI-compatible + real tool-loop; "cursor" = local cursor-agent CLI; url is ignored
 	Model        string     `yaml:"model"`         // claude: --model + DEFAULT_* aliases; openai/openai-agent: OPENAI_MODEL; cursor: CURSOR_MODEL; codex: CODEX_MODEL
-	URL          string     `yaml:"url"`           // optional (claude); required (openai, openai-agent, cursor) — agent gateway
+	URL          string     `yaml:"url"`           // optional (claude); required (openai, openai-agent) — agent gateway; ignored by cursor
 	SystemPrompt string     `yaml:"system_prompt"` // optional; "file:<path>" → --append-system-prompt-file content
 	Auth         RecipeAuth `yaml:"auth"`          // required
 	MaxTurns     int        `yaml:"max_turns"`     // openai-agent only: max tool-call iterations per stage invocation; 0 → script default (40)
 	// Reasoning задаёт уровень рассуждения (minimal..max) для этого рецепта; afm клампит его в механизм семьи
 	// (codex model_reasoning_effort / claude --effort / openai reasoning_effort). Docker-only: врапперы
-	// генерируются только в контейнере. Пусто → не передаётся; cursor игнорирует (нет API).
+	// генерируются только в контейнере. Пусто → не передаётся; cursor игнорирует (у cursor-agent нет такой настройки).
 	Reasoning string `yaml:"reasoning"`
 }
 
@@ -318,9 +318,13 @@ func (r AgentRecipe) Validate() error {
 	if isReservedAuthVarName(r.Auth.EnvVarName()) {
 		return fmt.Errorf("recipe: auth.to env var %q is reserved for afm control/transport, cannot be used for auth", r.Auth.EnvVarName())
 	}
-	// openai, openai-agent и cursor — внешние шлюзы: url обязателен, auth.to не
-	// ограничен ClaudeAuthEnvVars (используют свои env vars: OPENAI_API_KEY, CURSOR_API_KEY и т.д.).
-	if r.Type == RecipeTypeOpenAI || r.Type == RecipeTypeOpenAIAgent || r.Type == RecipeTypeCursor {
+	// cursor — локальный CLI без шлюза: url не нужен, auth.to не ограничен ClaudeAuthEnvVars (CURSOR_API_KEY).
+	if r.Type == RecipeTypeCursor {
+		return nil
+	}
+	// openai и openai-agent — внешние шлюзы: url обязателен, auth.to не ограничен ClaudeAuthEnvVars
+	// (используют свои env vars: OPENAI_API_KEY и т.д.).
+	if r.Type == RecipeTypeOpenAI || r.Type == RecipeTypeOpenAIAgent {
 		if r.URL == "" {
 			return fmt.Errorf("recipe: url is required for type: %s", r.Type)
 		}

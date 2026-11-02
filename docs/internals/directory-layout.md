@@ -29,6 +29,8 @@
         <phase>.q<N>.question.json   # agent's question
         <phase>.q<N>.answer.json     # user's answer
         <phase>.dialog.jsonl         # dialog history for the UI
+        # AI verify (verify/<id>/step-NN/) and helper turns keep a provenance receipt for every answer:
+        output.recovery.json         # verify step; helper turns write turn-<N>-output.recovery.json
   side-agent/
     <run-name>-<ts>-<rand>/    # dashboard side-agent chat, keyed by run id
       chat.jsonl     # side conversation journal — its own seq, not part of events.jsonl

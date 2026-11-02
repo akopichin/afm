@@ -36,8 +36,10 @@ Phase is inferred from context afm itself provides, not from prompt wording:
 - **autonomous** (`agents: [auto]`): `AFM_STAGE_DIR` env var is set for this
   phase and the prompt mentions `execution_summary.md` → write it there.
 - **interactive dialog** (any phase with `AFM_STAGE_DIR` set, i.e.
-  `interactive: true` stages): write `<phase>.<id>.question.json` into
-  `$AFM_STAGE_DIR`, poll for `<phase>.<id>.answer.json`, then proceed.
+  `interactive: true` stages): `afm stage ask` (question text on stdin, one
+  `--option` per answer), then `afm stage wait-answer` (exit 75 = no answer
+  yet, run it again), then proceed. The commands write
+  `<phase>.<id>.question.json` into `$AFM_STAGE_DIR` and read the answer file.
 - **default** (non-interactive planning/review): just emit assistant text
   with `## Tasks` / `## Assumptions` / `## Acceptance Criteria` headings —
   `RunPlanning` writes the collected text to `plan.md` itself when no

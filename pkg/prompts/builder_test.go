@@ -106,13 +106,11 @@ func TestBuild_InteractivePrintsAbsolutePathAndNowhereElse(t *testing.T) {
 	if !strings.Contains(out, fmt.Sprintf("%q", stageDir)) {
 		t.Errorf("interactive prompt should contain quoted absolute stage dir %q:\n%s", stageDir, out)
 	}
-	// Явный запрет писать куда-либо ещё (точная формулировка из builder.go).
-	if !strings.Contains(out, "NOWHERE ELSE") {
-		t.Errorf("interactive prompt should say 'NOWHERE ELSE':\n%s", out)
-	}
-	// Путь для записи вопроса.
-	if !strings.Contains(out, "planning.q<N>.question.json") {
-		t.Errorf("interactive prompt should show question file path:\n%s", out)
+	// Основной путь — команды; путь вопроса остаётся только в резервном блоке.
+	for _, want := range []string{"afm stage ask", "afm stage wait-answer", "planning.q<N>.question.json"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("interactive prompt should contain %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -127,14 +125,35 @@ func TestBuild_InteractiveRobustnessInstructions(t *testing.T) {
 	out := Build(in)
 
 	for _, want := range []string{
+		"timeout set to at least 120 seconds",
+		"Exit 75",
+		"Run the EXACT SAME command again",
 		"EXPECTED and is NOT a signal to stop",
-		"Keep re-launching it until the answer file appears",
+		"Fix the call as the message says",
+		"Do NOT switch to writing files by hand because of such an error",
 		"Do NOT use ScheduleWakeup, background tasks, async waits",
 		"Do NOT write to plan.md / output artifact yet",
+		"Fallback, ONLY if `afm stage ask` itself is unavailable",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("interactive prompt should contain %q:\n%s", want, out)
 		}
+	}
+}
+
+// Ручная запись файлов — короткий блок в конце правил, после основного пути с командами.
+func TestBuild_InteractiveFallbackComesLast(t *testing.T) {
+	out := Build(Inputs{
+		Template: "RULES", Stage: flow.Stage{ID: "x", Name: "X"}, PhaseAgent: AgentPlanning,
+		StageDir: t.TempDir(), Interactive: true,
+	})
+	rules := out[strings.Index(out, "<interactive_rules>"):strings.Index(out, "</interactive_rules>")]
+	ask, fallback, file := strings.Index(rules, "afm stage ask"), strings.Index(rules, "Fallback, ONLY"), strings.Index(rules, "question.json")
+	if ask < 0 || fallback < ask || file < fallback {
+		t.Fatalf("order ask=%d fallback=%d file=%d, want commands, then fallback, then file paths:\n%s", ask, fallback, file, rules)
+	}
+	if !strings.Contains(rules, "<<'EOF'\n## Full context here") {
+		t.Errorf("heredoc example must start at column 0 so it can be copied:\n%s", rules)
 	}
 }
 
@@ -149,11 +168,8 @@ func TestBuild_InteractivePrefixIsPhaseNotStageID(t *testing.T) {
 	out := Build(in)
 
 	for _, want := range []string{
-		// Явно называет ловушку: префикс — это фаза, не id стадии.
-		`the prefix is EXACTLY "planning". It is NOT the stage id`,
-		// Инлайн-пример с реальным id текущей стадии.
-		`This stage is called "commit-changes" — but the file prefix is still "planning"`,
-		`FORBIDDEN: writing "commit-changes".q<N>.question.json`,
+		// Резервный путь называет ловушку: префикс — это фаза, не id стадии.
+		`The prefix is EXACTLY "planning" — NOT the stage id "commit-changes"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("interactive prompt should contain %q:\n%s", want, out)
@@ -175,9 +191,9 @@ func TestBuild_InteractiveRules_ForbidsBatchQuestions(t *testing.T) {
 	}
 	out := Build(in)
 	for _, want := range []string{
-		"Write ONLY ONE question file at a time",
-		"do NOT write the next question until",
-		"afm accepts an answer only to the OLDEST unanswered question",
+		"Ask ONE question at a time",
+		"wait for its answer before the next",
+		"question_pending means an earlier question is still open",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("interactive_rules missing %q", want)

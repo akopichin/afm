@@ -335,7 +335,7 @@
         },
         "url": {
           "type": "string",
-          "description": "Agent gateway URL (required for openai/openai-agent/cursor)."
+          "description": "Agent gateway URL (required for openai/openai-agent; ignored by cursor, which runs the local cursor-agent CLI)."
         },
         "system_prompt": {
           "type": "string",

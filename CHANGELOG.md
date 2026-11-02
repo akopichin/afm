@@ -3,6 +3,56 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-02
+
+### Improvement: agents ask questions with `afm stage ask` and `afm stage wait-answer`
+
+A stage agent no longer writes question and answer files by hand. `afm stage ask`
+takes the question text on stdin (with `--option` and `--allow-custom`), picks the
+next id, checks the question and creates it; `afm stage wait-answer` returns the
+answer, or exit 75 after `--timeout` (default `AFM_WAIT_ANSWER_TIMEOUT`, else 100 s)
+so the agent runs the same command again. A mistake in the call exits 1 with
+`{"error","message"}` naming the field, where the agent can fix it. Asking the same
+question twice returns the same id. The commands work for the stage's own agent
+only (`AFM_DIALOG_PHASE` is set for it, not for verify or helpers), and afm puts its
+own binary first in the agents' `PATH`. The `<interactive_rules>` prompt now teaches
+these commands and keeps hand-written files as a short fallback; the dialog files
+and the dashboard poller are unchanged. See
+[Interactive stages](docs/interactive-stages.md).
+
+### Improvement: verify and helpers answer in the CLI's native schema mode
+
+Verify steps and helpers that cannot delegate ask the CLI for its own structured
+output, so a format mistake is caught while the agent is still answering: `claude`
+(and any claude-family recipe, whatever the provider) with `--json-schema`, codex
+with `--output-schema`, and openai-agent through a schema check in its tool loop.
+A `pass` the CLI had to force out of a verifier is not accepted: the step is re-run
+once with the schema in the prompt only, without spending the correction budget. If a
+provider refuses native mode, the step falls back the same way. Every verify step
+and helper turn now writes an `output.recovery.json` receipt that records whether
+the answer was `native`, `prompt`, `repair` or `format_agent`. The original contract
+remains the only gate; local repair and the format agent stay as the last resort.
+See [AI verify](docs/verify.md#native-schema-mode) and
+[Collaboration](docs/collaboration.md#helper-answers-and-protocol-errors).
+
+### Improvement: openai-agent gives the model feedback about malformed output
+
+The `openai-agent` adapter answers a tool call with invalid `arguments` with a tool
+error instead of running an empty command, and checks its final answer against the
+required schema (`afm schema validate`), asking the model to correct it up to twice.
+It also defaults `AFM_WAIT_ANSWER_TIMEOUT` to 600 seconds.
+
+### Improvement: `type: cursor` runs the local `cursor-agent`
+
+The `cursor` recipe type now runs the `cursor-agent` CLI baked into the Docker image
+(version `2026.10.22-27dcf5f`, installed by `scripts/install-cursor-agent.sh` after a
+sha256 check) with `CURSOR_API_KEY` from `auth`, never in argv or logs. A run that
+exits with an error or without a successful result fails instead of reporting success.
+`url` is ignored and no longer required. **The Cursor Cloud Agents API adapter
+(`scripts/cursor-as-claude.sh`, `CURSOR_BASE_URL`) is removed.** `cursor` is still not
+accepted as a verify command: its structured verdict is unverified. See
+[Docker mode](docs/docker.md#non-claude-agents-in-docker-autoshim).
+
 ## 2026-11-01
 
 ### Improvement: larger text and compact panels in the dashboard

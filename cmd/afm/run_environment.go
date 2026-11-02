@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 
 	"github.com/akopichin/afm/pkg/browser"
@@ -21,15 +23,69 @@ type runEnvironment struct {
 	MemoryDir       string
 	WrapperDir      string
 	GeneratedAgents map[string]bool
+	// AfmBinDir holds the `afm` link put first on this process's PATH; OriginalPath is restored on Close.
+	AfmBinDir    string
+	OriginalPath string
 }
 
 func (e runEnvironment) Close() {
 	if e.WrapperDir != "" {
 		_ = os.RemoveAll(e.WrapperDir)
 	}
+	if e.AfmBinDir != "" {
+		_ = os.Setenv("PATH", e.OriginalPath)
+		_ = os.RemoveAll(e.AfmBinDir)
+	}
 }
 
+// prepareRunEnvironment resolves the run's directories and puts this afm first on PATH for every agent.
 func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, worktreeDir string) (runEnvironment, error) {
+	env, err := resolveRunEnvironment(afmRoot, f, cfg, worktreeDir)
+	if err != nil {
+		return env, err
+	}
+	env.AfmBinDir, env.OriginalPath = installAfmOnPath()
+	return env, nil
+}
+
+// installAfmOnPath makes `afm` in agents' shells this very binary: the afm on the user's PATH may be an older
+// release without the commands the prompts mention. Nothing is installed when PATH already resolves afm to
+// this binary, or when the link cannot be made (the agent then uses whatever afm it finds).
+func installAfmOnPath() (dir, originalPath string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", ""
+	}
+	if exe, err = filepath.EvalSymlinks(exe); err != nil {
+		return "", ""
+	}
+	if found, err := exec.LookPath("afm"); err == nil && isSameFile(found, exe) {
+		return "", ""
+	}
+	dir, err = os.MkdirTemp("", "afm-bin-")
+	if err != nil {
+		return "", ""
+	}
+	name := "afm"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.Symlink(exe, filepath.Join(dir, name)); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", ""
+	}
+	originalPath = os.Getenv("PATH")
+	_ = os.Setenv("PATH", dir+string(os.PathListSeparator)+originalPath)
+	return dir, originalPath
+}
+
+func isSameFile(a, b string) bool {
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
+}
+
+func resolveRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, worktreeDir string) (runEnvironment, error) {
 	var env runEnvironment
 	// Absolute: the root, memory and wrapper paths reach agents whose CWD may be a worktree.
 	afmRoot, err := filepath.Abs(afmRoot)

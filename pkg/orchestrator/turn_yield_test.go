@@ -29,15 +29,15 @@ func TestTurnYielded_ReadyWaitNeedsAnAbsentFinalText(t *testing.T) {
 	if o.hasOpenMeshWaitFor(waiter) {
 		t.Fatal("setup: the wait should already be ready")
 	}
-	if !o.turnYielded(waiter, before, "") {
+	if !o.turnYielded(waiter, before, "", false) {
 		t.Fatal("no final text after registering a wait is a yield")
 	}
-	if o.turnYielded(waiter, before, "{not json") {
+	if o.turnYielded(waiter, before, "{not json", false) {
 		t.Fatal("a non-empty malformed answer is a protocol error, not a yield")
 	}
 
 	// An empty exit after waits that all ended before the turn is a protocol error, not a rerun.
-	if o.turnYielded(waiter, o.meshWaitStatusesOf(waiter), "") {
+	if o.turnYielded(waiter, o.meshWaitStatusesOf(waiter), "", false) {
 		t.Fatal("no final text after the waits already ended is not a yield")
 	}
 }

@@ -72,7 +72,7 @@ func TestOutputRecovery_PreservationAndBudget(t *testing.T) {
 			if !bytes.Equal(raw, original) {
 				t.Fatal("raw mutated")
 			}
-			if tc.accepted && (got.Provenance.Source != "model_format" || got.Provenance.Contract != schema.AssistantResult || got.Provenance.Owner != "task/t1/turn/1" || got.Provenance.Validation != "accepted") {
+			if tc.accepted && (got.Provenance.Source != sourceFormatAgent || got.Provenance.Contract != schema.AssistantResult || got.Provenance.Owner != "task/t1/turn/1" || got.Provenance.Validation != "accepted") {
 				t.Fatalf("provenance=%+v", got.Provenance)
 			}
 		})
@@ -86,7 +86,7 @@ func TestOutputRecovery_FindingDetailLinesJoinedByFormatter(t *testing.T) {
 	got, err := recoverOutput(context.Background(), schema.AssistantResult, "t", []byte(raw), assistantOutputValidator, 1, func(context.Context, schema.Contract, string, int) ([]byte, error) {
 		return []byte(candidate), nil
 	})
-	if err != nil || got.Provenance.Source != "model_format" {
+	if err != nil || got.Provenance.Source != sourceFormatAgent {
 		t.Fatalf("err=%v provenance=%+v", err, got.Provenance)
 	}
 }
@@ -138,7 +138,7 @@ func TestOutputRecovery_LocalRedesignNoModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env.Result.Verdict != assistants.VerdictNeedsChanges || len(env.Result.Findings) != 7 || got.Provenance.Source != "schema_normalization" {
+	if env.Result.Verdict != assistants.VerdictNeedsChanges || len(env.Result.Findings) != 7 || got.Provenance.Source != sourceRepair || got.Provenance.RepairKind != "schema_normalization" {
 		t.Fatalf("result=%+v metadata=%+v", env.Result, got.Provenance)
 	}
 }
@@ -754,7 +754,7 @@ func TestHelperOutputRecovery_RawSurvivesNextTurn(t *testing.T) {
 		if err != nil || json.Unmarshal(data, &receipt) != nil {
 			t.Fatalf("missing receipt: %s %v", data, err)
 		}
-		if receipt.RawHash != fmt.Sprintf("%x", sha256.Sum256(saved)) || receipt.Source != "model_format" || receipt.Validation != "accepted" {
+		if receipt.RawHash != fmt.Sprintf("%x", sha256.Sum256(saved)) || receipt.Source != sourceFormatAgent || receipt.Validation != "accepted" {
 			t.Fatalf("raw/receipt mismatch: %+v", receipt)
 		}
 		want := recoveryHelperRaw
@@ -826,7 +826,7 @@ func TestOutputRecovery_NumericVersionPreservation(t *testing.T) {
 				raw = strings.Replace(raw, `"schema_version":1`, `"schema_version":`+pair[0], 1)
 				fixed = strings.Replace(fixed, `"schema_version":1`, `"schema_version":`+pair[1], 1)
 				got, err := recoverOutput(context.Background(), contract, "test", []byte(raw), validator, 1, func(context.Context, schema.Contract, string, int) ([]byte, error) { return []byte(fixed), nil })
-				if err != nil || got.Provenance.Source != "model_format" {
+				if err != nil || got.Provenance.Source != sourceFormatAgent {
 					t.Fatalf("equivalent numeric spelling rejected: %v %+v", err, got.Provenance)
 				}
 			})
@@ -943,11 +943,7 @@ func formatterNativeRequests(t *testing.T, o *Orchestrator, cmd string, contract
 
 func TestOutputFormatter_NativeSchemaOnFirstAttemptOnly(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, true)
-	o.opts.Config.Docker.Agents = map[string]config.AgentRecipe{
-		"codex-recipe": {Type: config.RecipeTypeCodex},
-		"glm51":        {Type: config.ClaudeCommand},
-		"openai-text":  {Type: config.RecipeTypeOpenAI},
-	}
+	o.opts.Config.Docker.Agents = nativeFamilyRecipes()
 	for _, tc := range []struct {
 		name, cmd string
 		contract  schema.Contract
@@ -956,10 +952,11 @@ func TestOutputFormatter_NativeSchemaOnFirstAttemptOnly(t *testing.T) {
 		{"claude", "claude", schema.VerifyResult, executor.SchemaRuntimeClaude},
 		{"claude question", "claude", schema.Question, executor.SchemaRuntimeClaude},
 		{"empty command is claude", "", schema.VerifyResult, executor.SchemaRuntimeClaude},
-		{"codex shim", "codex-as-claude", schema.AssistantResult, executor.SchemaRuntimeCodex},
+		{"codex shim", "codex-as-claude", schema.AssistantResultOnly, executor.SchemaRuntimeCodex},
 		{"codex recipe", "codex-recipe", schema.VerifyResult, executor.SchemaRuntimeCodex},
-		// A claude recipe is requested like claude: the executor itself rejects wrappers it has not verified.
 		{"claude recipe", "glm51", schema.VerifyResult, executor.SchemaRuntimeClaude},
+		{"openai-agent recipe", "agent-recipe", schema.VerifyResult, executor.SchemaRuntimeOpenAIAgent},
+		{"delegation has no variant", "codex-as-claude", schema.AssistantResult, ""},
 		{"text-only recipe", "openai-text", schema.VerifyResult, ""},
 		{"unknown command", "helper-cmd", schema.VerifyResult, ""},
 	} {
@@ -977,9 +974,9 @@ func TestOutputFormatter_NativeSchemaOnFirstAttemptOnly(t *testing.T) {
 				}
 				return
 			}
-			want := executor.NativeSchema{Runtime: tc.runtime, Schema: schema.JSON(tc.contract)}
-			if requests[0] == nil || *requests[0] != want {
-				t.Fatalf("first attempt = %+v, want the %s contract schema for %s", requests[0], tc.contract, tc.runtime)
+			want := o.nativeSchemaFor(tc.cmd, tc.contract)
+			if requests[0] == nil || want == nil || *requests[0] != *want || requests[0].Runtime != tc.runtime {
+				t.Fatalf("first attempt = %+v, want the %s form of the %s contract", requests[0], tc.runtime, tc.contract)
 			}
 		})
 	}
@@ -992,7 +989,9 @@ func TestOutputFormatterConfig_NeverCarriesNativeSchema(t *testing.T) {
 	}
 }
 
-func TestOutputRecovery_RequestedNativeNotApplied(t *testing.T) {
+// Native mode reaches the process for every contract with a variant, whatever the provider behind a claude-family
+// command; a refusal there costs one prompt-only rerun of the same attempt. Delegation stays prompt-only.
+func TestOutputRecovery_NativeModeReachesTheProcess(t *testing.T) {
 	for _, tc := range []struct {
 		name, command string
 		contract      schema.Contract
@@ -1000,30 +999,27 @@ func TestOutputRecovery_RequestedNativeNotApplied(t *testing.T) {
 		wantNative    bool
 	}{
 		{"claude helper", "claude", schema.AssistantResult, false, false},
-		{"claude result only", "claude", schema.AssistantResultOnly, false, false},
-		{"claude verify", "claude", schema.VerifyResult, false, false},
-		{"claude question native", "claude", schema.Question, false, true},
+		{"claude result only", "claude", schema.AssistantResultOnly, false, true},
+		{"claude verify", "claude", schema.VerifyResult, false, true},
+		{"claude question", "claude", schema.Question, false, true},
 		{"codex helper", "codex-as-claude", schema.AssistantResult, false, false},
-		{"codex result only", "codex-as-claude", schema.AssistantResultOnly, false, false},
-		{"codex verify", "codex-as-claude", schema.VerifyResult, false, false},
-		{"codex question", "codex-as-claude", schema.Question, false, false},
-		{"unverified command", "glm51", schema.Question, false, false},
-		{"unverified provider", "claude", schema.Question, true, false},
+		{"codex result only", "codex-as-claude", schema.AssistantResultOnly, false, true},
+		{"codex verify", "codex-as-claude", schema.VerifyResult, false, true},
+		{"codex question", "codex-as-claude", schema.Question, false, true},
+		{"claude recipe", "glm51", schema.Question, false, true},
+		{"third-party provider", "claude", schema.Question, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			callsFile := filepath.Join(dir, "calls")
 			t.Setenv("OUTPUT_FORMAT_CALLS", callsFile)
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-			t.Setenv("CLAUDE_CONFIG_DIR", dir)
-			for _, name := range []string{"ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"} {
-				t.Setenv(name, "")
-			}
 			if tc.provider {
 				t.Setenv("ANTHROPIC_BASE_URL", "https://provider.example/anthropic")
 			}
 			script := `#!/bin/sh
 mode=plain
+if [ -n "$AFM_OUTPUT_SCHEMA_FILE" ]; then mode=native; fi
 for arg do
   if [ "$arg" = --json-schema ]; then mode=native; fi
 done
@@ -1041,9 +1037,6 @@ exit 1
 			calls := 0
 			o.runOutputFormat = func(ctx context.Context, cfg executor.Config, prompt, logFile, resultFile string) ([]byte, error) {
 				calls++
-				if calls == 1 && cfg.NativeSchema == nil {
-					t.Fatal("first call did not request native mode")
-				}
 				return execOutputFormat(ctx, cfg, prompt, logFile, resultFile)
 			}
 			raw, validate := recoveryHelperRaw, outputValidator(assistantOutputValidator)
@@ -1100,7 +1093,7 @@ func TestOutputRecovery_NativeFailureFallsBackSameAttempt(t *testing.T) {
 		raw, fixed string
 		validate   outputValidator
 	}{
-		{"helper", schema.AssistantResult, recoveryHelperRaw, recoveryHelperFixed, assistantOutputValidator},
+		{"helper", schema.AssistantResultOnly, recoveryHelperRaw, recoveryHelperFixed, assistantOutputValidator},
 		{"verify", schema.VerifyResult, recoveryVerifyRaw, recoveryVerifyFixed, verifyOutputValidator},
 		{"question", schema.Question, `{"question":"Pick","options":"one"}`, `{"question":"Pick","options":["one"]}`, questionOutputValidator},
 	} {
@@ -1108,30 +1101,45 @@ func TestOutputRecovery_NativeFailureFallsBackSameAttempt(t *testing.T) {
 			o, _ := newAssistantsTestOrchestrator(t, true)
 			var native []bool
 			var firstCtx context.Context
-			var firstLog, firstResult string
 			o.runOutputFormat = func(ctx context.Context, cfg executor.Config, prompt, logFile, resultFile string) ([]byte, error) {
 				native = append(native, cfg.NativeSchema != nil)
 				if !strings.Contains(prompt, schema.JSON(tc.contract)) {
 					t.Fatal("fallback lost schema in prompt")
 				}
+				mode := "prompt-only"
 				if cfg.NativeSchema != nil {
-					firstCtx, firstLog, firstResult = ctx, logFile, resultFile
+					mode = "native"
+				}
+				for _, path := range []string{logFile, strings.TrimSuffix(logFile, ".log") + ".jsonl", resultFile} {
+					if err := os.WriteFile(path, []byte(mode), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if cfg.NativeSchema != nil {
+					firstCtx = ctx
 					return nil, &nativeSchemaError{&executor.TerminalResultError{APIErrorStatus: 400, Message: "schema rejected"}}
 				}
 				if ctx != firstCtx {
 					t.Error("fallback reset the attempt timeout")
 				}
-				if logFile == firstLog || resultFile == firstResult {
-					t.Error("fallback overwrites native failure artifacts")
-				}
 				return []byte(tc.fixed), nil
 			}
 			cfg := o.outputFormatterConfig("claude", assistantsTestStageID)
-			got, err := recoverOutput(context.Background(), tc.contract, "t", []byte(tc.raw), tc.validate, 1, o.outputFormatter(cfg, t.TempDir(), "output", ""))
+			dir := t.TempDir()
+			got, err := recoverOutput(context.Background(), tc.contract, "t", []byte(tc.raw), tc.validate, 1, o.outputFormatter(cfg, dir, "output", ""))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Provenance.Attempts != 1 || got.Provenance.Source != "model_format" || got.Provenance.Validation != "accepted" || string(got.Candidate) != tc.fixed {
+			// The native run's files stay as *.native.* evidence; the rerun writes the attempt's own names.
+			for name, want := range map[string]string{
+				"output.format-1.native.log": "native", "output.format-1.native.jsonl": "native", "output.format-1.raw.native.json": "native",
+				"output.format-1.log": "prompt-only", "output.format-1.jsonl": "prompt-only", "output.format-1.raw.json": "prompt-only",
+			} {
+				if data, readErr := os.ReadFile(filepath.Join(dir, name)); readErr != nil || string(data) != want {
+					t.Errorf("%s = %q (%v), want %q", name, data, readErr, want)
+				}
+			}
+			if got.Provenance.Attempts != 1 || got.Provenance.Source != sourceFormatAgent || got.Provenance.Validation != "accepted" || string(got.Candidate) != tc.fixed {
 				t.Fatalf("recovery=%+v candidate=%s", got.Provenance, got.Candidate)
 			}
 			if len(native) != 2 || !native[0] || native[1] {
@@ -1153,7 +1161,7 @@ func TestOutputRecovery_NativeFailureBothModesFail(t *testing.T) {
 		return nil, plainErr
 	}
 	cfg := o.outputFormatterConfig("claude", assistantsTestStageID)
-	got, err := recoverOutput(context.Background(), schema.AssistantResult, "t", []byte(recoveryHelperRaw), assistantOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, t.TempDir(), "output", ""))
+	got, err := recoverOutput(context.Background(), schema.AssistantResultOnly, "t", []byte(recoveryHelperRaw), assistantOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, t.TempDir(), "output", ""))
 	var runErr *outputRunError
 	if !errors.As(err, &runErr) || !errors.Is(err, plainErr) || got.Provenance.Attempts != 1 {
 		t.Fatalf("err=%v provenance=%+v", err, got.Provenance)
@@ -1219,7 +1227,7 @@ func TestOutputFormatter_NativeCandidateStillChecked(t *testing.T) {
 		return []byte(recoveryHelperFixed), nil
 	}
 	cfg := o.outputFormatterConfig("claude", assistantsTestStageID)
-	got, err := recoverOutput(context.Background(), schema.AssistantResult, "t", []byte(recoveryHelperRaw), assistantOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, t.TempDir(), "output", ""))
+	got, err := recoverOutput(context.Background(), schema.AssistantResultOnly, "t", []byte(recoveryHelperRaw), assistantOutputValidator, outputFormatAttempts, o.outputFormatter(cfg, t.TempDir(), "output", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1600,10 +1608,6 @@ func TestHelperTurnPreparation_StaleRawClearFailureOfSupersededTurnRequeues(t *t
 func TestOutputRecovery_NativeStartFailureIsNotRetried(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("CLAUDE_CONFIG_DIR", dir)
-	for _, name := range []string{"ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"} {
-		t.Setenv(name, "")
-	}
 	// Found on PATH, but exec fails: native mode is selected and cmd.Start returns ErrAgentStart.
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/afm-no-such-interpreter\n"), 0o755); err != nil {
 		t.Fatal(err)

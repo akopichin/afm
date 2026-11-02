@@ -36,14 +36,12 @@ func (o *Orchestrator) jobConfig(meta agentjobs.JobMeta, waiter agentcomm.Partic
 	return cfg
 }
 
-// turnYieldCheck decides a clean exit exactly as the runtime will after it: a stage author parks for the waits
-// of its turn's episode, a helper yields unless it answered. The waits are read now, before the process starts.
-func (o *Orchestrator) turnYieldCheck(waiter agentcomm.ParticipantID, author bool) func(finalText string) bool {
+// turnYieldCheck decides a clean exit exactly as the runtime will after it (turnYielded): a stage author and a
+// helper in native schema mode park for the waits of the turn's episode (byWaits), any other helper yields unless
+// it answered. The waits are read now, before the process starts.
+func (o *Orchestrator) turnYieldCheck(waiter agentcomm.ParticipantID, byWaits bool) func(finalText string) bool {
 	before := o.meshWaitStatusesOf(waiter)
-	if author {
-		return func(string) bool { return len(o.turnEpisode(waiter, before)) > 0 }
-	}
-	return func(finalText string) bool { return o.turnYielded(waiter, before, finalText) }
+	return func(finalText string) bool { return o.turnYielded(waiter, before, finalText, byWaits) }
 }
 
 // jobSegment places a job on the run's active timeline as the run state knows it at the job's start. A run that

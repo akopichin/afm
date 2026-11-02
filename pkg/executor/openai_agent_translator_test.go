@@ -62,7 +62,10 @@ echo $((n + 1)) > %q
 func runAgentScript(t *testing.T, fakeCurlDir, prompt string, extraEnv ...string) (stdout string, err error) {
 	t.Helper()
 	cmd := exec.Command("bash", agentScriptPath(t))
+	// The shim's control variables come from the test, never from the environment go test inherited.
 	env := append(os.Environ(),
+		"AFM_OUTPUT_SCHEMA_FILE=",
+		"AFM_WAIT_ANSWER_TIMEOUT=",
 		"PATH="+fakeCurlDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"OPENAI_API_KEY=test",
 		"OPENAI_BASE_URL=http://fake/v1",

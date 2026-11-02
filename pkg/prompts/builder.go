@@ -88,43 +88,7 @@ func Build(in Inputs) string {
 		if abs, err := filepath.Abs(in.StageDir); err == nil && abs != "" {
 			stageDir = abs
 		}
-		sb.WriteString("\n\n<interactive_rules>\n")
-		sb.WriteString("Use the file-based dialog protocol to ask the user questions.\n")
-		fmt.Fprintf(&sb, "Your stage directory is AFM_STAGE_DIR=%q\n\n", stageDir)
-		// Полностью развёрнутые имена файлов + адресный constraint против подстановки id стадии вместо фазы.
-		sb.WriteString("The dialog files use a FIXED filename prefix that is ALWAYS the literal phase word below.\n")
-		fmt.Fprintf(&sb, "  Question file: %s.q<N>.question.json\n", in.PhaseAgent)
-		fmt.Fprintf(&sb, "  Answer file:   %s.q<N>.answer.json\n", in.PhaseAgent)
-		fmt.Fprintf(&sb, "CONSTRAINT: the prefix is EXACTLY %q. It is NOT the stage id, stage name, or feature name.\n", in.PhaseAgent)
-		fmt.Fprintf(&sb, "  This stage is called %q — but the file prefix is still %q, not the stage id.\n", in.Stage.ID, in.PhaseAgent)
-		fmt.Fprintf(&sb, "  FORBIDDEN: writing %q.q<N>.question.json or any prefix other than %q.\n", in.Stage.ID, in.PhaseAgent)
-		sb.WriteString("Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).\n\n")
-		sb.WriteString("For each question:\n")
-		sb.WriteString("0. BEFORE writing any question file, read the real stage dir from the environment:\n")
-		sb.WriteString("   Run Bash: echo \"$AFM_STAGE_DIR\"\n")
-		sb.WriteString("   Capture the printed value (call it STAGE_DIR). Example output: /some/path/runs/my-flow-20240101-120000/my-stage\n")
-		fmt.Fprintf(&sb, "   CONSTRAINT: you MUST write the question file to exactly STAGE_DIR/%s.q<N>.question.json.\n", in.PhaseAgent)
-		sb.WriteString("   FORBIDDEN: writing to any path you did not obtain from echo above.\n")
-		sb.WriteString("   FORBIDDEN: constructing or guessing the path from cwd, flow name, or timestamps.\n")
-		sb.WriteString("1. Write the question file using the Write tool:\n")
-		fmt.Fprintf(&sb, "   Path: <STAGE_DIR from step 0>/%s.q<N>.question.json\n", in.PhaseAgent)
-		sb.WriteString("   Write the file to this path and NOWHERE ELSE.\n")
-		sb.WriteString("   Content: {\"id\":\"qN\",\"question\":\"## Full context here\\n\\nYour question?\",\"options\":[\"A\",\"B\"],\"allow_custom\":true}\n")
-		sb.WriteString("   Put ALL context in 'question': descriptions, trade-offs, examples. Use markdown freely.\n")
-		sb.WriteString("2. Wait for the answer via a blocking Bash polling loop:\n")
-		fmt.Fprintf(&sb, "   while [ ! -f \"$AFM_STAGE_DIR/%s.qN.answer.json\" ]; do sleep 15; done && cat \"$AFM_STAGE_DIR/%s.qN.answer.json\"\n", in.PhaseAgent, in.PhaseAgent)
-		sb.WriteString("3. The polling loop may be cut short by a command timeout after a few minutes — this is EXPECTED and is NOT a signal to stop.\n")
-		sb.WriteString("   When that happens, immediately run the EXACT SAME polling-loop command again. Keep re-launching it until the answer file appears.\n")
-		fmt.Fprintf(&sb, "4. You MUST keep waiting until $AFM_STAGE_DIR/%s.qN.answer.json exists. Do NOT end your turn, do NOT stop, do NOT write \"I'll wait\" and return control.\n", in.PhaseAgent)
-		sb.WriteString("5. Do NOT use ScheduleWakeup, background tasks, async waits, or \"wait for a notification\" — those mechanisms DO NOT EXIST here. The ONLY way to receive the user's answer is the blocking Bash polling loop above.\n")
-		sb.WriteString("6. Do NOT write to plan.md / output artifact yet — finish waiting for and processing all answers first, then produce the artifact in one go.\n")
-		sb.WriteString("Ask ONE question at a time. Write ONLY ONE question file at a time.\n")
-		fmt.Fprintf(&sb, "  After writing %s.q<N>.question.json, WAIT for its %s.q<N>.answer.json (step 2) before writing the next question — do NOT write the next question until the current one is answered.\n", in.PhaseAgent, in.PhaseAgent)
-		sb.WriteString("  If you have several questions for this round, either ask them ONE BY ONE (recommended), or combine them into a SINGLE question file with numbered sub-questions inside 'question' and let the user answer them together.\n")
-		sb.WriteString("  Note: afm accepts an answer only to the OLDEST unanswered question — any extra question files you write ahead of time are ignored until the earlier ones are answered, so writing a batch will stall you.\n")
-		sb.WriteString("Question JSON Schema (the filename owns the question ID):\n")
-		sb.WriteString(schema.JSON(schema.Question))
-		sb.WriteString("\n</interactive_rules>\n")
+		writeInteractiveRules(&sb, in, stageDir)
 	}
 
 	// Контракт публикации картинки в ленту: агент может показать пользователю файл-изображение, атомарно
@@ -272,6 +236,38 @@ var tagReplacer = strings.NewReplacer(
 	"</agent_communication>", "</\u200bagent_communication>",
 	"<agent_communication>", "<\u200bagent_communication>",
 )
+
+// writeInteractiveRules explains the dialog: the afm commands are the main path (they validate and number the
+// question themselves), hand-written files are only a fallback for an unavailable command.
+func writeInteractiveRules(sb *strings.Builder, in Inputs, stageDir string) {
+	sb.WriteString("\n\n<interactive_rules>\n")
+	sb.WriteString("Ask the user questions with the two afm commands below. They pick the question id, write the file and check the question, so you never write dialog files yourself.\n")
+	fmt.Fprintf(sb, "Your stage directory is AFM_STAGE_DIR=%q (the commands read it from the environment).\n\n", stageDir)
+	sb.WriteString("1. Ask: pass the question text on stdin and one --option per answer option (the heredoc lines start at column 0):\n")
+	sb.WriteString("afm stage ask --option \"A\" --option \"B\" <<'EOF'\n")
+	sb.WriteString("## Full context here\n\nYour question?\n")
+	sb.WriteString("EOF\n")
+	sb.WriteString("   Put ALL context in the text: descriptions, trade-offs, examples. Use markdown freely.\n")
+	sb.WriteString("   Options are optional; add --allow-custom=false only when the user must pick one of them.\n")
+	sb.WriteString("   It prints {\"id\":\"qN\",\"wait\":\"afm stage wait-answer qN\"}. Asking the same question again returns the same id, so repeating the command is safe.\n")
+	sb.WriteString("2. Wait: run the printed wait command with the Bash tool timeout set to at least 120 seconds (e.g. 150000 ms):\n")
+	sb.WriteString("   afm stage wait-answer qN\n")
+	sb.WriteString("   Exit 0 prints the answer as JSON {\"id\",\"answer\",\"from_options\"}: continue with it.\n")
+	sb.WriteString("   Exit 75 prints {\"status\":\"waiting\"}: the user has not answered yet. This is EXPECTED and is NOT a signal to stop. Run the EXACT SAME command again, as many times as it takes.\n")
+	sb.WriteString("3. A mistake in your call exits 1 with {\"error\",\"message\"} on stderr (message names the field). Fix the call as the message says and run it again. Do NOT switch to writing files by hand because of such an error.\n")
+	sb.WriteString("   error question_pending means an earlier question is still open: wait for its answer first, then ask the next one.\n\n")
+	sb.WriteString("Ask ONE question at a time and wait for its answer before the next. If you have several questions, ask them one by one (recommended) or combine them into a SINGLE question with numbered sub-questions.\n")
+	sb.WriteString("You MUST keep waiting until the answer arrives. Do NOT end your turn, do NOT write \"I'll wait\" and return control.\n")
+	sb.WriteString("Do NOT use ScheduleWakeup, background tasks, async waits, or \"wait for a notification\" — those mechanisms DO NOT EXIST here. The ONLY way to receive the user's answer is `afm stage wait-answer`.\n")
+	sb.WriteString("Do NOT write to plan.md / output artifact yet — finish waiting for and processing all answers first, then produce the artifact in one go.\n\n")
+	sb.WriteString("Fallback, ONLY if `afm stage ask` itself is unavailable (command not found, or it fails for a reason other than your call being invalid): write the files by hand.\n")
+	fmt.Fprintf(sb, "  Question file: $AFM_STAGE_DIR/%s.q<N>.question.json, answer file: $AFM_STAGE_DIR/%s.q<N>.answer.json\n", in.PhaseAgent, in.PhaseAgent)
+	fmt.Fprintf(sb, "  The prefix is EXACTLY %q — NOT the stage id %q. Ids are q1, q2, … (never reused); one open question at a time.\n", in.PhaseAgent, in.Stage.ID)
+	fmt.Fprintf(sb, "  Wait with a blocking Bash loop and re-run it after a command timeout: while [ ! -f \"$AFM_STAGE_DIR/%s.qN.answer.json\" ]; do sleep 15; done && cat \"$AFM_STAGE_DIR/%s.qN.answer.json\"\n", in.PhaseAgent, in.PhaseAgent)
+	sb.WriteString("  Question JSON Schema (the filename owns the question ID):\n")
+	sb.WriteString(schema.JSON(schema.Question))
+	sb.WriteString("\n</interactive_rules>\n")
+}
 
 func escapeTags(s string) string {
 	return tagReplacer.Replace(s)

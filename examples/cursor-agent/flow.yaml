@@ -2,7 +2,7 @@
 # Demo flow for cursor — using Cursor as an agent via type: cursor.
 
 name: cursor-demo
-description: "Demo: cursor as an agent via type: cursor (Cursor Cloud Agents API)"
+description: "Demo: cursor as an agent via type: cursor (local cursor-agent CLI)"
 
 stages:
   - id: ask

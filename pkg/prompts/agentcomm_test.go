@@ -125,7 +125,7 @@ func TestAgentComm_UnavailableStatesSoAndOmitsCommands(t *testing.T) {
 }
 
 // TestAgentComm_PeerWaitNeverUsesBashPollingLoop proves the peer-wait instruction is textually distinct from
-// <interactive_rules>'s human-dialog bash polling loop — the two protocols must never be conflated (T4.1).
+// <interactive_rules>'s human-dialog wait-answer instructions — the two protocols must never be conflated.
 func TestAgentComm_PeerWaitNeverUsesBashPollingLoop(t *testing.T) {
 	block := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true})
 	if !strings.Contains(block, "never a bash polling loop") {
@@ -145,7 +145,7 @@ func TestAgentComm_PeerWaitNeverUsesBashPollingLoop(t *testing.T) {
 	}
 	section := out[agentCommStart:agentCommEnd]
 	if strings.Contains(section, "while [ ! -f") {
-		t.Fatalf("the human-dialog bash-loop instruction must not leak into the agent_communication section:\n%s", section)
+		t.Fatalf("the human-dialog wait instruction must not leak into the agent_communication section:\n%s", section)
 	}
 	if !strings.Contains(out, "<interactive_rules>") {
 		t.Fatal("interactive_rules must still be present alongside agent_communication")

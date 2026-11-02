@@ -12,6 +12,10 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# The bash tool has no timeout of its own, so a stage agent can wait for the user's answer much longer than
+# the default `afm stage wait-answer` slice.
+export AFM_WAIT_ANSWER_TIMEOUT="${AFM_WAIT_ANSWER_TIMEOUT:-600}"
+
 if [[ -t 0 ]]; then
     echo "error: no prompt on stdin (openai-agent-as-claude requires prompt via stdin pipe)" >&2
     exit 1
@@ -27,6 +31,7 @@ OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"
 OPENAI_AGENT_MAX_TURNS="${OPENAI_AGENT_MAX_TURNS:-40}"
 OPENAI_REASONING_EFFORT="${OPENAI_REASONING_EFFORT:-}"
+MAX_SCHEMA_CORRECTIONS=2
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
     echo "error: OPENAI_API_KEY is not set" >&2
@@ -130,6 +135,28 @@ build_result_line() {
          + (if $err != "" then {is_error:true, result:$err} else {} end)'
 }
 
+# parse_tool_arguments <arguments-json> -> {"command":...} for a usable call, else {"error":<reason>}. A model that
+# streams broken arguments must hear about it instead of getting an empty command run.
+parse_tool_arguments() {
+    jq -nc --rawfile args <(printf '%s' "$1") '
+        try ($args | fromjson
+             | if type != "object" then error("arguments must be a JSON object")
+               elif (.command | type) != "string" or .command == "" then error("\"command\" must be a non-empty string")
+               else {command: .command} end)
+        catch {error: .}'
+}
+
+# schema_violation <text> -> the validator's message when the text breaks AFM_OUTPUT_SCHEMA_FILE, else nothing.
+# Only an explicit output_invalid asks for a correction; a missing or broken validator accepts the answer.
+schema_violation() {
+    [[ -n "${AFM_OUTPUT_SCHEMA_FILE:-}" ]] && command -v afm >/dev/null 2>&1 || return 0
+    local verdict_err
+    if verdict_err=$(printf '%s' "$1" | afm schema validate --schema "$AFM_OUTPUT_SCHEMA_FILE" 2>&1 >/dev/null); then
+        return 0
+    fi
+    printf '%s' "$verdict_err" | jq -r 'select(.error == "output_invalid") | .message[0:2000]' 2>/dev/null || true
+}
+
 # Linux limits each exec argument to 128 KiB on 4 KiB pages. Keep arbitrary payloads in stdin/files,
 # including JSON history, images and generated commands.
 work_dir=$(mktemp -d)
@@ -151,6 +178,7 @@ printf '%s' "$user_content" | jq -c --arg sys "$system_prompt" \
 final_text=""
 turn=0
 max_turns_reached=0
+schema_corrections=0
 upstream_usages='[]'
 resolved_model="$OPENAI_MODEL"
 
@@ -225,7 +253,16 @@ while :; do
 
     if [[ "$tool_call_count" -eq 0 ]]; then
         final_text=$(printf '%s' "$reassembled" | jq -r '.content')
-        break
+        violation=""
+        if [[ "$schema_corrections" -lt "$MAX_SCHEMA_CORRECTIONS" ]]; then
+            violation=$(schema_violation "$final_text")
+        fi
+        [[ -z "$violation" ]] && break
+        schema_corrections=$((schema_corrections + 1))
+        jq -nc --rawfile text <(printf '%s' "$final_text") '{role:"assistant", content:$text}' | append_message
+        jq -nc --rawfile err <(printf 'Your final answer does not match the required JSON schema: %s\nReply again with only the corrected JSON document, without markdown fences or commentary.' "$violation") \
+            '{role:"user", content:$err}' | append_message
+        continue
     fi
 
     assistant_msg=$(printf '%s' "$reassembled" | jq -c \
@@ -235,7 +272,14 @@ while :; do
     for i in $(seq 0 $((tool_call_count - 1))); do
         call=$(printf '%s' "$reassembled" | jq -c ".tool_calls[$i]")
         call_id=$(printf '%s' "$call" | jq -r '.id')
-        command=$(printf '%s' "$call" | jq -r '.arguments | fromjson? | .command // empty')
+        parsed=$(parse_tool_arguments "$(printf '%s' "$call" | jq -r '.arguments')")
+        arguments_error=$(printf '%s' "$parsed" | jq -r '.error // empty')
+        if [[ -n "$arguments_error" ]]; then
+            jq -nc --arg err "error: invalid arguments JSON: ${arguments_error}; expected {\"command\": string}" --arg id "$call_id" \
+                '{role:"tool", tool_call_id:$id, content:$err}' | append_message
+            continue
+        fi
+        command=$(printf '%s' "$parsed" | jq -r '.command')
 
         # живой tool_use конверт — сразу в stdout: сбрасывает idle-timer и рисуется
         # в event feed дашборда (та же форма, что и реальный Bash tool_use у claude).
@@ -243,7 +287,8 @@ while :; do
 
         printf '%s\n' "$command" > "$command_file"
         set +e
-        tool_output=$(bash "$command_file" 2>&1)
+        # The schema file is the shim's own control; the subshell keeps it from the model's commands only.
+        tool_output=$(unset AFM_OUTPUT_SCHEMA_FILE; bash "$command_file" 2>&1)
         tool_exit=$?
         set -e
         if [[ ${#tool_output} -gt 15000 ]]; then

@@ -75,7 +75,7 @@ RUN mkdir -p /home/afm
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# openai-as-claude: транслятор для OpenAI-совместимых провайдеров (cursor, deepseek, и т.д.)
+# openai-as-claude: транслятор для OpenAI-совместимых провайдеров (deepseek и т.д.)
 COPY scripts/openai-as-claude.sh /usr/local/bin/openai-as-claude
 RUN chmod +x /usr/local/bin/openai-as-claude
 
@@ -84,9 +84,14 @@ RUN chmod +x /usr/local/bin/openai-as-claude
 COPY scripts/openai-agent-as-claude.sh /usr/local/bin/openai-agent-as-claude
 RUN chmod +x /usr/local/bin/openai-agent-as-claude
 
-# cursor-as-claude: адаптер Cursor Cloud Agents API (асинхронный run-based → claude stream-json)
-COPY scripts/cursor-as-claude.sh /usr/local/bin/cursor-as-claude
-RUN chmod +x /usr/local/bin/cursor-as-claude
+# cursor-agent CLI. Версия и sha256 архива зафиксированы в install-скрипте и меняются только после ручной
+# проверки с afm.
+COPY scripts/install-cursor-agent.sh /tmp/install-cursor-agent.sh
+RUN bash /tmp/install-cursor-agent.sh /usr/local && rm /tmp/install-cursor-agent.sh
+
+# cursor-agent-as-claude: адаптер локального cursor-agent (stream-json → claude stream-json)
+COPY scripts/cursor-agent-as-claude.sh /usr/local/bin/cursor-agent-as-claude
+RUN chmod +x /usr/local/bin/cursor-agent-as-claude
 
 # codex-as-claude: адаптер codex JSONL (`codex exec --json`) → claude stream-json
 COPY scripts/codex-as-claude.sh /usr/local/bin/codex-as-claude

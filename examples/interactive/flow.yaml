@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/akopichin/afm/main/schema/flow.schema.json
-# File-dialog demo: run afm run examples/interactive/flow.yaml and answer questions in the dashboard.
+# Dialog demo: run afm run examples/interactive/flow.yaml and answer questions in the dashboard.
 
 name: interactive-demo
 description: "Demo of an interactive stage"
@@ -12,11 +12,10 @@ stages:
       1. Which programming language they prefer (offer Go, Python, TypeScript).
       2. Which architecture style (offer monolith, microservices, "not sure").
 
-      For each question use the file-based dialog protocol:
-      - write $AFM_STAGE_DIR/implementation.q1.question.json
-        (format: {"id":"q1","question":"...","options":["Go","Python","TypeScript"],"allow_custom":true})
-      - wait for the answer: while [ ! -f "$AFM_STAGE_DIR/implementation.q1.answer.json" ]; do sleep 30; done
-      - repeat for q2 (architecture)
+      For each question use the dialog commands:
+      - ask: afm stage ask --option Go --option Python --option TypeScript (question text on stdin)
+      - wait for the answer: afm stage wait-answer (run it again after exit 75)
+      - repeat for the second question (architecture)
 
       After both answers, write the result to ./summary.md in this format:
         # Summary

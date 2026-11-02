@@ -35,6 +35,19 @@ type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt,
 // notes. Whether the helper can also write to the project is up to its environment (a host codex sandbox is
 // read-only, a container is not) — this config promises nothing about it.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
+	cfg := o.promptOnlyHelperConfig(taskID, cmd)
+	// Delegation's alternatives have no native form, so only a helper that cannot delegate runs in native mode.
+	if task, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok && helperContract(task.Task) == schema.AssistantResultOnly {
+		cfg.NativeSchema = o.nativeSchemaFor(cmd, schema.AssistantResultOnly)
+	}
+	if cfg.NativeSchema != nil && cfg.Job != nil {
+		cfg.Job.Yielded = o.turnYieldCheck(o.taskMeshParticipant(taskID), true)
+	}
+	return cfg
+}
+
+// promptOnlyHelperConfig is helperExecutorConfig with the schema in the prompt alone.
+func (o *Orchestrator) promptOnlyHelperConfig(taskID assistants.TaskID, cmd string) executor.Config {
 	participant := o.taskMeshParticipant(taskID)
 	return executor.Config{
 		Command:        cmd,
@@ -58,15 +71,66 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 	}
 }
 
+// helperContract is the answer contract of a helper's turn: the delegate form only for a profile that may delegate.
+func helperContract(task assistants.Task) schema.Contract {
+	if task.ProfileSnapshot.Capabilities.Delegate {
+		return schema.AssistantResult
+	}
+	return schema.AssistantResultOnly
+}
+
 // execHelperAgent is the production implementation of o.runHelperAgent: builds a fresh executor.Executor
 // (mirrors runnerForVerify/execVerifyAgent) and delegates to RunHelperAgent. Cost accounting attribution
 // (T3.8) is wired here via OnUsage/AppendTask — task identity (root stage, parent task) is read back from
 // the current projection rather than widening the helperAgentRunner seam signature, which tests (T3.4)
 // already depend on.
 func (o *Orchestrator) execHelperAgent(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
-	cfg := o.helperExecutorConfig(assistants.TaskID(taskID), cmd)
-	cfg.OnUsage = o.recordTaskUsage(assistants.TaskID(taskID), assistants.ProfileID(profileID))
-	return executor.New(cfg).RunHelperAgent(ctx, taskID, profileID, prompt, logFile, resultFile)
+	id := assistants.TaskID(taskID)
+	run := func(cfg executor.Config) (executor.HelperOutcome, error) {
+		cfg.OnUsage = o.recordTaskUsage(id, assistants.ProfileID(profileID))
+		return executor.New(cfg).RunHelperAgent(ctx, taskID, profileID, prompt, logFile, resultFile)
+	}
+	yielded := o.turnYieldCheck(o.taskMeshParticipant(id), true)
+	outcome, err := run(o.helperExecutorConfig(id, cmd))
+	if err != nil || ctx.Err() != nil {
+		return outcome, err
+	}
+	fallback := helperNativeRerun(outcome, yielded)
+	if fallback == "" {
+		return outcome, nil
+	}
+	// One prompt-only rerun of the same turn; the task's log collects both runs like all its turns.
+	if keepErr := keepNativeEvidence("", resultFile); keepErr != nil {
+		return outcome, keepErr
+	}
+	cfg := o.promptOnlyHelperConfig(id, cmd)
+	if hold := o.admitAgent(cfg.Provider, "", id); hold != nil {
+		return executor.HelperOutcome{ProcessErr: hold}, hold
+	}
+	enforced := outcome.NativeEnforced
+	outcome, err = run(cfg)
+	// The provenance records what the native run did, as for verify.
+	outcome.NativeFallback, outcome.NativeEnforced = executor.NativeSchemaFallback(fallback), enforced
+	return outcome, err
+}
+
+// helperNativeRerun is nativeRerunReason for a helper turn. A turn that yielded gave no answer, so a payload the CLI
+// forced into it decides nothing. A forced pass that repeats the model's own final answer is not made up.
+func helperNativeRerun(outcome executor.HelperOutcome, yielded func(string) bool) string {
+	failure := runFailure(outcome.Interrupted, outcome.TimedOut, outcome.ProcessOK, outcome.ProcessErr)
+	forcedMayPass := false
+	if failure == nil && outcome.NativeEnforced && !yielded(outcome.RawText) {
+		env, decodeErr := assistants.DecodeResult(nativeAnswer(schema.AssistantResultOnly, []byte(outcome.RawText)))
+		forcedMayPass = decodeErr != nil || env.Result == nil ||
+			(env.Result.Verdict.ClosesGate() && !givesVerdict(outcome.TextBeforeEnforcement, env.Result.Verdict))
+	}
+	return nativeRerunReason(outcome.NativeStarted, failure, outcome.NativeEnforced, forcedMayPass)
+}
+
+// givesVerdict reports whether text is a result with verdict, accepted as a prompt-only answer would be.
+func givesVerdict(text string, verdict assistants.Verdict) bool {
+	env, _, _, err := assistants.RecoverResult([]byte(text))
+	return err == nil && env.Kind == assistants.KindResult && env.Result != nil && env.Result.Verdict == verdict
 }
 
 // recordTaskUsage returns the OnUsage callback for one helper task invocation — nil (accounting disabled)
@@ -220,7 +284,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 		return
 	}
 	turn.runCtx = runCtx
-	end.recovery, end.err = o.recoverHelperOutput(runCtx, taskID, task, turn, []byte(end.outcome.RawText))
+	end.recovery, end.err = o.recoverHelperOutput(runCtx, taskID, task, turn, end.outcome)
 	if end.err == nil && end.recovery.Provenance.Attempts == 0 {
 		turn.runCtx = nil // A locally complete answer retains the existing shutdown/hold completion semantics.
 	}
@@ -410,7 +474,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	// false completion and NOT a protocol error: a yielding agent prints no final answer, so the yield is
 	// classified BEFORE the executor's "no final answer" protocol error is looked at. This task's own
 	// concurrency lease is released simply by runHelperTask returning next.
-	if o.turnYielded(end.waiter, end.waitsBefore, outcome.RawText) {
+	if o.turnYielded(end.waiter, end.waitsBefore, outcome.RawText, outcome.NativeStarted) {
 		beforeCommit()
 		interruptIfSuperseded(o.parkYieldedTurn(ctx, taskID, consumed, end.waiter, end.waitsBefore, guard))
 		return true
@@ -423,12 +487,11 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	return false
 }
 
-func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, raw []byte) (outputRecovery, error) {
-	contract := schema.AssistantResultOnly
-	if task.ProfileSnapshot.Capabilities.Delegate {
-		contract = schema.AssistantResult
-	}
-	validator := func(raw []byte) ([]byte, jsonstrict.RepairKind, error) {
+func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistants.TaskID, task assistants.Task, turn helperTurn, outcome executor.HelperOutcome) (outputRecovery, error) {
+	contract := helperContract(task)
+	origin := nativeOrigin{started: outcome.NativeStarted, fallback: string(outcome.NativeFallback), enforced: outcome.NativeEnforced}
+	raw := []byte(outcome.RawText)
+	validator := nativeValidator(contract, origin, func(raw []byte) ([]byte, jsonstrict.RepairKind, error) {
 		env, candidate, kind, err := assistants.RecoverResult(raw)
 		if err != nil {
 			return nil, "", err
@@ -440,7 +503,7 @@ func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistant
 			return nil, "", jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New("verdict pass with an unresolved required child"))
 		}
 		return candidate, kind, nil
-	}
+	})
 	cfg := o.outputFormatterConfig(task.ProfileSnapshot.Command, task.RootStageID)
 	cfg.OnUsage = o.recordTaskUsage(taskID, task.ProfileID)
 	cfg.Job = o.repairJob(o.taskJobMeta(o.opts.Store.Snapshot(), taskID, task.ProfileSnapshot.Command), task.ProfileSnapshot.Command)
@@ -450,7 +513,9 @@ func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistant
 		return outputRecovery{}, fmt.Errorf("persist immutable helper output: %w", err)
 	}
 	owner := fmt.Sprintf("task/%s/generation/%d/turn/%d", taskID, task.TaskGeneration, turn.number)
-	return recoverOutput(ctx, contract, owner, raw, validator, outputFormatAttempts, o.outputFormatter(cfg, turn.dir, prefix, taskID))
+	recovered, err := recoverOutput(ctx, contract, owner, raw, validator, outputFormatAttempts, o.outputFormatter(cfg, turn.dir, prefix, taskID))
+	recovered.noteNative(origin)
+	return recovered, err
 }
 
 func (o *Orchestrator) helperOutputCurrent(taskID assistants.TaskID, task assistants.Task, turn helperTurn) bool {
@@ -549,7 +614,7 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		fail(protocolErrorPrefix+decErr.Error(), true)
 		return
 	}
-	repaired := end.recovery.Provenance.Source != ""
+	repaired := end.recovery.Provenance.Source == sourceRepair || end.recovery.Provenance.Source == sourceFormatAgent
 	if repaired {
 		o.publishNotice(bus.Event{Type: bus.EventHelperResultRepaired, StageID: task.RootStageID, Data: map[string]any{
 			"task_id": string(taskID), "source": end.recovery.Provenance.Source,
@@ -779,7 +844,12 @@ func (o *Orchestrator) parkYieldedTurn(ctx context.Context, taskID assistants.Ta
 // turnYielded reports whether a helper turn yielded into a mesh wait: one of waiter is still pending, or the turn
 // left no final text after a wait ended that it registered or found pending (an already_pending receipt names
 // one). A non-empty answer is never a yield: if it does not decode it is a protocol error, not a rerun.
-func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus, rawText string) bool {
+// byWaits decides by the turn's waits alone (turnEpisode), as for a stage author: native mode forces a payload
+// even into a turn that yielded, so its final text tells nothing.
+func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore map[agentcomm.WaitID]agentcomm.WaitStatus, rawText string, byWaits bool) bool {
+	if byWaits {
+		return len(o.turnEpisode(waiter, waitsBefore)) > 0
+	}
 	if o.hasOpenMeshWaitFor(waiter) {
 		return true
 	}

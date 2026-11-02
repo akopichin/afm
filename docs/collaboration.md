@@ -850,6 +850,33 @@ Helpers must return one JSON object with `schema_version: 1` and either
 `kind: "delegate"` (with child tasks). afm includes this output contract at the
 end of each helper's task context, including after any follow-up instruction.
 
+A helper that cannot delegate (a role without `delegate: true`) answers in the
+CLI's native schema mode, the same one [verify uses](verify.md#native-schema-mode):
+for example, `claude` is run with `--json-schema`, so a format mistake is caught
+while the helper is still answering. A helper that can delegate keeps the schema
+in the prompt only, because delegation has several answer forms with no native
+schema. The native answer still goes through afm's strict decoding and domain
+checks.
+
+A turn that ends by yielding into `afm agent wait` gives no answer. In native mode the CLI may
+force a result payload into such a turn, so afm decides by the turn's waits alone, not
+by the payload. A wait that is still pending, or that was registered with `afm agent
+wait` returning `yield`, parks the turn even when its answer arrived before the process
+exited: the helper then answers when the wait ends. A wait that was already ready when
+it was registered does not park the turn by itself, because the helper read its
+answer in the same turn, so such a turn's result is accepted. If the CLI
+forced a payload that closes the gate (such as a `pass`), or one that does not
+decode, into a turn that did not yield, and the model's own last text before that
+does not give the same verdict, afm treats the payload as possibly made up and
+re-runs the turn once with the schema in the prompt only. If the
+provider refuses native mode and the process fails, the turn is re-run the same way.
+
+Every helper turn writes `turn-<N>-output.recovery.json` in the task directory,
+including a clean turn, with `source` (`native`, `prompt`, `repair` or
+`format_agent`) and the native-mode fields described under
+[native schema mode](verify.md#native-schema-mode). The **repaired** badge below
+appears only for `repair` and `format_agent`.
+
 If strict decoding fails, afm first tries bounded local repair of one JSON
 object, including known shape errors. If the result is still invalid because of
 format, a format-only model call, told the exact validation error, may produce

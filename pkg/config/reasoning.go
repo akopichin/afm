@@ -58,7 +58,7 @@ func ResolveReasoning(mechanism, raw string) (value string, warn bool) {
 
 // ReasoningWarnings returns human-readable preflight warnings for a config: one
 // per non-canonical client/recipe reasoning value (forwarded as-is), and one per
-// cursor-recipe that sets reasoning (ignored, no API). Empty slice = no warnings.
+// cursor-recipe that sets reasoning (ignored: cursor-agent has no such setting). Empty slice = no warnings.
 // reasoning is NEVER a hard error, so this never returns an error.
 func (c Config) ReasoningWarnings() []string {
 	var out []string

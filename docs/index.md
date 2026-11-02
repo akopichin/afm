@@ -55,7 +55,7 @@ or the **[flow.yaml reference](flow-reference.md)** for every field.
 | `agents: [auto]` | [Autonomous track](autonomous-track.md) |
 | Independent AI/shell verification gate | [AI-verify](verify.md) |
 | `script:` stages and hooks | [Script stages & hooks](script-stages.md) |
-| File-based dialog | [Interactive stages](interactive-stages.md) |
+| Dialog with the agent | [Interactive stages](interactive-stages.md) |
 | Passing data between stages | [Artifacts & inputs](artifacts.md) |
 | Carrying lessons across runs | [Agent memory](agent-memory.md) |
 | The web dashboard | [Dashboard](dashboard.md) |

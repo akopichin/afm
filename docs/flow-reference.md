@@ -70,7 +70,7 @@ stages:
 | `plan` | no | Path to a ready-made plan file (skips planning); `./` looks in dependency stage directories, other relative paths start at the agents' project root |
 | `command` | no | AI command for this stage (overrides `client.command` from the config) |
 | `max_parallel` | no | Limit on parallel stages for this command |
-| `interactive` | no | `true` — enables the [file-based dialog protocol](interactive-stages.md) with the user via the dashboard |
+| `interactive` | no | `true` — enables the [dialog](interactive-stages.md) with the user via the dashboard (`afm stage ask` and `afm stage wait-answer`) |
 | `auto_approve` | no | `true` — approve this stage's plan automatically the instant it's ready, with no human interaction — regardless of a dashboard being attached or `--require-approval`. Default `false`. Intended for CI (see [Dashboard → Auto-approving a plan](dashboard.md#auto-approving-a-stages-plan)) |
 | `auto_run` | no | `false` — pause the stage the instant it's first eligible to start (`depends_on` satisfied), instead of starting immediately; it sits in `paused` until you hit **Continue** on the dashboard. Default `true` (starts on its own). Works on any stage type — regular, `agents: [auto]`, or `script`. Only gates the very first activation, not retries |
 | `artifacts` | no | Files the stage produces for other stages (see [Artifacts & inputs](artifacts.md)) |

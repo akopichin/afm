@@ -419,3 +419,62 @@ func TestRunnerFor_InjectedRunnerOnlyForDefaultCommand(t *testing.T) {
 		t.Error("interactive stage must build its own session executor")
 	}
 }
+
+// AFM_DIALOG_PHASE получает только автор стадии с настоящей фазой диалога: verify, helper и json-fix вопросов
+// не задают, а `afm stage ask` без этой переменной отвечает not_stage_author.
+func TestStageExecutorConfig_DialogPhaseOnlyForStageAuthor(t *testing.T) {
+	o, _ := newAssistantsTestOrchestrator(t, true)
+	stage := flow.Stage{ID: assistantsTestStageID}
+
+	for _, phase := range []string{phasePlanning, phaseImplementation, phaseReview, phaseAutonomous} {
+		if got := o.baseStageExecutorConfig(stage, phase, "agent-cmd", nil).DialogPhase; got != phase {
+			t.Errorf("stage turn %q: DialogPhase = %q, want the phase itself", phase, got)
+		}
+	}
+	if got := o.baseStageExecutorConfig(stage, "../bogus", "agent-cmd", nil).DialogPhase; got != "" {
+		t.Errorf("stage turn with an invalid phase: DialogPhase = %q, want empty", got)
+	}
+	if got := o.verifyExecutorConfig(stage, "agent-cmd", 1).DialogPhase; got != "" {
+		t.Errorf("verify: DialogPhase = %q, want empty", got)
+	}
+	if got := o.helperExecutorConfig(assistants.TaskID("t-phase"), "agent-cmd").DialogPhase; got != "" {
+		t.Errorf("helper: DialogPhase = %q, want empty", got)
+	}
+	if got := o.outputFormatterConfig("agent-cmd", stage.ID).DialogPhase; got != "" {
+		t.Errorf("json-fix: DialogPhase = %q, want empty", got)
+	}
+}
+
+func TestRunnerFor_DialogPhaseReachesStageAuthorEnv(t *testing.T) {
+	t.Setenv("AFM_DIALOG_PHASE", "leaked")
+	runDir := t.TempDir()
+	stage := flow.Stage{ID: "s1", Name: "Backend"}
+
+	store, err := state.Open(runDir, []string{stage.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	marker := filepath.Join(runDir, "phase-seen.txt")
+	script := fmt.Sprintf(`printf '%%s' "$AFM_DIALOG_PHASE" > %q
+printf '{"type":"result","subtype":"success"}\n'`, marker)
+	cfg := config.Default()
+	cfg.Client.Command = "sh"
+	cfg.Client.ExtraArgs = []string{"-c", script}
+	cfg.Executor.IdleTimeout = 5 * time.Second
+	o := New(Options{RunDir: runDir, Stages: []flow.Stage{stage}, Store: store, Config: cfg})
+
+	runner := o.runnerFor(stage, phaseReview)
+	if err := runner.RunAgent(context.Background(), phaseReview, stage.Name, "review", filepath.Join(runDir, "review.log")); err != nil {
+		t.Fatalf("RunAgent: %v", err)
+	}
+
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if string(got) != phaseReview {
+		t.Errorf("AFM_DIALOG_PHASE = %q, want %q", got, phaseReview)
+	}
+}

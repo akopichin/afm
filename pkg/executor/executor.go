@@ -129,7 +129,10 @@ type Config struct {
 	SessionID     string // if non-empty, passed via --session-id (or --resume when Resume=true)
 	Resume        bool   // if true, --resume <SessionID> is used instead of --session-id
 	StageDir      string // passed to agent as AFM_STAGE_DIR env var (file-based dialog protocol)
-	ScratchDir    string // passed to a helper agent as AFM_SCRATCH_DIR: its own directory for notes
+	// DialogPhase is passed as AFM_DIALOG_PHASE: the phase whose dialog files `afm stage ask` writes. Only a stage
+	// author has one; without it the command refuses, so verify and helper runs cannot ask the human questions.
+	DialogPhase string
+	ScratchDir  string // passed to a helper agent as AFM_SCRATCH_DIR: its own directory for notes
 	// Redact, if set, masks secrets in everything RunHelperAgent writes or reports: the raw stream (*.jsonl),
 	// the action log and OnAction details, stderr and the raw answer. It is called at write time, so a secret
 	// that appears only after the executor was configured (the agent's own mesh token) is masked too.
@@ -176,8 +179,8 @@ type Config struct {
 	// StopHook, if set, opens a Stop hook bridge for this author runner's process: a per-invocation loopback
 	// listener and a 0600 descriptor named by AFM_STOP_HOOK_DESCRIPTOR. Only the autonomous author gets it.
 	StopHook *StopHookClient
-	// NativeSchema, if set, asks RunHelperAgent to constrain the final answer with the CLI's own schema mode when
-	// that CLI/provider pair is verified (HelperOutcome.NativeFallback says why not). Other run kinds ignore it.
+	// NativeSchema, if set, asks RunHelperAgent and RunVerifyAgent to constrain the final answer with the CLI's own
+	// schema mode when the schema fits it (the outcome's NativeFallback says why not). Other run kinds ignore it.
 	NativeSchema *NativeSchema
 	// OnDelivered, if set, is called exactly once, right after cmd.Start() SUCCEEDS — the one moment a
 	// prepared prompt package (Agent Mesh Phase 4, T4.4: the <inbox> block) has actually been handed to a
@@ -188,7 +191,7 @@ type Config struct {
 	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
 	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
 	runMode RunMode
-	// nativeSchemaOn is internal-only: RunHelperAgent sets it once NativeSchema passed the capability check.
+	// nativeSchemaOn is internal-only: RunHelperAgent and RunVerifyAgent set it once NativeSchema passed the shape check.
 	nativeSchemaOn bool
 	// Clock is the executor's clock. nil (the production default) means clock.Real(); tests inject a
 	// clock.FakeClock to drive the idle timer / interrupt grace period without real sleeps.
@@ -752,8 +755,8 @@ func (e *Executor) RunAgent(ctx context.Context, agentType, stageName, prompt, l
 	return runErr
 }
 
-// RunVerifyAgent запускает один проход AI-verify: свежую read-only сессию и захватывает ФИНАЛЬНЫЙ
-// ассистентский текстовый блок как машинный ответ модели, а не весь лог.
+// RunVerifyAgent запускает один проход AI-verify: свежую read-only сессию и захватывает финальный ответ модели
+// (последний текстовый блок или structured payload native-режима), а не весь лог.
 func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, prompt, logFile, resultFile string) (verify.RunOutcome, error) {
 	job := e.newJob()
 	lg, err := progress.NewLogger(logFile)
@@ -785,11 +788,20 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 	verifyCfg.SessionID = ""
 	verifyCfg.Resume = false
 	verifyCfg.StageDir = ""
+	verifyCfg.DialogPhase = ""
 	verifyCfg.VerifyMode = true
+	started := false
+	delivered := verifyCfg.OnDelivered
+	verifyCfg.OnDelivered = func() { // run вызывает его сразу после успешного cmd.Start
+		started = true
+		if delivered != nil {
+			delivered()
+		}
+	}
 	ve := &Executor{cfg: verifyCfg}
+	nativeFallback := ve.selectNativeSchema()
 
-	var finalText strings.Builder
-	var haveFinalText bool
+	final := finalAnswer{claudeNative: ve.cfg.claudeNativeSchema()}
 	var firstErr string
 	phase := strings.TrimSuffix(filepath.Base(logFile), filepath.Ext(logFile))
 	collector := accounting.NewCollector(ve.cfg.UsageHint)
@@ -800,7 +812,7 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		jf.WriteString(line + "\n") //nolint:errcheck
 		ev, ok := parseStreamEvent(line)
 		if !ok {
-			if isErrorLine(line) {
+			if !final.observeLine(line) && isErrorLine(line) {
 				lg.LogAction("error", line)
 				if firstErr == "" {
 					firstErr = line
@@ -810,11 +822,7 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		}
 		for _, c := range ev.Message.Content {
 			if c.Type == contentTypeText {
-				// Финальный ответ — последний ассистентский текстовый блок: каждый следующий ЗАМЕНЯЕТ предыдущий, а не
-				// дописывается к нему — промежуточные рассуждения не должны перемешаться с итоговым JSON.
-				finalText.Reset()
-				finalText.WriteString(c.Text)
-				haveFinalText = true
+				final.observeText(c.Text)
 			}
 			if tool, detail, actionOK := contentToAction(c, ve.cfg.TruncateOutput); actionOK {
 				lg.LogAction(tool, detail)
@@ -836,7 +844,15 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		return verify.RunOutcome{}, limit
 	}
 
-	outcome := verify.RunOutcome{}
+	outcome := verify.RunOutcome{
+		NativeFallback:    string(nativeFallback),
+		NativeStarted:     started && ve.cfg.nativeSchemaOn,
+		StructuredPayload: final.structured,
+		NativeEnforced:    final.enforced,
+	}
+	if final.payloadMissing(runErr) {
+		lg.LogAction("verify-note", "native schema mode returned no structured payload; the text answer is validated as usual")
+	}
 	switch {
 	case errors.Is(runErr, ErrUserInterrupted):
 		outcome.Interrupted = true
@@ -849,10 +865,11 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		// просто не отработал штатно; все три флага остаются false.
 	}
 
-	// Сохраняем сырой финальный текст, если он вообще появился, — даже если процесс потом упал ненулевым exit
+	// Сохраняем сырой финальный ответ, если он вообще появился, — даже если процесс потом упал ненулевым exit
 	// code (аудиторский след того, что модель успела написать, не более).
-	if haveFinalText && strings.TrimSpace(finalText.String()) != "" {
-		if werr := os.WriteFile(resultFile, []byte(finalText.String()), 0644); werr != nil {
+	answered := strings.TrimSpace(final.answer()) != ""
+	if answered {
+		if werr := os.WriteFile(resultFile, []byte(final.answer()), 0644); werr != nil {
 			return outcome, fmt.Errorf("write result file: %w", werr)
 		}
 	}
@@ -863,12 +880,12 @@ func (e *Executor) RunVerifyAgent(ctx context.Context, agentType, stageName, pro
 		return outcome, nil
 	}
 
-	if !haveFinalText || strings.TrimSpace(finalText.String()) == "" {
+	if !answered {
 		outcome.ProtocolErr = errors.New("verifier produced no final answer")
 		return outcome, nil
 	}
 
-	result, decErr := verify.DecodeModelResult([]byte(finalText.String()))
+	result, decErr := verify.DecodeModelResult([]byte(final.answer()))
 	if decErr != nil {
 		outcome.ProtocolErr = decErr
 		return outcome, nil
@@ -985,8 +1002,8 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 		switch {
 		case strings.HasPrefix(kv, "CLAUDECODE="):
 			// always strip for nested sessions
-		case strings.HasPrefix(kv, "AFM_STAGE_DIR="), strings.HasPrefix(kv, "AFM_SCRATCH_DIR="):
-			// always strip inherited; re-added by caller only if cfg.StageDir/cfg.ScratchDir is set
+		case strings.HasPrefix(kv, "AFM_STAGE_DIR="), strings.HasPrefix(kv, "AFM_DIALOG_PHASE="), strings.HasPrefix(kv, "AFM_SCRATCH_DIR="):
+			// always strip inherited; re-added by caller only if cfg.StageDir/DialogPhase/ScratchDir is set
 		case strings.HasPrefix(kv, OutputSchemaFileEnv+"="):
 			// always strip inherited; re-added by run only for a native schema call
 		case strings.HasPrefix(kv, "CODEX_VERIFY="):
@@ -1089,6 +1106,9 @@ func (e *Executor) runJob(ctx context.Context, job *jobRun, prompt, phase string
 	filtered := e.filterInheritedEnv(os.Environ())
 	if e.cfg.StageDir != "" {
 		filtered = append(filtered, "AFM_STAGE_DIR="+e.cfg.StageDir)
+	}
+	if e.cfg.DialogPhase != "" {
+		filtered = append(filtered, "AFM_DIALOG_PHASE="+e.cfg.DialogPhase)
 	}
 	if e.cfg.ScratchDir != "" {
 		filtered = append(filtered, "AFM_SCRATCH_DIR="+e.cfg.ScratchDir)

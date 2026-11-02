@@ -55,11 +55,12 @@ Stop hook reminder in the current session; after exit, afm can append a summary
 correction prompt to each of two separate continuation attempts. These prompts
 ask the author to finish any outstanding work before writing the file.
 
-JSON result and question contracts are available in the relevant prompts before
-the agent answers. A format-only correction receives the same schema in its
-prompt. For verified CLI and provider combinations, afm can additionally use the
-CLI's structured-output mode; unsupported combinations keep prompt guidance and
-the same server-side validation.
+JSON result contracts are available in the relevant prompts before the agent
+answers, and a question is checked by `afm stage ask` when the agent asks it. A
+format-only correction receives the same schema in its prompt. For verify and for
+helpers that cannot delegate, afm also asks the CLI for its own structured-output
+mode (native schema mode, see [AI verify](../verify.md#native-schema-mode)); other
+combinations keep prompt guidance and the same server-side validation.
 
 ## 1. Planning agent
 
@@ -201,27 +202,41 @@ Read implementation and review logs from each stage in the run directory.
 
 ## 7. Interactive rules
 
-Added to `system_rules` when `stage.Interactive = true`:
+Added to `system_rules` when `stage.Interactive = true`. The two `afm stage`
+commands are the main path; hand-written files are a short fallback at the end
+(see [Interactive stages](../interactive-stages.md)).
 
 ```xml
 <interactive_rules>
-Use the file-based dialog protocol to ask the user questions.
-Your stage directory is AFM_STAGE_DIR="{stageDir}"
-Assign sequential IDs: q1, q2, … (never reuse an ID within a phase).
+Ask the user questions with the two afm commands below. They pick the question id, write the file and check the question, so you never write dialog files yourself.
+Your stage directory is AFM_STAGE_DIR="{stageDir}" (the commands read it from the environment).
 
-For each question:
-1. Write the question file using the Write tool:
-   Path: {stageDir}/{phase}.q<N>.question.json  (== $AFM_STAGE_DIR/{phase}.q<N>.question.json)
-   Write the file to this path and NOWHERE ELSE. Do NOT invent paths like .afm/stages/... — always use $AFM_STAGE_DIR.
-   Content: {"id":"qN","question":"## Full context here\n\nYour question?","options":["A","B"],"allow_custom":true}
-   Put ALL context in 'question': descriptions, trade-offs, examples. Use markdown freely.
-2. Wait for the answer via a blocking Bash polling loop:
-   while [ ! -f "$AFM_STAGE_DIR/{phase}.qN.answer.json" ]; do sleep 15; done && cat "$AFM_STAGE_DIR/{phase}.qN.answer.json"
-3. The polling loop may be cut short by a command timeout after a few minutes — this is EXPECTED and is NOT a signal to stop.
-   When that happens, immediately run the EXACT SAME polling-loop command again. Keep re-launching it until the answer file appears.
-4. You MUST keep waiting until $AFM_STAGE_DIR/<phase>.qN.answer.json exists. Do NOT end your turn, do NOT stop, do NOT write "I'll wait" and return control.
-5. Do NOT use ScheduleWakeup, background tasks, async waits, or "wait for a notification" — those mechanisms DO NOT EXIST here. The ONLY way to receive the user's answer is the blocking Bash polling loop above.
-6. Do NOT write to plan.md / output artifact yet — finish waiting for and processing all answers first, then produce the artifact in one go.
-Ask ONE question at a time.
+1. Ask: pass the question text on stdin and one --option per answer option (the heredoc lines start at column 0):
+afm stage ask --option "A" --option "B" <<'EOF'
+## Full context here
+
+Your question?
+EOF
+   Put ALL context in the text: descriptions, trade-offs, examples. Use markdown freely.
+   Options are optional; add --allow-custom=false only when the user must pick one of them.
+   It prints {"id":"qN","wait":"afm stage wait-answer qN"}. Asking the same question again returns the same id, so repeating the command is safe.
+2. Wait: run the printed wait command with the Bash tool timeout set to at least 120 seconds (e.g. 150000 ms):
+   afm stage wait-answer qN
+   Exit 0 prints the answer as JSON {"id","answer","from_options"}: continue with it.
+   Exit 75 prints {"status":"waiting"}: the user has not answered yet. This is EXPECTED and is NOT a signal to stop. Run the EXACT SAME command again, as many times as it takes.
+3. A mistake in your call exits 1 with {"error","message"} on stderr (message names the field). Fix the call as the message says and run it again. Do NOT switch to writing files by hand because of such an error.
+   error question_pending means an earlier question is still open: wait for its answer first, then ask the next one.
+
+Ask ONE question at a time and wait for its answer before the next. If you have several questions, ask them one by one (recommended) or combine them into a SINGLE question with numbered sub-questions.
+You MUST keep waiting until the answer arrives. Do NOT end your turn, do NOT write "I'll wait" and return control.
+Do NOT use ScheduleWakeup, background tasks, async waits, or "wait for a notification" — those mechanisms DO NOT EXIST here. The ONLY way to receive the user's answer is `afm stage wait-answer`.
+Do NOT write to plan.md / output artifact yet — finish waiting for and processing all answers first, then produce the artifact in one go.
+
+Fallback, ONLY if `afm stage ask` itself is unavailable (command not found, or it fails for a reason other than your call being invalid): write the files by hand.
+  Question file: $AFM_STAGE_DIR/{phase}.q<N>.question.json, answer file: $AFM_STAGE_DIR/{phase}.q<N>.answer.json
+  The prefix is EXACTLY "{phase}" — NOT the stage id "{stageID}". Ids are q1, q2, … (never reused); one open question at a time.
+  Wait with a blocking Bash loop and re-run it after a command timeout: while [ ! -f "$AFM_STAGE_DIR/{phase}.qN.answer.json" ]; do sleep 15; done && cat "$AFM_STAGE_DIR/{phase}.qN.answer.json"
+  Question JSON Schema (the filename owns the question ID):
+  {the question JSON Schema}
 </interactive_rules>
 ```

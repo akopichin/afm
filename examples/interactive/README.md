@@ -1,9 +1,9 @@
 # Interactive stage
 
 A stage marked `interactive: true` can ask the user questions mid-run through
-the [file-based dialog protocol](https://akopichin.github.io/afm/interactive-stages/).
-The agent writes a `question.json`, the dashboard shows a "Dialog" panel, and
-the stage waits in `awaiting_user_input` until you answer.
+the [dialog protocol](https://akopichin.github.io/afm/interactive-stages/).
+The agent runs `afm stage ask` and `afm stage wait-answer`, the dashboard shows
+a "Dialog" panel, and the stage waits in `awaiting_user_input` until you answer.
 
 ```bash
 afm run examples/interactive/flow.yaml
