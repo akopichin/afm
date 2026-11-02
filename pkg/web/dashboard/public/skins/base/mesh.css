@@ -90,7 +90,10 @@
   color: var(--text-primary);
   border-bottom-color: var(--accent-primary);
 }
-.team-list-tab:focus-visible,
+.team-list-tab:focus-visible {
+  outline: none;
+  border-bottom-color: var(--focus-ring);
+}
 .team-roster-search:focus-within {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -638,8 +641,8 @@
   border-bottom-color: var(--accent-primary);
 }
 .team-tab:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: none;
+  border-bottom-color: var(--focus-ring);
 }
 
 /* A Board/Activity tab panel: fills the space under the tabs like .team-messages does. */

@@ -806,13 +806,13 @@ describe('FeedComposer', () => {
       const delivery = screen.getByRole('status', { name: 'Delivery' })
       // Accepted by the API is not delivered: nobody is "Delivered" before its own delivery receipt.
       expect(delivery).toHaveTextContent('QA reviewer · Accepted · waiting for an inbox check')
-      expect(delivery).toHaveTextContent('Backend agent · Accepted · waiting for an inbox check')
+      expect(delivery).toHaveTextContent('s1 · Accepted · waiting for an inbox check')
 
       const answer = { id: 'm2', thread_id: 'mt-1', sender_id: 'run:t-1', recipient_ids: ['user'], kind: 'message', in_reply_to: 'm1', body: 'ok', seq: 2, created_at: '' }
       const delivered = { ...mesh, deliveries: new Set(['m1|stage:s1']) }
       rerender(<FeedComposer stageId="s1" onSend={vi.fn()} mesh={delivered} conversationMessages={[answer]} />)
       expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('QA reviewer · Answered')
-      expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('Backend agent · Delivered')
+      expect(screen.getByRole('status', { name: 'Delivery' })).toHaveTextContent('s1 · Delivered')
     })
 
     it('shows a terminal side failure from the run notice even before the thread reply is in the stage poll', async () => {
@@ -919,7 +919,7 @@ describe('FeedComposer', () => {
         expect(within(dialog).getByText('please take a look')).toBeInTheDocument()
         expect(within(dialog).getByText('Configured executor')).toBeInTheDocument()
         expect(within(dialog).getByText('claude')).toBeInTheDocument()
-        expect(within(dialog).getByText('Backend')).toBeInTheDocument()
+        expect(within(dialog).getByText('s1')).toBeInTheDocument()
         expect(within(dialog).getByText(/advisory/i)).toBeInTheDocument()
         expect(attachSpy).not.toHaveBeenCalled()
         expect(sendSpy).not.toHaveBeenCalled()
@@ -1084,7 +1084,7 @@ describe('FeedComposer', () => {
         expect(options.join('|')).toMatch(/QA reviewer/)
         expect(options.join('|')).toMatch(/Docs writer/)
         expect(options.join('|')).toMatch(/Reviewer/)
-        expect(options.join('|')).not.toMatch(/Backend agent|claude|Other helper|Frontend reviewer|Old/)
+        expect(options.join('|')).not.toMatch(/@s1|claude|Other helper|Frontend reviewer|Old/)
       })
 
       it('shows the resolved target in its own row and a valid command can be started', () => {
@@ -1214,7 +1214,7 @@ describe('FeedComposer', () => {
         type('/loop 1h --until-stage-end @qa check')
         run()
         await waitFor(() => expect(add).toHaveBeenCalledWith(expect.objectContaining({ every: '1h', prompt: 'check', untilStage: 's1', originStage: 's1' })))
-        expect(await screen.findByRole('status')).toHaveTextContent(/ends with Backend/)
+        expect(await screen.findByRole('status')).toHaveTextContent(/ends with s1/)
       })
 
       it('a created loop shows its id, next tick in host time with seconds, stop command and origin Feed, and clears the draft', async () => {
@@ -1228,11 +1228,11 @@ describe('FeedComposer', () => {
         expect(receipt).toHaveTextContent('@qa')
         expect(receipt).toHaveTextContent(/Next tick .*19:05:07/)
         expect(receipt).toHaveTextContent('/loop stop L1')
-        expect(receipt).toHaveTextContent('Feed: Backend')
+        expect(receipt).toHaveTextContent('Feed: s1')
         expect(input().value).toBe('')
       })
 
-      it.each(['create', 'list'])('uses the stage id for unnamed origin and bound stages in a %s result', async (action) => {
+      it.each(['create', 'list'])('uses the stage id for origin and bound stages without a name too in a %s result', async (action) => {
         const loop = { ...created, until_stage: 's1' }
         vi.spyOn(meshClient, 'addMeshLoop').mockResolvedValue(loop)
         vi.spyOn(meshClient, 'listMeshLoops').mockResolvedValue({ loops: [loop] })
@@ -1335,9 +1335,9 @@ describe('FeedComposer', () => {
         expect(list).toHaveBeenCalledTimes(1)
         const rows = within(result).getAllByRole('listitem').map((li) => li.textContent ?? '')
         expect(rows).toHaveLength(3)
-        expect(rows[0]).toMatch(/L1.*active.*every 5m.*@qa.*You.*Feed: Backend.*next tick .*19:05:07/)
-        expect(rows[1]).toMatch(/L2.*ended.*the conversation reached its message limit.*every 1m30s.*@rev.*Docs writer.*run conversations.*ends with Docs stage/)
-        expect(rows[2]).toMatch(/L3.*stopped.*stopped by You.*every 1h.*@docs.*Feed: Docs stage/)
+        expect(rows[0]).toMatch(/L1.*active.*every 5m.*@qa.*You.*Feed: s1.*next tick .*19:05:07/)
+        expect(rows[1]).toMatch(/L2.*ended.*the conversation reached its message limit.*every 1m30s.*@rev.*Docs writer.*run conversations.*ends with s2/)
+        expect(rows[2]).toMatch(/L3.*stopped.*stopped by You.*every 1h.*@docs.*Feed: s2/)
         expect(input().value).toBe('')
         expectNothingSent(spies)
       })

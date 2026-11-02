@@ -218,7 +218,7 @@ func TestAgentJobs_StageTurnsAreJobsOfOneAgent(t *testing.T) {
 	for _, rec := range started {
 		ids[rec.JobID] = true
 		if rec.AgentID != "stage:build" || rec.AgentKind != accounting.AgentKindStage || rec.StageID != "build" ||
-			rec.RootStageID != "build" || rec.Phase != phaseAutonomous || rec.Title != "Build · Autonomous execution" || rec.RunID != jobsTestRunID {
+			rec.RootStageID != "build" || rec.Phase != phaseAutonomous || rec.Title != "build · Autonomous execution" || rec.RunID != jobsTestRunID {
 			t.Fatalf("stage job meta = %+v", rec.JobMeta)
 		}
 		if rec.Segment.IsZero() {
@@ -418,7 +418,7 @@ func TestAgentJobs_FormatRepairBelongsToItsOwner(t *testing.T) {
 		want agentjobs.JobMeta
 	}{
 		{"stage", o.outputFormatterConfig("codex", "build").Job,
-			agentjobs.JobMeta{AgentID: "stage:build", AgentKind: accounting.AgentKindStage, StageID: "build", RootStageID: "build", Title: "Format repair · Build"}},
+			agentjobs.JobMeta{AgentID: "stage:build", AgentKind: accounting.AgentKindStage, StageID: "build", RootStageID: "build", Title: "Format repair · build"}},
 		{"verify", o.repairJob(o.verifyJobMeta(stage, 2, "codex"), "codex"),
 			agentjobs.JobMeta{AgentID: "verify:build#2", AgentKind: accounting.AgentKindVerify, StageID: "build", RootStageID: "build", VerifyStep: 2, Title: "Format repair · Verify · step 2"}},
 		{"helper", o.repairJob(o.taskJobMeta(rs, "t-1", "codex"), "codex"),

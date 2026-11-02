@@ -511,7 +511,7 @@ describe('ThreadConversation', () => {
     render(<ThreadConversation target={{ kind: 'thread', thread: group }} participants={[qa, done]} />)
 
     expect(screen.queryByRole('status')).toBeNull()
-    expect(screen.getByText("API has finished and won't get this message")).toBeInTheDocument()
+    expect(screen.getByText("api has finished and won't get this message")).toBeInTheDocument()
     fireEvent.change(screen.getByPlaceholderText('Message Due dates…'), { target: { value: 'status?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(sendSpy).toHaveBeenCalledWith('mt-g', expect.objectContaining({ recipientIds: ['run:qa'] })))

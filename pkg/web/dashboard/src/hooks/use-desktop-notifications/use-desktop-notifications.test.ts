@@ -56,6 +56,8 @@ describe('useDesktopNotifications', () => {
     rerender({ stages: [stage('awaiting_approval')] })
     expect(MockNotification.instances).toHaveLength(1)
     expect(MockNotification.instances[0]?.title).toBe('Need Approve')
+    // The body names the stage by its id, not its long name.
+    expect(MockNotification.instances[0]?.options?.body).toMatch(/^s — click to view\n/)
 
     rerender({ stages: [stage('awaiting_approval')] })
     expect(MockNotification.instances).toHaveLength(1)

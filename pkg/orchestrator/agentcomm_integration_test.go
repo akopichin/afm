@@ -67,10 +67,7 @@ func newMeshIntegrationOrchestrator(t *testing.T) (*Orchestrator, *state.Store) 
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 		{ID: meshIntegrationQAProfile, Title: "QA", Command: "helper-cmd"},
 		{ID: meshIntegrationDevOpsProfile, Title: "DevOps", Command: "helper-cmd"},
-	}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -86,6 +83,7 @@ func newMeshIntegrationOrchestrator(t *testing.T) (*Orchestrator, *state.Store) 
 		fsm:           bus.NewFSM(store),
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), stages, "claude", 1, nil), // max_parallel: 1
 		fingerprintFn: func(string) (string, bool) { return "", false },
+		helperAccess:  allowHelpersOS,
 	}
 	return o, store
 }

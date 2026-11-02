@@ -14,10 +14,10 @@ import type { MeshParticipant } from '../../api/mesh-client'
 
 const participants: MeshParticipant[] = [
   { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
-  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
+  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'api', stage_id: 'api', reachable: true },
 ]
 
-const stages = [{ id: 'api', title: 'API', status: 'running' }]
+const stages = [{ id: 'api', status: 'running' }]
 
 describe('BoardPanel', () => {
   afterEach(() => {
@@ -95,7 +95,7 @@ describe('BoardPanel', () => {
     })
     render(<BoardWithPoll participants={participants} stages={stages} />)
     const card = await screen.findByRole('button', { name: 'CSV export, Done' })
-    expect(within(card).getAllByText('API').length).toBeGreaterThan(0)
+    expect(within(card).getAllByText('api').length).toBeGreaterThan(0)
     expect(within(card).getByText(/done: GET \/todos.csv added/)).toBeInTheDocument()
     expect(document.querySelectorAll('.board-task-card')).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /task\/csv-export\/api/ })).toBeNull()
@@ -219,7 +219,7 @@ describe('BoardPanel', () => {
     render(<BoardWithPoll participants={participants} stages={stages} />)
     const notify = await screen.findByRole('group', { name: 'Notify' })
     expect(within(notify).getByRole('checkbox', { name: 'QA' })).toBeChecked()
-    expect(within(notify).getByRole('checkbox', { name: 'API' })).toBeChecked()
+    expect(within(notify).getByRole('checkbox', { name: 'api' })).toBeChecked()
   })
 
   test('posting notifies the checked agents only', async () => {
@@ -239,7 +239,7 @@ describe('BoardPanel', () => {
   test('unreachable run agents and agents of idle stages are not offered', async () => {
     vi.spyOn(meshClient, 'getMeshBoard').mockResolvedValue({ tasks: [], typedTasks: false, entries: [] })
     const offline = participants.map((p) => (p.kind === 'run_agent' ? { ...p, reachable: false } : p))
-    render(<BoardWithPoll participants={offline} stages={[{ id: 'api', title: 'API', status: 'done' }]} />)
+    render(<BoardWithPoll participants={offline} stages={[{ id: 'api', status: 'done' }]} />)
     await waitFor(() => expect(screen.getByText(/Nothing on the board yet/)).toBeInTheDocument())
     expect(screen.queryByRole('group', { name: 'Notify' })).toBeNull()
     expect(screen.queryByRole('checkbox')).toBeNull()

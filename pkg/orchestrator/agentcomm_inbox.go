@@ -345,7 +345,7 @@ func (o *Orchestrator) startTurn(taskID assistants.TaskID, inbox []agentcomm.Mes
 		ReadonlyEnforcement: o.currentReadonlyEnforcement(t.Task),
 	})
 	if err != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: record the turn: "+err.Error())
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.taskTurnFailure(taskID, "assistants: record the turn", err.Error()))
 		return 0, 0, false
 	}
 	op := state.Operation{

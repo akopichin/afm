@@ -2,7 +2,6 @@ import type { ReactElement } from 'react'
 import type { MeshLoop, MeshParticipant } from '../../api/mesh-client'
 import { formatHostTime, useMessageTimeZone } from '../../lib/message-time-zone'
 import { mentionHandles, senderLabel } from '../../lib/mesh-roster'
-import type { Stage } from '../../types'
 
 // LoopOutcome — what a /loop command answered: the loop it created or stopped, or the run's loops.
 export type LoopOutcome = { kind: 'created' | 'stopped'; loop: MeshLoop } | { kind: 'list'; loops: MeshLoop[] }
@@ -14,22 +13,21 @@ function loopTime(iso: string, timeZone: string, utcOffsetMinutes: number): stri
   return formatHostTime(date, { timeZone, utcOffsetMinutes }).full
 }
 
-type Names = { stages: Stage[]; handles: Map<string, string> }
+type Names = { handles: Map<string, string> }
 
 const target = (loop: MeshLoop, names: Names): string => `@${names.handles.get(loop.target_id) ?? loop.target_id}`
-const stageName = (id: string, names: Names): string => names.stages.find((s) => s.id === id)?.name || id
 // origin — where the loop's messages show: its Feed, or the run conversations for a loop an agent made.
-const origin = (loop: MeshLoop, names: Names): string =>
-  loop.origin_stage !== undefined && loop.origin_stage !== '' ? `Feed: ${stageName(loop.origin_stage, names)}` : 'run conversations'
-const bound = (loop: MeshLoop, names: Names): string | null =>
-  loop.until_stage !== undefined && loop.until_stage !== '' ? `ends with ${stageName(loop.until_stage, names)}` : null
+const origin = (loop: MeshLoop): string =>
+  loop.origin_stage !== undefined && loop.origin_stage !== '' ? `Feed: ${loop.origin_stage}` : 'run conversations'
+const bound = (loop: MeshLoop): string | null =>
+  loop.until_stage !== undefined && loop.until_stage !== '' ? `ends with ${loop.until_stage}` : null
 const ended = (loop: MeshLoop): string => (loop.end_reason !== undefined && loop.end_reason !== '' ? ` — ${loop.end_reason}` : '')
 
 // LoopOutcomeView — the one-shot result of a /loop command, a status region the composer keeps until the next
 // edit or Escape. Times are in the host's time zone, like the messages of the Feed.
-export function LoopOutcomeView({ outcome, participants, stages }: { outcome: LoopOutcome; participants: MeshParticipant[]; stages: Stage[] }): ReactElement {
+export function LoopOutcomeView({ outcome, participants }: { outcome: LoopOutcome; participants: MeshParticipant[] }): ReactElement {
   const { timeZone, utcOffsetMinutes } = useMessageTimeZone()
-  const names: Names = { stages, handles: mentionHandles(participants) }
+  const names: Names = { handles: mentionHandles(participants) }
   const time = (iso: string): string => loopTime(iso, timeZone, utcOffsetMinutes)
 
   if (outcome.kind === 'list') {
@@ -43,8 +41,8 @@ export function LoopOutcomeView({ outcome, participants, stages }: { outcome: Lo
               <li key={loop.id}>
                 <strong>{loop.id}</strong> · {loop.status}
                 {ended(loop)} · every {loop.every} · {target(loop, names)} · by {senderLabel(loop.creator_id, participants)} ·{' '}
-                {origin(loop, names)}
-                {bound(loop, names) !== null && ` · ${bound(loop, names)}`}
+                {origin(loop)}
+                {bound(loop) !== null && ` · ${bound(loop)}`}
                 {loop.next_tick_at !== undefined && ` · next tick ${time(loop.next_tick_at)}`}
               </li>
             ))}
@@ -67,10 +65,10 @@ export function LoopOutcomeView({ outcome, participants, stages }: { outcome: Lo
     <div className="mesh-message-receipt mesh-loop-result" role="status">
       <p>
         <strong>Loop {loop.id} started</strong> · every {loop.every} to {target(loop, names)}
-        {bound(loop, names) !== null && ` · ${bound(loop, names)}`}
+        {bound(loop) !== null && ` · ${bound(loop)}`}
       </p>
       {loop.next_tick_at !== undefined && <p>Next tick {time(loop.next_tick_at)}</p>}
-      <p>{origin(loop, names)} · stop it with <code>/loop stop {loop.id}</code></p>
+      <p>{origin(loop)} · stop it with <code>/loop stop {loop.id}</code></p>
     </div>
   )
 }

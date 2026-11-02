@@ -53,6 +53,36 @@ exits with an error or without a successful result fails instead of reporting su
 accepted as a verify command: its structured verdict is unverified. See
 [Docker mode](docs/docker.md#non-claude-agents-in-docker-autoshim).
 
+### Improvement: the dashboard labels stages by id
+
+The stage rail, the workspace header, its stage tab, Feed author rows, Team,
+Cost and analytics show the stage `id` from `flow.yaml` again instead of the
+long `name`; the name stays as a tooltip on the rail row and the header.
+Keyboard focus on tabs is an underline instead of a box.
+
+### Improvement: helpers run the executor of their stage
+
+A helper profile can be a role only: without `command` the helper runs the
+command of its stage, or `client.command` for a run agent, and a built-in
+`default` profile is always available. This covers helpers attached in the
+dashboard, from `assistants:` and `team:`, started with `afm agent spawn` and
+delegated children. The executor, with the stage's reasoning and the model
+arguments of `client.extra_args`, is saved with the task, so a restart or Retry
+keeps it. If the `docker.agents` recipe behind a command changes meanwhile, the
+task fails with `executor_changed` instead of running on another model or
+account. **Attach helper…** and **Add run agent** show the executor and where it
+comes from, and why a role is unavailable; `GET /api/assistant-profiles` takes
+`?stage_id=`. New `runtime_context: wrapper` (`collaboration` or per profile)
+keeps the Claude credentials of afm's process for a helper's wrapper. See
+[Helpers and collaboration](docs/collaboration.md#which-executor-a-helper-runs).
+
+### Fix: helper wrappers lose their system prompt and authentication
+
+A helper started through a generated recipe wrapper now receives its own system
+prompt, and a failed helper turn names the role, command and source of its
+executor. A CLI error such as *Not logged in* is reported as a CLI error, not a
+broken result contract, and output repair no longer runs for it.
+
 ## 2026-11-01
 
 ### Improvement: larger text and compact panels in the dashboard

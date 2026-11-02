@@ -61,7 +61,7 @@ describe('BoardTaskCard', () => {
     const task = taskOf(['stage:api', 'in progress: wiring'], ['run:t-1', 'done: checked'])
     render(<BoardTaskCard task={task} participants={participants} onOpen={() => {}} />)
     const card = screen.getByRole('button', { name: 'CSV export, In progress' })
-    expect(within(card).getByText('@api')).toHaveAttribute('title', 'API')
+    expect(within(card).getByText('@api')).toHaveAttribute('title', 'api')
     expect(within(card).getAllByText('QA').length).toBeGreaterThan(0)
     expect(within(card).queryByText('Unassigned')).toBeNull()
     expect(within(card).getByText('2 reports')).toBeInTheDocument()

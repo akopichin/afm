@@ -21,7 +21,7 @@ The layout is a **stage rail** on the left plus one **tabbed workspace** on the
 right. The selected stage's Feed can also show a People panel on wide screens.
 
 - **Stage rail** — a compact vertical timeline of the run: status nodes (filled
-  for completed stages), each stage's `name` (or `id`), a human-readable status
+  for completed stages), each stage's `id` (its `name` as a tooltip), a human-readable status
   line, and, in the rail head, the
   run progress (`done / total`). Attached helper tasks appear beneath their stage;
   **+ Stage** is available when a live stage can be added. A stage using
@@ -687,7 +687,9 @@ resizing still works, but the width is not retained.
 
 - Each row shows the person's `@handle`, what they are doing now and a presence
   dot. A chip next to the name shows the command they run: the stage's command
-  for a stage agent, the profile's command for a run agent or helper. A run agent
+  for a stage agent, the resolved executor for a run agent or helper (the
+  profile's command, or the one it inherits; see
+  [Which executor a helper runs](collaboration.md#which-executor-a-helper-runs)). A run agent
   or helper also shows its read-only guarantee: **read-only** (an OS sandbox
   enforces it) or **no sandbox** (only the container or the prompt limits it).
   Both come from the server. For a live agent the guarantee is the one the

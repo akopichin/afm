@@ -469,6 +469,9 @@ type TaskCreatedPayload struct {
 	// older journals, which replay as "none".
 	Skills    []string `json:"skills,omitempty"`
 	SkillsDir string   `json:"skills_dir,omitempty"`
+	// Execution is how the resolved command in ProfileSnapshot runs, committed with the admission that resolved
+	// it; absent in older journals, whose tasks run the current default executor.
+	Execution *assistants.ExecutionBinding `json:"execution,omitempty"`
 }
 
 // TaskStatusChangedPayload is the task_status_changed control record's payload — decoded here by
@@ -684,6 +687,7 @@ func applyTaskCreated(as *AssistantsState, c *Control, dryRun bool) error {
 		RootStageID:      c.Target.StageID,
 		ProfileID:        assistants.ProfileID(p.ProfileID),
 		ProfileSnapshot:  p.ProfileSnapshot,
+		Execution:        p.Execution,
 		Title:            p.Title,
 		Instruction:      p.Instruction,
 		Mode:             assistants.Mode(p.Mode),

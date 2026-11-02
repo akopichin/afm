@@ -71,6 +71,11 @@
           "enum": ["team", "assistants"],
           "description": "Dashboard collaboration mode. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Affects the UI only, not whether collaboration is enabled. Unset falls back to the other config layer, then team; a flow.yaml collaboration.mode can override this further."
         },
+        "runtime_context": {
+          "type": "string",
+          "enum": ["isolated", "wrapper"],
+          "description": "Environment a helper process receives. isolated (default) passes only the helper's own command secret and system prompt; wrapper also keeps the ambient Claude auth and ANTHROPIC_BASE_URL for a wrapper command that calls claude itself. A profile's runtime_context overrides this; unset falls back to the other config layer, then isolated."
+        },
         "profiles": {
           "type": "object",
           "description": "Locally configured assistant roles, keyed by profile id. No marketplace: builtin + global config + project config are the only sources.",
@@ -85,8 +90,13 @@
       "description": "One locally configured assistant role.",
       "properties": {
         "title": { "type": "string", "description": "Title shown in the UI." },
-        "command": { "type": "string", "description": "An already-configured command/recipe name to run this profile with (not a new binary/transport). A built-in profile with no command inherits client.command." },
+        "command": { "type": "string", "description": "An already-configured command/recipe name to run this profile with (not a new binary/transport). Optional: a profile without a command runs with the executor of the stage it is attached to (or client.command)." },
         "instructions": { "type": "string", "description": "System instructions for this role." },
+        "runtime_context": {
+          "type": "string",
+          "enum": ["isolated", "wrapper"],
+          "description": "Overrides collaboration.runtime_context for this profile: isolated or wrapper."
+        },
         "delegate": { "type": "boolean", "description": "Allow this profile to create its own child tasks (recursive delegation). Default false — delegation is opt-in per profile because it spawns additional helper subprocesses." }
       }
     },

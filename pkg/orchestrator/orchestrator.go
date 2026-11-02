@@ -119,6 +119,10 @@ type Options struct {
 	// its own (Инвариант 9).
 	AssistantsEnabled  bool
 	AssistantsRegistry *assistants.Registry
+	// RecipeIdentity returns the identity of command's docker.agents recipe in a re-exec'd autoShim container, ""
+	// without a recipe or outside one; nil means "" for every command. A task keeps the identity it was admitted
+	// with and fails rather than silently run another model or account behind the same alias.
+	RecipeIdentity func(command string) string
 	// AddStageDisabled — add_stage switch (config add_stage.enabled / AFM_ADD_STAGE) resolved ONCE by cmd/afm.
 	// True rejects every runtime stage creation (preview, commit, add_stage proposal); the zero value keeps
 	// the capability on. Stages already durable in the journal still materialize on resume.
@@ -254,6 +258,8 @@ type Orchestrator struct {
 	// runHelperAgent — подменяемый запуск одного хода помощника (T3.4), продакшн — execHelperAgent. Тесты
 	// подставляют фейковый раннер (см. assistants_test.go) — тот же seam-паттерн, что и runVerifyAgent выше.
 	runHelperAgent helperAgentRunner
+	// helperAccess replaces the helper availability check in tests; nil means the config's own policy.
+	helperAccess func(cmd string) (rejection string, enforcement assistants.ReadonlyEnforcement)
 	// taskCancels хранит *taskCancelEntry активного прогона задачи на время её выполнения — Pause/Cancel
 	// используют его, чтобы прервать уже стартовавший helper-процесс немедленно (ключ — assistants.TaskID).
 	// Значение — указатель (не голый context.CancelFunc), чтобы runHelperTask's defer мог CompareAndDelete

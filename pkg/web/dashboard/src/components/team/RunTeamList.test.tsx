@@ -21,9 +21,9 @@ const threads: MeshThread[] = [
 
 // Порядок флоу: plan → implement → commit.
 const stages = [
-  { id: 'plan', title: 'Plan', status: 'done' },
-  { id: 'implement', title: 'Implement feature', status: 'running' },
-  { id: 'commit', title: 'Commit & cleanup', status: 'pending' },
+  { id: 'plan', status: 'done' },
+  { id: 'implement', status: 'running' },
+  { id: 'commit', status: 'pending' },
 ]
 
 function renderList(overrides: Partial<Parameters<typeof RunTeamList>[0]> = {}) {
@@ -74,7 +74,7 @@ describe('RunTeamList', () => {
     const filter = screen.getByRole('button', { name: /New to you.*1/ })
     expect(filter).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByRole('button', { name: /Hand-off/ })).toBeNull()
-    expect(screen.getByRole('button', { name: /Commit & cleanup.*New messages/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /commit.*New messages/ })).toBeInTheDocument()
     rerender(<RunTeamList participants={participants} threads={threads} stages={stages}
       listView="conversations" selectedThreadId="mt-1" onAddRunAgent={vi.fn()}
       unreadThreadIds={new Set()} newOnly onNewOnlyChange={onNewOnlyChange} />)
@@ -113,7 +113,7 @@ describe('RunTeamList', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(inStages().queryByRole('button', { name: /Correctness helper/ })).toBeNull()
     fireEvent.click(toggle)
-    expect(stageRowNames()).toEqual(['Plan', 'Implement feature', 'Commit & cleanup'])
+    expect(stageRowNames()).toEqual(['plan', 'implement', 'commit'])
     expect(screen.getByText('Correctness helper').closest('button')).toHaveClass('nested')
   })
 
@@ -126,27 +126,27 @@ describe('RunTeamList', () => {
 
   test('stages follow the flow order, not the server id order', () => {
     renderList()
-    expect(stageRowNames()).toEqual(['Plan', 'Implement feature', 'Commit & cleanup'])
+    expect(stageRowNames()).toEqual(['plan', 'implement', 'commit'])
   })
 
   test('a stage is one row — its name is not repeated as a group heading', () => {
     renderList()
-    expect(inStages().getAllByText('Commit & cleanup')).toHaveLength(1)
+    expect(inStages().getAllByText('commit')).toHaveLength(1)
     expect(screen.queryByText(/^Stage · /)).toBeNull()
   })
 
   test('each stage row shows its live status; a pending stage is dimmed', () => {
     renderList()
-    const commitRow = inStages().getByText('Commit & cleanup').closest('button') as HTMLElement
+    const commitRow = inStages().getByText('commit').closest('button') as HTMLElement
     expect(within(commitRow).getByText('Pending')).toBeInTheDocument()
     expect(commitRow).toHaveAttribute('data-status', 'pending')
-    const implementRow = screen.getByText('Implement feature').closest('button') as HTMLElement
+    const implementRow = screen.getByText('implement').closest('button') as HTMLElement
     expect(within(implementRow).getByText('Running')).toBeInTheDocument()
   })
 
   test('a stage waiting for a colleague says "Waiting" — short enough to keep its @name readable', () => {
-    renderList({ stages: [stages[0], { id: 'implement', title: 'Implement feature', status: 'awaiting_peer' }, stages[2]] as typeof stages })
-    const row = screen.getByText('Implement feature').closest('button') as HTMLElement
+    renderList({ stages: [stages[0], { id: 'implement', status: 'awaiting_peer' }, stages[2]] as typeof stages })
+    const row = screen.getByText('implement').closest('button') as HTMLElement
     expect(within(row).getByText('Waiting')).toBeInTheDocument()
   })
 
@@ -186,7 +186,7 @@ describe('RunTeamList', () => {
       .getAllByRole('button')
       .filter((button) => button.classList.contains('team-person-row'))
       .map((b) => b.querySelector('.team-person-name')?.textContent)
-    expect(names).toEqual(['Plan', 'Implement feature', 'Correctness helper', 'Commit & cleanup'])
+    expect(names).toEqual(['plan', 'implement', 'Correctness helper', 'commit'])
     const helperRow = screen.getByText('Correctness helper').closest('button') as HTMLElement
     expect(helperRow).toHaveClass('nested')
   })
@@ -208,7 +208,7 @@ describe('RunTeamList', () => {
 
   test('long names carry a tooltip with the full text', () => {
     renderList()
-    expect(inStages().getByText('Commit & cleanup')).toHaveAttribute('title', 'Commit & cleanup')
+    expect(inStages().getByText('Correctness helper')).toHaveAttribute('title', 'Correctness helper')
   })
 
   test('clicking a person row calls onSelectParticipant with that participant', () => {
@@ -218,7 +218,7 @@ describe('RunTeamList', () => {
   })
 
   test('a participant bound to a paused stage shows "Paused"', () => {
-    renderList({ stages: [{ id: 'implement', title: 'Implement feature', status: 'paused' }] })
+    renderList({ stages: [{ id: 'implement', status: 'paused' }] })
     expect(screen.getAllByText('Paused').length).toBeGreaterThan(0)
   })
 
@@ -236,7 +236,7 @@ describe('RunTeamList', () => {
   test('conversations are named by title, or by the other member when untitled', () => {
     const { onSelectThread } = renderList({ listView: 'conversations' })
     const conversations = screen.getByRole('region', { name: 'Conversations' })
-    expect(within(conversations).getByText('Commit & cleanup')).toBeInTheDocument()
+    expect(within(conversations).getByText('commit')).toBeInTheDocument()
     expect(within(conversations).queryByText(/^mt-/)).toBeNull()
     fireEvent.click(within(conversations).getByText('Hand-off'))
     expect(onSelectThread).toHaveBeenCalledWith(threads[0])
@@ -288,11 +288,11 @@ describe('RunTeamList with focusStageId', () => {
   test('groups: this stage first, then run agents, then the other stages in flow order — no conversations', () => {
     renderFocused()
     expect(groupNames()).toEqual(['This stage', 'Run agents', 'Other stages', 'Assistant'])
-    expect(rowNames('This stage')).toEqual(['Implement feature', 'Correctness helper', 'Docs helper'])
+    expect(rowNames('This stage')).toEqual(['implement', 'Correctness helper', 'Docs helper'])
     expect(rowNames('Run agents')).toEqual(['QA reviewer', 'Security'])
     expect(rowNames('Assistant')).toEqual(['claude'])
     // Flow order (plan → commit), each stage's helpers right under it; the focused stage is not repeated.
-    expect(rowNames('Other stages')).toEqual(['Plan', 'Commit & cleanup', 'Commit helper'])
+    expect(rowNames('Other stages')).toEqual(['plan', 'commit', 'Commit helper'])
     expect(screen.queryByRole('region', { name: 'Conversations' })).toBeNull()
   })
 
@@ -322,7 +322,7 @@ describe('RunTeamList with focusStageId', () => {
 
   test('a stage not started yet is addressable: it reads the message when it starts', () => {
     renderFocused()
-    const commit = screen.getByText('Commit & cleanup').closest('button') as HTMLElement
+    const commit = screen.getByText('commit').closest('button') as HTMLElement
     expect(commit).toBeEnabled()
     expect(within(commit).getByText('Not started — reads it when it starts')).toBeInTheDocument()
   })
@@ -334,7 +334,7 @@ describe('RunTeamList with focusStageId', () => {
         { id: 'stage:commit', kind: 'stage_agent', scope: 'stage', stage_id: 'commit', display_name: 'Commit & cleanup', reachable: false, unreachable_reason: 'script stage: no agent reads messages' },
       ],
     })
-    const commit = screen.getByText('Commit & cleanup').closest('button') as HTMLElement
+    const commit = screen.getByText('commit').closest('button') as HTMLElement
     expect(commit).toBeDisabled()
     expect(within(commit).getByText('Script stage: no agent reads messages')).toBeInTheDocument()
   })
@@ -408,8 +408,8 @@ describe('RunTeamList without focusStageId (the Team tab)', () => {
   })
 
   test('a stage parked on a usage limit says "Usage limit" with a waiting presence dot', () => {
-    renderList({ stages: [stages[0], { id: 'implement', title: 'Implement feature', status: 'awaiting_quota' }, stages[2]] as typeof stages })
-    const row = screen.getByText('Implement feature').closest('button') as HTMLElement
+    renderList({ stages: [stages[0], { id: 'implement', status: 'awaiting_quota' }, stages[2]] as typeof stages })
+    const row = screen.getByText('implement').closest('button') as HTMLElement
     expect(within(row).getByText('Usage limit')).toBeInTheDocument()
     expect(row.querySelector('.team-presence')).toHaveAttribute('data-presence', 'waiting')
   })

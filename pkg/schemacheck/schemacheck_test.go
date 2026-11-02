@@ -3,6 +3,7 @@ package schemacheck_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,7 +58,7 @@ func jsonInstance(t *testing.T, yamlData []byte) any {
 	if err := yaml.Unmarshal(yamlData, &value); err != nil {
 		t.Fatalf("parse YAML instance: %v", err)
 	}
-	data, err := json.Marshal(value)
+	data, err := json.Marshal(stringKeys(value))
 	if err != nil {
 		t.Fatalf("normalize YAML instance as JSON: %v", err)
 	}
@@ -66,6 +67,29 @@ func jsonInstance(t *testing.T, yamlData []byte) any {
 		t.Fatalf("decode JSON instance: %v", err)
 	}
 	return instance
+}
+
+// stringKeys turns the map[any]any yaml.v3 builds for a mapping with a non-string key tag (a `!!binary` key) into
+// the string-keyed object JSON needs; such a key decodes to a string already.
+func stringKeys(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, e := range v {
+			v[k] = stringKeys(e)
+		}
+	case map[any]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[fmt.Sprint(k)] = stringKeys(e)
+		}
+		return out
+	case []any:
+		for i, e := range v {
+			v[i] = stringKeys(e)
+		}
+	default: // a scalar
+	}
+	return v
 }
 
 func schemaAcceptsYAML(t *testing.T, sch *jsonschema.Schema, body string) bool {
@@ -501,6 +525,54 @@ func TestConfigSchemaMatchesAddStageSwitch(t *testing.T) {
 		{"empty mapping", "add_stage: {}\n", true},
 		{"string instead of bool", "add_stage:\n  enabled: \"false\"\n", false},
 		{"number instead of bool", "add_stage:\n  enabled: 0\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaAcceptsYAML(t, sch, tt.body); got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(t.TempDir(), projectDir)
+			if runtimeAccepts := err == nil; runtimeAccepts != tt.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
+	}
+}
+
+func TestConfigSchemaMatchesCollaborationRuntimeContext(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"collaboration isolated", "collaboration:\n  runtime_context: isolated\n", true},
+		{"collaboration wrapper", "collaboration:\n  runtime_context: wrapper\n", true},
+		{"profile wrapper without command", "collaboration:\n  profiles:\n    p:\n      runtime_context: wrapper\n", true},
+		{"profile with command", "collaboration:\n  profiles:\n    p:\n      command: /abs/x.sh\n      runtime_context: isolated\n", true},
+		{"unknown value", "collaboration:\n  runtime_context: host\n", false},
+		{"wrong case", "collaboration:\n  runtime_context: Wrapper\n", false},
+		{"empty string", "collaboration:\n  runtime_context: \"\"\n", false},
+		{"explicit null", "collaboration:\n  runtime_context: null\n", false},
+		{"number", "collaboration:\n  runtime_context: 1\n", false},
+		{"profile unknown value", "collaboration:\n  profiles:\n    p:\n      runtime_context: host\n", false},
+		{"profile explicit null", "collaboration:\n  profiles:\n    p:\n      runtime_context: null\n", false},
+		{"merge-tag key null", "collaboration: { !!merge runtime_context: null }\n", false},
+		{"binary key null", "collaboration: { !!binary cnVudGltZV9jb250ZXh0: null }\n", false},
+		{"profile binary key null", "collaboration:\n  profiles:\n    p: { !!binary cnVudGltZV9jb250ZXh0: null }\n", false},
+		{"binary key host", "collaboration: { !!binary cnVudGltZV9jb250ZXh0: host }\n", false},
+		{"merged null", "collaboration: { <<: { !!merge runtime_context: null } }\n", false},
+		{"binary key overrides merged host", "collaboration: { <<: { runtime_context: host }, !!binary cnVudGltZV9jb250ZXh0: isolated }\n", true},
+		{"merge-tag key overrides merged host", "collaboration: { <<: { runtime_context: host }, !!merge runtime_context: isolated }\n", true},
+		{"profile binary key shadows merged null", "collaboration:\n  profiles:\n    p: { <<: { runtime_context: null }, !!binary cnVudGltZV9jb250ZXh0: isolated }\n", true},
+		{"earlier tagged mapping in merge sequence", "collaboration: { <<: [ { !!binary cnVudGltZV9jb250ZXh0: isolated }, { runtime_context: host } ] }\n", true},
+		{"earlier host in merge sequence", "collaboration: { <<: [ { runtime_context: host }, { !!binary cnVudGltZV9jb250ZXh0: isolated } ] }\n", false},
 	}
 
 	for _, tt := range tests {

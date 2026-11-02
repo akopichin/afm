@@ -137,7 +137,7 @@ describe('StagesList', () => {
     expect(items[0]).not.toHaveClass('active')
     expect(items[1]).toHaveClass('active')
 
-    fireEvent.click(screen.getByText('Propose'))
+    fireEvent.click(screen.getByText('s1'))
     expect(onSelect).toHaveBeenCalledWith('s1')
   })
 
@@ -150,7 +150,7 @@ describe('StagesList', () => {
     render(<StagesList stages={stages} selectedStageId={null} onSelect={onSelect} accounting={{ supported: false }} />)
 
     // Строка — настоящая <button> с доступным именем из содержимого (имя+статус).
-    const row = screen.getByRole('button', { name: /Propose/i })
+    const row = screen.getByRole('button', { name: /^s1 / })
     expect(row.tagName).toBe('BUTTON')
 
     // Клавиатура: фокус ставится, Enter/Space активируют кнопку нативно.
@@ -222,12 +222,12 @@ describe('StagesList', () => {
     expect(indicator).toHaveAttribute('title', 'Stage note attached · select stage to read')
     expect(indicator.closest('.stage-actions')).not.toBeNull()
     expect(indicator.closest('.stage-row')).toBeNull()
-    const rowName = screen.getByRole('button', { name: /Build/ }).textContent
+    const rowName = screen.getByRole('button', { name: /^a / }).textContent
 
     rerender(<StagesList stages={[{ ...noted, preNote: '' }]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
     expect(screen.queryByRole('img', { name: 'Stage note attached' })).toBeNull()
     expect(container.querySelector('.prenote-badge')).toBeNull()
-    expect(screen.getByRole('button', { name: /Build/ }).textContent).toBe(rowName)
+    expect(screen.getByRole('button', { name: /^a / }).textContent).toBe(rowName)
   })
 
   test('does not mark running stage with attention', () => {
@@ -248,20 +248,22 @@ describe('StagesList', () => {
 
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
 
-    // Заголовок стадии всегда есть (макет показывает имя жирным); при пустом
-    // name показываем id.
-    expect(screen.getByRole('listitem').querySelector('.stage-name')).toHaveTextContent('s1')
+    // Заголовок стадии — всегда её id; при пустом name подсказки нет.
+    const title = screen.getByRole('listitem').querySelector('.stage-name')
+    expect(title).toHaveTextContent('s1')
+    expect(title).not.toHaveAttribute('title')
   })
 
-  test('a row shows the stage name as its title and the status word under it, not the id', () => {
+  test('a row shows the stage id as its title with the name in a tooltip, and the status word under it', () => {
     const stages: Stage[] = [
       { id: 'impl', name: 'Build the checkout', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] },
     ]
     render(<StagesList stages={stages} selectedStageId={null} onSelect={vi.fn()} accounting={{ supported: false }} />)
     const row = screen.getByRole('listitem')
-    expect(row.querySelector('.stage-name')).toHaveTextContent('Build the checkout')
+    expect(row.querySelector('.stage-name')).toHaveTextContent('impl')
+    expect(row.querySelector('.stage-name')).toHaveAttribute('title', 'Build the checkout')
     expect(row.querySelector('.stage-status')).toHaveTextContent('Running')
-    expect(row).not.toHaveTextContent('impl')
+    expect(row).not.toHaveTextContent('Build the checkout')
   })
 
   test('переход стадии в done навешивает one-shot класс just-done', async () => {
@@ -499,7 +501,7 @@ describe('StagesList', () => {
       expect(container.querySelector('.verify-badge')).toHaveAttribute('data-phase', 'needs_changes')
 
       // Стадия по-прежнему просто "running" — verify не подменяет статус.
-      expect(screen.getByRole('button', { name: /Build/i })).toHaveTextContent('Running')
+      expect(screen.getByRole('button', { name: /^a / })).toHaveTextContent('Running')
     })
 
     test('accepted_stalemate (review_patience) renders a distinct data-phase badge with its own title', () => {
@@ -559,7 +561,7 @@ describe('StagesList', () => {
 
     test('TestStageRow_ShowsAwaitingAssistants', () => {
       const { container } = render(<StagesList stages={[stage]} selectedStageId={null} onSelect={() => {}} accounting={{ supported: false }} />)
-      expect(screen.getByRole('button', { name: /QA gate/i })).toHaveTextContent('Awaiting helpers')
+      expect(screen.getByRole('button', { name: /^a / })).toHaveTextContent('Awaiting helpers')
       expect(container.querySelector('.status-dot[data-status="awaiting_assistants"]')).not.toBeNull()
     })
 
@@ -806,8 +808,8 @@ test('stage time shares the status line, distinguishes pending from zero and sta
     { ...railStage, id: 'zero', name: 'Started stage', timing: { started: true, complete: true, ms: { work: 0, approval: 0, helpers: 0, backoff: 0, scheduling: 0, paused: 0 } } },
   ]
   render(<StagesList stages={stages} times={stageTimes(stages, 0, false)} selectedStageId={null} onSelect={vi.fn()} accounting={ACCOUNTING_UNSUPPORTED} />)
-  const pending = screen.getByRole('button', { name: 'Pending stage Pending' })
-  const started = screen.getByRole('button', { name: 'Started stage Running' })
+  const pending = screen.getByRole('button', { name: 'pending Pending' })
+  const started = screen.getByRole('button', { name: 'zero Running' })
   expect(pending.querySelector('.stage-time')).toHaveTextContent('—')
   expect(pending).toHaveAccessibleDescription('Stage time —')
   expect(started.querySelector('.stage-time')).toHaveTextContent('0s')

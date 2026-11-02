@@ -493,9 +493,7 @@ func newNativeHelperTestOrchestrator(t *testing.T) (*Orchestrator, *state.Store)
 		{ID: "delegator", Title: "Delegator", Command: "claude", Capabilities: assistants.Capabilities{Delegate: true}},
 		{ID: "codexer", Title: "Codexer", Command: "codex-as-claude"},
 		{ID: "custom", Title: "Custom", Command: "helper-cmd"},
-	}, nil, "claude", func(string) (bool, string, assistants.ReadonlyEnforcement) {
-		return true, "", assistants.ReadonlyEnforcementOS
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +502,7 @@ func newNativeHelperTestOrchestrator(t *testing.T) (*Orchestrator, *state.Store)
 	return o, store
 }
 
-func attachProfile(t *testing.T, o *Orchestrator, opID string, profile assistants.ProfileID) assistants.TaskID {
+func attachNativeProfile(t *testing.T, o *Orchestrator, opID string, profile assistants.ProfileID) assistants.TaskID {
 	t.Helper()
 	taskID, err := o.Attach(context.Background(), AttachRequest{
 		OperationID: opID, StageID: assistantsTestStageID, ProfileID: profile, Instruction: "look at this", Actor: state.Actor{Kind: "user"},
@@ -532,7 +530,7 @@ func TestHelperNative_ConfigRequestsNativeOnlyWithoutDelegation(t *testing.T) {
 		{"custom", "helper-cmd", nil},
 	} {
 		t.Run(string(tc.profile), func(t *testing.T) {
-			taskID := attachProfile(t, o, "op-native-"+string(tc.profile), tc.profile)
+			taskID := attachNativeProfile(t, o, "op-native-"+string(tc.profile), tc.profile)
 			waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 5*time.Second)
 			got := o.helperExecutorConfig(taskID, tc.cmd).NativeSchema
 			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
@@ -630,7 +628,7 @@ func TestHelperNative_ForcedPayloadAfterAYieldIsNotCommitted(t *testing.T) {
 				raw := `{"schema_version":1,"kind":"result","verdict":"pass","summary":"` + summary + `"}`
 				return executor.HelperOutcome{ProcessOK: true, RawText: raw, StructuredPayload: tc.native, NativeStarted: tc.native}, nil
 			}
-			attachProfile(t, o, "op-forced", "reviewer")
+			attachNativeProfile(t, o, "op-forced", "reviewer")
 			waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 5*time.Second)
 			o.concurrency.WaitAgents()
 			if got := turns.Load(); got != tc.wantTurns {
@@ -664,7 +662,7 @@ func TestHelperNative_JobYieldedLikeItsTurn(t *testing.T) {
 				awaitRelease(t, release)
 				return passResultOutcome(), nil
 			}
-			taskID := attachProfile(t, o, "op-job-"+string(tc.profile), tc.profile)
+			taskID := attachNativeProfile(t, o, "op-job-"+string(tc.profile), tc.profile)
 			<-started
 			helperID := meshHelperParticipantID(taskID)
 			cfg := o.helperExecutorConfig(taskID, "claude")
@@ -696,7 +694,7 @@ func TestHelperNative_AnswerIsNormalizedAndRecorded(t *testing.T) {
 			o.runHelperAgent = func(context.Context, string, string, string, string, string, string) (executor.HelperOutcome, error) {
 				return executor.HelperOutcome{ProcessOK: true, RawText: tc.raw, NativeStarted: tc.native}, nil
 			}
-			taskID := attachProfile(t, o, "op-prov", "reviewer")
+			taskID := attachNativeProfile(t, o, "op-prov", "reviewer")
 			tk := waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 5*time.Second)
 			if tk.LastVerdict != assistants.VerdictPass {
 				t.Fatalf("task = %+v", tk)
@@ -728,7 +726,7 @@ func TestHelperNative_OversizedAnswerIsRejectedAsSent(t *testing.T) {
 		return executor.HelperOutcome{ProcessOK: true, RawText: raw, StructuredPayload: true, NativeStarted: true}, nil
 	}
 
-	taskID := attachProfile(t, o, "op-oversized", "reviewer")
+	taskID := attachNativeProfile(t, o, "op-oversized", "reviewer")
 
 	tk := waitForTaskStatus(t, store, taskID, assistants.StatusFailed, 5*time.Second)
 	if !strings.Contains(tk.StatusReason, "byte limit") {
@@ -771,7 +769,7 @@ func TestHelperNative_ProviderRefusalRerunsPromptOnly(t *testing.T) {
 	o, store := newNativeHelperTestOrchestrator(t)
 	o.runHelperAgent = o.execHelperAgent
 
-	taskID := attachProfile(t, o, "op-refused", "reviewer")
+	taskID := attachNativeProfile(t, o, "op-refused", "reviewer")
 	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 10*time.Second)
 	o.concurrency.WaitAgents()
 
@@ -861,7 +859,7 @@ func TestHelperNative_EnforcedAnswerRule(t *testing.T) {
 			o, store := newNativeHelperTestOrchestrator(t)
 			o.runHelperAgent = o.execHelperAgent
 
-			taskID := attachProfile(t, o, "op-enforced", "reviewer")
+			taskID := attachNativeProfile(t, o, "op-enforced", "reviewer")
 			waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 10*time.Second)
 			o.concurrency.WaitAgents()
 
@@ -910,7 +908,7 @@ func TestHelperNative_UnkeptNativeEvidenceFailsTheTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	attachProfile(t, o, "op-unkept", "reviewer")
+	attachNativeProfile(t, o, "op-unkept", "reviewer")
 	tk := waitForTaskStatus(t, store, taskID, assistants.StatusFailed, 10*time.Second)
 	o.concurrency.WaitAgents()
 

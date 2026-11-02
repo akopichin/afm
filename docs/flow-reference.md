@@ -59,7 +59,7 @@ stages:
 | Field | Required | Description |
 |------|-------------|----------|
 | `id` | yes | Unique identifier. Must be a safe path component — non-empty, not `.`/`..`, and no `/`, `\`, or NUL (it becomes a directory name on disk) |
-| `name` | no | Human-readable name for logs and the dashboard (if empty — `id` is shown) |
+| `name` | no | Human-readable name for logs; the dashboard labels stages by `id` and shows `name` as a tooltip |
 | `description` | no | Task description for the AI (background/context). Not enforced by the validator, but strongly recommended — it's the main guidance the agent gets |
 | `prompt` | no | Explicit instruction for the agent — a separate `<prompt>` block after the context. Unlike `description`, this is a direct instruction on what to do. It's escaped and cannot inject XML tags |
 | `agents` | conditional | Combination of `planning`, `implementation`, `review` — or `[auto]` for the [autonomous track](autonomous-track.md). A stage must have **one of**: an agent list, a `plan`, `interactive: true`, `agents: [auto]`, or `script:` (see the note below the table) |

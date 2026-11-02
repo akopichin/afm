@@ -243,7 +243,7 @@ export function App(): ReactElement {
   // assistantMaxDepth — the run's effective delegation-depth ceiling (T4a.8's breadcrumb "depth N of max_depth"),
   // independent of assistantsByStage's own per-stage poll (a run-wide, rarely-changing number).
   const assistantMaxDepth = useAssistantMaxDepth(capabilities.collaboration)
-  // assistantProfiles — configured helper roles, for the "Attach helper…" dialog. Same collaboration gate as
+  // assistantProfiles — configured helper roles at run level (Team, Add run agent). Same collaboration gate as
   // the rest; empty list when the capability is off (no network calls).
   const assistantProfiles = useAssistantProfiles(capabilities.collaboration)
 
@@ -306,6 +306,13 @@ export function App(): ReactElement {
   // выбранная в рейле стадия.
   const workspaceStageId = wsState.view === 'attention' && attnItem !== null ? attnItem.stageId : selectedStageId
   const workspaceStage = stages.find((stage) => stage.id === workspaceStageId) ?? null
+  // stageProfiles — the same roles resolved in the open stage's context (its executor, availability): the
+  // Feed's attach mention/preview and the "Attach helper…" dialog act on that stage, not on the run. A script
+  // stage takes no helpers and the server answers 400 for it, so it is not asked.
+  const stageProfiles = useAssistantProfiles(
+    capabilities.collaboration && workspaceStage !== null && !workspaceStage.isScript,
+    workspaceStage?.id,
+  )
 
   // Focus mode is offered on the Feed and on the Plan / Question views of a stage (their own waiting view or the
   // history). Any other view or a helper ends it. Overlays, including the Stages drawer DashboardShell reports,
@@ -552,7 +559,7 @@ export function App(): ReactElement {
       // (!isGlobalView) таб нужен всегда — он и есть активная вкладка истории.
       tabs.push({
         id: 'detail',
-        label: workspaceStage.name !== '' ? workspaceStage.name : workspaceStage.id,
+        label: workspaceStage.id,
       })
     }
   }
@@ -638,7 +645,7 @@ export function App(): ReactElement {
       onOpenChange={setSideAgentOpen}
       attentionShortcut={attentionShortcut}
       currentStageId={selectedStageId ?? ''}
-      stages={stages.map((s) => ({ id: s.id, title: s.name }))}
+      stages={stages.map((s) => ({ id: s.id, title: s.id }))}
       mentionsEnabled={capabilities.collaboration}
     >
       {/* CommentProvider выше FileBrowserProvider, PlanPanel и DialogChannel: черновики и отправка
@@ -832,7 +839,7 @@ export function App(): ReactElement {
                       // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
                       // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
                       // and the plain note-to-agent composer (no Message/Revise tabs).
-                      mesh={stageMesh ? { roster: mergedRoster, profiles: assistantProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts, sideFailures: meshSideFailures } : undefined}
+                      mesh={stageMesh ? { roster: mergedRoster, profiles: stageProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts, sideFailures: meshSideFailures } : undefined}
                       reviseAvailable={reviseAvailable}
                       paused={workspaceStage?.status === 'paused' || flowPauseState !== 'none'}
                       onReplyNeededChange={reportFeedReplies}
@@ -952,8 +959,8 @@ export function App(): ReactElement {
       {attachHelperStageId !== null && (
         <AttachHelperDialog
           stageId={attachHelperStageId}
-          stageTitle={stages.find((s) => s.id === attachHelperStageId)?.name || attachHelperStageId}
-          profiles={assistantProfiles}
+          stageTitle={attachHelperStageId}
+          profiles={attachHelperStageId === workspaceStage?.id ? stageProfiles : []}
           onAttached={() => setAttachHelperStageId(null)}
           onCancel={() => setAttachHelperStageId(null)}
         />
@@ -963,7 +970,7 @@ export function App(): ReactElement {
         <AddStageDialog
           capabilityEnabled={capabilities.addStage}
           graphRevision={graphRevision}
-          stages={stages.map((s) => ({ id: s.id, title: s.name || s.id }))}
+          stages={stages.map((s) => ({ id: s.id, title: s.id }))}
           onCommitted={() => { setAddStageOpen(false); refresh() }}
           onCancel={() => setAddStageOpen(false)}
         />

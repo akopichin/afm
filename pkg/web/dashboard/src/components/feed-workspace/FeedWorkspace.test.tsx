@@ -702,10 +702,10 @@ describe('FeedWorkspace', () => {
   })
 
   describe('FeedGroupView — repliable thoughts', () => {
-    it('the author row names the stage agent when the caller knows its name', () => {
-      const { container } = render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} agentName="Checkout executor" />)
-      expect(container.querySelector('.feed-author-row .feed-actor')).toHaveTextContent('Checkout executor')
-      expect(container.querySelector('.mesh-avatar')).toHaveTextContent('CE')
+    it('the author row names the stage agent by its stage id', () => {
+      const { container } = render(<FeedGroupView group={{ ...groupOf([thoughtItem()]), stageId: 'checkout' }} showStageBadges={false} />)
+      expect(container.querySelector('.feed-author-row .feed-actor')).toHaveTextContent('checkout')
+      expect(container.querySelector('.mesh-avatar')).toHaveTextContent('CH')
     })
 
     it('клик по строке-мысли вызывает onReplyToThought(key, text)', () => {

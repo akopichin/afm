@@ -408,11 +408,12 @@ func (o *Orchestrator) admitStageTurn(s flow.Stage) *executor.UsageLimitError {
 	}
 }
 
-// taskProviderHold — admission хода помощника: hold провайдера его профильной команды или nil. Под hold'ом ход не
+// taskProviderHold — admission хода помощника: hold провайдера команды его исполнителя или nil. Под hold'ом ход не
 // стартует: задача остаётся (или возвращается) в queued, а retryTaskAt повторяет планирование к концу hold'а.
 // Собственное durable ожидание помощника после отказа — TaskState.Quota (parkTaskForQuota).
 func (o *Orchestrator) taskProviderHold(task assistants.Task) *executor.UsageLimitError {
-	return o.admitAgent(o.opts.Config.UsageLimitProvider(task.ProfileSnapshot.Command), "", task.ID)
+	cmd := o.taskExecution(o.opts.Store.Snapshot(), task).Command
+	return o.admitAgent(o.opts.Config.UsageLimitProvider(cmd), "", task.ID)
 }
 
 // retryTaskAt повторяет планирование queued-задачи в момент at (конец hold'а или until парка): таймер на

@@ -8,7 +8,7 @@ import { BoardTaskDetails } from './BoardTaskDetails'
 import { DialogOpenContext } from '../../lib/focus-trap'
 
 const participants: MeshParticipant[] = [
-  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
+  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'api', stage_id: 'api', reachable: true },
   { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
 ]
 
@@ -102,7 +102,7 @@ describe('BoardTaskDetails', () => {
     expect(within(dialog).getByText('You')).toBeInTheDocument()
 
     const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
-    expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('Done')
+    expect(within(assignees).getByText('api').closest('li')).toHaveTextContent('Done')
     expect(within(assignees).getByText('QA', { selector: '.board-task-details-assignee-name' }).closest('li')).toHaveTextContent('In progress')
 
     const reports = within(dialog).getByRole('list', { name: 'Reports' })
@@ -157,7 +157,7 @@ describe('BoardTaskDetails', () => {
       vi.restoreAllMocks()
     })
 
-    const stages = [{ id: 'api', title: 'API', status: 'running' }]
+    const stages = [{ id: 'api', status: 'running' }]
     const typed = taskFromView(
       typedTaskView({
         key: 'task/csv',
@@ -186,7 +186,7 @@ describe('BoardTaskDetails', () => {
       expect(within(dialog).getByText('wiring the handler', { selector: '.board-task-details-progress' })).toBeInTheDocument()
       expect(within(dialog).getByText('v4')).toBeInTheDocument()
       const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
-      expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('In progress')
+      expect(within(assignees).getByText('api').closest('li')).toHaveTextContent('In progress')
       expect(within(assignees).getByText('QA', { selector: '.board-task-details-assignee-name' }).closest('li')).toHaveTextContent('Assigned')
       expect(within(assignees).getByText('gone').closest('li')).toHaveTextContent('Done')
     })
@@ -201,7 +201,7 @@ describe('BoardTaskDetails', () => {
 
     test('Release is offered only on active assignments that are not done', () => {
       const { dialog } = renderTyped()
-      expect(within(dialog).getByRole('button', { name: 'Release API' })).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Release api' })).toBeInTheDocument()
       expect(within(dialog).getByRole('button', { name: 'Release QA' })).toBeInTheDocument()
       expect(within(dialog).queryByRole('button', { name: 'Release gone' })).toBeNull()
     })
@@ -210,7 +210,7 @@ describe('BoardTaskDetails', () => {
       const post = vi.spyOn(meshClient, 'postMeshTask').mockResolvedValue({ key: 'task/csv', version: 5, status: 'in_progress', seq: 9 })
       const { dialog, reload } = renderTyped()
       fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'blocked' } })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Release api' }))
       await waitFor(() => expect(reload).toHaveBeenCalled())
       expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'release', key: 'task/csv', assignmentId: 'a1', expectedVersion: 4, text: 'blocked' })
       expect(within(dialog).getByLabelText('Reason')).toHaveValue('')
@@ -220,7 +220,7 @@ describe('BoardTaskDetails', () => {
       vi.spyOn(meshClient, 'postMeshTask').mockRejectedValue(new meshClient.MeshApiError('/api/mesh/tasks', 409, 'stale_revision', 'version mismatch'))
       const { dialog, reload } = renderTyped()
       fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'blocked' } })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Release api' }))
       await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Task changed, reloaded'))
       expect(reload).toHaveBeenCalled()
       expect(within(dialog).getByLabelText('Reason')).toHaveValue('blocked')
@@ -231,7 +231,7 @@ describe('BoardTaskDetails', () => {
       const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
       const { dialog, reload } = renderTyped(unassigned)
       const select = within(dialog).getByRole('combobox', { name: 'Assign to' })
-      expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose an agent', 'API', 'QA'])
+      expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose an agent', 'api', 'QA'])
       fireEvent.change(select, { target: { value: 'run:t-1' } })
       fireEvent.click(within(dialog).getByRole('button', { name: 'Assign' }))
       await waitFor(() => expect(reload).toHaveBeenCalled())
@@ -274,8 +274,8 @@ describe('BoardTaskDetails', () => {
     test("each assignment shows its own result or progress, not only the latest note", () => {
       const { dialog } = renderTyped()
       const assignees = within(dialog).getByRole('list', { name: 'Assignees' })
-      expect(within(assignees).getByText('API').closest('li')).toHaveTextContent('wiring the handler')
-      // run:gone's result is older than API's progress, so it is not the task's note — it still shows.
+      expect(within(assignees).getByText('api').closest('li')).toHaveTextContent('wiring the handler')
+      // run:gone's result is older than api's progress, so it is not the task's note — it still shows.
       expect(within(assignees).getByText('gone').closest('li')).toHaveTextContent('reviewed')
     })
 
@@ -305,7 +305,7 @@ describe('BoardTaskDetails', () => {
       const { dialog } = renderTyped(ended)
       const history = within(dialog).getByRole('list', { name: 'History' })
       expect(within(history).getByText('QA', { selector: '.board-task-details-assignee-name' }).closest('li')).toHaveTextContent('half the columns')
-      expect(within(history).getByText('API').closest('li')).toHaveTextContent('parser drafted')
+      expect(within(history).getByText('api').closest('li')).toHaveTextContent('parser drafted')
     })
 
     test('an agent picked to assign that stops being a candidate is neither shown nor sent', () => {
@@ -328,7 +328,7 @@ describe('BoardTaskDetails', () => {
         }),
       )
       const { dialog } = renderTyped(withRefs)
-      const active = within(within(dialog).getByRole('list', { name: 'Assignees' })).getByRole('list', { name: 'API artifacts' })
+      const active = within(within(dialog).getByRole('list', { name: 'Assignees' })).getByRole('list', { name: 'api artifacts' })
       expect(within(active).getByText('artifacts/report.md')).toBeInTheDocument()
       const archived = within(within(dialog).getByRole('list', { name: 'History' })).getByRole('list', { name: 'QA artifacts' })
       expect(within(archived).getByText('artifacts/draft.md')).toBeInTheDocument()
@@ -349,14 +349,14 @@ describe('BoardTaskDetails', () => {
       const unassigned = taskFromView(typedTaskView({ key: 'task/csv', title: 'CSV export', version: 2 }))
       render(<BoardTaskDetails task={unassigned} participants={withAssistant} stages={stages} onClose={() => {}} />)
       const select = screen.getByRole('combobox', { name: 'Assign to' })
-      expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose an agent', 'API', 'QA'])
+      expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose an agent', 'api', 'QA'])
     })
 
     test('Release without a reason puts only the fields it changes on the wire', async () => {
       const receipt = { key: 'task/csv', version: 5, status: 'in_progress', seq: 9 }
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, json: async () => receipt } as Response)
       const { dialog, reload } = renderTyped()
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Release api' }))
       await waitFor(() => expect(reload).toHaveBeenCalled())
       const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string)
       expect(Object.keys(body).sort()).toEqual(['action', 'assignment_id', 'expected_version', 'key', 'request_id'])
@@ -410,10 +410,10 @@ describe('BoardTaskDetails', () => {
       test('Release resends the original payload with the same request id after the task moved on', async () => {
         const post = lostThenOk()
         const { dialog, reload, poll } = renderLive(typed)
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Release api' }))
         await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument())
         poll(newer)
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Release api' }))
         await waitFor(() => expect(reload).toHaveBeenCalled())
         expect(post.mock.calls[0]?.[0]).toMatchObject({ action: 'release', assignmentId: 'a1', expectedVersion: 4 })
         expect(post.mock.calls[1]?.[0]).toEqual(post.mock.calls[0]?.[0])
@@ -463,7 +463,7 @@ describe('BoardTaskDetails', () => {
       test('a different action after a lost response is built from the fresh task', async () => {
         const post = lostThenOk()
         const { dialog, reload, poll } = renderLive(typed)
-        fireEvent.click(within(dialog).getByRole('button', { name: 'Release API' }))
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Release api' }))
         await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument())
         poll(newer)
         fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }))

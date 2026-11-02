@@ -78,8 +78,11 @@ func taskStatusChangeEffect(taskID assistants.TaskID, p state.TaskStatusChangedP
 	if err != nil {
 		return state.Effect{}, fmt.Errorf("marshal task_status_changed payload: %w", err)
 	}
-	return state.Effect{Kind: "task_status_changed", Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
+	return state.Effect{Kind: taskStatusChangedEffectKind, Target: state.Target{TaskID: string(taskID)}, Payload: raw}, nil
 }
+
+// taskStatusChangedEffectKind is the Kind of the effects taskStatusChangeEffect builds; a replay looks for it.
+const taskStatusChangedEffectKind = "task_status_changed"
 
 func taskHoldEffect(kind string, taskID assistants.TaskID, owner, reason string) (state.Effect, error) {
 	raw, err := json.Marshal(state.TaskHoldPayload{Owner: owner, Reason: reason})
@@ -129,18 +132,6 @@ func randomOpSuffix() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-// profileView looks up a profile's current availability view by id — Registry.Get returns the raw Profile
-// definition (used for ProfileSnapshot); this is the separate availability check (T1.5's gate), enforced
-// here at admission time per dev-plan's T3.4 spec.
-func profileView(reg *assistants.Registry, id assistants.ProfileID) (assistants.ProfileView, bool) {
-	for _, v := range reg.List() {
-		if v.ID == id {
-			return v, true
-		}
-	}
-	return assistants.ProfileView{}, false
 }
 
 // taskDir returns the file namespace root for one helper task — see assistants_files.go (T3.6) for the
@@ -414,6 +405,11 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	if idleRunAgent(rs, t) {
 		return
 	}
+	// A turn never starts on another model or account than the task was admitted with: it fails with the reason.
+	if reason := o.executorChangedReason(t.Task, o.taskExecution(rs, t.Task)); reason != "" {
+		o.finishTaskFrom(taskID, assistants.StatusQueued, assistants.StatusFailed, reason)
+		return
+	}
 	// Durable usage-limit park (Quota.Until ahead): the turn is not due yet. The park armed the wake timer; after a
 	// restart this very call, made by recovery, arms it again from the journal. A manual probe starts now.
 	if q := t.Quota; q != nil && !q.ManualProbe && q.Until.After(o.clk().Now()) {
@@ -485,7 +481,7 @@ func (o *Orchestrator) taskAdmissionHold(task assistants.Task) *executor.UsageLi
 	return o.taskProviderHold(task)
 }
 
-// spawnTask hands the task's turn to concurrency.SpawnOwned under its profile command's semaphore. The
+// spawnTask hands the task's turn to concurrency.SpawnOwned under its executor command's semaphore. The
 // pause/TOCTOU re-check happens INSIDE the run body (not via SpawnOwned's shouldRun hook) so a task that
 // gets held while queued behind a full command semaphore can be put visibly BACK to "queued" instead of
 // being left stuck in "running" with no process ever having started (SpawnOwned's shouldRun-false path is
@@ -495,7 +491,8 @@ func (o *Orchestrator) taskAdmissionHold(task assistants.Task) *executor.UsageLi
 // (status still "running") and silently no-op'd, leaving the task stuck in "queued" with the hold already
 // cleared and nothing left to wake it (see the finish-queue block below for the full trace).
 func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, task assistants.Task) {
-	cmd := task.ProfileSnapshot.Command
+	// The slot of the command the task runs: a helper inheriting its stage's command waits for the stage agent.
+	cmd := o.taskExecution(o.opts.Store.Snapshot(), task).Command
 	o.concurrency.SpawnOwned(ctx, concurrency.TaskOwnerKey(string(taskID)), cmd, nil, func(runCtx context.Context, lease *concurrency.Lease) {
 		if o.taskHeld(taskID) {
 			if o.taskRequeueBarrier != nil {

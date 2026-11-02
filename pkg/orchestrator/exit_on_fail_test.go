@@ -289,15 +289,14 @@ func TestExitOnFailStartupAutoRecover(t *testing.T) {
 
 // Провал не закрывает ожидания mesh как run_closed: ран не финализирован, его можно продолжить.
 func TestExitOnFailMeshWaits(t *testing.T) {
+	pinContainerHelperPolicy(t)
 	const stageID = "work"
 	stages := []flow.Stage{{ID: stageID, Name: "Work", Script: "until [ -e go ]; do sleep 0.01; done; exit 1"}}
 	rec := &flowEventRecorder{}
 	r := newExitOnFailRun(t, stages, true, func(o *orchestrator.Options) {
 		reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 			{ID: "qa", Title: "QA", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
-		}, nil, "claude", func(string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("BuildRegistry: %v", err)
 		}

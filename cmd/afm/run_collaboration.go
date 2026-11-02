@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
@@ -77,8 +78,7 @@ type collaborationRuntime struct {
 
 // startCollaboration resolves the policy, durably records it (T2.6/T2.7 — see below) and, if enabled, builds
 // the profile registry from this process's config. There is no code here creating profiles from an HTTP
-// request — only config (global/project collaboration.profiles) and the (currently empty) built-in catalog
-// feed the registry.
+// request — only config (global/project collaboration.profiles) and the builtin default feed the registry.
 //
 // store is used ONLY to durably record the resolved policy (state.Store.EnsurePolicyRecorded) before this
 // function returns — the T2.7 recovery-ordering requirement that policy be resolved and any change recorded
@@ -108,14 +108,10 @@ func startCollaboration(store *state.Store, cfg config.Config, f *flow.Flow) *co
 	return &collaborationRuntime{policy: policy, registry: reg}
 }
 
-// buildProfileRegistry builds the collaboration profile registry from config — the one validation of
-// collaboration.profiles, shared by afm run and afm validate.
+// buildProfileRegistry builds the collaboration profile registry — the builtin default and the configured
+// collaboration.profiles — and is the one validation of the latter, shared by afm run and afm validate.
 func buildProfileRegistry(cfg config.Config) (*assistants.Registry, error) {
-	available := func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-		reason := config.HelperCommandRejection(cmd, cfg)
-		return reason == "", reason, assistants.ReadonlyEnforcement(config.HelperReadonlyEnforcement(cmd, cfg))
-	}
-	return assistants.BuildRegistry(nil, profilesFromConfig(cfg.Collaboration.Profiles), nil, cfg.Client.Command, available)
+	return assistants.BuildRegistry(assistants.BuiltinProfiles(), profilesFromConfig(cfg.Collaboration.Profiles), nil)
 }
 
 // checkDeclaredAssistants preflights every stage's assistants: field against the resolved collaboration
@@ -125,27 +121,41 @@ func buildProfileRegistry(cfg config.Config) (*assistants.Registry, error) {
 // When collaboration is disabled, a declared assistants: is a silent no-op at runtime (attachDeclaredAssistants's
 // own gate) — so this does not error, only warns once per offending stage, keeping AFM_COLLABORATION=0 a
 // working way to temporarily turn helpers off without editing every flow.yaml that declares them.
-//
-// Profile command AVAILABILITY (ProfileView.Available) is deliberately NOT checked here — PATH differs
-// between host and container, and a hard check here would break Docker runs where the profile's command
-// only exists inside the image. An unavailable profile is instead rejected, best-effort, by Attach itself at
-// runtime (attachDeclaredAssistants already logs and moves on without blocking the stage).
 func checkDeclaredAssistants(f *flow.Flow, collab *collaborationRuntime) error {
 	if !collab.policy.Enabled || collab.registry == nil {
-		for _, s := range f.Stages {
-			if len(s.Assistants) == 0 {
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "warning: stage %q declares \"assistants\" but collaboration is disabled — they will not be attached\n", s.ID)
-		}
+		warnAssistantsWithoutCollaboration(f.Stages)
 		return nil
 	}
-	for _, s := range f.Stages {
+	return checkStageAssistants(f.Stages, collab.registry)
+}
+
+// warnAssistantsWithoutCollaboration warns once per stage whose assistants: will not be attached.
+func warnAssistantsWithoutCollaboration(stages []flow.Stage) {
+	for _, s := range stages {
+		if len(s.Assistants) > 0 {
+			fmt.Fprintf(os.Stderr, "warning: stage %q declares \"assistants\" but collaboration is disabled — they will not be attached\n", s.ID)
+		}
+	}
+}
+
+// checkStageAssistants reports the first stage assistant whose profile reg lacks.
+func checkStageAssistants(stages []flow.Stage, reg *assistants.Registry) error {
+	for _, s := range stages {
 		for _, a := range s.Assistants {
-			if _, ok := collab.registry.Get(assistants.ProfileID(a.Profile)); !ok {
-				return fmt.Errorf("stage %q: unknown assistant profile %q (not in collaboration.profiles)", s.ID, a.Profile)
+			if err := checkHelperProfile(reg, a.Profile); err != nil {
+				return fmt.Errorf("stage %q: %w", s.ID, err)
 			}
 		}
+	}
+	return nil
+}
+
+// checkHelperProfile reports a declared helper whose profile reg lacks. Its executor always resolves (client.command
+// falls back to claude); whether this process may run it is left to admission, since PATH differs between the host
+// and the container.
+func checkHelperProfile(reg *assistants.Registry, id string) error {
+	if _, ok := reg.Get(assistants.ProfileID(id)); !ok {
+		return fmt.Errorf("unknown assistant profile %q (not in collaboration.profiles)", id)
 	}
 	return nil
 }
@@ -166,11 +176,11 @@ func checkFlowTeam(store *state.Store, team flow.Team, collab *collaborationRunt
 	return checkTeamProfiles(toCreate, collab.registry)
 }
 
-// checkTeamProfiles reports the first team member whose profile is not in the registry.
+// checkTeamProfiles reports the first team member whose profile reg lacks.
 func checkTeamProfiles(team flow.Team, reg *assistants.Registry) error {
 	for _, m := range team {
-		if _, ok := reg.Get(assistants.ProfileID(m.Profile)); !ok {
-			return fmt.Errorf("team member %q: unknown assistant profile %q (not in collaboration.profiles)", m.ID, m.Profile)
+		if err := checkHelperProfile(reg, m.Profile); err != nil {
+			return fmt.Errorf("team member %q: %w", m.ID, err)
 		}
 	}
 	return nil
@@ -184,25 +194,20 @@ func warnTeamWithoutCollaboration(team flow.Team) {
 	}
 }
 
-// assistantProfileCommands returns the distinct, non-empty commands named by this process's configured
-// collaboration profiles — T8.5: Docker mount/wrapper preparation (reexecFlow, run_environment.go) needs this
-// list BEFORE startCollaboration ever runs (that happens after re-exec, possibly inside the container), so a
-// profile's non-standard command gets the same ":ro" binary mount flow.Stage commands already get. Returns
-// nil when collaboration is disabled — no profile command needs preparing for a capability that is off.
-func assistantProfileCommands(cfg config.Config, f *flow.Flow) []string {
+// helperCommands returns the sorted, distinct commands helpers may run beyond the stages' and client.command:
+// configured profiles' own ones and resume, those of the saved run's unfinished tasks. Docker preparation needs
+// them before startCollaboration runs; none when collaboration is disabled, as no helper is added or woken then.
+func helperCommands(cfg config.Config, f *flow.Flow, resume []string) []string {
 	if !resolveCollaboration(cfg, f).Enabled {
 		return nil
 	}
-	seen := make(map[string]bool, len(cfg.Collaboration.Profiles))
-	var cmds []string
+	cmds := slices.Clone(resume)
 	for _, p := range cfg.Collaboration.Profiles {
-		if p.Command == "" || seen[p.Command] {
-			continue
-		}
-		seen[p.Command] = true
 		cmds = append(cmds, p.Command)
 	}
-	return cmds
+	// A profile without a command runs its stage's command or client.command, which are prepared anyway.
+	cmds = slices.DeleteFunc(cmds, func(cmd string) bool { return cmd == "" })
+	return slices.Compact(slices.Sorted(slices.Values(cmds)))
 }
 
 // profilesFromConfig converts the config layer's YAML-natural map[string]ProfileConfig into the slice form
@@ -215,33 +220,40 @@ func profilesFromConfig(m map[string]config.ProfileConfig) []assistants.Profile 
 	out := make([]assistants.Profile, 0, len(m))
 	for id, p := range m {
 		out = append(out, assistants.Profile{
-			ID:           assistants.ProfileID(id),
-			Title:        p.Title,
-			Command:      p.Command,
-			Instructions: p.Instructions,
-			Capabilities: assistants.Capabilities{Delegate: p.Delegate},
+			ID:             assistants.ProfileID(id),
+			Title:          p.Title,
+			Command:        p.Command,
+			Instructions:   p.Instructions,
+			Capabilities:   assistants.Capabilities{Delegate: p.Delegate},
+			RuntimeContext: p.RuntimeContext,
 		})
 	}
 	return out
 }
 
-// service returns the server-facing view of the registry. nil receiver, a disabled policy, or a failed
+// service returns the server-facing view of the profiles. nil receiver, a disabled policy, or a failed
 // registry build all return a nil interface — capability off: /api/assistant-profiles is not registered,
-// mirroring sideAgentRuntime.service().
-func (r *collaborationRuntime) service() server.AssistantProfilesService {
+// mirroring sideAgentRuntime.service(). Built after orchestrator.New like actions(): a profile's executor depends
+// on the stage it is attached to, and stages added during the run live in the orchestrator's registry.
+func (r *collaborationRuntime) service(orch *orchestrator.Orchestrator) server.AssistantProfilesService {
 	if r == nil || !r.policy.Enabled || r.registry == nil {
 		return nil
 	}
-	return collaborationService{r}
+	return collaborationService{policy: r.policy, orch: orch}
 }
 
-// collaborationService adapts collaborationRuntime to server.AssistantProfilesService.
-type collaborationService struct{ r *collaborationRuntime }
+// collaborationService adapts *orchestrator.Orchestrator to server.AssistantProfilesService.
+type collaborationService struct {
+	policy collaborationPolicy
+	orch   *orchestrator.Orchestrator
+}
 
-func (s collaborationService) Profiles() []assistants.ProfileView { return s.r.registry.List() }
+func (s collaborationService) Profiles(stageID string) ([]assistants.ProfileView, error) {
+	return s.orch.AssistantProfiles(stageID)
+}
 
 func (s collaborationService) MaxDepth() (depth int, source string) {
-	return s.r.policy.Depth.MaxDepth, string(s.r.policy.Depth.Source)
+	return s.policy.Depth.MaxDepth, string(s.policy.Depth.Source)
 }
 
 // actions returns the server-facing write-adapter for the collaboration HTTP API (T3.7's AssistantActions:

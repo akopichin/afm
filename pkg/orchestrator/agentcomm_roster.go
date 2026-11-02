@@ -155,7 +155,7 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 			// entry for the same standing role (meshParticipantForTask's own doc comment).
 			continue
 		}
-		out = append(out, o.withEffectiveReadonly(helperParticipant(id, t), t))
+		out = append(out, o.withTaskExecutor(rs, helperParticipant(id, t), t))
 	}
 
 	runIDs := make([]string, 0, len(rs.Assistants.Mesh.Participants))
@@ -169,7 +169,7 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 	for _, idStr := range runIDs {
 		p := o.sideParticipantAvailable(liveRunParticipant(rs, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)]))
 		if taskID, ok := runTaskForParticipant(rs, p.ID); ok && rs.Assistants.Tasks[taskID] != nil {
-			p = o.withEffectiveReadonly(p, rs.Assistants.Tasks[taskID])
+			p = o.withTaskExecutor(rs, p, rs.Assistants.Tasks[taskID])
 		}
 		out = append(out, p)
 	}
@@ -245,24 +245,23 @@ func (o *Orchestrator) withStageConfig(p agentcomm.Participant, s flow.Stage) ag
 	return p
 }
 
-// withEffectiveReadonly sets the read-only guarantee a task-backed participant's badge shows. A live task
-// runs its next turn in THIS process's environment, so it gets the guarantee that environment gives its
-// command now (a host run resumed in a container loses the OS sandbox); a finished task shows the guarantee
-// its last turn ran under, recorded at that turn's start (an older journal has only the admission snapshot).
-// The admission-time value stays in AdmittedReadonlyEnforcement.
-func (o *Orchestrator) withEffectiveReadonly(p agentcomm.Participant, t *state.TaskState) agentcomm.Participant {
-	p.ReadonlyEnforcement = effectiveReadonlyEnforcement(t, o.opts.Config)
+// withTaskExecutor sets the command a task-backed participant runs and the read-only guarantee its badge shows: a
+// live task's next turn gets what THIS environment gives that command, a finished one shows what its last turn ran
+// under (an older journal: the admission snapshot, which AdmittedReadonlyEnforcement keeps anyway).
+func (o *Orchestrator) withTaskExecutor(rs state.RunState, p agentcomm.Participant, t *state.TaskState) agentcomm.Participant {
+	p.Command = o.taskExecution(rs, t.Task).Command
+	p.ReadonlyEnforcement = effectiveReadonlyEnforcement(t, p.Command, o.opts.Config)
 	return p
 }
 
-func effectiveReadonlyEnforcement(t *state.TaskState, cfg config.Config) string {
+func effectiveReadonlyEnforcement(t *state.TaskState, cmd string, cfg config.Config) string {
 	if t.Status.Terminal() {
 		if t.TurnReadonlyEnforcement != "" {
 			return string(t.TurnReadonlyEnforcement)
 		}
 		return string(t.ProfileSnapshot.ReadonlyEnforcement)
 	}
-	return config.HelperReadonlyEnforcement(t.ProfileSnapshot.Command, cfg)
+	return config.HelperReadonlyEnforcement(cmd, cfg)
 }
 
 // stageParticipant synthesizes stageID's live roster entry. A stage finishing removes nothing from history

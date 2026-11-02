@@ -300,9 +300,10 @@ export async function listStageAssistants(stageId: string): Promise<{ tasks: Ass
 
 // listAssistantProfiles reads the configured helper roles and the effective delegation depth — GET
 // /api/assistant-profiles (404 when the collaboration capability is off; callers degrade to an empty list,
-// same posture as listStageAssistants).
-export async function listAssistantProfiles(): Promise<{ profiles: AssistantProfile[]; maxDepth: number; maxDepthSource: string }> {
-  const url = '/api/assistant-profiles'
+// same posture as listStageAssistants). With stageId the profiles are resolved in that stage's context
+// (executor, availability); without it they are run-level.
+export async function listAssistantProfiles(stageId?: string): Promise<{ profiles: AssistantProfile[]; maxDepth: number; maxDepthSource: string }> {
+  const url = stageId === undefined ? '/api/assistant-profiles' : `/api/assistant-profiles?stage_id=${encodeURIComponent(stageId)}`
   const response = await fetch(url)
   if (!response.ok) {
     throw await flowApiError(url, response)

@@ -89,15 +89,15 @@ func TestEffectiveReadonlyEnforcement(t *testing.T) {
 			ProfileSnapshot: assistants.Profile{Command: "helper-cmd", ReadonlyEnforcement: assistants.ReadonlyEnforcementOS},
 		}}
 	}
-	if got := effectiveReadonlyEnforcement(task(assistants.StatusCompleted), config.Config{}); got != string(assistants.ReadonlyEnforcementOS) {
+	if got := effectiveReadonlyEnforcement(task(assistants.StatusCompleted), "helper-cmd", config.Config{}); got != string(assistants.ReadonlyEnforcementOS) {
 		t.Errorf("finished task from an older journal = %q, want its admission-time os", got)
 	}
 	ranWithout := task(assistants.StatusCompleted)
 	ranWithout.TurnReadonlyEnforcement = assistants.ReadonlyEnforcementNone
-	if got := effectiveReadonlyEnforcement(ranWithout, config.Config{}); got != string(assistants.ReadonlyEnforcementNone) {
+	if got := effectiveReadonlyEnforcement(ranWithout, "helper-cmd", config.Config{}); got != string(assistants.ReadonlyEnforcementNone) {
 		t.Errorf("finished task = %q, want the none its last turn ran under", got)
 	}
-	if got := effectiveReadonlyEnforcement(task(assistants.StatusRunning), config.Config{}); got != string(assistants.ReadonlyEnforcementNone) {
+	if got := effectiveReadonlyEnforcement(task(assistants.StatusRunning), "helper-cmd", config.Config{}); got != string(assistants.ReadonlyEnforcementNone) {
 		t.Errorf("live task = %q, want the current environment's none", got)
 	}
 }

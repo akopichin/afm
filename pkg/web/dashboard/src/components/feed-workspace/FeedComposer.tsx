@@ -746,7 +746,7 @@ function MeshMessageComposer({
           stageId={stageId}
           instruction={attachPreview.instruction}
           profiles={mesh.profiles}
-          stages={mesh.stages.map((s) => ({ id: s.id, title: s.name }))}
+          stages={mesh.stages.map((s) => ({ id: s.id, title: s.id }))}
           onCancel={() => setAttachPreview(null)}
           onConfirmed={handleAttachConfirmed}
         />
@@ -887,7 +887,7 @@ function MeshMessageComposer({
           {loopMode ? localError : (submitter.error ?? localError)}
         </div>
       )}
-      {loopOutcome !== null && <LoopOutcomeView outcome={loopOutcome} participants={participants} stages={mesh.stages} />}
+      {loopOutcome !== null && <LoopOutcomeView outcome={loopOutcome} participants={participants} />}
       {loopMode ? null : submitter.pending ? (
         <div className="mesh-message-receipt" role="status">
           {RECEIPT_LABEL.awaiting}

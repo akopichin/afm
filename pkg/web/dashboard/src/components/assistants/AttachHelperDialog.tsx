@@ -1,11 +1,12 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { attachAssistant, type AttachHelperRequest } from '../../api/run-client'
-import type { AssistantProfile } from '../../types/assistant-profile'
+import { describeExecutor, describeUnavailable, type AssistantProfile } from '../../types/assistant-profile'
 import { useModalDialog } from '../../lib/focus-trap'
 
 export type AttachHelperDialogProps = {
   stageId: string
   stageTitle: string
+  // profiles — resolved in this stage's context, so the executor shown is the one the helper would run on.
   profiles: AssistantProfile[]
   onAttached: (taskId: string) => void
   onCancel: () => void
@@ -17,7 +18,7 @@ export type AttachHelperDialogProps = {
 // operator's own choices. Focus, Escape and Tab-wrap come from the shared useModalDialog.
 export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, onCancel }: AttachHelperDialogProps): ReactElement {
   const available = profiles.filter((p) => p.available)
-  const [profileId, setProfileId] = useState(available[0]?.id ?? '')
+  const [chosenId, setChosenId] = useState('')
   const [title, setTitle] = useState('')
   const [instruction, setInstruction] = useState('')
   const [mode, setMode] = useState<AttachHelperRequest['mode']>('advisory')
@@ -28,10 +29,13 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
 
   useModalDialog(modalRef, onCancel)
 
-  const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitting
+  // Profiles load after the dialog opens, so the choice falls back to the first available one until picked.
+  const selected = available.find((p) => p.id === chosenId) ?? available[0] ?? null
+  const canSubmit = selected !== null && instruction.trim() !== '' && !submitting
 
   function handleSubmit(): void {
     if (!canSubmit) return
+    const profileId = selected.id
     setSubmitting(true)
     setError(null)
     attachAssistant(stageId, { profileId, title: title.trim(), instruction: instruction.trim(), mode, trigger })
@@ -42,17 +46,22 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
       })
   }
 
+  const unavailable = describeUnavailable(profiles)
+
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Attach helper">
       <div className="modal-content attach-helper-dialog" ref={modalRef}>
         <h2 className="attach-helper-heading">Attach helper to {stageTitle}</h2>
         {available.length === 0 ? (
-          <p className="attach-helper-empty">No helper profiles are available for this run.</p>
+          <p className="attach-helper-empty">
+            No helper profiles are available for this stage.
+            {unavailable !== '' && ` Unavailable — ${unavailable}.`}
+          </p>
         ) : (
           <>
             <label className="attach-helper-field">
               <span>Role</span>
-              <select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+              <select value={selected?.id ?? ''} onChange={(e) => setChosenId(e.target.value)}>
                 {available.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.title}
@@ -60,6 +69,10 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
                 ))}
               </select>
             </label>
+            <dl className="add-run-agent-executor">
+              <dt>Configured executor</dt>
+              <dd>{selected === null ? '—' : describeExecutor(selected)}</dd>
+            </dl>
             <label className="attach-helper-field">
               <span>Title (optional)</span>
               <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Correctness review" />

@@ -8,6 +8,8 @@
 package orchestrator
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,6 +97,13 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 	if len(children) > assistants.MaxDelegateChildren {
 		return nil, fmt.Errorf("assistants: %d children exceeds the cap of %d", len(children), assistants.MaxDelegateChildren)
 	}
+	// A retry of an already-committed admission replays it, whatever changed since (the config, the parent's status).
+	if op, committed, err := o.opts.Store.CommittedOperation(operationID, opKindAttachChildren); err != nil || committed {
+		if err != nil {
+			return nil, err
+		}
+		return o.replayedChildren(op, operationID, parentTaskID, children, actor, parentTo, continuation)
+	}
 	if o.opts.AssistantsRegistry == nil {
 		return nil, &state.OperationRejectedError{Code: assistants.CodeFeatureDisabled, Reason: "no assistant profiles configured"}
 	}
@@ -122,38 +131,28 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 	childIDs := make([]assistants.TaskID, len(children))
 	effects := make([]state.Effect, 0, len(children)*2+2)
 	parentIDStr := string(parentTaskID)
+	parentExec := o.taskExecution(rs, parent.Task)
+	_, parentEnforcement := o.helperCommandAccess(parentExec.Command)
 	for i, child := range children {
 		profile, ok := o.opts.AssistantsRegistry.Get(child.ProfileID)
 		if !ok {
 			return nil, &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: fmt.Sprintf("unknown profile %q", child.ProfileID)}
 		}
-		view, _ := profileView(o.opts.AssistantsRegistry, child.ProfileID)
-		if !view.Available {
-			return nil, &state.OperationRejectedError{Code: assistants.CodeCapabilityUnavailable, Reason: view.UnavailableReason}
+		// Same freeze-at-admission rule as a top-level task; a child without its own command runs its parent's.
+		profile, binding, err := o.admitExecution(profile, o.executionInputs(parent.RootStageID, &parentExec))
+		if err != nil {
+			return nil, err
 		}
-		// Этап 10 (T10.2, "no self elevation"): an assistant delegating to ITS OWN task (actor.Kind ==
-		// assistant, already self-match-checked above) must never be able to hand a child a LESS restricted
-		// executor than its own profile's — otherwise a read-only-enforced helper could escape its own
-		// guarantee simply by delegating to a profile with none. A "user"/"side_agent" actor's explicit,
-		// already-confirmed child-creation is NOT subject to this (same carve-out as the self-match check
-		// above, and for the same reason: a human/side-agent choosing a different profile for a child is an
-		// affirmative decision, not the model elevating itself).
-		if actor.Kind == string(assistants.OriginAssistant) && view.ReadonlyEnforcement.WeakerThan(parent.ProfileSnapshot.ReadonlyEnforcement) {
-			return nil, &state.OperationRejectedError{Code: assistants.CodeExecutorNotPermitted, Reason: fmt.Sprintf("child profile %q (%s) is less restricted than the parent's own (%s)", child.ProfileID, view.ReadonlyEnforcement, parent.ProfileSnapshot.ReadonlyEnforcement)}
+		// "No self elevation": an assistant delegating to its own task must not hand a child a less restricted
+		// executor than the one it runs itself here, or a read-only helper could escape its guarantee by delegating.
+		// A human's or the side agent's confirmed choice of a child profile is not the model elevating itself.
+		if actor.Kind == string(assistants.OriginAssistant) && profile.ReadonlyEnforcement.WeakerThan(parentEnforcement) {
+			return nil, &state.OperationRejectedError{Code: assistants.CodeExecutorNotPermitted, Reason: fmt.Sprintf("child profile %q (%s) is less restricted than the parent's own (%s)", child.ProfileID, profile.ReadonlyEnforcement, parentEnforcement)}
 		}
-		// Same freeze-at-admission-time rule as Attach (assistants.go) — see its own comment for why.
-		profile.ReadonlyEnforcement = view.ReadonlyEnforcement
 
-		childID := deriveTaskID(operationID + ":" + strconv.Itoa(i))
+		childID := childTaskID(operationID, i)
 		childIDs[i] = childID
-		mode := child.Mode
-		if mode == "" {
-			mode = assistants.ModeAdvisory
-		}
-		trigger := child.Trigger
-		if trigger == "" {
-			trigger = assistants.TriggerOneShot
-		}
+		child = withChildDefaults(child)
 
 		created, err := taskCreatedEffect(childID, parent.RootStageID, state.TaskCreatedPayload{
 			ParentTaskID:             &parentIDStr,
@@ -161,13 +160,14 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 			ProfileSnapshot:          o.redactProfile(profile),
 			Title:                    o.RedactSecrets(child.Title),
 			Instruction:              o.RedactSecrets(child.Instruction),
-			Mode:                     string(mode),
-			Trigger:                  string(trigger),
+			Mode:                     string(child.Mode),
+			Trigger:                  string(child.Trigger),
 			PolicyRev:                rs.Assistants.Policy.Revision,
 			MaxDepthAtCreate:         rs.Assistants.Policy.MaxDepth,
 			CreatedBy:                actor.Kind,
 			ParentGenerationAtCreate: parent.TaskGeneration,
 			RootGenerationAtCreate:   rs.Assistants.RootGenerations[parent.RootStageID],
+			Execution:                &binding,
 		})
 		if err != nil {
 			return nil, err
@@ -214,7 +214,7 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 
 	op := state.Operation{
 		ID:    operationID,
-		Kind:  "attach_children",
+		Kind:  opKindAttachChildren,
 		Actor: actor,
 		Expect: state.Preconditions{
 			PolicyRevision: rs.Assistants.Policy.Revision,
@@ -237,6 +237,102 @@ func (o *Orchestrator) admitChildrenWithParentChange(
 		return nil, err
 	}
 	return childIDs, nil
+}
+
+// opKindAttachChildren is the kind a child admission commits under; a retry reads it back as that kind.
+const opKindAttachChildren = "attach_children"
+
+// childTaskID is the id of the i-th child an admission creates: derived from its operation, so a retry finds it.
+func childTaskID(operationID string, i int) assistants.TaskID {
+	return deriveTaskID(operationID + ":" + strconv.Itoa(i))
+}
+
+// withChildDefaults is the child as admission records it: advisory and one_shot unless it names otherwise.
+func withChildDefaults(child assistants.DelegateRequest) assistants.DelegateRequest {
+	child.Mode = cmp.Or(child.Mode, assistants.ModeAdvisory)
+	child.Trigger = cmp.Or(child.Trigger, assistants.TriggerOneShot)
+	return child
+}
+
+// replayedChildren answers a committed child admission without resolving executors again: only the whole same request
+// (children, actor kind, parent transition and continuation, set or omitted) gets the original children back, anything
+// else under that id is a conflict. Stored text was redacted at commit, so it is compared as redacted text.
+func (o *Orchestrator) replayedChildren(op state.CommittedOperation, operationID string, parentTaskID assistants.TaskID,
+	children []assistants.DelegateRequest, actor state.Actor, parentTo state.TaskStatusChangedPayload, continuation *assistants.Continuation,
+) ([]assistants.TaskID, error) {
+	conflict := state.OperationIDConflictError(operationID)
+	var childIDs []assistants.TaskID
+	var savedParentTo *state.TaskStatusChangedPayload
+	var savedContinuation *assistants.Continuation
+	for _, e := range op.Effects {
+		switch {
+		case e.Kind == "task_created":
+			var p state.TaskCreatedPayload
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				return nil, fmt.Errorf("decode committed task_created: %w", err)
+			}
+			i := len(childIDs)
+			if i == len(children) {
+				return nil, conflict
+			}
+			child := withChildDefaults(children[i])
+			same := assistants.TaskID(e.Target.TaskID) == childTaskID(operationID, i) && p.ParentTaskID != nil &&
+				*p.ParentTaskID == string(parentTaskID) && p.ProfileID == string(child.ProfileID) &&
+				o.sameRedactedText(p.Title, child.Title) && o.sameRedactedText(p.Instruction, child.Instruction) &&
+				p.Mode == string(child.Mode) && p.Trigger == string(child.Trigger) && p.CreatedBy == actor.Kind
+			if !same {
+				return nil, conflict
+			}
+			childIDs = append(childIDs, assistants.TaskID(e.Target.TaskID))
+		case e.Kind == taskStatusChangedEffectKind && e.Target.TaskID == string(parentTaskID):
+			savedParentTo = new(state.TaskStatusChangedPayload)
+			if err := json.Unmarshal(e.Payload, savedParentTo); err != nil {
+				return nil, fmt.Errorf("decode committed task_status_changed: %w", err)
+			}
+		case e.Kind == "task_continuation_saved":
+			savedContinuation = new(assistants.Continuation)
+			if err := json.Unmarshal(e.Payload, savedContinuation); err != nil {
+				return nil, fmt.Errorf("decode committed task_continuation_saved: %w", err)
+			}
+		default: // the children's queued records and the quota reservation follow from the child list
+		}
+	}
+	if len(childIDs) != len(children) {
+		return nil, conflict
+	}
+	sameParentTo, err := sameStatusChange(savedParentTo, parentTo)
+	if err != nil {
+		return nil, err
+	}
+	if !sameParentTo || !o.sameContinuation(savedContinuation, continuation) {
+		return nil, conflict
+	}
+	return childIDs, nil
+}
+
+// sameStatusChange reports whether a committed parent change is the requested one; an empty requested status
+// asks for none. Both sides are compared as encoded, as admission journals them.
+func sameStatusChange(saved *state.TaskStatusChangedPayload, requested state.TaskStatusChangedPayload) (bool, error) {
+	if saved == nil || requested.Status == "" {
+		return saved == nil && requested.Status == "", nil
+	}
+	a, err := json.Marshal(saved)
+	if err != nil {
+		return false, err
+	}
+	b, err := json.Marshal(requested)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(a, b), nil
+}
+
+// sameContinuation reports whether a committed continuation is the requested one; nil asks for none.
+func (o *Orchestrator) sameContinuation(saved, requested *assistants.Continuation) bool {
+	if saved == nil || requested == nil {
+		return saved == nil && requested == nil
+	}
+	return saved.Trigger == requested.Trigger && o.sameRedactedText(saved.Note, requested.Note)
 }
 
 // currentChildren filters parentID's ByParent set down to only the children stamped under

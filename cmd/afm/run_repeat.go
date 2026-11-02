@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -9,11 +10,13 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/browser"
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/docker"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/lifecyclehooks"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // interCycleDrainGrace — сколько dashboard держит финальное состояние рана между циклами repeat. Вкладку
@@ -236,11 +239,12 @@ func (l cycleLoop) checkContainerReload(prev, next *flow.Flow) error {
 	if nextRoot != prevRoot && !isSubPath(project, nextRoot) {
 		return restartError("root_dir %q is outside the Docker-mounted project %q and needs a new mount", nextRoot, project)
 	}
-	prevProj, err := projectDocker(prev, l.cfg)
+	// The saved tasks of this run were prepared at start; only what the flows themselves need is compared.
+	prevProj, err := projectDocker(prev, l.cfg, nil)
 	if err != nil {
 		return err
 	}
-	nextProj, err := projectDocker(next, l.cfg)
+	nextProj, err := projectDocker(next, l.cfg, nil)
 	if err != nil {
 		return err
 	}
@@ -277,14 +281,14 @@ func checkedByHost(libs []string) error {
 type dockerProjection struct {
 	Recipes         map[string]config.AgentRecipe // только используемые рецепты
 	Generated       map[string]bool               // команды рецептов, для которых создаются wrapper'ы
-	Extra           []string                      // команды профилей помощников; отсортированы
+	Extra           []string                      // команды профилей и сохранённых задач помощников; отсортированы
 	Commands        []string                      // docker.CommandNames: команды, которые ищутся на хосте
 	MountCodexState bool
 }
 
-func projectDocker(f *flow.Flow, cfg config.Config) (dockerProjection, error) {
-	p := dockerProjection{Extra: assistantProfileCommands(cfg, f)}
-	slices.Sort(p.Extra) // команды берутся из map профилей: порядок должен быть одинаковым при каждом вызове
+// projectDocker: resume — команды незавершённых задач сохранённого рана (resumeTaskCommands), nil у нового рана.
+func projectDocker(f *flow.Flow, cfg config.Config, resume []string) (dockerProjection, error) {
+	p := dockerProjection{Extra: helperCommands(cfg, f, resume)}
 	p.Commands = docker.CommandNames(f, cfg.Client.Command, p.Extra)
 	if cfg.Docker.IsAutoShim() {
 		if err := cfg.Docker.ValidateAgents(); err != nil {
@@ -297,8 +301,51 @@ func projectDocker(f *flow.Flow, cfg config.Config) (dockerProjection, error) {
 			p.Generated[cmd] = true
 		}
 	}
-	p.MountCodexState = docker.UsesCodex(f, cfg.Client.Command, p.Recipes)
+	// A helper profile or saved task can run the codex adapter itself and needs its state like a stage does.
+	p.MountCodexState = docker.UsesCodex(f, cfg.Client.Command, p.Recipes) ||
+		slices.ContainsFunc(p.Extra, func(cmd string) bool { return docker.UsesCodex(nil, cmd, nil) })
 	return p, nil
+}
+
+// resumeTaskCommands returns the commands of the saved run's unfinished tasks that can still run a turn: a task keeps
+// the executor it was created with, which the current config may no longer name. nil for a new run.
+func resumeTaskCommands(saved *savedRun, f *flow.Flow, cfg config.Config) []string {
+	if saved == nil {
+		return nil
+	}
+	stageCommands := saved.stageCommands(f)
+	client := cmp.Or(cfg.Client.Command, config.ClaudeCommand)
+	tasks := saved.state.Assistants.Tasks
+	var cmds []string
+	for _, t := range tasks {
+		if t.Status.Terminal() {
+			continue
+		}
+		cmd := savedTaskCommand(tasks, t.Task, stageCommands, client)
+		// Admitted with another recipe, the task fails executor_changed before its first turn: it needs no wrapper,
+		// mount or secret, and must not block the restart on one.
+		if t.Execution != nil && t.Execution.RecipeIdentity != recipeIdentity(cfg, cmd) {
+			continue
+		}
+		cmds = append(cmds, cmd)
+	}
+	return cmds
+}
+
+// savedTaskCommand is the command a saved task runs, resolved as the orchestrator resolves it: the one it was admitted
+// with, or for a task of an older journal its parent's, its root stage's in the restored registry or the client's.
+func savedTaskCommand(tasks map[assistants.TaskID]*state.TaskState, t assistants.Task, stageCommands map[string]string, client string) string {
+	if t.Execution != nil {
+		return t.ProfileSnapshot.Command
+	}
+	in := assistants.ExecutionInputs{StageCommand: stageCommands[t.RootStageID], ClientCommand: client}
+	if t.ParentTaskID != nil {
+		if parent, ok := tasks[*t.ParentTaskID]; ok {
+			in.Parent = &assistants.Execution{Command: savedTaskCommand(tasks, parent.Task, stageCommands, client)}
+		}
+	}
+	exec, _ := assistants.ResolveExecution(t.ProfileSnapshot, in) // cannot fail: the client command is never empty
+	return exec.Command
 }
 
 // takeContainerTransport один раз читает одноразовый transport хоста — env-секреты хуков и дескриптор

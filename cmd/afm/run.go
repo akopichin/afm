@@ -237,7 +237,11 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	fmt.Printf("afm: running %q\n", f.Name)
 	fmt.Printf("  run dir: %s\n", runDir)
 
-	env, err := prepareRunEnvironment(rootDir, f, cfg, opts.worktreeDir)
+	saved, err := readSavedRun(runDir, store.Snapshot())
+	if err != nil {
+		return cycleResult{}, err
+	}
+	env, err := prepareRunEnvironment(rootDir, f, cfg, opts.worktreeDir, saved)
 	if err != nil {
 		return cycleResult{}, err
 	}
@@ -329,6 +333,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		Prompts:            prompts,
 		WrapperDir:         env.WrapperDir,
 		GeneratedAgents:    env.GeneratedAgents,
+		RecipeIdentity:     env.RecipeIdentity,
 		GlobalPrompt:       f.Prompt,
 		RootDir:            env.RootDir,
 		RequireApproval:    opts.requireApproval,
@@ -385,7 +390,7 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 		Accounting:        serverAccountingProvider(cfg.Accounting.IsEnabled(), acct, acctErr),
 		UsageAnalytics:    newUsageAnalytics(acct, acctErr, jobs, orch, side),
 		SideAgent:         side.service(),
-		AssistantProfiles: collab.service(),
+		AssistantProfiles: collab.service(orch),
 		CollaborationMode: resolveCollaborationMode(cfg, f),
 		AssistantActions:  collab.actions(orch),
 		AssistantsReader:  collab.reader(orch),

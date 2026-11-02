@@ -33,6 +33,7 @@ const runBarrierStageID = "work"
 // journal closes (pkg/orchestrator/AGENTS.md's "State persistence & run lifecycle").
 func newRunBarrierTestOrch(t *testing.T, dispatcher *lifecyclehooks.Dispatcher, script string) (*orchestrator.Orchestrator, *state.Store, string) {
 	t.Helper()
+	pinContainerHelperPolicy(t)
 	runDir := t.TempDir()
 	rootDir := t.TempDir()
 	stages := []flow.Stage{{ID: runBarrierStageID, Name: "Work", Script: script}}
@@ -49,10 +50,7 @@ func newRunBarrierTestOrch(t *testing.T, dispatcher *lifecyclehooks.Dispatcher, 
 
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 		{ID: "qa", Title: "QA", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
-	}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -66,6 +64,13 @@ func newRunBarrierTestOrch(t *testing.T, dispatcher *lifecyclehooks.Dispatcher, 
 		AssistantsRegistry: reg,
 	})
 	return orch, store, filepath.Join(runDir, "state.json")
+}
+
+// pinContainerHelperPolicy makes every helper command available, as inside a container, for tests of something
+// else than that policy. Called before the store opens, so it is restored after the run and the store are done.
+func pinContainerHelperPolicy(t *testing.T) {
+	t.Helper()
+	t.Cleanup(config.SwapContainerMarkerPresent(func() bool { return true }))
 }
 
 // waitForTaskStatus polls store until taskID reaches want or timeout — the orchestrator_test-package

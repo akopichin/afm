@@ -7,6 +7,8 @@ const USER_ID = 'user'
 
 // participantLabel — display_name, иначе alias, иначе id.
 export function participantLabel(p: MeshParticipant): string {
+  // Агента стадии показываем по id стадии: display_name — длинный name из flow.yaml.
+  if (p.kind === 'stage_agent' && p.stage_id !== undefined && p.stage_id !== '') return p.stage_id
   if (p.display_name !== undefined && p.display_name !== '') return p.display_name
   if (p.alias !== undefined && p.alias !== '') return p.alias
   return p.id

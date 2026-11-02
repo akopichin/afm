@@ -33,7 +33,8 @@ type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt,
 // the verifier's (o.opts.RootDir, already worktree-aware; empty = afm's own CWD): a helper reviews code, so it
 // must be able to read it where it lives. Its own scratch/ is handed over as AFM_SCRATCH_DIR, a place for
 // notes. Whether the helper can also write to the project is up to its environment (a host codex sandbox is
-// read-only, a container is not) — this config promises nothing about it.
+// read-only, a container is not) — this config promises nothing about it. The task's executor binding sets its
+// model arguments, reasoning and runtime context.
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
 	cfg := o.promptOnlyHelperConfig(taskID, cmd)
 	// Delegation's alternatives have no native form, so only a helper that cannot delegate runs in native mode.
@@ -49,7 +50,7 @@ func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string
 // promptOnlyHelperConfig is helperExecutorConfig with the schema in the prompt alone.
 func (o *Orchestrator) promptOnlyHelperConfig(taskID assistants.TaskID, cmd string) executor.Config {
 	participant := o.taskMeshParticipant(taskID)
-	return executor.Config{
+	return withExecutionBinding(executor.Config{
 		Command:        cmd,
 		IdleTimeout:    o.opts.Config.Executor.IdleTimeout,
 		TruncateOutput: o.opts.Config.Executor.TruncateOutput,
@@ -68,7 +69,7 @@ func (o *Orchestrator) promptOnlyHelperConfig(taskID assistants.TaskID, cmd stri
 		MeshClient:     o.meshClientFor(participant),
 		OnDelivered:    o.deliverRenderedInbox(participant),
 		Job:            o.jobConfig(o.taskJobMeta(o.opts.Store.Snapshot(), taskID, cmd), participant),
-	}
+	}, o.taskExecutionByID(taskID, cmd).Binding)
 }
 
 // helperContract is the answer contract of a helper's turn: the delegate form only for a profile that may delegate.
@@ -253,7 +254,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 	end := helperTurnEnd{waiter: o.taskMeshParticipant(taskID)}
 	end.waitsBefore = o.meshWaitStatusesOf(end.waiter)
 	beforeFP, beforeOK := o.fingerprintFn(o.projectDir())
-	end.outcome, end.err = o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), task.ProfileSnapshot.Command, turn.ctx.Prompt, turn.logFile, turn.resultFile)
+	end.outcome, end.err = o.runHelperAgent(runCtx, string(taskID), string(task.ProfileID), turn.exec.Command, turn.ctx.Prompt, turn.logFile, turn.resultFile)
 	// Marking delivered here also covers a runner that never calls OnDelivered. Only a turn that ran to its end
 	// consumed its input (committed with its outcome); a cut-short turn is retried with the same messages.
 	if end.err == nil && end.outcome.ProcessOK {
@@ -302,7 +303,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 			if o.helperOutputCommitHook != nil {
 				o.helperOutputCommitHook()
 			}
-			finishErr := o.finishTaskTurnReplyingGuarded(taskID, end.consumed, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist recovery: "+err.Error(), nil, o.helperTurnGuard(taskID, task, turn), nil)
+			finishErr := o.finishTaskTurnReplyingGuarded(taskID, end.consumed, assistants.StatusRunning, assistants.StatusFailed, o.helperTurnFailure("assistants: persist recovery", task, turn.exec, err.Error()), nil, o.helperTurnGuard(taskID, task, turn), nil)
 			if finishErr != nil && !o.helperOutputCurrent(taskID, task, turn) {
 				o.interruptHelperOutput(ctx, taskID, task, turn)
 			}
@@ -320,6 +321,7 @@ func (o *Orchestrator) runHelperTask(ctx context.Context, taskID assistants.Task
 // helperTurn is what a helper turn needs once its preparation succeeded.
 type helperTurn struct {
 	runCtx     context.Context
+	exec       assistants.Execution // the executor of the turn and of its format repair
 	dir        string
 	ctx        TaskContext
 	number     uint64
@@ -342,9 +344,13 @@ type helperTurnEnd struct {
 // prepareHelperTurn creates the task's workspace and context and starts the turn. It reports false when the
 // turn must not run: the task already failed here (finishTaskFrom) or the turn did not start.
 func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.TaskID, task assistants.Task) (helperTurn, bool) {
+	exec := o.taskExecution(o.opts.Store.Snapshot(), task)
+	fail := func(what, detail string) {
+		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, o.helperTurnFailure(what, task, exec, detail))
+	}
 	dir := o.taskDir(taskID)
 	if err := ensureTaskWorkspace(dir, o.taskScratchDir(taskID)); err != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: create task workspace: "+err.Error())
+		fail("assistants: create task workspace", err.Error())
 		return helperTurn{}, false
 	}
 	o.persistTaskCache(dir, task)
@@ -359,18 +365,18 @@ func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.
 	if task.RootStageID != "" {
 		st := o.reg().Stage(task.RootStageID)
 		if st == nil {
-			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: root stage no longer exists")
+			fail("assistants: root stage no longer exists", "")
 			return helperTurn{}, false
 		}
 		stage = *st
 	}
 	tc, cerr := o.buildTaskContext(task, stage)
 	if cerr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: build context: "+cerr.Error())
+		fail("assistants: build context", cerr.Error())
 		return helperTurn{}, false
 	}
 	if werr := memory.AtomicWrite(filepath.Join(dir, "context.md"), []byte(tc.Prompt)); werr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusFailed, "assistants: persist context: "+werr.Error())
+		fail("assistants: persist context", werr.Error())
 		return helperTurn{}, false
 	}
 	number, holdEpoch, started := o.startTurn(taskID, tc.inboxIDs)
@@ -390,14 +396,15 @@ func (o *Orchestrator) prepareHelperTurn(ctx context.Context, taskID assistants.
 			o.helperOutputCommitHook()
 		}
 		err := o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed,
-			"assistants: clear stale raw answer: "+rerr.Error(), nil, o.helperTurnGuard(taskID, task, started), nil)
+			o.helperTurnFailure("assistants: clear stale raw answer", task, exec, rerr.Error()), nil, o.helperTurnGuard(taskID, task, started), nil)
 		if err != nil && !o.helperOutputCurrent(taskID, task, started) {
 			o.interruptHelperOutput(ctx, taskID, task, started)
 		}
 		return helperTurn{}, false
 	}
 	return helperTurn{
-		dir: dir, ctx: tc, number: number, holdEpoch: holdEpoch,
+		exec: exec,
+		dir:  dir, ctx: tc, number: number, holdEpoch: holdEpoch,
 		logFile: filepath.Join(dir, "agent.log"), resultFile: resultFile,
 	}, true
 }
@@ -417,8 +424,9 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 			o.interruptHelperOutput(ctx, taskID, task, turn)
 		}
 	}
-	fail := func(reason string) {
+	fail := func(what, detail string) {
 		beforeCommit()
+		reason := o.helperTurnFailure(what, task, turn.exec, detail)
 		interruptIfSuperseded(o.finishTaskTurnReplyingGuarded(taskID, consumed, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil))
 	}
 
@@ -445,7 +453,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 		if end.finalizedByOther {
 			return true
 		}
-		fail("assistants: helper execution failed: " + err.Error())
+		fail(processFailure(err))
 		return true
 	}
 	switch {
@@ -454,7 +462,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 		// subprocess reaching here must not clobber it with a second, contradictory status.
 		return true
 	case outcome.TimedOut:
-		fail("helper agent timed out")
+		fail("helper agent timed out", "")
 		return true
 	case !outcome.ProcessOK:
 		// Pause/clarify cancels runCtx just like a crash; its marker survives a concurrent Continue.
@@ -465,7 +473,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 			o.requeuePausedTurn(ctx, taskID)
 			return true
 		}
-		fail(o.helperFailureReason(outcome.ProcessErr))
+		fail(processFailure(outcome.ProcessErr))
 		return true
 	}
 
@@ -481,7 +489,7 @@ func (o *Orchestrator) classifyHelperFailure(ctx context.Context, taskID assista
 	}
 	if outcome.ProtocolErr != nil {
 		beforeCommit()
-		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, protocolErrorPrefix+outcome.ProtocolErr.Error(), unacceptedAnswer{}, guard))
+		interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, o.helperProtocolReason(task, turn.exec, outcome.ProtocolErr.Error()), unacceptedAnswer{}, guard))
 		return true
 	}
 	return false
@@ -504,9 +512,10 @@ func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistant
 		}
 		return candidate, kind, nil
 	})
-	cfg := o.outputFormatterConfig(task.ProfileSnapshot.Command, task.RootStageID)
+	cmd := turn.exec.Command
+	cfg := withExecutionBinding(o.outputFormatterConfig(cmd, task.RootStageID), turn.exec.Binding)
 	cfg.OnUsage = o.recordTaskUsage(taskID, task.ProfileID)
-	cfg.Job = o.repairJob(o.taskJobMeta(o.opts.Store.Snapshot(), taskID, task.ProfileSnapshot.Command), task.ProfileSnapshot.Command)
+	cfg.Job = o.repairJob(o.taskJobMeta(o.opts.Store.Snapshot(), taskID, cmd), cmd)
 	cfg.OnLimitWarning = o.limitWarningSink(task.RootStageID, taskID)
 	prefix := fmt.Sprintf("turn-%d-output", turn.number)
 	if err := memory.AtomicWrite(filepath.Join(turn.dir, prefix+".raw.json"), raw); err != nil {
@@ -586,10 +595,11 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 			o.interruptHelperOutput(ctx, taskID, task, turn)
 		}
 	}
-	fail := func(reason string, answered bool) {
+	fail := func(what, detail string, answered bool) {
 		if o.helperOutputCommitHook != nil {
 			o.helperOutputCommitHook()
 		}
+		reason := o.helperTurnFailure(what, task, turn.exec, detail)
 		if answered {
 			answer := unacceptedAnswer{text: end.outcome.RawText, path: filepath.Join(turn.dir, fmt.Sprintf("turn-%d-output.raw.json", turn.number))}
 			interruptIfSuperseded(o.failAnsweredTurn(ctx, taskID, task, consumed, reason, answer, guard))
@@ -602,16 +612,16 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		return
 	}
 	if err := persistOutputRecovery(turn.dir, fmt.Sprintf("turn-%d-output", turn.number), end.recovery); err != nil {
-		fail("assistants: persist recovery: "+err.Error(), false)
+		fail("assistants: persist recovery", err.Error(), false)
 		return
 	}
 	if end.err != nil {
-		fail(protocolErrorPrefix+end.err.Error(), true)
+		fail(contractNotMet, end.err.Error(), true)
 		return
 	}
 	env, decErr := assistants.DecodeResult(end.recovery.Candidate)
 	if decErr != nil {
-		fail(protocolErrorPrefix+decErr.Error(), true)
+		fail(contractNotMet, decErr.Error(), true)
 		return
 	}
 	repaired := end.recovery.Provenance.Source == sourceRepair || end.recovery.Provenance.Source == sourceFormatAgent
@@ -634,14 +644,14 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		return
 	}
 	if env.Kind != assistants.KindResult || env.Result == nil {
-		fail(protocolErrorPrefix+"unsupported kind", true)
+		fail(contractNotMet, "unsupported kind", true)
 		return
 	}
 	if env.Result.Verdict == assistants.VerdictPass && o.requiredChildOpen(taskID) {
 		// dev-plan.md's TestResult_ConsistencyWithRequiredChildren: a required child that has not (yet, or
 		// ever will) reached verdict:"pass" keeps this gate closed — the model's own claimed "pass" text does
 		// not override it.
-		fail(protocolErrorPrefix+"verdict:\"pass\" with an unresolved required child", true)
+		fail(contractNotMet, "verdict:\"pass\" with an unresolved required child", true)
 		return
 	}
 
@@ -657,11 +667,11 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	}
 	resultBytes, marshalErr := json.MarshalIndent(result, "", "  ")
 	if marshalErr != nil {
-		fail("assistants: marshal result: "+marshalErr.Error(), false)
+		fail("assistants: marshal result", marshalErr.Error(), false)
 		return
 	}
 	if werr := memory.AtomicWrite(filepath.Join(turn.dir, fmt.Sprintf("turn-%d-result.json", turn.number)), resultBytes); werr != nil {
-		fail("assistants: persist result: "+werr.Error(), false)
+		fail("assistants: persist result", werr.Error(), false)
 		return
 	}
 	// The decoded result is attached as a SECOND effect of the SAME finish operation — never a separate
@@ -669,7 +679,7 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	// result event does not exist yet (see finishTaskFrom's extra doc comment).
 	resultEff, eerr := taskResultEffect(taskID, result)
 	if eerr != nil {
-		fail("assistants: marshal result event: "+eerr.Error(), false)
+		fail("assistants: marshal result event", eerr.Error(), false)
 		return
 	}
 
@@ -688,7 +698,7 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 	}
 	if writeErr != nil {
 		if restoreLatest() {
-			fail("assistants: persist latest result: "+writeErr.Error(), false)
+			fail("assistants: persist latest result", writeErr.Error(), false)
 		}
 		return
 	}
@@ -749,18 +759,22 @@ func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.T
 	if !ok {
 		return errHelperOutputSuperseded
 	}
+	fail := func(err error) error {
+		reason := o.taskTurnFailure(taskID, "assistants: record usage limit", err.Error())
+		return o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed, reason, nil, guard, nil)
+	}
 	waits := quotaWaits(t.Quota, state.QuotaTargetHelper, false, limit)
 	q := planQuotaWait(o.opts.Config.UsageLimit, limit, state.QuotaTargetHelper, waits, o.clk().Now())
 	reason := o.sanitizeTaskReason(taskQuotaReason(q))
 	parkEff, err := taskStatusChangeEffect(taskID, state.TaskStatusChangedPayload{Status: string(assistants.StatusQueued), Reason: reason, Quota: &q})
 	if err != nil {
-		return o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error(), nil, guard, nil)
+		return fail(err)
 	}
 	effects := []state.Effect{parkEff}
 	if q.PauseReason != "" {
 		holdEff, err := taskHoldEffect("task_hold_set", taskID, holdOwnerManual, reason)
 		if err != nil {
-			return o.finishTaskTurnReplyingGuarded(taskID, 0, assistants.StatusRunning, assistants.StatusFailed, "assistants: record usage limit: "+err.Error(), nil, guard, nil)
+			return fail(err)
 		}
 		effects = append(effects, holdEff)
 	}
@@ -868,16 +882,52 @@ func (o *Orchestrator) turnYielded(waiter agentcomm.ParticipantID, waitsBefore m
 // and the event log.
 const maxFailureReasonLen = 300
 
-// helperFailureReason is the failed task's reason: the process error when there is one (secrets redacted,
-// length-capped), so the dashboard says why the helper failed — not only that it did.
-func (o *Orchestrator) helperFailureReason(processErr error) string {
-	const prefix = "helper execution failed"
-	if processErr == nil {
-		return prefix
+// contractNotMet is what failed in a turn whose answer broke the result contract. protocolErrorPrefix stays first:
+// it marks an invalid answer, whose raw text the dashboard can show.
+const contractNotMet = protocolErrorPrefix + "result contract not met"
+
+// helperProtocolReason is the reason of a turn whose answer broke the result contract.
+func (o *Orchestrator) helperProtocolReason(task assistants.Task, exec assistants.Execution, detail string) string {
+	return o.helperTurnFailure(contractNotMet, task, exec, detail)
+}
+
+// helperTurnFailure is the reason of every failed helper turn: what went wrong and with which executor — role,
+// command and its source, never the argv — then the detail, so the dashboard says why. The detail is redacted
+// before the reason is cut to length: a secret cut in half would no longer be recognised.
+func (o *Orchestrator) helperTurnFailure(what string, task assistants.Task, exec assistants.Execution, detail string) string {
+	reason := what + " (role " + string(task.ProfileID) + ", " + executorLabel(exec) + ")"
+	if detail != "" {
+		reason += ": " + o.RedactSecrets(detail)
 	}
-	reason := []rune(prefix + ": " + o.RedactSecrets(processErr.Error()))
-	if len(reason) > maxFailureReasonLen {
-		return string(reason[:maxFailureReasonLen-1]) + "…"
+	if r := []rune(reason); len(r) > maxFailureReasonLen {
+		return string(r[:maxFailureReasonLen-1]) + "…"
 	}
-	return string(reason)
+	return reason
+}
+
+// taskTurnFailure is helperTurnFailure for a task known by id, with the executor it runs.
+func (o *Orchestrator) taskTurnFailure(taskID assistants.TaskID, what, detail string) string {
+	rs := o.opts.Store.Snapshot()
+	var task assistants.Task
+	if t, ok := rs.Assistants.Tasks[taskID]; ok {
+		task = t.Task
+	}
+	return o.helperTurnFailure(what, task, o.taskExecution(rs, task), detail)
+}
+
+// processFailure says how a turn's process failed — the executable did not start, the CLI reported an error itself
+// (such as "Not logged in") or the process just failed — and the error's text.
+func processFailure(err error) (what, detail string) {
+	if err != nil {
+		detail = err.Error()
+	}
+	var cliErr *executor.CLIReportedError
+	switch {
+	case errors.Is(err, executor.ErrAgentStart):
+		return "helper executable did not start", detail
+	case errors.As(err, &cliErr):
+		return "helper CLI reported an error", detail
+	default:
+		return "helper execution failed", detail
+	}
 }

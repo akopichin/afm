@@ -23,23 +23,15 @@ import (
 	"github.com/akopichin/afm/pkg/progress"
 )
 
-// afmSecretEnvPrefix/afmSyspromptEnvPrefix — те же транспортные префиксы, что pkg/docker расставляет в
-// окружении afm-процесса для autoShim-агентов.
-const (
-	afmSecretEnvPrefix    = "AFM_SECRET_"    //nolint:gosec // это имя переменной окружения, а не сам секрет
-	afmSyspromptEnvPrefix = "AFM_SYSPROMPT_" //nolint:gosec // аналогично
-	// afmMeshTokenEnv is the bare env var name the Docker transport uses for the mesh bearer token (Agent
-	// Mesh Phase 3, T3.3) — mirrors AFM_BROWSER_TRANSPORT_TOKEN. The host path never sets this literal
-	// variable (the token lives only in the AFM_MESH_DESCRIPTOR file there); Docker needs it because the
-	// descriptor file itself is minted on the host, outside the container's filesystem.
-	afmMeshTokenEnv = "AFM_MESH_TOKEN" //nolint:gosec // env var name, not the secret value
-)
+// afmMeshTokenEnv is the bare env var the Docker transport uses for the mesh bearer token: the descriptor
+// file is minted on the host, outside the container's filesystem. The host path never sets it.
+const afmMeshTokenEnv = "AFM_MESH_TOKEN" //nolint:gosec // env var name, not the secret value
 
 // IsCrossAgentTransportSecret определяет секреты AFM_SECRET_*, AFM_HOOK_SECRET_*, AFM_SYSPROMPT_* и
 // AFM_MESH_TOKEN для фильтрации verify-окружения.
 func IsCrossAgentTransportSecret(kv string) bool {
-	return strings.HasPrefix(kv, afmSecretEnvPrefix) ||
-		strings.HasPrefix(kv, afmSyspromptEnvPrefix) ||
+	return strings.HasPrefix(kv, config.SecretEnvPrefix) ||
+		strings.HasPrefix(kv, config.SyspromptEnvPrefix) ||
 		strings.HasPrefix(kv, lifecyclehooks.HookSecretTransportPrefix) ||
 		strings.HasPrefix(kv, afmMeshTokenEnv+"=")
 }
@@ -72,27 +64,16 @@ func SecretValuesForRedaction() []string {
 	return vals
 }
 
-// afmSecretEnvName воспроизводит ТОТ ЖЕ transform, что pkg/docker/wrapper.go's envName делает над именем
-// враппер-команды при построении переменной AFM_SECRET_<NAME>.
-func afmSecretEnvName(cmd string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(cmd) {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
-}
-
-// isVerifierOwnSecret сохраняет секрет verify-агента по точному имени переменной, исключая совпадение
-// префиксов команд.
-func isVerifierOwnSecret(kv, verifyCommand string) bool {
-	if verifyCommand == "" {
+// isOwnTransportVar сохраняет секрет команды по точному имени переменной, исключая совпадение префиксов
+// команд. System prompt сохраняется только helper-у; verify его намеренно не наследует (политика не менялась).
+func isOwnTransportVar(kv, command string, mode RunMode) bool {
+	if command == "" {
 		return false
 	}
-	return strings.HasPrefix(kv, afmSecretEnvPrefix+afmSecretEnvName(verifyCommand)+"=")
+	if strings.HasPrefix(kv, config.SecretEnvVar(command)+"=") {
+		return true
+	}
+	return mode == ModeHelper && strings.HasPrefix(kv, config.SyspromptEnvVar(command)+"=")
 }
 
 // isClaudeAuthorCredential определяет Claude credentials и BASE_URL автора, которые verify-агент не должен
@@ -191,6 +172,9 @@ type Config struct {
 	// runMode is internal-only (hardening.go): set exclusively by RunHelperAgent's config copy to ModeHelper.
 	// VerifyMode remains the public surface for verify; effectiveMode() folds both into one switch.
 	runMode RunMode
+	// HelperWrapperRuntime keeps the ambient Claude auth and ANTHROPIC_BASE_URL for a helper whose command is
+	// not bare claude (a wrapper that calls claude itself). Honoured by RunHelperAgent only; verify ignores it.
+	HelperWrapperRuntime bool
 	// nativeSchemaOn is internal-only: RunHelperAgent and RunVerifyAgent set it once NativeSchema passed the shape check.
 	nativeSchemaOn bool
 	// Clock is the executor's clock. nil (the production default) means clock.Real(); tests inject a
@@ -244,6 +228,38 @@ func ResolveArgs(extra []string) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+// modelArgFlags — единственные флаги client.extra_args, которые наследует helper: выбор модели и уровня
+// рассуждения. Остальное (--resume, --mcp-config, пути, чужие флаги) принадлежит агенту стадии.
+var modelArgFlags = []string{"--model", "--fallback-model", "--effort"}
+
+// HelperModelArgs оставляет в extra только пары --model/--fallback-model/--effort в обеих формах записи
+// (`--model X` и `--model=X`). Дубли не удаляются: ResolveArgs сломал бы пары `--model X --fallback-model X`.
+// Флаг без значения отбрасывается.
+func HelperModelArgs(extra []string) []string {
+	var out []string
+	for i := 0; i < len(extra); i++ {
+		flag, _, hasValue := strings.Cut(extra[i], "=")
+		if !slices.Contains(modelArgFlags, flag) {
+			continue
+		}
+		switch {
+		case hasValue:
+			out = append(out, extra[i])
+		case i+1 < len(extra) && !strings.HasPrefix(extra[i+1], "-"):
+			out = append(out, extra[i], extra[i+1])
+			i++
+		default:
+			// Флаг без значения отбрасывается, а не склеивается со следующим флагом.
+		}
+	}
+	return out
+}
+
+// HelperClaudeArgs — DefaultClaudeArgs и HelperModelArgs(extra): готовый Config.ExtraArgs helper-а.
+func HelperClaudeArgs(extra []string) []string {
+	return append(DefaultClaudeArgs(), HelperModelArgs(extra)...)
 }
 
 // isClaudeCommand reports whether cmd is the default claude CLI (the only command that accepts --effort).
@@ -1014,17 +1030,17 @@ func (e *Executor) filterInheritedEnv(ambient []string) []string {
 			// Strip AFM_MESH_* from all children; only author runners with a MeshClient re-add it below.
 		case IsStopHookTransportEnv(kv):
 			// Strip AFM_STOP_HOOK_* from all children; only an author runner that opened a bridge re-adds it below.
-		case mode.isolated() && isVerifierOwnSecret(kv, e.cfg.Command):
-			// D2b: the verifier's/helper's OWN secret (AFM_SECRET_<command>) survives.
+		case mode.isolated() && isOwnTransportVar(kv, e.cfg.Command, mode):
+			// The verifier's/helper's OWN secret survives, and the helper's own system prompt for its wrapper.
 			filtered = append(filtered, kv)
 		case mode.isolated() && IsCrossAgentTransportSecret(kv):
 			// C2: a read-only verifier/helper must not inherit OTHER agents'/hooks'
 			// transport secrets (it could reflect them in its persisted JSON).
-		case mode.isolated() && !isClaudeCommand(e.cfg.Command) && isClaudeAuthorCredential(kv):
+		case mode.isolated() && !isClaudeCommand(e.cfg.Command) && !e.cfg.keepsAmbientAuth() && isClaudeAuthorCredential(kv):
 			// F4: the author's forwarded Claude auth must not reach a FOREIGN verify/helper agent. When the
 			// verifier/helper itself is claude (isClaudeCommand), there is no foreign agent to protect
 			// against — there's only one claude identity in this environment, and it needs these credentials
-			// just to start.
+			// just to start. A helper in wrapper runtime opts into the ambient auth for its wrapper.
 		default:
 			filtered = append(filtered, kv)
 		}

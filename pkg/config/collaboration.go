@@ -23,6 +23,10 @@ type CollaborationConfig struct {
 	// Default() deliberately does NOT set it: the "team" default lives only at mode resolution
 	// (cmd/afm/run_collaboration.go). The value is validated per layer by UnmarshalYAML.
 	Mode *assistants.CollaborationMode `yaml:"mode,omitempty"`
+	// RuntimeContext — окружение процесса помощника по умолчанию (assistants.RuntimeContext); профиль может его
+	// переопределить. nil = не задано этим слоем: значение по умолчанию (isolated) подставляет только
+	// assistants.ResolveRuntimeContext.
+	RuntimeContext *assistants.RuntimeContext `yaml:"runtime_context,omitempty"`
 	// Profiles — locally configured assistant roles, keyed by profile id. No marketplace, no install step:
 	// builtin + this (global/project config) are the only sources (§3.5 of dev-plan.md's grooming notes).
 	Profiles map[string]ProfileConfig `yaml:"profiles,omitempty"`
@@ -41,17 +45,41 @@ type CollaborationConfig struct {
 	maxDepthProject *int
 }
 
-// UnmarshalYAML decodes the struct normally but first validates the raw `mode` node. A plain *string field
-// cannot tell an explicit `mode: null` (or bare `mode:`) from an absent key and would silently stringify a
-// number or bool, so the node is checked before it collapses into a pointer.
+// UnmarshalYAML decodes the struct normally but first validates the raw `mode` and `runtime_context` nodes.
+// A plain pointer field cannot tell an explicit `mode: null` (or bare `mode:`) from an absent key and would
+// silently stringify a number or bool, so the node is checked before it collapses into a pointer.
 func (c *CollaborationConfig) UnmarshalYAML(node *yaml.Node) error {
 	if modeNode := findMapValue(node, "mode"); modeNode != nil {
 		if _, err := assistants.ParseCollaborationModeNode(modeNode); err != nil {
 			return err
 		}
 	}
+	if err := validateRuntimeContextNode("collaboration.runtime_context", node); err != nil {
+		return err
+	}
 	type plain CollaborationConfig // no methods: decoding it does not recurse into UnmarshalYAML
 	return node.Decode((*plain)(c))
+}
+
+// validateRuntimeContextNode checks the `runtime_context` value of a mapping node when the mapping sets it. The
+// mapping is decoded by yaml.v3 itself, so tagged keys, aliases and merge precedence pick the same value node the
+// struct decode will, before a null collapses into "not set".
+func validateRuntimeContextNode(field string, node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return nil // not a mapping: the struct decode reports it
+	}
+	var values map[string]yaml.Node
+	if err := node.Decode(&values); err != nil {
+		return err
+	}
+	n, set := values["runtime_context"]
+	if !set {
+		return nil
+	}
+	if _, err := assistants.ParseRuntimeContextNode(field, &n); err != nil {
+		return fmt.Errorf("%w (line %d)", err, n.Line)
+	}
+	return nil
 }
 
 // findMapValue returns the value node of key in a YAML mapping, or nil when the mapping does not set it.
@@ -135,6 +163,18 @@ type ProfileConfig struct {
 	// this field no configured profile could ever delegate (BuildRegistry is called with no builtin layer),
 	// leaving the whole recursive-delegation path unreachable in production.
 	Delegate bool `yaml:"delegate,omitempty"`
+	// RuntimeContext переопределяет collaboration.runtime_context для этого профиля. nil = наследовать.
+	RuntimeContext *assistants.RuntimeContext `yaml:"runtime_context,omitempty"`
+}
+
+// UnmarshalYAML проверяет сырой узел runtime_context до превращения в указатель — как mode выше.
+func (p *ProfileConfig) UnmarshalYAML(node *yaml.Node) error {
+	const field = "collaboration.profiles.*.runtime_context"
+	if err := validateRuntimeContextNode(field, node); err != nil {
+		return err
+	}
+	type plain ProfileConfig // no methods: decoding it does not recurse into UnmarshalYAML
+	return node.Decode((*plain)(p))
 }
 
 // CollaborationLimits carries delegation/quota limits (T4a.2 admission). MaxTasks is a whole-RUN ceiling —

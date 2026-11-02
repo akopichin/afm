@@ -59,10 +59,7 @@ func newAssistantsTestOrchestratorWith(t *testing.T, enabled bool, beforeRecords
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 		{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
 		{ID: "qa", Title: "QA", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
-	}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -71,6 +68,12 @@ func newAssistantsTestOrchestratorWith(t *testing.T, enabled bool, beforeRecords
 		RunDir: dir, Stages: stages, Store: store, RunID: "run1",
 		AssistantsEnabled: enabled, AssistantsRegistry: reg,
 	}), store
+}
+
+// allowHelpersOS stands in for the host/container helper policy: every command may run, under an OS read-only
+// sandbox. Tests of that policy itself set helperAccess back to nil and pin the environment.
+func allowHelpersOS(string) (string, assistants.ReadonlyEnforcement) {
+	return "", assistants.ReadonlyEnforcementOS
 }
 
 // reopenAssistantsTestOrchestrator simulates a resume of prev's run in a fresh process: prev's store must
@@ -105,6 +108,7 @@ func assembleAssistantsTestOrchestrator(t *testing.T, opts Options) *Orchestrato
 		fsm:           bus.NewFSM(opts.Store),
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), opts.Stages, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
+		helperAccess:  allowHelpersOS,
 	}
 	// Clean shutdown, as in a real run: cancel the run context and wait for the helper agents BEFORE the store
 	// closes and t.TempDir is removed (cleanups run LIFO). A helper still running when the test returns would

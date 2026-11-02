@@ -189,12 +189,6 @@ export function FeedWorkspace({
   const canAnswerThought = composerMounted && (mesh === undefined || reviseAvailable)
   const stageIndex = mesh?.stages.findIndex((stage) => stage.id === stageId) ?? -1
   const stageCommand = participants.find((person) => person.id === `stage:${stageId}`)?.command
-  // The stage agent's name: its roster name, else the stage's name, else the stage id.
-  function stageAgentName(id: string): string {
-    const displayName = participants.find((person) => person.id === `stage:${id}`)?.display_name
-    if (displayName !== undefined && displayName !== '') return displayName
-    return mesh?.stages.find((stage) => stage.id === id)?.name ?? id
-  }
   const unseen = useUnseenCount(feed.stick, items.length + conversationMessages.length, stageId)
 
   // Раскрытая группа — режим чтения: новые события не уводят её из вида. Свернули — снова решаем по позиции,
@@ -265,7 +259,6 @@ export function FeedWorkspace({
                 key={entry.key}
                 group={entry.group}
                 showStageBadges={false}
-                agentName={stageAgentName(entry.group.stageId)}
                 imagePolicy={imagePolicy}
                 enteringKey={enteringKey}
                 onEntered={onEntered}
@@ -404,13 +397,11 @@ type FeedGroupViewProps = {
   // count over without a bump: a filter can merge two runs into one without any new call.
   toolCountScope?: string
   messageCard?: boolean
-  // agentName — the stage agent's name in the author row of its messages; defaults to the stage id.
-  agentName?: string
 }
 
 // FeedGroupView — одна группа: стейдж-агент — строка автора и тело без рамки, события флоу — тихие строки,
 // пользователь и карточки истории — пузырь с шапкой.
-export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false, agentName }: FeedGroupViewProps): ReactElement {
+export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false }: FeedGroupViewProps): ReactElement {
   // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
   // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
   const authorLabel = group.authorLabel ?? (group.actor === 'system' || (messageCard && group.actor === 'agent') ? systemAuthorLabel : ACTOR_LABEL[group.actor])
@@ -420,11 +411,10 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
   // The first row's time sits in the author row, so that row does not repeat it.
   const timeInHead = messageCard || isStageAgent
   const framed = messageCard || group.actor === 'user'
-  const stageAgentName = agentName ?? group.stageId
   const firstTime = firstItem && <MessageTime timestamp={firstItem.ts} gap={firstItem.gap} firstEvent={firstItem.firstEvent} focusable />
   const head = isFlow ? null : isStageAgent ? (
     <div className="feed-group-head feed-author-row">
-      <strong className="feed-actor">{stageAgentName}</strong>
+      <strong className="feed-actor">{group.stageId}</strong>
       <span className="feed-role">{STAGE_AGENT_ROLE}</span>
       {firstTime}
     </div>
@@ -546,7 +536,7 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
         <MeshAvatar name={authorLabel} kind={group.actor === 'user' ? 'user' : 'side_agent'} />
         <div className="feed-history-card">{content}</div>
       </> : isStageAgent ? <>
-        <MeshAvatar name={stageAgentName} kind="stage_agent" />
+        <MeshAvatar name={group.stageId} kind="stage_agent" />
         <div className="feed-authored-body">{content}</div>
       </> : content}
     </div>

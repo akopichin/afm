@@ -6,9 +6,9 @@ import { BoardTaskForm } from './BoardTaskForm'
 
 const participants: MeshParticipant[] = [
   { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
-  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
+  { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'api', stage_id: 'api', reachable: true },
 ]
-const stages = [{ id: 'api', title: 'API', status: 'running' }]
+const stages = [{ id: 'api', status: 'running' }]
 
 function posted(key: string, status: string): MeshBoardEntry {
   return { author_id: 'user', key, version: 1, status, seq: 1, ts: '2026-10-18T00:00:00Z' }
@@ -72,7 +72,7 @@ describe('BoardTaskForm', () => {
     const publish = vi.spyOn(meshClient, 'publishMeshBoard').mockResolvedValue(posted('task/csv-export', 'CSV export'))
     render(<BoardTaskForm participants={participants} stages={stages} mode="legacy" onPosted={() => {}} />)
     const notify = screen.getByRole('group', { name: 'Notify' })
-    expect(within(notify).getByRole('checkbox', { name: 'API' })).toBeChecked()
+    expect(within(notify).getByRole('checkbox', { name: 'api' })).toBeChecked()
     fireEvent.click(within(notify).getByRole('checkbox', { name: 'QA' }))
     fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
     fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
@@ -121,7 +121,7 @@ describe('BoardTaskForm', () => {
       expect(screen.queryByRole('checkbox')).toBeNull()
       const assignee = screen.getByRole('combobox', { name: 'Assignee' })
       expect(assignee).toHaveValue('')
-      expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'API'])
+      expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'api'])
     })
 
     test('the Assignee select never offers an Assistant (side agent) or a helper', () => {
@@ -132,7 +132,7 @@ describe('BoardTaskForm', () => {
       ]
       render(<BoardTaskForm participants={withAssistant} stages={stages} mode="typed" onPosted={() => {}} />)
       const assignee = screen.getByRole('combobox', { name: 'Assignee' })
-      expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'API'])
+      expect(within(assignee).getAllByRole('option').map((o) => o.textContent)).toEqual(['Nobody yet', 'QA', 'api'])
     })
 
     test('creates the task with title, description and the picked assignee', async () => {
@@ -165,7 +165,7 @@ describe('BoardTaskForm', () => {
       const { rerender } = render(<BoardTaskForm participants={participants} stages={stages} mode="typed" onPosted={() => {}} />)
       fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'CSV export' } })
       fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
-      rerender(<BoardTaskForm participants={participants} stages={[{ id: 'api', title: 'API', status: 'paused' }]} mode="typed" onPosted={() => {}} />)
+      rerender(<BoardTaskForm participants={participants} stages={[{ id: 'api', status: 'paused' }]} mode="typed" onPosted={() => {}} />)
       expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('')
       fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
       await waitFor(() => expect(create).toHaveBeenCalled())
@@ -183,7 +183,7 @@ describe('BoardTaskForm', () => {
       fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'stage:api' } })
       fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
       await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'))
-      rerender(<BoardTaskForm participants={participants} stages={[{ id: 'api', title: 'API', status: 'paused' }]} mode="typed" onPosted={onPosted} />)
+      rerender(<BoardTaskForm participants={participants} stages={[{ id: 'api', status: 'paused' }]} mode="typed" onPosted={onPosted} />)
       expect(screen.getByRole('combobox', { name: 'Assignee' })).toHaveValue('')
       fireEvent.click(screen.getByRole('button', { name: 'Post task' }))
       await waitFor(() => expect(onPosted).toHaveBeenCalledWith(false))

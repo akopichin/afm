@@ -147,8 +147,8 @@ describe('CostPanel — table + Total + expand', () => {
         accounting={ACCOUNTING_OK_DATA}
       />,
     )
-    expect(screen.getByText('Build')).toBeInTheDocument()
-    expect(screen.getByText('No cost stage')).toBeInTheDocument()
+    expect(screen.getByText('s1')).toBeInTheDocument()
+    expect(screen.getByText('s2')).toBeInTheDocument()
     expect(screen.getByText('Run overhead')).toBeInTheDocument()
     expect(screen.getByText('$0.50')).toBeInTheDocument()
     expect(screen.getByText('Total')).toBeInTheDocument()
@@ -201,7 +201,7 @@ describe('CostPanel — table + Total + expand', () => {
 
     // Сворачиваем стадию "a stage" обратно — overhead и __overhead__-стадия
     // остаются раскрытыми (независимость состояния).
-    const aStageBtn = screen.getByRole('button', { name: /A stage/ })
+    const aStageBtn = screen.getByRole('button', { name: /a stage/ })
     fireEvent.click(aStageBtn)
     expect(aStageBtn).toHaveAttribute('aria-expanded', 'false')
     const overheadBtn = screen.getByRole('button', { name: /run overhead/i })
@@ -214,7 +214,7 @@ describe('CostPanel — table + Total + expand', () => {
     const stages = [makeStage('a stage', makeCost(), 'A stage')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
 
-    const btn = screen.getByRole('button', { name: /A stage/ })
+    const btn = screen.getByRole('button', { name: /a stage/ })
     fireEvent.click(btn)
 
     const regionId = btn.getAttribute('aria-controls')
@@ -230,7 +230,7 @@ describe('CostPanel — table + Total + expand', () => {
   test('detail region lives inside a td spanning stage, time, tokens and est. cost (colSpan=4)', () => {
     const stages = [makeStage('s1', makeCost(), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
     const region = screen.getByRole('region')
     const td = region.closest('td')
     expect(td).not.toBeNull()
@@ -260,7 +260,7 @@ describe('CostPanel — show_money off drops the Cost column', () => {
     // Токены/кэш остаются.
     expect(screen.getByRole('columnheader', { name: 'Tokens' })).toBeInTheDocument()
     // Детализация раскрывается в td с colSpan=3.
-    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
     const td = screen.getByRole('region').closest('td')
     expect(td?.getAttribute('colspan')).toBe('3')
   })
@@ -271,7 +271,7 @@ describe('CostPanel — token-mix bar', () => {
     const cost = makeCost() // totalTokens = 750 = 100 + 200 + 50 + 400
     const stages = [makeStage('s1', cost, 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
 
     const bar = document.querySelector('.cost-tokenmix')
     expect(bar).not.toBeNull()
@@ -290,7 +290,7 @@ describe('CostPanel — token-mix bar', () => {
     const cost = makeCost({ totalTokens: 0, uncachedInput: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheWriteOther: 0, cacheWriteTotal: 0, output: 0 })
     const stages = [makeStage('s1', cost, 'Empty')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    fireEvent.click(screen.getByRole('button', { name: /Empty/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
 
     const bar = document.querySelector('.cost-tokenmix')
     expect(bar).not.toBeNull()
@@ -306,7 +306,7 @@ describe('CostPanel — cache-hit ratio + figures', () => {
     const cost = makeCost({ cacheHitRatio: null })
     const stages = [makeStage('s1', cost, 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
     const region = screen.getByRole('region')
     expect(region).toHaveTextContent('—')
     expect(region).not.toHaveTextContent('0%')
@@ -316,7 +316,7 @@ describe('CostPanel — cache-hit ratio + figures', () => {
     const cost = makeCost({ cacheHitRatio: 0.4 })
     const stages = [makeStage('s1', cost, 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
     const region = screen.getByRole('region')
     expect(region).toHaveTextContent('40%')
   })
@@ -325,7 +325,7 @@ describe('CostPanel — cache-hit ratio + figures', () => {
     const cost = makeCost({ phases: { planning: 2, implementation: 5 } })
     const stages = [makeStage('s1', cost, 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    fireEvent.click(screen.getByRole('button', { name: /Build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /s1/ }))
     const region = screen.getByRole('region')
     expect(region).toHaveTextContent('×2')
     expect(region).toHaveTextContent('×5')
@@ -389,10 +389,10 @@ describe('CostPanel — layout: title, rows, total and usage breakdown', () => {
     expect(headers).toEqual(['Stage', 'Time', 'Tokens', 'Est. cost'])
   })
 
-  test('a row shows the stage name with its models as a meta line and the token count', () => {
+  test('a row shows the stage id with its models as a meta line and the token count', () => {
     const stages = [makeStage('s1', makeCost({ models: ['claude', 'codex'], totalTokens: 1234 }), 'Build')]
     render(<CostPanel stages={stages} coverageIssues={[]} accounting={ACCOUNTING_OK_DATA} />)
-    const row = screen.getByText('Build').closest('tr')
+    const row = screen.getByText('s1').closest('tr')
     expect(row).toHaveTextContent('claude, codex')
     expect(row).toHaveTextContent('1,234')
   })

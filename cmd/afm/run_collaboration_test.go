@@ -2,8 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +17,7 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/state"
 )
 
@@ -221,21 +228,19 @@ func TestRecovery_TreeRestoredBeforeOrchestratorNew(t *testing.T) {
 	}
 }
 
-// TestAssistantProfileCommands_EmptyWhenDisabled: T8.5's Docker-mount wiring must not try to prepare any
-// profile command for a capability that is off.
-func TestAssistantProfileCommands_EmptyWhenDisabled(t *testing.T) {
+// Docker preparation must not prepare any profile or saved task command for a capability that is off: no helper
+// is added or woken then.
+func TestHelperCommands_EmptyWhenDisabled(t *testing.T) {
 	off := false
 	cfg := config.Config{Collaboration: config.CollaborationConfig{
 		Enabled:  &off,
 		Profiles: map[string]config.ProfileConfig{"reviewer": {Command: "frontend-reviewer"}},
 	}}
-	if got := assistantProfileCommands(cfg, nil); got != nil {
-		t.Fatalf("assistantProfileCommands(disabled) = %v, want nil", got)
+	if got := helperCommands(cfg, nil, []string{"saved-reviewer"}); got != nil {
+		t.Fatalf("helperCommands(disabled) = %v, want nil", got)
 	}
 }
 
-// TestAssistantProfileCommands_DedupedWhenEnabled: configured profile commands come back deduplicated, and a
-// profile with an empty Command (inherits the client default, already scanned separately) is skipped.
 // TestProfilesFromConfig_DelegateCapability — the config `delegate: true` flag must reach the built
 // registry's Profile.Capabilities.Delegate, otherwise admitChildren rejects every delegate turn ("this
 // profile is not permitted to delegate") and recursive delegation is unreachable in production.
@@ -256,7 +261,9 @@ func TestProfilesFromConfig_DelegateCapability(t *testing.T) {
 	}
 }
 
-func TestAssistantProfileCommands_DedupedWhenEnabled(t *testing.T) {
+// Configured profile commands and saved task commands come back sorted and deduplicated. A profile without a
+// command runs its stage's command or client.command, which the projection already has.
+func TestHelperCommands_ProfilesAndSavedTasks(t *testing.T) {
 	cfg := config.Config{Collaboration: config.CollaborationConfig{
 		Profiles: map[string]config.ProfileConfig{
 			"reviewer":  {Command: "frontend-reviewer"},
@@ -264,9 +271,95 @@ func TestAssistantProfileCommands_DedupedWhenEnabled(t *testing.T) {
 			"inherits":  {Command: ""},
 		},
 	}}
-	got := assistantProfileCommands(cfg, nil)
-	if len(got) != 1 || got[0] != "frontend-reviewer" {
-		t.Fatalf("assistantProfileCommands = %v, want exactly [frontend-reviewer]", got)
+	got := helperCommands(cfg, nil, []string{"saved-reviewer", "frontend-reviewer"})
+	if want := []string{"frontend-reviewer", "saved-reviewer"}; !slices.Equal(got, want) {
+		t.Fatalf("helperCommands = %v, want %v", got, want)
+	}
+}
+
+// run and validate build one registry: the builtin default is there without any config, and a configured
+// profile with its id replaces it as a whole.
+func TestBuildProfileRegistry_BuiltinDefault(t *testing.T) {
+	reg, err := buildProfileRegistry(config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := reg.Get(assistants.DefaultProfileID); !ok || p.Command != "" || p.Instructions == "" {
+		t.Fatalf("builtin default = %+v, %v; want a role without a command", p, ok)
+	}
+
+	reg, err = buildProfileRegistry(config.Config{Collaboration: config.CollaborationConfig{
+		Profiles: map[string]config.ProfileConfig{"default": {Command: "my-cli"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := reg.Get(assistants.DefaultProfileID); p.Command != "my-cli" || p.Instructions != "" || p.Title != "" {
+		t.Fatalf("configured default = %+v, want the configured profile only, no builtin field kept", p)
+	}
+}
+
+// profileOnTheWire is one profile of GET /api/assistant-profiles as the dashboard reads it.
+type profileOnTheWire struct {
+	ID             string `json:"id"`
+	Command        string `json:"command"`
+	CommandSource  string `json:"command_source"`
+	RuntimeContext string `json:"runtime_context"`
+	Available      bool   `json:"available"`
+}
+
+// The dashboard lists every profile as it would run where it is attached: a role-only profile runs the stage's
+// command, or client.command for a stage without one and for a run agent; a profile's own command wins.
+func TestAssistantProfilesAPI_ResolvesWhereAttached(t *testing.T) {
+	t.Setenv("AFM_IN_DOCKER", "1") // container trust: every command may run as a helper
+	stages := []flow.Stage{{ID: "a"}, stageWithCommand("b", "fake-recipe"), {ID: "s", Script: "true"}}
+	store, err := state.Open(t.TempDir(), []string{"a", "b", "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	wrapper := assistants.RuntimeContextWrapper
+	cfg := config.Default()
+	cfg.Collaboration.Profiles = map[string]config.ProfileConfig{
+		"reviewer": {Instructions: "Review."},
+		"external": {Command: "/opt/ext-as-claude.sh", RuntimeContext: &wrapper},
+	}
+	f := &flow.Flow{Name: "api", Stages: stages}
+	collab := startCollaboration(store, cfg, f)
+	orch := orchestrator.New(orchestrator.Options{
+		RunDir: t.TempDir(), Stages: stages, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(),
+		AssistantsEnabled: collab.policy.Enabled, AssistantsRegistry: collab.registry,
+	})
+	handler := server.New(server.Config{Store: store, AssistantProfiles: collab.service(orch)}).Handler()
+	get := func(query string) (int, map[string]string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/assistant-profiles"+query, nil))
+		var resp struct {
+			Profiles []profileOnTheWire `json:"profiles"`
+		}
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		got := map[string]string{}
+		for _, p := range resp.Profiles {
+			got[p.ID] = fmt.Sprintf("%s %s %s %t", p.Command, p.CommandSource, p.RuntimeContext, p.Available)
+		}
+		return w.Code, got
+	}
+
+	for query, want := range map[string]map[string]string{
+		"?stage_id=a": {"default": "claude client isolated true", "reviewer": "claude client isolated true", "external": "/opt/ext-as-claude.sh profile wrapper true"},
+		"?stage_id=b": {"default": "fake-recipe stage isolated true", "reviewer": "fake-recipe stage isolated true", "external": "/opt/ext-as-claude.sh profile wrapper true"},
+		"":            {"default": "claude client isolated true", "reviewer": "claude client isolated true", "external": "/opt/ext-as-claude.sh profile wrapper true"},
+	} {
+		code, got := get(query)
+		if code != http.StatusOK || !maps.Equal(got, want) {
+			t.Errorf("GET %q = %d %v, want 200 %v", query, code, got, want)
+		}
+	}
+	for query, want := range map[string]int{"?stage_id=nope": http.StatusNotFound, "?stage_id=s": http.StatusBadRequest} {
+		if code, _ := get(query); code != want {
+			t.Errorf("GET %q = %d, want %d", query, code, want)
+		}
 	}
 }
 
@@ -318,6 +411,27 @@ func TestCheckDeclaredAssistants_KnownProfilesPass(t *testing.T) {
 
 	if err := checkDeclaredAssistants(f, collab); err != nil {
 		t.Fatalf("checkDeclaredAssistants: %v", err)
+	}
+}
+
+// The builtin default needs no config: a stage and the team may name it in a run without any profiles.
+func TestPreflight_BuiltinDefaultProfile(t *testing.T) {
+	t.Setenv("AFM_COLLABORATION", "1") // with collaboration off the preflight only warns and would prove nothing
+	f := &flow.Flow{
+		Stages: []flow.Stage{{ID: "s1", Assistants: flow.StageAssistants{{Profile: "default"}}}},
+		Team:   flow.Team{{ID: "helper", Profile: "default", Title: "Helper"}},
+	}
+	store := newCollabTestStore(t)
+	collab := startCollaboration(store, config.Config{}, f)
+	if !collab.policy.Enabled || collab.registry == nil {
+		t.Fatal("setup: collaboration must be enabled with a registry")
+	}
+
+	if err := checkDeclaredAssistants(f, collab); err != nil {
+		t.Fatalf("checkDeclaredAssistants: %v", err)
+	}
+	if err := checkFlowTeam(store, f.Team, collab); err != nil {
+		t.Fatalf("checkFlowTeam: %v", err)
 	}
 }
 

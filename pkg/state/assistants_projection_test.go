@@ -3,6 +3,9 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/assistants"
@@ -388,5 +391,75 @@ func TestReplay_IdempotencyIndexRestored(t *testing.T) {
 	}
 	if _, ok := rs.Assistants.OperationIndex["op-last"]; !ok {
 		t.Fatal("OperationIndex[op-last] missing")
+	}
+}
+
+// TestReplay_TaskExecutionBinding — the executor binding a task was admitted with survives the live projection, a
+// replay of the journal and the state.json snapshot alike, so a restart runs the task exactly as it was created.
+func TestReplay_TaskExecutionBinding(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	want := &assistants.ExecutionBinding{
+		Source: assistants.CommandSourceClient, ExtraArgs: []string{"--model", "client-model"}, Reasoning: "high",
+		RuntimeContext: assistants.RuntimeContextWrapper, RecipeIdentity: "abc123",
+	}
+	created := taskCreatedControl("op-1", "t1", "a", nil)
+	created.Payload = mustMarshal(t, TaskCreatedPayload{ProfileID: "reviewer", ProfileSnapshot: assistants.Profile{ID: "reviewer", Command: "claude"}, Execution: want})
+	if err := store.AppendControl(created); err != nil {
+		t.Fatalf("AppendControl: %v", err)
+	}
+	live := store.Snapshot().Assistants.Tasks["t1"]
+	if live == nil || !reflect.DeepEqual(live.Execution, want) {
+		t.Fatalf("live Execution = %+v, want %+v", live, want)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	replayed, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	if got := replayed.Assistants.Tasks["t1"].Execution; !reflect.DeepEqual(got, want) {
+		t.Fatalf("replayed Execution = %+v, want %+v", got, want)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	var snap RunState
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatalf("decode state.json: %v", err)
+	}
+	if got := snap.Assistants.Tasks["t1"].Execution; !reflect.DeepEqual(got, want) {
+		t.Fatalf("state.json Execution = %+v, want %+v", got, want)
+	}
+}
+
+// TestReplay_LegacyTaskCreatedHasNoExecution — a task_created record written before executor bindings existed has
+// no "execution" key: it replays to a nil binding, never to a zero-value one that would claim a source.
+func TestReplay_LegacyTaskCreatedHasNoExecution(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, []string{"a"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	created := taskCreatedControl("op-1", "t1", "a", nil)
+	created.Payload = json.RawMessage(`{"profile_id":"reviewer","profile_snapshot":{"ID":"reviewer","Command":""},"title":"Review"}`)
+	if err := store.AppendControl(created); err != nil {
+		t.Fatalf("AppendControl: %v", err)
+	}
+	store.Close()
+
+	rs, err := LoadRunState(dir)
+	if err != nil {
+		t.Fatalf("LoadRunState: %v", err)
+	}
+	if got := rs.Assistants.Tasks["t1"].Execution; got != nil {
+		t.Fatalf("legacy Execution = %+v, want nil", got)
 	}
 }

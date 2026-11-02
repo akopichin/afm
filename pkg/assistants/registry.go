@@ -28,90 +28,64 @@ func (e ReadonlyEnforcement) WeakerThan(other ReadonlyEnforcement) bool {
 	return e == ReadonlyEnforcementNone && other == ReadonlyEnforcementOS
 }
 
-// AvailabilityCheck reports whether a command can run a helper profile at all (ok), why not if it can't
-// (reason — non-empty exactly when ok is false), and which read-only guarantee backs a positive answer
-// (enforcement — meaningful only when ok is true). Production callers build this around
-// config.HelperCommandRejection + config.HelperReadonlyEnforcement (cmd/afm composition); pkg/assistants
-// itself stays neutral and does not import pkg/config.
-type AvailabilityCheck func(command string) (ok bool, reason string, enforcement ReadonlyEnforcement)
-
-// ProfileView is the read-only projection of a registry entry exposed to callers (HTTP, task creation): the
-// profile's public fields plus its CURRENT availability. Recomputed every time BuildRegistry runs; List()
-// returns the snapshot taken at that time.
+// ProfileView is a profile as a caller sees it where a task would run: the executor it resolves to, where that
+// came from, and whether this process may run it. Built per stage by the orchestrator, never stored.
 type ProfileView struct {
 	ID                  ProfileID
 	Title               string
 	Command             string
+	CommandSource       CommandSource
+	RuntimeContext      RuntimeContext
 	Available           bool
 	UnavailableReason   string
 	ReadonlyEnforcement ReadonlyEnforcement
 }
 
-// Registry is the immutable, resolved set of assistant profiles for a run: three layers (builtin → global →
-// project) folded by id, where a later layer's definition fully REPLACES an earlier one with the same id
-// (never a field-by-field merge). Availability is a separate concern from "configured": an
-// unknown/unavailable command marks a profile unavailable without failing the whole build.
+// DefaultProfileID is the builtin profile every run has: a general role with no command of its own, so it runs
+// the executor of wherever it is attached.
+const DefaultProfileID ProfileID = "default"
+
+// BuiltinProfiles returns the builtin layer for BuildRegistry. A global or project profile with the same id
+// replaces it as a whole.
+func BuiltinProfiles() []Profile {
+	return []Profile{{
+		ID:           DefaultProfileID,
+		Title:        "Default",
+		Instructions: "Help with the request you are given: study the project as far as it needs and answer with concrete, checked findings.",
+	}}
+}
+
+// Registry is the immutable set of a run's assistant profiles, layers folded by id (see BuildRegistry). It holds
+// roles only: the executor and whether it may run are decided per task, where it is attached (ResolveExecution).
 type Registry struct {
-	entries map[ProfileID]registryEntry
-	// byLower indexes every profile id by its lowercased form, for case-insensitive `@mention` resolution
-	// (T4.1). Built once in BuildRegistry, which also rejects a config where two DIFFERENT ids collide once
-	// lowercased — that config would make `@mention` resolution ambiguous.
+	entries map[ProfileID]Profile
+	// byLower indexes every profile id by its lowercased form, for case-insensitive `@mention` resolution. Built
+	// once in BuildRegistry, which also rejects a config where two DIFFERENT ids collide once lowercased — that
+	// config would make `@mention` resolution ambiguous.
 	byLower map[string]ProfileID
 }
 
-type registryEntry struct {
-	profile Profile
-	view    ProfileView
-}
-
-// BuildRegistry folds builtin, global and project profile layers (in that priority order — a later layer's
-// profile with the same id fully replaces the earlier one, not a field merge) and computes each resulting
-// profile's availability via `available`. defaultCommand is substituted for any BUILTIN profile left with
-// an empty Command ("a builtin role with no command inherits the client's default command", §3.5);
-// global/project profiles are user-authored and must name their own command — they never inherit it.
+// BuildRegistry folds builtin, global and project profile layers in that priority order — a later layer's profile
+// with the same id fully replaces the earlier one, not a field merge.
 //
-// Returns an error only for structural problems that would corrupt task storage or identity later: a
-// duplicate id within a single layer, or an id unsafe to use as a directory name (a task's workspace is
-// keyed by its profile id, T3.x). An unavailable (but structurally valid) command is NOT an error — see
-// AvailabilityCheck.
-func BuildRegistry(builtin, global, project []Profile, defaultCommand string, available AvailabilityCheck) (*Registry, error) {
-	reg := &Registry{entries: map[ProfileID]registryEntry{}}
-
-	type layerSpec struct {
-		profiles       []Profile
-		inheritDefault bool
+// Returns an error only for structural problems that would corrupt task storage or identity later: a duplicate id
+// within a single layer, or an id unsafe to use as a directory name (a task's workspace is keyed by its profile id).
+func BuildRegistry(builtin, global, project []Profile) (*Registry, error) {
+	reg := &Registry{entries: map[ProfileID]Profile{}}
+	for _, layer := range [][]Profile{global, project} {
+		if err := foldLayer(reg.entries, layer); err != nil {
+			return nil, err
+		}
 	}
-	layers := []layerSpec{
-		{builtin, true},
-		{global, false},
-		{project, false},
+	builtins := map[ProfileID]Profile{}
+	if err := foldLayer(builtins, builtin); err != nil {
+		return nil, err
 	}
-
-	for _, l := range layers {
-		seen := make(map[ProfileID]bool, len(l.profiles))
-		for _, p := range l.profiles {
-			if seen[p.ID] {
-				return nil, fmt.Errorf("assistants: duplicate profile id %q within one layer", p.ID)
-			}
-			seen[p.ID] = true
-			if !profileIDSafe(string(p.ID)) {
-				return nil, fmt.Errorf("assistants: profile id %q is not safe for use as a path component", p.ID)
-			}
-			if l.inheritDefault && p.Command == "" {
-				p.Command = defaultCommand
-			}
-			ok, reason, enforcement := available(p.Command)
-			reg.entries[p.ID] = registryEntry{
-				profile: p,
-				view: ProfileView{
-					ID:                  p.ID,
-					Title:               p.Title,
-					Command:             p.Command,
-					Available:           ok,
-					UnavailableReason:   reason,
-					ReadonlyEnforcement: enforcement,
-				},
-			}
+	// A configured id that differs from a builtin one only in case replaces it like the same id would: the user
+	// never wrote the builtin, so it must not make their config ambiguous. Two configured ids still collide below.
+	for id, b := range builtins {
+		if !containsIDIgnoringCase(reg.entries, id) {
+			reg.entries[id] = b
 		}
 	}
 
@@ -125,6 +99,31 @@ func BuildRegistry(builtin, global, project []Profile, defaultCommand string, av
 	}
 	reg.byLower = byLower
 	return reg, nil
+}
+
+// foldLayer adds one layer's profiles to entries, replacing a same-id profile from an earlier layer.
+func foldLayer(entries map[ProfileID]Profile, layer []Profile) error {
+	seen := make(map[ProfileID]bool, len(layer))
+	for _, p := range layer {
+		if seen[p.ID] {
+			return fmt.Errorf("assistants: duplicate profile id %q within one layer", p.ID)
+		}
+		seen[p.ID] = true
+		if !profileIDSafe(string(p.ID)) {
+			return fmt.Errorf("assistants: profile id %q is not safe for use as a path component", p.ID)
+		}
+		entries[p.ID] = p
+	}
+	return nil
+}
+
+func containsIDIgnoringCase(entries map[ProfileID]Profile, id ProfileID) bool {
+	for existing := range entries {
+		if strings.EqualFold(string(existing), string(id)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Resolve looks up a profile by a case-insensitive id, used to turn `@mention` text into a profile: a
@@ -141,17 +140,17 @@ func (r *Registry) Resolve(mention string) (ProfileID, bool) {
 	return id, ok
 }
 
-// List returns every registered profile's view, sorted by id for a stable, deterministic order (map
-// iteration order is not stable across Go runs).
-func (r *Registry) List() []ProfileView {
+// List returns every registered profile, sorted by id for a stable, deterministic order (map iteration order is
+// not stable across Go runs).
+func (r *Registry) List() []Profile {
 	ids := make([]string, 0, len(r.entries))
 	for id := range r.entries {
 		ids = append(ids, string(id))
 	}
 	slices.Sort(ids)
-	out := make([]ProfileView, 0, len(ids))
+	out := make([]Profile, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, r.entries[ProfileID(id)].view)
+		out = append(out, r.entries[ProfileID(id)])
 	}
 	return out
 }
@@ -159,11 +158,8 @@ func (r *Registry) List() []ProfileView {
 // Get returns the full profile definition by id — used when creating a task: ProfileSnapshot is a copy of
 // this value, frozen at creation time.
 func (r *Registry) Get(id ProfileID) (Profile, bool) {
-	e, ok := r.entries[id]
-	if !ok {
-		return Profile{}, false
-	}
-	return e.profile, true
+	p, ok := r.entries[id]
+	return p, ok
 }
 
 // profileIDSafe mirrors pkg/flow's stage-id safety check (StageIDSafe): a profile id becomes a task

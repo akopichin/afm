@@ -115,10 +115,7 @@ func newRecoveryRigVerifying(t *testing.T, runDir string, runner *stageScriptRun
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatal(err)
 	}
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "qa", Title: "QA", Command: "helper-cmd"}}, nil, "claude",
-		func(string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "qa", Title: "QA", Command: "helper-cmd"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +134,7 @@ func newRecoveryRigVerifying(t *testing.T, runDir string, runner *stageScriptRun
 		},
 		AssistantsEnabled: true, AssistantsRegistry: reg,
 	})
+	rig.o.helperAccess = allowHelpersOS
 	rig.o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
 		rig.verifyCalls.Add(1)
 		result := &verify.ModelResult{SchemaVersion: verify.SupportedSchemaVersion, Verdict: rig.verdict.Load().(verify.Verdict), Summary: "checked"}

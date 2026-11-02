@@ -16,14 +16,21 @@ const profiles: AssistantProfile[] = [
 ]
 
 describe('participantLabel', () => {
-  it('prefers display_name', () => {
-    expect(participantLabel(stageAgent)).toBe('Backend')
+  it('names a stage agent by its stage id, not its display_name', () => {
+    expect(participantLabel(stageAgent)).toBe('s1')
+    expect(participantLabel({ ...stageAgent, display_name: '', alias: '' })).toBe('s1')
+  })
+  it('a stage agent without a stage id falls back to display_name', () => {
+    expect(participantLabel({ ...stageAgent, stage_id: '' })).toBe('Backend')
+  })
+  it('prefers display_name for other participants', () => {
+    expect(participantLabel(helperOnS1)).toBe('QA helper')
   })
   it('falls back to alias when display_name is empty', () => {
-    expect(participantLabel({ ...stageAgent, display_name: '' })).toBe('s1')
+    expect(participantLabel({ ...helperOnS1, display_name: '' })).toBe('t1')
   })
   it('falls back to id when alias and display_name are both empty', () => {
-    expect(participantLabel({ ...stageAgent, display_name: '', alias: '' })).toBe('stage:s1')
+    expect(participantLabel({ ...helperOnS1, display_name: '', alias: '' })).toBe('helper:t1')
   })
 })
 

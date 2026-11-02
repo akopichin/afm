@@ -57,7 +57,7 @@ export function CostPanel({ stages, times, elapsedMs, runCost, runOverheadCost, 
   const totalOrUnknown = (seconds: number): number | null => (times.totalsKnown ? seconds : null)
 
   const rows: CostRow[] = stages.map((stage) => ({
-    key: `stage:${stage.id}`, label: stage.name || stage.id,
+    key: `stage:${stage.id}`, label: stage.id,
     cost: usage ? stage.cost : undefined,
     time: times.byStage.get(stage.id) ?? null,
     incomplete: times.incompleteIds.has(stage.id),

@@ -322,7 +322,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     await waitFor(() => expect(row('r')).not.toBeNull())
     expect(row('q')).toHaveClass('from-you')
     expect(within(row('q')).getByText('→ @impl, @qa, gone')).toBeInTheDocument()
-    expect(within(row('a')).getByText('Implement')).toBeInTheDocument()
+    expect(within(row('a')).getByText('impl')).toBeInTheDocument()
     expect(row('a').querySelector('.md h1')).toHaveTextContent('Found an issue')
     expect(row('a').querySelector('.md strong')).toHaveTextContent('retry loop')
     expect(within(row('r')).getByText('All checks green.')).toBeInTheDocument()

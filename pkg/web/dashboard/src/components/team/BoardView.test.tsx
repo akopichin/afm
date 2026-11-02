@@ -11,7 +11,7 @@ const participants: MeshParticipant[] = [
   { id: 'stage:api', kind: 'stage_agent', scope: 'stage', alias: 'api', display_name: 'API', stage_id: 'api', reachable: true },
   { id: 'run:t-1', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA', reachable: true },
 ]
-const stages = [{ id: 'api', title: 'API', status: 'running' }]
+const stages = [{ id: 'api', status: 'running' }]
 
 function entry(author_id: string, key: string, status: string, seq: number): MeshBoardEntry {
   return { author_id, key, version: 1, status, seq, ts: '2026-10-18T00:00:00Z' }
@@ -112,7 +112,7 @@ describe('BoardView', () => {
   test('the assignee filter lists the live roster, Unassigned, and matches any claimant', () => {
     renderView(boardOf(entries))
     const filter = screen.getByRole('combobox', { name: 'Assignee' })
-    expect(within(filter).getAllByRole('option').map((o) => o.textContent)).toEqual(['All assignees', 'Unassigned', 'API', 'QA'])
+    expect(within(filter).getAllByRole('option').map((o) => o.textContent)).toEqual(['All assignees', 'Unassigned', 'api', 'QA'])
 
     fireEvent.change(filter, { target: { value: 'run:t-1' } })
     expect(cardTitles('In progress')).toEqual(['Release, In progress'])

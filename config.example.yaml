@@ -53,8 +53,14 @@ client:
 # Collaboration dashboard mode: "team" (default) shows Team, Board and People;
 # "assistants" hides those views and shows run-wide conversations in a right panel.
 # Set collaboration.mode in this file or flow.yaml (flow overrides project, then global config).
+# Helper profiles are roles: without `command` a helper runs the executor of its stage (or client.command).
+# runtime_context: wrapper keeps afm's Claude credentials for a helper's wrapper command; default isolated.
 # collaboration:
 #   mode: assistants
+#   runtime_context: isolated
+#   profiles:
+#     reviewer: { instructions: Review the stage's changes. }
+#     codex-reviewer: { command: codex-as-claude, runtime_context: wrapper, instructions: Review with Codex. }
 
 # Per-flow git worktrees — run each flow on its own branch/worktree under .worktrees/<flow>. OFF by
 # default; opt in here with worktrees.enabled: true, or set AFM_WORKTREES=1.
