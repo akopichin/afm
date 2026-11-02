@@ -44,6 +44,9 @@ export type FlowStatus = {
   // collaborationMode: team — Team/Board/People видны, assistants — только Feed-общение. Отсутствующее или
   // неизвестное значение (старый бэкенд) даёт team.
   collaborationMode: 'team' | 'assistants'
+  // hideAttachHelpers — настройка скрывает кнопки ручного прикрепления helper. Отсутствующее или не boolean
+  // значение (старый бэкенд) даёт false.
+  hideAttachHelpers: boolean
   // runCost/runOverheadCost — сводки по затратам флоу (omitempty, если
   // бэкенд не отдаёт информацию о стоимости).
   runCost?: CostSummary
@@ -83,6 +86,7 @@ const EMPTY_STATUS: FlowStatus = {
   flowPauseState: 'none',
   flowPausedStages: [],
   collaborationMode: 'team',
+  hideAttachHelpers: false,
   coverageIssues: [],
   accounting: { supported: false },
   usageAnalytics: null,
@@ -216,6 +220,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? obj.flow_paused_stages.filter((v): v is string => typeof v === 'string')
     : []
   const collaborationMode: FlowStatus['collaborationMode'] = obj.collaboration_mode === 'assistants' ? 'assistants' : 'team'
+  const hideAttachHelpers = obj.hide_attach_helpers === true
 
   const runCostResult = isRecord(obj.run_cost) ? toCostSummary(obj.run_cost) : null
   const runCost = runCostResult === null ? undefined : runCostResult
@@ -258,6 +263,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     flowPauseState,
     flowPausedStages,
     collaborationMode,
+    hideAttachHelpers,
     runCost,
     runOverheadCost,
     coverageIssues,

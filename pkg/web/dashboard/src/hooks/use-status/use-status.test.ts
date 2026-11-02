@@ -488,6 +488,35 @@ describe('useStatus', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: null }).collaborationMode).toBe('team')
   })
 
+  test('normalizeStatus maps hide_attach_helpers only for a boolean true', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: true }).hideAttachHelpers).toBe(true)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: false }).hideAttachHelpers).toBe(false)
+  })
+
+  test('normalizeStatus falls back to hideAttachHelpers false when the field is absent (old backend) or malformed', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).hideAttachHelpers).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: 'true' }).hideAttachHelpers).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: 1 }).hideAttachHelpers).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: null }).hideAttachHelpers).toBe(false)
+  })
+
+  test('a failed poll keeps the last received hideAttachHelpers', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ flow_name: 'demo', stages: [], hide_attach_helpers: true }),
+    } as Response)
+
+    const { result } = renderHook(() => useStatus())
+    await waitFor(() => expect(result.current.hideAttachHelpers).toBe(true))
+
+    fetchSpy.mockRejectedValue(new Error('network down'))
+    const callsBefore = fetchSpy.mock.calls.length
+    result.current.refresh()
+    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsBefore))
+
+    expect(result.current.hideAttachHelpers).toBe(true)
+  })
+
   test('normalizeStatus reads run_id and defaults to "" when absent/non-string', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], run_id: 'demo-123-ab12' }).runId).toBe('demo-123-ab12')
     expect(normalizeStatus({ flow_name: 'demo', stages: [] }).runId).toBe('')

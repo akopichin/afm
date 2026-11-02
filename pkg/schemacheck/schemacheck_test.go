@@ -321,6 +321,7 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"collaboration mode bare key", "name: f\ncollaboration:\n  mode:\nstages:\n  - id: s\n    agents: [planning]\n", false},
 		{"collaboration mode number", "name: f\ncollaboration:\n  mode: 1\nstages:\n  - id: s\n    agents: [planning]\n", false},
 		{"collaboration mode list", "name: f\ncollaboration:\n  mode: [team]\nstages:\n  - id: s\n    agents: [planning]\n", false},
+		{"collaboration hide_attach_helpers is rejected (no per-flow override)", "name: f\ncollaboration:\n  hide_attach_helpers: true\nstages:\n  - id: s\n    agents: [planning]\n", false},
 		{"collaboration enabled is rejected (no per-flow enable)", "name: f\ncollaboration:\n  enabled: true\nstages:\n  - id: s\n    agents: [planning]\n", false},
 		{"assistants scalar", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: reviewer\n", true},
 		{"assistants list of names", "name: f\nstages:\n  - id: s\n    agents: [auto]\n    assistants: [reviewer, qa]\n", true},
@@ -525,6 +526,38 @@ func TestConfigSchemaMatchesAddStageSwitch(t *testing.T) {
 		{"empty mapping", "add_stage: {}\n", true},
 		{"string instead of bool", "add_stage:\n  enabled: \"false\"\n", false},
 		{"number instead of bool", "add_stage:\n  enabled: 0\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaAcceptsYAML(t, sch, tt.body); got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(t.TempDir(), projectDir)
+			if runtimeAccepts := err == nil; runtimeAccepts != tt.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
+	}
+}
+
+func TestConfigSchemaMatchesHideAttachHelpers(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"true", "collaboration:\n  hide_attach_helpers: true\n", true},
+		{"false", "collaboration:\n  hide_attach_helpers: false\n", true},
+		{"with neighbour", "collaboration:\n  mode: assistants\n  hide_attach_helpers: true\n", true},
+		{"string instead of bool", "collaboration:\n  hide_attach_helpers: \"true\"\n", false},
+		{"number instead of bool", "collaboration:\n  hide_attach_helpers: 1\n", false},
 	}
 
 	for _, tt := range tests {

@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-02
 
+### Improvement: hide the manual Attach helper buttons
+
+New `collaboration.hide_attach_helpers` setting (global or project `config.yaml`) and
+`AFM_HIDE_ATTACH_HELPERS` environment variable hide **Attach helper to stage…** in
+People and **Attach helper…** in the stage header. It is off by default; a non-empty
+env value takes precedence over project and global config (`1` or `true` hides,
+any other value shows). It changes visibility only: collaboration stays enabled,
+and the Feed `@` **Attach to stage** group, `afm agent spawn` and the API keep
+working. See [Config reference](docs/config-reference.md) and
+[Collaboration](docs/collaboration.md#hide-the-attach-helper-buttons).
+
 ### Improvement: the dashboard URL in `afm run` stands out
 
 `afm run` prints the dashboard URL as a separate block set off by blank lines:

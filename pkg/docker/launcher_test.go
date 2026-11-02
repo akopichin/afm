@@ -719,6 +719,54 @@ func TestReExec_ForwardsAddStageEnv(t *testing.T) {
 	})
 }
 
+func TestReExec_ForwardsHideAttachHelpersEnv(t *testing.T) {
+	run := func(t *testing.T, set bool, envVal string) string {
+		var capturedArgs []string
+		docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+			capturedArgs = argv
+			return nil
+		})
+		defer docker.ResetExecFunc()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		t.Setenv("AFM_HIDE_ATTACH_HELPERS", envVal)
+		if !set {
+			_ = os.Unsetenv("AFM_HIDE_ATTACH_HELPERS") // t.Setenv above restores the original on cleanup
+		}
+
+		if err := docker.ReExec(docker.ReExecConfig{
+			Image:      "akopichin/afm:latest",
+			ProjectDir: "/tmp/proj",
+			ExtraArgs:  []string{"run", "flow.yaml"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(capturedArgs, " ")
+	}
+
+	for _, v := range []string{"0", "1"} {
+		t.Run("forwards "+v, func(t *testing.T) {
+			if got := run(t, true, v); !strings.Contains(got, "-e AFM_HIDE_ATTACH_HELPERS="+v) {
+				t.Errorf("AFM_HIDE_ATTACH_HELPERS=%s not forwarded by value: %s", v, got)
+			}
+		})
+	}
+	t.Run("empty forwards nothing", func(t *testing.T) {
+		if got := run(t, true, ""); strings.Contains(got, "AFM_HIDE_ATTACH_HELPERS") {
+			t.Errorf("empty AFM_HIDE_ATTACH_HELPERS must not appear (must not be invented): %s", got)
+		}
+	})
+	t.Run("unset forwards nothing", func(t *testing.T) {
+		if got := run(t, false, ""); strings.Contains(got, "AFM_HIDE_ATTACH_HELPERS") {
+			t.Errorf("unset AFM_HIDE_ATTACH_HELPERS must not appear (must not be invented): %s", got)
+		}
+	})
+}
+
 // TestDockerReExec_ForwardsNoColor — в контейнере stdout — TTY, поэтому явный NO_COLOR хоста должен
 // доехать значением, а незаданный не должен появляться.
 func TestDockerReExec_ForwardsNoColor(t *testing.T) {

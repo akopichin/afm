@@ -69,6 +69,9 @@ type statusResponse struct {
 	// CollaborationMode — режим представления collaboration ("team"|"assistants"). Всегда присутствует и не
 	// зависит от capabilities.collaboration: это только подсказка dashboard, какие разделы показывать.
 	CollaborationMode assistants.CollaborationMode `json:"collaboration_mode"`
+	// HideAttachHelpers — подсказка dashboard скрыть кнопки ручного attach helper. Всегда присутствует и не
+	// зависит от capabilities.collaboration.
+	HideAttachHelpers bool `json:"hide_attach_helpers"`
 	// GraphRevision (Этап 9) — the runtime stage registry's current revision; omitted when the add-stage
 	// capability is off. The dashboard compares this against a previously-fetched preview's graph_revision to
 	// detect staleness without a dedicated endpoint.
@@ -134,6 +137,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		BackoffAccumulatedMs: rs.BackoffAccumulatedMs,
 		BackoffOpenSince:     rs.BackoffOpenSince(),
 		CollaborationMode:    s.collaborationMode,
+		HideAttachHelpers:    s.hideAttachHelpers,
 	}
 	if s.accounting != nil {
 		bundle := s.accounting.CostSnapshot()

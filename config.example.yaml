@@ -55,8 +55,13 @@ client:
 # Set collaboration.mode in this file or flow.yaml (flow overrides project, then global config).
 # Helper profiles are roles: without `command` a helper runs the executor of its stage (or client.command).
 # runtime_context: wrapper keeps afm's Claude credentials for a helper's wrapper command; default isolated.
+# Hide the dashboard's manual "Attach helper" buttons (People and the stage header). Visibility only: Feed @ attach,
+# afm agent spawn and the API still work; collaboration.enabled: false is what turns helpers off.
+# A nonempty AFM_HIDE_ATTACH_HELPERS overrides it: exact 1/true hides, any other value shows.
+# Priority: environment > project config > global config > default (false).
 # collaboration:
 #   mode: assistants
+#   hide_attach_helpers: true
 #   runtime_context: isolated
 #   profiles:
 #     reviewer: { instructions: Review the stage's changes. }

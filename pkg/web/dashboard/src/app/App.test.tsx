@@ -3352,8 +3352,9 @@ describe('App', () => {
   })
 
   // mockModeRun — a mesh-on run with collaboration enabled whose collaboration_mode can change between status polls:
-  // stage s1 (running) with a stage conversation, a run agent and a counted board.
-  function mockModeRun(requests: string[], mode: () => string) {
+  // stage s1 (running) with a stage conversation, a run agent and a counted board. hideAttachHelpers is the
+  // hide_attach_helpers status field; undefined omits it like an old backend.
+  function mockModeRun(requests: string[], mode: () => string, hideAttachHelpers: () => boolean | undefined = () => undefined) {
     return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       requests.push(`${init?.method ?? 'GET'} ${url}`)
@@ -3361,7 +3362,7 @@ describe('App', () => {
         return {
           ok: true,
           json: async () => ({
-            flow_name: 'demo', run_id: 'app-mode-run', collaboration_mode: mode(),
+            flow_name: 'demo', run_id: 'app-mode-run', collaboration_mode: mode(), hide_attach_helpers: hideAttachHelpers(),
             stages: [stageView('s1', 'Propose', 'running')],
             capabilities: { collaboration: true },
             accounting: { health: 'ok', has_data: false, show_money: true },
@@ -3485,6 +3486,119 @@ describe('App', () => {
     expect(header.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull()
   })
+
+  test('assistants mode with hide_attach_helpers: the header has no Attach helper…, the Feed communication stays', async () => {
+    mockModeRun([], () => 'assistants', () => true)
+    render(<App />)
+
+    expect(await screen.findByText('Found a bug in parse()')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /message the mesh/i })).toBeInTheDocument()
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    expect(header.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
+  })
+
+  test('assistants mode with hide_attach_helpers false: the header keeps Attach helper… and opens its dialog', async () => {
+    mockModeRun([], () => 'assistants', () => false)
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    fireEvent.click(header.getByRole('button', { name: 'Attach helper…' }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  test('without the mesh the header fallback follows hide_attach_helpers', async () => {
+    mockFetchForStatus(() => ({ flow_name: 'demo', capabilities: { collaboration: true }, stages: [stageView('s1', 'Propose', 'running')] }))
+    const { unmount } = render(<App />)
+    expect(await screen.findByRole('button', { name: 'Attach helper…' })).toBeInTheDocument()
+    unmount()
+
+    vi.restoreAllMocks()
+    mockFetchForStatus(() => ({ flow_name: 'demo', capabilities: { collaboration: true }, hide_attach_helpers: true, stages: [stageView('s1', 'Propose', 'running')] }))
+    render(<App />)
+    await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
+    expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
+  })
+
+  // Adds a helper of stage s1 to the roster mockModeRun serves, so People has an existing helper to show.
+  function mockHelperInRoster(): void {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (!url.includes('/api/mesh/participants')) return base(input, init)
+      const roster = (await (await base(input, init)).json()) as { participants: unknown[] }
+      const helper = { id: 'helper:t-h1', kind: 'helper', scope: 'stage', stage_id: 's1', alias: 'rev', display_name: 'Stage reviewer', reachable: true }
+      return { ok: true, json: async () => ({ participants: [...roster.participants, helper] }) } as Response
+    })
+  }
+
+  describe.each([
+    ['a wide screen', false],
+    ['a narrow screen drawer', true],
+  ])('team mode with hide_attach_helpers on %s', (_, narrow) => {
+    test('People has no Attach helper to stage…, keeps Add run agent… and the existing helper', async () => {
+      stubPeopleViewport(narrow)
+      mockModeRun([], () => 'team', () => true)
+      mockHelperInRoster()
+      const profileRequests: string[] = []
+      mockProfilesByContext(profileRequests)
+      render(<App />)
+
+      await screen.findByRole('navigation', { name: 'People', hidden: true })
+      if (narrow) fireEvent.click(peopleToggle())
+      const people = within(peoplePanel())
+      expect(await people.findByRole('button', { name: /Stage reviewer/ })).toBeInTheDocument()
+      expect(people.queryByRole('button', { name: 'Attach helper to stage…' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
+
+      fireEvent.click(people.getByRole('button', { name: 'Add run agent…' }))
+      expect(await screen.findByText('claude (run default)')).toBeInTheDocument()
+    })
+
+    test('People offers Attach helper to stage… when the flag is off', async () => {
+      stubPeopleViewport(narrow)
+      mockModeRun([], () => 'team', () => false)
+      render(<App />)
+
+      await screen.findByRole('navigation', { name: 'People', hidden: true })
+      if (narrow) fireEvent.click(peopleToggle())
+      fireEvent.click(within(peoplePanel()).getByRole('button', { name: 'Attach helper to stage…' }))
+      expect(await screen.findByRole('dialog', { name: /attach helper/i })).toBeInTheDocument()
+    })
+  })
+
+  test('with hide_attach_helpers the Feed @ menu still offers Attach to stage profiles', async () => {
+    mockModeRun([], () => 'assistants', () => true)
+    mockProfilesByContext([])
+    render(<App />)
+
+    const composer = await screen.findByRole('combobox', { name: /message the mesh/i })
+    fireEvent.change(composer, { target: { value: '@', selectionStart: 1 } })
+    const menu = within(await screen.findByRole('listbox', { name: /mention a mesh participant/i }))
+    expect(await menu.findByText('QA role')).toBeInTheDocument()
+    expect(menu.getByText('Helper · Attach to stage')).toBeInTheDocument()
+  })
+
+  test('hide_attach_helpers arriving while the Attach helper dialog is open closes it and does not bring it back', async () => {
+    let hide = false
+    mockModeRun([], () => 'assistants', () => hide)
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    const header = () => within(document.querySelector('.workspace-header') as HTMLElement)
+    fireEvent.click(header().getByRole('button', { name: 'Attach helper…' }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    hide = true
+    // The next status poll (3s) delivers the flag.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), { timeout: 5000 })
+    expect(header().queryByRole('button', { name: 'Attach helper…' })).toBeNull()
+
+    hide = false
+    expect(await header().findByRole('button', { name: 'Attach helper…' }, { timeout: 5000 })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  }, 15000)
 
   test('the header has no Attach helper… when collaboration is off or the stage is done', async () => {
     mockFetchForStatus(() => ({ flow_name: 'demo', stages: [stageView('s1', 'Propose', 'running')] }))

@@ -71,6 +71,10 @@
           "enum": ["team", "assistants"],
           "description": "Dashboard collaboration mode. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Affects the UI only, not whether collaboration is enabled. Unset falls back to the other config layer, then team; a flow.yaml collaboration.mode can override this further."
         },
+        "hide_attach_helpers": {
+          "type": "boolean",
+          "description": "Hide the dashboard buttons that attach a helper to a stage by hand (Attach helper to stage… in People, Attach helper… in the stage header). Default false. A nonempty env AFM_HIDE_ATTACH_HELPERS overrides it: exact 1/true hides, any other value shows. Priority: environment > project config > global config > default. Affects visibility only: collaboration stays enabled, and attaching through the Feed @ menu, afm agent spawn and the API still works."
+        },
         "runtime_context": {
           "type": "string",
           "enum": ["isolated", "wrapper"],

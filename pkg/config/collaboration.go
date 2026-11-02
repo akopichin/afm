@@ -23,6 +23,10 @@ type CollaborationConfig struct {
 	// Default() deliberately does NOT set it: the "team" default lives only at mode resolution
 	// (cmd/afm/run_collaboration.go). The value is validated per layer by UnmarshalYAML.
 	Mode *assistants.CollaborationMode `yaml:"mode,omitempty"`
+	// HideAttachHelpers hides the dashboard buttons that attach a helper to a stage by hand. nil = not set by
+	// this layer (so a project false can override a global true); Default() does not set it. See
+	// ShouldHideAttachHelpers.
+	HideAttachHelpers *bool `yaml:"hide_attach_helpers,omitempty"`
 	// RuntimeContext — окружение процесса помощника по умолчанию (assistants.RuntimeContext); профиль может его
 	// переопределить. nil = не задано этим слоем: значение по умолчанию (isolated) подставляет только
 	// assistants.ResolveRuntimeContext.
@@ -149,6 +153,15 @@ func (c CollaborationConfig) IsEnabled() bool {
 		return v
 	}
 	return c.Enabled == nil || *c.Enabled
+}
+
+// ShouldHideAttachHelpers reports whether the dashboard hides the manual "Attach helper" buttons. Priority: env
+// AFM_HIDE_ATTACH_HELPERS > config > default false. Only visibility changes; collaboration itself stays as is.
+func (c CollaborationConfig) ShouldHideAttachHelpers() bool {
+	if v, set := envBool("AFM_HIDE_ATTACH_HELPERS"); set {
+		return v
+	}
+	return c.HideAttachHelpers != nil && *c.HideAttachHelpers
 }
 
 // ProfileConfig describes one locally configured assistant role: the title shown in the UI, the

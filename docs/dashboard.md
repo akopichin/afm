@@ -726,6 +726,11 @@ resizing still works, but the width is not retained.
 - Where there is no People panel (for example in `assistants` mode, or with
   collaboration on but no Agent Mesh), the stage header has an **Attach helper…**
   button instead, shown under the same condition. It opens the same dialog.
+- With `collaboration.hide_attach_helpers: true` (or `AFM_HIDE_ATTACH_HELPERS=1`) both
+  **Attach helper to stage…** and the header **Attach helper…** are not shown, and
+  **Add run agent…** and People stay. **Attach to stage** in the Feed `@` list and
+  helpers that already exist are unaffected. See
+  [Config reference](config-reference.md#configuration).
 
 On a wide screen the panel is open by default next to the Feed. Click **People**
 in the stage header, or **×** in the panel, to hide it; the Feed and composer then

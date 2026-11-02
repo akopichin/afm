@@ -844,6 +844,9 @@ func mergeFile(dst *Config, path string, layer string) error {
 	if overlay.Collaboration.Mode != nil {
 		dst.Collaboration.Mode = overlay.Collaboration.Mode
 	}
+	if overlay.Collaboration.HideAttachHelpers != nil {
+		dst.Collaboration.HideAttachHelpers = overlay.Collaboration.HideAttachHelpers
+	}
 	if overlay.Collaboration.RuntimeContext != nil {
 		dst.Collaboration.RuntimeContext = overlay.Collaboration.RuntimeContext
 	}
