@@ -1,7 +1,20 @@
 # Web dashboard
 
-On startup (if `server.open_browser: true`) the dashboard opens; otherwise its URL
-is printed to the log.
+On startup (if `server.open_browser: true`) the dashboard opens. Its URL is always
+printed as a separate block set off by blank lines, so it stands out from the run
+header and stage logs:
+
+```text
+  ➜  dashboard: http://localhost:9876
+     open this URL in your browser to follow the run
+```
+
+The second line is shown only with `server.open_browser: false`, and only for the
+first [repeat](flow-reference.md#repeat-run-successful-flows-again) cycle; later
+cycles print the URL block without it. In a terminal the block is coloured. With
+`NO_COLOR` set (see [no-color.org](https://no-color.org)), or when output goes to a
+pipe, a file or CI, the same text is printed without colour codes, so
+`grep 'dashboard: http'` still finds it.
 
 In message and feedback fields, **Enter** submits and **Shift+Enter** adds a line.
 This applies to Feed Message/Revise, Team and run conversations, the Assistant,

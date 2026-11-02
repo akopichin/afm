@@ -719,6 +719,46 @@ func TestReExec_ForwardsAddStageEnv(t *testing.T) {
 	})
 }
 
+// TestDockerReExec_ForwardsNoColor — в контейнере stdout — TTY, поэтому явный NO_COLOR хоста должен
+// доехать значением, а незаданный не должен появляться.
+func TestDockerReExec_ForwardsNoColor(t *testing.T) {
+	run := func(t *testing.T, envVal string) string {
+		var capturedArgs []string
+		docker.SetExecFunc(func(argv0 string, argv []string, envv []string) error {
+			capturedArgs = argv
+			return nil
+		})
+		defer docker.ResetExecFunc()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		t.Setenv("NO_COLOR", envVal)
+
+		if err := docker.ReExec(docker.ReExecConfig{
+			Image:      "akopichin/afm:latest",
+			ProjectDir: "/tmp/proj",
+			ExtraArgs:  []string{"run", "flow.yaml"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(capturedArgs, " ")
+	}
+
+	t.Run("set forwards by value", func(t *testing.T) {
+		if got := run(t, "1"); !strings.Contains(got, "-e NO_COLOR=1") {
+			t.Errorf("NO_COLOR=1 not forwarded by value: %s", got)
+		}
+	})
+	t.Run("empty forwards nothing", func(t *testing.T) {
+		if got := run(t, ""); strings.Contains(got, "NO_COLOR") {
+			t.Errorf("NO_COLOR must not appear when empty (must not be invented): %s", got)
+		}
+	})
+}
+
 // TestDockerReExec_ForwardsExplicitCollaborationEnv — T1.4: an explicitly-set AFM_COLLABORATION value is
 // forwarded by value (not bare -e: this is a switch, not a secret). An UNSET host env must not be invented
 // inside the container — otherwise host and container would silently diverge in how they interpret the

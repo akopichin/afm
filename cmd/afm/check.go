@@ -18,6 +18,7 @@ import (
 
 const (
 	colorReset  = "\033[0m"
+	colorBold   = "\033[1m"
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"

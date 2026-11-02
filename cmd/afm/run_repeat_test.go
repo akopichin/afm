@@ -504,6 +504,9 @@ func TestRepeatLoop_DashboardOpensTabOncePerProcess(t *testing.T) {
 		if got := strings.Count(out, "open this URL in your browser"); got != 1 {
 			t.Fatalf("URL hint printed %d times over 2 cycles, want 1\n%s", got, out)
 		}
+		if got := strings.Count(out, "➜  dashboard: http://localhost:"); got != 2 {
+			t.Fatalf("dashboard URL block printed %d times over 2 cycles, want 2\n%s", got, out)
+		}
 	})
 }
 

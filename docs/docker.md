@@ -65,6 +65,10 @@ the in-container default. Use an explicit CLI value (`--exit-on-fail` or
 `--exit-on-fail=false`) when the outcome must be independent of the image's
 environment.
 
+An explicitly set host `NO_COLOR` is also passed into the container. Inside it
+afm's stdout is a terminal, so without this the [dashboard URL block](dashboard.md)
+would be coloured despite the host setting.
+
 When [per-flow git worktrees](flow-reference.md#per-flow-git-worktrees) are enabled
 with automatic Docker mode, afm creates or reuses the worktree on the host and
 passes its path into the container. The effective project root (`root_dir`, or

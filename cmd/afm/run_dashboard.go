@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/akopichin/afm/pkg/accounting"
 	"github.com/akopichin/afm/pkg/agentjobs"
 	"github.com/akopichin/afm/pkg/config"
@@ -200,16 +202,34 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	_, port, _ := net.SplitHostPort(addr)
 	dashURL := fmt.Sprintf("http://localhost:%s", port) //nolint:revive // local dashboard is http
 	orch.SetDashboardURL(dashURL)
-	fmt.Printf("  dashboard: %s\n", dashURL)
-	if !announce {
-		return srv, nil
-	}
-	if cfg.Server.IsOpenBrowser() {
+	printDashboardURL(os.Stdout, dashURL, announce && !cfg.Server.IsOpenBrowser(), dashboardColorEnabled())
+	if announce && cfg.Server.IsOpenBrowser() {
 		openBrowser(dashURL)
-	} else {
-		fmt.Println("  → open this URL in your browser to follow the run")
 	}
 	return srv, nil
+}
+
+// dashboardColorEnabled colours the URL block only for a terminal and when NO_COLOR (no-color.org) is unset,
+// so logs, pipes and CI stay free of escape codes.
+func dashboardColorEnabled() bool {
+	return os.Getenv("NO_COLOR") == "" && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// printDashboardURL prints the URL as a block set off by blank lines, because it is the first thing the operator
+// needs and otherwise gets lost among the run header and stage logs.
+func printDashboardURL(w io.Writer, url string, hint, color bool) {
+	arrow, label, link, note := "➜", "dashboard:", url, "open this URL in your browser to follow the run"
+	if color {
+		arrow = colorGreen + arrow + colorReset
+		label = colorBold + label + colorReset
+		link = colorBold + colorCyan + link + colorReset
+		note = colorGray + note + colorReset
+	}
+	_, _ = fmt.Fprintf(w, "\n  %s  %s %s\n", arrow, label, link)
+	if hint {
+		_, _ = fmt.Fprintf(w, "     %s\n", note)
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 // browserCmd возвращает команду открытия браузера для текущей ОС

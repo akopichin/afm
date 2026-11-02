@@ -109,7 +109,8 @@ afm run path/to/flow.yaml
 ```
 
 By default a web dashboard comes up (`http://localhost:9876`); its URL is printed
-to the log.
+as a highlighted block (coloured in a terminal, plain text with `NO_COLOR` or when
+output is not a terminal).
 
 For an unattended run, disable the dashboard and make a failed stage fail the
 command:

@@ -5,6 +5,17 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-02
 
+### Improvement: the dashboard URL in `afm run` stands out
+
+`afm run` prints the dashboard URL as a separate block set off by blank lines:
+`  ➜  dashboard: http://localhost:<port>`, followed by the browser hint when
+`server.open_browser` is `false`. In a terminal the block is coloured (green arrow,
+bold label, bold cyan URL, gray hint). When `NO_COLOR` is set or stdout is not a
+terminal (pipe, file, CI), the same text is printed without colour codes, so it
+stays easy to `grep`. With `repeat`, every cycle prints the block. In Docker mode a
+host `NO_COLOR` is passed into the container. See
+[Web dashboard](docs/dashboard.md).
+
 ### Improvement: agents ask questions with `afm stage ask` and `afm stage wait-answer`
 
 A stage agent no longer writes question and answer files by hand. `afm stage ask`
