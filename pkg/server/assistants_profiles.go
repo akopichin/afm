@@ -11,20 +11,23 @@ import (
 // *assistants.Registry (мирроит SideAgentService). nil = capability off: маршрут /api/assistant-profiles не
 // регистрируется, GET на него отдаёт 404 — тот же паттерн, что у side-agent (server.go).
 type AssistantProfilesService interface {
-	// Profiles возвращает текущий список профилей с их доступностью (assistants.Registry.List()).
-	Profiles() []assistants.ProfileView
+	// Profiles возвращает профили такими, какими они запустятся у стадии stageID, а при пустом stageID — у агента
+	// рана. Неизвестная стадия — отказ assistants.CodeNotFound, script-стадия — assistants.CodeInvalidRequest.
+	Profiles(stageID string) ([]assistants.ProfileView, error)
 	// MaxDepth возвращает разрешённую глубину делегирования и слой, из которого она взята
 	// ("flow"/"project"/"global"/"default" — assistants.DepthSource).
 	MaxDepth() (depth int, source string)
 }
 
-// assistantProfileView — форма одного профиля в ответе GET /api/assistant-profiles. Command — это ИМЯ уже
-// настроенной команды/recipe (например "claude", "codex-as-claude", "frontend-reviewer"), не путь на диске
-// и не секрет — профиль не несёт ни токенов, ни абсолютных путей.
+// assistantProfileView — форма одного профиля в ответе GET /api/assistant-profiles. Command — команда из
+// конфига (имя recipe или CLI, либо путь, заданный в профиле), никогда не argv и не секрет; CommandSource
+// говорит, чья это команда: профиля, стадии или client.command.
 type assistantProfileView struct {
 	ID                string `json:"id"`
 	Title             string `json:"title"`
 	Command           string `json:"command"`
+	CommandSource     string `json:"command_source"`
+	RuntimeContext    string `json:"runtime_context"`
 	Available         bool   `json:"available"`
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
@@ -36,21 +39,27 @@ type assistantProfilesResponse struct {
 	MaxDepthSource string                 `json:"max_depth_source"`
 }
 
-// handleAssistantProfiles отдаёт список настроенных профилей помощников и эффективную глубину
-// делегирования. Только чтение: клиент передаёт лишь profile_id при создании задачи (T3.x) — здесь нет
-// кода, создающего профили из HTTP-запроса.
+// handleAssistantProfiles отдаёт профили помощников с исполнителем, который каждый получит у стадии из
+// ?stage_id= (без параметра — у агента рана), и эффективную глубину делегирования. Только чтение: клиент
+// передаёт лишь profile_id при создании задачи — здесь нет кода, создающего профили из HTTP-запроса.
 func (s *Server) handleAssistantProfiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	views := s.assistantProfiles.Profiles()
+	views, err := s.assistantProfiles.Profiles(r.URL.Query().Get("stage_id"))
+	if err != nil {
+		s.writeAssistantError(w, err)
+		return
+	}
 	resp := assistantProfilesResponse{Profiles: make([]assistantProfileView, 0, len(views))}
 	for _, v := range views {
 		resp.Profiles = append(resp.Profiles, assistantProfileView{
 			ID:                string(v.ID),
 			Title:             v.Title,
 			Command:           v.Command,
+			CommandSource:     string(v.CommandSource),
+			RuntimeContext:    string(v.RuntimeContext),
 			Available:         v.Available,
 			UnavailableReason: v.UnavailableReason,
 		})

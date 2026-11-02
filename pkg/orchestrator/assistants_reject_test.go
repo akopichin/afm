@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,12 @@ func TestReject_RepeatedDelegationIsBoundedNotInfinite(t *testing.T) {
 	}
 
 	parentID := attachTestTask(context.Background(), t, o, "op-parent")
-	waitForTaskStatus(t, store, parentID, assistants.StatusFailed, 3*time.Second)
+	tk := waitForTaskStatus(t, store, parentID, assistants.StatusFailed, 3*time.Second)
+	wantHead := fmt.Sprintf("delegation_rejected %d times in a row (%s) (role reviewer, command helper-cmd, source profile): ",
+		maxConsecutiveDelegationRejections, assistants.CodeDelegationDepthExceeded)
+	if !strings.HasPrefix(tk.StatusReason, wantHead) {
+		t.Fatalf("reason = %q, want it to start with %q", tk.StatusReason, wantHead)
+	}
 
 	if got := int(calls.Load()); got != maxConsecutiveDelegationRejections {
 		t.Fatalf("helper ran %d times, want exactly %d (the rejection cap)", got, maxConsecutiveDelegationRejections)

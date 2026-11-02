@@ -42,18 +42,19 @@ func newProposalDeliveryTestOrchestrator(t *testing.T, cmd string, stages []flow
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 		{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd-os", Capabilities: assistants.Capabilities{Delegate: true}},
 		{ID: "unrestricted", Title: "Unrestricted", Command: "helper-cmd-none", Capabilities: assistants.Capabilities{Delegate: true}},
-	}, nil, "claude", func(c string) (bool, string, assistants.ReadonlyEnforcement) {
-		if c == "helper-cmd-none" {
-			return true, "", assistants.ReadonlyEnforcementNone
-		}
-		return true, "", assistants.ReadonlyEnforcementOS
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
 	cfg := config.Default()
 	cfg.Client.Command = cmd
 	orch := New(Options{RunDir: runDir, Stages: stages, Store: store, Config: cfg, Prompts: DefaultPrompts(), AssistantsEnabled: true, AssistantsRegistry: reg})
+	orch.helperAccess = func(c string) (string, assistants.ReadonlyEnforcement) {
+		if c == "helper-cmd-none" {
+			return "", assistants.ReadonlyEnforcementNone
+		}
+		return allowHelpersOS(c)
+	}
 	// CommitAddStage wakes the scheduler via tryActivatePrePlanned, which spawns agent goroutines fire-and-
 	// forget — registered AFTER the store-close cleanup above so LIFO runs it FIRST (same ordering rationale
 	// as newGraphMutateTestOrchestrator).

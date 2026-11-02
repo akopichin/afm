@@ -12,20 +12,6 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 )
 
-// envName sanitizes a command name into an uppercase env-var suffix: only [A-Z0-9_] allowed, everything
-// else → '_'. Used for AFM_SECRET_<NAME> and AFM_SYSPROMPT_<NAME> transient env vars.
-func envName(cmd string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(cmd) {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
-}
-
 // WrapperSpec describes one wrapper script to generate in the wrapper-dir. Model == "" with Type ""
 // selects the claude proxy-shim (BASE_URL only, no model vars).
 type WrapperSpec struct {
@@ -104,7 +90,7 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	if s.Command == "" {
 		return "", errors.New("empty command")
 	}
-	name := envName(s.Command)
+	secretVar := config.SecretEnvVar(s.Command)
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 
@@ -112,8 +98,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		// openai-compatible: OPENAI_* vars + exec openai-as-claude.
 		// realClaude не нужен — openai-as-claude не вызывает claude.
 		if s.AuthTo != "" {
-			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
-			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+			fmt.Fprintf(&b, "export %s=\"$%s\"\n", s.AuthTo, secretVar)
+			fmt.Fprintf(&b, "unset %s\n", secretVar)
 		}
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export OPENAI_BASE_URL=%q\n", s.BaseURL)
@@ -132,8 +118,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		// openai-compatible tool-loop: OPENAI_* vars + exec openai-agent-as-claude.
 		// realClaude не нужен — openai-agent-as-claude не вызывает claude.
 		if s.AuthTo != "" {
-			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
-			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+			fmt.Fprintf(&b, "export %s=\"$%s\"\n", s.AuthTo, secretVar)
+			fmt.Fprintf(&b, "unset %s\n", secretVar)
 		}
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export OPENAI_BASE_URL=%q\n", s.BaseURL)
@@ -155,8 +141,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		// cursor Cloud Agents API: CURSOR_* vars + exec cursor-as-claude.
 		// realClaude не нужен — cursor-as-claude не вызывает claude.
 		if s.AuthTo != "" {
-			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
-			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+			fmt.Fprintf(&b, "export %s=\"$%s\"\n", s.AuthTo, secretVar)
+			fmt.Fprintf(&b, "unset %s\n", secretVar)
 		}
 		if s.BaseURL != "" {
 			fmt.Fprintf(&b, "export CURSOR_BASE_URL=%q\n", s.BaseURL)
@@ -172,8 +158,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 		// codex: без API/URL/auth-token — авторизация идёт через смонтированный ~/.codex, не через этот враппер.
 		// realClaude не нужен — codex-as-claude не вызывает claude.
 		if s.AuthTo != "" {
-			fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
-			fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+			fmt.Fprintf(&b, "export %s=\"$%s\"\n", s.AuthTo, secretVar)
+			fmt.Fprintf(&b, "unset %s\n", secretVar)
 		}
 		// hasModel — ""/"default" означает "решает сам codex/~/.codex/config.toml",
 		// поэтому CODEX_MODEL для них не выставляется.
@@ -204,8 +190,8 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	}
 	// claude agent template
 	if s.AuthTo != "" {
-		fmt.Fprintf(&b, "export %s=\"$AFM_SECRET_%s\"\n", s.AuthTo, name)
-		fmt.Fprintf(&b, "unset AFM_SECRET_%s\n", name)
+		fmt.Fprintf(&b, "export %s=\"$%s\"\n", s.AuthTo, secretVar)
+		fmt.Fprintf(&b, "unset %s\n", secretVar)
 	}
 	if s.BaseURL != "" {
 		fmt.Fprintf(&b, "export ANTHROPIC_BASE_URL=%q\n", s.BaseURL)
@@ -217,8 +203,9 @@ func generateWrapper(s WrapperSpec, realClaude, realCodexBin string) (string, er
 	// Pin the recipe after caller args so settings, inherited env and --resume cannot select another model.
 	fmt.Fprintf(&b, "set -- \"$@\" --model %s\n", shellSingleQuote(s.Model))
 	if s.HasSysPrompt {
-		fmt.Fprintf(&b, "if [ -n \"$AFM_SYSPROMPT_%s\" ]; then\n", name)
-		fmt.Fprintf(&b, "  _sp=$(mktemp); printf '%%s' \"$AFM_SYSPROMPT_%s\" > \"$_sp\"; chmod 600 \"$_sp\"; unset AFM_SYSPROMPT_%s\n", name, name)
+		sysVar := config.SyspromptEnvVar(s.Command)
+		fmt.Fprintf(&b, "if [ -n \"$%s\" ]; then\n", sysVar)
+		fmt.Fprintf(&b, "  _sp=$(mktemp); printf '%%s' \"$%s\" > \"$_sp\"; chmod 600 \"$_sp\"; unset %s\n", sysVar, sysVar)
 		b.WriteString("  set -- \"$@\" --append-system-prompt-file \"$_sp\"\n")
 		b.WriteString("fi\n")
 	}

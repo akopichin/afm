@@ -67,7 +67,7 @@ func TestAttachAndSend_SideFirstMessageCommitPrecedesAvailabilityClose(t *testin
 }
 
 // newBrokenProfileTestOrchestrator is newAssistantsTestOrchestrator's fixture PLUS one additional profile,
-// "broken", whose command the registry's availability check reports as unavailable — needed to exercise
+// "broken", whose command the availability check reports as unavailable — needed to exercise
 // AttachAndSend's "unavailable profile" gate (CodeCapabilityUnavailable), which newAssistantsTestOrchestrator's
 // own registry (every profile available) cannot reach.
 func newBrokenProfileTestOrchestrator(t *testing.T) (*Orchestrator, *state.Store) {
@@ -77,16 +77,17 @@ func newBrokenProfileTestOrchestrator(t *testing.T) (*Orchestrator, *state.Store
 		{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
 		{ID: "qa", Title: "QA", Command: "helper-cmd", Capabilities: assistants.Capabilities{Delegate: true}},
 		{ID: "broken", Title: "Broken", Command: "broken-cmd"},
-	}, nil, "claude", func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-		if cmd == "broken-cmd" {
-			return false, "no such tool on PATH", assistants.ReadonlyEnforcementNone
-		}
-		return true, "", assistants.ReadonlyEnforcementOS
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
 	o.opts.AssistantsRegistry = reg
+	o.helperAccess = func(cmd string) (string, assistants.ReadonlyEnforcement) {
+		if cmd == "broken-cmd" {
+			return "no such tool on PATH", assistants.ReadonlyEnforcementNone
+		}
+		return allowHelpersOS(cmd)
+	}
 	return o, store
 }
 

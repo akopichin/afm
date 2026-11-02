@@ -192,6 +192,21 @@ not rejected by afm's `afm run` preflight — it is forwarded to the wrapper as-
 `afm run` prints a startup warning. The provider backend may still reject a value it
 doesn't accept and fail that invocation.
 
+A recipe works for helpers too. A role-only helper profile, or the built-in
+`default` one, runs the command of the stage or `client.command` it is attached
+to, so a stage with `command: glm51` starts its helpers through the same
+generated wrapper, with the recipe's secret and system prompt. A profile with
+its own `command` can name another recipe. On a restart afm prepares the
+wrappers, mounts and secrets for the commands of unfinished saved helper tasks
+as well as for the current flow. A task keeps the recipe it was created with:
+if the recipe in `docker.agents` changed since, its next turn fails with
+`executor_changed` and the task does not start on the new model or account (see
+[Which executor a helper runs](collaboration.md#which-executor-a-helper-runs)).
+A helper whose command is the bare `claude` gets the Claude credentials of afm's
+process. For any other command they are passed only when its effective
+`runtime_context` is `wrapper`, set in the profile or in
+`collaboration.runtime_context` ([Runtime context](collaboration.md#runtime-context)).
+
 Full recipes and per-provider notes are in
 [`config.example.yaml`](https://github.com/akopichin/afm/blob/main/config.example.yaml)
 and the [`examples/cursor-agent/`](https://github.com/akopichin/afm/tree/main/examples/cursor-agent)

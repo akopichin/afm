@@ -178,6 +178,7 @@ var _ server.MeshActions = meshServerActionsForTest{}
 // drama is already covered by TestAgentMesh_QADevOps_EndToEnd in the internal package; this test's own job is
 // only the server-presence claim) with a real *server.Server constructed alongside, never queried.
 func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
+	pinContainerHelperPolicy(t)
 	runDir := t.TempDir()
 	rootDir := t.TempDir()
 	const stageID = "impl"
@@ -194,9 +195,7 @@ func TestAgentMesh_QADevOps_WithHTTPServerPresent(t *testing.T) {
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 		{ID: "qa", Title: "QA", Command: "helper-cmd"},
 		{ID: "devops", Title: "DevOps", Command: "helper-cmd"},
-	}, nil, "claude", func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-		return true, "", assistants.ReadonlyEnforcementOS
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}

@@ -2,12 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AddRunAgentDialog } from './AddRunAgentDialog'
 import { DialogOpenContext } from '../../lib/focus-trap'
-import type { AssistantProfile } from '../../types/assistant-profile'
+import { toAssistantProfile, type AssistantProfile } from '../../types/assistant-profile'
 import * as meshClient from '../../api/mesh-client'
 
 const profiles: AssistantProfile[] = [
-  { id: 'qa', title: 'QA reviewer', command: 'claude', available: true, unavailableReason: '' },
-  { id: 'ghost', title: 'Ghost', command: 'codex', available: false, unavailableReason: 'no policy' },
+  { id: 'qa', title: 'QA reviewer', command: 'claude', commandSource: 'client', available: true, unavailableReason: '' },
+  { id: 'ghost', title: 'Ghost', command: 'codex', commandSource: 'profile', available: false, unavailableReason: 'no policy' },
 ]
 
 function renderDialog(overrides: Partial<Parameters<typeof AddRunAgentDialog>[0]> = {}) {
@@ -22,10 +22,17 @@ describe('AddRunAgentDialog', () => {
     vi.restoreAllMocks()
   })
 
+  test('an untitled profile is offered under its id next to its executor', () => {
+    const untitled = toAssistantProfile({ id: 'reviewer', title: '', command: 'claude', command_source: 'client', available: true })
+    renderDialog({ profiles: [untitled] })
+    expect(screen.getByRole('option', { name: 'reviewer' })).toBeTruthy()
+    expect(screen.getByText('claude (run default)')).toBeTruthy()
+  })
+
   test('shows a read-only "Configured executor" with no model selector', () => {
     renderDialog()
     expect(screen.getByText('Configured executor')).toBeInTheDocument()
-    expect(screen.getByText('claude')).toBeInTheDocument()
+    expect(screen.getByText('claude (run default)')).toBeInTheDocument()
     // No model <select> anywhere in the dialog — only the Role select.
     expect(screen.getAllByRole('combobox')).toHaveLength(1)
     expect(screen.queryByLabelText(/model/i)).toBeNull()
@@ -147,7 +154,27 @@ describe('AddRunAgentDialog', () => {
 
   test('empty state when no profile is available', () => {
     renderDialog({ profiles: [profiles[1]!] })
-    expect(screen.getByText('No agent profiles are available for this run.')).toBeInTheDocument()
+    // The reason replaces a bare "none available", so the operator knows what to fix.
+    expect(screen.getByText(/No agent profiles are available for this run\./)).toHaveTextContent('Ghost: no policy')
+    renderDialog({ profiles: [] })
+    expect(screen.getAllByText('No agent profiles are available for this run.')).toHaveLength(1)
+  })
+
+  test('follows the selected role: executor and its source change with it', () => {
+    renderDialog({ profiles: [...profiles.slice(0, 1), { id: 'doc', title: 'Docs', command: 'codex', commandSource: 'profile', available: true, unavailableReason: '' }] })
+    expect(screen.getByText('claude (run default)')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'doc' } })
+    expect(screen.getByText('codex (profile)')).toBeInTheDocument()
+  })
+
+  test('adds the role shown in the executor line when profiles arrive after the dialog opened', async () => {
+    const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh').mockResolvedValue({ participant_id: 'run:t-1' } as meshClient.MeshAttachAndSendResult)
+    const props = { onAttached: vi.fn(), onCancel: vi.fn() }
+    const view = render(<AddRunAgentDialog {...props} profiles={[]} />)
+    view.rerender(<AddRunAgentDialog {...props} profiles={profiles} />)
+    fireEvent.change(screen.getByPlaceholderText('What should this run agent do?'), { target: { value: 'go' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add run agent' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'qa', scope: 'run' })))
   })
 
   test('editing the form after a failure makes the retry a new request with a new request_id', async () => {

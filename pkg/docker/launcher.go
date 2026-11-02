@@ -449,7 +449,6 @@ func ReExec(cfg ReExecConfig) error {
 			return err
 		}
 		for cmd, recipe := range cfg.Recipes {
-			name := envName(cmd)
 			// codex — единственный тип, для которого Validate допускает пустой Auth.
 			if recipe.Type == config.RecipeTypeCodex && recipe.Auth.From == "" {
 				continue
@@ -458,14 +457,16 @@ func ReExec(cfg ReExecConfig) error {
 			if vErr != nil {
 				return fmt.Errorf("agent %s: %w", cmd, vErr)
 			}
-			_ = os.Setenv("AFM_SECRET_"+name, val) // процесс далее exec'нет docker; утечки в argv нет
-			args = append(args, "-e", "AFM_SECRET_"+name)
+			secretVar := config.SecretEnvVar(cmd)
+			_ = os.Setenv(secretVar, val) // процесс далее exec'нет docker; утечки в argv нет
+			args = append(args, "-e", secretVar)
 			if recipe.SystemPrompt != "" {
 				// system_prompt опционален: при ошибке резолва — тихий fallback, claude запускается со своим
 				// стандартным system prompt вместо glm-специфичного.
 				if sp, spErr := ResolveSystemPrompt(recipe.SystemPrompt); spErr == nil && sp != "" {
-					_ = os.Setenv("AFM_SYSPROMPT_"+name, sp)
-					args = append(args, "-e", "AFM_SYSPROMPT_"+name)
+					sysVar := config.SyspromptEnvVar(cmd)
+					_ = os.Setenv(sysVar, sp)
+					args = append(args, "-e", sysVar)
 				}
 			}
 		}

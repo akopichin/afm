@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -284,6 +287,15 @@ func isReservedAuthVarName(name string) bool {
 		}
 	}
 	return false
+}
+
+// Identity — sha256-дайджест (hex) всех полей рецепта. Входят только селекторы (auth.from — ссылка, а не
+// секрет; system_prompt — спецификация, а не содержимое файла), поэтому дайджест безопасно хранить в журнале.
+// Новое поле AgentRecipe попадает в дайджест автоматически.
+func (r AgentRecipe) Identity() string {
+	data, _ := json.Marshal(r) // строки и int: ошибки быть не может
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // Validate returns an error if the recipe is malformed.
@@ -827,6 +839,9 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	if overlay.Collaboration.Mode != nil {
 		dst.Collaboration.Mode = overlay.Collaboration.Mode
+	}
+	if overlay.Collaboration.RuntimeContext != nil {
+		dst.Collaboration.RuntimeContext = overlay.Collaboration.RuntimeContext
 	}
 	if overlay.Collaboration.MaxDepth != nil {
 		if err := validateCollaborationMaxDepth(layer, overlay.Collaboration.MaxDepth); err != nil {

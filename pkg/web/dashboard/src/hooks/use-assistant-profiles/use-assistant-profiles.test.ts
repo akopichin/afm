@@ -33,9 +33,40 @@ describe('useAssistantProfiles', () => {
     const { result } = renderHook(() => useAssistantProfiles(true))
     await waitFor(() => expect(result.current).toHaveLength(2))
     expect(result.current[0]).toEqual({
-      id: 'frontendDeveloper', title: 'Frontend reviewer', command: 'claude', available: true, unavailableReason: '',
+      id: 'frontendDeveloper', title: 'Frontend reviewer', command: 'claude', commandSource: '', runtimeContext: '',
+      available: true, unavailableReason: '',
     })
     expect(result.current[1]?.unavailableReason).toBe('no policy')
+  })
+
+  it('requests run-level profiles without stage_id', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ profiles: [] }))
+    renderHook(() => useAssistantProfiles(true))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+    expect(fetchSpy).toHaveBeenCalledWith('/api/assistant-profiles')
+  })
+
+  it('requests the stage context with stage_id and keeps source and runtime context', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        profiles: [{ id: 'qa', title: 'QA', command: 'codex', command_source: 'stage', runtime_context: 'wrapper', available: true }],
+      }),
+    )
+    const { result } = renderHook(() => useAssistantProfiles(true, 'impl 1'))
+    await waitFor(() => expect(result.current).toHaveLength(1))
+    expect(fetchSpy).toHaveBeenCalledWith('/api/assistant-profiles?stage_id=impl%201')
+    expect(result.current[0]).toMatchObject({ command: 'codex', commandSource: 'stage', runtimeContext: 'wrapper' })
+  })
+
+  it('does not show one stage\'s profiles for another stage while the new request is in flight', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ profiles: [{ id: 'a', title: 'A', command: 'claude', available: true }] }))
+    const { result, rerender } = renderHook(({ stageId }) => useAssistantProfiles(true, stageId), { initialProps: { stageId: 'one' } })
+    await waitFor(() => expect(result.current).toHaveLength(1))
+
+    fetchSpy.mockReturnValueOnce(new Promise<Response>(() => {}))
+    rerender({ stageId: 'two' })
+    expect(result.current).toEqual([])
   })
 
   it('a transient fetch error keeps the last known list instead of clearing it', async () => {

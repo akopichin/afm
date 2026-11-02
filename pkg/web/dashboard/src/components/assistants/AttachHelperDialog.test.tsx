@@ -1,13 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AttachHelperDialog } from './AttachHelperDialog'
-import type { AssistantProfile } from '../../types/assistant-profile'
+import { toAssistantProfile, type AssistantProfile } from '../../types/assistant-profile'
 import * as runClient from '../../api/run-client'
 
 const profiles: AssistantProfile[] = [
-  { id: 'reviewer', title: 'Code reviewer', command: 'claude', available: true, unavailableReason: '' },
-  { id: 'ghost', title: 'Ghost', command: 'claude', available: false, unavailableReason: 'no policy' },
+  { id: 'reviewer', title: 'Code reviewer', command: 'claude', commandSource: 'stage', available: true, unavailableReason: '' },
+  { id: 'qa', title: 'QA', command: 'codex', commandSource: 'profile', available: true, unavailableReason: '' },
+  { id: 'ghost', title: 'Ghost', command: 'claude', commandSource: 'client', available: false, unavailableReason: 'no policy' },
 ]
+const ghost = profiles[2]!
 
 function renderDialog(overrides: Partial<Parameters<typeof AttachHelperDialog>[0]> = {}) {
   const onAttached = vi.fn()
@@ -28,6 +30,12 @@ function renderDialog(overrides: Partial<Parameters<typeof AttachHelperDialog>[0
 describe('AttachHelperDialog', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  test('an untitled profile is offered under its id', () => {
+    const untitled = toAssistantProfile({ id: 'reviewer', title: '', command: 'claude', command_source: 'client', available: true })
+    renderDialog({ profiles: [untitled] })
+    expect(screen.getByRole('option', { name: 'reviewer' })).toBeTruthy()
   })
 
   test('lists only available profiles and submits an attach', async () => {
@@ -71,7 +79,35 @@ describe('AttachHelperDialog', () => {
   })
 
   test('shows an empty state when no profile is available', () => {
-    renderDialog({ profiles: [profiles[1]!] })
-    expect(screen.getByText('No helper profiles are available for this run.')).toBeTruthy()
+    renderDialog({ profiles: [] })
+    expect(screen.getByText('No helper profiles are available for this stage.')).toBeTruthy()
+  })
+
+  test('explains an empty list by the reason each profile is unavailable', () => {
+    renderDialog({ profiles: [ghost] })
+    expect(screen.getByText(/No helper profiles are available for this stage\./).textContent).toContain('Ghost: no policy')
+    expect((screen.getByRole('button', { name: 'Attach helper' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  test('shows the executor and its source for the selected role and follows the selection', () => {
+    renderDialog()
+    expect(screen.getByText('Configured executor')).toBeTruthy()
+    expect(screen.getByText('claude (stage)')).toBeTruthy()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'qa' } })
+    expect(screen.getByText('codex (profile)')).toBeTruthy()
+    expect(screen.queryByText('claude (stage)')).toBeNull()
+  })
+
+  test('attaches the role of the executor line when profiles arrive after the dialog opened', async () => {
+    const attachSpy = vi.spyOn(runClient, 'attachAssistant').mockResolvedValue({ taskId: 't-1' })
+    const props = { stageId: 'impl', stageTitle: 'Implement', onAttached: vi.fn(), onCancel: vi.fn() }
+    const view = render(<AttachHelperDialog {...props} profiles={[]} />)
+    view.rerender(<AttachHelperDialog {...props} profiles={profiles} />)
+
+    expect(screen.getByText('claude (stage)')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('What should this helper do?'), { target: { value: 'Check it' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Attach helper' }))
+    await waitFor(() => expect(attachSpy).toHaveBeenCalledWith('impl', expect.objectContaining({ profileId: 'reviewer' })))
   })
 })

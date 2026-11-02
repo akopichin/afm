@@ -84,10 +84,7 @@ func newUnreadTestOrchestratorAt(t *testing.T, runDir string, agent flow.AgentTy
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatal(err)
 	}
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "qa", Title: "QA", Command: "helper-cmd"}}, nil, "claude",
-		func(string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "qa", Title: "QA", Command: "helper-cmd"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +100,7 @@ func newUnreadTestOrchestratorAt(t *testing.T, runDir string, agent flow.AgentTy
 		Stages:            []flow.Stage{{ID: unreadTestStageID, Name: "Frontend", Agents: []flow.AgentType{agent}}},
 		AssistantsEnabled: true, AssistantsRegistry: reg,
 	})
+	o.helperAccess = allowHelpersOS
 	return o, store
 }
 

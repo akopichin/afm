@@ -21,6 +21,26 @@ type runEnvironment struct {
 	MemoryDir       string
 	WrapperDir      string
 	GeneratedAgents map[string]bool
+	// recipeIdentities holds recipeIdentity of every docker.agents alias, nil outside a re-exec'd autoShim
+	// container.
+	recipeIdentities map[string]string
+}
+
+// RecipeIdentity is the identity of cmd's docker.agents recipe, "" without one or outside a re-exec'd autoShim
+// container (always on the host). A helper task records it and compares it before every turn.
+func (e runEnvironment) RecipeIdentity(cmd string) string {
+	return e.recipeIdentities[cmd]
+}
+
+// recipeIdentity is the identity of cmd's docker.agents recipe under autoShim, "" without one, even when no wrapper
+// is built for it. The resume projection and a task's turn check compare its binding with it.
+func recipeIdentity(cfg config.Config, cmd string) string {
+	recipe, ok := cfg.Docker.Agents[cmd]
+	// The builtin claude never gets a wrapper (docker.UsedRecipeCommands), even under an alias of that name.
+	if !ok || !cfg.Docker.IsAutoShim() || cmd == config.ClaudeCommand {
+		return ""
+	}
+	return recipe.Identity()
 }
 
 func (e runEnvironment) Close() {
@@ -29,7 +49,8 @@ func (e runEnvironment) Close() {
 	}
 }
 
-func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, worktreeDir string) (runEnvironment, error) {
+// saved is the run this process opened, without tasks when it is new: its unfinished helper tasks need wrappers too.
+func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, worktreeDir string, saved *savedRun) (runEnvironment, error) {
 	var env runEnvironment
 	// Absolute: the root, memory and wrapper paths reach agents whose CWD may be a worktree.
 	afmRoot, err := filepath.Abs(afmRoot)
@@ -63,9 +84,15 @@ func prepareRunEnvironment(afmRoot string, f *flow.Flow, cfg config.Config, work
 	if !config.ReExecedIntoContainer() || !cfg.Docker.IsAutoShim() {
 		return env, nil
 	}
-	// Helper-profile commands count too: a recipe used only by a helper (reviewer → codex) still needs its
-	// wrapper here, matching the host side's projection in reexecFlow.
-	proj, err := projectDocker(f, cfg)
+	// Every alias, not only the generated ones: a saved task left without its wrapper because its recipe changed must
+	// fail on that change rather than run its command unwrapped.
+	env.recipeIdentities = make(map[string]string, len(cfg.Docker.Agents))
+	for cmd := range cfg.Docker.Agents {
+		env.recipeIdentities[cmd] = recipeIdentity(cfg, cmd)
+	}
+	// Helper commands count too: a recipe used only by a helper profile or a saved task (reviewer → codex) still
+	// needs its wrapper here, matching the host side's projection in reexecFlow.
+	proj, err := projectDocker(f, cfg, resumeTaskCommands(saved, f, cfg))
 	if err != nil {
 		return env, err
 	}
@@ -97,7 +124,8 @@ func normalizeInteractiveStages(stages []flow.Stage, dashboardEnabled bool) []fl
 	return stages
 }
 
-// saved is the run this start would resume (nil for a new run): its frozen skill libraries need mounts too.
+// saved is the run this start would resume (nil for a new run): its frozen skill libraries need mounts too, and its
+// unfinished helper tasks their commands.
 func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyclehooks.RegisteredHook, worktreeDir string, saved *savedRun) error {
 	absDir, err := filepath.Abs(afmRoot)
 	if err != nil {
@@ -106,7 +134,7 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 	if err := docker.CheckClaudeDockerAuth(cfg.Client.Command); err != nil {
 		return err
 	}
-	proj, err := projectDocker(f, cfg)
+	proj, err := projectDocker(f, cfg, resumeTaskCommands(saved, f, cfg))
 	if err != nil {
 		return err
 	}
@@ -141,8 +169,8 @@ func reexecFlow(afmRoot string, f *flow.Flow, cfg config.Config, hooks []lifecyc
 	}
 	defer browserCleanup()
 
-	// T8.5: assistant (helper-agent) profile commands are pre-prepared for Docker alongside flow-stage
-	// commands — a profile configured after this scan has no mount and stays unavailable until the next run.
+	// Helper profile and saved task commands are prepared for Docker alongside the stage commands: a profile
+	// configured after this scan has no mount and stays unavailable until the next run.
 	rc := docker.ReExecConfig{
 		Image:         cfg.Docker.GetImage(),
 		ProjectDir:    absDir,

@@ -49,6 +49,11 @@ describe('AttachAssistantDialog', () => {
     expect(attachSpy).not.toHaveBeenCalled()
   })
 
+  test('names where the executor comes from, as resolved in the stage', () => {
+    renderDialog({ profiles: [{ ...profiles[0]!, command: 'codex', commandSource: 'stage' }] })
+    expect(screen.getByText('codex (stage)')).toBeInTheDocument()
+  })
+
   // TestCard_DoubleSubmitCreatesOneTask — a client-side guard (disable the button immediately on first
   // click) in ADDITION to the server's own idempotency: two rapid clicks must issue at most one request.
   test('TestCard_DoubleSubmitCreatesOneTask', async () => {
@@ -152,5 +157,93 @@ describe('AttachAssistantDialog', () => {
   test('disables the confirm button and explains why at the depth limit', () => {
     renderDialog({ maxDepth: 0 })
     expect(screen.getByRole('button', { name: /attach and send/i })).toBeDisabled()
+  })
+
+  // Profiles are polled, so an open preview must follow the role: a stale enabled button would attach to a
+  // helper the server now refuses, and the reason would never be shown.
+  describe('profile availability while the preview is open', () => {
+    function renderRerenderable(maxDepth?: number) {
+      const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
+      const props = {
+        profileId: 'qaEngineer',
+        stageId: 'impl',
+        instruction: 'Please review',
+        maxDepth,
+        stages,
+        onConfirmed: vi.fn(),
+        onCancel: vi.fn(),
+      }
+      const view = render(<AttachAssistantDialog {...props} profiles={profiles} />)
+      return { attachSpy, props, rerenderWith: (next: AssistantProfile[]) => view.rerender(<AttachAssistantDialog {...props} profiles={next} />) }
+    }
+
+    test('an available role becoming unavailable disables Attach and shows the reason', () => {
+      const { attachSpy, rerenderWith } = renderRerenderable()
+      expect(screen.getByRole('button', { name: /attach and send/i })).toBeEnabled()
+
+      rerenderWith([{ ...profiles[0]!, available: false, unavailableReason: 'claude is not on PATH' }])
+
+      const button = screen.getByRole('button', { name: /attach and send/i })
+      expect(button).toBeDisabled()
+      expect(screen.getByRole('alert')).toHaveTextContent('QA Engineer: claude is not on PATH')
+      fireEvent.click(button)
+      expect(attachSpy).not.toHaveBeenCalled()
+      // The assignment stays visible so the draft is not lost.
+      expect(screen.getByText('Please review')).toBeInTheDocument()
+    })
+
+    test('a role removed from the list disables Attach and says so', () => {
+      const { attachSpy, rerenderWith } = renderRerenderable()
+
+      rerenderWith([])
+
+      const button = screen.getByRole('button', { name: /attach and send/i })
+      expect(button).toBeDisabled()
+      expect(screen.getByRole('alert')).toHaveTextContent('qaEngineer is no longer in the profile list.')
+      fireEvent.click(button)
+      expect(attachSpy).not.toHaveBeenCalled()
+      expect(screen.getByText('Please review')).toBeInTheDocument()
+    })
+
+    // Every blocking reason is shown on its own: the depth warning must not hide why the role is unusable.
+    test('at the depth limit, an unavailable role still shows both the depth warning and the reason', () => {
+      const { attachSpy, rerenderWith } = renderRerenderable(0)
+      expect(screen.getAllByRole('alert')).toHaveLength(1)
+
+      rerenderWith([{ ...profiles[0]!, available: false, unavailableReason: 'claude is not on PATH' }])
+
+      const button = screen.getByRole('button', { name: /attach and send/i })
+      expect(button).toBeDisabled()
+      const alerts = screen.getAllByRole('alert')
+      expect(alerts).toHaveLength(2)
+      expect(alerts[0]).toHaveTextContent('delegation depth limit')
+      expect(alerts[1]).toHaveTextContent('QA Engineer: claude is not on PATH')
+      fireEvent.click(button)
+      expect(attachSpy).not.toHaveBeenCalled()
+    })
+
+    test('at the depth limit, a removed role still shows both the depth warning and the removal', () => {
+      const { attachSpy, rerenderWith } = renderRerenderable(0)
+
+      rerenderWith([])
+
+      const button = screen.getByRole('button', { name: /attach and send/i })
+      expect(button).toBeDisabled()
+      const alerts = screen.getAllByRole('alert')
+      expect(alerts).toHaveLength(2)
+      expect(alerts[0]).toHaveTextContent('delegation depth limit')
+      expect(alerts[1]).toHaveTextContent('qaEngineer is no longer in the profile list.')
+      fireEvent.click(button)
+      expect(attachSpy).not.toHaveBeenCalled()
+    })
+
+    test('the role coming back enables Attach again', () => {
+      const { rerenderWith } = renderRerenderable()
+      rerenderWith([])
+      rerenderWith(profiles)
+
+      expect(screen.getByRole('button', { name: /attach and send/i })).toBeEnabled()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
   })
 })

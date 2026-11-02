@@ -254,11 +254,34 @@ func loadSavedRun(runsDir, runName string, f *flow.Flow) (*savedRun, error) {
 	if err != nil || !hasUnfinishedStage(rs, f.Stages) {
 		return nil, nil // resolveRun starts a new run for these
 	}
+	return readSavedRun(runDir, rs)
+}
+
+// readSavedRun is the run in runDir with its journal state rs and its frozen stage registry. The host reads it
+// before the re-exec, the container from the run it opened, so both prepare Docker from the same data.
+func readSavedRun(runDir string, rs state.RunState) (*savedRun, error) {
 	stages, _, err := graph.LoadRegistry(runDir)
 	if err != nil {
 		return nil, fmt.Errorf("restore stage registry: %w", err)
 	}
 	return &savedRun{state: rs, stages: stages}, nil
+}
+
+// stageCommands is each stage's own command in the registry the run restores: the frozen one (the declaration when
+// there is none yet) with the stages added during the run.
+func (s *savedRun) stageCommands(f *flow.Flow) map[string]string {
+	frozen := s.stages
+	if frozen == nil {
+		frozen = f.Stages
+	}
+	cmds := make(map[string]string, len(frozen)+len(s.state.DynamicStages))
+	for _, st := range frozen {
+		cmds[st.ID] = st.Command
+	}
+	for _, d := range s.state.DynamicStages {
+		cmds[d.Stage.ID] = d.Stage.Command
+	}
+	return cmds
 }
 
 // hasUnfinishedStage mirrors resolveRun: a stage the journal has not seen yet counts as pending.

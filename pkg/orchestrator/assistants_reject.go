@@ -48,7 +48,7 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn
 	}
 	if count >= maxConsecutiveDelegationRejections {
 		return o.finishTaskTurnReplyingGuarded(taskID, turn, assistants.StatusRunning, assistants.StatusFailed,
-			fmt.Sprintf("delegation_rejected %d times in a row (%s): %s", count, code, reason), nil, guard,
+			o.taskTurnFailure(taskID, fmt.Sprintf("delegation_rejected %d times in a row (%s)", count, code), reason), nil, guard,
 			func(state.OperationResult) { o.taskDelegationRejects.Delete(taskID) })
 	}
 
@@ -68,7 +68,7 @@ func (o *Orchestrator) deliverDelegationRejection(taskID assistants.TaskID, turn
 		return err
 	}
 	if writeErr != nil {
-		o.finishTaskFrom(taskID, assistants.StatusQueued, assistants.StatusFailed, "assistants: persist delegation rejection: "+writeErr.Error())
+		o.finishTaskFrom(taskID, assistants.StatusQueued, assistants.StatusFailed, o.taskTurnFailure(taskID, "assistants: persist delegation rejection", writeErr.Error()))
 		return writeErr
 	}
 	o.maybeScheduleTask(o.runContext(context.Background()), taskID)

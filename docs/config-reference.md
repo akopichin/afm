@@ -48,11 +48,13 @@ server:
 # collaboration:
 #   enabled: true           # stage helpers; ON by default. env AFM_COLLABORATION overrides
 #   mode: team              # dashboard: team (default) | assistants; flow.yaml may override
+#   runtime_context: isolated # helper process environment: isolated (default) | wrapper
 #   max_depth: 3            # helper delegation depth; flow.yaml may override it
 #   limits: { max_tasks: 20 } # optional whole-run task limit
 #   profiles:               # locally configured roles; see collaboration.md
-#     reviewer: { title: Code reviewer, command: codex-as-claude,
-#                 instructions: Review the stage, delegate: false }
+#     reviewer: { title: Code reviewer, instructions: Review the stage }  # runs the executor it is attached to
+#     codex-reviewer: { command: codex-as-claude, runtime_context: wrapper,
+#                       instructions: Review the stage, delegate: false }
 
 # worktrees:
 #   enabled: true           # per-flow git worktrees; OFF by default. env AFM_WORKTREES
@@ -105,6 +107,14 @@ existing configs) or `assistants`. The value in `flow.yaml` takes precedence ove
 project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
 still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
+
+A profile defines a role; its `command` is optional. Without it a helper runs the
+executor of its stage (or `client.command`), and a built-in `default` profile always
+exists. `collaboration.runtime_context` (`isolated` or `wrapper`) and
+`profiles.<id>.runtime_context` choose the environment of a helper's process; a
+profile value wins, and an empty, `null` or unknown value stops config loading.
+See [Which executor a helper runs](collaboration.md#which-executor-a-helper-runs)
+and [Runtime context](collaboration.md#runtime-context).
 
 ## Exit on stage failure
 

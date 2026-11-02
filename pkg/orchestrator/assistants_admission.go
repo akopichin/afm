@@ -45,7 +45,7 @@ type admittedTask struct {
 }
 
 // admitTopLevelTask decides whether req may create a task, from rs and the profile registry: the stage (it
-// exists, is not a script stage, has not finished) or the run scope, the profile and its availability, and the
+// exists, is not a script stage, has not finished) or the run scope, the profile and its executor's availability, and the
 // delegation depth. Every top-level task reserves one unit of collaboration.limits.max_tasks, checked under the
 // commit's lock together with the stage's status and the policy revision.
 func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequest) (admittedTask, error) {
@@ -89,13 +89,12 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 	if !ok {
 		return admittedTask{}, attachRejected(assistants.CodeCapabilityUnavailable, "unknown profile %q", req.ProfileID)
 	}
-	view, _ := profileView(o.opts.AssistantsRegistry, req.ProfileID)
-	if !view.Available {
-		return admittedTask{}, attachRejected(assistants.CodeCapabilityUnavailable, "%s", view.UnavailableReason)
+	// The snapshot freezes the resolved executor and its read-only guarantee, and the binding how it runs: later
+	// config changes reach new tasks only — like PolicyRev and MaxDepthAtCreate.
+	profile, binding, err := o.admitExecution(profile, o.executionInputs(req.StageID, nil))
+	if err != nil {
+		return admittedTask{}, err
 	}
-	// The task's durable profile snapshot remembers the read-only guarantee that backed it at admission, even
-	// if the profile's config or availability changes later — like PolicyRev and MaxDepthAtCreate.
-	profile.ReadonlyEnforcement = view.ReadonlyEnforcement
 
 	if rs.Assistants.Policy.Blocks(assistants.ComputeDepth(nil)) {
 		return admittedTask{}, attachRejected(assistants.CodeDelegationDepthExceeded, "max_depth=%d", rs.Assistants.Policy.MaxDepth)
@@ -110,7 +109,7 @@ func (o *Orchestrator) admitTopLevelTask(rs state.RunState, req topLevelTaskRequ
 		Mode: string(req.Mode), Trigger: string(req.Trigger), PolicyRev: rs.Assistants.Policy.Revision,
 		MaxDepthAtCreate: rs.Assistants.Policy.MaxDepth, CreatedBy: string(req.createdBy()),
 		RootGenerationAtCreate: rs.Assistants.RootGenerations[req.StageID],
-		Skills:                 slices.Clone(req.Skills), SkillsDir: req.SkillsDir,
+		Skills:                 slices.Clone(req.Skills), SkillsDir: req.SkillsDir, Execution: &binding,
 	}
 	if scope == assistants.ScopeRun {
 		payload.Scope = string(scope)

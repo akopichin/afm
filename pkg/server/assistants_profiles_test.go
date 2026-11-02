@@ -2,23 +2,102 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/assistants"
+	"github.com/akopichin/afm/pkg/state"
 )
 
-// fakeAssistantProfiles is a test double for AssistantProfilesService.
+// fakeAssistantProfiles is a test double for AssistantProfilesService: profiles are the run-level views, byStage
+// those of a stage, and the stage "script" is a script stage.
 type fakeAssistantProfiles struct {
 	profiles       []assistants.ProfileView
+	byStage        map[string][]assistants.ProfileView
 	maxDepth       int
 	maxDepthSource string
 }
 
-func (f fakeAssistantProfiles) Profiles() []assistants.ProfileView { return f.profiles }
-func (f fakeAssistantProfiles) MaxDepth() (int, string)            { return f.maxDepth, f.maxDepthSource }
+func (f fakeAssistantProfiles) Profiles(stageID string) ([]assistants.ProfileView, error) {
+	switch views, ok := f.byStage[stageID]; {
+	case stageID == "":
+		return f.profiles, nil
+	case stageID == "script":
+		return nil, &state.OperationRejectedError{Code: assistants.CodeInvalidRequest, Reason: "stage \"script\" is a script stage"}
+	case !ok:
+		return nil, &state.OperationRejectedError{Code: assistants.CodeNotFound, Reason: fmt.Sprintf("unknown stage %q", stageID)}
+	default:
+		return views, nil
+	}
+}
+func (f fakeAssistantProfiles) MaxDepth() (int, string) { return f.maxDepth, f.maxDepthSource }
+
+func getProfiles(t *testing.T, svc AssistantProfilesService, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	srv := newTestServer(t, Config{AssistantProfiles: svc})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/assistant-profiles"+query, nil))
+	return w
+}
+
+// The dashboard asks for the profiles of the stage it attaches to; without stage_id it gets the run-level ones.
+func TestProfiles_StageIDSelectsTheStageViews(t *testing.T) {
+	svc := fakeAssistantProfiles{
+		profiles: []assistants.ProfileView{{ID: "reviewer", Command: "claude", CommandSource: assistants.CommandSourceClient, Available: true}},
+		byStage: map[string][]assistants.ProfileView{
+			"b": {{ID: "reviewer", Command: "fake-recipe", CommandSource: assistants.CommandSourceStage, Available: true}},
+		},
+	}
+	for query, want := range map[string]string{"": "client", "?stage_id=b": "stage"} {
+		w := getProfiles(t, svc, query)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %q: status %d, want 200: %s", query, w.Code, w.Body.String())
+		}
+		var resp assistantProfilesResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Profiles) != 1 || resp.Profiles[0].CommandSource != want {
+			t.Fatalf("GET %q: profiles = %+v, want reviewer with command_source %q", query, resp.Profiles, want)
+		}
+	}
+}
+
+func TestProfiles_UnknownStageIs404AndScriptStage400(t *testing.T) {
+	for query, want := range map[string]int{"?stage_id=nope": http.StatusNotFound, "?stage_id=script": http.StatusBadRequest} {
+		if w := getProfiles(t, fakeAssistantProfiles{}, query); w.Code != want {
+			t.Errorf("GET %q: status %d, want %d: %s", query, w.Code, want, w.Body.String())
+		}
+	}
+}
+
+// The wire names are the contract of the dashboard client: a rename breaks it silently.
+func TestProfiles_WireFields(t *testing.T) {
+	svc := fakeAssistantProfiles{profiles: []assistants.ProfileView{
+		{ID: "external", Title: "External", Command: "/opt/ext-as-claude.sh", CommandSource: assistants.CommandSourceProfile,
+			RuntimeContext: assistants.RuntimeContextWrapper, Available: true},
+		{ID: "ghost", Title: "Ghost", Command: "claude", CommandSource: assistants.CommandSourceClient,
+			RuntimeContext: assistants.RuntimeContextIsolated, UnavailableReason: "not on the host"},
+	}}
+	w := getProfiles(t, svc, "")
+	var resp struct {
+		Profiles []map[string]any `json:"profiles"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]any{
+		{"id": "external", "title": "External", "command": "/opt/ext-as-claude.sh", "command_source": "profile", "runtime_context": "wrapper", "available": true},
+		{"id": "ghost", "title": "Ghost", "command": "claude", "command_source": "client", "runtime_context": "isolated", "available": false, "unavailable_reason": "not on the host"},
+	}
+	if !reflect.DeepEqual(resp.Profiles, want) {
+		t.Fatalf("profiles on the wire = %v, want %v", resp.Profiles, want)
+	}
+}
 
 func TestProfiles_404WhenServiceNil(t *testing.T) {
 	srv := newTestServer(t, Config{}) // no AssistantProfiles wired

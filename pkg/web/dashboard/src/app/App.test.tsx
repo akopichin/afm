@@ -3433,6 +3433,47 @@ describe('App', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
+  // Answers GET /api/assistant-profiles like the server: the stage context reports the stage's executor, the
+  // run level the run default. Everything else stays with mockModeRun.
+  function mockProfilesByContext(profileRequests: string[]): void {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (!url.includes('/api/assistant-profiles')) return base(input, init)
+      profileRequests.push(url)
+      const inStage = url.includes('stage_id=s1')
+      const profile = { id: 'qa', title: 'QA role', command: inStage ? 'codex' : 'claude', command_source: inStage ? 'stage' : 'client', available: true }
+      return { ok: true, json: async () => ({ profiles: [profile] }) } as Response
+    })
+  }
+
+  test("Attach helper… asks for the open stage's profiles and shows that stage's executor and source", async () => {
+    mockModeRun([], () => 'assistants')
+    const profileRequests: string[] = []
+    mockProfilesByContext(profileRequests)
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    fireEvent.click(header.getByRole('button', { name: 'Attach helper…' }))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(await dialog.findByText('codex (stage)')).toBeInTheDocument()
+    expect(profileRequests).toContain('/api/assistant-profiles?stage_id=s1')
+  })
+
+  test('Add run agent uses the run-level profiles and shows the run default executor', async () => {
+    mockModeRun([], () => 'team')
+    const profileRequests: string[] = []
+    mockProfilesByContext(profileRequests)
+    render(<App />)
+
+    const people = await screen.findByRole('navigation', { name: 'People' })
+    fireEvent.click(within(people).getByRole('button', { name: 'Add run agent…' }))
+    expect(await screen.findByText('claude (run default)')).toBeInTheDocument()
+    expect(profileRequests).toContain('/api/assistant-profiles')
+  })
+
   test('team mode: Attach helper… stays in the People panel, not duplicated in the header', async () => {
     mockModeRun([], () => 'team')
     render(<App />)

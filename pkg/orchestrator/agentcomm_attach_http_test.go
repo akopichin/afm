@@ -18,6 +18,7 @@ import (
 
 // A correctable attach request is answered with a 4xx and its reason through the real server, not a bare 500.
 func TestAttachAndSend_CorrectableErrorsAreNot500(t *testing.T) {
+	pinContainerHelperPolicy(t)
 	runDir := t.TempDir()
 	stages := []flow.Stage{{ID: "impl", Name: "Work", Command: "claude"}, {ID: "lint", Name: "Lint", Script: "true"}}
 	store, err := state.Open(runDir, []string{"impl", "lint"})
@@ -28,10 +29,7 @@ func TestAttachAndSend_CorrectableErrorsAreNot500(t *testing.T) {
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatal(err)
 	}
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "qa", Title: "QA", Command: "helper-cmd"}}, nil, "claude",
-		func(string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "qa", Title: "QA", Command: "helper-cmd"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -157,3 +157,50 @@ func TestValidateFlowFile_TeamWithMalformedProfileRegistry(t *testing.T) {
 		t.Fatalf("validateFlowFile = %v, want the registry error for bad/id", err)
 	}
 }
+
+// The builtin default needs no config, like in afm run: a team member and a stage assistant may name it.
+func TestValidateFlowFile_BuiltinDefaultProfile(t *testing.T) {
+	t.Setenv("AFM_COLLABORATION", "1") // with collaboration off validate only warns and would prove nothing
+	writeValidateConfig(t, "")
+	path := writeTestFlow(t, `name: default-flow
+team:
+  - id: helper
+    profile: default
+    title: Helper
+stages:
+  - id: s
+    agents: [auto]
+    assistants: default
+`)
+	if _, err := validateFlowFile(path); err != nil {
+		t.Fatalf("validateFlowFile: %v", err)
+	}
+}
+
+const validateStageAssistantFlow = `name: stage-flow
+stages:
+  - id: s
+    agents: [auto]
+    assistants: ghost
+`
+
+// A stage's assistants are checked as afm run's preflight checks them.
+func TestValidateFlowFile_StageAssistantUnknownProfile(t *testing.T) {
+	writeValidateConfig(t, "")
+	_, err := validateFlowFile(writeTestFlow(t, validateStageAssistantFlow))
+	if err == nil || !strings.Contains(err.Error(), `stage "s"`) || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("validateFlowFile = %v, want an unknown-profile error for stage s", err)
+	}
+}
+
+func TestValidateFlowFile_StageAssistantWithDisabledCollaborationWarns(t *testing.T) {
+	writeValidateConfig(t, "collaboration:\n  enabled: false\n")
+	var err error
+	stderr := captureStderr(t, func() { _, err = validateFlowFile(writeTestFlow(t, validateStageAssistantFlow)) })
+	if err != nil {
+		t.Fatalf("validateFlowFile: %v, want OK with a warning", err)
+	}
+	if !strings.Contains(stderr, `stage "s"`) || !strings.Contains(stderr, "collaboration is disabled") {
+		t.Fatalf("stderr = %q, want the disabled-collaboration warning for stage s", stderr)
+	}
+}

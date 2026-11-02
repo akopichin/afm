@@ -60,5 +60,6 @@ func diffBaseRevision(dir string) string {
 // admitted on the host under the codex sandbox and resumed in a container has none. The turn start records it
 // (state.TaskState.TurnReadonlyEnforcement) and the helper's prompt states it.
 func (o *Orchestrator) currentReadonlyEnforcement(task assistants.Task) string {
-	return config.HelperReadonlyEnforcement(task.ProfileSnapshot.Command, o.opts.Config)
+	cmd := o.taskExecution(o.opts.Store.Snapshot(), task).Command
+	return config.HelperReadonlyEnforcement(cmd, o.opts.Config)
 }

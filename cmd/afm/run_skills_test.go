@@ -35,7 +35,7 @@ func TestPrepareRunEnvironment_SkillsBase(t *testing.T) {
 		{"worktree", &flow.Flow{Name: "f", RootDir: "src"}, filepath.Join(".worktrees", "wt"), filepath.Join(dir, ".worktrees", "wt"), filepath.Join(dir, ".worktrees", "wt")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env, err := prepareRunEnvironment(".", tc.flow, config.Default(), tc.worktree)
+			env, err := prepareRunEnvironment(".", tc.flow, config.Default(), tc.worktree, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

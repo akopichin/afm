@@ -256,6 +256,7 @@ func TestRun_TeamExistsBeforeReviewPauseResume(t *testing.T) {
 		AssistantsEnabled: true, AssistantsRegistry: base.opts.AssistantsRegistry,
 		Team: flow.Team{{ID: "qa", Profile: "qa", Title: "QA"}},
 	})
+	o.helperAccess = allowHelpersOS
 	setPausedFrom(t, store, assistantsTestStageID, state.StatusRunning)
 	stageDir := filepath.Join(o.opts.RunDir, assistantsTestStageID)
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {

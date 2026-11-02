@@ -15,24 +15,135 @@ Add roles to global `~/.afm/config.yaml` or project `.afm/config.yaml`:
 collaboration:
   enabled: true                 # default; AFM_COLLABORATION=0 disables it
   mode: team                    # dashboard: team (default) or assistants
+  runtime_context: isolated     # default; isolated or wrapper, see below
   max_depth: 3                 # default; 0 prevents helper creation
   limits:
     max_tasks: 20              # optional lifetime limit for this run
   profiles:
-    reviewer:
+    reviewer:                  # a role only: runs the executor it is attached to
       title: Code reviewer
-      command: codex-as-claude
       instructions: Review the stage's changes and report concrete findings.
       delegate: false          # opt in to child tasks with true
+    codex-reviewer:
+      command: codex-as-claude # optional: overrides the executor for this role
+      instructions: Review the stage's changes with Codex.
 ```
 
-Each configured profile needs its own `command`; it does not inherit
-`client.command`. Profiles with the same ID in project config replace those in
-global config. Only available profiles can run. On a native host, afm accepts
-the Codex read-only adapter for helpers; inside a container, afm relies on the
-container boundary and allows configured commands without an OS read-only
-guarantee. Unavailable roles cannot be attached; the profiles API reports why
-each one is unavailable.
+A profile is a role: `instructions`, an optional `title`, `delegate` and an
+optional `runtime_context`. `command` is optional. Without it the helper runs
+the executor of the place it is attached to, so you do not repeat a command and
+its authentication in every profile. Profiles with the same ID in project
+config replace those in global config as a whole; fields are not merged. Every
+run also has a built-in `default` profile with no command and general
+instructions; define a profile named `default` in global or project config to
+replace it. An unknown profile is an error. With collaboration disabled there
+are no helpers.
+
+### Which executor a helper runs
+
+afm resolves the executor once, when the task is created:
+
+| Task | Executor, first match wins | Source shown |
+|---|---|---|
+| Stage helper (**Attach helper…**, `assistants:`, feed attach, `afm agent spawn`) | the profile's `command`; the stage's own `command` (also for a stage added during the run); `client.command` | `profile`, `stage`, `client` |
+| Run agent (`team:`, **Add run agent**) | the profile's `command`; `client.command` | `profile`, `client` |
+| Child of a delegating helper | the profile's `command`; the parent task's executor | `profile`, `parent` |
+
+`client.command` defaults to `claude`; afm never starts a helper with an empty
+command. A helper never inherits the stage agent's session, its dialog and
+`AFM_STAGE_DIR`, the managed browser or the stop hook; it has its own
+Agent Mesh identity, a fresh session and its own task lifecycle.
+
+Besides the command, an inheriting helper takes the stage agent's settings:
+
+- `client.reasoning` applies when the source is `stage`, `client` or `parent`
+  (the same rule as for stage agents: it becomes `--effort` for the bare
+  `claude` command).
+- Only the model arguments of `client.extra_args` apply, and only when the
+  source is `client` (a child copies them from such a parent): `--model`,
+  `--fallback-model` and `--effort`, written as `--flag value` or
+  `--flag=value`. Other arguments, such as `--resume` or `--mcp-config`,
+  belong to the stage agent and are not passed. afm's stream-json defaults stay.
+- A profile with its own `command` takes neither arguments nor reasoning.
+
+The executor and its settings are saved with the task. Retry, Pause/Continue
+and a restart reuse them, and so does a repeated attach request that returns
+the existing task; changing `client.command`, `client.extra_args`,
+`client.reasoning` or a profile affects new tasks only. A task created by an
+older version of afm has no saved executor. If its saved profile has no
+`command`, it runs the default executor of the current flow and config,
+resolved by the same rules as a new task; if the saved profile has a `command`,
+that command is still used.
+
+**Recipes.** A profile or stage can name a `docker.agents` recipe (see
+[Docker](docker.md#non-claude-agents-in-docker-autoshim)). The recipe's model and
+account belong to the task as they were when it was created. afm saves a digest
+of the recipe (its type, model, URL, system prompt settings, `auth.from` and
+`auth.to` selectors, reasoning and max turns — never a secret value or the
+content of a referenced file). If the recipe has changed by the task's next
+turn, the turn does not start and the task fails with `executor_changed`,
+naming the role, command and source. afm does not run the task on the new model
+or account; attach a new helper to use the new settings. Tasks of older
+versions are not checked.
+
+**Parallelism.** A helper that inherits a command shares that command's
+`max_parallel` limit with the stage. With `max_parallel: 1` a one-shot helper
+waits until the stage agent yields or finishes; waiting in the mesh yields the
+slot, so there is no deadlock.
+
+### Runtime context
+
+`runtime_context` sets what environment a helper's process gets. It is
+`isolated` (default) or `wrapper`, set for all profiles in
+`collaboration.runtime_context` or for one profile in
+`profiles.<id>.runtime_context`; a profile value wins. An empty, `null` or
+unknown value stops config loading. There is no environment variable for it.
+
+- `isolated`: the helper gets its own command's transport secret
+  (`AFM_SECRET_<COMMAND>`) and, for a recipe wrapper generated in Docker, its own
+  system prompt (`AFM_SYSPROMPT_<COMMAND>`). The Claude credentials and
+  `ANTHROPIC_BASE_URL` of afm's process are removed unless the command is the
+  bare `claude`. An external wrapper that calls `claude` itself therefore starts
+  without authentication, and the task fails with *Not logged in*.
+- `wrapper`: as `isolated`, and the helper also keeps the Claude credentials and
+  `ANTHROPIC_BASE_URL` of afm's process for any command. Use it for a wrapper
+  that needs them. This is an explicit opt-in: a helper in this mode can write
+  the token into project files, like a stage agent, and a Codex profile gets
+  Claude credentials too.
+
+Both modes remove other commands' `AFM_SECRET_*` and `AFM_SYSPROMPT_*`, hook
+secrets, the mesh token, the parent's browser and stop-hook transport and
+`AFM_STAGE_DIR`. Other environment variables are kept. The helper gets its own
+mesh descriptor and `AFM_SCRATCH_DIR`. Neither mode is OS isolation: a shell
+wrapper can read what its environment and filesystem allow. AI verify does not
+use `runtime_context`; its command and environment are unchanged.
+
+### Availability
+
+Whether a helper may run depends on the resolved executor, checked when the
+task is created; each turn then recomputes the read-only guarantee of the
+environment it runs in. On a native host afm accepts the Codex
+read-only adapter for helpers; inside a container, afm relies on the container
+boundary and allows configured commands without an OS read-only guarantee.
+Unavailable roles cannot be attached; **Attach helper…** shows the executor,
+its source and the reason for each unavailable role, and a child cannot gain a
+weaker read-only guarantee than its parent. `GET /api/assistant-profiles`
+returns `command`, `command_source`, `runtime_context`, `available` and
+`unavailable_reason` for each profile; add `?stage_id=<id>` to resolve them for
+a stage (an unknown stage is `404`, a `script:` stage `400`), or omit it for
+run agents. `afm validate` and `afm run` check the same profiles but do not run
+a model or prove that a login works.
+
+### Failures
+
+A failed helper turn says what went wrong, for which role, command and source,
+without the command line or secrets:
+
+- *helper executable did not start*: the command was not found or could not be
+  executed;
+- *helper CLI reported an error*: the CLI itself reported an error, such as
+  *Not logged in*. afm does not run output repair for it;
+- *result contract not met*: the helper answered, but not in the JSON result format.
 
 `AFM_COLLABORATION` takes precedence over `collaboration.enabled`; collaboration
 is on by default. Delegation depth follows `flow.yaml` > project config > global
@@ -209,7 +320,9 @@ both answers with `afm agent wait`, fixes the valid findings, and then passes a
 ## Use helpers in the dashboard
 
 Open a stage's **⋯ → Attach helper…** menu, select an available role, and give
-it an instruction. Choose **Advisory** for a result that does not block the
+it an instruction. **Configured executor** shows the command the helper will run
+on this stage and where it comes from (*profile*, *stage* or *run default*); if
+no role is available, the dialog lists why. Choose **Advisory** for a result that does not block the
 stage, or **Required** for a result that must pass before the stage finishes.
 Attach helpers after the stage starts. A helper attached while its stage is
 `pending` stays in `waiting_parent` and does not start when the stage starts;
@@ -418,7 +531,8 @@ list; the resize divider is hidden. Wider layouts show both panes and retain the
 keyboard-resizable divider.
 
 **Add run agent** starts a standing agent from an available configured profile.
-Choose a role, enter an instruction, and optionally give it a title and a first
+It runs the profile's `command`, or `client.command` for a role-only profile; the
+dialog shows the executor and its source. Choose a role, enter an instruction, and optionally give it a title and a first
 message. You can add several agents with the same role; each one is addressed by
 an `@name` made from its title (or the role's title when there is none) — unique
 in the run, so a second "QA" becomes `@qa-2` — and they work side by side. A run agent is a standing role: every message addressed to it
@@ -805,8 +919,9 @@ participant/profile must be available in the run.
 ## Temporary helpers from a stage agent
 
 A stage agent can start a one-shot advisory helper from an available configured
-profile. It chooses the profile, task title and instruction; afm uses that
-profile's command and model and the caller's stage. Quota, depth and helper
+profile. It chooses the profile, task title and instruction; afm resolves the
+executor as for any stage helper (the profile's `command`, else the caller
+stage's command, else `client.command`) and attaches it to the caller's stage. Quota, depth and helper
 access rules still apply. For example:
 
 ```sh

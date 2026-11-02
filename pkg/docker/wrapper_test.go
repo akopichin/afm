@@ -9,20 +9,6 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 )
 
-func TestEnvName(t *testing.T) {
-	cases := map[string]string{
-		"glm51":              "GLM51",
-		"deepseek-v4":        "DEEPSEEK_V4",
-		"ai-free.claude-glm": "AI_FREE_CLAUDE_GLM",
-		"":                   "",
-	}
-	for in, want := range cases {
-		if got := envName(in); got != want {
-			t.Errorf("envName(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // stubClaudeOnPATH кладёт fake-claude в temp-dir и prepend'ит его к PATH.
 // Возвращает абсолютный путь к fake-claude.
 func stubClaudeOnPATH(t *testing.T) string {

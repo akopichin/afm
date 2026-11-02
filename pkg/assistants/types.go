@@ -16,21 +16,23 @@ type TaskID string
 // ProfileID — идентификатор профиля помощника (настроенного типа агента).
 type ProfileID string
 
-// Profile описывает настроенный тип помощника: какую команду запускать и с
-// какими системными инструкциями/возможностями.
+// Profile описывает настроенный тип помощника: роль (системные инструкции/возможности) и, если задано, свою
+// команду.
 type Profile struct {
 	ID    ProfileID
 	Title string
-	// Command — имя уже настроенной команды/recipe (claude, codex-as-claude,
-	// docker.agents-рецепт и т.п.), а не новый бинарь/транспорт.
+	// Command — имя уже настроенной команды/recipe (claude, codex-as-claude, docker.agents-рецепт и т.п.), а не
+	// новый бинарь/транспорт. Пусто в профиле — помощник наследует исполнителя (ResolveExecution); в снимке задачи
+	// здесь всегда разрешённая команда (пусто только у задач старого журнала).
 	Command      string
 	Instructions string
 	Capabilities Capabilities
-	// ReadonlyEnforcement — какая read-only-гарантия действовала для этой команды в момент, когда профиль
-	// был разрешён к использованию (T1.5's AvailabilityCheck). Пусто у "сырого" Profile, возвращаемого
-	// Registry.Get — заполняется вызывающим (Attach, T3.4) из ProfileView.ReadonlyEnforcement ПЕРЕД тем как
-	// профиль замораживается в Task.ProfileSnapshot, чтобы история задачи навсегда помнила гарантию,
-	// действовавшую на момент прогона, а не ту, что действует сейчас (dev-plan.md Этап 1 T1.5).
+	// RuntimeContext — явный runtime_context профиля; nil — берётся collaboration.runtime_context. В снимке задачи
+	// всегда nil и в журнал не пишется: единственная запись — ExecutionBinding.
+	RuntimeContext *RuntimeContext `json:",omitempty"`
+	// ReadonlyEnforcement — какая read-only-гарантия действовала для разрешённой команды при создании задачи.
+	// Пусто у профиля из Registry.Get: заполняет admission перед тем, как профиль замораживается в
+	// Task.ProfileSnapshot, чтобы история задачи помнила гарантию того момента, а не текущую.
 	ReadonlyEnforcement ReadonlyEnforcement
 }
 
@@ -191,6 +193,9 @@ type Task struct {
 	// последующее редактирование профиля не должно задним числом менять уже
 	// идущую/завершённую задачу.
 	ProfileSnapshot Profile
+	// Execution — как запускается исполнитель задачи, зафиксированный при создании; nil у задач старого журнала,
+	// которые запускаются исполнителем по умолчанию из текущих flow/config.
+	Execution *ExecutionBinding
 
 	Title       string
 	Instruction string

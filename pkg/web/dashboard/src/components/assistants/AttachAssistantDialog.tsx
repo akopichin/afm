@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { ActionCard } from './ActionCard'
 import { attachAndSendMesh, genMeshRequestId, type MeshAttachAndSendResult } from '../../api/mesh-client'
-import type { AssistantProfile } from '../../types/assistant-profile'
+import { describeExecutor, describeUnavailable, type AssistantProfile } from '../../types/assistant-profile'
 import { useModalDialog } from '../../lib/focus-trap'
 
 export type AttachAssistantDialogProps = {
@@ -44,16 +44,24 @@ export function AttachAssistantDialog({
 
   const profile = profiles.find((p) => p.id === profileId)
   const roleTitle = profile?.title ?? profileId
-  const executor = profile?.command ?? '—'
+  const executor = profile === undefined ? '—' : describeExecutor(profile)
   const stageTitle = stages.find((s) => s.id === stageId)?.title ?? stageId
   const displayTitle = title !== undefined && title.trim() !== '' ? title : roleTitle
   const remainingDepth = maxDepth === undefined ? undefined : maxDepth - 1
   const atDepthLimit = remainingDepth !== undefined && remainingDepth < 0
+  // Profiles are polled while the preview is open, so the role can become unavailable or vanish after it was picked.
+  // Each blocking reason is shown on its own; the depth warning (ActionCard) must not hide an unusable role.
+  const roleAvailable = profile?.available === true
+  const canAttach = roleAvailable && !atDepthLimit
+  const unavailableNote =
+    profile === undefined
+      ? `${profileId} is no longer in the profile list.`
+      : describeUnavailable([profile])
 
   useModalDialog(modalRef, onCancel)
 
   function handleConfirm(): void {
-    if (submitting || atDepthLimit) return
+    if (submitting || !canAttach) return
     setSubmitting(true)
     setError(null)
     attachAndSendMesh({
@@ -87,6 +95,11 @@ export function AttachAssistantDialog({
           remainingDepth={remainingDepth}
           atDepthLimit={atDepthLimit}
         />
+        {!roleAvailable && (
+          <div className="attach-assistant-error" role="alert">
+            Cannot attach: {unavailableNote}
+          </div>
+        )}
         {error !== null && (
           <div className="attach-assistant-error" role="alert">
             Attach failed: {error}
@@ -99,7 +112,7 @@ export function AttachAssistantDialog({
           <button
             type="button"
             className="btn btn-send"
-            disabled={submitting || atDepthLimit}
+            disabled={submitting || !canAttach}
             onClick={handleConfirm}
           >
             {submitting ? 'Attaching…' : 'Attach and send'}

@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { attachAndSendMesh, type MeshAttachAndSendResult, type MeshParticipant } from '../../api/mesh-client'
 import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
-import type { AssistantProfile } from '../../types/assistant-profile'
+import { describeExecutor, describeUnavailable, type AssistantProfile } from '../../types/assistant-profile'
 import { useModalDialog } from '../../lib/focus-trap'
 
 export type AddRunAgentDialogProps = {
@@ -25,7 +25,7 @@ export type AddRunAgentDialogProps = {
 // (useModalDialog) and modal-overlay/modal-content classes rather than reinventing them.
 export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage, active = true }: AddRunAgentDialogProps): ReactElement {
   const available = profiles.filter((p) => p.available)
-  const [profileId, setProfileId] = useState(available[0]?.id ?? '')
+  const [chosenId, setChosenId] = useState('')
   const [title, setTitle] = useState('')
   const [instruction, setInstruction] = useState('')
   // firstMessage — optional; without one the agent is only registered and starts no work until it is sent one.
@@ -35,15 +35,18 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage,
   // must not mint a second durable attach); changing any field makes it a new request with a new id.
   const submitter = useRetryableSubmit<{ profileId: string; title: string; instruction: string; firstMessage: string }>('mesh-run-agent')
 
-  const selected = available.find((p) => p.id === profileId) ?? null
+  // Profiles load after the dialog opens, so the choice falls back to the first available one until picked.
+  const selected = available.find((p) => p.id === chosenId) ?? available[0] ?? null
+  const unavailable = describeUnavailable(profiles)
 
   useModalDialog(modalRef, onCancel, undefined, active)
 
-  const canSubmit = profileId !== '' && instruction.trim() !== '' && !submitter.pending
+  const canSubmit = selected !== null && instruction.trim() !== '' && !submitter.pending
 
   function handleSubmit(): void {
     if (!canSubmit) return
-    const name = title.trim() !== '' ? title.trim() : (selected?.title ?? profileId)
+    const profileId = selected.id
+    const name = title.trim() !== '' ? title.trim() : selected.title
     submitter.submit(
       { profileId, title: title.trim(), instruction: instruction.trim(), firstMessage: firstMessage.trim() },
       (p, requestId) =>
@@ -68,12 +71,15 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage,
       <div className="modal-content add-run-agent-dialog" ref={modalRef}>
         <h2 className="add-run-agent-heading">Add a run-scoped agent</h2>
         {available.length === 0 ? (
-          <p className="add-run-agent-empty">No agent profiles are available for this run.</p>
+          <p className="add-run-agent-empty">
+            No agent profiles are available for this run.
+            {unavailable !== '' && ` Unavailable — ${unavailable}.`}
+          </p>
         ) : (
           <>
             <label className="add-run-agent-field">
               <span>Role</span>
-              <select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+              <select value={selected?.id ?? ''} onChange={(e) => setChosenId(e.target.value)}>
                 {available.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.title}
@@ -81,12 +87,12 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage,
                 ))}
               </select>
             </label>
-            {/* Read-only: the executor is decided by the profile's own configuration, never a per-request
-                choice — there is no model selector here, same as MeshAttachAndSendRequest having no field
-                for one (pkg/server/mesh.go's own comment on that struct). */}
+            {/* Read-only: the executor and where it comes from are decided by configuration, never a
+                per-request choice — there is no model selector here, same as MeshAttachAndSendRequest
+                having no field for one (pkg/server/mesh.go's own comment on that struct). */}
             <dl className="add-run-agent-executor">
               <dt>Configured executor</dt>
-              <dd>{selected?.command ?? '—'}</dd>
+              <dd>{selected === null ? '—' : describeExecutor(selected)}</dd>
             </dl>
             <label className="add-run-agent-field">
               <span>Title (optional)</span>

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,31 +29,38 @@ func TestHelperTurnOutcomes_TerminalStatusAndReason(t *testing.T) {
 			name:       "runner error",
 			err:        errors.New("spawn failed"),
 			wantStatus: assistants.StatusFailed,
-			wantReason: "assistants: helper execution failed: spawn failed",
+			wantReason: "helper execution failed (role reviewer, command helper-cmd, source profile): spawn failed",
+		},
+		{
+			name:       "runner error: executable did not start",
+			err:        fmt.Errorf("%w: exec: not found", executor.ErrAgentStart),
+			wantStatus: assistants.StatusFailed,
+			wantReason: "helper executable did not start (role reviewer, command helper-cmd, source profile): ",
 		},
 		{
 			name:       "timeout",
 			outcome:    executor.HelperOutcome{TimedOut: true},
 			wantStatus: assistants.StatusFailed,
-			wantReason: "helper agent timed out",
+			wantReason: "helper agent timed out (role reviewer, command helper-cmd, source profile)",
 		},
 		{
 			name:       "process crash carries its error",
 			outcome:    executor.HelperOutcome{ProcessErr: errors.New("exit status 2")},
 			wantStatus: assistants.StatusFailed,
-			wantReason: "helper execution failed: exit status 2",
+			wantReason: "helper execution failed (role reviewer, command helper-cmd, source profile): exit status 2",
 		},
 		{
 			name:       "executor protocol error",
 			outcome:    executor.HelperOutcome{ProcessOK: true, ProtocolErr: errors.New("no final answer")},
 			wantStatus: assistants.StatusFailed,
-			wantReason: protocolErrorPrefix + "no final answer",
+			wantReason: protocolErrorPrefix + "result contract not met (role reviewer, command helper-cmd, source profile): no final answer",
 		},
 		{
+			// The format repair cannot run here either, so recovery is exhausted.
 			name:       "undecodable answer",
 			outcome:    executor.HelperOutcome{ProcessOK: true, RawText: "not json"},
 			wantStatus: assistants.StatusFailed,
-			wantReason: protocolErrorPrefix,
+			wantReason: protocolErrorPrefix + "result contract not met (role reviewer, command helper-cmd, source profile): ",
 		},
 		{
 			name:       "pass",
@@ -211,7 +219,7 @@ func TestHelperTurnOutcomes_PreparationFailureSkipsAgent(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			wantReason: "assistants: create task workspace:",
+			wantReason: "assistants: create task workspace (role reviewer, command helper-cmd, source profile): ",
 		},
 		{
 			name: "stale raw answer cannot be removed",
@@ -221,7 +229,7 @@ func TestHelperTurnOutcomes_PreparationFailureSkipsAgent(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			wantReason: "assistants: clear stale raw answer:",
+			wantReason: "assistants: clear stale raw answer (role reviewer, command helper-cmd, source profile): ",
 		},
 	}
 	for _, tc := range cases {

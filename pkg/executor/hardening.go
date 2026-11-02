@@ -17,11 +17,9 @@ import (
 	"github.com/akopichin/afm/pkg/redact"
 )
 
-// RunMode names the isolation/behavior policy a subprocess is launched under. ModeAuthor is the default
-// (implementation/planning/review agents, no extra isolation). ModeVerify and ModeHelper share the SAME
-// env-filtering policy (see (Config).effectiveMode/filterInheritedEnv's single switch) — a read-only
-// reviewer and a read-only helper agent both must not inherit foreign transport secrets or the author's
-// forwarded Claude credentials.
+// RunMode names the isolation policy a subprocess is launched under. ModeVerify and ModeHelper share the
+// env-filtering switch (foreign transport secrets and the author's Claude auth are dropped); only ModeHelper
+// keeps its own system prompt and may opt into the ambient auth (Config.HelperWrapperRuntime).
 type RunMode int
 
 const (
@@ -49,6 +47,11 @@ func (c Config) effectiveMode() RunMode {
 // isolated reports whether mode m is subject to the verify/helper env-filtering policy (foreign transport
 // secrets and the author's forwarded Claude credentials stripped) rather than the author's full inheritance.
 func (m RunMode) isolated() bool { return m != ModeAuthor }
+
+// keepsAmbientAuth reports whether this run opted into the ambient Claude auth for a non-claude command.
+func (c Config) keepsAmbientAuth() bool {
+	return c.effectiveMode() == ModeHelper && c.HelperWrapperRuntime
+}
 
 // HelperOutcome is RunHelperAgent's raw result: process-level success/failure plus the captured final
 // assistant text block. Unlike verify.RunOutcome, this package does NOT decode the text into a domain
@@ -196,6 +199,7 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		stderrStream = nil
 	}
 	runErr = he.turnOutcome(limits, runErr, logFile, stderrFrom)
+	runErr = withCLIReportedError(runErr, limits.terminal, red)
 	lg.LogEnd(runErr)
 	job.noteFinalText(finalText.String())
 	he.finishTurn(job, collector, runErr)
@@ -238,6 +242,18 @@ func (e *Executor) RunHelperAgent(ctx context.Context, taskID, profileID, prompt
 		outcome.ProtocolErr = errors.New("helper produced no final answer")
 	}
 	return outcome, nil
+}
+
+// withCLIReportedError превращает ошибку хода в *CLIReportedError, когда CLI сам сообщил о ней корневым
+// result. Usage-limit, остановка и ошибка запуска остаются как есть: у них свой путь обработки.
+func withCLIReportedError(runErr error, terminal *TerminalResultError, red helperRedactor) error {
+	var limit *UsageLimitError
+	if terminal == nil || errors.As(runErr, &limit) || errors.Is(runErr, ErrUserInterrupted) ||
+		errors.Is(runErr, ErrIdleTimeout) || errors.Is(runErr, ErrAgentStart) ||
+		errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		return runErr
+	}
+	return newCLIReportedError(terminal, red, runErr)
 }
 
 // helperRedactor masks known secrets in everything RunHelperAgent writes or reports. Either source may be nil.

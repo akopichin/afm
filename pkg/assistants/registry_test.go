@@ -6,16 +6,10 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 )
 
-// alwaysAvailable is a stand-in AvailabilityCheck for tests that don't care about the host-capability gate
-// itself (TestHelperCapability_* in pkg/config covers that gate directly).
-func alwaysAvailable(string) (bool, string, assistants.ReadonlyEnforcement) {
-	return true, "", assistants.ReadonlyEnforcementOS
-}
-
 func TestRegistry_LayerOverridesWholeProfile(t *testing.T) {
 	global := []assistants.Profile{{ID: "x", Title: "G", Instructions: "ginstr", Command: "claude"}}
 	project := []assistants.Profile{{ID: "x", Title: "P", Command: "claude"}} // no Instructions: must NOT inherit from global
-	reg, err := assistants.BuildRegistry(nil, global, project, "claude", alwaysAvailable)
+	reg, err := assistants.BuildRegistry(nil, global, project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,76 +27,90 @@ func TestRegistry_LayerOverridesWholeProfile(t *testing.T) {
 
 func TestRegistry_DuplicateIdsWithinLayerRejected(t *testing.T) {
 	global := []assistants.Profile{{ID: "x", Command: "claude"}, {ID: "x", Command: "claude"}}
-	if _, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable); err == nil {
+	if _, err := assistants.BuildRegistry(nil, global, nil); err == nil {
 		t.Fatal("expected an error for a duplicate profile id within one layer")
 	}
 }
 
-func TestRegistry_BuiltinInheritsClientCommand(t *testing.T) {
-	builtin := []assistants.Profile{{ID: "reviewer", Title: "Reviewer"}} // no Command set
-	reg, err := assistants.BuildRegistry(builtin, nil, nil, "claude", alwaysAvailable)
+// TestRegistry_BuiltinDefaultIsARoleWithoutCommand — the builtin "default" profile is always there, carries
+// general instructions and names no command: the executor comes from where the task runs (ResolveExecution).
+func TestRegistry_BuiltinDefaultIsARoleWithoutCommand(t *testing.T) {
+	reg, err := assistants.BuildRegistry(assistants.BuiltinProfiles(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, ok := reg.Get("reviewer")
+	p, ok := reg.Get(assistants.DefaultProfileID)
 	if !ok {
-		t.Fatal("expected profile reviewer")
+		t.Fatal("builtin default profile missing")
 	}
-	if p.Command != "claude" {
-		t.Errorf("Command = %q, want inherited default command %q", p.Command, "claude")
+	if p.Command != "" || p.Capabilities.Delegate || p.Instructions == "" || p.Title == "" {
+		t.Fatalf("default = %+v, want a titled role with instructions, no command and no delegation", p)
 	}
 }
 
-func TestRegistry_BuiltinKeepsExplicitCommand(t *testing.T) {
-	builtin := []assistants.Profile{{ID: "reviewer", Command: "codex-as-claude"}}
-	reg, err := assistants.BuildRegistry(builtin, nil, nil, "claude", alwaysAvailable)
+// A configured profile keeps exactly what it names: no layer fills in a command it left out.
+func TestRegistry_ProfilesKeepTheirOwnCommand(t *testing.T) {
+	global := []assistants.Profile{{ID: "x"}, {ID: "y", Command: "codex-as-claude"}}
+	reg, err := assistants.BuildRegistry(assistants.BuiltinProfiles(), global, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ := reg.Get("reviewer")
-	if p.Command != "codex-as-claude" {
-		t.Errorf("Command = %q, want the explicitly configured %q (default must not override it)", p.Command, "codex-as-claude")
+	if p, _ := reg.Get("x"); p.Command != "" {
+		t.Errorf("x.Command = %q, want empty (inherited at task creation, not in the registry)", p.Command)
+	}
+	if p, _ := reg.Get("y"); p.Command != "codex-as-claude" {
+		t.Errorf("y.Command = %q, want codex-as-claude", p.Command)
 	}
 }
 
-// TestRegistry_GlobalProjectDoNotInheritDefaultCommand — only BUILTIN profiles inherit the default command;
-// global/project profiles are user-authored and must name their own command.
-func TestRegistry_GlobalProjectDoNotInheritDefaultCommand(t *testing.T) {
-	global := []assistants.Profile{{ID: "x"}} // no Command
-	reg, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable)
+// A global or project "default" replaces the builtin one as a whole, like any other profile id.
+func TestRegistry_ConfiguredDefaultReplacesBuiltin(t *testing.T) {
+	project := []assistants.Profile{{ID: assistants.DefaultProfileID, Title: "Mine", Command: "codex-as-claude"}}
+	reg, err := assistants.BuildRegistry(assistants.BuiltinProfiles(), nil, project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ := reg.Get("x")
-	if p.Command != "" {
-		t.Errorf("Command = %q, want empty (global layer must not inherit the default command)", p.Command)
+	p, _ := reg.Get(assistants.DefaultProfileID)
+	if p.Title != "Mine" || p.Command != "codex-as-claude" || p.Instructions != "" {
+		t.Fatalf("default = %+v, want the project's definition in full", p)
 	}
 }
 
-func TestRegistry_UnavailableCommandIsReported(t *testing.T) {
-	unavailable := func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-		return false, "no provider configured for " + cmd, assistants.ReadonlyEnforcementNone
+// A configured profile whose id differs from the builtin default's only in case replaces it, as before the builtin
+// existed: the user never wrote the builtin, so it must not make their config ambiguous. Two configured ids that
+// collide that way still do.
+func TestRegistry_ConfiguredIDInAnotherCaseReplacesBuiltin(t *testing.T) {
+	for _, layers := range [][2][]assistants.Profile{
+		{{{ID: "Default", Command: "my-cli"}}, nil},
+		{nil, {{ID: "DEFAULT", Command: "my-cli"}}},
+	} {
+		reg, err := assistants.BuildRegistry(assistants.BuiltinProfiles(), layers[0], layers[1])
+		if err != nil {
+			t.Fatalf("BuildRegistry: %v", err)
+		}
+		if _, ok := reg.Get(assistants.DefaultProfileID); ok {
+			t.Error("the builtin default is still registered next to the configured one")
+		}
+		if id, ok := reg.Resolve("default"); !ok || id == assistants.DefaultProfileID {
+			t.Errorf("@default resolves to %q, %v; want the configured profile", id, ok)
+		}
 	}
-	global := []assistants.Profile{{ID: "x", Command: "mystery-agent"}}
-	reg, err := assistants.BuildRegistry(nil, global, nil, "claude", unavailable)
-	if err != nil {
-		t.Fatalf("BuildRegistry must not fail config load for an unavailable (but configured) provider: %v", err)
-	}
-	views := reg.List()
-	if len(views) != 1 {
-		t.Fatalf("List() = %d entries, want 1", len(views))
-	}
-	if views[0].Available {
-		t.Error("Available = true, want false")
-	}
-	if views[0].UnavailableReason == "" {
-		t.Error("UnavailableReason is empty, want a reason")
+	for name, layers := range map[string][2][]assistants.Profile{
+		"Default and DEFAULT across layers":   {{{ID: "Default"}}, {{ID: "DEFAULT"}}},
+		"default and Default in one layer":    {nil, {{ID: "default"}, {ID: "Default"}}},
+		"global default, project Default":     {{{ID: "default"}}, {{ID: "Default"}}},
+		"global Default, project default":     {{{ID: "Default"}}, {{ID: "default"}}},
+		"global default+Default, project nil": {{{ID: "Default"}, {ID: "default"}}, nil},
+	} {
+		if _, err := assistants.BuildRegistry(assistants.BuiltinProfiles(), layers[0], layers[1]); err == nil {
+			t.Errorf("%s: two configured ids differing only in case must still be rejected", name)
+		}
 	}
 }
 
 func TestRegistry_SnapshotIsImmutable(t *testing.T) {
 	global := []assistants.Profile{{ID: "x", Title: "Original", Command: "claude"}}
-	reg, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable)
+	reg, err := assistants.BuildRegistry(nil, global, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +124,7 @@ func TestRegistry_SnapshotIsImmutable(t *testing.T) {
 func TestRegistry_RejectsIdUnsafeForPath(t *testing.T) {
 	for _, id := range []string{"a/b", "..", ".", "", "a\x00b", "../escape"} {
 		global := []assistants.Profile{{ID: assistants.ProfileID(id), Command: "claude"}}
-		if _, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable); err == nil {
+		if _, err := assistants.BuildRegistry(nil, global, nil); err == nil {
 			t.Errorf("id %q: expected rejection (unsafe for use as a path component)", id)
 		}
 	}
@@ -124,18 +132,18 @@ func TestRegistry_RejectsIdUnsafeForPath(t *testing.T) {
 
 func TestRegistry_ListIsSortedAndStable(t *testing.T) {
 	global := []assistants.Profile{{ID: "zebra", Command: "claude"}, {ID: "alpha", Command: "claude"}}
-	reg, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable)
+	reg, err := assistants.BuildRegistry(nil, global, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	views := reg.List()
-	if len(views) != 2 || views[0].ID != "alpha" || views[1].ID != "zebra" {
-		t.Errorf("List() = %+v, want sorted [alpha, zebra]", views)
+	profiles := reg.List()
+	if len(profiles) != 2 || profiles[0].ID != "alpha" || profiles[1].ID != "zebra" {
+		t.Errorf("List() = %+v, want sorted [alpha, zebra]", profiles)
 	}
 }
 
 func TestRegistry_GetUnknownIDReturnsFalse(t *testing.T) {
-	reg, err := assistants.BuildRegistry(nil, nil, nil, "claude", alwaysAvailable)
+	reg, err := assistants.BuildRegistry(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +158,7 @@ func TestRegistry_GetUnknownIDReturnsFalse(t *testing.T) {
 // such a config is ambiguous for every future `@mention` and must fail loudly at startup, not at mention time.
 func TestMentionNormalize_CaseInsensitiveUniqueIds(t *testing.T) {
 	global := []assistants.Profile{{ID: "QAEngineer", Command: "claude"}}
-	reg, err := assistants.BuildRegistry(nil, global, nil, "claude", alwaysAvailable)
+	reg, err := assistants.BuildRegistry(nil, global, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,15 +170,16 @@ func TestMentionNormalize_CaseInsensitiveUniqueIds(t *testing.T) {
 	}
 
 	collidingGlobal := []assistants.Profile{{ID: "QAEngineer", Command: "claude"}, {ID: "qaengineer", Command: "claude"}}
-	if _, err := assistants.BuildRegistry(nil, collidingGlobal, nil, "claude", alwaysAvailable); err == nil {
+	if _, err := assistants.BuildRegistry(nil, collidingGlobal, nil); err == nil {
 		t.Fatal("expected an error for two ids colliding once lowercased within one layer")
 	}
 
-	// Collision can also span layers: a later layer does not exactly match the earlier id (different case),
-	// so it does NOT replace it — it silently introduces an ambiguous second entry unless rejected.
-	builtin := []assistants.Profile{{ID: "QAEngineer", Command: "claude"}}
+	// Collision can also span configured layers: a later layer does not exactly match the earlier id (different
+	// case), so it does NOT replace it — it silently introduces an ambiguous second entry unless rejected. Only a
+	// builtin id is replaced that way (TestRegistry_ConfiguredIDInAnotherCaseReplacesBuiltin).
+	global = []assistants.Profile{{ID: "QAEngineer", Command: "claude"}}
 	project := []assistants.Profile{{ID: "qaengineer", Command: "claude"}}
-	if _, err := assistants.BuildRegistry(builtin, nil, project, "claude", alwaysAvailable); err == nil {
+	if _, err := assistants.BuildRegistry(nil, global, project); err == nil {
 		t.Fatal("expected an error for ids colliding once lowercased across layers")
 	}
 }
@@ -187,7 +196,7 @@ func TestRegistry_ResolveNilSafe(t *testing.T) {
 // TestMentionNormalize_UnknownMentionIsNotAnError — an unrecognized `@word` is not an error anywhere in the
 // mention path: it stays plain text and never triggers anything (dev-plan.md §4.1 acceptance).
 func TestMentionNormalize_UnknownMentionIsNotAnError(t *testing.T) {
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "frontendDeveloper", Command: "claude"}}, nil, "claude", alwaysAvailable)
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "frontendDeveloper", Command: "claude"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

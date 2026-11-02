@@ -21,6 +21,7 @@ const teamRunStageID = "work"
 // one long script stage and the given team. The store closes after Run has returned (LIFO cleanups).
 func newTeamRunOrch(t *testing.T, runDir string, team flow.Team, resumed bool) (*orchestrator.Orchestrator, *state.Store) {
 	t.Helper()
+	pinContainerHelperPolicy(t)
 	store, err := state.Open(runDir, []string{teamRunStageID})
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
@@ -32,9 +33,7 @@ func newTeamRunOrch(t *testing.T, runDir string, team flow.Team, resumed bool) (
 	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{
 		{ID: "qa", Title: "QA", Command: "helper-cmd"},
 		{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"},
-	}, nil, "claude", func(string) (bool, string, assistants.ReadonlyEnforcement) {
-		return true, "", assistants.ReadonlyEnforcementOS
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}

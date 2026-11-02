@@ -46,10 +46,7 @@ func newMultiStageBarrierTestOrchestrator(t *testing.T, stages []flow.Stage) (*O
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -65,6 +62,7 @@ func newMultiStageBarrierTestOrchestrator(t *testing.T, stages []flow.Stage) (*O
 		fsm:           bus.NewFSM(store),
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), stages, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
+		helperAccess:  allowHelpersOS,
 	}
 	// Registered AFTER the store-close cleanup above, so LIFO runs it FIRST: a background task goroutine's
 	// own finishTaskFrom/completeStage call (triggered by this test releasing a blocked runHelperAgent) must
@@ -210,10 +208,7 @@ func TestBarrier_RestoredAfterRestart(t *testing.T) {
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -225,6 +220,7 @@ func TestBarrier_RestoredAfterRestart(t *testing.T) {
 		fsm:           bus.NewFSM(store),
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), []flow.Stage{stage}, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
+		helperAccess:  allowHelpersOS,
 	}
 	activateStage(t, o, assistantsTestStageID)
 	// release stays open for the "running at crash time" portion of the test. t.Cleanup (not a bare defer)
@@ -324,10 +320,7 @@ func TestResumeByDoneMarkerDoesNotBypassBarrier(t *testing.T) {
 	if _, err := store.EnsurePolicyRecorded(assistants.DepthPolicy{MaxDepth: 3, Source: assistants.DepthSourceDefault, Revision: "rev-1"}, state.Actor{Kind: "system"}); err != nil {
 		t.Fatalf("EnsurePolicyRecorded: %v", err)
 	}
-	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil, "claude",
-		func(cmd string) (bool, string, assistants.ReadonlyEnforcement) {
-			return true, "", assistants.ReadonlyEnforcementOS
-		})
+	reg, err := assistants.BuildRegistry(nil, []assistants.Profile{{ID: "reviewer", Title: "Reviewer", Command: "helper-cmd"}}, nil)
 	if err != nil {
 		t.Fatalf("BuildRegistry: %v", err)
 	}
@@ -339,6 +332,7 @@ func TestResumeByDoneMarkerDoesNotBypassBarrier(t *testing.T) {
 		fsm:           bus.NewFSM(store),
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), []flow.Stage{stage}, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
+		helperAccess:  allowHelpersOS,
 	}
 	if err := store.Apply(&state.Transition{StageID: assistantsTestStageID, From: state.StatusPending, To: state.StatusRetrying, Event: "test_setup"}); err != nil {
 		t.Fatal(err)
@@ -382,6 +376,7 @@ func TestPlanningOnlyStageUnaffected(t *testing.T) {
 		fsm:           bus.NewFSM(store),
 		concurrency:   concurrency.New(bus.NewCriticalBus(16), []flow.Stage{stage}, "claude", 0, nil),
 		fingerprintFn: func(string) (string, bool) { return "", false },
+		helperAccess:  allowHelpersOS,
 	}
 	if _, ok := o.Trigger("plan-only", bus.EvStartPlanning, bus.GuardCtx{}, ""); !ok {
 		t.Fatal("EvStartPlanning failed")
