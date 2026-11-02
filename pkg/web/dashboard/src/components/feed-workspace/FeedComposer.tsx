@@ -244,8 +244,8 @@ export function FeedComposer({
   const reviseAgent = mesh?.roster.participants.find((p) => p.kind === 'stage_agent' && p.stage_id === stageId)
   const reviseSend = (
     <ChatSendButton
-      label={mesh !== undefined ? 'Send revision' : 'Send note to agent'}
-      visibleLabel={mesh !== undefined ? 'Send revision' : undefined}
+      label={mesh !== undefined ? 'Restart with note' : 'Send note to agent'}
+      visibleLabel={mesh !== undefined ? 'Restart with note' : undefined}
       disabled={empty || slashInRevise}
       sending={sending}
       paused={paused}
@@ -300,8 +300,8 @@ export function FeedComposer({
           className="chat-composer-input"
           value={value}
           onChange={setValue}
-          placeholder={mesh !== undefined ? 'Describe what the agent should change…' : 'Note to agent…'}
-          textareaProps={mesh !== undefined ? { 'aria-label': 'Revision instructions' } : undefined}
+          placeholder={mesh !== undefined ? 'New instructions — the agent restarts this phase with them…' : 'Note to agent…'}
+          textareaProps={mesh !== undefined ? { 'aria-label': 'Restart instructions' } : undefined}
           allowFileReferences
           attachInline
           toolbar={mesh !== undefined ? reviseSend : undefined}
@@ -341,7 +341,7 @@ export function FeedComposer({
           tabClassName="feed-composer-mode"
           selected={shownMode}
           onSelect={setMode}
-          tabs={[{ id: 'message', label: <><ComposerModeIcon mode="message" />Message</> }, ...(reviseAvailable ? [{ id: 'revise' as const, label: <><ComposerModeIcon mode="revise" />Revise</> }] : [])]}
+          tabs={[{ id: 'message', label: <><ComposerModeIcon mode="message" />Chat</> }, ...(reviseAvailable ? [{ id: 'revise' as const, label: <><ComposerModeIcon mode="revise" />Restart with note</> }] : [])]}
         />
         <div className="composer-opts" ref={setModeOptions}>
           {shownMode === 'revise' && pauseOption}
@@ -385,11 +385,11 @@ function ComposerModeIcon({ mode }: { mode: ComposerMode }): ReactElement {
 }
 
 const COMPOSER_HINT: Record<ComposerMode, string> = {
-  message: 'Only the recipients above receive this message.',
-  revise: 'The executor starts a revision with your instructions.',
+  message: 'Only the recipients above receive this. The agent keeps working on its task.',
+  revise: 'The agent stops and restarts its current phase with your note.',
 }
 
-const SLASH_IN_REVISE = 'Slash commands run in Message'
+const SLASH_IN_REVISE = 'Slash commands run in Chat'
 const NO_MESSAGES: MeshMessage[] = []
 const NO_PICKS: string[] = []
 const MAX_MESSAGE_TEXTAREA_HEIGHT = 200
@@ -800,7 +800,7 @@ function MeshMessageComposer({
             </button>
             {offerRevise && (
               <button type="button" className="mesh-recipients-use-revise" onClick={onUseRevise}>
-                Use Revise
+                Use Restart with note
               </button>
             )}
           </ComposerRecipients>
@@ -837,7 +837,7 @@ function MeshMessageComposer({
           value={draft}
           onChange={handleChange}
           onKeyDown={onKeyDown}
-          placeholder="Write a message, or type @ to bring someone in…"
+          placeholder="Ask or tell — type @ to bring someone in…"
           rows={1}
         />
         {mention.open && (

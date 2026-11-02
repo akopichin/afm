@@ -57,7 +57,7 @@ export function recipientProblem(p: MeshParticipant, handle: string, stages: Sta
   if (p.kind === 'user') return `@${handle} is you — you can't write to yourself`
   if (!p.reachable) return `@${handle} can't receive messages: ${p.unreachable_reason !== undefined && p.unreachable_reason !== '' ? p.unreachable_reason : 'unavailable'}`
   if (p.kind === 'stage_agent' && stages.find((s) => s.id === p.stage_id)?.status === 'awaiting_assistants') {
-    return `@${handle} has finished its turn and waits for its helpers — it reads a note only as a Revise`
+    return `@${handle} has finished its turn and waits for its helpers — it reads a note only through Restart with note`
   }
   return null
 }

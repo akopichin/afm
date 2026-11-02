@@ -33,11 +33,11 @@ beforeEach(() => {
 })
 afterEach(() => vi.restoreAllMocks())
 
-it.each(['Message', 'Revise'] as const)('%s toolbar uploads and removes an image through the shared Attach control', async (mode) => {
+it.each(['Chat', 'Restart with note'] as const)('%s toolbar uploads and removes an image through the shared Attach control', async (mode) => {
   render(<FeedComposer stageId="s1" mesh={mesh} onSend={vi.fn()} />)
   fireEvent.click(screen.getByRole('tab', { name: mode }))
   const panel = screen.getByRole('tabpanel', { name: mode })
-  const textarea = mode === 'Message' ? within(panel).getByRole('combobox') : within(panel).getByRole('textbox', { name: 'Revision instructions' })
+  const textarea = mode === 'Chat' ? within(panel).getByRole('combobox') : within(panel).getByRole('textbox', { name: 'Restart instructions' })
   fireEvent.click(within(panel).getByRole('button', { name: 'Attach' }))
   fireEvent.click(within(panel).getByRole('menuitem', { name: /upload image/i }))
   const fileInputs = panel.querySelectorAll('input[type="file"]')
@@ -50,17 +50,17 @@ it.each(['Message', 'Revise'] as const)('%s toolbar uploads and removes an image
   expect(within(panel).queryByAltText('Pasted screenshot')).toBeNull()
 })
 
-it.each(['Message', 'Revise'] as const)('%s removes only sent attachments from both the textarea and saved draft', async (mode) => {
+it.each(['Chat', 'Restart with note'] as const)('%s removes only sent attachments from both the textarea and saved draft', async (mode) => {
   let finish!: () => void
   const sending = new Promise<void>((resolve) => { finish = resolve })
   vi.spyOn(api, 'postStageDiscussionMessage').mockImplementation(async () => { await sending; return { messageId: 'sent' } })
   const saved = vi.fn()
   render(<FeedComposer stageId="s1" mesh={mesh} onSend={() => sending} onDraftChange={saved} />)
-  if (mode === 'Revise') fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-  const textarea = mode === 'Message' ? screen.getByRole('combobox') : screen.getByPlaceholderText('Describe what the agent should change…')
+  if (mode === 'Restart with note') fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  const textarea = mode === 'Chat' ? screen.getByRole('combobox') : screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   paste(textarea, 'sent.png')
   await waitFor(() => expect(textarea).toHaveValue('[Screenshot: /attachments/sent.png]\n'))
-  fireEvent.click(screen.getByRole('button', { name: mode === 'Message' ? 'Send message' : 'Send revision' }))
+  fireEvent.click(screen.getByRole('button', { name: mode === 'Chat' ? 'Send message' : 'Restart with note' }))
   fireEvent.change(textarea, { target: { value: `${(textarea as HTMLTextAreaElement).value}Keep this note\n` } })
   paste(textarea, 'later.png')
   await waitFor(() => expect(screen.getAllByAltText('Pasted screenshot')).toHaveLength(2))
@@ -71,41 +71,41 @@ it.each(['Message', 'Revise'] as const)('%s removes only sent attachments from b
   expect(screen.getByAltText('Pasted screenshot')).toHaveAttribute('src', 'blob:image-2')
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:image-1')
   expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:image-2')
-  const key = mode === 'Message' ? 'messageAttachments' : 'reviseAttachments'
+  const key = mode === 'Chat' ? 'messageAttachments' : 'reviseAttachments'
   const last = saved.mock.calls.map(([patch]) => patch).filter((patch) => key in patch).at(-1)
   expect(last[key]).toHaveLength(1)
   expect(last[key][0].previewUrl).toBe('blob:image-2')
 })
 
 // The user glued the marker's line to their text: the line break after it is gone, the image is still sent.
-it.each(['Message', 'Revise'] as const)('%s drops a sent image from the composer and draft although the line break after its marker is gone', async (mode) => {
+it.each(['Chat', 'Restart with note'] as const)('%s drops a sent image from the composer and draft although the line break after its marker is gone', async (mode) => {
   vi.spyOn(api, 'postStageDiscussionMessage').mockResolvedValue({ messageId: 'sent' })
   const saved = vi.fn()
   render(<FeedComposer stageId="s1" mesh={mesh} onSend={vi.fn().mockResolvedValue(undefined)} onDraftChange={saved} />)
-  if (mode === 'Revise') fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-  const textarea = mode === 'Message' ? screen.getByRole('combobox') : screen.getByPlaceholderText('Describe what the agent should change…')
+  if (mode === 'Restart with note') fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  const textarea = mode === 'Chat' ? screen.getByRole('combobox') : screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   paste(textarea, 'glued.png')
   await waitFor(() => expect(textarea).toHaveValue('[Screenshot: /attachments/glued.png]\n'))
   fireEvent.change(textarea, { target: { value: '[Screenshot: /attachments/glued.png] tool calls' } })
-  fireEvent.click(screen.getByRole('button', { name: mode === 'Message' ? 'Send message' : 'Send revision' }))
+  fireEvent.click(screen.getByRole('button', { name: mode === 'Chat' ? 'Send message' : 'Restart with note' }))
   await waitFor(() => expect(screen.queryByAltText('Pasted screenshot')).toBeNull())
   expect(textarea).toHaveValue('')
-  const key = mode === 'Message' ? 'messageAttachments' : 'reviseAttachments'
+  const key = mode === 'Chat' ? 'messageAttachments' : 'reviseAttachments'
   const last = saved.mock.calls.map(([patch]) => patch).filter((patch) => key in patch).at(-1)
   expect(last[key]).toHaveLength(0)
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:image-1')
 })
 
-it.each(['Message', 'Revise'] as const)('%s keeps the image chip and text when sending fails', async (mode) => {
+it.each(['Chat', 'Restart with note'] as const)('%s keeps the image chip and text when sending fails', async (mode) => {
   const failing = vi.fn().mockRejectedValue(new Error('offline'))
   vi.spyOn(api, 'postStageDiscussionMessage').mockImplementation(failing)
   render(<FeedComposer stageId="s1" mesh={mesh} onSend={failing} />)
-  if (mode === 'Revise') fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-  const textarea = mode === 'Message' ? screen.getByRole('combobox') : screen.getByPlaceholderText('Describe what the agent should change…')
+  if (mode === 'Restart with note') fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  const textarea = mode === 'Chat' ? screen.getByRole('combobox') : screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   paste(textarea, 'kept.png')
   await waitFor(() => expect(textarea).toHaveValue('[Screenshot: /attachments/kept.png]\n'))
   fireEvent.change(textarea, { target: { value: '[Screenshot: /attachments/kept.png] still here' } })
-  fireEvent.click(screen.getByRole('button', { name: mode === 'Message' ? 'Send message' : 'Send revision' }))
+  fireEvent.click(screen.getByRole('button', { name: mode === 'Chat' ? 'Send message' : 'Restart with note' }))
   await waitFor(() => expect(failing).toHaveBeenCalled())
   await act(async () => { await Promise.resolve() })
   expect(textarea).toHaveValue('[Screenshot: /attachments/kept.png] still here')
@@ -128,13 +128,13 @@ it('keeps an image chip whose marker is not in the sent text', async () => {
 it('pastes a clipboard image into Revise, uploads it and inserts its marker and chip', async () => {
   const send = vi.fn().mockResolvedValue(undefined)
   render(<FeedComposer stageId="s1" mesh={mesh} onSend={send} />)
-  fireEvent.click(screen.getByRole('tab', { name: 'Revise' }))
-  const textarea = screen.getByPlaceholderText('Describe what the agent should change…')
+  fireEvent.click(screen.getByRole('tab', { name: 'Restart with note' }))
+  const textarea = screen.getByPlaceholderText('New instructions — the agent restarts this phase with them…')
   paste(textarea, 'clipboard.png')
   await waitFor(() => expect(textarea).toHaveValue('[Screenshot: /attachments/clipboard.png]\n'))
   expect(api.uploadAttachment).toHaveBeenCalledWith('s1', expect.objectContaining({ name: 'clipboard.png', type: 'image/png' }))
   expect(screen.getByAltText('Pasted screenshot')).toHaveAttribute('src', 'blob:image-1')
-  fireEvent.click(screen.getByRole('button', { name: 'Send revision' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
   await waitFor(() => expect(send).toHaveBeenCalledWith('[Screenshot: /attachments/clipboard.png]'))
 })
 

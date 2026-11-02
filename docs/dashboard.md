@@ -4,7 +4,7 @@ On startup (if `server.open_browser: true`) the dashboard opens; otherwise its U
 is printed to the log.
 
 In message and feedback fields, **Enter** submits and **Shift+Enter** adds a line.
-This applies to Feed Message/Revise, Team and run conversations, the Assistant,
+This applies to Feed Chat/Restart with note, Team and run conversations, the Assistant,
 dialog answers, notes to agents, and plan, question, file and review-note editors.
 Creating stages, agents, helpers and Board tasks keeps its existing behavior.
 
@@ -90,7 +90,7 @@ right. The selected stage's Feed can also show a People panel on wide screens.
   includes a **repaired** badge for an answer whose JSON needed repair or the
   raw answer behind a protocol error when available. With collaboration on,
   your conversation with a stage's agent lives
-  in its **Feed** (see [Message](#message) and
+  in its **Feed** (see [Chat](#chat) and
   [Conversations in the stage feed](#conversations-in-the-stage-feed)); **+ Stage**
   can add a stage to a live run. See [Helpers and collaboration](collaboration.md).
 
@@ -532,14 +532,14 @@ works on an agent's **question** in the Communication channel.
 A messenger-style composer is pinned to the bottom of a stage's **Feed**.
 
 With collaboration off (`AFM_COLLABORATION=0`) it is the plain note field, without
-modes, shown only while the stage is `running` (and not a script stage); it sends a
-Revise. With Agent Mesh and collaboration on it has two modes:
+modes, shown only while the stage is `running` (and not a script stage); it works like
+**Restart with note**. With Agent Mesh and collaboration on it has two modes:
 
-- **Message** (selected by default) — write to people in the run without
-  restarting the stage. Available for any non-script stage while the run is going,
+- **Chat** (selected by default) — ask or tell people in the run; the agent keeps
+  working on its task. Available for any non-script stage while the run is going,
   whatever the stage's status.
-- **Revise** — the note that restarts the stage's agent with your text. The tab is
-  there only while the stage takes a Revise: `running`, `awaiting_approval` or
+- **Restart with note** — the agent stops and restarts its current phase with your
+  note as new instructions. The tab is there only while the stage can be restarted: `running`, `awaiting_approval` or
   `awaiting_assistants`, and not during a review pause.
 
 Each mode keeps its own draft when you switch between them. Drafts — both modes'
@@ -548,14 +548,14 @@ recipients — are kept per stage:
 switching to another stage, the Feed following the run to the next stage, or
 opening another tab and coming back restores them. They are not kept across a
 page reload. When Agent Mesh becomes available only after the composer appeared,
-it switches to **Message** unless you already chose a mode or are writing a
-Revise note.
+it switches to **Chat** unless you already chose a mode or are writing a
+restart note.
 
-### Revise
+### Restart with note
 
-1. Select the stage and open its **Feed** tab (with modes, pick **Revise**). The
+1. Select the stage and open its **Feed** tab (with modes, pick **Restart with note**). The
    input is a growing textarea, an **Attach** button and a send button.
-2. Type your note and send it — click **Apply Revise** when the composer has
+2. Type your note and send it — click **Restart with note** when the composer has
    modes (otherwise the send button), or press **Enter**
    (**Shift+Enter** inserts a newline). **Attach** lets you paste or upload an image,
    and in Docker mode reference a project file. An image sent with the note is
@@ -565,14 +565,14 @@ Revise note.
    not a kill); the stage moves through `revising` and restarts the same phase
    (planning/implementation/review/autonomous) with your note folded into its
    context, then continues toward `done`. An agent waiting for its helpers
-   (`awaiting_assistants`) has finished its turn; a Revise starts it again.
+   (`awaiting_assistants`) has finished its turn; Restart with note starts it again.
 4. Your note appears in the Feed as a right-side bubble carrying its text, alongside
    the agent's own messages (it is not clickable — it's a record of what you sent).
 
 Click **↩** on one of the agent's thoughts to answer it: the composer switches to
-**Revise** and shows the quoted thought above the input (**↩ In reply to**).
+**Restart with note** and shows the quoted thought above the input (**↩ In reply to**).
 
-### Message
+### Chat
 
 The **To** row above the input lists who the message goes to:
 
@@ -583,8 +583,8 @@ The **To** row above the input lists who the message goes to:
   the text and shows as a chip. A handle typed by hand counts too.
 - Nobody named — the stage's own agent, shown as a dashed **stage agent** chip.
   If it cannot read a message (the stage has finished, or it waits for its
-  helpers and reads a note only as a Revise), the row says why and you must pick
-  someone; **Use Revise** switches modes when Revise is available.
+  helpers and reads a note only through Restart with note), the row says why and you must pick
+  someone; **Use Restart with note** switches modes when it is available.
 
 **×** on a chip removes that recipient everywhere it came from: the pick and
 every mention of them in the text (a full id such as `@stage:docs` included). A
@@ -637,7 +637,7 @@ the helper's assignment (it must be the only recipient). See
 
 ### Repeating a prompt with /loop
 
-In **Feed → Message**, type `/loop` to see syntax guidance and selectable
+In **Feed → Chat**, type `/loop` to see syntax guidance and selectable
 **5m**, **15m** and **1h** intervals. For example:
 
 ```text
@@ -663,7 +663,7 @@ working can finish its current turn.
 
 Loop commands have their own route: ordinary **To** selections, reply recipients
 and helper-attachment chips do not receive their text. An invalid command keeps
-the draft and shows an error; **Revise** asks you to use Message. See
+the draft and shows an error; **Restart with note** asks you to use Chat. See
 [Repeating prompts with loops](loops.md) for fixed-slot timing, skipped ticks,
 agent commands, thread limits and recovery.
 
@@ -697,7 +697,7 @@ resizing still works, but the width is not retained.
   different one (for example, a host run resumed in Docker), the badge's tooltip
   says so. A finished agent shows the guarantee it ran under.
 - Click a person to add them to the composer's recipients: the composer switches
-  to **Message** and the person gets a chip in the **To** row; click more people
+  to **Chat** and the person gets a chip in the **To** row; click more people
   to write to several at once. You can do this while the stage's composer is
   shown (any non-script stage while the run is going).
 - A finished stage or task stays listed but is disabled (*Finished — can't
@@ -758,14 +758,14 @@ line such as *"reviewer posted in the stage conversation"*.
   rows that filter shows. Messages addressed to you stay visible under every
   filter.
 - **↩ Reply in conversation** answers that message in its conversation: the
-  composer switches to **Message**, the author becomes a recipient and a
+  composer switches to **Chat**, the author becomes a recipient and a
   **↩ Reply in conversation** chip quotes the message, which is highlighted in
   the feed. The reply goes to that conversation's people only: people you picked
   before wait until the reply ends, and anyone you add during it is dropped with
   it. Naming someone who is not in that conversation, or the finished stage's
   agent, is an error on their chip and Send stays off — a conversation never
   gains members. One message is answered at a time — choosing another replaces it; **✕**
-  cancels. It is told apart from answering a thought with Revise by its colour.
+  cancels. It is told apart from answering a thought with Restart with note by its colour.
   It is offered while the composer is shown, on open conversations you are a
   member of, and while the author can still read it; if the conversation closes
   meanwhile, the reply ends on the next poll.

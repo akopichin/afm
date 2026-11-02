@@ -42,7 +42,7 @@ running → awaiting_quota → running
   a user answer; once answered, it returns to the phase where the question was asked
 - `revising` — feedback was sent and the AI is reworking: either the plan (from
   `awaiting_approval`), or a `running` stage that just got a note and a graceful
-  interrupt (see [Dashboard → Revise](dashboard.md#revise))
+  interrupt (see [Dashboard → Restart with note](dashboard.md#restart-with-note))
 - `retrying` — an agent process failed and an automatic retry is scheduled. Known
   rate-limit, server, and network errors get up to 15 retries; an unrecognized
   process failure or idle timeout gets up to 3. A process that could not start
