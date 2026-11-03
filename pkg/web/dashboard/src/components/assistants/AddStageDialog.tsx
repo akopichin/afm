@@ -29,7 +29,7 @@ export type AddStageDialogProps = {
 type PreviewStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 function toGraphStagePreview(view: AddStagePreviewView): GraphStagePreview {
-  return { id: view.id, dependsOn: view.depends_on, extraDeps: view.extra_deps, warnings: view.warnings }
+  return { id: view.id, dependsOn: view.depends_on, command: view.command, commandName: view.command_name, extraDeps: view.extra_deps, warnings: view.warnings }
 }
 
 function newRequestId(): string {

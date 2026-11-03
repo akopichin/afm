@@ -1169,14 +1169,14 @@ describe('skins CSS contract — plan line numbers share one style', () => {
     expect(setters).toHaveLength(1)
   })
 
-  it('the shared number is 10px monospace in a 30px column at the left edge, on the muted token', () => {
+  it('the shared number is 10px monospace in a 30px column at the left edge, a faint muted token at rest', () => {
     const shared = numbers.filter((d) => d.selector === preludesSetting(numbers, 'position')[0])
     const value = (property: string): string | undefined => shared.find((d) => d.property === property)?.value
     expect(value('font')).toBe('10px/16px var(--font-mono)')
     expect(value('left')).toBe('4px')
     expect(value('min-width')).toBe('30px')
     expect(value('text-align')).toBe('center')
-    expect(value('color')).toBe('var(--text-muted)')
+    expect(value('color')).toBe('color-mix(in srgb, var(--text-muted) 35%, transparent)')
   })
 
   it('every row type centres the number on its first line through --row-h alone', () => {

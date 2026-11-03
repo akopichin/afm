@@ -149,7 +149,11 @@ func quotaViewTime(t time.Time) time.Time { return t.UTC().Truncate(time.Second)
 // проход снова даёт running.
 type VerifyView struct {
 	Step    int    `json:"step"`
+	Kind    string `json:"kind,omitempty"`
+	Name    string `json:"name,omitempty"`
 	Command string `json:"command"`
+	// CommandName names the executor of an AI step; a shell step has none.
+	CommandName string `json:"command_name,omitempty"`
 	// Phase ∈ {"running","pass","needs_changes","inconclusive","error"}.
 	Phase string `json:"phase"`
 }
@@ -321,6 +325,8 @@ func latestVerifyByStage(runDir string) map[string]*VerifyView {
 func verifyViewFromNotice(n *verifyNotice) *VerifyView {
 	view := &VerifyView{
 		Step:    noticeIntField(n.Data, "step"),
+		Kind:    noticeStringField(n.Data, "kind"),
+		Name:    noticeStringField(n.Data, "name"),
 		Command: noticeStringField(n.Data, "command"),
 	}
 	if n.Type == string(bus.EventVerifyStarted) {

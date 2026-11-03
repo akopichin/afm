@@ -57,20 +57,22 @@ func (req addStageRequest) toDraft() orchestrator.AddStageDraft {
 // stagePreviewView is the JSON-facing projection of a graph.InsertionPlan — T9.6's dialog reads DependsOn/
 // ExtraDeps/Order/Warnings to render the actual dependency diff, not just "a new row will appear."
 type stagePreviewView struct {
-	ID        string              `json:"id"`
-	Name      string              `json:"name,omitempty"`
-	Command   string              `json:"command"`
-	Prompt    string              `json:"prompt"`
-	DependsOn []string            `json:"depends_on"`
-	ExtraDeps map[string][]string `json:"extra_deps,omitempty"`
-	Order     []string            `json:"order"`
-	Warnings  []string            `json:"warnings,omitempty"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name,omitempty"`
+	Command     string              `json:"command"`
+	CommandName string              `json:"command_name,omitempty"`
+	Prompt      string              `json:"prompt"`
+	DependsOn   []string            `json:"depends_on"`
+	ExtraDeps   map[string][]string `json:"extra_deps,omitempty"`
+	Order       []string            `json:"order"`
+	Warnings    []string            `json:"warnings,omitempty"`
 }
 
-func stagePreviewFromPlan(plan graph.InsertionPlan) stagePreviewView {
+func (s *Server) stagePreviewFromPlan(plan graph.InsertionPlan) stagePreviewView {
 	return stagePreviewView{
-		ID: plan.Stage.ID, Name: plan.Stage.Name, Command: plan.Stage.Command, Prompt: plan.Stage.Prompt,
-		DependsOn: plan.Stage.DependsOn, ExtraDeps: plan.ExtraDeps, Order: plan.Order, Warnings: plan.Warnings,
+		ID: plan.Stage.ID, Name: plan.Stage.Name, Command: plan.Stage.Command, CommandName: s.commandName(plan.Stage.Command),
+		Prompt: plan.Stage.Prompt, DependsOn: plan.Stage.DependsOn, ExtraDeps: plan.ExtraDeps, Order: plan.Order,
+		Warnings: plan.Warnings,
 	}
 }
 
@@ -124,7 +126,7 @@ func (s *Server) handleGraphPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"stage":          stagePreviewFromPlan(preview.Plan),
+		"stage":          s.stagePreviewFromPlan(preview.Plan),
 		"graph_revision": preview.GraphRevision,
 	})
 }
@@ -142,7 +144,7 @@ func (s *Server) handleGraphCommit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"stage": stagePreviewView{
-			ID: res.Stage.ID, Name: res.Stage.Name, Command: res.Stage.Command,
+			ID: res.Stage.ID, Name: res.Stage.Name, Command: res.Stage.Command, CommandName: s.commandName(res.Stage.Command),
 			Prompt: res.Stage.Prompt, DependsOn: res.Stage.DependsOn,
 		},
 		"graph_revision": res.GraphRevision,

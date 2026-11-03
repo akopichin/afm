@@ -69,6 +69,12 @@ type statusResponse struct {
 	// CollaborationMode — режим представления collaboration ("team"|"assistants"). Всегда присутствует и не
 	// зависит от capabilities.collaboration: это только подсказка dashboard, какие разделы показывать.
 	CollaborationMode assistants.CollaborationMode `json:"collaboration_mode"`
+	// UnknownCommandName is the label prefix the dashboard numbers commands with when a response has no
+	// command_name; always present so the fallback never needs a client-side default.
+	UnknownCommandName string `json:"unknown_command_name"`
+	// HideAttachHelpers — подсказка dashboard скрыть кнопки ручного attach helper. Всегда присутствует и не
+	// зависит от capabilities.collaboration.
+	HideAttachHelpers bool `json:"hide_attach_helpers"`
 	// GraphRevision (Этап 9) — the runtime stage registry's current revision; omitted when the add-stage
 	// capability is off. The dashboard compares this against a previously-fetched preview's graph_revision to
 	// detect staleness without a dedicated endpoint.
@@ -134,6 +140,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		BackoffAccumulatedMs: rs.BackoffAccumulatedMs,
 		BackoffOpenSince:     rs.BackoffOpenSince(),
 		CollaborationMode:    s.collaborationMode,
+		UnknownCommandName:   s.unknownCommandName,
+		HideAttachHelpers:    s.hideAttachHelpers,
 	}
 	if s.accounting != nil {
 		bundle := s.accounting.CostSnapshot()
@@ -144,6 +152,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.Accounting = &accountingHealth{Health: string(bundle.Health), HasData: bundle.HasData, ShowMoney: s.showMoney}
 	}
 	resp.Stages = buildStageViews(rs, s.runDir, s.stageConfigs(), stageCosts)
+	for _, view := range resp.Stages {
+		if v := view.Verify; v != nil {
+			v.CommandName = verifyCommandName(v.Kind, v.Command, s.commandName)
+		}
+	}
 	resp.Capabilities.FileBrowser = s.workspace != nil && len(s.workspace.Roots()) > 0
 	resp.Capabilities.SideAgent = s.sideAgent != nil
 	resp.Capabilities.Collaboration = s.assistantProfiles != nil

@@ -154,6 +154,7 @@
       "required": ["run"],
       "description": "A verify step that runs a shell command.",
       "properties": {
+        "name": { "type": "string", "pattern": "\\S", "description": "Optional label shown in the dashboard: what this step checks, not who runs it. Must contain a non-space character." },
         "run": { "type": "string", "minLength": 1, "description": "Shell command for this verify step." },
         "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }
       }
@@ -164,6 +165,7 @@
       "required": ["command"],
       "description": "A verify step delegated to an agent (e.g. codex).",
       "properties": {
+        "name": { "type": "string", "pattern": "\\S", "description": "Optional label shown in the dashboard: what this step checks, not who runs it. Must contain a non-space character." },
         "command": { "type": "string", "minLength": 1, "description": "Agent alias that performs this verify step (e.g. codex)." },
         "prompt": { "type": "string", "description": "Extra criteria for the verify agent." },
         "timeout": { "$ref": "#/definitions/duration", "description": "Optional per-step timeout." }

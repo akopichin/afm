@@ -325,7 +325,8 @@
   border-radius: var(--radius-sm);
   font: 10px/16px var(--font-mono);
   text-align: center;
-  color: var(--text-muted);
+  /* В покое номер еле виден, чтобы не отвлекать от текста; строка под курсором подсвечивает его ярко. */
+  color: color-mix(in srgb, var(--text-muted) 35%, transparent);
   transition: background var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
 }
 .line-commented [data-line]:is(.is-hover, :focus-visible):not(tr)::before,

@@ -44,6 +44,9 @@ export type FlowStatus = {
   // collaborationMode: team — Team/Board/People видны, assistants — только Feed-общение. Отсутствующее или
   // неизвестное значение (старый бэкенд) даёт team.
   collaborationMode: 'team' | 'assistants'
+  // hideAttachHelpers — настройка скрывает кнопки ручного прикрепления helper. Отсутствующее или не boolean
+  // значение (старый бэкенд) даёт false.
+  hideAttachHelpers: boolean
   // runCost/runOverheadCost — сводки по затратам флоу (omitempty, если
   // бэкенд не отдаёт информацию о стоимости).
   runCost?: CostSummary
@@ -62,6 +65,8 @@ export type FlowStatus = {
   // MessageTimeZoneProvider взять browser-local fallback.
   timeZone: string
   utcOffsetMinutes: number | null
+  // unknownCommandName — prefix of the `<prefix>-N` label for a command the server sent no name for.
+  unknownCommandName: string
 }
 
 const EMPTY_STATUS: FlowStatus = {
@@ -83,11 +88,13 @@ const EMPTY_STATUS: FlowStatus = {
   flowPauseState: 'none',
   flowPausedStages: [],
   collaborationMode: 'team',
+  hideAttachHelpers: false,
   coverageIssues: [],
   accounting: { supported: false },
   usageAnalytics: null,
   timeZone: '',
   utcOffsetMinutes: null,
+  unknownCommandName: 'Unknown',
 }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages — уже упорядоченный массив
@@ -216,6 +223,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? obj.flow_paused_stages.filter((v): v is string => typeof v === 'string')
     : []
   const collaborationMode: FlowStatus['collaborationMode'] = obj.collaboration_mode === 'assistants' ? 'assistants' : 'team'
+  const hideAttachHelpers = obj.hide_attach_helpers === true
 
   const runCostResult = isRecord(obj.run_cost) ? toCostSummary(obj.run_cost) : null
   const runCost = runCostResult === null ? undefined : runCostResult
@@ -238,6 +246,10 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? obj.utc_offset_minutes
     : null
 
+  const unknownCommandName = typeof obj.unknown_command_name === 'string' && obj.unknown_command_name.trim() !== ''
+    ? obj.unknown_command_name
+    : EMPTY_STATUS.unknownCommandName
+
   return {
     flowName,
     stages,
@@ -258,6 +270,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     flowPauseState,
     flowPausedStages,
     collaborationMode,
+    hideAttachHelpers,
     runCost,
     runOverheadCost,
     coverageIssues,
@@ -265,6 +278,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     usageAnalytics,
     timeZone,
     utcOffsetMinutes,
+    unknownCommandName,
   }
 }
 
@@ -318,7 +332,9 @@ function toVerifyView(raw: unknown): StageVerify | undefined {
   const step = typeof obj.step === 'number' ? obj.step : 0
   const command = typeof obj.command === 'string' ? obj.command : ''
 
-  return { step, command, phase }
+  const optionalText = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined)
+
+  return { step, command, kind: optionalText(obj.kind), name: optionalText(obj.name), commandName: optionalText(obj.command_name), phase }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

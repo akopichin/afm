@@ -71,10 +71,11 @@ type fakeMeshActions struct {
 	lastStageCursor uint64
 	lastStageLimit  int
 
-	attachByReq map[string]MeshAttachAndSendResult
-	attachCalls int
-	lastAttach  MeshAttachAndSendRequest
-	attachErr   error
+	attachByReq       map[string]MeshAttachAndSendResult
+	attachCalls       int
+	lastAttach        MeshAttachAndSendRequest
+	attachErr         error
+	attachParticipant *agentcomm.Participant
 
 	boardTasksEnabled bool
 	tasks             []agentcomm.BoardTaskView
@@ -246,6 +247,7 @@ func (f *fakeMeshActions) AttachAndSend(ctx context.Context, requestID string, r
 	}
 	res := MeshAttachAndSendResult{
 		TaskID: "task-" + requestID, ParticipantID: "helper:task-" + requestID, ThreadID: "mt-" + requestID,
+		Participant: f.attachParticipant,
 	}
 	if req.FirstMessage != nil {
 		mid := "msg-" + requestID

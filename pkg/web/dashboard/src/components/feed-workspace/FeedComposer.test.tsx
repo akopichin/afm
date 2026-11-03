@@ -302,7 +302,7 @@ describe('FeedComposer', () => {
       id: 'run:t-3', kind: 'run_agent', scope: 'run', alias: 'old', display_name: 'Old', reachable: false, unreachable_reason: 'task t-3 has reached a terminal status',
     }
     const profiles: AssistantProfile[] = [
-      { id: 'frontendDeveloper', title: 'Frontend reviewer', command: 'claude', available: true, unavailableReason: '' },
+      { id: 'frontendDeveloper', title: 'Frontend reviewer', command: 'claude', commandName: 'Claude Code', available: true, unavailableReason: '' },
     ]
 
     function roster(overrides: Partial<MeshRoster> = {}): MeshRoster {
@@ -918,7 +918,7 @@ describe('FeedComposer', () => {
         const dialog = screen.getByRole('dialog', { name: /attach helper/i })
         expect(within(dialog).getByText('please take a look')).toBeInTheDocument()
         expect(within(dialog).getByText('Configured executor')).toBeInTheDocument()
-        expect(within(dialog).getByText('claude')).toBeInTheDocument()
+        expect(within(dialog).getByText('Claude Code')).toHaveAttribute('title', 'Claude Code\nCommand: claude')
         expect(within(dialog).getByText('s1')).toBeInTheDocument()
         expect(within(dialog).getByText(/advisory/i)).toBeInTheDocument()
         expect(attachSpy).not.toHaveBeenCalled()

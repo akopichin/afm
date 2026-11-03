@@ -65,6 +65,23 @@ describe('AddStageDialog', () => {
     expect(after).toHaveTextContent('lint')
   })
 
+  test('the preview names the executor readably while the request keeps the raw command', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      okResponse({
+        stage: { id: 'review', command: 'codex-as-claude', command_name: 'Codex Reviewer', prompt: 'review it', depends_on: ['build'] },
+        graph_revision: 4,
+      }),
+    )
+    renderDialog()
+    fillCommonFields('review', 'codex-as-claude', 'review it')
+
+    expect(await screen.findByText('Codex Reviewer')).toHaveAttribute('title', 'Codex Reviewer\nCommand: codex-as-claude')
+    const [, init] = fetchSpy.mock.calls[0]!
+    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({ command: 'codex-as-claude' })
+    // The input still holds what the user typed.
+    expect(screen.getByLabelText(/^command$/i)).toHaveValue('codex-as-claude')
+  })
+
   // TestDialog_ShowsWhatNewStageWillWaitFor — appending to the end must name the actual dependency ids the
   // new stage will wait for, with any warning (e.g. a failed dependency) visibly flagged, not buried in prose.
   test('TestDialog_ShowsWhatNewStageWillWaitFor', async () => {

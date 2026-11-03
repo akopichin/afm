@@ -7,6 +7,15 @@
 # Fully custom dashboard skin: a directory containing index.css. Overrides `theme`. Default: "" (use the
 # built-in theme) skin_dir: .afm/skin/
 
+# Readable dashboard names for agent commands, keyed by the exact command string. Presentation only: it never
+# changes how an agent runs. Project keys override global ones. Without an entry the dashboard shows a built-in
+# name (claude, codex-as-claude, cursor-agent-as-claude, openai-as-claude, openai-agent-as-claude) or the file name.
+# command_names:
+#   "./scripts/dev-agent.sh": Development Agent
+#   codex-as-claude: Codex Reviewer
+# Label prefix for a command the server sent no name for (<prefix>-1, <prefix>-2, ...). Default: Unknown
+# unknown_command_name: Unknown
+
 # Automatically reset failed stages back to pending on run start/resume — no manual `afm retry <id>` per
 # failed stage. Default: true auto_recover: true
 
@@ -55,8 +64,13 @@ client:
 # Set collaboration.mode in this file or flow.yaml (flow overrides project, then global config).
 # Helper profiles are roles: without `command` a helper runs the executor of its stage (or client.command).
 # runtime_context: wrapper keeps afm's Claude credentials for a helper's wrapper command; default isolated.
+# Hide the dashboard's manual "Attach helper" buttons (People and the stage header). Visibility only: Feed @ attach,
+# afm agent spawn and the API still work; collaboration.enabled: false is what turns helpers off.
+# A nonempty AFM_HIDE_ATTACH_HELPERS overrides it: exact 1/true hides, any other value shows.
+# Priority: environment > project config > global config > default (false).
 # collaboration:
 #   mode: assistants
+#   hide_attach_helpers: true
 #   runtime_context: isolated
 #   profiles:
 #     reviewer: { instructions: Review the stage's changes. }

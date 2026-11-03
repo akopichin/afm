@@ -171,7 +171,7 @@ func TestReconstructNotices_DedupsDialogQuestionAndAnswerByContent(t *testing.T)
 		t.Fatal(err)
 	}
 
-	out := reconstructNotices(runDir, "")
+	out := reconstructNotices(runDir, "", resolveBuiltinNames)
 
 	var dialogQuestions, dialogAnswers, scriptOutputs int
 	for _, e := range out {
@@ -221,7 +221,7 @@ func TestReconstructNotices_AutoAnsweredDedupOnlyWhenDialog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := reconstructNotices(runDir, "")
+	out := reconstructNotices(runDir, "", resolveBuiltinNames)
 
 	var navigable, repair int
 	for _, e := range out {

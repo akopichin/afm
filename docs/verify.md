@@ -120,11 +120,52 @@ container's top level is a parse error (it belongs inside a `steps` item).
 |-------|-------------|------|
 | `run` | shell step | non-empty shell command; mutually exclusive with `command`/`prompt` |
 | `command` | AI step | required — an agent alias, resolved by the **same** command/recipe mechanism as `stage.command`. Text-only recipes are rejected at preflight; the command must support the agent CLI output protocol (see below) |
+| `name` | either | optional label for the dashboard: what the step checks, not who runs it. A string with at least one non-space character; spaces around it are trimmed. See [Naming a step](#naming-a-step) |
 | `prompt` | AI step only | additional review criteria; optional |
 | `timeout` | either | optional step duration; bounds both waiting for a free command slot and the step's own execution. The executor's independent idle-timeout still applies — whichever limit is hit first wins |
 
 A `verify:` field is unset by default — a flow that never mentions it has zero
 behavior change: no extra runs, no extra files, no new defaults.
+
+## Naming a step
+
+A step written as an object can carry an optional `name`: a single step, a list item
+or an item of a container's `steps`. Name what the step checks, not who
+runs it:
+
+```yaml
+verify:
+  - name: Unit tests
+    run: "make test"
+  - name: Code review
+    command: codex-as-claude
+    prompt: Check acceptance criteria and backward compatibility.
+```
+
+The name only changes how the dashboard labels the step. It does not change what
+runs, the step numbers, the report files or the verdict. A `name` that is empty or
+only spaces, or not a string (`123`, `true`, `null`), is a parse error naming
+`name`; on the container's top level the key is rejected with the other step
+fields. The legacy scalar form (`verify: "make test"`) has no place for a name and
+keeps its labels. Names are per step of one stage: two stages may use the same
+name. Steps run before this version have no saved name, so a resumed run keeps
+showing them as before.
+
+In the Feed and the stage rail:
+
+| Step | Start line | Result line |
+|---|---|---|
+| Named shell step | `Unit tests` | `Verify passed · Unit tests: <reason>` |
+| Named AI step | `Code review` + executor badge (for example `Codex Reviewer`) | `Verify passed · Code review: <reason>` + the badge |
+| Unnamed step | `Verify step 1 · make test` (the shell command, or the AI step's executor name) | `Verify passed (step 1) · make test: <reason>` |
+
+The step number and the raw command of a named step move into the row's tooltip
+(`step 2 · codex-as-claude`). The same applies to retry, needs-changes,
+inconclusive and error lines. The AI step's executor name comes from
+[`command_names`](config-reference.md#executor-names); a shell step has no
+executor, so it has no badge. The stage rail's verify badge tooltip reads
+`AI verify · Code review · Codex Reviewer: passed` for a named AI step and
+`AI verify step 2 · <executor name>: passed` for an unnamed one.
 
 ## Choosing a verifier
 
@@ -481,7 +522,7 @@ completely, the active `verify/feedback.md` is cleared — the history under
 ## Dashboard
 
 The Feed shows a line for each step as it starts and finishes: `Verify step N ·
-<alias>`, then the outcome — pass (success), needs_changes/inconclusive (warning),
+<alias>` (or the step's [`name`](#naming-a-step)), then the outcome — pass (success), needs_changes/inconclusive (warning),
 or an execution error (danger) — with a **Show full report** link and the step's
 cost, alongside the stage's normal pause/retry/revise actions. Nothing about
 verify introduces a new stage status or a second progress bar.

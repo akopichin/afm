@@ -74,7 +74,7 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 	// первое же @-mention или Send от "side:<runID>" адресовало бы ещё не существующего участника. Сбой
 	// регистрации отключает боковой агент тем же способом, что и сбой открытия журнала выше (не роняя флоу).
 	if _, err := orch.RegisterSideAgent(context.Background(), orchestrator.RegisterSideAgentRequest{
-		DisplayName: cfg.Client.Command, Actor: state.Actor{Kind: "system"},
+		Command: cfg.Client.Command, Actor: state.Actor{Kind: "system"},
 	}); err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("register Assistant identity: %w", err)

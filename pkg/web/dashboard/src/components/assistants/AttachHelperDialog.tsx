@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { attachAssistant, type AttachHelperRequest } from '../../api/run-client'
-import { describeExecutor, describeUnavailable, type AssistantProfile } from '../../types/assistant-profile'
+import { describeExecutor, describeUnavailable, executorTitle, type AssistantProfile } from '../../types/assistant-profile'
+import { useUnknownCommandName } from '../../lib/executor-label'
 import { useModalDialog } from '../../lib/focus-trap'
 
 export type AttachHelperDialogProps = {
@@ -17,6 +18,7 @@ export type AttachHelperDialogProps = {
 // side-agent turn already proposed (confirmActionDraft); this one creates a fresh top-level task from the
 // operator's own choices. Focus, Escape and Tab-wrap come from the shared useModalDialog.
 export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, onCancel }: AttachHelperDialogProps): ReactElement {
+  const unknownPrefix = useUnknownCommandName()
   const available = profiles.filter((p) => p.available)
   const [chosenId, setChosenId] = useState('')
   const [title, setTitle] = useState('')
@@ -71,7 +73,7 @@ export function AttachHelperDialog({ stageId, stageTitle, profiles, onAttached, 
             </label>
             <dl className="add-run-agent-executor">
               <dt>Configured executor</dt>
-              <dd>{selected === null ? '—' : describeExecutor(selected)}</dd>
+              <dd title={selected === null ? undefined : executorTitle(selected, unknownPrefix)}>{selected === null ? '—' : describeExecutor(selected, unknownPrefix)}</dd>
             </dl>
             <label className="attach-helper-field">
               <span>Title (optional)</span>

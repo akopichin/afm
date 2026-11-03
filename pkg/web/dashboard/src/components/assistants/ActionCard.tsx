@@ -9,6 +9,8 @@ export type ActionCardProps = {
   // selector" concept AddRunAgentDialog (T7.3) already shows: the executor is decided by the profile's own
   // configuration, never a per-request choice.
   executor: string
+  // executorTitle — the executor's tooltip: the full name and, unless a skin hides it, the raw command.
+  executorTitle?: string
   mode?: 'advisory' | 'required'
   // maxDepth/remainingDepth — effective_max_depth and the depth budget left AFTER this task is created
   // (dev-plan.md T4.6, §12.4). Optional: a caller that has no depth data yet (e.g. the Feed's attach preview,
@@ -20,14 +22,14 @@ export type ActionCardProps = {
 
 // ActionCard — the read-only policy summary inside AttachAssistantDialog: everything §12.4 requires a
 // confirmation card to show before a helper task is actually created.
-export function ActionCard({ roleTitle, stageTitle, title, instruction, executor, mode = 'advisory', maxDepth, remainingDepth, atDepthLimit = false }: ActionCardProps): ReactElement {
+export function ActionCard({ roleTitle, stageTitle, title, instruction, executor, executorTitle, mode = 'advisory', maxDepth, remainingDepth, atDepthLimit = false }: ActionCardProps): ReactElement {
   return (
     <div className="action-card">
       <dl className="action-card-fields">
         <dt>Role</dt>
         <dd>{roleTitle}</dd>
         <dt>Configured executor</dt>
-        <dd>{executor}</dd>
+        <dd title={executorTitle}>{executor}</dd>
         <dt>Stage</dt>
         <dd>{stageTitle}</dd>
         <dt>Task</dt>

@@ -82,40 +82,43 @@ func findSkinFavicon(base string, statFn func(name string) bool) (href, mime str
 
 // Server is the HTTP server for the dashboard and API.
 type Server struct {
-	runDir            string
-	Description       string // корневой description флоу (для хедера дашборда)
-	stages            RuntimeStageProvider
-	store             *state.Store
-	uiBus             *bus.UIBus
-	accounting        accounting.CostProvider      // nil = accounting unsupported (server built without it); see handleStatus
-	showMoney         bool                         // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
-	usageAnalytics    UsageAnalyticsSource         // nil = capability off (GET /api/usage/analytics не регистрируется)
-	usageMode         UsageAnalyticsMode           // режим показа аналитики; никогда не пустой (New подставляет time_only)
-	usageNow          func() time.Time             // as_of ответа аналитики; подменяется в тестах
-	actions           StageActions                 // never nil in practice — see StageActions doc
-	secondary         SecondaryActions             // may be nil — see SecondaryActions doc
-	flowActions       FlowActions                  // review-pause commands; nil = respond 404 (see routeFlow)
-	reviewState       func() (string, []string)    // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
-	workspace         workspace.FS                 // Docker project file browser backend; nil = capability off
-	sideAgent         SideAgentService             // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
-	assistantProfiles AssistantProfilesService     // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
-	collaborationMode assistants.CollaborationMode // режим представления collaboration в dashboard; никогда не пустой (New подставляет "team")
-	assistantActions  AssistantActions             // write-команды задач помощников; nil = capability off (POST/pause/continue/cancel 404)
-	assistantsReader  AssistantsReader             // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
-	discussionService DiscussionService            // обсуждение стадии (T6.7); nil = capability off (GET|POST .../discussion 404)
-	proposalActions   ProposalActions              // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
-	graphActions      GraphActions                 // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
-	agentMesh         AgentMeshActions             // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
-	mesh              MeshActions                  // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
-	ownerWaits        OwnerWaitActions             // owner wait recovery; nil, or without ownerTokenDigest = its two routes 404
-	ownerTokenDigest  *[sha256.Size]byte           // SHA-256 of the run owner's bearer token; the token itself is not kept
-	redact            func(string) string          // removes the run's secret values from logged text; nil = environment secrets only
-	theme             string                       // "goga" или "" (default graphite)
-	version           string                       // версия afm-бинарника, отдаётся в /api/status для футера дашборда
-	indexBytes        []byte                       // предподготовленный index.html (с заменами скина/favicon)
-	fileServer        http.Handler                 // отдаёт встроенную статику (skins/, assets, ...)
-	customSkinServer  http.Handler                 // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
-	httpSrv           *http.Server
+	runDir             string
+	Description        string // корневой description флоу (для хедера дашборда)
+	stages             RuntimeStageProvider
+	store              *state.Store
+	uiBus              *bus.UIBus
+	accounting         accounting.CostProvider      // nil = accounting unsupported (server built without it); see handleStatus
+	showMoney          bool                         // показывать ли денежные ($) величины в дашборде (accounting.show_money); токены показываются всегда
+	usageAnalytics     UsageAnalyticsSource         // nil = capability off (GET /api/usage/analytics не регистрируется)
+	usageMode          UsageAnalyticsMode           // режим показа аналитики; никогда не пустой (New подставляет time_only)
+	usageNow           func() time.Time             // as_of ответа аналитики; подменяется в тестах
+	actions            StageActions                 // never nil in practice — see StageActions doc
+	secondary          SecondaryActions             // may be nil — see SecondaryActions doc
+	flowActions        FlowActions                  // review-pause commands; nil = respond 404 (see routeFlow)
+	reviewState        func() (string, []string)    // lock-free read of flow_pause_state/flow_paused_stages; nil = "none"
+	workspace          workspace.FS                 // Docker project file browser backend; nil = capability off
+	sideAgent          SideAgentService             // «боковой» разговор; nil = capability off (маршруты /api/side-agent/* не регистрируются)
+	assistantProfiles  AssistantProfilesService     // реестр помощников (collaboration); nil = capability off (/api/assistant-profiles не регистрируется)
+	collaborationMode  assistants.CollaborationMode // режим представления collaboration в dashboard; никогда не пустой (New подставляет "team")
+	hideAttachHelpers  bool                         // скрыть кнопки ручного прикрепления helper в dashboard; только видимость, не capability
+	assistantActions   AssistantActions             // write-команды задач помощников; nil = capability off (POST/pause/continue/cancel 404)
+	assistantsReader   AssistantsReader             // read-сторона: дерево задач/история событий; nil = capability off (GET 404)
+	discussionService  DiscussionService            // обсуждение стадии (T6.7); nil = capability off (GET|POST .../discussion 404)
+	proposalActions    ProposalActions              // предложения (T6.7); nil = capability off (GET .../proposals, /api/proposals/* 404)
+	graphActions       GraphActions                 // динамические стадии (Этап 9); nil = capability off (/api/run/graph/* 404)
+	agentMesh          AgentMeshActions             // Agent Mesh Phase 3 (T3.1); nil = capability off (/api/agent-mesh/* 404)
+	mesh               MeshActions                  // Agent Mesh Phase 7 (T7.1); nil = capability off (/api/mesh/* 404)
+	ownerWaits         OwnerWaitActions             // owner wait recovery; nil, or without ownerTokenDigest = its two routes 404
+	ownerTokenDigest   *[sha256.Size]byte           // SHA-256 of the run owner's bearer token; the token itself is not kept
+	redact             func(string) string          // removes the run's secret values from logged text; nil = environment secrets only
+	commandNames       map[string]string            // config command_names; read by commandName
+	unknownCommandName string                       // dashboard fallback label prefix, never empty (New defaults it)
+	theme              string                       // "goga" или "" (default graphite)
+	version            string                       // версия afm-бинарника, отдаётся в /api/status для футера дашборда
+	indexBytes         []byte                       // предподготовленный index.html (с заменами скина/favicon)
+	fileServer         http.Handler                 // отдаёт встроенную статику (skins/, assets, ...)
+	customSkinServer   http.Handler                 // отдаёт /skins/custom/* с диска; nil, если skin_dir не активен
+	httpSrv            *http.Server
 	// Keepalive-таймауты вебсокета.
 	wsPongWait   time.Duration
 	wsPingPeriod time.Duration
@@ -215,6 +218,9 @@ type Config struct {
 	// CollaborationMode — режим представления collaboration в dashboard; нулевое значение нормализуется в
 	// "team" в New. Не зависит от AssistantProfiles (capability).
 	CollaborationMode assistants.CollaborationMode
+	// HideAttachHelpers прячет в dashboard кнопки ручного прикрепления helper к стадии. Меняет только
+	// видимость: attach через Feed, API и CLI остаются доступны.
+	HideAttachHelpers bool
 	// AssistantActions/AssistantsReader — write/read стороны задач помощников; nil = capability off.
 	AssistantActions AssistantActions
 	AssistantsReader AssistantsReader
@@ -234,7 +240,11 @@ type Config struct {
 	// RedactSecrets removes the run's secret values (environment, secrets.env, live mesh tokens) from text
 	// the server logs; nil redacts only afm's environment secrets.
 	RedactSecrets func(string) string
-	Theme         string
+	// CommandNames are the configured dashboard names of agent commands (config command_names).
+	CommandNames map[string]string
+	// UnknownCommandName is the dashboard's fallback label prefix; empty means config.DefaultUnknownCommandName.
+	UnknownCommandName string
+	Theme              string
 	// Version — версия afm-бинарника, отдаётся в /api/status для футера дашборда.
 	Version string
 	SkinDir string
@@ -263,42 +273,49 @@ func New(cfg Config) *Server {
 	if collaborationMode == "" {
 		collaborationMode = assistants.CollaborationModeTeam
 	}
+	unknownCommandName := cfg.UnknownCommandName
+	if unknownCommandName == "" {
+		unknownCommandName = config.DefaultUnknownCommandName
+	}
 
 	s := &Server{
-		runDir:            cfg.RunDir,
-		Description:       cfg.Description,
-		stages:            cfg.Stages,
-		store:             cfg.Store,
-		uiBus:             cfg.UIBus,
-		accounting:        cfg.Accounting,
-		showMoney:         cfg.ShowMoney,
-		usageAnalytics:    cfg.UsageAnalytics,
-		usageMode:         usageModeOrClosed(cfg.UsageMode),
-		usageNow:          time.Now,
-		actions:           cfg.Actions,
-		secondary:         cfg.Secondary,
-		flowActions:       cfg.FlowActions,
-		reviewState:       cfg.ReviewState,
-		workspace:         cfg.Workspace,
-		sideAgent:         cfg.SideAgent,
-		assistantProfiles: cfg.AssistantProfiles,
-		collaborationMode: collaborationMode,
-		assistantActions:  cfg.AssistantActions,
-		assistantsReader:  cfg.AssistantsReader,
-		discussionService: cfg.DiscussionService,
-		proposalActions:   cfg.ProposalActions,
-		graphActions:      cfg.GraphActions,
-		agentMesh:         cfg.AgentMesh,
-		mesh:              cfg.Mesh,
-		ownerWaits:        cfg.OwnerWaits,
-		redact:            cfg.RedactSecrets,
-		theme:             cfg.Theme,
-		version:           cfg.Version,
-		wsPongWait:        pongWait,
-		wsPingPeriod:      pingPeriod,
-		wsWriteWait:       writeWait,
-		fileServer:        http.FileServer(http.FS(web.FS)),
-		done:              make(chan struct{}),
+		runDir:             cfg.RunDir,
+		Description:        cfg.Description,
+		stages:             cfg.Stages,
+		store:              cfg.Store,
+		uiBus:              cfg.UIBus,
+		accounting:         cfg.Accounting,
+		showMoney:          cfg.ShowMoney,
+		usageAnalytics:     cfg.UsageAnalytics,
+		usageMode:          usageModeOrClosed(cfg.UsageMode),
+		usageNow:           time.Now,
+		actions:            cfg.Actions,
+		secondary:          cfg.Secondary,
+		flowActions:        cfg.FlowActions,
+		reviewState:        cfg.ReviewState,
+		workspace:          cfg.Workspace,
+		sideAgent:          cfg.SideAgent,
+		assistantProfiles:  cfg.AssistantProfiles,
+		collaborationMode:  collaborationMode,
+		hideAttachHelpers:  cfg.HideAttachHelpers,
+		assistantActions:   cfg.AssistantActions,
+		assistantsReader:   cfg.AssistantsReader,
+		discussionService:  cfg.DiscussionService,
+		proposalActions:    cfg.ProposalActions,
+		graphActions:       cfg.GraphActions,
+		agentMesh:          cfg.AgentMesh,
+		mesh:               cfg.Mesh,
+		ownerWaits:         cfg.OwnerWaits,
+		redact:             cfg.RedactSecrets,
+		commandNames:       cfg.CommandNames,
+		unknownCommandName: unknownCommandName,
+		theme:              cfg.Theme,
+		version:            cfg.Version,
+		wsPongWait:         pongWait,
+		wsPingPeriod:       pingPeriod,
+		wsWriteWait:        writeWait,
+		fileServer:         http.FileServer(http.FS(web.FS)),
+		done:               make(chan struct{}),
 	}
 
 	if cfg.OwnerToken != "" {

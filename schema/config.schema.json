@@ -32,6 +32,17 @@
       "type": "string",
       "description": "A fully custom dashboard skin directory (containing index.css). Overrides `theme`."
     },
+    "command_names": {
+      "type": "object",
+      "description": "Readable dashboard names for agent commands, keyed by the exact command string. Project keys override global ones; values are trimmed. Presentation only: it never changes how an agent runs. Built-in names cover claude, codex-as-claude, cursor-agent-as-claude, openai-as-claude and openai-agent-as-claude; other commands show their file name.",
+      "propertyNames": { "pattern": "\\S" },
+      "additionalProperties": { "type": "string", "pattern": "\\S" }
+    },
+    "unknown_command_name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Label prefix the dashboard uses for a command the server did not name (<prefix>-1, <prefix>-2, ...). Project overrides global; trimmed. Default Unknown."
+    },
     "auto_recover": {
       "type": "boolean",
       "description": "Auto-reset failed stages to pending on run start/resume. Default true."
@@ -70,6 +81,10 @@
           "type": "string",
           "enum": ["team", "assistants"],
           "description": "Dashboard collaboration mode. team (default) shows Team, Board and People; assistants hides them and keeps the helpers under stages. Affects the UI only, not whether collaboration is enabled. Unset falls back to the other config layer, then team; a flow.yaml collaboration.mode can override this further."
+        },
+        "hide_attach_helpers": {
+          "type": "boolean",
+          "description": "Hide the dashboard buttons that attach a helper to a stage by hand (Attach helper to stage… in People, Attach helper… in the stage header). Default false. A nonempty env AFM_HIDE_ATTACH_HELPERS overrides it: exact 1/true hides, any other value shows. Priority: environment > project config > global config > default. Affects visibility only: collaboration stays enabled, and attaching through the Feed @ menu, afm agent spawn and the API still works."
         },
         "runtime_context": {
           "type": "string",

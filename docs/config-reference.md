@@ -41,6 +41,11 @@ server:
 # skills_dir: /opt/team-skills  # default extra local skill library for runs
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
+# command_names:            # readable dashboard names for agent commands; see "Executor names"
+#   "./scripts/dev-agent.sh": Development Agent
+#   codex-as-claude: Codex Reviewer
+# unknown_command_name: Unknown  # label prefix when the server sent no name (default: Unknown)
+
 # side_agent:
 #   enabled: false          # dashboard Assistant; ON by default. env AFM_SIDEAGENT overrides,
 #                           # and flow.yaml side_agent overrides both. See dashboard.md
@@ -48,6 +53,8 @@ server:
 # collaboration:
 #   enabled: true           # stage helpers; ON by default. env AFM_COLLABORATION overrides
 #   mode: team              # dashboard: team (default) | assistants; flow.yaml may override
+#   hide_attach_helpers: true # hide the manual Attach helper buttons; OFF by default.
+#                           # env AFM_HIDE_ATTACH_HELPERS overrides; no flow.yaml override
 #   runtime_context: isolated # helper process environment: isolated (default) | wrapper
 #   max_depth: 3            # helper delegation depth; flow.yaml may override it
 #   limits: { max_tasks: 20 } # optional whole-run task limit
@@ -111,6 +118,28 @@ existing configs) or `assistants`. The value in `flow.yaml` takes precedence ove
 project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
 still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
+
+`collaboration.hide_attach_helpers: true` hides the dashboard buttons that attach a
+helper to a stage by hand: **Attach helper to stage…** in People and **Attach helper…**
+in the stage header. It is `false` by default. Precedence is the non-empty
+`AFM_HIDE_ATTACH_HELPERS` environment variable, then project `.afm/config.yaml`, then
+global `~/.afm/config.yaml`, then `false`; `flow.yaml` cannot set it. In the
+environment, exactly `1` or `true` hides the buttons and any other non-empty value
+(such as `0`, `false` or `yes`) shows them; an empty or unset variable leaves the
+config value in effect.
+
+```bash
+AFM_HIDE_ATTACH_HELPERS=1 afm run flow.yaml   # hide the buttons for this run
+AFM_HIDE_ATTACH_HELPERS=0 afm run flow.yaml   # show them even if config says true
+```
+
+The setting is read when `afm run` starts or resumes a run, so changing it needs a
+restart. It only hides the two buttons: collaboration stays enabled, and
+**Attach to stage** in the Feed `@` menu, `afm agent spawn`, the API and `assistants:`
+in YAML keep working. To switch helpers off entirely use `collaboration.enabled` or
+`AFM_COLLABORATION=0` instead. See
+[Web dashboard](dashboard.md#people-panel) and
+[Collaboration](collaboration.md#hide-the-attach-helper-buttons).
 
 A profile defines a role; its `command` is optional. Without it a helper runs the
 executor of its stage (or `client.command`), and a built-in `default` profile always
@@ -212,6 +241,58 @@ never has money), and
 [AI-verify](verify.md) for the top-level `verify.max_failures` correction budget,
 `verify.review_patience` stalemate backstop, and `verify.fresh_correction` session
 setting.
+
+## Executor names
+
+The dashboard shows a readable name for the command an agent runs instead of the
+raw binary, recipe or wrapper script. `command_names` maps a command to the name
+you want to see:
+
+```yaml
+command_names:
+  "./scripts/dev-agent.sh": Development Agent
+  codex-as-claude: Codex Reviewer
+```
+
+- **The key is the exact command string**, as written in `client.command`, a
+  stage's `command`, a collaboration profile or a `verify` step. It is compared
+  as is: `./scripts/dev-agent.sh` and `scripts/dev-agent.sh` are different keys.
+  A key that is empty or only spaces is an error.
+- **The value is a non-empty string.** Surrounding spaces are trimmed. A number,
+  boolean, `null`, map or list is an error, as is an empty value. Two commands may
+  share one name.
+- **Project and global files are merged by key.** A key in the project's
+  `.afm/config.yaml` overrides the same key in `~/.afm/config.yaml`; keys that
+  only one file has are kept.
+
+The name for a command is the first match of:
+
+1. an exact `command_names` key (project, then global);
+2. a built-in name: `claude` → `Claude Code`, `codex-as-claude` → `Codex`,
+   `cursor-agent-as-claude` → `Cursor Agent`, `openai-as-claude` → `OpenAI`,
+   `openai-agent-as-claude` → `OpenAI Agent`. The directory and a trailing `.sh`
+   are ignored, so `/opt/bin/codex-as-claude.sh` also reads `Codex`;
+3. the file name of the command, such as `agent.sh` for `./tools/x/agent.sh`.
+
+afm never guesses a provider from part of an unknown file name and never reads
+the file system to name a command.
+
+`unknown_command_name` sets the prefix of the emergency label that the dashboard
+shows only when the server sent no name for a command, for example a newer
+dashboard talking to an older server. Such commands read `<prefix>-1`,
+`<prefix>-2`, … (one number per command), and the raw command stays in the
+tooltip. The default prefix is `Unknown`; project overrides global, spaces are
+trimmed, and an empty value is an error.
+
+Names are presentation only. They do not change which command runs, the
+executor identity saved with a helper task (renaming a command never produces
+`executor_changed`), participant IDs or `@` handles, or the event journal. Names are read when `afm run` starts and there is no hot
+reload: after you edit `command_names`, restart the run, and the new names apply
+to its earlier history as well, because journals keep the raw command. In Docker
+mode the container reads the same mounted global and project config files, so
+the names match the host. The dashboard layer is described in
+[Executor names](dashboard.md#executor-names) and
+[Verify step names](verify.md#naming-a-step).
 
 ## Settings priority
 

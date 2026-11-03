@@ -5,7 +5,7 @@ import type { AssistantProfile } from '../../types/assistant-profile'
 import * as meshClient from '../../api/mesh-client'
 
 const profiles: AssistantProfile[] = [
-  { id: 'qaEngineer', title: 'QA Engineer', command: 'claude', available: true, unavailableReason: '' },
+  { id: 'qaEngineer', title: 'QA Engineer', command: 'claude', commandName: 'Claude Code', available: true, unavailableReason: '' },
 ]
 const stages = [{ id: 'impl', title: 'Frontend' }]
 
@@ -42,7 +42,7 @@ describe('AttachAssistantDialog', () => {
     // "QA Engineer" appears twice: Role, and Task (the title falls back to the role when none is given).
     expect(screen.getAllByText('QA Engineer').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('Configured executor')).toBeInTheDocument()
-    expect(screen.getByText('claude')).toBeInTheDocument()
+    expect(screen.getByText('Claude Code')).toHaveAttribute('title', 'Claude Code\nCommand: claude')
     expect(screen.getByText('Frontend')).toBeInTheDocument()
     expect(screen.getByText('Please review')).toBeInTheDocument()
     expect(screen.getByText(/advisory/i)).toBeInTheDocument()
@@ -50,8 +50,8 @@ describe('AttachAssistantDialog', () => {
   })
 
   test('names where the executor comes from, as resolved in the stage', () => {
-    renderDialog({ profiles: [{ ...profiles[0]!, command: 'codex', commandSource: 'stage' }] })
-    expect(screen.getByText('codex (stage)')).toBeInTheDocument()
+    renderDialog({ profiles: [{ ...profiles[0]!, command: 'codex-as-claude', commandName: 'Codex Reviewer', commandSource: 'stage' }] })
+    expect(screen.getByText('Codex Reviewer (stage)')).toBeInTheDocument()
   })
 
   // TestCard_DoubleSubmitCreatesOneTask — a client-side guard (disable the button immediately on first

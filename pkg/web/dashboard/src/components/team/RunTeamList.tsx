@@ -3,6 +3,7 @@ import type { AssistantTask } from '../../types/assistant-task'
 import type { MeshParticipant, MeshThread, MeshThreadSummaries } from '../../api/mesh-client'
 import { activityLabel, activityPresence, participantLabel, participantRole, stagePresence, threadLabel, type Presence } from '../../lib/mesh-roster'
 import { MeshAvatar } from './MeshAvatar'
+import { ExecutorBadge } from '../ExecutorBadge'
 import { STAGE_STATUS_LABELS, type Stage, type StageStatus } from '../../types'
 import { ThreadList } from './ThreadList'
 import { TabList, tabPanelProps } from '../tab-list'
@@ -181,6 +182,8 @@ export function RunTeamList({
     const sandbox = focused ? sandboxLabel(p) : null
     const helperTask = p.kind === 'helper' ? helperTasks.find((task) => p.id === `helper:${task.id}`) : undefined
     const disabled = focused && (onPick === undefined || !p.reachable)
+    // The Team tab names only the Assistant's executor: the other rows keep the participant name alone.
+    const showExecutor = focused || p.kind === 'side_agent'
     return (
       <li key={p.id}>
         <button
@@ -193,12 +196,10 @@ export function RunTeamList({
         >
           <MeshAvatar name={name} kind={p.kind} />
           <span className="team-person-text">
-            {focused ? (
+            {showExecutor ? (
               <span className="team-person-title">
                 <span className="team-person-name" title={name}>{name}</span>
-                {p.command !== undefined && p.command !== '' && (
-                  <span className="team-person-chip" title={`Command: ${p.command}`}>{p.command}</span>
-                )}
+                <ExecutorBadge command={p.command ?? ''} commandName={p.command_name} className="team-person-chip" />
               </span>
             ) : (
               <span className="team-person-name" title={name}>{name}</span>

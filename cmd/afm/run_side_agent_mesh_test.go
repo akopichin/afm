@@ -147,7 +147,7 @@ func newSideMeshOrchAt(t *testing.T, runDir string) (*orchestrator.Orchestrator,
 		RunDir: runDir, RunID: "side-test", Store: meshStore, Config: config.Default(), Prompts: orchestrator.DefaultPrompts(),
 		Stages: []flow.Stage{{ID: "impl", Name: "impl", Agents: []flow.AgentType{flow.AgentAuto}}},
 	})
-	if _, err := orch.RegisterSideAgent(context.Background(), orchestrator.RegisterSideAgentRequest{DisplayName: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
+	if _, err := orch.RegisterSideAgent(context.Background(), orchestrator.RegisterSideAgentRequest{Command: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
 		t.Fatal(err)
 	}
 	return orch, meshStore

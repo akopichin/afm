@@ -30,6 +30,35 @@ older afm. See
 
 ## 2026-11-02
 
+### Improvement: readable executor names and Verify step names in the dashboard
+
+The dashboard shows a readable executor name instead of the raw command: `Codex Reviewer`,
+not `codex-as-claude`. Set names once in global or project `config.yaml` with `command_names`
+(keyed by the exact command; project overrides global per key). Without an entry, five built-in
+names apply (`Claude Code`, `Codex`, `Cursor Agent`, `OpenAI`, `OpenAI Agent`), then the file name.
+Names appear in the People panel, message headers, the Feed context line, the attach and **Add run
+agent** dialogs, the **+ Stage** preview and the Assistant window; the raw command stays in the
+tooltip. The Assistant is now a participant named **Assistant** with its executor shown as a
+separate chip. A skin can hide raw commands from tooltips with `--afm-raw-command-tooltip: none`,
+and `unknown_command_name` sets the label prefix used when the server sends no name.
+
+`verify` steps accept an optional `name` saying what the step checks, for example
+`Verify passed · Unit tests: ...`; unnamed steps keep their previous labels. Names are
+presentation only: execution, participant IDs and journals do not change, and a restart applies new
+names to the existing history. See [Configuration](docs/config-reference.md#executor-names),
+[Web dashboard](docs/dashboard.md#executor-names) and [AI-verify](docs/verify.md#naming-a-step).
+
+### Improvement: hide the manual Attach helper buttons
+
+New `collaboration.hide_attach_helpers` setting (global or project `config.yaml`) and
+`AFM_HIDE_ATTACH_HELPERS` environment variable hide **Attach helper to stage…** in
+People and **Attach helper…** in the stage header. It is off by default; a non-empty
+env value takes precedence over project and global config (`1` or `true` hides,
+any other value shows). It changes visibility only: collaboration stays enabled,
+and the Feed `@` **Attach to stage** group, `afm agent spawn` and the API keep
+working. See [Config reference](docs/config-reference.md) and
+[Collaboration](docs/collaboration.md#hide-the-attach-helper-buttons).
+
 ### Improvement: the dashboard URL in `afm run` stands out
 
 `afm run` prints the dashboard URL as a separate block set off by blank lines:

@@ -69,7 +69,7 @@ func (s *Server) reconstructEventHistory(stageID string) []feedEvent {
 		out = append(out, reconstructAgentActions(s.runDir, id)...)
 	}
 
-	out = append(out, reconstructNotices(s.runDir, stageID)...) // stage-aware (Step 3b)
+	out = append(out, reconstructNotices(s.runDir, stageID, s.commandName)...) // stage-aware (Step 3b)
 
 	limit := maxReplayEvents
 	if stageID != "" {
@@ -188,8 +188,8 @@ func isDialogDedupable(typ string, data any) bool {
 }
 
 // reconstructNotices reads the shared notices.jsonl. O(file) time, O(cap) memory; only invoked on an
-// /api/events request, not a hot path.
-func reconstructNotices(runDir, stageID string) []feedEvent {
+// /api/events request, not a hot path. Verify notices are presented like the live stream (presentVerifyData).
+func reconstructNotices(runDir, stageID string, commandName func(string) string) []feedEvent {
 	path := filepath.Join(runDir, "notices.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
@@ -229,7 +229,8 @@ func reconstructNotices(runDir, stageID string) []feedEvent {
 			}
 			seen[key] = true
 		}
-		ring = append(ring, feedEvent{Type: e.Type, StageID: e.StageID, Data: e.Data, Timestamp: e.Time})
+		data := presentVerifyData(e.Type, e.Data, commandName)
+		ring = append(ring, feedEvent{Type: e.Type, StageID: e.StageID, Data: data, Timestamp: e.Time})
 		if len(ring) > ringCap {
 			ring = ring[1:]
 		}

@@ -130,6 +130,11 @@ function parseStageTimeOpen(raw: unknown): StageTiming['open'] {
 export type StageVerify = {
   step: number
   command: string
+  // kind — "shell" or "agent"; name — the check's own name from flow.yaml; commandName — the server's readable
+  // name of an agent step's executor. All absent for a legacy run or an older server.
+  kind?: string
+  name?: string
+  commandName?: string
   phase: 'running' | 'pass' | 'accepted_stalemate' | 'needs_changes' | 'inconclusive' | 'error'
 }
 

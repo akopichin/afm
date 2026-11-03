@@ -156,7 +156,9 @@ type Orchestrator struct {
 	opts Options
 	// sideAgentReachable is true only while this process has a usable side store and inbox bridge.
 	sideAgentReachable atomic.Bool
-	sideAgentGate      sync.RWMutex
+	// sideAgentCommand is the executor the Side agent runs; RegisterSideAgent sets it before Run and the dashboard.
+	sideAgentCommand string
+	sideAgentGate    sync.RWMutex
 	// sideMeshDrain is installed before Run. Finalization waits for its Mesh
 	// inbox and active turn without blocking the event loop that handles replies.
 	sideMeshDrain     func(context.Context) bool

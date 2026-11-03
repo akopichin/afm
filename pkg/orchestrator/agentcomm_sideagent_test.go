@@ -23,7 +23,7 @@ import (
 func registerTestSideAgent(t *testing.T, o *Orchestrator) agentcomm.Participant {
 	t.Helper()
 	p, err := o.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{
-		DisplayName: "claude", Actor: state.Actor{Kind: "system"},
+		Command: "claude", Actor: state.Actor{Kind: "system"},
 	})
 	if err != nil {
 		t.Fatalf("RegisterSideAgent: %v", err)
@@ -34,7 +34,7 @@ func registerTestSideAgent(t *testing.T, o *Orchestrator) agentcomm.Participant 
 
 func TestSideAgentMesh_AvailabilityGatesRosterAndSends(t *testing.T) {
 	o, _ := newAssistantsTestOrchestrator(t, true)
-	if _, err := o.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{DisplayName: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
+	if _, err := o.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{Command: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
 		t.Fatal(err)
 	}
 	checkReachable := func(want bool) {
@@ -147,8 +147,8 @@ func TestSideAgent_HasParticipantIdentity(t *testing.T) {
 	if p.Alias == "" {
 		t.Fatal("expected a non-empty display alias (so @-mentions can address it)")
 	}
-	if p.DisplayName != "claude" {
-		t.Fatalf("display name = %q, want the configured executor %q", p.DisplayName, "claude")
+	if p.DisplayName != "Assistant" || p.Command != "claude" {
+		t.Fatalf("participant %q runs %q, want the Assistant running the configured %q", p.DisplayName, p.Command, "claude")
 	}
 	if !p.Reachable {
 		t.Fatal("a freshly registered side agent must be reachable")
@@ -166,6 +166,9 @@ func TestSideAgent_HasParticipantIdentity(t *testing.T) {
 		found = true
 		if got.Kind != agentcomm.KindSideAgent {
 			t.Fatalf("roster entry kind = %q, want %q", got.Kind, agentcomm.KindSideAgent)
+		}
+		if got.DisplayName != "Assistant" || got.Command != "claude" {
+			t.Fatalf("roster entry %q runs %q, want the Assistant running claude", got.DisplayName, got.Command)
 		}
 	}
 	if !found {
@@ -388,8 +391,8 @@ func TestSideAgent_FreshRegistrationAnswersToAssistant(t *testing.T) {
 	if p.ID != "side:run1" || p.Alias != "assistant" {
 		t.Fatalf("registered %q @%s, want side:run1 @assistant", p.ID, p.Alias)
 	}
-	if stored := store.Snapshot().Assistants.Mesh.Participants[p.ID]; stored == nil || stored.Alias != "assistant" {
-		t.Fatalf("stored descriptor = %+v, want alias assistant", stored)
+	if stored := store.Snapshot().Assistants.Mesh.Participants[p.ID]; stored == nil || stored.Alias != "assistant" || stored.DisplayName != "Assistant" {
+		t.Fatalf("stored descriptor = %+v, want alias assistant and the name Assistant", stored)
 	}
 	if got := mustResolveHandle(t, o, "@assistant"); got != p.ID {
 		t.Fatalf("@assistant = %s, want %s", got, p.ID)
@@ -504,12 +507,12 @@ func TestSideAgent_LegacySideAliasReplaysWithoutConflict(t *testing.T) {
 	reopened, rstore := reopenAssistantsTestOrchestrator(t, o)
 
 	for _, display := range []string{"claude", "codex"} {
-		p, err := reopened.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{DisplayName: display, Actor: state.Actor{Kind: "system"}})
+		p, err := reopened.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{Command: display, Actor: state.Actor{Kind: "system"}})
 		if err != nil {
 			t.Fatalf("RegisterSideAgent(%q) over a legacy descriptor: %v", display, err)
 		}
-		if p.Alias != "side" || p.DisplayName != "claude" {
-			t.Fatalf("RegisterSideAgent(%q) = @%s / %q, want the saved @side / claude", display, p.Alias, p.DisplayName)
+		if p.Alias != "side" || p.DisplayName != "Assistant" || p.Command != display {
+			t.Fatalf("RegisterSideAgent(%q) = @%s / %q running %q, want the saved @side as the Assistant running %q", display, p.Alias, p.DisplayName, p.Command, display)
 		}
 	}
 	sides := 0
@@ -526,6 +529,58 @@ func TestSideAgent_LegacySideAliasReplaysWithoutConflict(t *testing.T) {
 	}
 	if _, err := agentcomm.ResolveAlias("@assistant", reopened.liveRoster(rstore.Snapshot())); !errors.Is(err, agentcomm.ErrAliasNotFound) {
 		t.Fatalf("@assistant err = %v, want ErrAliasNotFound for a run with the saved @side", err)
+	}
+}
+
+// A run saved before the rename named the bound agent after its command. Every read shows the Assistant running
+// that command, or the one this process runs once the Assistant is registered; nothing is journaled again.
+func TestSideAgent_LegacyDescriptorReadsAsAssistant(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	seedLegacySideAgent(t, o, store)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, rstore := reopenAssistantsTestOrchestrator(t, o)
+	side := reopened.SideAgentParticipantID()
+	journalPath := filepath.Join(o.opts.RunDir, "events.jsonl")
+	journal, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(when, wantCommand string) {
+		t.Helper()
+		roster := reopened.liveRoster(rstore.Snapshot())
+		i := slices.IndexFunc(roster, func(p agentcomm.Participant) bool { return p.ID == side })
+		if i < 0 {
+			t.Fatalf("%s: the roster lost %s", when, side)
+		}
+		if got := roster[i]; got.DisplayName != "Assistant" || got.Command != wantCommand || got.Alias != "side" {
+			t.Fatalf("%s: roster entry = %q @%s running %q, want the Assistant @side running %q", when, got.DisplayName, got.Alias, got.Command, wantCommand)
+		}
+		if got, _ := reopened.liveParticipant(rstore.Snapshot(), side); got.DisplayName != "Assistant" || got.Command != wantCommand {
+			t.Fatalf("%s: liveParticipant = %q running %q, want the Assistant running %q", when, got.DisplayName, got.Command, wantCommand)
+		}
+		// Agent-facing texts (who cannot answer, quotes) read the run state alone.
+		if got, _ := resolveParticipant(rstore.Snapshot(), side); got.DisplayName != "Assistant" || got.Command != "claude" {
+			t.Fatalf("%s: resolveParticipant = %q running %q, want the Assistant running the saved claude", when, got.DisplayName, got.Command)
+		}
+		if stored := rstore.Snapshot().Assistants.Mesh.Participants[side]; stored.DisplayName != "claude" {
+			t.Fatalf("%s: stored descriptor name = %q, want the saved claude", when, stored.DisplayName)
+		}
+	}
+	check("before registration", "claude")
+	if _, err := reopened.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{Command: "codex", Actor: state.Actor{Kind: "system"}}); err != nil {
+		t.Fatal(err)
+	}
+	check("after registration", "codex")
+
+	after, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, journal) {
+		t.Fatalf("resuming a legacy run changed events.jsonl:\nbefore %s\nafter  %s", journal, after)
 	}
 }
 
@@ -843,7 +898,7 @@ func TestSideAgent_AvailabilityTextsNameAssistant(t *testing.T) {
 	t.Run("registration error", func(t *testing.T) {
 		o, _ := newAssistantsTestOrchestrator(t, true)
 		o.opts.RunID = ""
-		_, err := o.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{DisplayName: "claude", Actor: state.Actor{Kind: "system"}})
+		_, err := o.RegisterSideAgent(context.Background(), RegisterSideAgentRequest{Command: "claude", Actor: state.Actor{Kind: "system"}})
 		if err == nil {
 			t.Fatal("registration without a run id succeeded")
 		}

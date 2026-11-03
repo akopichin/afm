@@ -540,3 +540,103 @@ func TestVerifyFreshCorrection_RequiresSteps(t *testing.T) {
 		t.Errorf("error = %q, want it to mention fresh_correction", err.Error())
 	}
 }
+
+func TestVerifySpec_StepName(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{"run object", "verify:\n  run: make test\n  name: Unit tests\n", []string{"Unit tests"}},
+		{"command object", "verify:\n  command: codex\n  name: Code review\n", []string{"Code review"}},
+		{"list", "verify:\n  - run: make test\n    name: Unit tests\n  - command: codex\n", []string{"Unit tests", ""}},
+		{"container", "verify:\n  steps:\n    - run: make test\n      name: Unit tests\n    - command: codex\n      name: Code review\n  max_failures: 2\n", []string{"Unit tests", "Code review"}},
+		{"trimmed", "verify:\n  run: make test\n  name: \"  Unit tests  \"\n", []string{"Unit tests"}},
+		{"unnamed", "verify:\n  run: make test\n", []string{""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := parseVerify(t, tc.src, "s1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(spec.Steps) != len(tc.want) {
+				t.Fatalf("Steps = %+v, want %d steps", spec.Steps, len(tc.want))
+			}
+			for i, want := range tc.want {
+				if got := spec.Steps[i].Name; got != want {
+					t.Errorf("step %d Name = %q, want %q", i+1, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestVerifySpec_StepNameRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"blank", "verify:\n  run: make test\n  name: \"  \"\n", "name"},
+		{"empty", "verify:\n  run: make test\n  name: \"\"\n", "name"},
+		{"number", "verify:\n  run: make test\n  name: 123\n", "name"},
+		{"bool", "verify:\n  run: make test\n  name: true\n", "name"},
+		{"null", "verify:\n  run: make test\n  name: null\n", "name"},
+		{"map", "verify:\n  run: make test\n  name: {a: b}\n", "name"},
+		{"list item blank", "verify:\n  - run: make test\n    name: \" \"\n", "name"},
+		{"container level", "verify:\n  name: Unit tests\n  steps:\n    - run: make test\n", "cannot be combined with steps"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseVerify(t, tc.src, "s1")
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifySpec_StepNameMarshalRoundTrip(t *testing.T) {
+	srcs := []string{
+		"verify:\n  run: make test\n  name: Unit tests\n",
+		"verify:\n  - run: make test\n    name: Unit tests\n  - command: codex\n    name: Code review\n",
+		"verify:\n  steps:\n    - command: codex\n      name: Code review\n  max_failures: 1\n",
+	}
+	for _, src := range srcs {
+		spec, err := parseVerify(t, src, "s1")
+		if err != nil {
+			t.Fatalf("parse %q: %v", src, err)
+		}
+		out, err := yaml.Marshal(verifyHolder{Verify: spec})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		back, err := parseVerify(t, string(out), "s1")
+		if err != nil {
+			t.Fatalf("re-parse %q: %v", out, err)
+		}
+		for i := range spec.Steps {
+			if back.Steps[i].Name != spec.Steps[i].Name {
+				t.Errorf("step %d Name = %q after round-trip, want %q (yaml: %s)", i+1, back.Steps[i].Name, spec.Steps[i].Name, out)
+			}
+		}
+	}
+}
+
+func TestVerifySpec_UnnamedStepMarshalOmitsName(t *testing.T) {
+	spec, err := parseVerify(t, "verify:\n  run: make test\n", "s1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out, err := yaml.Marshal(verifyHolder{Verify: spec})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), "name") {
+		t.Errorf("marshalled yaml = %q, want no name key for an unnamed step", out)
+	}
+}

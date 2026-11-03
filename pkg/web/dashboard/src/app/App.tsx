@@ -25,6 +25,7 @@ import { CommentRecipientsContext } from '../components/comments/comment-recipie
 import { FileBrowserProvider } from '../components/file-browser'
 import { SideAgentProvider } from '../components/side-agent'
 import { MessageTimeZoneProvider } from '../lib/message-time-zone'
+import { UnknownCommandNameContext } from '../lib/executor-label'
 import { DialogOpenContext } from '../lib/focus-trap'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
@@ -95,7 +96,7 @@ export function App(): ReactElement {
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, collaborationMode, runCost,
     runOverheadCost, coverageIssues, accounting, usageAnalytics, statusAvailable, refresh, runStatus,
-    timeZone, utcOffsetMinutes,
+    timeZone, utcOffsetMinutes, unknownCommandName, hideAttachHelpers,
   } = useStatus()
   const runEpoch = useRunEpoch(runId)
   const stageActions = useMemo(createStageActions, [runEpoch])
@@ -104,6 +105,10 @@ export function App(): ReactElement {
   const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
   const [attachHelperStageId, setAttachHelperStageId] = useState<string | null>(null)
+  // Скрытие кнопок приходит со статусом: уже открытый диалог закрываем, чтобы он не вернулся после обратного переключения.
+  useEffect(() => {
+    if (hideAttachHelpers) setAttachHelperStageId(null)
+  }, [hideAttachHelpers])
   const [addStageOpen, setAddStageOpen] = useState(false)
 
   // «Pause on focus» — при включённом toggle фокус поля заметки ставит running- стадию на паузу, а
@@ -491,6 +496,9 @@ export function App(): ReactElement {
     : legacyNoteTarget
   // showPeople — the stage Feed shows who this stage can talk to.
   const showPeople = stageMesh && collaborationMode === 'team' && workspaceStage !== null && wsState.view === 'feed'
+  // canAttachToWorkspaceStage — обе кнопки «Attach helper» (шапка и People) показываются по одному условию.
+  const canAttachToWorkspaceStage =
+    workspaceStage !== null && !hideAttachHelpers && canAttachHelper(workspaceStage, capabilities.collaboration)
 
   const stageNowMs = useStageClock(statusAvailable && runAlive && hasOpenTiming(stages))
   // A stale status freezes the clock, preserving the last displayed open interval in both views.
@@ -647,6 +655,7 @@ export function App(): ReactElement {
   return (
     // MessageTimeZoneProvider стоит СНАРУЖИ SideAgentProvider: Feed, Team и история бокового агента
     // должны видеть одну и ту же хост-зону для времени сообщений.
+    <UnknownCommandNameContext.Provider value={unknownCommandName}>
     <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
     <DialogOpenContext.Provider value={reportDialogOpen}>
     {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
@@ -788,7 +797,7 @@ export function App(): ReactElement {
                           </svg>
                           <span>People</span>
                         </button>
-                      ) : canAttachHelper(workspaceStage, capabilities.collaboration) ? (
+                      ) : canAttachToWorkspaceStage ? (
                         // Без People-панели (assistants, collaboration без mesh) это единственное место прикрепить helper.
                         <button type="button" className="workspace-action" onClick={() => setAttachHelperStageId(workspaceStage.id)}>
                           Attach helper…
@@ -878,7 +887,7 @@ export function App(): ReactElement {
                         stages={stages}
                         profiles={assistantProfiles}
                         onAgentAdded={addParticipant}
-                        onAttachHelper={canAttachHelper(workspaceStage, capabilities.collaboration) ? setAttachHelperStageId : undefined}
+                        onAttachHelper={canAttachToWorkspaceStage ? setAttachHelperStageId : undefined}
                         open={peopleOpen}
                         drawer={peopleDrawer}
                         onClose={closePeople}
@@ -971,7 +980,7 @@ export function App(): ReactElement {
         <ReviewNotesModal pausedStages={flowPausedStages} onClose={() => setReviewModalOpen(false)} attentionShortcut={attentionShortcut} />
       )}
 
-      {attachHelperStageId !== null && (
+      {attachHelperStageId !== null && !hideAttachHelpers && (
         <AttachHelperDialog
           stageId={attachHelperStageId}
           stageTitle={attachHelperStageId}
@@ -997,6 +1006,7 @@ export function App(): ReactElement {
     </SideAgentProvider>
     </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>
+    </UnknownCommandNameContext.Provider>
   )
 }
 

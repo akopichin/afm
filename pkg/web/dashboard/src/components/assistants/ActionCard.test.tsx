@@ -9,7 +9,8 @@ function renderCard(overrides: Partial<Parameters<typeof ActionCard>[0]> = {}): 
       stageTitle="Frontend"
       title="Look at this"
       instruction="Please review the mobile scenario"
-      executor="claude"
+      executor="Claude Code"
+      executorTitle={"Claude Code\nCommand: claude"}
       maxDepth={3}
       remainingDepth={2}
       atDepthLimit={false}
@@ -26,7 +27,7 @@ describe('ActionCard', () => {
     renderCard()
     expect(screen.getByText('QA Engineer')).toBeInTheDocument()
     expect(screen.getByText('Configured executor')).toBeInTheDocument()
-    expect(screen.getByText('claude')).toBeInTheDocument()
+    expect(screen.getByText('Claude Code')).toHaveAttribute('title', 'Claude Code\nCommand: claude')
     expect(screen.getByText('Frontend')).toBeInTheDocument()
     expect(screen.getByText('Look at this')).toBeInTheDocument()
     expect(screen.getByText('Please review the mobile scenario')).toBeInTheDocument()

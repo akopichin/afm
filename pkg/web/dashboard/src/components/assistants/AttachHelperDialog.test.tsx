@@ -1,12 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { AttachHelperDialog } from './AttachHelperDialog'
 import { toAssistantProfile, type AssistantProfile } from '../../types/assistant-profile'
 import * as runClient from '../../api/run-client'
+import { resetUnknownCommandLabels } from '../../lib/executor-label'
 
 const profiles: AssistantProfile[] = [
-  { id: 'reviewer', title: 'Code reviewer', command: 'claude', commandSource: 'stage', available: true, unavailableReason: '' },
-  { id: 'qa', title: 'QA', command: 'codex', commandSource: 'profile', available: true, unavailableReason: '' },
+  { id: 'reviewer', title: 'Code reviewer', command: 'claude', commandName: 'Claude Code', commandSource: 'stage', available: true, unavailableReason: '' },
+  { id: 'qa', title: 'QA', command: 'codex-as-claude', commandName: 'Codex Reviewer', commandSource: 'profile', available: true, unavailableReason: '' },
   { id: 'ghost', title: 'Ghost', command: 'claude', commandSource: 'client', available: false, unavailableReason: 'no policy' },
 ]
 const ghost = profiles[2]!
@@ -28,6 +29,8 @@ function renderDialog(overrides: Partial<Parameters<typeof AttachHelperDialog>[0
 }
 
 describe('AttachHelperDialog', () => {
+  beforeEach(() => resetUnknownCommandLabels())
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -92,11 +95,21 @@ describe('AttachHelperDialog', () => {
   test('shows the executor and its source for the selected role and follows the selection', () => {
     renderDialog()
     expect(screen.getByText('Configured executor')).toBeTruthy()
-    expect(screen.getByText('claude (stage)')).toBeTruthy()
+    expect(screen.getByText('Claude Code (stage)')).toBeTruthy()
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'qa' } })
-    expect(screen.getByText('codex (profile)')).toBeTruthy()
-    expect(screen.queryByText('claude (stage)')).toBeNull()
+    expect(screen.getByText('Codex Reviewer (profile)')).toHaveAttribute('title', 'Codex Reviewer\nCommand: codex-as-claude')
+    expect(screen.queryByText('Claude Code (stage)')).toBeNull()
+  })
+
+  test('the executor tooltip loses the raw command when the skin hides it; a nameless command is numbered', () => {
+    document.documentElement.style.setProperty('--afm-raw-command-tooltip', 'none')
+    try {
+      renderDialog({ profiles: [{ ...profiles[0]!, command: './x/agent.sh', commandName: undefined }] })
+      expect(screen.getByText('Unknown-1 (stage)')).toHaveAttribute('title', 'Unknown-1')
+    } finally {
+      document.documentElement.style.removeProperty('--afm-raw-command-tooltip')
+    }
   })
 
   test('attaches the role of the executor line when profiles arrive after the dialog opened', async () => {
@@ -105,7 +118,7 @@ describe('AttachHelperDialog', () => {
     const view = render(<AttachHelperDialog {...props} profiles={[]} />)
     view.rerender(<AttachHelperDialog {...props} profiles={profiles} />)
 
-    expect(screen.getByText('claude (stage)')).toBeTruthy()
+    expect(screen.getByText('Claude Code (stage)')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('What should this helper do?'), { target: { value: 'Check it' } })
     fireEvent.click(screen.getByRole('button', { name: 'Attach helper' }))
     await waitFor(() => expect(attachSpy).toHaveBeenCalledWith('impl', expect.objectContaining({ profileId: 'reviewer' })))

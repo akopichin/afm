@@ -283,7 +283,7 @@ describe('useSideAgent', () => {
 
   it('hydrates history and command from getConversation', async () => {
     const convo = (): ConversationResponse => emptyConversation({
-      command: 'codex', state: 'idle',
+      command: 'codex', commandName: 'Codex', state: 'idle',
       events: [parsed(1, 'turn_accepted', { message: 'prev', clientMessageId: 'm0' }), parsed(2, 'assistant_text', { text: 'prev answer' })],
       lastSeq: 2, nextCursor: 2,
     })
@@ -292,6 +292,7 @@ describe('useSideAgent', () => {
     await act(async () => { result.current.open() })
     await waitFor(() => expect(result.current.events).toHaveLength(2))
     expect(result.current.command).toBe('codex')
+    expect(result.current.commandName).toBe('Codex')
   })
 
   it('a run_id change invalidates the previous conversation (clears events/draft)', async () => {

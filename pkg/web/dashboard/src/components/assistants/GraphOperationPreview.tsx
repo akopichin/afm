@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react'
+import { ExecutorBadge } from '../ExecutorBadge'
 
 // GraphStagePreview — the app-facing (camelCase) shape of one resolved graph.InsertionPlan, decoupled from
 // the wire's AddStagePreviewView (src/api/run-client.ts) so this component stays reusable outside the specific
@@ -6,6 +7,9 @@ import type { ReactElement } from 'react'
 export type GraphStagePreview = {
   id: string
   dependsOn: string[]
+  // command/commandName — the new stage's raw executor command and the server's readable name for it.
+  command?: string
+  commandName?: string
   extraDeps?: Record<string, string[]>
   warnings?: string[]
 }
@@ -30,6 +34,15 @@ function DepList({ ids, emptyLabel, addedIds }: { ids: string[]; emptyLabel: str
         </li>
       ))}
     </ul>
+  )
+}
+
+function Executor({ preview }: { preview: GraphStagePreview }): ReactElement | null {
+  if (preview.command === undefined || preview.command === '') return null
+  return (
+    <p className="graph-preview-executor">
+      Executor: <ExecutorBadge command={preview.command} commandName={preview.commandName} className="graph-preview-executor-name" />
+    </p>
   )
 }
 
@@ -76,6 +89,7 @@ export function GraphOperationPreview({ kind, targetId, preview }: GraphOperatio
             <DepList ids={after} emptyLabel="nothing" addedIds={addedIds} />
           </div>
         </div>
+        <Executor preview={preview} />
         <Warnings warnings={preview.warnings} />
       </div>
     )
@@ -87,6 +101,7 @@ export function GraphOperationPreview({ kind, targetId, preview }: GraphOperatio
         New stage <code>{preview.id}</code> will wait for:
       </p>
       <DepList ids={preview.dependsOn} emptyLabel="nothing — it starts immediately" />
+      <Executor preview={preview} />
       <Warnings warnings={preview.warnings} />
     </div>
   )

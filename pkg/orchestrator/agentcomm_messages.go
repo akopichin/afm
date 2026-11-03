@@ -232,7 +232,7 @@ func (o *Orchestrator) liveParticipant(rs state.RunState, id agentcomm.Participa
 			p = o.withStageConfig(p, *s)
 		}
 	}
-	p = o.sideParticipantAvailable(p)
+	p = o.withSideAgentRuntime(p)
 	return p, true
 }
 

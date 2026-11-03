@@ -461,6 +461,8 @@ export type AddStagePreviewView = {
   id: string
   name?: string
   command: string
+  // command_name — the server's readable name of command; the request keeps sending the raw command.
+  command_name?: string
   prompt: string
   depends_on: string[]
   extra_deps?: Record<string, string[]>

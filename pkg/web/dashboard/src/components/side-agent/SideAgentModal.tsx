@@ -5,6 +5,7 @@ import { SideAgentComposer } from './SideAgentComposer'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { trapTab } from '../../lib/focus-trap'
+import { ExecutorBadge } from '../ExecutorBadge'
 
 // Таймер, после которого закрывающееся окно уходит из hit-testing/a11y. 220 оставляет запас, чтобы фолбэк
 // не срезал анимацию.
@@ -27,7 +28,7 @@ export type SideAgentModalProps = {
 // продолжается под ctx менеджера на бэкенде).
 export function SideAgentModal({ api, attentionShortcut = null, stages = [], assistantProfiles = [] }: SideAgentModalProps): ReactElement {
   const {
-    isOpen, close, command, events, draft, setDraft, send, interrupt, requestState, activeSource, error, unavailable,
+    isOpen, close, command, commandName, events, draft, setDraft, send, interrupt, requestState, activeSource, error, unavailable,
     quote, clearQuote, contextStageId, setContextStageId,
   } = api
 
@@ -169,7 +170,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
             ) : (
               <span className="side-agent-context-value">{contextStageId}</span>
             )}
-            {command !== '' && <span className="side-agent-command" title="The configured agent command">{command}</span>}
+            <ExecutorBadge command={command} commandName={commandName} className="side-agent-command" />
           </div>
 
         {unavailable && (

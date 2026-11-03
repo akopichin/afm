@@ -1660,3 +1660,57 @@ func TestHandleStatus_CollaborationMode(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleStatus_HideAttachHelpers: hide_attach_helpers — отдельное поле представления; оно всегда есть в JSON
+// (без omitempty) и не зависит от capabilities.collaboration и collaboration_mode.
+func TestHandleStatus_HideAttachHelpers(t *testing.T) {
+	cases := []struct {
+		name       string
+		cfg        Config
+		want       string
+		wantCollab bool
+	}{
+		{"zero config shows buttons", Config{}, "false", false},
+		{"configured hides buttons", Config{HideAttachHelpers: true}, "true", false},
+		{"hidden with collaboration capability", Config{
+			HideAttachHelpers: true,
+			AssistantProfiles: fakeAssistantProfiles{maxDepthSource: "default"},
+		}, "true", true},
+		{"shown with collaboration capability", Config{
+			AssistantProfiles: fakeAssistantProfiles{maxDepthSource: "default"},
+		}, "false", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(t, tc.cfg)
+			w := httptest.NewRecorder()
+			srv.handleStatus(w, httptest.NewRequest("GET", "/api/status", nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status: got %d, want 200", w.Code)
+			}
+
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			got, ok := raw["hide_attach_helpers"]
+			if !ok {
+				t.Fatalf("hide_attach_helpers key missing from JSON: %s", w.Body.String())
+			}
+			if string(got) != tc.want {
+				t.Errorf("hide_attach_helpers = %s, want %s", got, tc.want)
+			}
+
+			var resp statusResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Capabilities.Collaboration != tc.wantCollab {
+				t.Errorf("capabilities.collaboration = %v, want %v", resp.Capabilities.Collaboration, tc.wantCollab)
+			}
+			if resp.CollaborationMode != assistants.CollaborationModeTeam {
+				t.Errorf("collaboration_mode = %q, want team (unchanged)", resp.CollaborationMode)
+			}
+		})
+	}
+}

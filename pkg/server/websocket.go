@@ -99,6 +99,7 @@ func (s *Server) writePump(conn *websocket.Conn, id uint64, ch <-chan bus.Event,
 					return
 				}
 			}
+			ev.Data = presentVerifyData(string(ev.Type), ev.Data, s.commandName)
 			data, err := json.Marshal(ev)
 			if err != nil {
 				continue

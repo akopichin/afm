@@ -60,6 +60,7 @@ const (
 	keyStep           = "step"
 	keyVerifyKind     = "kind"
 	keyVerifyCommand  = "command"
+	keyVerifyName     = "name"
 	keyVerdict        = "verdict"
 	keyExecErrorKind  = "exec_error"
 	keyVerifyReason   = "reason"
@@ -89,26 +90,42 @@ func (e *verifyLimitError) Error() string {
 
 func (e *verifyLimitError) Unwrap() error { return e.Limit }
 
-// emitVerifyStarted публикует событие live и в notices.jsonl; оно не входит в FSM-лог или flow.Phases.
-func (o *Orchestrator) emitVerifyStarted(stageID, verID string, idx int, kind, command string) {
+// verifyStepRef — идентичность шага в verify-notices: одно значение для start/result/retry/tree-modified/
+// stalemate, чтобы строки ленты не расходились.
+type verifyStepRef struct {
+	Index   int
+	Kind    string
+	Command string
+	Name    string
+}
+
+func verifyStepRefFor(st flow.VerifyStep, idx int) verifyStepRef {
+	return verifyStepRef{Index: idx, Kind: verifyStepManifestKind(st), Command: verifyStepManifestCommand(st), Name: st.Name}
+}
+
+// noticeData собирает общие поля notice шага; name пишется только у именованных шагов.
+func (r verifyStepRef) noticeData(verID string) map[string]any {
 	data := map[string]any{
 		keyVerificationID: verID,
-		keyStep:           idx,
-		keyVerifyKind:     kind,
-		keyVerifyCommand:  command,
+		keyStep:           r.Index,
+		keyVerifyKind:     r.Kind,
+		keyVerifyCommand:  r.Command,
 	}
-	o.publishNotice(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: data})
+	if r.Name != "" {
+		data[keyVerifyName] = r.Name
+	}
+	return data
+}
+
+// emitVerifyStarted публикует событие live и в notices.jsonl; оно не входит в FSM-лог или flow.Phases.
+func (o *Orchestrator) emitVerifyStarted(stageID, verID string, ref verifyStepRef) {
+	o.publishNotice(bus.Event{Type: bus.EventVerifyStarted, StageID: stageID, Data: ref.noticeData(verID)})
 }
 
 // emitVerifyResult публикует наблюдательное событие "шаг verify завершился" — см. emitVerifyStarted.
-func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, command string, verdict verify.Verdict, execErrorKind, reason, reportPath string) {
-	data := map[string]any{
-		keyVerificationID: verID,
-		keyStep:           idx,
-		keyVerifyKind:     kind,
-		keyVerifyCommand:  command,
-		keyVerifyReason:   reason,
-	}
+func (o *Orchestrator) emitVerifyResult(stageID, verID string, ref verifyStepRef, verdict verify.Verdict, execErrorKind, reason, reportPath string) {
+	data := ref.noticeData(verID)
+	data[keyVerifyReason] = reason
 	if verdict != "" {
 		data[keyVerdict] = string(verdict)
 	}
@@ -123,20 +140,18 @@ func (o *Orchestrator) emitVerifyResult(stageID, verID string, idx int, kind, co
 
 // emitVerifyRetry публикует событие «транзиентный сбой verify-шага будет повторён после backoff» —
 // live + durable, как emitVerifyStarted/emitVerifyResult. attempt — 1-based номер предстоящей повторной попытки.
-func (o *Orchestrator) emitVerifyRetry(stageID, verID string, idx int, kind, command string, attempt int, reason string) {
-	o.publishNotice(bus.Event{Type: bus.EventVerifyRetry, StageID: stageID, Data: map[string]any{
-		keyVerificationID: verID, keyStep: idx, keyVerifyKind: kind,
-		keyVerifyCommand: command, keyAttempt: attempt, keyVerifyReason: reason,
-	}})
+func (o *Orchestrator) emitVerifyRetry(stageID, verID string, ref verifyStepRef, attempt int, reason string) {
+	data := ref.noticeData(verID)
+	data[keyAttempt] = attempt
+	data[keyVerifyReason] = reason
+	o.publishNotice(bus.Event{Type: bus.EventVerifyRetry, StageID: stageID, Data: data})
 }
 
 // emitVerifyTreeModified публикует наблюдательное событие "verify-агент поменял рабочее дерево" — AI-verify
 // обязан быть read-only ревьюером, поэтому факт правки фиксируется как WARN-сигнал, но НИКОГДА не меняет
 // вердикт шага и не валит стадию. Live + durable, как emitVerifyStarted/emitVerifyResult/emitVerifyRetry.
-func (o *Orchestrator) emitVerifyTreeModified(stageID, verID string, idx int, command string) {
-	o.publishNotice(bus.Event{Type: bus.EventVerifyTreeModified, StageID: stageID, Data: map[string]any{
-		keyVerificationID: verID, keyStep: idx, keyVerifyCommand: command,
-	}})
+func (o *Orchestrator) emitVerifyTreeModified(stageID, verID string, ref verifyStepRef) {
+	o.publishNotice(bus.Event{Type: bus.EventVerifyTreeModified, StageID: stageID, Data: ref.noticeData(verID)})
 }
 
 // verifyTreeFingerprint берёт отпечаток рабочего дерева через подменяемый o.fingerprintFn. Нулевой seam
@@ -245,7 +260,11 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 		firstStep = resume.quota.VerifyStep - 1
 		if err := restoreVerifyPasses(stageDir, s, resume.quota, pass.manifestSteps, &pass.passedSteps); err != nil {
 			reason := "verify storage failure: " + err.Error()
-			o.emitVerifyResult(s.ID, verID, resume.quota.VerifyStep, "", "", "", execErrorKindExecFailure, reason, "")
+			ref := verifyStepRef{Index: resume.quota.VerifyStep}
+			if step := resume.quota.VerifyStep; step >= 1 && step <= len(s.Verify.Steps) {
+				ref = verifyStepRefFor(s.Verify.Steps[step-1], step)
+			}
+			o.emitVerifyResult(s.ID, verID, ref, "", execErrorKindExecFailure, reason, "")
 			return &VerifyExecError{Reason: reason, Step: resume.quota.VerifyStep}
 		}
 	}
@@ -265,9 +284,7 @@ func (o *Orchestrator) RunVerification(ctx context.Context, s flow.Stage, phase 
 			continue
 		}
 		idx := i + 1
-		kind := verifyStepManifestKind(st)
-		command := verifyStepManifestCommand(st)
-		o.emitVerifyStarted(s.ID, verID, idx, kind, command)
+		o.emitVerifyStarted(s.ID, verID, verifyStepRefFor(st, idx))
 
 		var stepErr error
 		if st.Kind == flow.VerifyAgent {
@@ -372,7 +389,7 @@ func (o *Orchestrator) runVerifyAgentStep(ctx context.Context, s flow.Stage, st 
 		outcome, err = o.runVerifyAgent(withPromptOnlyVerify(withVerifyStep(ctx, idx)), s, st.Command, prompt, agentLog, rawResult)
 	}
 	if afterFP, afterOK := o.verifyTreeFingerprint(); beforeOK && afterOK && beforeFP != afterFP {
-		o.emitVerifyTreeModified(s.ID, verID, idx, st.Command)
+		o.emitVerifyTreeModified(s.ID, verID, verifyStepRefFor(st, idx))
 	}
 	if err != nil {
 		// Истёкший дедлайн шага — таймаут, даже если отказ провайдера пришёл вместе с ним: паркуя такой шаг, повтор
@@ -558,12 +575,12 @@ func (o *Orchestrator) verifyShellInterruptPending(stageID string) bool {
 
 // persistVerifyRejection сохраняет result → report → manifest → feedback до emit и typed rejection; ошибка
 // записи даёт VerifyExecError.
-func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, kind, alias, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
-	if err := stagefiles.SaveAcceptedResult(stageDir, verID, idx, result); err != nil {
-		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
+func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, ref verifyStepRef, reason string, result verify.ModelResult, manifestSteps []stagefiles.ManifestStep, stageID, phase string) error {
+	if err := stagefiles.SaveAcceptedResult(stageDir, verID, ref.Index, result); err != nil {
+		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: ref.Index}
 	}
-	if err := stagefiles.WriteReport(stageDir, verID, result, alias, idx); err != nil {
-		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
+	if err := stagefiles.WriteReport(stageDir, verID, result, ref.Command, ref.Index); err != nil {
+		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: ref.Index}
 	}
 	if err := stagefiles.WriteManifest(stageDir, verID, stagefiles.Manifest{
 		RunID:          o.opts.RunID,
@@ -573,16 +590,16 @@ func (o *Orchestrator) persistVerifyRejection(stageDir, verID string, idx int, k
 		CreatedAt:      time.Now(),
 		Steps:          append([]stagefiles.ManifestStep(nil), manifestSteps...),
 	}); err != nil {
-		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
+		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: ref.Index}
 	}
-	if err := stagefiles.WriteActiveFeedback(stageDir, verID, result, alias, idx); err != nil {
-		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: idx}
+	if err := stagefiles.WriteActiveFeedback(stageDir, verID, result, ref.Command, ref.Index); err != nil {
+		return &VerifyExecError{Reason: "verify storage failure: " + err.Error(), Step: ref.Index}
 	}
-	o.emitVerifyResult(stageID, verID, idx, kind, alias, result.Verdict, "", result.Summary, verifyReportPath(stageDir, verID))
+	o.emitVerifyResult(stageID, verID, ref, result.Verdict, "", result.Summary, verifyReportPath(stageDir, verID))
 	return &VerifyRejectedError{
 		IncompleteWorkError: &stagefiles.IncompleteWorkError{Reason: reason},
 		ReportID:            verID,
-		Step:                idx,
+		Step:                ref.Index,
 	}
 }
 

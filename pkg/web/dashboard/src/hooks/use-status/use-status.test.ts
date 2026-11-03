@@ -136,6 +136,20 @@ describe('useStatus', () => {
     expect(byId.get('s5')?.verify).toEqual({ step: 0, command: '', phase: 'running' })
   })
 
+  test('verify keeps the check name, kind and server command_name for the rail tooltip', () => {
+    const { stages } = normalizeStatus({
+      stages: [{ id: 's1', status: 'running', verify: { step: 2, command: 'codex-as-claude', kind: 'agent', name: 'Code review', command_name: 'Codex Reviewer', phase: 'running' } }],
+    })
+    expect(stages[0]?.verify).toEqual({ step: 2, command: 'codex-as-claude', kind: 'agent', name: 'Code review', commandName: 'Codex Reviewer', phase: 'running' })
+  })
+
+  test('unknown_command_name is the fallback prefix; missing or blank means Unknown', () => {
+    expect(normalizeStatus({ unknown_command_name: 'test' }).unknownCommandName).toBe('test')
+    expect(normalizeStatus({}).unknownCommandName).toBe('Unknown')
+    expect(normalizeStatus({ unknown_command_name: '  ' }).unknownCommandName).toBe('Unknown')
+    expect(normalizeStatus({ unknown_command_name: 7 }).unknownCommandName).toBe('Unknown')
+  })
+
   // accepted_stalemate — синтезированный afm терминальный ПРИНЯТЫЙ исход должен пережить нормализацию
   // /api/status, иначе бейдж стадии пропадёт.
   test('парсит verify phase accepted_stalemate (review_patience) без отбрасывания', () => {
@@ -486,6 +500,35 @@ describe('useStatus', () => {
     expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 'Assistants' }).collaborationMode).toBe('team')
     expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: 7 }).collaborationMode).toBe('team')
     expect(normalizeStatus({ flow_name: 'demo', stages: [], collaboration_mode: null }).collaborationMode).toBe('team')
+  })
+
+  test('normalizeStatus maps hide_attach_helpers only for a boolean true', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: true }).hideAttachHelpers).toBe(true)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: false }).hideAttachHelpers).toBe(false)
+  })
+
+  test('normalizeStatus falls back to hideAttachHelpers false when the field is absent (old backend) or malformed', () => {
+    expect(normalizeStatus({ flow_name: 'demo', stages: [] }).hideAttachHelpers).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: 'true' }).hideAttachHelpers).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: 1 }).hideAttachHelpers).toBe(false)
+    expect(normalizeStatus({ flow_name: 'demo', stages: [], hide_attach_helpers: null }).hideAttachHelpers).toBe(false)
+  })
+
+  test('a failed poll keeps the last received hideAttachHelpers', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ flow_name: 'demo', stages: [], hide_attach_helpers: true }),
+    } as Response)
+
+    const { result } = renderHook(() => useStatus())
+    await waitFor(() => expect(result.current.hideAttachHelpers).toBe(true))
+
+    fetchSpy.mockRejectedValue(new Error('network down'))
+    const callsBefore = fetchSpy.mock.calls.length
+    result.current.refresh()
+    await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsBefore))
+
+    expect(result.current.hideAttachHelpers).toBe(true)
   })
 
   test('normalizeStatus reads run_id and defaults to "" when absent/non-string', () => {

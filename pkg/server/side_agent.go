@@ -35,6 +35,7 @@ type sideAgentStateResponse struct {
 	ConversationID string            `json:"conversation_id"`
 	RunID          string            `json:"run_id"`
 	Command        string            `json:"command"`
+	CommandName    string            `json:"command_name,omitempty"`
 	Unavailable    bool              `json:"unavailable"`
 	State          string            `json:"state"`
 	Events         []sideagent.Event `json:"events"`
@@ -101,6 +102,7 @@ func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 		ConversationID: s.sideAgent.ConversationID(),
 		RunID:          s.sideAgent.ConversationID(),
 		Command:        s.sideAgent.Command(),
+		CommandName:    s.commandName(s.sideAgent.Command()),
 		Unavailable:    s.sideAgent.Unavailable(),
 		State:          deriveSideAgentState(history),
 		Events:         events,

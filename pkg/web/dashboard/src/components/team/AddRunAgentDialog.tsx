@@ -1,7 +1,8 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { attachAndSendMesh, type MeshAttachAndSendResult, type MeshParticipant } from '../../api/mesh-client'
 import { useRetryableSubmit } from '../../hooks/use-retryable-submit'
-import { describeExecutor, describeUnavailable, type AssistantProfile } from '../../types/assistant-profile'
+import { describeExecutor, describeUnavailable, executorTitle, type AssistantProfile } from '../../types/assistant-profile'
+import { useUnknownCommandName } from '../../lib/executor-label'
 import { useModalDialog } from '../../lib/focus-trap'
 
 export type AddRunAgentDialogProps = {
@@ -24,6 +25,7 @@ export type AddRunAgentDialogProps = {
 // convention orchestrator.AddRunAgent's own thin wrapper uses. Uses the shared modal focus lifecycle
 // (useModalDialog) and modal-overlay/modal-content classes rather than reinventing them.
 export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage, active = true }: AddRunAgentDialogProps): ReactElement {
+  const unknownPrefix = useUnknownCommandName()
   const available = profiles.filter((p) => p.available)
   const [chosenId, setChosenId] = useState('')
   const [title, setTitle] = useState('')
@@ -92,7 +94,7 @@ export function AddRunAgentDialog({ profiles, onAttached, onCancel, originStage,
                 having no field for one (pkg/server/mesh.go's own comment on that struct). */}
             <dl className="add-run-agent-executor">
               <dt>Configured executor</dt>
-              <dd>{selected === null ? '—' : describeExecutor(selected)}</dd>
+              <dd title={selected === null ? undefined : executorTitle(selected, unknownPrefix)}>{selected === null ? '—' : describeExecutor(selected, unknownPrefix)}</dd>
             </dl>
             <label className="add-run-agent-field">
               <span>Title (optional)</span>

@@ -301,8 +301,10 @@ project, or run a quick command-style exchange *without* touching the run.
   status or trigger stage timers or lifecycle hooks, and an error in a turn cannot
   fail a stage. Mesh messages to and from the Assistant appear in their original
   Team or stage Feed conversations. When Agent Mesh is available, the Assistant
-  appears in Team as `@assistant` in newly registered runs. Older runs keep their
-  saved `@side` handle.
+  appears in Team as **Assistant** with the handle `@assistant` in newly registered
+  runs, and a separate chip names the executor it runs (for example **Claude
+  Code**). Older runs keep their saved `@side` handle; their roster entry is shown
+  as **Assistant** too, without rewriting the journal.
 - **Messages from colleagues appear here too.** A message addressed to `@assistant`
   from Team, a stage Feed, or an agent starts a turn in this conversation. The
   incoming message is labelled **From <sender>**; while it runs, the header says
@@ -362,6 +364,42 @@ the dashboard also exposes unauthenticated mutating stage/flow APIs, so the bind
 unconditional regardless of whether the Assistant or file browser is enabled.
 Remote/authenticated access is not supported in this version.
 
+## Executor names
+
+Wherever the dashboard shows who runs an agent, it shows a readable **executor
+name** instead of the raw command: `Codex Reviewer`, not `codex-as-claude`. The
+server resolves the name from [`command_names`](config-reference.md#executor-names)
+in the global or project `config.yaml`, then a built-in list (`Claude Code`,
+`Codex`, `Cursor Agent`, `OpenAI`, `OpenAI Agent`), then the command's file name.
+It is presentation only; the command that runs, participant handles and the
+journals do not change. The name is a separate chip next to the participant's own
+name: `Architecture` is the participant and `Codex Reviewer` is its executor.
+
+The name appears in:
+
+- the stage **People** panel and the **Assistant** row of the Team roster. The
+  other Team roster rows do not show an executor chip;
+- the sender header of a message in a Team conversation and in the stage Feed;
+- the context line above the Feed, for example `Stage 1 of 2 · Development Agent`;
+- **Attach helper…**, **Add run agent** and the attach confirmation, for example
+  `Codex Reviewer (profile)` and **Configured executor**;
+- the **Assistant** window, and the **Executor** line of the **+ Stage** preview;
+- [Verify](verify.md#naming-a-step) lines in the Feed and the rail's verify
+  badge, for an AI step.
+
+A long name is shortened with an ellipsis in the chip. Hover over any of these
+to see a tooltip with the full name and a second line `Command: <raw command>`.
+Names are plain text: a name such as `<b>Tag</b> Agent` is shown literally. Names
+come from the config read at start, so after you edit `command_names` restart
+the run; earlier history shows the new names as well. If the server sends no name
+for a command, the chip falls back to `<prefix>-1`, `<prefix>-2`, … with one
+number per command and the raw command in its tooltip; the prefix is
+[`unknown_command_name`](config-reference.md#executor-names), `Unknown` by default.
+
+To hide the raw command from every tooltip (leaving only the full name), a skin
+sets the CSS variable `--afm-raw-command-tooltip: none`; see
+[Themes](#themes).
+
 ## Themes
 
 The dashboard ships with three built-in themes; choose one with `theme:` in
@@ -379,6 +417,24 @@ that normalizes to `graphite`. Light vs. dark mode is toggled inside the dashboa
 itself and is independent of the theme choice. A fully custom skin can be supplied
 via the top-level `skin_dir:` config option (a directory containing `index.css`),
 which overrides the built-in theme.
+
+A skin can also hide raw commands from the [executor-name](#executor-names)
+tooltips by setting `--afm-raw-command-tooltip: none` on `:root`. The tooltips then
+keep the full name (and a Verify step's number) without the command. To keep a
+built-in look and only add this, point `skin_dir` at a directory whose
+`index.css` imports the built-in skin:
+
+```css
+/* .afm/skin/index.css, with skin_dir: .afm/skin in config.yaml */
+@import url("../graphite/index.css");
+:root { --afm-raw-command-tooltip: none; }
+```
+
+The dashboard serves a custom skin at `/skins/custom/` and the built-in ones at
+`/skins/<theme>/`, so `../<theme>/index.css` reaches a built-in skin; use `goga` or
+`novacorps` in place of `graphite` for those looks. Without the variable the tooltips show the command as before. The
+visible text does not change: an unnamed shell Verify step still reads
+`Verify step 1 · make test`.
 
 The dashboard uses entrance animations as content appears. The reply-to-thought
 quote chip and the line-comment quote mark glow in, taking their accent color from
@@ -705,9 +761,10 @@ returns to that width when space grows again. If browser storage is unavailable,
 resizing still works, but the width is not retained.
 
 - Each row shows the person's `@handle`, what they are doing now and a presence
-  dot. A chip next to the name shows the command they run: the stage's command
-  for a stage agent, the resolved executor for a run agent or helper (the
-  profile's command, or the one it inherits; see
+  dot. A chip next to the name shows the executor they run, by its
+  [readable name](#executor-names): the stage's command for a stage agent, the
+  resolved executor for a run agent or helper (the profile's command, or the one
+  it inherits; see
   [Which executor a helper runs](collaboration.md#which-executor-a-helper-runs)). A run agent
   or helper also shows its read-only guarantee: **read-only** (an OS sandbox
   enforces it) or **no sandbox** (only the container or the prompt limits it).
@@ -732,6 +789,11 @@ resizing still works, but the width is not retained.
 - Where there is no People panel (for example in `assistants` mode, or with
   collaboration on but no Agent Mesh), the stage header has an **Attach helper…**
   button instead, shown under the same condition. It opens the same dialog.
+- With `collaboration.hide_attach_helpers: true` (or `AFM_HIDE_ATTACH_HELPERS=1`) both
+  **Attach helper to stage…** and the header **Attach helper…** are not shown, and
+  **Add run agent…** and People stay. **Attach to stage** in the Feed `@` list and
+  helpers that already exist are unaffected. See
+  [Config reference](config-reference.md#configuration).
 
 On a wide screen the panel is open by default next to the Feed. Click **People**
 in the stage header, or **×** in the panel, to hide it; the Feed and composer then

@@ -167,7 +167,7 @@ func (o *Orchestrator) liveRoster(rs state.RunState) []agentcomm.Participant {
 	}
 	slices.Sort(runIDs)
 	for _, idStr := range runIDs {
-		p := o.sideParticipantAvailable(liveRunParticipant(rs, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)]))
+		p := o.withSideAgentRuntime(liveRunParticipant(rs, *rs.Assistants.Mesh.Participants[agentcomm.ParticipantID(idStr)]))
 		if taskID, ok := runTaskForParticipant(rs, p.ID); ok && rs.Assistants.Tasks[taskID] != nil {
 			p = o.withTaskExecutor(rs, p, rs.Assistants.Tasks[taskID])
 		}
@@ -368,8 +368,12 @@ func participantStage(rs state.RunState, id agentcomm.ParticipantID) string {
 
 // liveRunParticipant derives a run agent's reachability from its task, like helperParticipant does: the
 // journal's descriptor says Reachable for good, but once the agent's task is terminal nobody will read new
-// messages, so it must not look (or be addressable) as if somebody would.
+// messages, so it must not look (or be addressable) as if somebody would. The bound Side agent is shown as the
+// Assistant whatever name its descriptor saved.
 func liveRunParticipant(rs state.RunState, p agentcomm.Participant) agentcomm.Participant {
+	if p.Kind == agentcomm.KindSideAgent {
+		return assistantParticipant(p, "")
+	}
 	if p.Kind != agentcomm.KindRunAgent {
 		return p
 	}

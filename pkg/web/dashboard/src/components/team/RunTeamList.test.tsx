@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { resetUnknownCommandLabels } from '../../lib/executor-label'
 import { RunTeamList } from './RunTeamList'
 import type { MeshParticipant, MeshThread } from '../../api/mesh-client'
+
+beforeEach(() => resetUnknownCommandLabels())
 
 const participants: MeshParticipant[] = [
   { id: 'user', kind: 'user', scope: 'run', reachable: true },
@@ -249,9 +252,9 @@ describe('RunTeamList with focusStageId', () => {
     ...participants,
     {
       id: 'run:sec', kind: 'run_agent', scope: 'run', alias: 'security', display_name: 'Security', reachable: true,
-      command: 'codex-as-claude', readonly_enforcement: 'os',
+      command: 'codex-as-claude', command_name: 'Codex Reviewer', readonly_enforcement: 'os',
     },
-    { id: 'helper:h2', kind: 'helper', scope: 'stage', stage_id: 'implement', display_name: 'Docs helper', reachable: true, command: 'claude', readonly_enforcement: 'none' },
+    { id: 'helper:h2', kind: 'helper', scope: 'stage', stage_id: 'implement', display_name: 'Docs helper', reachable: true, command: 'claude', command_name: 'Claude Code', readonly_enforcement: 'none' },
     { id: 'helper:h3', kind: 'helper', scope: 'stage', stage_id: 'commit', display_name: 'Commit helper', reachable: true },
   ]
 
@@ -357,14 +360,34 @@ describe('RunTeamList with focusStageId', () => {
   test('the command chip and the sandbox come from the roster fields', () => {
     renderFocused()
     const sec = screen.getByText('Security').closest('button') as HTMLElement
-    expect(within(sec).getByText('codex-as-claude')).toHaveClass('team-person-chip')
+    expect(within(sec).getByText('Codex Reviewer')).toHaveClass('team-person-chip')
     expect(within(sec).getByText('read-only')).toHaveAttribute('data-enforcement', 'os')
     const docs = screen.getByText('Docs helper').closest('button') as HTMLElement
-    expect(within(docs).getByText('claude')).toHaveClass('team-person-chip')
+    expect(within(docs).getByText('Claude Code')).toHaveClass('team-person-chip')
     expect(within(docs).getByText('no sandbox')).toHaveAttribute('data-enforcement', 'none')
     // Nothing guessed: a row without the fields has no chips.
     const qa = screen.getByText('QA reviewer').closest('button') as HTMLElement
     expect(qa.querySelector('.team-person-chip')).toBeNull()
+  })
+
+  test('the chip tooltip is the full name and the raw command, and the raw command stays out of the text', () => {
+    renderFocused()
+    const sec = screen.getByText('Security').closest('button') as HTMLElement
+    expect(within(sec).getByText('Codex Reviewer')).toHaveAttribute('title', 'Codex Reviewer\nCommand: codex-as-claude')
+    expect(sec).not.toHaveTextContent('codex-as-claude')
+  })
+
+  test('a person whose command the server sent no name for gets a numbered label', () => {
+    renderFocused({ participants: [...focusParticipants, { id: 'run:odd', kind: 'run_agent', scope: 'run', display_name: 'Odd', reachable: true, command: './tools/x/agent.sh' }] })
+    const odd = screen.getByText('Odd').closest('button') as HTMLElement
+    expect(within(odd).getByText('Unknown-1')).toHaveAttribute('title', 'Unknown-1\nCommand: ./tools/x/agent.sh')
+  })
+
+  test('the Assistant keeps its participant name and gets the executor as a separate chip', () => {
+    renderFocused({ participants: [...focusParticipants.filter((p) => p.kind !== 'side_agent'), assistant] })
+    const row = screen.getByText('Assistant', { selector: '.team-person-name' }).closest('button') as HTMLElement
+    expect(within(row).getByText('Claude Code')).toHaveClass('team-person-chip')
+    expect(row).not.toHaveTextContent(/claude(?! Code)/)
   })
 
   test('without onPick the rows are disabled and the hint says when writing is possible', () => {
@@ -381,7 +404,35 @@ describe('RunTeamList with focusStageId', () => {
   })
 })
 
+const assistant: MeshParticipant = {
+  id: 'side:run-1', kind: 'side_agent', scope: 'run', alias: 'assistant', display_name: 'Assistant', reachable: true,
+  command: 'claude', command_name: 'Claude Code',
+}
+
 describe('RunTeamList without focusStageId (the Team tab)', () => {
+  test('only the Assistant row carries an executor badge; other participants stay as they were', () => {
+    render(
+      <RunTeamList
+        participants={[...participants.filter((p) => p.kind !== 'side_agent'), assistant, { id: 'run:sec', kind: 'run_agent', scope: 'run', display_name: 'Security', reachable: true, command: 'codex-as-claude', command_name: 'Codex Reviewer' }]}
+        threads={threads}
+        stages={stages}
+        onSelectParticipant={vi.fn()}
+        onSelectThread={vi.fn()}
+        onAddRunAgent={vi.fn()}
+        listView="people"
+        open
+      />,
+    )
+    const row = screen.getByText('Assistant', { selector: '.team-person-name' }).closest('button') as HTMLElement
+    const badge = within(row).getByText('Claude Code')
+    expect(badge).toHaveClass('team-person-chip')
+    expect(badge).toHaveAttribute('title', 'Claude Code\nCommand: claude')
+    expect(row).toHaveTextContent('@assistant')
+    const nav = screen.getByRole('navigation', { name: 'Team roster' })
+    expect(nav.querySelectorAll('.team-person-chip')).toHaveLength(1)
+    expect(nav).not.toHaveTextContent('Codex Reviewer')
+  })
+
   test('keeps its groups, ids and rows: no chips, nothing disabled, finished rows keep their reason', () => {
     render(
       <RunTeamList
@@ -401,7 +452,8 @@ describe('RunTeamList without focusStageId (the Team tab)', () => {
     expect(nav).toHaveClass('team-roster', 'open')
     expect(nav).not.toHaveClass('team-roster-embedded')
     expect(document.getElementById('team-roster-run')).not.toBeNull()
-    expect(nav.querySelector('.team-person-chip, .team-person-title, .team-person-sandbox')).toBeNull()
+    expect(nav.querySelector('.team-person-sandbox')).toBeNull()
+    expect(nav.querySelector('.team-person-chip')).toBeNull() // the only side agent here has no command, and Security (a run agent) gets no badge
     expect(within(nav).getAllByRole('button').every((b) => !(b as HTMLButtonElement).disabled)).toBe(true)
     expect(screen.getByText('task h1 has reached a terminal status')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add run agent' })).toBeInTheDocument()
