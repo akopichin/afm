@@ -179,7 +179,8 @@ export type AssistantFinding = {
 // AssistantTaskView.tsx's latestResult), подтверждённый сквозным
 // cmd/afm/run_collaboration_integration_test.go, а не форвард-совместимый мёртвый код.
 export type AssistantResult = {
-  verdict: AssistantVerdict
+  // Absent for a neutral advisory report: no verdict badge, never read as "Needs changes".
+  verdict?: AssistantVerdict
   summary: string
   findings: AssistantFinding[]
   evidence: string[]
@@ -195,7 +196,8 @@ export type AssistantResult = {
 export function parseAssistantResult(raw: unknown): AssistantResult | null {
   if (raw === null || typeof raw !== 'object') return null
   const obj = raw as Record<string, unknown>
-  if (!isAssistantVerdict(obj.verdict) || typeof obj.summary !== 'string') return null
+  if (typeof obj.summary !== 'string') return null
+  if (obj.verdict !== undefined && !isAssistantVerdict(obj.verdict)) return null
 
   const findings: AssistantFinding[] = Array.isArray(obj.findings)
     ? obj.findings.map(toFinding).filter((f): f is AssistantFinding => f !== null)

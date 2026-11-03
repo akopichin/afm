@@ -11,7 +11,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-var nativeContracts = []Contract{VerifyResult, AssistantResultOnly, Question}
+var nativeContracts = []Contract{VerifyResult, AssistantResultOnly, AssistantResultOnlyRequired, Question}
 
 var nativeDialects = []Dialect{DialectClaude, DialectStrict}
 
@@ -24,9 +24,14 @@ var validPayloads = map[Contract][]string{
 		`{"schema_version":1,"verdict":"needs_changes","summary":["line 1","line 2"],"findings":[{"blocking":true,"title":"t","path":"a.go","line_start":3,"line_end":4,"requirement":["r"],"evidence":"e","minimal_fix":"m"}]}`,
 	},
 	AssistantResultOnly: {
+		`{"schema_version":1,"kind":"result","summary":"logs collected"}`,
 		`{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok"}`,
 		`{"schema_version":1,"kind":"result","verdict":"inconclusive","summary":["a","b"],"findings":null,"evidence":"checked","context_version":null}`,
 		`{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"s","findings":[{"id":"f1","severity":"major","path":"a.go","line_start":1,"line_end":2,"detail":["d"]}],"evidence":["e"],"suggested_change":"fix","limitations":"none","context_version":"v1"}`,
+	},
+	AssistantResultOnlyRequired: {
+		`{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok"}`,
+		`{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"s","findings":[{"id":"f1","severity":"major","detail":["d"]}],"evidence":["e"]}`,
 	},
 	Question: {
 		`{"question":"Pick?","options":["a","b"],"allow_custom":false}`,
@@ -156,7 +161,7 @@ func TestNativeJSON_StrictDialectKeepsOnlyAllowedKeywordsAndClosesObjects(t *tes
 
 // A strict-mode model must send every property, so an optional one that cannot be null gets null as its "absent".
 func TestNativeJSON_StrictDialectMakesOptionalPropertiesNullable(t *testing.T) {
-	root := decodeObject(t, mustNative(t, AssistantResultOnly, DialectStrict))
+	root := decodeObject(t, mustNative(t, AssistantResultOnlyRequired, DialectStrict))
 	properties := root["properties"].(map[string]any)
 	for _, name := range []string{"evidence", "suggested_change", "limitations"} {
 		if !acceptsNull(properties[name].(map[string]any)) {
@@ -177,9 +182,10 @@ func TestNativeJSON_StrictDialectMakesOptionalPropertiesNullable(t *testing.T) {
 // rejects every try.
 func TestNativeJSON_TypesEveryConstAndEnum(t *testing.T) {
 	wantTypes := map[Contract]map[string]string{
-		VerifyResult:        {"schema_version": "integer", "verdict": "string"},
-		AssistantResultOnly: {"schema_version": "integer", "kind": "string", "verdict": "string"},
-		Question:            {},
+		VerifyResult:                {"schema_version": "integer", "verdict": "string"},
+		AssistantResultOnly:         {"schema_version": "integer", "kind": "string"},
+		AssistantResultOnlyRequired: {"schema_version": "integer", "kind": "string", "verdict": "string"},
+		Question:                    {},
 	}
 	for _, contract := range nativeContracts {
 		for _, dialect := range nativeDialects {

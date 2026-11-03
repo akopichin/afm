@@ -81,7 +81,6 @@
       "required": [
         "schema_version",
         "kind",
-        "verdict",
         "summary"
       ],
       "properties": {
@@ -97,7 +96,8 @@
             "pass",
             "needs_changes",
             "inconclusive"
-          ]
+          ],
+          "description": "Assessment of the work. Send it when the task asks for one; otherwise omit the field."
         },
         "summary": {
           "$ref": "#/definitions/freeText"

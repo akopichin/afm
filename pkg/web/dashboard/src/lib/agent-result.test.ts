@@ -8,6 +8,12 @@ describe('parseAgentResultBody', () => {
     expect(messageText(body, true)).toBe('Could not reach the API.')
   })
 
+  test('a result without a verdict is still recognised', () => {
+    const body = '{"schema_version":1,"kind":"result","summary":"Collected the logs."}'
+    expect(parseAgentResultBody(body)).toEqual({ summary: 'Collected the logs.' })
+    expect(messageText(body, true)).toBe('Collected the logs.')
+  })
+
   test("a human's JSON is never reinterpreted", () => {
     const body = '{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok"}'
     expect(messageText(body, false)).toBe(body)
@@ -17,6 +23,8 @@ describe('parseAgentResultBody', () => {
     ['plain text', 'all good'],
     ['other JSON', '{"kind":"delegate","summary":"x","schema_version":1}'],
     ['no summary', '{"schema_version":1,"kind":"result","verdict":"pass"}'],
+    ['empty verdict', '{"schema_version":1,"kind":"result","verdict":"","summary":"ok"}'],
+    ['null verdict', '{"schema_version":1,"kind":"result","verdict":null,"summary":"ok"}'],
     ['no schema_version', '{"kind":"result","verdict":"pass","summary":"ok"}'],
     ['another schema version', '{"schema_version":2,"kind":"result","verdict":"pass","summary":"ok"}'],
     ['unknown verdict', '{"schema_version":1,"kind":"result","verdict":"great","summary":"ok"}'],

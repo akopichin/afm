@@ -603,3 +603,72 @@ func TestChain_ExplainedInApi(t *testing.T) {
 	close(release)
 	waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 2*time.Second)
 }
+
+// A required on_completion helper runs once the main executor is done, while the stage awaits it; the stage then
+// completes once: its after-hook runs once and its dependent stage is made ready once.
+func TestBarrier_RequiredCompletionHelperGatesCompletionOnce(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "after-ran")
+	upstream := flow.Stage{ID: assistantsTestStageID, Command: "claude", ScriptAfter: "echo ran >> " + marker}
+	downstream := flow.Stage{ID: "downstream", Command: "claude", DependsOn: []string{assistantsTestStageID}}
+	o, store := newMultiStageBarrierTestOrchestrator(t, []flow.Stage{upstream, downstream})
+	activateStage(t, o, assistantsTestStageID)
+	release := make(chan struct{})
+	turns := countTurns(t, o, release)
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeRequired)
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+	waitForTaskStatus(t, store, helper, assistants.StatusRunning, 2*time.Second)
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusAwaitingAssistants {
+		t.Fatalf("status = %v while the required helper runs, want awaiting_assistants", got)
+	}
+	if got := o.currentStatus("downstream"); got != state.StatusPending {
+		t.Fatalf("downstream = %v before the gate closed, want pending", got)
+	}
+	close(release)
+
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("required on_completion helper ran %d turns, want 1", got)
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "ran\n" {
+		t.Fatalf("after-hook output = %q, %v; want exactly one run", raw, err)
+	}
+	history, err := store.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readied := 0
+	for _, tr := range history {
+		if tr.StageID == "downstream" && tr.To == state.StatusReady {
+			readied++
+		}
+	}
+	if readied != 1 {
+		t.Fatalf("downstream was made ready %d times, want once", readied)
+	}
+}
+
+// An advisory on_completion helper does not hold its stage: the stage is done, and the helper's needs_changes is
+// recorded as its own assessment of the finished stage.
+func TestBarrier_AdvisoryCompletionHelperVerdictDoesNotHoldTheStage(t *testing.T) {
+	o, store := newBarrierTestOrchestrator(t, flow.Stage{ID: assistantsTestStageID, Command: "claude"})
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return executor.HelperOutcome{ProcessOK: true, RawText: `{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"the logs show a retry storm"}`}, nil
+	}
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeAdvisory)
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusDone {
+		t.Fatalf("status = %v, want done: an advisory helper does not gate its stage", got)
+	}
+	done := waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	if done.LastVerdict != assistants.VerdictNeedsChanges {
+		t.Fatalf("helper verdict = %q, want needs_changes", done.LastVerdict)
+	}
+	if got := o.currentStatus(assistantsTestStageID); got != state.StatusDone {
+		t.Fatalf("status = %v after the helper's needs_changes, want still done", got)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/mcp"
 	"github.com/akopichin/afm/pkg/orchestrator/verify"
+	"github.com/akopichin/afm/schema"
 )
 
 type schemaCase struct {
@@ -26,6 +27,9 @@ func TestOutputSchemaParity(t *testing.T) {
 			{`{"schema_version":1,"kind":"result","verdict":"pass","summary":["ok"],"evidence":"checked","context_version":null,"findings":null}`, true},
 			{`{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"review","findings":[{"id":"f","severity":"major","detail":"d","path":null,"line_start":null,"line_end":null}]}`, true},
 			{`{"schema_version":1,"kind":"delegate","children":[{"profile_id":"p","title":"t","instruction":"i","mode":"advisory","trigger":"one_shot"}],"continuation":null}`, true},
+			{`{"schema_version":1,"kind":"result","summary":"logs collected"}`, true},
+			{`{"schema_version":1,"kind":"result","verdict":"","summary":"ok"}`, false},
+			{`{"schema_version":1,"kind":"result","verdict":null,"summary":"ok"}`, false},
 			{`{"schema_version":1,"kind":"result","verdict":"pass"}`, false},
 			{`{"schema_version":1,"kind":"result","verdict":"pass","summary":null}`, false},
 			{`{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok","findings":[{}]}`, false},
@@ -119,5 +123,31 @@ func TestOutputSchemaNumericVersionParity(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The required variants are derived in code, not files: the decoder with requireVerdict must accept exactly what
+// they accept.
+func TestRequiredVerdictContractParity(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{`{"schema_version":1,"kind":"result","verdict":"pass","summary":"ok"}`, true},
+		{`{"schema_version":1,"kind":"result","verdict":"needs_changes","summary":"ok"}`, true},
+		{`{"schema_version":1,"kind":"delegate","children":[{"profile_id":"p","title":"t","instruction":"i"}]}`, true},
+		{`{"schema_version":1,"kind":"result","summary":"logs collected"}`, false},
+		{`{"schema_version":1,"kind":"result","verdict":"","summary":"ok"}`, false},
+		{`{"schema_version":1,"kind":"result","verdict":null,"summary":"ok"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			if _, err := assistants.DecodeResultFor([]byte(tc.raw), true); (err == nil) != tc.want {
+				t.Errorf("decoder accepts=%v want=%v", err == nil, tc.want)
+			}
+			if got := schema.Validate(schema.AssistantResultRequired, []byte(tc.raw)) == nil; got != tc.want {
+				t.Errorf("schema accepts=%v want=%v", got, tc.want)
+			}
+		})
 	}
 }

@@ -48,6 +48,16 @@ stop blocking root-stage completion). Concretely:
   consumer already relies on. The strict rule above is specifically about the
   *discriminators* (`kind`, `schema_version`), not about every field on a record.
 
+## Results without a verdict
+
+The `verdict` of a helper's `task_result` is optional for an advisory helper: a
+result that only reports (for example, collected logs) is recorded without the
+field, and replay shows it as a completed task with no verdict. A required
+helper's result still carries one. Older journals, where every `task_result`
+has a verdict, replay unchanged. An older binary cannot replay a journal that
+contains a result without a verdict; use this release or a later one to resume
+such a run.
+
 ## Conversation topic edits
 
 Editing or clearing a Team conversation topic commits a

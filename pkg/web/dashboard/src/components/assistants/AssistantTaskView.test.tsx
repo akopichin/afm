@@ -166,15 +166,60 @@ describe('AssistantTaskView', () => {
     expect(screen.queryByText('repaired')).toBeNull()
   })
 
+  test('a result without a verdict shows summary, evidence-bearing fields and no verdict badge', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      eventsResponse([{ seq: 1, type: 'task_result', data: { summary: 'Collected the logs.', evidence: ['a.log'], limitations: 'one pod missing' } }]),
+    )
+    const { container } = render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('Collected the logs.')).toBeInTheDocument())
+    expect(screen.getByText('a.log')).toBeInTheDocument()
+    expect(screen.getByText('one pod missing')).toBeInTheDocument()
+    expect(container.querySelector('.assistant-task-verdict')).toBeNull()
+    expect(screen.queryByText('Needs changes')).toBeNull()
+    expect(screen.queryByText(/no detailed result/i)).toBeNull()
+  })
+
+  test('a result without evidence or limitations renders neither section', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_result', data: { summary: 'Collected the logs.' } }]))
+    const { container } = render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('Collected the logs.')).toBeInTheDocument())
+    expect(container.querySelector('.assistant-task-evidence')).toBeNull()
+    expect(container.querySelector('.assistant-task-limitations')).toBeNull()
+  })
+
+  test('a required task with a pass verdict is treated as passed: waive is hidden', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_result', data: { verdict: 'pass', summary: 'All good.' } }]))
+    render(<AssistantTaskView task={makeTask({ mode: 'required', status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('All good.')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Waive…' })).toBeNull()
+  })
+
+  test('an event of another type that carries a summary is not read as the result', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_delegated', data: { summary: 'Splitting the work.' } }]))
+    render(<AssistantTaskView task={makeTask({ status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText(/no detailed result/i)).toBeInTheDocument())
+    expect(screen.queryByText('Splitting the work.')).toBeNull()
+  })
+
+  test('a required task whose result has no verdict is not treated as passed: waive stays offered', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(eventsResponse([{ seq: 1, type: 'task_result', data: { summary: 'Collected the logs.' } }]))
+    render(<AssistantTaskView task={makeTask({ mode: 'required', status: 'completed' })} />)
+
+    await waitFor(() => expect(screen.getByText('Collected the logs.')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Waive…' })).toBeInTheDocument()
+  })
+
   test('completed result renders through the shared safe markdown renderer, not a second dangerouslySetInnerHTML', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       eventsResponse([
         {
           seq: 1,
           // The real wire shape (pkg/server/assistants.go's AssistantEventView.Type) is literally the
-          // string "task_result" — a different literal here would silently defeat this test's purpose: it
-          // would still pass even if the Go side's event Kind were renamed out from under it, since
-          // parseAssistantResult does not look at `type` at all (see latestResult's doc comment).
+          // string "task_result"; latestResult only reads events of that type.
           type: 'task_result',
           data: {
             verdict: 'needs_changes',

@@ -437,6 +437,34 @@ func TestLoopHelper_SelfLoopWakesItsCreatorOncePerSlot(t *testing.T) {
 	}
 }
 
+// A tick never starts an on_completion helper before its stage has a result: the slot is skipped without a trace
+// and the helper keeps watching. A checkpoints watcher of the same stage is still restarted by its own loop.
+func TestLoopHelper_TickSkipsACompletionHelperBeforeItsStageResult(t *testing.T) {
+	r := newHelperRig(t, passes)
+	helper := attachWatcherTask(t, r.o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeAdvisory)
+	control := attachWatcherTask(t, r.o, "op-control", assistantsTestStageID, assistants.TriggerCheckpoints, assistants.ModeAdvisory)
+	r.loopFor(t, "op-loop-helper", helper)
+	r.loopFor(t, "op-loop-control", control)
+	rs := r.store.Snapshot()
+	if r.o.loopMayTick(rs, *rs.Assistants.Loops[r.loopKey(t, "L1")]) {
+		t.Fatal("loopMayTick = true for an on_completion helper whose stage is still running")
+	}
+	seq := rs.LastSeq
+
+	if err := r.tick(t, "L1", 1); err != nil {
+		t.Fatalf("commitLoopTick = %v, want the skipped slot to be quiet", err)
+	}
+	if after := r.task(helper); after.Status != assistants.StatusWatching || r.turnsOf(helper) != 0 {
+		t.Fatalf("task = %s (%d runs), want still watching: a tick started it before its stage's result", after.Status, r.turnsOf(helper))
+	}
+	if r.store.Snapshot().LastSeq != seq || r.lastSlot(t, "L1") != 0 {
+		t.Fatal("a tick skipped for an on_completion helper left a trace in the journal")
+	}
+
+	r.mustTick(t, "L2", 1)
+	r.waitRested(t, control, 1, assistants.StatusWatching)
+}
+
 // A final watcher pass winning the CAS must invalidate a tick planned from its resting state.
 func TestLoopHelper_TickPlannedForAWatcherLosesTheRaceToItsFinalPass(t *testing.T) {
 	r := newHelperRig(t, passes)

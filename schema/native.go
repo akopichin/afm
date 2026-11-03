@@ -49,7 +49,7 @@ func NativeJSON(contract Contract, dialect Dialect) (string, bool) {
 // nativeRoot is the contract's own answer schema with every $ref inlined, the root keywords that no native mode
 // takes dropped and every const and enum typed.
 func nativeRoot(contract Contract) (map[string]any, bool) {
-	if contract == AssistantResult {
+	if contract == AssistantResult || contract == AssistantResultRequired {
 		return nil, false
 	}
 	var doc map[string]any
@@ -248,11 +248,14 @@ func acceptsNull(node map[string]any) bool {
 }
 
 // allowsObject reports whether a schema "type" is, or lists, "object".
+const objType = "object"
+
+// allowsObject reports whether a schema "type" is, or lists, "object".
 func allowsObject(typeValue any) bool {
 	if list, isList := typeValue.([]any); isList {
-		return slices.Contains(list, any("object"))
+		return slices.Contains(list, any(objType))
 	}
-	return typeValue == "object"
+	return typeValue == objType
 }
 
 // NormalizeNative turns an answer written against the strict variant back into the contract's form: an optional

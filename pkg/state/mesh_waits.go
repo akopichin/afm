@@ -146,7 +146,7 @@ func (as *AssistantsState) meshWaitSatisfied(w *MeshWait) bool {
 		if w.FreshResultOnly {
 			return t.ResultSeq > w.ResultBaseline
 		}
-		return t.LastVerdict != ""
+		return t.ResultSeq != 0
 	case agentcomm.WaitOnBoardKey:
 		e, ok := as.Mesh.Board[cond.Key]
 		return ok && e.Status == cond.Status

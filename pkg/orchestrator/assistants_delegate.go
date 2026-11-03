@@ -604,6 +604,7 @@ func (o *Orchestrator) recoverAssistants(ctx context.Context) {
 // turns a crash cut short back in the queue, and starts nothing: Run decides the waits for requests an idle agent
 // left between the halves, before a new turn makes it busy.
 func (o *Orchestrator) settleAssistantsAfterRestart() {
+	defer o.helpersSettled.Store(true)
 	if !o.opts.AssistantsEnabled {
 		return
 	}
@@ -649,8 +650,13 @@ func (o *Orchestrator) resumeAssistantsAfterRestart(ctx context.Context) {
 			// (hasOpenMeshWaitFor, hasWakingUnread) are re-derived fresh, and the resume it triggers is
 			// CAS-protected, so finding nothing to do (or racing tryResumePeer's own resume above) is a no-op.
 			o.maybeResumeAwaitingPeerQuestion(ctx, meshParticipantForTask(o.opts.Store.Snapshot(), t.Task))
+		case assistants.StatusWatching:
+			// The crash may have come between the stage's result and the pass it owes this helper.
+			if isCompletionHelper(t.Task) {
+				o.issueCompletionPasses(ctx, t.RootStageID)
+			}
 		default:
-			// waiting_parent/watching/paused/terminal: nothing for a fresh process to do on its own —
+			// waiting_parent/paused/terminal: nothing for a fresh process to do on its own —
 			// waiting_parent is reactivated by the stage's own startup path, paused stays paused until an
 			// explicit ContinueTask, and a terminal status needs no recovery at all.
 		}

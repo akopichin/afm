@@ -3,6 +3,31 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-03
+
+### Fix: an `on_completion` helper starts only after the stage result is ready
+
+A stage helper with `trigger: on_completion` could start while the stage agent
+was still writing output, so a log collector reported on an unfinished stage.
+It now starts only when the stage's own result is ready (`awaiting_assistants`
+or `done`), however the start is requested: by output, a message, **Continue**,
+a `/loop` tick or a restart. It gets one final pass, which survives a restart of
+afm and **Pause** / **Continue**, and a helper attached after the result is
+ready starts at once. A required helper still holds the stage until it passes or
+is waived. A stage that fails or is cancelled does not start it. `checkpoints`
+helpers are unchanged. See
+[When an on-completion helper starts](docs/collaboration.md#when-an-on-completion-helper-starts).
+
+### Improvement: advisory helpers can report without a verdict
+
+An advisory helper may answer with just a summary and evidence; the verdict is
+optional and afm never makes one up. The helper view and the stage Feed show
+such a report without a verdict badge instead of "Needs changes". A required
+helper must still send an explicit verdict, and only `pass` (or a waiver) closes
+its gate. Runs that contain a result without a verdict cannot be opened by an
+older afm. See
+[Helper answers and protocol errors](docs/collaboration.md#helper-answers-and-protocol-errors).
+
 ## 2026-11-02
 
 ### Improvement: the dashboard URL in `afm run` stands out

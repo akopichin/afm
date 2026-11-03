@@ -70,7 +70,7 @@ func (e Envelope) ClosesRequiredGate() bool {
 type resultEnvelope struct {
 	SchemaVersion   jsonstrict.Integer `json:"schema_version"`
 	Kind            Kind               `json:"kind"`
-	Verdict         Verdict            `json:"verdict"`
+	Verdict         json.RawMessage    `json:"verdict"`
 	Summary         textField          `json:"summary"`
 	Findings        []findingWire      `json:"findings,omitempty"`
 	Evidence        textListField      `json:"evidence,omitempty"`
@@ -115,13 +115,20 @@ type discriminator struct {
 	Kind Kind `json:"kind"`
 }
 
-// DecodeResult строго разбирает сырой JSON-ответ помощника через общие транспортные примитивы
+// DecodeResult принимает ответ advisory-помощника: verdict необязателен. Required-помощник разбирается
+// через DecodeResultFor(raw, true).
+func DecodeResult(raw []byte) (Envelope, error) {
+	return DecodeResultFor(raw, false)
+}
+
+// DecodeResultFor строго разбирает сырой JSON-ответ помощника через общие транспортные примитивы
 // pkg/jsonstrict (кап размера — на ПОЛНОМ входе до парсинга, markdown-fence, дубли ключей на любой глубине,
 // хвостовой контент, узкий ремонт сырых переводов строк), поверх которых лежит собственная схема этого
 // пакета: обязательный дискриминатор kind, неподдерживаемая schema_version и согласованность
-// verdict/findings. Держи правила в синхроне со schema/assistant-result.schema.json — оба описывают один и
-// тот же контракт.
-func DecodeResult(raw []byte) (Envelope, error) {
+// verdict/findings. requireVerdict требует verdict у kind:"result" (required-режим: гейт закрывает только
+// явный pass); без него отсутствующий verdict означает «оценки нет». Держи правила в синхроне со
+// schema/assistant-result.schema.json — оба описывают один и тот же контракт.
+func DecodeResultFor(raw []byte, requireVerdict bool) (Envelope, error) {
 	if err := jsonstrict.EnforceMaxBytes(raw, MaxResultBytes); err != nil {
 		return Envelope{}, fmt.Errorf("assistant %w", err)
 	}
@@ -131,7 +138,7 @@ func DecodeResult(raw []byte) (Envelope, error) {
 		return Envelope{}, fmt.Errorf("assistant %w", err)
 	}
 
-	env, err := decodeEnvelopeStrict(trimmed)
+	env, err := decodeEnvelopeStrict(trimmed, requireVerdict)
 	if err == nil {
 		return env, nil
 	}
@@ -139,7 +146,7 @@ func DecodeResult(raw []byte) (Envelope, error) {
 	// Тот же узкий ремонт, что verify.DecodeModelResult: сырые управляющие символы ВНУТРИ строкового
 	// литерала (например, многострочная цитата кода в summary/detail без экранирования).
 	if repaired, changed := jsonstrict.RepairRawNewlines(trimmed); changed && jsonstrict.EnforceMaxBytes(repaired, MaxResultBytes) == nil {
-		if env2, err2 := decodeEnvelopeStrict(repaired); err2 == nil {
+		if env2, err2 := decodeEnvelopeStrict(repaired, requireVerdict); err2 == nil {
 			return env2, nil
 		}
 	}
@@ -154,7 +161,7 @@ func DecodeEnvelope(raw []byte) (Envelope, error) {
 
 // decodeEnvelopeStrict разбирает уже прошедший размер/fence-проверки документ: дискриминатор kind, дубли
 // ключей на любой глубине, затем доменная схема конкретного kind.
-func decodeEnvelopeStrict(raw []byte) (Envelope, error) {
+func decodeEnvelopeStrict(raw []byte, requireVerdict bool) (Envelope, error) {
 	if err := jsonstrict.DecodeNoDuplicates(raw); err != nil {
 		return Envelope{}, fmt.Errorf("parse assistant result JSON: %w", err)
 	}
@@ -165,7 +172,7 @@ func decodeEnvelopeStrict(raw []byte) (Envelope, error) {
 
 	switch disc.Kind {
 	case KindResult:
-		return decodeResultEnvelope(raw)
+		return decodeResultEnvelope(raw, requireVerdict)
 	case KindDelegate:
 		return decodeDelegateEnvelope(raw)
 	case "":
@@ -175,7 +182,7 @@ func decodeEnvelopeStrict(raw []byte) (Envelope, error) {
 	}
 }
 
-func decodeResultEnvelope(raw []byte) (Envelope, error) {
+func decodeResultEnvelope(raw []byte, requireVerdict bool) (Envelope, error) {
 	var e resultEnvelope
 	if err := strictDecode(raw, &e); err != nil {
 		return Envelope{}, err
@@ -183,21 +190,20 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 	if e.SchemaVersion != SupportedSchemaVersion {
 		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("unsupported schema_version %d (expected %d)", e.SchemaVersion, SupportedSchemaVersion))
 	}
-	switch e.Verdict {
-	case VerdictPass, VerdictNeedsChanges, VerdictInconclusive:
-	default:
-		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("invalid verdict value %q", e.Verdict))
+	verdict, err := decodeVerdict(e.Verdict, requireVerdict)
+	if err != nil {
+		return Envelope{}, err
 	}
 	findings := decodedFindings(e.Findings)
-	if err := validateVerdictConsistency(e.Verdict, findings); err != nil {
+	if err := validateVerdictConsistency(verdict, findings); err != nil {
 		return Envelope{}, jsonstrict.NewIssue(jsonstrict.DomainIssue, err)
 	}
-	if err := schema.Validate(schema.AssistantResult, raw); err != nil {
+	if err := schema.Validate(resultContract(requireVerdict), raw); err != nil {
 		return Envelope{}, jsonstrict.NewIssue(jsonstrict.StructureIssue, err)
 	}
 
 	result := &Result{
-		Verdict:         e.Verdict,
+		Verdict:         verdict,
 		Summary:         string(e.Summary),
 		Findings:        findings,
 		Evidence:        e.Evidence,
@@ -206,6 +212,38 @@ func decodeResultEnvelope(raw []byte) (Envelope, error) {
 		Limitations:     string(e.Limitations),
 	}
 	return Envelope{SchemaVersion: int(e.SchemaVersion), Kind: KindResult, Result: result}, nil
+}
+
+// decodeVerdict reads the verdict member of a kind:"result" answer; verdict is nil when the member is absent. An
+// explicit null is refused as an invalid value, so no repair can turn it into an assessment.
+func decodeVerdict(member json.RawMessage, requireVerdict bool) (Verdict, error) {
+	if member == nil {
+		if requireVerdict {
+			return "", jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New(`assistant result of a required helper is missing "verdict"`))
+		}
+		return "", nil
+	}
+	if bytes.Equal(bytes.TrimSpace(member), []byte("null")) {
+		return "", jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New(`invalid verdict value null: give a verdict or omit the member`))
+	}
+	var verdict Verdict
+	if err := json.Unmarshal(member, &verdict); err != nil {
+		return "", fmt.Errorf("parse assistant result JSON: %w", err)
+	}
+	switch verdict {
+	case VerdictPass, VerdictNeedsChanges, VerdictInconclusive:
+		return verdict, nil
+	default:
+		return "", jsonstrict.NewIssue(jsonstrict.DomainIssue, fmt.Errorf("invalid verdict value %q", verdict))
+	}
+}
+
+// resultContract is the turn-answer schema for the helper's mode.
+func resultContract(requireVerdict bool) schema.Contract {
+	if requireVerdict {
+		return schema.AssistantResultRequired
+	}
+	return schema.AssistantResult
 }
 
 func decodeDelegateEnvelope(raw []byte) (Envelope, error) {

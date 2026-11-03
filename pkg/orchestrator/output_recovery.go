@@ -151,6 +151,9 @@ func recoverOutput(ctx context.Context, contract schema.Contract, owner string, 
 		return result, original
 	}
 	baseline, err := comparableOutput(contract, raw, true)
+	if jsonstrict.Classify(err) == jsonstrict.DomainIssue {
+		return result, err
+	}
 	if err != nil {
 		return result, original
 	}
@@ -221,7 +224,7 @@ func comparableOutput(contract schema.Contract, raw []byte, repairSyntax bool) (
 			return nil, err
 		}
 	}
-	if contract == schema.AssistantResult || contract == schema.AssistantResultOnly {
+	if schema.IsAssistantResult(contract) {
 		if normalized, ok := assistants.NormalizeResult(raw); ok {
 			raw = normalized
 		}
@@ -234,6 +237,15 @@ func comparableOutput(contract schema.Contract, raw []byte, repairSyntax bool) (
 	}
 	if root == nil {
 		return nil, errors.New("output must be an object")
+	}
+	// A null verdict is a contract error, not an absent one: dropping it would let a format agent erase it.
+	// The decoder matches keys case-insensitively, so every spelling of "verdict" counts.
+	if schema.IsAssistantResult(contract) {
+		for key, value := range root {
+			if strings.EqualFold(key, "verdict") && value == nil {
+				return nil, jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New("invalid verdict value null"))
+			}
+		}
 	}
 	// A strict-mode formatter sends every optional property, as null; for the decoders null is "absent".
 	dropNullMembers(root)

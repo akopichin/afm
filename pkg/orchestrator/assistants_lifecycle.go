@@ -38,8 +38,8 @@ type helperAgentRunner func(ctx context.Context, taskID, profileID, cmd, prompt,
 func (o *Orchestrator) helperExecutorConfig(taskID assistants.TaskID, cmd string) executor.Config {
 	cfg := o.promptOnlyHelperConfig(taskID, cmd)
 	// Delegation's alternatives have no native form, so only a helper that cannot delegate runs in native mode.
-	if task, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok && helperContract(task.Task) == schema.AssistantResultOnly {
-		cfg.NativeSchema = o.nativeSchemaFor(cmd, schema.AssistantResultOnly)
+	if task, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok && !task.ProfileSnapshot.Capabilities.Delegate {
+		cfg.NativeSchema = o.nativeSchemaFor(cmd, helperContract(task.Task))
 	}
 	if cfg.NativeSchema != nil && cfg.Job != nil {
 		cfg.Job.Yielded = o.turnYieldCheck(o.taskMeshParticipant(taskID), true)
@@ -72,12 +72,33 @@ func (o *Orchestrator) promptOnlyHelperConfig(taskID assistants.TaskID, cmd stri
 	}, o.taskExecutionByID(taskID, cmd).Binding)
 }
 
-// helperContract is the answer contract of a helper's turn: the delegate form only for a profile that may delegate.
+// helperContract is the answer contract of a helper's turn: the delegate form only for a profile that may delegate,
+// and a verdict only a required task must give.
 func helperContract(task assistants.Task) schema.Contract {
-	if task.ProfileSnapshot.Capabilities.Delegate {
+	required := task.Mode == assistants.ModeRequired
+	switch {
+	case task.ProfileSnapshot.Capabilities.Delegate && required:
+		return schema.AssistantResultRequired
+	case task.ProfileSnapshot.Capabilities.Delegate:
 		return schema.AssistantResult
+	case required:
+		return schema.AssistantResultOnlyRequired
+	default:
+		return schema.AssistantResultOnly
+	}
+}
+
+// taskContract is helperContract of a task in the projection; a task that is gone gets the most common one.
+func (o *Orchestrator) taskContract(taskID assistants.TaskID) schema.Contract {
+	if task, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]; ok {
+		return helperContract(task.Task)
 	}
 	return schema.AssistantResultOnly
+}
+
+// verdictRequired reports whether the contract is the answer of a required task, which only a verdict can close.
+func verdictRequired(contract schema.Contract) bool {
+	return contract == schema.AssistantResultRequired || contract == schema.AssistantResultOnlyRequired
 }
 
 // execHelperAgent is the production implementation of o.runHelperAgent: builds a fresh executor.Executor
@@ -96,7 +117,7 @@ func (o *Orchestrator) execHelperAgent(ctx context.Context, taskID, profileID, c
 	if err != nil || ctx.Err() != nil {
 		return outcome, err
 	}
-	fallback := helperNativeRerun(outcome, yielded)
+	fallback := helperNativeRerun(outcome, yielded, o.taskContract(id))
 	if fallback == "" {
 		return outcome, nil
 	}
@@ -116,12 +137,13 @@ func (o *Orchestrator) execHelperAgent(ctx context.Context, taskID, profileID, c
 }
 
 // helperNativeRerun is nativeRerunReason for a helper turn. A turn that yielded gave no answer, so a payload the CLI
-// forced into it decides nothing. A forced pass that repeats the model's own final answer is not made up.
-func helperNativeRerun(outcome executor.HelperOutcome, yielded func(string) bool) string {
+// forced into it decides nothing. A forced pass that repeats the model's own final answer is not made up, and a
+// forced answer without the verdict a required task needs does not decode.
+func helperNativeRerun(outcome executor.HelperOutcome, yielded func(string) bool, contract schema.Contract) string {
 	failure := runFailure(outcome.Interrupted, outcome.TimedOut, outcome.ProcessOK, outcome.ProcessErr)
 	forcedMayPass := false
 	if failure == nil && outcome.NativeEnforced && !yielded(outcome.RawText) {
-		env, decodeErr := assistants.DecodeResult(nativeAnswer(schema.AssistantResultOnly, []byte(outcome.RawText)))
+		env, decodeErr := assistants.DecodeResultFor(nativeAnswer(contract, []byte(outcome.RawText)), verdictRequired(contract))
 		forcedMayPass = decodeErr != nil || env.Result == nil ||
 			(env.Result.Verdict.ClosesGate() && !givesVerdict(outcome.TextBeforeEnforcement, env.Result.Verdict))
 	}
@@ -504,6 +526,11 @@ func (o *Orchestrator) recoverHelperOutput(ctx context.Context, taskID assistant
 		if err != nil {
 			return nil, "", err
 		}
+		if verdictRequired(contract) {
+			if _, err := assistants.DecodeResultFor(candidate, true); err != nil {
+				return nil, "", err
+			}
+		}
 		if env.Kind == assistants.KindDelegate && !task.ProfileSnapshot.Capabilities.Delegate {
 			return nil, "", jsonstrict.NewIssue(jsonstrict.DomainIssue, errors.New("profile cannot delegate"))
 		}
@@ -619,7 +646,7 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		fail(contractNotMet, end.err.Error(), true)
 		return
 	}
-	env, decErr := assistants.DecodeResult(end.recovery.Candidate)
+	env, decErr := assistants.DecodeResultFor(end.recovery.Candidate, verdictRequired(helperContract(task)))
 	if decErr != nil {
 		fail(contractNotMet, decErr.Error(), true)
 		return
@@ -703,6 +730,8 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		return
 	}
 	_, finalPass := o.taskFinalPass.Load(taskID)
+	// A completion helper starts only once its stage has its result, so each of its passes is its last.
+	finalPass = finalPass || isCompletionHelper(task)
 	committed := func(state.OperationResult) {
 		if o.helperOutputCommittedHook != nil {
 			o.helperOutputCommittedHook()
@@ -718,12 +747,8 @@ func (o *Orchestrator) commitHelperResult(ctx context.Context, taskID assistants
 		}
 	}
 
-	// Этап 5 (T5.4): a checkpoints/on_completion watcher's successful turn lands in the non-terminal
-	// "watching" resting state — unless this was explicitly marked as its FINAL pass (on_completion's single
-	// turn, a required watcher's guaranteed last word once its root stage is done, or the collector itself
-	// reporting MaxPasses reached — see watch_tasks.go's commitAndFire/finalizeWatcherOnCompletion, both of
-	// which Store the taskFinalPass signal strictly BEFORE this turn's own completion can observe it). A plain
-	// one_shot task never reaches this branch non-final (isWatcherTrigger is false for it).
+	// A watcher's successful turn rests in "watching" unless it is its final pass: always for a stage's own
+	// on_completion helper (isCompletionHelper), otherwise as taskFinalPass marks it (required last word, MaxPasses).
 	if isWatcherTrigger(task.Trigger) && !finalPass {
 		finish(assistants.StatusWatching, "", nil)
 		return

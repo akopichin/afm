@@ -53,4 +53,17 @@ describe('parseAssistantResult', () => {
     expect(parseAssistantResult({ ...base, repaired: true })?.repaired).toBe(true)
     expect(parseAssistantResult(base)?.repaired).toBe(false)
   })
+
+  it('accepts a result without a verdict and leaves it undefined', () => {
+    const parsed = parseAssistantResult({ summary: 'Collected the logs.', evidence: ['a.log'], limitations: 'one pod missing' })
+    expect(parsed).not.toBeNull()
+    expect(parsed?.verdict).toBeUndefined()
+    expect(parsed?.summary).toBe('Collected the logs.')
+    expect(parsed?.evidence).toEqual(['a.log'])
+    expect(parsed?.limitations).toBe('one pod missing')
+  })
+
+  it.each([['an unknown string', 'great'], ['an empty string', ''], ['null', null], ['a number', 1]])('rejects %s as a verdict', (_, verdict) => {
+    expect(parseAssistantResult({ verdict, summary: 'ok' })).toBeNull()
+  })
 })

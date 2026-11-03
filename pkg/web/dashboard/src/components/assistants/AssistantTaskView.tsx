@@ -33,8 +33,8 @@ const POLL_INTERVAL_MS = 3000
 // long run; only the most recent events are kept, which is all latestResult ever needs.
 const MAX_ACCUMULATED_EVENTS = 2000
 
-// latestResult scans a task's event page, newest first, for the latest entry whose payload already matches
-// assistants.Result's shape (verdict + summary, see pkg/assistants/types.go). Since commit 419753b the
+// latestResult scans a task's event page, newest first, for the latest task_result entry whose payload matches
+// assistants.Result's shape (summary, optional verdict, see pkg/assistants/types.go). Since commit 419753b the
 // backend DOES emit such a payload over GET /api/assistants/{id}/events: runHelperTask bundles a "task_result"
 // effect into the SAME ApplyRunOperation call as the task_status_changed-to-"completed" transition (see
 // pkg/orchestrator/assistants.go's taskResultEffect / assistants_lifecycle.go), in addition to (not instead
@@ -42,6 +42,8 @@ const MAX_ACCUMULATED_EVENTS = 2000
 // cmd/afm/run_collaboration_integration_test.go — not forward-compatible dead code.
 function latestResult(events: AssistantEventWire[]): AssistantResult | null {
   for (let i = events.length - 1; i >= 0; i--) {
+    // The verdict is optional, so the type is what keeps other events that carry a summary out.
+    if (events[i]?.type !== 'task_result') continue
     const parsed = parseAssistantResult(events[i]?.data)
     if (parsed !== null) return parsed
   }
@@ -223,15 +225,21 @@ function TaskOutcome({ task, result, isError, isTerminal }: { task: AssistantTas
   ) : result !== null ? (
     <div className="assistant-task-result">
       {/* Verdict is text + icon, never color alone — same rule as required/advisory above. */}
-      <div className="assistant-task-verdict" data-verdict={result.verdict}>
-        <span aria-hidden="true">{verdictGlyph(result.verdict)}</span>
-        <span>{verdictLabel(result.verdict)}</span>
-        {result.repaired && (
-          <span className="assistant-task-repaired" title="afm repaired this answer's syntax (markdown fence/surrounding prose); the verdict is unchanged">
-            repaired
-          </span>
-        )}
-      </div>
+      {(result.verdict !== undefined || result.repaired) && (
+        <div className="assistant-task-verdict" data-verdict={result.verdict}>
+          {result.verdict !== undefined && (
+            <>
+              <span aria-hidden="true">{verdictGlyph(result.verdict)}</span>
+              <span>{verdictLabel(result.verdict)}</span>
+            </>
+          )}
+          {result.repaired && (
+            <span className="assistant-task-repaired" title="afm repaired this answer's syntax (markdown fence/surrounding prose); the verdict is unchanged">
+              repaired
+            </span>
+          )}
+        </div>
+      )}
       <MarkdownRenderer source={result.summary} />
       {result.findings.length > 0 && (
         <ul className="assistant-task-findings">
@@ -248,6 +256,22 @@ function TaskOutcome({ task, result, isError, isTerminal }: { task: AssistantTas
             </li>
           ))}
         </ul>
+      )}
+      {/* Evidence and limitations reuse the finding row styling; a verdictless report is mostly these two. */}
+      {result.evidence.length > 0 && (
+        <ul className="assistant-task-findings assistant-task-evidence">
+          {result.evidence.map((line, i) => (
+            <li key={`${i}:${line}`} className="assistant-task-finding">
+              <span className="assistant-task-finding-detail">{line}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {result.limitations !== '' && (
+        <div className="assistant-task-finding assistant-task-limitations">
+          <span className="assistant-task-finding-severity">limitations</span>
+          <span className="assistant-task-finding-detail">{result.limitations}</span>
+        </div>
       )}
     </div>
   ) : isTerminal ? (

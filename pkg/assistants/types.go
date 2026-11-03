@@ -248,7 +248,8 @@ type Finding struct {
 // envelope-полям схемы один в один; schema_version/kind сюда не входят — это
 // служебные поля конверта, разбираемые отдельно в result.go.
 type Result struct {
-	Verdict         Verdict        `json:"verdict"`
+	// Verdict is empty when the helper gave no assessment: a neutral report, which never closes a required gate.
+	Verdict         Verdict        `json:"verdict,omitempty"`
 	Summary         string         `json:"summary"`
 	Findings        []Finding      `json:"findings,omitempty"`
 	Evidence        []string       `json:"evidence,omitempty"`

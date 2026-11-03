@@ -13,6 +13,14 @@ describe('AgentMessageBody', () => {
     expect(screen.getByText(RESULT)).toBeInTheDocument() // inside the collapsed "Raw" details
   })
 
+  test('a result without a verdict shows its summary and no verdict chip', () => {
+    const body = '{"schema_version":1,"kind":"result","summary":"Collected the logs."}'
+    const { container } = render(<AgentMessageBody body={body} fromAgent />)
+    expect(screen.getByText('Collected the logs.')).toBeInTheDocument()
+    expect(container.querySelector('.agent-result-verdict')).toBeNull()
+    expect(screen.getByText('Raw')).toBeInTheDocument()
+  })
+
   test('the same JSON from the human is shown as written', () => {
     render(<AgentMessageBody body={RESULT} fromAgent={false} />)
     expect(screen.getByText(RESULT)).toBeInTheDocument()

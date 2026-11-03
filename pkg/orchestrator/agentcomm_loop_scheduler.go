@@ -337,7 +337,8 @@ func loopOverForGood(rs state.RunState, l state.LoopState) bool {
 }
 
 // loopTargetReady skips busy, held and unread targets while allowing durable waits and resting helpers.
-// A required helper whose own decision gate remains open cannot restart.
+// A required helper whose own decision gate remains open cannot restart, nor can an on_completion helper whose
+// stage has no result yet.
 func loopTargetReady(rs state.RunState, l state.LoopState) bool {
 	t, ok := loopTargetTask(rs, l.TargetID)
 	if !ok {
@@ -347,8 +348,10 @@ func loopTargetReady(rs state.RunState, l state.LoopState) bool {
 		return false
 	}
 	switch t.Status {
-	case assistants.StatusWaitingPeer, assistants.StatusWatching:
+	case assistants.StatusWaitingPeer:
 		return true
+	case assistants.StatusWatching:
+		return !completionHelperGated(rs, t)
 	case assistants.StatusCompleted:
 		return !taskNeedsHumanDecision(t)
 	case assistants.StatusQueued:

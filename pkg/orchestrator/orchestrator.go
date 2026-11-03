@@ -404,10 +404,8 @@ type Orchestrator struct {
 	// статусу и самим Revise, чтобы тест мог вклинить конкурентный Pause. nil в продакшене.
 	feedbackDeliveryDecidedHook func(stageID string)
 
-	// taskRequeueBarrier — тест-сейм: вызывается в spawnTask's run body СРАЗУ после того, как taskHeld
-	// вернул true (held), но ДО finishTaskFrom's requeue-commit (running->queued) — позволяет тесту
-	// детерминированно воспроизвести lost-wakeup гонку PauseTask/ContinueTask вокруг этого окна (см.
-	// spawnTask's doc comment).
+	// taskRequeueBarrier — тест-сейм перед requeue-commit (running->queued) в spawnTask, когда ход возвращается в
+	// очередь (held или стадия без результата): тест вклинивает в это окно Continue, чей запуск ещё не сработает.
 	taskRequeueBarrier func(taskID assistants.TaskID)
 	// taskRequeuePreDeferHook — тест-сейм: вызывается в runHelperTask's requeue-while-running ветке СРАЗУ
 	// после синхронного maybeScheduleTask (который уже мог успеть застартовать СЛЕДУЮЩУЮ попытку в новой
@@ -480,6 +478,9 @@ type Orchestrator struct {
 	// taskFinalPass keeps a watcher's final-pass intent across rejected turns.
 	// Only a successful guarded result commit consumes it.
 	taskFinalPass sync.Map
+	// helpersSettled is set once settleAssistantsAfterRestart has requeued the helper turns a crash cut short:
+	// before that, a turn a resumed run started would be taken for one of them and run twice.
+	helpersSettled atomic.Bool
 	// renderedInbox maps a mesh participant to the message ids its most recently built prompt put into the
 	// <inbox> block — what that turn's OnDelivered marks delivered once its process has started (see
 	// agentCommInboxFor). One agent per participant runs at a time, so the latest prompt is that turn's prompt.
@@ -730,11 +731,15 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		// Этап 5 T5.4 / Этап 7 T7.2: a single funnel for "this stage's own result is ready/failed/now waiting on
 		// required assistants" regardless of which of the ~60 call sites triggered it — see
 		// finalizeWatchersForStage's doc comment for why hooking here (rather than completeStage/each EvFail
-		// call site individually) is the safe, additive choice. EvAwaitAssistants forces any orphaned
-		// checkpoints/on_completion watcher into its bounded final pass the moment there is no more main-agent
-		// output coming — otherwise a required watcher could be left "watching" forever.
+		// call site individually) is the safe, additive choice. EvAwaitAssistants forces any orphaned required
+		// checkpoints watcher into its bounded final pass the moment there is no more main-agent output coming —
+		// otherwise it could be left "watching" forever.
 		if ev == bus.EvComplete || ev == bus.EvFail || ev == bus.EvVerifyFail || ev == bus.EvAwaitAssistants {
 			o.finalizeWatchersForStage(stageID, ev)
+		}
+		// Whatever event brought the stage here (its completion, a Continue), its on_completion helpers may start.
+		if o.opts.AssistantsEnabled && (to == state.StatusAwaitingAssistants || to == state.StatusDone) {
+			o.issueCompletionPasses(o.runContext(context.Background()), stageID)
 		}
 		// T6.5/T6.6: a stage settling into ANY new status may be exactly what a deferred FeedbackIntent
 		// (planning/revising/retrying/paused/awaiting_user_input/hook_failed -> now interruptible or terminal)
@@ -833,6 +838,8 @@ func (o *Orchestrator) Run(ctx context.Context) (runErr error) {
 	if !poisoned {
 		o.startPlanningForPending(ctx)
 		o.recoverCollaboration(ctx)
+	} else {
+		o.helpersSettled.Store(true) // a poisoned round settles nothing that a new turn could be taken for
 	}
 	o.startQuestionPoller(ctx) // file-based dialog poller
 	stopCollaborationLoops := o.startCollaborationLoops(ctx, poisoned)

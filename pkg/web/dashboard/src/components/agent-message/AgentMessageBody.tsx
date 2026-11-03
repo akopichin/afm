@@ -33,7 +33,7 @@ export function AgentMessageBody({ body, fromAgent, markdown = false, autoResult
           turn result
         </span>
       )}
-      {result !== null && (
+      {result?.verdict !== undefined && (
         <span className="agent-result-verdict" data-verdict={result.verdict}>
           {verdictLabel(result.verdict)}
         </span>

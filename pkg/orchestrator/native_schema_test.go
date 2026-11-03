@@ -520,17 +520,22 @@ func TestHelperNative_ConfigRequestsNativeOnlyWithoutDelegation(t *testing.T) {
 		return passResultOutcome(), nil
 	}
 	for _, tc := range []struct {
+		name    string
 		profile assistants.ProfileID
+		mode    assistants.Mode
 		cmd     string
 		want    *executor.NativeSchema
 	}{
-		{"reviewer", "claude", &executor.NativeSchema{Runtime: executor.SchemaRuntimeClaude, Schema: mustNativeVariant(t, schema.AssistantResultOnly, schema.DialectClaude)}},
-		{"codexer", "codex-as-claude", &executor.NativeSchema{Runtime: executor.SchemaRuntimeCodex, Schema: mustNativeVariant(t, schema.AssistantResultOnly, schema.DialectStrict)}},
-		{"delegator", "claude", nil},
-		{"custom", "helper-cmd", nil},
+		{"reviewer", "reviewer", assistants.ModeAdvisory, "claude", &executor.NativeSchema{Runtime: executor.SchemaRuntimeClaude, Schema: mustNativeVariant(t, schema.AssistantResultOnly, schema.DialectClaude)}},
+		{"codexer", "codexer", assistants.ModeAdvisory, "codex-as-claude", &executor.NativeSchema{Runtime: executor.SchemaRuntimeCodex, Schema: mustNativeVariant(t, schema.AssistantResultOnly, schema.DialectStrict)}},
+		{"delegator", "delegator", assistants.ModeAdvisory, "claude", nil},
+		{"custom", "custom", assistants.ModeAdvisory, "helper-cmd", nil},
+		{"required reviewer", "reviewer", assistants.ModeRequired, "claude", &executor.NativeSchema{Runtime: executor.SchemaRuntimeClaude, Schema: mustNativeVariant(t, schema.AssistantResultOnlyRequired, schema.DialectClaude)}},
+		{"required codexer", "codexer", assistants.ModeRequired, "codex-as-claude", &executor.NativeSchema{Runtime: executor.SchemaRuntimeCodex, Schema: mustNativeVariant(t, schema.AssistantResultOnlyRequired, schema.DialectStrict)}},
+		{"required delegator", "delegator", assistants.ModeRequired, "claude", nil},
 	} {
-		t.Run(string(tc.profile), func(t *testing.T) {
-			taskID := attachNativeProfile(t, o, "op-native-"+string(tc.profile), tc.profile)
+		t.Run(tc.name, func(t *testing.T) {
+			taskID := attachWithMode(t, o, "op-native-"+strings.ReplaceAll(tc.name, " ", "-"), tc.profile, tc.mode)
 			waitForTaskStatus(t, store, taskID, assistants.StatusCompleted, 5*time.Second)
 			got := o.helperExecutorConfig(taskID, tc.cmd).NativeSchema
 			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
@@ -891,7 +896,7 @@ func TestHelperNativeRerun_YieldedTurnNeverReruns(t *testing.T) {
 	const forcedApproval = `{"schema_version":1,"kind":"result","verdict":"pass","summary":"forced"}`
 	for _, ownText := range []string{"", "done reviewing", `{"schema_version":1,"kind":"result","verdict":"pass","summary":"own"}`} {
 		outcome := executor.HelperOutcome{ProcessOK: true, NativeStarted: true, NativeEnforced: true, StructuredPayload: true, RawText: forcedApproval, TextBeforeEnforcement: ownText}
-		if got := helperNativeRerun(outcome, func(string) bool { return true }); got != "" {
+		if got := helperNativeRerun(outcome, func(string) bool { return true }, schema.AssistantResultOnly); got != "" {
 			t.Fatalf("own text %q: rerun reason %q, want none for a yielded turn", ownText, got)
 		}
 	}

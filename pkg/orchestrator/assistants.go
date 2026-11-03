@@ -154,6 +154,13 @@ func (o *Orchestrator) taskHeld(taskID assistants.TaskID) bool {
 	return held
 }
 
+// taskCompletionGated is completionHelperGated for taskID in the current projection.
+func (o *Orchestrator) taskCompletionGated(taskID assistants.TaskID) bool {
+	rs := o.opts.Store.Snapshot()
+	t, ok := rs.Assistants.Tasks[taskID]
+	return ok && completionHelperGated(rs, t)
+}
+
 // TaskQuota returns a copy of the usage-limit park of a queued task (state.TaskState.Quota) — nil for a task
 // without one or an unknown id. A side lookup like TaskWaiver: the dashboard shows it while the task is queued.
 func (o *Orchestrator) TaskQuota(taskID assistants.TaskID) *state.QuotaWait {
@@ -259,6 +266,10 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		}
 		if task.Status == assistants.StatusQueued {
 			o.maybeScheduleTask(runCtx, task.ID)
+		}
+		// A stage already awaiting its assistants owes a new on_completion helper its pass now.
+		if task.Trigger == assistants.TriggerOnCompletion {
+			o.issueCompletionPasses(runCtx, req.StageID)
 		}
 	})
 	if err != nil {
@@ -402,6 +413,10 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 	if !ok || t.Status != assistants.StatusQueued {
 		return
 	}
+	// The turn waits in the queue for its stage's result (or the restart's settle), which issues it again.
+	if o.completionPassDeferred(rs, t) {
+		return
+	}
 	if idleRunAgent(rs, t) {
 		return
 	}
@@ -436,6 +451,10 @@ func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.
 		ID:   "task-start:" + string(taskID) + ":" + randomOpSuffix(),
 		Kind: "start_task",
 		Expect: state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusQueued}, Check: func(cur *state.RunState) error {
+			// A Pause or Revise may have taken the stage's result away since the snapshot.
+			if completionHelperGated(*cur, cur.Assistants.Tasks[taskID]) {
+				return errCompletionGated
+			}
 			if now, _ := leftWaits(*cur, agent); !slices.Equal(now, left) {
 				return errLeftWaitsChanged
 			}
@@ -510,6 +529,16 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 			if !o.taskHeld(taskID) {
 				o.maybeScheduleTask(ctx, taskID)
 			}
+			return
+		}
+		// The stage may have lost its result while the turn waited for the slot. Its Continue may already have
+		// found the task still running, so scheduling is retried once the requeue commits.
+		if o.taskCompletionGated(taskID) {
+			if o.taskRequeueBarrier != nil {
+				o.taskRequeueBarrier(taskID)
+			}
+			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: parent result not ready")
+			o.maybeScheduleTask(ctx, taskID)
 			return
 		}
 		// Слот команды получен: hold мог появиться, пока задача ждала его (тот же возврат в queued, что и при паузе).

@@ -336,12 +336,13 @@ Choose when it runs:
 - **One shot** runs once.
 - **At checkpoints** observes the stage agent's output and can run again when
   a checkpoint is reached.
-- **On stage completion** can run earlier if enough stage output reaches its
-  collector. If it is still active when the stage result is ready, it receives
-  a final turn.
+- **On stage completion** starts only after the stage's own result is ready,
+  and then runs one final pass. See
+  [When an on-completion helper starts](#when-an-on-completion-helper-starts).
 
 Attached helpers appear as child rows in the stage rail. Select one to see its
-status, verdict, findings, delegation breadcrumb, and, for watchers, pass count.
+status, verdict (when it gave one), findings, delegation breadcrumb, and, for
+watchers, pass count.
 The task view offers **Pause**, **Continue**, and **Cancel** while applicable.
 A helper that hits a provider usage limit remains queued with its wait time and
 reason shown in the task view. It resumes after the wait; if the limit cannot be
@@ -352,7 +353,69 @@ A paused task with work waiting — a message it has not read yet or a turn it w
 in — keeps the run open until you continue or cancel it.
 If a required helper cannot pass, **Waive…** lets a human unblock the stage by
 recording a reason. Required tasks with `needs_changes` or `inconclusive` do not
-pass the gate; a `pass` verdict does.
+pass the gate; a `pass` verdict does. A required answer without a verdict is
+rejected and does not close the gate (see
+[Helper answers and protocol errors](#helper-answers-and-protocol-errors)).
+
+### When an on-completion helper starts
+
+A helper with `trigger: on_completion` never starts while the stage agent is
+still working. Neither its output, a long pause in it, a message sent to the
+helper, **Continue**, a restart of afm nor a `/loop` tick starts it early; a
+message stays in the helper's inbox until it starts. Text such as "I am done" in
+the agent's output starts nothing either. The helper starts when afm
+considers the stage's own result ready: the agent has finished, the expected
+files exist and any `verify:` step has passed. In status terms, that is
+`awaiting_assistants` or `done` for the current attempt.
+
+- A **required** helper starts when the stage enters `awaiting_assistants`. The
+  stage becomes `done`, and its dependent stages start, only after the helper
+  passes or is waived.
+- An **advisory** helper starts when the stage result is ready. It does not
+  hold the stage back or its dependent stages, but the run stays open until it
+  has finished.
+- A helper attached from the dashboard after the stage result is ready starts
+  right away.
+- It gets exactly **one** final pass, also across a restart of afm and across
+  **Pause** / **Continue**; the stage agent and `verify:` do not run again. A
+  stage paused after its result is ready starts the helper on **Continue**.
+  **Restart with note** makes an earlier pass stale: it cannot start or close
+  the gate of the new attempt.
+- A stage that fails or is cancelled does not start it. The helper stays
+  waiting, which keeps the run open: cancel it, or retry the stage.
+- A helper started by another helper (delegation) keeps its own rules and is not
+  held back this way.
+
+`checkpoints` helpers are different: they follow the stage agent's output and may
+run several times while it works.
+
+`trigger`, `mode` and `verdict` are independent:
+
+| Setting | Decides |
+|---|---|
+| `trigger` | when afm lets the helper start |
+| `mode` (`advisory` or `required`) | whether the helper's result blocks the stage from finishing |
+| `verdict` | what the helper concluded by the criteria you gave it, if you asked for a verdict |
+
+For example, a log collector that only reports and never judges the code:
+
+```yaml
+stages:
+  - id: build
+    agents: [auto]
+    assistants:
+      - profile: log-collector
+        title: Collect logs
+        instruction: >-
+          Collect the failing test logs and group them by package. Report
+          what you found; do not review the code.
+        trigger: on_completion
+        mode: advisory
+```
+
+Its answer needs only a `summary` (and optionally `evidence`); the helper view
+shows the report without a verdict badge. The stage finishes whatever the
+helper writes.
 
 Your conversation with a stage's agent lives in the stage's **Feed**: write a
 **Chat** to the stage agent from its composer (see
@@ -935,7 +998,7 @@ afm agent spawn --profile reviewer --title "Review API" --instruction "Check the
 The command returns `task_id`, `participant_id` and `message_id`. The message
 is the request to the helper: wait for it with `reply_to`, or include several
 spawned helpers' message IDs in one `reply_to_all` batch. A completed helper
-replies with a summary, verdict and task ID; if it cannot finish, the wait ends
+replies with a summary, its verdict if it gave one, and the task ID; if it cannot finish, the wait ends
 with a reason. Use `afm agent helper-result --task-id <task_id>` for its status
 and full committed result, including findings and evidence. A running helper
 has no result yet. The next stage turn lists its spawned helpers' IDs, titles
@@ -965,9 +1028,19 @@ flows.
 ## Helper answers and protocol errors
 
 Helpers must return one JSON object with `schema_version: 1` and either
-`kind: "result"` (with a verdict and summary) or, for a role with `delegate: true`,
-`kind: "delegate"` (with child tasks). afm includes this output contract at the
-end of each helper's task context, including after any follow-up instruction.
+`kind: "result"` (with a summary, and a verdict when the task asks for an
+assessment) or, for a role with `delegate: true`, `kind: "delegate"` (with child
+tasks). afm includes this output contract at the end of each helper's task
+context, including after any follow-up instruction.
+
+The `verdict` (`pass`, `needs_changes` or `inconclusive`) is the helper's own
+assessment, by the criteria in its instruction. An **advisory** helper may omit
+it, for example when it only collects information; afm never fills in a
+verdict the helper did not give, and an empty or unknown value is still a
+protocol error. A **required** helper must send an explicit verdict: an answer
+without one fails the helper with *result contract not met*, and the stage
+stays in `awaiting_assistants`. A format-only repair never adds the missing
+assessment. Only `pass` (or a waiver) lets the stage finish.
 
 A helper that cannot delegate (a role without `delegate: true`) answers in the
 CLI's native schema mode, the same one [verify uses](verify.md#native-schema-mode):

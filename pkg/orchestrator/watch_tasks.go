@@ -8,6 +8,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"time"
@@ -30,6 +31,41 @@ const defaultWatchPollInterval = 1 * time.Second
 func isWatcherTrigger(trigger assistants.Trigger) bool {
 	return trigger == assistants.TriggerCheckpoints || trigger == assistants.TriggerOnCompletion
 }
+
+// isCompletionHelper reports whether t is a stage's own on_completion helper, whose turns wait for the stage's
+// result. A delegated child is not one: its parent may be waiting for it.
+func isCompletionHelper(t assistants.Task) bool {
+	return t.Scope == assistants.ScopeStage && t.ParentTaskID == nil && t.Trigger == assistants.TriggerOnCompletion
+}
+
+// completionHelperGated reports whether t is a completion helper that may not start yet: only the current attempt
+// of a stage that finished its own work (awaiting_assistants or done) admits it. A paused stage holds it whatever
+// it paused from; its Continue issues the pass again.
+func completionHelperGated(rs state.RunState, t *state.TaskState) bool {
+	if !isCompletionHelper(t.Task) {
+		return false
+	}
+	if t.RootGeneration != rs.Assistants.RootGenerations[t.RootStageID] {
+		return true
+	}
+	status := rs.Stages[t.RootStageID].Status
+	return status != state.StatusAwaitingAssistants && status != state.StatusDone
+}
+
+// completionPassDeferred reports whether t is a completion helper that may not start now: its stage has no result,
+// or a resumed run has not settled its helpers yet. A start before that settle would be taken for a turn the crash
+// cut short and run twice; the restart issues the pass itself once settled.
+func (o *Orchestrator) completionPassDeferred(rs state.RunState, t *state.TaskState) bool {
+	if !isCompletionHelper(t.Task) {
+		return false
+	}
+	startupUnsettled := o.opts.Resumed && !o.helpersSettled.Load()
+	return startupUnsettled || completionHelperGated(rs, t)
+}
+
+// errCompletionGated rejects queueing or starting a completion helper whose stage lost its result after the
+// decision (Pause, Revise). The helper waits for the stage's next completion; nothing re-plans it.
+var errCompletionGated = errors.New("assistants: the stage of this on_completion helper has no result yet")
 
 // watcherBinding is the live, IN-MEMORY-ONLY state for one attached watcher task. Nothing here is itself the
 // durable record of anything FSM-relevant: every actual Task status transition still commits through the
@@ -113,15 +149,17 @@ func (o *Orchestrator) unbindWatcher(taskID assistants.TaskID) {
 	o.removeFromStageListLocked(b)
 }
 
-// feedWatchCollectors fans out one Observation to every watcher Collector currently bound to stageID — called
+// feedWatchCollectors fans out one Observation to every checkpoints watcher currently bound to stageID — called
 // synchronously from observationSink for every normalized Observation (including incomplete ones; Collector
-// itself drops those, see watch.Collector.Observe).
+// itself drops those, see watch.Collector.Observe). An on_completion helper does not read the output.
 func (o *Orchestrator) feedWatchCollectors(stageID string, obs executor.Observation) {
 	o.watchMu.Lock()
 	bindings := append([]*watcherBinding{}, o.watchByStage[stageID]...)
 	o.watchMu.Unlock()
 	for _, b := range bindings {
-		b.coll.Observe(obs)
+		if b.task.Trigger == assistants.TriggerCheckpoints {
+			b.coll.Observe(obs)
+		}
 	}
 }
 
@@ -190,6 +228,10 @@ func (o *Orchestrator) pollWatchersOnce(ctx context.Context) {
 // (T5.2's "context durable before reference committed" — done HERE, before the fire, not inside runHelperTask)
 // and then fires the task's next turn through the ordinary task lifecycle (fireWatcherTask).
 func (o *Orchestrator) maybeFireWatcher(ctx context.Context, b *watcherBinding) {
+	// Only checkpoints start from output; Ready itself claims the collector, so the check comes first.
+	if b.task.Trigger != assistants.TriggerCheckpoints {
+		return
+	}
 	bundle, ready := b.coll.Ready()
 	if !ready {
 		return
@@ -245,9 +287,14 @@ func (o *Orchestrator) fireWatcherTask(ctx context.Context, taskID assistants.Ta
 		return false
 	}
 	op := state.Operation{
-		ID:      "task-watch-fire:" + string(taskID) + ":" + randomOpSuffix(),
-		Kind:    "fire_watch_task",
-		Expect:  state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusWatching}},
+		ID:   "task-watch-fire:" + string(taskID) + ":" + randomOpSuffix(),
+		Kind: "fire_watch_task",
+		Expect: state.Preconditions{TaskStatus: map[string]assistants.TaskStatus{string(taskID): assistants.StatusWatching}, Check: func(cur *state.RunState) error {
+			if completionHelperGated(*cur, cur.Assistants.Tasks[taskID]) {
+				return errCompletionGated
+			}
+			return nil
+		}},
 		Effects: []state.Effect{eff},
 	}
 	runCtx := o.runContext(ctx)
@@ -271,9 +318,9 @@ func (o *Orchestrator) publishTaskQueued(taskID assistants.TaskID, reason string
 // EvFail/EvComplete/EvAwaitAssistants call sites produced it. T5.4's two remaining trigger rules live here:
 //   - EvFail/EvVerifyFail: TestTrigger_ParentFailedStopsNewPasses — stop issuing new passes; whatever the
 //     watcher already recorded (its own result.json / task_result events from earlier passes) is untouched.
-//   - EvComplete/EvAwaitAssistants: TestTrigger_OnCompletionRunsAtStageResultReady /
-//     TestTrigger_RequiredWatcherHasFinalBoundedPass — an on_completion watcher gets its one turn now; a
-//     required watcher (any trigger) is guaranteed one final, bounded pass rather than being left "watching"
+//   - EvComplete/EvAwaitAssistants: TestTrigger_RequiredWatcherHasFinalBoundedPass — a stage's on_completion
+//     helpers get their pass from issueCompletionPasses instead; a required checkpoints watcher is guaranteed
+//     one final, bounded pass rather than being left "watching"
 //     forever. T7.2 moved the moment this fires from "after the stage is already Done" to "the instant the
 //     main executor's own part is done" (EvAwaitAssistants when the barrier is open, EvComplete when it
 //     wasn't) — the whole point of the barrier is that this final pass's own verdict must still be able to
@@ -299,7 +346,7 @@ func (o *Orchestrator) finalizeWatchersForStage(stageID string, ev bus.FSMEvent)
 // finalizeWatcherOnCompletion forces b's bounded final pass if required by T5.4's rule (see
 // finalizeWatchersForStage) and the task is not already terminal/mid-turn in a way that already covers it.
 func (o *Orchestrator) finalizeWatcherOnCompletion(ctx context.Context, b *watcherBinding) {
-	if o.taskTerminal(b.taskID) {
+	if o.taskTerminal(b.taskID) || isCompletionHelper(b.task) {
 		return
 	}
 	if b.task.Trigger != assistants.TriggerOnCompletion && b.task.Mode != assistants.ModeRequired {
@@ -315,6 +362,27 @@ func (o *Orchestrator) finalizeWatcherOnCompletion(ctx context.Context, b *watch
 	}
 	// If currently "running" or "queued", that in-flight/queued turn's own completion will consult
 	// taskFinalPass (LoadAndDelete) and land in "completed" instead of "watching" — no extra fire needed here.
+}
+
+// issueCompletionPasses starts the pass of each on_completion helper of stageID once the stage has its result:
+// the live completion, a Continue, a restart and an Attach to a stage already awaiting its assistants all come
+// here. It only queues or schedules, so a helper already running, waiting or finished is left as it is.
+func (o *Orchestrator) issueCompletionPasses(ctx context.Context, stageID string) {
+	rs := o.opts.Store.Snapshot()
+	for _, id := range rs.Assistants.ByRootStage[stageID] {
+		t := rs.Assistants.Tasks[id]
+		if t == nil || !isCompletionHelper(t.Task) || o.completionPassDeferred(rs, t) {
+			continue
+		}
+		switch t.Status {
+		case assistants.StatusWatching:
+			o.fireWatcherTask(ctx, id)
+		case assistants.StatusQueued:
+			o.maybeScheduleTask(ctx, id)
+		default:
+			// Running, waiting or finished: the pass is under way, owed by its own path, or over.
+		}
+	}
 }
 
 // currentTaskStatus reads a task's current projected status — "" for an unknown task id.

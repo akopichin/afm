@@ -202,17 +202,24 @@ func undeliveredReplyWaitEffects(rs state.RunState, undelivered []undeliveredRep
 }
 
 // turnReplyBody is the text of a turn reply: the result's summary, cut to fit the mesh's body limit, and a line
-// with the verdict, the number of findings and where the full result is.
+// with the verdict (when the helper gave one), the number of findings and where the full result is.
 func turnReplyBody(taskID assistants.TaskID, turn uint64, r assistants.Result) string {
-	footer := "\n\n— verdict " + string(r.Verdict)
+	var assessment []string
+	if r.Verdict != "" {
+		assessment = append(assessment, "verdict "+string(r.Verdict))
+	}
 	switch n := len(r.Findings); n {
 	case 0:
 	case 1:
-		footer += ", 1 finding"
+		assessment = append(assessment, "1 finding")
 	default:
-		footer += fmt.Sprintf(", %d findings", n)
+		assessment = append(assessment, fmt.Sprintf("%d findings", n))
 	}
-	footer += fmt.Sprintf("; full result: task %s, turn %d", taskID, turn)
+	footer := "\n\n— "
+	if len(assessment) > 0 {
+		footer += strings.Join(assessment, ", ") + "; "
+	}
+	footer += fmt.Sprintf("full result: task %s, turn %d", taskID, turn)
 	summary := strings.TrimSpace(r.Summary)
 	if summary == "" {
 		summary = "(no summary)"

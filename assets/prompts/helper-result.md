@@ -7,7 +7,7 @@ This JSON object is ONLY your final turn output. Messages you send to the human 
 Rules:
 - `schema_version` is always `1`.
 - `kind` is always `"result"`.
-- `verdict` is exactly one of `pass`, `needs_changes`, `inconclusive`.
+- `verdict` is your assessment of the work: send it when the task asks for one, and then it is exactly one of `pass`, `needs_changes`, `inconclusive`. If the task asks for no assessment, omit the field: never invent one. Always send it when the schema above lists it as required.
 - `summary` is required: a short overall summary of what you did and concluded.
 - `findings[]` entries require `id`, `severity` (`info`, `minor`, `major`, or `blocker`), and `detail`. `path`, `line_start`, `line_end` are optional — omit them rather than inventing a location you did not actually observe.
 - `verdict:"pass"` cannot coexist with a finding of `severity:"blocker"`.
@@ -25,7 +25,18 @@ Exact JSON Schema for the `kind:"result"` form:
 {{OUTPUT_SCHEMA}}
 ```
 
-Example:
+Example of a report when the task asks for no assessment:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "result",
+  "summary": "Collected the failing test logs and grouped them by package.",
+  "evidence": ["go test ./... -run TestFoo: 3 failures in pkg/foo"]
+}
+```
+
+Example of an assessment when the task asks for one:
 
 ```json
 {

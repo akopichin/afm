@@ -15,10 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akopichin/afm/pkg/agentcomm"
 	"github.com/akopichin/afm/pkg/assistants"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
 	"github.com/akopichin/afm/pkg/orchestrator/bus"
+	"github.com/akopichin/afm/pkg/orchestrator/concurrency"
 	"github.com/akopichin/afm/pkg/state"
 	"github.com/akopichin/afm/pkg/watch"
 )
@@ -153,6 +155,538 @@ func TestTrigger_OnCompletionRunsAtStageResultReady(t *testing.T) {
 	case id := <-calls:
 		t.Fatalf("on_completion watcher ran a second time (task %s)", id)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// turnCounter counts the helper turns each task started.
+type turnCounter struct {
+	mu    sync.Mutex
+	turns map[string]int
+}
+
+// countTurns makes every helper turn of o count itself and pass, once release is closed (nil: at once).
+func countTurns(t *testing.T, o *Orchestrator, release <-chan struct{}) *turnCounter {
+	c := &turnCounter{turns: map[string]int{}}
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		c.mu.Lock()
+		c.turns[taskID]++
+		c.mu.Unlock()
+		if release != nil {
+			awaitRelease(t, release)
+		}
+		return passResultOutcome(), nil
+	}
+	return c
+}
+
+func (c *turnCounter) of(id assistants.TaskID) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turns[string(id)]
+}
+
+// An on_completion helper never starts from the main agent's output, whatever its mode and however long the
+// output goes on: it starts once, from the stage's completion path, even when there was no output at all. A
+// checkpoints watcher fed the same output starts a turn on each checkpoint.
+func TestCompletionHelper_DoesNotRunBeforeParentResult(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   assistants.Mode
+		rounds int // checkpoints worth of main-agent output before the stage completes
+	}{
+		{"advisory", assistants.ModeAdvisory, 3},
+		{"required", assistants.ModeRequired, 3},
+		{"advisory without any output", assistants.ModeAdvisory, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store := newAssistantsTestOrchestrator(t, true)
+			activateStage(t, o, assistantsTestStageID)
+			clock := newWatchFakeClock()
+			o.watchClock = clock
+			turns := countTurns(t, o, nil)
+
+			helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, tc.mode)
+			control := attachWatcherTask(t, o, "op-control", assistantsTestStageID, assistants.TriggerCheckpoints, assistants.ModeAdvisory)
+			for seq := 1; seq <= tc.rounds; seq++ {
+				o.feedWatchCollectors(assistantsTestStageID, substantialObservation(assistantsTestStageID, seq))
+				clock.Advance(10 * time.Second)
+				o.pollWatchersOnce(context.Background())
+				o.concurrency.WaitAgents()
+			}
+			if got := turns.of(helper); got != 0 {
+				t.Fatalf("on_completion helper ran %d turn(s) before its stage's result was ready", got)
+			}
+			if got := store.Snapshot().Assistants.Tasks[helper].Status; got != assistants.StatusWatching {
+				t.Fatalf("on_completion helper status = %s before completion, want watching", got)
+			}
+			if got := turns.of(control); got != tc.rounds {
+				t.Fatalf("checkpoints watcher ran %d turn(s) on %d checkpoints of the same output", got, tc.rounds)
+			}
+
+			o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+			waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+			waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+
+			o.pollWatchersOnce(context.Background())
+			o.finalizeWatchersForStage(assistantsTestStageID, bus.EvComplete)
+			o.concurrency.WaitAgents()
+			if got := turns.of(helper); got != 1 {
+				t.Fatalf("on_completion helper ran %d turns, want exactly one after its stage completed", got)
+			}
+		})
+	}
+}
+
+// commitTaskStatus records a task's status in the journal alone, as a commit whose follow-up a crash cut off.
+func commitTaskStatus(t *testing.T, store *state.Store, id assistants.TaskID, status assistants.TaskStatus) {
+	t.Helper()
+	eff, err := taskStatusEffect(id, status, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := state.Operation{ID: "test-status:" + string(id) + ":" + randomOpSuffix(), Kind: "test_status", Effects: []state.Effect{eff}}
+	if _, err := store.ApplyRunOperation(op, nil); err != nil {
+		t.Fatalf("commit %s %s: %v", id, status, err)
+	}
+}
+
+// commitStageEvent records a stage transition in the journal alone, without what triggerWithSeq does after it.
+func commitStageEvent(t *testing.T, o *Orchestrator, stageID string, ev bus.FSMEvent) {
+	t.Helper()
+	if _, _, _, ok, err := o.applyTransition(stageID, ev, bus.GuardCtx{}, "test"); !ok || err != nil {
+		t.Fatalf("%s %s: ok=%v err=%v", stageID, ev, ok, err)
+	}
+}
+
+// taskStartRecords are the journal lines of the turn starts of id.
+func taskStartRecords(t *testing.T, o *Orchestrator, id assistants.TaskID) []string {
+	t.Helper()
+	var out []string
+	for _, line := range operationRecords(t, o.opts.RunDir, "start_task") {
+		if strings.Contains(line, string(id)) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// queueCompletionHelper attaches an on_completion helper to the running test stage and records it queued, as a
+// fire, a retry or a recovery leaves it: due to start, with nothing having tried yet.
+func queueCompletionHelper(t *testing.T, o *Orchestrator, store *state.Store, opID string, mode assistants.Mode) assistants.TaskID {
+	t.Helper()
+	id := attachWatcherTask(t, o, opID, assistantsTestStageID, assistants.TriggerOnCompletion, mode)
+	commitTaskStatus(t, store, id, assistants.StatusQueued)
+	return id
+}
+
+// requireNoTurn fails unless id is still in want with no turn started: neither a process nor a start record.
+func requireNoTurn(t *testing.T, o *Orchestrator, turns *turnCounter, id assistants.TaskID, want assistants.TaskStatus) {
+	t.Helper()
+	o.concurrency.WaitAgents()
+	if got := turns.of(id); got != 0 {
+		t.Fatalf("on_completion helper ran %d turn(s) before its stage's result was ready", got)
+	}
+	if got := taskStartRecords(t, o, id); len(got) != 0 {
+		t.Fatalf("on_completion helper start recorded before its stage's result was ready: %q", got)
+	}
+	if got := o.opts.Store.Snapshot().Assistants.Tasks[id].Status; got != want {
+		t.Fatalf("on_completion helper status = %s, want %s", got, want)
+	}
+}
+
+// A queued on_completion helper does not start before its stage has a result, whatever asks it to: the scheduler,
+// a Continue of the task, its wake timer or a message, which stays unread for it. Once the stage has finished its
+// own work, the same call starts it.
+func TestCompletionHelper_QueuedTurnWaitsForParentResult(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	ctx := context.Background()
+	helper := queueCompletionHelper(t, o, store, "op-helper", assistants.ModeRequired)
+	participant := meshHelperParticipantID(helper)
+
+	o.maybeScheduleTask(ctx, helper)
+	if err := o.PauseTask(ctx, helper); err != nil {
+		t.Fatalf("PauseTask: %v", err)
+	}
+	if err := o.ContinueTask(ctx, helper); err != nil {
+		t.Fatalf("ContinueTask: %v", err)
+	}
+	o.retryTaskAt(ctx, helper, o.clk().Now())
+	th, err := o.OpenThread(ctx, OpenThreadRequest{
+		OperationID: "op-open", Scope: agentcomm.ScopeStage, Members: []agentcomm.ParticipantID{meshUserParticipantID, participant},
+	})
+	if err != nil {
+		t.Fatalf("OpenThread: %v", err)
+	}
+	if _, err := o.Send(ctx, SendRequest{
+		OperationID: "op-message", ThreadID: th.ID, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{participant},
+		Kind: agentcomm.MessageKindMessage, Body: "collect the logs", Actor: state.Actor{Kind: actorKindUser},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	requireNoTurn(t, o, turns, helper, assistants.StatusQueued)
+	if got := unreadOf(store.Snapshot(), participant); len(got) != 1 {
+		t.Fatalf("helper inbox holds %d unread message(s), want the message kept for its turn", len(got))
+	}
+
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+	o.maybeScheduleTask(ctx, helper)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turn(s) once its stage awaited it, want 1", got)
+	}
+}
+
+// A Retry of a failed on_completion helper queues it again, and it waits for its stage's result like any turn: the
+// stage's completion starts that queued turn once.
+func TestCompletionHelper_RetryWaitsForParentResult(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeAdvisory)
+	commitTaskStatus(t, store, helper, assistants.StatusFailed)
+
+	if err := o.RetryTask(context.Background(), helper); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+	requireNoTurn(t, o, turns, helper, assistants.StatusQueued)
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns after its stage completed, want 1", got)
+	}
+}
+
+// A paused stage holds its on_completion helpers even when it paused while awaiting them.
+func TestCompletionHelper_PausedStageHoldsItsHelper(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	ctx := context.Background()
+	helper := queueCompletionHelper(t, o, store, "op-helper", assistants.ModeRequired)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvPause)
+
+	o.maybeScheduleTask(ctx, helper)
+	requireNoTurn(t, o, turns, helper, assistants.StatusQueued)
+
+	if _, to, _, ok, err := o.applyTransition(assistantsTestStageID, bus.EvContinue, bus.GuardCtx{PausedFrom: state.StatusAwaitingAssistants}, ""); !ok || err != nil || to != state.StatusAwaitingAssistants {
+		t.Fatalf("continue: to=%s ok=%v err=%v", to, ok, err)
+	}
+	o.maybeScheduleTask(ctx, helper)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turn(s) after its stage continued, want 1", got)
+	}
+}
+
+// A Revise committed after the scheduler read a ready stage, and before the start commits, rejects the start: the
+// gate is checked again under the Store lock, so the old attempt's helper never runs.
+func TestCompletionHelper_ReviseBeforeStartCommitRejectsTheStart(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	helper := queueCompletionHelper(t, o, store, "op-helper", assistants.ModeRequired)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+	var revise sync.Once
+	o.settlePlannedHook = func() {
+		revise.Do(func() {
+			commitStageEvent(t, o, assistantsTestStageID, bus.EvRevise)
+			bump := state.Effect{Kind: "root_generation_bumped", Target: state.Target{StageID: assistantsTestStageID}}
+			if _, err := store.ApplyRunOperation(state.Operation{ID: "test-bump", Kind: opKindBumpRootGeneration, Effects: []state.Effect{bump}}, nil); err != nil {
+				t.Errorf("bump: %v", err)
+			}
+		})
+	}
+
+	o.maybeScheduleTask(context.Background(), helper)
+	requireNoTurn(t, o, turns, helper, assistants.StatusQueued)
+}
+
+// startCompletionHelperBehindASlot queues a required on_completion helper of a stage awaiting it and starts its
+// turn behind a full command slot: the start is committed, the process waits for the returned slot to free up.
+func startCompletionHelperBehindASlot(t *testing.T, o *Orchestrator, store *state.Store) (assistants.TaskID, concurrency.ChannelSemaphore) {
+	t.Helper()
+	slot := concurrency.ChannelSemaphore(make(chan struct{}, 1))
+	slot <- struct{}{}
+	o.concurrency = concurrency.NewWithSemaphores(bus.NewCriticalBus(16), map[string]concurrency.Semaphore{"helper-cmd": slot}, "claude")
+	helper := queueCompletionHelper(t, o, store, "op-helper", assistants.ModeRequired)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+	o.maybeScheduleTask(context.Background(), helper)
+	waitForTaskStatus(t, store, helper, assistants.StatusRunning, 2*time.Second)
+	return helper, slot
+}
+
+// A turn whose start committed while its stage awaited it, but which waited for its command slot, goes back to the
+// queue when the stage paused meanwhile: the gate is checked again once the slot is granted. The stage's Continue
+// starts the queued pass once, and the stage completes on its result.
+func TestCompletionHelper_PauseWhileWaitingForTheSlotRequeuesTheTurn(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	ctx := context.Background()
+	helper, slot := startCompletionHelperBehindASlot(t, o, store)
+	if err := o.Pause(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	<-slot
+
+	requeued := waitForTaskStatus(t, store, helper, assistants.StatusQueued, 2*time.Second)
+	if requeued.StatusReason != "re-queued: parent result not ready" {
+		t.Fatalf("requeue reason = %q", requeued.StatusReason)
+	}
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 0 {
+		t.Fatalf("on_completion helper ran %d turn(s) while its stage was paused", got)
+	}
+	startsBefore := len(taskStartRecords(t, o, helper))
+
+	if err := o.Continue(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns after its stage continued, want 1", got)
+	}
+	if got := len(taskStartRecords(t, o, helper)) - startsBefore; got != 1 {
+		t.Fatalf("on_completion helper has %d start records after the Continue, want 1", got)
+	}
+}
+
+// A Continue of the stage that lands while such a turn is going back to the queue finds the task still running, so
+// it issues nothing: the requeue itself schedules the pass again, which runs once, and the stage completes.
+func TestCompletionHelper_ContinueDuringTheRequeueStillStartsThePass(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	ctx := context.Background()
+	helper, slot := startCompletionHelperBehindASlot(t, o, store)
+	if err := o.Pause(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	continued := make(chan struct{})
+	o.taskRequeueBarrier = func(id assistants.TaskID) {
+		defer close(continued)
+		if err := o.Continue(ctx, assistantsTestStageID); err != nil {
+			t.Errorf("Continue: %v", err)
+		}
+		if got := o.currentTaskStatus(id); got != assistants.StatusRunning {
+			t.Errorf("helper = %s when the Continue issued its pass, want running (the requeue not committed yet)", got)
+		}
+	}
+	<-slot
+
+	select {
+	case <-continued:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskRequeueBarrier was never invoked: spawnTask did not requeue the turn of the paused stage")
+	}
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns, want 1", got)
+	}
+}
+
+// A delegated child with trigger on_completion is not a stage's completion helper: its parent may be waiting for
+// it, so it starts while the stage is still running.
+func TestCompletionHelper_DelegatedChildIsNotGated(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	childRan := make(chan struct{}, 1)
+	parentID := attachTestTask(context.Background(), t, o, "op-parent")
+	childID := deriveTaskID("op-child:0")
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		if taskID == string(childID) {
+			childRan <- struct{}{}
+			return passResultOutcome(), nil
+		}
+		awaitRelease(t, release)
+		return passResultOutcome(), nil
+	}
+	parent := string(parentID)
+	created, err := taskCreatedEffect(childID, assistantsTestStageID, state.TaskCreatedPayload{
+		ParentTaskID: &parent, ProfileID: "reviewer", Title: "child", Instruction: "do it",
+		Mode: "advisory", Trigger: string(assistants.TriggerOnCompletion), CreatedBy: "assistant",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quota, err := quotaReservedEffect(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyRunOperation(state.Operation{ID: "op-child", Kind: "attach_children", Effects: []state.Effect{created, quota}}, nil); err != nil {
+		t.Fatalf("commit child: %v", err)
+	}
+	commitTaskStatus(t, store, childID, assistants.StatusQueued)
+
+	o.maybeScheduleTask(context.Background(), childID)
+	select {
+	case <-childRan:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a delegated on_completion child did not start while its stage was running")
+	}
+}
+
+// One completion pass is one turn however many paths issue it — the stage's result, a second issue, the final-pass
+// funnel and a recovery scan — and that turn is the helper's last: it ends completed and the stage completes.
+func TestCompletionHelper_IssuedOncePerPass(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	release := make(chan struct{})
+	turns := countTurns(t, o, release)
+	ctx := context.Background()
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeRequired)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+
+	o.issueCompletionPasses(ctx, assistantsTestStageID)
+	o.issueCompletionPasses(ctx, assistantsTestStageID)
+	o.finalizeWatchersForStage(assistantsTestStageID, bus.EvAwaitAssistants)
+	o.resumeAssistantsAfterRestart(ctx)
+	close(release)
+
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns, want 1", got)
+	}
+	if got := taskStartRecords(t, o, helper); len(got) != 1 {
+		t.Fatalf("on_completion helper has %d start records, want 1", len(got))
+	}
+}
+
+// A stage paused while it awaits its helpers keeps an on_completion pass it has not started; its Continue starts
+// that pass once, and the stage completes on its result.
+func TestCompletionHelper_ContinueOfAPausedStageStartsItsPass(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	turns := countTurns(t, o, nil)
+	ctx := context.Background()
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeRequired)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+	if err := o.Pause(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	o.issueCompletionPasses(ctx, assistantsTestStageID)
+	requireNoTurn(t, o, turns, helper, assistants.StatusWatching)
+
+	if err := o.Continue(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns, want 1", got)
+	}
+}
+
+// A stage Pause does not hold a pass already under way: its result is final although the stage is paused, so the
+// Continue completes the stage instead of running the helper again.
+func TestCompletionHelper_PauseDuringThePassDoesNotRunItAgain(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	release := make(chan struct{})
+	turns := countTurns(t, o, release)
+	ctx := context.Background()
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeRequired)
+	o.completeStage(ctx, assistantsTestStageID, state.StatusRunning, "main done")
+	waitUntil(t, "the pass started its process", func() bool { return turns.of(helper) == 1 })
+	if err := o.Pause(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	close(release)
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+
+	if err := o.Continue(ctx, assistantsTestStageID); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+	o.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns, want 1", got)
+	}
+}
+
+// An on_completion helper attached when its stage already awaits its assistants starts at once, and only once: an
+// advisory one does not hold the stage, a required one closes the gate with its result.
+func TestCompletionHelper_AttachedAfterTheStageResultRunsOnce(t *testing.T) {
+	for _, mode := range []assistants.Mode{assistants.ModeAdvisory, assistants.ModeRequired} {
+		t.Run(string(mode), func(t *testing.T) {
+			o, store := newAssistantsTestOrchestrator(t, true)
+			activateStage(t, o, assistantsTestStageID)
+			release := make(chan struct{})
+			turns := countTurns(t, o, release)
+			ctx := context.Background()
+			blocker := attachRequiredTask(ctx, t, o, assistantsTestStageID, "op-blocker")
+			waitForTaskStatus(t, store, blocker, assistants.StatusRunning, 2*time.Second)
+			o.completeStage(ctx, assistantsTestStageID, state.StatusRunning, "main done")
+			waitStageStatus(t, store, assistantsTestStageID, state.StatusAwaitingAssistants, 2*time.Second)
+
+			helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, mode)
+			waitForTaskStatus(t, store, helper, assistants.StatusRunning, 2*time.Second)
+			close(release)
+
+			waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 2*time.Second)
+			waitStageStatus(t, store, assistantsTestStageID, state.StatusDone, 2*time.Second)
+			o.concurrency.WaitAgents()
+			if got := turns.of(helper); got != 1 {
+				t.Fatalf("on_completion helper ran %d turns, want 1", got)
+			}
+		})
+	}
+}
+
+// A stage that fails has no result: its on_completion helpers get no pass, whoever asks.
+func TestCompletionHelper_FailedStageGetsNoPass(t *testing.T) {
+	for _, ev := range []bus.FSMEvent{bus.EvFail, bus.EvVerifyFail} {
+		t.Run(string(ev), func(t *testing.T) {
+			o, _ := newAssistantsTestOrchestrator(t, true)
+			activateStage(t, o, assistantsTestStageID)
+			turns := countTurns(t, o, nil)
+			helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeRequired)
+			if _, ok := o.Trigger(assistantsTestStageID, ev, bus.GuardCtx{}, "boom"); !ok {
+				t.Fatalf("%s failed", ev)
+			}
+			o.issueCompletionPasses(context.Background(), assistantsTestStageID)
+			requireNoTurn(t, o, turns, helper, assistants.StatusWatching)
+		})
+	}
+}
+
+// A provider hold at the stage's result defers the pass without losing it: the helper waits queued and runs once
+// the hold ends.
+func TestCompletionHelper_ProviderHoldDefersThePassWithoutLosingIt(t *testing.T) {
+	o, store, clk := newHelperHoldOrch(t)
+	turns := countTurns(t, o, nil)
+	activateStage(t, o, assistantsTestStageID)
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeAdvisory)
+	parkStageForTest(t, o, "other", holdHelperPark(holdNow.Add(time.Hour)))
+
+	o.completeStage(context.Background(), assistantsTestStageID, state.StatusRunning, "main done")
+	if got := store.Snapshot().Assistants.Tasks[helper].Status; got != assistants.StatusQueued || turns.of(helper) != 0 {
+		t.Fatalf("on_completion helper = %s after %d turns under the provider hold, want queued without a turn", got, turns.of(helper))
+	}
+
+	clk.BlockUntil(1)
+	if _, ok := o.Trigger("other", bus.EvPause, bus.GuardCtx{}, "release the hold"); !ok {
+		t.Fatal("pause failed")
+	}
+	clk.Advance(time.Hour)
+	waitForTaskStatus(t, store, helper, assistants.StatusCompleted, 5*time.Second)
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns, want 1 after the hold", got)
 	}
 }
 

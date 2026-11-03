@@ -368,3 +368,203 @@ func TestDuplicateChildResult_OnlyResumesParentOnce(t *testing.T) {
 		t.Fatalf("parent status = %s after the duplicate delivery, want unchanged completed", got)
 	}
 }
+
+// restartAfterCrash ends o's process as a crash does, its store closing with what it committed, and recovers the
+// run in a new orchestrator over the same run directory in Run's startup order. Every helper turn of the new
+// process counts itself and passes once release is closed (nil: at once).
+func restartAfterCrash(t *testing.T, o *Orchestrator, store *state.Store, release <-chan struct{}) (*Orchestrator, *state.Store, *turnCounter) {
+	t.Helper()
+	store.Close()
+	o2, store2 := reopenAssistantsTestOrchestrator(t, o)
+	turns := countTurns(t, o2, release)
+	ctx := context.Background()
+	o2.startPlanningForPending(ctx)
+	o2.recoverCollaboration(ctx)
+	return o2, store2, turns
+}
+
+// requireAuthorNotRestarted fails if stageID went back after seq to a status its author or verify runs in.
+func requireAuthorNotRestarted(t *testing.T, store *state.Store, stageID string, seq uint64) {
+	t.Helper()
+	history, err := store.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range history {
+		if tr.StageID != stageID || tr.Seq <= seq {
+			continue
+		}
+		switch tr.To {
+		case state.StatusPlanning, state.StatusRevising, state.StatusReady, state.StatusRunning, state.StatusRetrying:
+			t.Fatalf("stage %s went %s -> %s after the restart: its author must not run again", stageID, tr.From, tr.To)
+		default:
+			// Done, awaiting_assistants, paused etc. are fine.
+		}
+	}
+}
+
+// A crash at any point of a completion pass — the stage's result recorded, the pass queued, its turn started —
+// leaves the restart one turn, which is the helper's last: it ends completed, not watching, and the stage completes
+// on it without its author running again.
+func TestCrash_CompletionPassSurvivesARestart(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   assistants.Mode
+		result bus.FSMEvent
+		helper []assistants.TaskStatus // what the journal recorded for the helper after the stage's result
+	}{
+		{"required, stage result recorded", assistants.ModeRequired, bus.EvAwaitAssistants, nil},
+		{"required, pass queued", assistants.ModeRequired, bus.EvAwaitAssistants, []assistants.TaskStatus{assistants.StatusQueued}},
+		{"required, turn started", assistants.ModeRequired, bus.EvAwaitAssistants, []assistants.TaskStatus{assistants.StatusQueued, assistants.StatusRunning}},
+		{"advisory, stage done", assistants.ModeAdvisory, bus.EvComplete, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store := newAssistantsTestOrchestrator(t, true)
+			activateStage(t, o, assistantsTestStageID)
+			helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, tc.mode)
+			commitStageEvent(t, o, assistantsTestStageID, tc.result)
+			for _, status := range tc.helper {
+				commitTaskStatus(t, store, helper, status)
+			}
+			crashSeq := store.Snapshot().LastSeq
+
+			o2, store2, turns := restartAfterCrash(t, o, store, nil)
+
+			waitForTaskStatus(t, store2, helper, assistants.StatusCompleted, 2*time.Second)
+			waitStageStatus(t, store2, assistantsTestStageID, state.StatusDone, 2*time.Second)
+			o2.concurrency.WaitAgents()
+			if got := turns.of(helper); got != 1 {
+				t.Fatalf("on_completion helper ran %d turns after the restart, want 1", got)
+			}
+			requireAuthorNotRestarted(t, store2, assistantsTestStageID, crashSeq)
+			if blocker, open := store2.Snapshot().Assistants.RunBlocker(); open {
+				t.Fatalf("run still held by %s (%s) after the pass", blocker.ID, blocker.Status)
+			}
+		})
+	}
+}
+
+// A restart that completes the stage during its own startup — its required helper had passed, the crash came
+// before the completion — issues the advisory helper's pass once, after the turns the crash cut short are settled:
+// a start before that settle would be taken for one of them and run a second time.
+func TestCrash_StageCompletedAtStartupIssuesThePassOnce(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	o.runHelperAgent = func(ctx context.Context, taskID, profileID, cmd, prompt, logFile, resultFile string) (executor.HelperOutcome, error) {
+		return passResultOutcome(), nil
+	}
+	blocker := attachRequiredTask(context.Background(), t, o, assistantsTestStageID, "op-blocker")
+	waitForTaskStatus(t, store, blocker, assistants.StatusCompleted, 2*time.Second)
+	o.concurrency.WaitAgents()
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeAdvisory)
+	commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+	crashSeq := store.Snapshot().LastSeq
+
+	release := make(chan struct{})
+	o2, store2, turns := restartAfterCrash(t, o, store, release)
+	close(release)
+
+	waitForTaskStatus(t, store2, helper, assistants.StatusCompleted, 2*time.Second)
+	o2.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns after the restart, want 1", got)
+	}
+	if got := taskStartRecords(t, o2, helper); len(got) != 1 {
+		t.Fatalf("on_completion helper has %d start records, want 1", len(got))
+	}
+	if got := o2.currentStatus(assistantsTestStageID); got != state.StatusDone {
+		t.Fatalf("stage = %s after the restart, want done", got)
+	}
+	requireAuthorNotRestarted(t, store2, assistantsTestStageID, crashSeq)
+}
+
+// A resumed stage that completes before the restart has settled its helpers — as an owner a review pause resumed
+// can — issues the advisory helper's pass once, after the settle, for the same reason as above.
+func TestCrash_StageCompletingBeforeTheSettleIssuesThePassOnce(t *testing.T) {
+	o, store := newAssistantsTestOrchestrator(t, true)
+	activateStage(t, o, assistantsTestStageID)
+	helper := attachWatcherTask(t, o, "op-helper", assistantsTestStageID, assistants.TriggerOnCompletion, assistants.ModeAdvisory)
+	store.Close()
+
+	o2, store2 := reopenAssistantsTestOrchestrator(t, o)
+	release := make(chan struct{})
+	turns := countTurns(t, o2, release)
+	ctx := context.Background()
+	o2.completeStage(ctx, assistantsTestStageID, state.StatusRunning, "main done")
+	o2.recoverCollaboration(ctx)
+	close(release)
+
+	waitForTaskStatus(t, store2, helper, assistants.StatusCompleted, 2*time.Second)
+	o2.concurrency.WaitAgents()
+	if got := turns.of(helper); got != 1 {
+		t.Fatalf("on_completion helper ran %d turns after the restart, want 1", got)
+	}
+	if got := taskStartRecords(t, o2, helper); len(got) != 1 {
+		t.Fatalf("on_completion helper has %d start records, want 1", len(got))
+	}
+}
+
+// A wake of a queued on_completion helper before the restart has settled its helpers — a Continue of the task or a
+// message, both open to the dashboard before Run — starts nothing: the settle would take that turn for one the
+// crash cut short and run it a second time. The restart starts the pass once, after the settle.
+func TestCrash_WakeBeforeTheSettleStartsThePassOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		held bool // the helper was paused before the crash
+		wake func(t *testing.T, o *Orchestrator, helper assistants.TaskID)
+	}{
+		{"continue of the task", true, func(t *testing.T, o *Orchestrator, helper assistants.TaskID) {
+			if err := o.ContinueTask(context.Background(), helper); err != nil {
+				t.Fatalf("ContinueTask: %v", err)
+			}
+		}},
+		{"message", false, func(t *testing.T, o *Orchestrator, helper assistants.TaskID) {
+			ctx := context.Background()
+			participant := meshHelperParticipantID(helper)
+			th, err := o.OpenThread(ctx, OpenThreadRequest{
+				OperationID: "op-open", Scope: agentcomm.ScopeStage, Members: []agentcomm.ParticipantID{meshUserParticipantID, participant},
+			})
+			if err != nil {
+				t.Fatalf("OpenThread: %v", err)
+			}
+			if _, err := o.Send(ctx, SendRequest{
+				OperationID: "op-message", ThreadID: th.ID, Sender: meshUserParticipantID, Recipients: []agentcomm.ParticipantID{participant},
+				Kind: agentcomm.MessageKindMessage, Body: "collect the logs", Actor: state.Actor{Kind: actorKindUser},
+			}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store := newAssistantsTestOrchestrator(t, true)
+			activateStage(t, o, assistantsTestStageID)
+			helper := queueCompletionHelper(t, o, store, "op-helper", assistants.ModeRequired)
+			if tc.held {
+				if err := o.PauseTask(context.Background(), helper); err != nil {
+					t.Fatalf("PauseTask: %v", err)
+				}
+			}
+			commitStageEvent(t, o, assistantsTestStageID, bus.EvAwaitAssistants)
+			store.Close()
+
+			o2, store2 := reopenAssistantsTestOrchestrator(t, o)
+			release := make(chan struct{})
+			turns := countTurns(t, o2, release)
+			ctx := context.Background()
+			tc.wake(t, o2, helper)
+			o2.startPlanningForPending(ctx)
+			o2.recoverCollaboration(ctx)
+			close(release)
+
+			waitForTaskStatus(t, store2, helper, assistants.StatusCompleted, 2*time.Second)
+			waitStageStatus(t, store2, assistantsTestStageID, state.StatusDone, 2*time.Second)
+			o2.concurrency.WaitAgents()
+			if got := turns.of(helper); got != 1 {
+				t.Fatalf("on_completion helper ran %d turns after the restart, want 1", got)
+			}
+			if got := taskStartRecords(t, o2, helper); len(got) != 1 {
+				t.Fatalf("on_completion helper has %d start records, want 1", len(got))
+			}
+		})
+	}
+}

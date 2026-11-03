@@ -574,3 +574,21 @@ func TestMesh_BatchIDKeepsGroupsApart(t *testing.T) {
 	}
 	assertBatchState(t, "replayed", rs.Assistants, want, []agentcomm.WaitID{"w-m1", "w-m2", "w-m3", "w-lone"})
 }
+
+// A run agent's neutral result carries no verdict; it still answers a task_result wait.
+func TestMesh_TaskResultWaitResolvedByResultWithoutVerdict(t *testing.T) {
+	rs := NewRunState([]string{"a"})
+	created := taskCreatedControl("op-run", "t-run", "", nil)
+	created.Payload = mustMarshal(t, TaskCreatedPayload{Scope: string(assistants.ScopeRun), ProfileID: "qa", Mode: "advisory"})
+	cond := agentcomm.WaitCondition{Kind: agentcomm.WaitOnTaskResult, TaskID: "t-run"}
+	result := &Control{Kind: "task_result", SchemaVersion: ControlSchemaVersion, Seq: 7,
+		Target: Target{TaskID: "t-run"}, Payload: mustMarshal(t, assistants.Result{Summary: "logs collected"})}
+	for _, c := range []*Control{created, result, meshWaitRegisteredControl("w-legacy", "user", cond, "", "", 0)} {
+		if err := applyControlToRunState(rs, c); err != nil {
+			t.Fatalf("apply %s: %v", c.Kind, err)
+		}
+	}
+	if got := rs.Assistants.Mesh.Waits["w-legacy"].Status; got != agentcomm.WaitReady {
+		t.Fatalf("wait after a result without verdict = %s, want ready", got)
+	}
+}
