@@ -410,7 +410,7 @@ func ReExec(cfg ReExecConfig) error {
 	// смонтированный конфиг, а невыставленный env не должен "придумываться" — иначе хост и контейнер разойдутся.
 	// AFM_DEBUG включает логирование промптов, AFM_ACCOUNTING — отображение стоимости, NO_COLOR отключает
 	// цвет (в контейнере stdout — TTY), остальные — тогглы фич.
-	for _, name := range []string{"AFM_DEBUG", "AFM_ACCOUNTING", "AFM_SIDEAGENT", "AFM_COLLABORATION", "AFM_ADD_STAGE", "NO_COLOR"} {
+	for _, name := range []string{"AFM_DEBUG", "AFM_ACCOUNTING", "AFM_SIDEAGENT", "AFM_COLLABORATION", "AFM_ADD_STAGE", "AFM_HIDE_ATTACH_HELPERS", "NO_COLOR"} {
 		if value := os.Getenv(name); value != "" {
 			args = append(args, "-e", name+"="+value)
 		}

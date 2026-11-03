@@ -53,6 +53,8 @@ server:
 # collaboration:
 #   enabled: true           # stage helpers; ON by default. env AFM_COLLABORATION overrides
 #   mode: team              # dashboard: team (default) | assistants; flow.yaml may override
+#   hide_attach_helpers: true # hide the manual Attach helper buttons; OFF by default.
+#                           # env AFM_HIDE_ATTACH_HELPERS overrides; no flow.yaml override
 #   runtime_context: isolated # helper process environment: isolated (default) | wrapper
 #   max_depth: 3            # helper delegation depth; flow.yaml may override it
 #   limits: { max_tasks: 20 } # optional whole-run task limit
@@ -116,6 +118,28 @@ existing configs) or `assistants`. The value in `flow.yaml` takes precedence ove
 project `.afm/config.yaml`, then global `~/.afm/config.yaml`. The mode does not
 enable or disable collaboration; `AFM_COLLABORATION` and `collaboration.enabled`
 still control that separately. See [Collaboration modes](collaboration.md#collaboration-modes).
+
+`collaboration.hide_attach_helpers: true` hides the dashboard buttons that attach a
+helper to a stage by hand: **Attach helper to stage…** in People and **Attach helper…**
+in the stage header. It is `false` by default. Precedence is the non-empty
+`AFM_HIDE_ATTACH_HELPERS` environment variable, then project `.afm/config.yaml`, then
+global `~/.afm/config.yaml`, then `false`; `flow.yaml` cannot set it. In the
+environment, exactly `1` or `true` hides the buttons and any other non-empty value
+(such as `0`, `false` or `yes`) shows them; an empty or unset variable leaves the
+config value in effect.
+
+```bash
+AFM_HIDE_ATTACH_HELPERS=1 afm run flow.yaml   # hide the buttons for this run
+AFM_HIDE_ATTACH_HELPERS=0 afm run flow.yaml   # show them even if config says true
+```
+
+The setting is read when `afm run` starts or resumes a run, so changing it needs a
+restart. It only hides the two buttons: collaboration stays enabled, and
+**Attach to stage** in the Feed `@` menu, `afm agent spawn`, the API and `assistants:`
+in YAML keep working. To switch helpers off entirely use `collaboration.enabled` or
+`AFM_COLLABORATION=0` instead. See
+[Web dashboard](dashboard.md#people-panel) and
+[Collaboration](collaboration.md#hide-the-attach-helper-buttons).
 
 A profile defines a role; its `command` is optional. Without it a helper runs the
 executor of its stage (or `client.command`), and a built-in `default` profile always

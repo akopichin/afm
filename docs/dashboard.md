@@ -176,13 +176,19 @@ selected conversation is preselected as the reply target, so the agent's
 ## Run conversations
 
 In `assistants` mode, the **Run conversations** button in the workspace tabs
-opens a right-hand panel for conversations that include you and have no stage
-origin or stage participant. This includes conversations started by run agents;
-conversations involving a stage agent or stage helper stay in the stage Feed.
-The panel starts closed and never opens itself. It is available across Feed,
-Plan, Cost, and Assistant views when Agent Mesh is available; changing
-views keeps the selected conversation and draft. There are no People, agent
-creation, or board task controls in this panel.
+opens a right-hand panel for conversations that include you and someone else and
+have no stage origin or stage participant. This includes conversations started by
+run agents; conversations involving a stage agent or stage helper stay in the stage
+Feed. The button appears when Agent Mesh is available and the run has such a
+conversation. A message is not required: a run agent, whether declared in `team:` or
+started from the dashboard, already has a conversation with you. Without one there
+is no button, panel or extra space, and profiles, the Assistant and stage helpers
+do not add them. When the first conversation appears, the panel stays closed; it
+never opens itself. A closed conversation, or one with an agent that has finished,
+stays readable, including after the run ends. The panel is available across Feed,
+Plan, Cost, and Assistant views; changing views keeps the selected conversation
+and draft. There are no People, agent creation, or board task controls in this
+panel.
 
 On wide screens the panel shares the workspace area; drag its left edge to
 resize it. On screens 1180 px wide or less, it opens over the workspace as a
@@ -783,6 +789,11 @@ resizing still works, but the width is not retained.
 - Where there is no People panel (for example in `assistants` mode, or with
   collaboration on but no Agent Mesh), the stage header has an **Attach helper…**
   button instead, shown under the same condition. It opens the same dialog.
+- With `collaboration.hide_attach_helpers: true` (or `AFM_HIDE_ATTACH_HELPERS=1`) both
+  **Attach helper to stage…** and the header **Attach helper…** are not shown, and
+  **Add run agent…** and People stay. **Attach to stage** in the Feed `@` list and
+  helpers that already exist are unaffected. See
+  [Config reference](config-reference.md#configuration).
 
 On a wide screen the panel is open by default next to the Feed. Click **People**
 in the stage header, or **×** in the panel, to hide it; the Feed and composer then

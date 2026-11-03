@@ -463,3 +463,102 @@ func TestCollaborationMode_SelfReferentialMergeKeyDoesNotCrash(t *testing.T) {
 		t.Fatalf("subprocess failed (stack overflow / hang?): %v\n%s", err, tail)
 	}
 }
+
+// --- hide_attach_helpers: tri-state visibility switch for the manual attach buttons ------------------------
+
+func TestHideAttachHelpers_Default(t *testing.T) {
+	t.Setenv("AFM_HIDE_ATTACH_HELPERS", "")
+	if config.Default().Collaboration.HideAttachHelpers != nil {
+		t.Error("Default() must not set hide_attach_helpers: nil means 'layer did not set it'")
+	}
+	if (config.CollaborationConfig{}).ShouldHideAttachHelpers() {
+		t.Error("buttons must stay visible by default")
+	}
+}
+
+func TestHideAttachHelpers_LayerMerge(t *testing.T) {
+	tests := []struct {
+		name            string
+		global, project string
+		want            bool
+	}{
+		{name: "no files"},
+		{name: "global true is inherited", global: "collaboration:\n  hide_attach_helpers: true\n", want: true},
+		{name: "project true", project: "collaboration:\n  hide_attach_helpers: true\n", want: true},
+		{name: "project false overrides global true",
+			global: "collaboration:\n  hide_attach_helpers: true\n", project: "collaboration:\n  hide_attach_helpers: false\n"},
+		{name: "project true overrides global false",
+			global: "collaboration:\n  hide_attach_helpers: false\n", project: "collaboration:\n  hide_attach_helpers: true\n", want: true},
+		{name: "project omission keeps global true",
+			global: "collaboration:\n  hide_attach_helpers: true\n", project: "collaboration:\n  max_depth: 2\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AFM_HIDE_ATTACH_HELPERS", "")
+			cfg, err := loadModeLayers(t, tt.global, tt.project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Collaboration.ShouldHideAttachHelpers(); got != tt.want {
+				t.Fatalf("ShouldHideAttachHelpers() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHideAttachHelpers_MergeKeepsSiblingFields(t *testing.T) {
+	t.Setenv("AFM_HIDE_ATTACH_HELPERS", "")
+	cfg, err := loadModeLayers(t,
+		"collaboration:\n  enabled: false\n  max_depth: 2\n  mode: assistants\n",
+		"collaboration:\n  hide_attach_helpers: true\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cfg.Collaboration
+	if c.Enabled == nil || *c.Enabled || c.MaxDepth == nil || *c.MaxDepth != 2 ||
+		c.Mode == nil || string(*c.Mode) != "assistants" {
+		t.Errorf("project hide_attach_helpers replaced neighbouring global collaboration fields: %+v", c)
+	}
+	if !c.ShouldHideAttachHelpers() {
+		t.Error("project hide_attach_helpers: true must apply")
+	}
+}
+
+func TestHideAttachHelpers_EnvPrecedence(t *testing.T) {
+	tr, fa := true, false
+	tests := []struct {
+		name   string
+		env    string
+		envSet bool
+		field  *bool
+		want   bool
+	}{
+		{name: "env 1 over config false", env: "1", envSet: true, field: &fa, want: true},
+		{name: "env true over config false", env: "true", envSet: true, field: &fa, want: true},
+		{name: "env 0 over config true", env: "0", envSet: true, field: &tr},
+		{name: "env false over config true", env: "false", envSet: true, field: &tr},
+		{name: "env yes is not truthy", env: "yes", envSet: true, field: &tr},
+		{name: "env TRUE is not truthy", env: "TRUE", envSet: true, field: &tr},
+		{name: "empty env keeps config true", env: "", envSet: true, field: &tr, want: true},
+		{name: "unset env keeps config true", field: &tr, want: true},
+		{name: "unset env keeps config false", field: &fa},
+		{name: "env 1 without config", env: "1", envSet: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envSet {
+				t.Setenv("AFM_HIDE_ATTACH_HELPERS", tt.env)
+			} else {
+				t.Setenv("AFM_HIDE_ATTACH_HELPERS", "")
+				// t.Setenv above restores the original value on cleanup.
+				if err := os.Unsetenv("AFM_HIDE_ATTACH_HELPERS"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := (config.CollaborationConfig{HideAttachHelpers: tt.field}).ShouldHideAttachHelpers()
+			if got != tt.want {
+				t.Fatalf("ShouldHideAttachHelpers() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

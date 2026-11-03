@@ -72,6 +72,9 @@ type statusResponse struct {
 	// UnknownCommandName is the label prefix the dashboard numbers commands with when a response has no
 	// command_name; always present so the fallback never needs a client-side default.
 	UnknownCommandName string `json:"unknown_command_name"`
+	// HideAttachHelpers — подсказка dashboard скрыть кнопки ручного attach helper. Всегда присутствует и не
+	// зависит от capabilities.collaboration.
+	HideAttachHelpers bool `json:"hide_attach_helpers"`
 	// GraphRevision (Этап 9) — the runtime stage registry's current revision; omitted when the add-stage
 	// capability is off. The dashboard compares this against a previously-fetched preview's graph_revision to
 	// detect staleness without a dedicated endpoint.
@@ -138,6 +141,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		BackoffOpenSince:     rs.BackoffOpenSince(),
 		CollaborationMode:    s.collaborationMode,
 		UnknownCommandName:   s.unknownCommandName,
+		HideAttachHelpers:    s.hideAttachHelpers,
 	}
 	if s.accounting != nil {
 		bundle := s.accounting.CostSnapshot()

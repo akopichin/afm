@@ -33,14 +33,15 @@ export type RunConversationsPanelProps = {
 }
 
 // runConversationThreads — the conversations of the whole run with the human: no stage owns them, so they are
-// not in any stage Feed. A thread qualifies when the human is in it, it was not opened from a stage, and none
-// of its members belongs to a stage (a run-scoped helper has no stage_id, a stage agent or stage helper does).
+// not in any stage Feed. A thread qualifies when the human is in it with someone else, it was not opened from a
+// stage, and none of its members belongs to a stage (a run-scoped helper has no stage_id, a stage agent or stage
+// helper does).
 // A member the roster does not know yet defers the whole thread to the next roster poll: showing it now would
 // mean a blank name.
 export function runConversationThreads(threads: MeshThread[], participants: MeshParticipant[]): MeshThread[] {
   const byId = new Map(participants.map((p) => [p.id, p]))
   return threads.filter((thread) => {
-    if (!thread.members.includes('user') || (thread.origin_stage ?? '') !== '') return false
+    if (!thread.members.includes('user') || !thread.members.some((id) => id !== 'user') || (thread.origin_stage ?? '') !== '') return false
     return thread.members.every((id) => {
       const member = byId.get(id)
       return member !== undefined && (member.stage_id ?? '') === ''

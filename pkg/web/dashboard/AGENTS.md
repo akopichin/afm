@@ -36,6 +36,9 @@
   Mesh-UI ленты стадии (беседы и их опрос, режим Message) требует mesh И
   collaboration; People требует также `collaboration_mode: team`. Team и Board
   требуют успешной mesh-пробы, run id и режима `team`; Board не опрашивается в
-  `assistants`. Run conversations требует mesh-пробу, run id и режима `assistants`.
+  `assistants`. Run conversations требует mesh-пробу, run id, режим `assistants` и непустой
+  `runConversationThreads`: команда и агенты без диалога не добавляют кнопку,
+  панель и layout. Roster опрашивается и пока панели нет, иначе первый диалог
+  не появится.
   Краткий сбой `/api/status` сохраняет последний режим и не размонтирует Team.
   План/диалог сверяются с серверными ShowPlan/ShowDialog, включая paused auto-стадии.

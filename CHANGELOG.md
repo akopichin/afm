@@ -23,6 +23,17 @@ presentation only: execution, participant IDs and journals do not change, and a 
 names to the existing history. See [Configuration](docs/config-reference.md#executor-names),
 [Web dashboard](docs/dashboard.md#executor-names) and [AI-verify](docs/verify.md#naming-a-step).
 
+### Improvement: hide the manual Attach helper buttons
+
+New `collaboration.hide_attach_helpers` setting (global or project `config.yaml`) and
+`AFM_HIDE_ATTACH_HELPERS` environment variable hide **Attach helper to stage…** in
+People and **Attach helper…** in the stage header. It is off by default; a non-empty
+env value takes precedence over project and global config (`1` or `true` hides,
+any other value shows). It changes visibility only: collaboration stays enabled,
+and the Feed `@` **Attach to stage** group, `afm agent spawn` and the API keep
+working. See [Config reference](docs/config-reference.md) and
+[Collaboration](docs/collaboration.md#hide-the-attach-helper-buttons).
+
 ### Improvement: the dashboard URL in `afm run` stands out
 
 `afm run` prints the dashboard URL as a separate block set off by blank lines:
@@ -41,6 +52,17 @@ The stage Feed composer modes are renamed from **Message** / **Revise** to
 in Chat it keeps working on its task, while Restart with note stops it and
 restarts its current phase with your note. The API, CLI (`afm revise`) and
 event names are unchanged.
+
+### Fix: Run conversations appears only when there is a conversation
+
+In `assistants` mode the **Run conversations** button, panel and the space it
+takes are shown only while the run has a conversation with you and someone else
+that does not belong to a stage. Without one, the dashboard looks as usual; the
+panel starts closed when the first conversation appears and is closed again when
+the conversations disappear or a new run starts. Run agents declared in `team:`
+or started from the dashboard already have a conversation with you, so the button
+is shown for them from the start. History stays readable after agents finish and
+after the run ends. See [Web dashboard](docs/dashboard.md#run-conversations).
 
 ### Fix: shell verify steps receive `AFM_STAGE_DIR`
 

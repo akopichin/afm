@@ -128,3 +128,46 @@ func decodeDashboardJSON(t *testing.T, url string, into any) {
 		t.Fatalf("decode %s: %v", url, err)
 	}
 }
+
+// TestStartDashboard_HideAttachHelpersInStatus: startDashboard resolves config and env once and the result reaches
+// /api/status; an explicit env overrides the config value in both directions.
+func TestStartDashboard_HideAttachHelpersInStatus(t *testing.T) {
+	hide, show := true, false
+	tests := []struct {
+		name   string
+		env    string
+		config *bool
+		want   bool
+	}{
+		{name: "default", want: false},
+		{name: "config true", config: &hide, want: true},
+		{name: "config false", config: &show, want: false},
+		{name: "env 1 over config false", env: "1", config: &show, want: true},
+		{name: "env 0 over config true", env: "0", config: &hide, want: false},
+		{name: "empty env keeps config true", env: "", config: &hide, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AFM_HIDE_ATTACH_HELPERS", tt.env)
+			cfg := config.Default()
+			cfg.Collaboration.HideAttachHelpers = tt.config
+			base := startGraphTestDashboard(t, cfg)
+
+			code, body := getBody(t, base+"/api/status")
+			if code != 200 {
+				t.Fatalf("GET /api/status = %d: %s", code, body)
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(body), &raw); err != nil {
+				t.Fatal(err)
+			}
+			got, ok := raw["hide_attach_helpers"]
+			if !ok {
+				t.Fatalf("hide_attach_helpers missing from /api/status: %s", body)
+			}
+			if want := map[bool]string{true: "true", false: "false"}[tt.want]; string(got) != want {
+				t.Errorf("hide_attach_helpers = %s, want %s", got, want)
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@ Add roles to global `~/.afm/config.yaml` or project `.afm/config.yaml`:
 collaboration:
   enabled: true                 # default; AFM_COLLABORATION=0 disables it
   mode: team                    # dashboard: team (default) or assistants
+  hide_attach_helpers: false    # default; true hides the manual Attach helper buttons
   runtime_context: isolated     # default; isolated or wrapper, see below
   max_depth: 3                 # default; 0 prevents helper creation
   limits:
@@ -178,16 +179,20 @@ not rewrite `flow.yaml` or stored participants.
 In `team` mode, the dashboard shows **Team**, **Board**, and the stage Feed's
 **People** panel when their usual capabilities are available. In `assistants`
 mode, those views and People controls are hidden and the Feed uses their space.
-Stage helpers remain under their stages; **⋯ → Attach helper…**, the Assistant,
+Stage helpers remain under their stages; the stage header's **Attach helper…**, the Assistant,
 stage Feed conversations, and **Chat** / **Restart with note** remain available under
 their existing gates. Run agents declared in `team:` still start, and agents can
 still exchange messages and use the board. **Add run agent** and human **New
 task** / **Post task** controls are available in `team` mode only.
 
-With Agent Mesh available, `assistants` mode shows a closed **Run conversations**
-panel beside the workspace. It contains conversations that include you, have no
-stage origin, and contain no stage agent or stage helper. Agent-started run-wide
-conversations can therefore appear here; stage conversations stay in their Feed.
+With Agent Mesh available, `assistants` mode shows a **Run conversations** button
+and a closed panel beside the workspace only while the run has a conversation that
+includes you and someone else, has no stage origin, and contains no stage agent or
+stage helper. Without such a conversation the dashboard looks as usual: no button,
+no panel and no extra space. Profiles, the Assistant and stage helpers do not add
+one. A run agent, whether declared in `team:` or started from the dashboard, already
+has a conversation with you, so the button is there from the start; agent-started
+run-wide conversations also appear here. Stage conversations stay in their Feed.
 See [Run conversations](dashboard.md#run-conversations) for reading, replies,
 resizing, and new-message signals.
 
@@ -324,10 +329,26 @@ Full example: [`examples/agent-team-review/`](https://github.com/akopichin/afm/t
 both answers with `afm agent wait`, fixes the valid findings, and then passes a
 `verify:` gate.
 
+## Hide the attach helper buttons
+
+Set `collaboration.hide_attach_helpers: true` in global or project `config.yaml`, or
+run with `AFM_HIDE_ATTACH_HELPERS=1`, to hide the two buttons that attach a helper to
+a stage by hand (**Attach helper to stage…** and **Attach helper…**). Precedence is
+non-empty env > project config > global config > `false`; see
+[Config reference](config-reference.md#configuration) for the accepted
+values. The setting applies when `afm run` starts or resumes.
+
+This is only a visibility switch, unlike `collaboration.enabled: false` and
+`AFM_COLLABORATION=0`, which turn helpers off entirely. With the buttons hidden,
+**Attach to stage** in the Feed `@` menu, `assistants:` in `flow.yaml`,
+`afm agent spawn`, the API and agent delegation still work, and existing helpers stay
+visible and open as before.
+
 ## Use helpers in the dashboard
 
-Open a stage's **⋯ → Attach helper…** menu, select an available role, and give
-it an instruction. **Configured executor** shows the executor the helper will run
+Click **Attach helper to stage…** in the stage Feed's **People** panel (or
+**Attach helper…** in the stage header when there is no People panel), select an
+available role, and give it an instruction. **Configured executor** shows the executor the helper will run
 on this stage, by its [readable name](config-reference.md#executor-names), and
 where it comes from (*profile*, *stage* or *run default*), for example
 `Codex Reviewer (profile)`; the raw command is in the tooltip; if
