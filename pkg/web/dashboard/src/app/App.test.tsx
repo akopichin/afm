@@ -3582,7 +3582,7 @@ describe('App', () => {
       expect(screen.queryByRole('button', { name: 'Attach helper…' })).toBeNull()
 
       fireEvent.click(people.getByRole('button', { name: 'Add run agent…' }))
-      expect(await screen.findByText('claude (run default)')).toBeInTheDocument()
+      expect(await screen.findByText('Claude Code (run default)')).toBeInTheDocument()
     })
 
     test('People offers Attach helper to stage… when the flag is off', async () => {
