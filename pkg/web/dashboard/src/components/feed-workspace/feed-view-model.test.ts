@@ -3,6 +3,7 @@ import type { AfmEvent } from '../../types'
 import type { FeedItem } from './feed-view-model'
 import { toFeedItems, groupFeedItems, groupToolRuns, toolCall, toolRunSummary, formatEventGap, buildFeedTimeline } from './feed-view-model'
 import type { MeshMessage } from '../../api/mesh-client'
+import { resetUnknownCommandLabels } from '../../lib/executor-label'
 
 const ev = (type: string, payload: unknown, stageId: string, timestamp: string, seq?: number): AfmEvent =>
   ({ type, payload, stageId, timestamp, ...(seq !== undefined ? { seq } : {}) }) as AfmEvent
@@ -134,27 +135,25 @@ describe('toFeedItems — mapping (parity with the old feed formatting)', () => 
 describe('verify_started/verify_result — наблюдательные события AI-verify (V5b.1)', () => {
   it('verify_started renders as a neutral system status row naming the step and command', () => {
     const items = toFeedItems([
-      ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', command_name: 'Codex' }, 's1', '2026-07-10T10:00:00Z'),
     ])
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'neutral', kind: 'status' })
-    expect(items[0]?.text).toContain('2')
-    expect(items[0]?.text).toContain('codex')
+    expect(items[0]?.text).toBe('Verify step 2 · Codex')
   })
 
   it('verify_result verdict=pass renders as a success row and carries a report link when report_path is present', () => {
     const items = toFeedItems([
       ev(
         'verify_result',
-        { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', verdict: 'pass', reason: 'всё хорошо', report_path: '/runs/x/s1/verify/v-1/report.md' },
+        { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', command_name: 'Codex', verdict: 'pass', reason: 'всё хорошо', report_path: '/runs/x/s1/verify/v-1/report.md' },
         's1',
         '2026-07-10T10:00:01Z',
       ),
     ])
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ actor: 'system', tone: 'success', kind: 'success' })
-    expect(items[0]?.text).toContain('codex')
-    expect(items[0]?.text).toContain('всё хорошо')
+    expect(items[0]?.text).toBe('Verify passed (step 2) · Codex: всё хорошо')
     // Ссылка на полный отчёт строится из id стадии + verification_id, а не из абсолютного report_path —
     // присутствие report_path в payload лишь СИГНАЛ "отчёт есть".
     expect(items[0]?.reportVerificationId).toBe('v-1')
@@ -225,22 +224,84 @@ describe('verify_started/verify_result — наблюдательные собы
   })
 })
 
+describe('verify rows with named steps and readable executors', () => {
+  const shell = { verification_id: 'v-1', step: 1, kind: 'shell', command: 'make test' }
+  const agent = { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex-as-claude', command_name: 'Codex Reviewer' }
+  const row = (type: string, payload: object) => toFeedItems([ev(type, payload, 's1', '2026-07-10T10:00:00Z')])[0]!
+
+  it('a named shell step is just its name, and its raw command and number stay in the tooltip', () => {
+    const started = row('verify_started', { ...shell, name: 'Unit tests' })
+    expect(started.text).toBe('Unit tests')
+    expect(started.title).toBe('step 1 · make test')
+    expect(started.executor).toBeUndefined()
+    expect(row('verify_result', { ...shell, name: 'Unit tests', verdict: 'pass', reason: 'ok' }).text).toBe('Verify passed · Unit tests: ok')
+  })
+
+  it('a named AI step is its name with the executor as a separate badge, and the raw command in the tooltip', () => {
+    const started = row('verify_started', { ...agent, name: 'Code review' })
+    expect(started.text).toBe('Code review')
+    expect(started.executor).toEqual({ label: 'Codex Reviewer', raw: 'codex-as-claude' })
+    expect(started.title).toBe('step 2 · codex-as-claude')
+    const result = row('verify_result', { ...agent, name: 'Code review', verdict: 'needs_changes', reason: 'fix it' })
+    expect(result.text).toBe('Verify needs changes · Code review: fix it')
+    expect(result.executor?.label).toBe('Codex Reviewer')
+  })
+
+  it('an unnamed shell step keeps the legacy text with its command, and the command again in the tooltip', () => {
+    const started = row('verify_started', shell)
+    expect(started.text).toBe('Verify step 1 · make test')
+    expect(started.title).toBe('step 1 · make test')
+    expect(started.executor).toBeUndefined()
+    expect(row('verify_result', { ...shell, verdict: 'pass', reason: 'ok' }).text).toBe('Verify passed (step 1) · make test: ok')
+  })
+
+  it('an unnamed AI step names its executor in the text; no separate badge repeats it', () => {
+    const started = row('verify_started', agent)
+    expect(started.text).toBe('Verify step 2 · Codex Reviewer')
+    expect(started.executor).toBeUndefined()
+    expect(started.title).toBe('step 2 · codex-as-claude')
+  })
+
+  it('names retry, tree-modified, interrupted and execution-error rows the same way', () => {
+    const named = { ...agent, name: 'Code review' }
+    expect(row('verify_retry', { ...named, attempt: 2, reason: 'backoff' }).text).toBe('Verify retry 2 · Code review: backoff')
+    expect(row('verify_tree_modified', named).text).toBe('Verify · Code review modified the working tree (verifier must be read-only)')
+    expect(row('verify_result', { ...named, verdict: 'inconclusive', reason: 'x' }).text).toBe('Verify inconclusive · Code review: x')
+    expect(row('verify_result', { ...named, verdict: 'accepted_stalemate', reason: 'x' }).text).toBe('Verify accepted · Code review: x')
+    expect(row('verify_result', { ...named, exec_error: 'interrupted', reason: 'x' }).text).toBe('Verify interrupted · Code review: x')
+    expect(row('verify_result', { ...named, exec_error: 'exec_failure', reason: 'x' }).text).toBe('Verify execution error · Code review: x')
+  })
+
+  it('without command_name (older server) an AI step falls back to the numbered prefix label', () => {
+    resetUnknownCommandLabels()
+    const started = toFeedItems([ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: './x/agent.sh' }, 's1', '2026-07-10T10:00:00Z')], 'test')[0]!
+    expect(started.text).toBe('Verify step 2 · test-1')
+    expect(started.title).toBe('step 2 · ./x/agent.sh')
+  })
+
+  it('--afm-raw-command-tooltip: none leaves only "step N" in the tooltip', () => {
+    document.documentElement.style.setProperty('--afm-raw-command-tooltip', 'none')
+    try {
+      expect(row('verify_started', { ...shell, name: 'Unit tests' }).title).toBe('step 1')
+    } finally {
+      document.documentElement.style.removeProperty('--afm-raw-command-tooltip')
+    }
+  })
+})
+
 describe('verify_retry — наблюдательное предупреждение о повторном verify-проходе', () => {
   it('renders as a system warning status row naming the step, command, attempt and reason', () => {
     const items = toFeedItems([
       ev(
         'verify_retry',
-        { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', attempt: 1, reason: 'needs changes' },
+        { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex', command_name: 'Codex', attempt: 1, reason: 'needs changes' },
         's1',
         '2026-07-10T10:00:00Z',
       ),
     ])
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
-    expect(items[0]?.text).toContain('2') // step
-    expect(items[0]?.text).toContain('codex') // command
-    expect(items[0]?.text).toContain('1') // attempt
-    expect(items[0]?.text).toContain('needs changes') // reason
+    expect(items[0]?.text).toBe('Verify retry 1 (step 2) · Codex: needs changes')
   })
 
   it('keys a verify_retry row by verification_id+step+attempt so a reload replay never duplicates it', () => {
@@ -267,12 +328,11 @@ describe('verify_retry — наблюдательное предупрежден
 describe('verify_tree_modified — предупреждение о нарушении read-only изоляции верификатора', () => {
   it('verify_tree_modified renders as a warning row naming the step and command', () => {
     const items = toFeedItems([
-      ev('verify_tree_modified', { verification_id: 'v-1', step: 2, command: 'claude' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_tree_modified', { verification_id: 'v-1', step: 2, command: 'claude', command_name: 'Claude Code' }, 's1', '2026-07-10T10:00:00Z'),
     ])
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ actor: 'system', side: 'left', tone: 'warning', kind: 'status' })
-    expect(items[0]?.text).toContain('2') // step
-    expect(items[0]?.text).toContain('claude') // command
+    expect(items[0]?.text).toBe('Verify step 2 · Claude Code modified the working tree (verifier must be read-only)')
   })
 
   it('keys a verify_tree_modified row by verification_id+step so a reload replay never duplicates it', () => {

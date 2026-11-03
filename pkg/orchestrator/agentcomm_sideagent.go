@@ -27,6 +27,10 @@ import (
 // before the rename saved the alias "side" and keep it: their descriptor is never rewritten.
 const sideAgentParticipantAlias = "assistant"
 
+// sideAgentDisplayName is the bound Side agent's participant name. The executor it runs is a separate field
+// (Participant.Command), so switching the configured command never renames the participant.
+const sideAgentDisplayName = "Assistant"
+
 // SideAgentParticipantID returns the canonical, run-scoped mesh identity for the bound Side agent —
 // "side:<runID>" — computed from the orchestrator's own run id so no caller hardcodes the prefix.
 func (o *Orchestrator) SideAgentParticipantID() agentcomm.ParticipantID {
@@ -49,11 +53,31 @@ func (o *Orchestrator) SetSideAgentDrain(drain func(context.Context) bool) {
 	o.sideMeshDrain = drain
 }
 
-func (o *Orchestrator) sideParticipantAvailable(p agentcomm.Participant) agentcomm.Participant {
-	if p.Kind == agentcomm.KindSideAgent && !o.sideAgentReachable.Load() {
+// withSideAgentRuntime adds what only this process knows about the bound Side agent: the command its runtime
+// runs and whether it is up. Every other participant is returned unchanged.
+func (o *Orchestrator) withSideAgentRuntime(p agentcomm.Participant) agentcomm.Participant {
+	if p.Kind != agentcomm.KindSideAgent {
+		return p
+	}
+	p = assistantParticipant(p, o.sideAgentCommand)
+	if !o.sideAgentReachable.Load() {
 		p.Reachable = false
 		p.UnreachableReason = "Assistant is unavailable"
 	}
+	return p
+}
+
+// assistantParticipant shows a Side agent descriptor as the Assistant running command. A run saved before the
+// rename stored the command as the name, so an empty command falls back to that saved name. Only the copy
+// changes: the journaled descriptor and its replayed registration stay as saved.
+func assistantParticipant(p agentcomm.Participant, command string) agentcomm.Participant {
+	if p.DisplayName != sideAgentDisplayName {
+		p.Command = p.DisplayName
+	}
+	if command != "" {
+		p.Command = command
+	}
+	p.DisplayName = sideAgentDisplayName
 	return p
 }
 
@@ -91,13 +115,12 @@ func sideAgentRegisterOperationID(runID string) string {
 	return "register-side-agent:" + runID
 }
 
-// RegisterSideAgentRequest carries just enough to label the roster row — the configured executor a human sees
-// when the Side agent shows up in ListParticipants/Team view.
+// RegisterSideAgentRequest describes the bound Side agent this process starts.
 type RegisterSideAgentRequest struct {
-	// DisplayName is the Side agent's configured executor command (e.g. "claude") — the same value every
-	// other "configured executor" label in the dashboard already shows, never a client-chosen name.
-	DisplayName string
-	Actor       state.Actor
+	// Command is the executor the Assistant runs (the configured client command). The roster shows it next to
+	// the participant name; it is never journaled, so a resumed run shows the command it runs now.
+	Command string
+	Actor   state.Actor
 }
 
 // RegisterSideAgent registers the bound Side agent's own identity in the SAME mesh every stage agent and
@@ -111,15 +134,16 @@ func (o *Orchestrator) RegisterSideAgent(ctx context.Context, req RegisterSideAg
 	if o.opts.RunID == "" {
 		return agentcomm.Participant{}, errors.New("agentcomm: run id is required to register the Assistant")
 	}
+	o.sideAgentCommand = req.Command
 	// A resumed run keeps the descriptor it saved — alias and display name included. Submitting it again with
 	// another configured command would be the same operation id with different effects.
 	rs := o.opts.Store.Snapshot()
 	if saved, ok := rs.Assistants.Mesh.Participants[o.SideAgentParticipantID()]; ok {
-		return *saved, nil
+		return assistantParticipant(*saved, req.Command), nil
 	}
 	p := agentcomm.Participant{
 		ID: o.SideAgentParticipantID(), Kind: agentcomm.KindSideAgent, Scope: agentcomm.ScopeRun,
-		Alias: sideAgentParticipantAlias, DisplayName: req.DisplayName, Reachable: true,
+		Alias: sideAgentParticipantAlias, DisplayName: sideAgentDisplayName, Reachable: true,
 	}
 	eff, err := meshParticipantAddedEffect(p)
 	if err != nil {
@@ -137,7 +161,7 @@ func (o *Orchestrator) RegisterSideAgent(ctx context.Context, req RegisterSideAg
 		return agentcomm.Participant{}, err
 	}
 	o.warnReassignedAliases(before, o.liveRoster(o.opts.Store.Snapshot()))
-	return p, nil
+	return assistantParticipant(p, req.Command), nil
 }
 
 // warnReassignedAliases tells the CLI about every participant that answered to a different @name before the

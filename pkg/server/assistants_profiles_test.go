@@ -91,8 +91,8 @@ func TestProfiles_WireFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []map[string]any{
-		{"id": "external", "title": "External", "command": "/opt/ext-as-claude.sh", "command_source": "profile", "runtime_context": "wrapper", "available": true},
-		{"id": "ghost", "title": "Ghost", "command": "claude", "command_source": "client", "runtime_context": "isolated", "available": false, "unavailable_reason": "not on the host"},
+		{"id": "external", "title": "External", "command": "/opt/ext-as-claude.sh", "command_name": "ext-as-claude.sh", "command_source": "profile", "runtime_context": "wrapper", "available": true},
+		{"id": "ghost", "title": "Ghost", "command": "claude", "command_name": "Claude Code", "command_source": "client", "runtime_context": "isolated", "available": false, "unavailable_reason": "not on the host"},
 	}
 	if !reflect.DeepEqual(resp.Profiles, want) {
 		t.Fatalf("profiles on the wire = %v, want %v", resp.Profiles, want)

@@ -63,6 +63,7 @@ export type SideAgentApi = {
   activeSource: ActiveTurnSource
   unavailable: boolean
   command: string
+  commandName: string | undefined
   draft: string
   setDraft: (value: string) => void
   isOpen: boolean
@@ -118,6 +119,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
   const [requestState, setRequestState] = useState<'idle' | 'running'>('idle')
   const [unavailable, setUnavailable] = useState(false)
   const [command, setCommand] = useState('')
+  const [commandName, setCommandName] = useState<string | undefined>(undefined)
   const [draft, setDraft] = useState('')
   const [isOpen, setIsOpen] = useState(false)
   const [unseenResult, setUnseenResult] = useState(false)
@@ -184,6 +186,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     setRequestState('idle')
     setUnavailable(false)
     setCommand('')
+    setCommandName(undefined)
     setDraft('')
     setUnseenResult(false)
     setError(null)
@@ -219,6 +222,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     if (!shouldApply() || resp.lastSeq < cursorRef.current) return
     setUnavailable(resp.unavailable)
     setCommand(resp.command)
+    setCommandName(resp.commandName)
     ingest(resp.events)
     // Авторитетное состояние из ответа — на случай, если пачка событий его не
     // покрыла (напр. running-ход, чьи события уже были за курсором).
@@ -379,6 +383,7 @@ export function useSideAgent(runId: string, enabled: boolean, deps: SideAgentDep
     activeSource: activeTurnSource(events, requestState),
     unavailable,
     command,
+    commandName,
     draft,
     setDraft,
     isOpen,

@@ -136,6 +136,20 @@ describe('useStatus', () => {
     expect(byId.get('s5')?.verify).toEqual({ step: 0, command: '', phase: 'running' })
   })
 
+  test('verify keeps the check name, kind and server command_name for the rail tooltip', () => {
+    const { stages } = normalizeStatus({
+      stages: [{ id: 's1', status: 'running', verify: { step: 2, command: 'codex-as-claude', kind: 'agent', name: 'Code review', command_name: 'Codex Reviewer', phase: 'running' } }],
+    })
+    expect(stages[0]?.verify).toEqual({ step: 2, command: 'codex-as-claude', kind: 'agent', name: 'Code review', commandName: 'Codex Reviewer', phase: 'running' })
+  })
+
+  test('unknown_command_name is the fallback prefix; missing or blank means Unknown', () => {
+    expect(normalizeStatus({ unknown_command_name: 'test' }).unknownCommandName).toBe('test')
+    expect(normalizeStatus({}).unknownCommandName).toBe('Unknown')
+    expect(normalizeStatus({ unknown_command_name: '  ' }).unknownCommandName).toBe('Unknown')
+    expect(normalizeStatus({ unknown_command_name: 7 }).unknownCommandName).toBe('Unknown')
+  })
+
   // accepted_stalemate — синтезированный afm терминальный ПРИНЯТЫЙ исход должен пережить нормализацию
   // /api/status, иначе бейдж стадии пропадёт.
   test('парсит verify phase accepted_stalemate (review_patience) без отбрасывания', () => {

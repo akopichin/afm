@@ -16,8 +16,8 @@ const ev = (type: string, payload: unknown, s: number): AfmEvent => ({ type, pay
 
 const participants: MeshParticipant[] = [
   { id: 'user', kind: 'user', scope: 'run', display_name: 'You', reachable: true },
-  { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', alias: 'impl', display_name: 'Implement', stage_id: 'impl', reachable: true, command: 'claude' },
-  { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true, command: 'codex', activity: 'working' },
+  { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', alias: 'impl', display_name: 'Implement', stage_id: 'impl', reachable: true, command: './scripts/dev-agent.sh', command_name: 'Development Agent' },
+  { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true, command: 'codex-as-claude', command_name: 'Codex Reviewer', activity: 'working' },
   { id: 'run:old', kind: 'run_agent', scope: 'run', alias: 'old', display_name: 'Old agent', reachable: true },
 ]
 const withUser: MeshThread = { id: 'mt-1', scope: 'run', members: ['user', 'stage:impl', 'run:qa'], status: 'open' }
@@ -74,9 +74,24 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
       autoApprove: false, hasDialog: false, showPlan: false, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [],
     }])} />)
     expect(screen.getByRole('button', { name: /^All activity/ })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByText('Stage 1 of 1 · claude')).toBeInTheDocument()
+    const context = screen.getByText('Stage 1 of 1 · Development Agent')
+    expect(context).toHaveAttribute('title', 'Development Agent\nCommand: ./scripts/dev-agent.sh')
     fireEvent.click(screen.getByRole('button', { name: /^Conversations/ }))
     expect(screen.getByText('Nothing to show for this filter')).toBeInTheDocument()
+  })
+
+  it('the stage context drops the raw command from its tooltip when the skin hides it', () => {
+    document.documentElement.style.setProperty('--afm-raw-command-tooltip', 'none')
+    try {
+      vi.spyOn(meshClient, 'getStageMessages').mockResolvedValue({ messages: [], threads: [], next_cursor: 0, has_more: false })
+      render(<FeedWorkspace events={events} stageId="impl" mesh={meshProps([{
+        id: 'impl', name: 'Implement', status: 'running', updatedAt: '', interactive: false, autonomous: false,
+        autoApprove: false, hasDialog: false, showPlan: false, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [],
+      }])} />)
+      expect(screen.getByText('Stage 1 of 1 · Development Agent')).toHaveAttribute('title', 'Development Agent')
+    } finally {
+      document.documentElement.style.removeProperty('--afm-raw-command-tooltip')
+    }
   })
 
   it('shows a linked side reply outcome beside the original post in the stage feed', async () => {
@@ -117,7 +132,7 @@ describe('FeedWorkspace — the stage\'s conversations in its feed', () => {
     expect(order.every((i) => i >= 0)).toBe(true)
     // The shared bubble: author, the command it runs, recipients, the quote of the replied message.
     const reply = row('m2')
-    expect(within(reply).getByText('claude')).toBeInTheDocument()
+    expect(within(reply).getByText('Development Agent')).toBeInTheDocument()
     expect(within(reply).getByText('Replying to QA reviewer')).toBeInTheDocument()
   })
 

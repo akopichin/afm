@@ -41,6 +41,11 @@ server:
 # skills_dir: /opt/team-skills  # default extra local skill library for runs
 # auto_recover: true        # auto-retry failed stages on run start/resume (default: true)
 
+# command_names:            # readable dashboard names for agent commands; see "Executor names"
+#   "./scripts/dev-agent.sh": Development Agent
+#   codex-as-claude: Codex Reviewer
+# unknown_command_name: Unknown  # label prefix when the server sent no name (default: Unknown)
+
 # side_agent:
 #   enabled: false          # dashboard Assistant; ON by default. env AFM_SIDEAGENT overrides,
 #                           # and flow.yaml side_agent overrides both. See dashboard.md
@@ -212,6 +217,58 @@ never has money), and
 [AI-verify](verify.md) for the top-level `verify.max_failures` correction budget,
 `verify.review_patience` stalemate backstop, and `verify.fresh_correction` session
 setting.
+
+## Executor names
+
+The dashboard shows a readable name for the command an agent runs instead of the
+raw binary, recipe or wrapper script. `command_names` maps a command to the name
+you want to see:
+
+```yaml
+command_names:
+  "./scripts/dev-agent.sh": Development Agent
+  codex-as-claude: Codex Reviewer
+```
+
+- **The key is the exact command string**, as written in `client.command`, a
+  stage's `command`, a collaboration profile or a `verify` step. It is compared
+  as is: `./scripts/dev-agent.sh` and `scripts/dev-agent.sh` are different keys.
+  A key that is empty or only spaces is an error.
+- **The value is a non-empty string.** Surrounding spaces are trimmed. A number,
+  boolean, `null`, map or list is an error, as is an empty value. Two commands may
+  share one name.
+- **Project and global files are merged by key.** A key in the project's
+  `.afm/config.yaml` overrides the same key in `~/.afm/config.yaml`; keys that
+  only one file has are kept.
+
+The name for a command is the first match of:
+
+1. an exact `command_names` key (project, then global);
+2. a built-in name: `claude` → `Claude Code`, `codex-as-claude` → `Codex`,
+   `cursor-agent-as-claude` → `Cursor Agent`, `openai-as-claude` → `OpenAI`,
+   `openai-agent-as-claude` → `OpenAI Agent`. The directory and a trailing `.sh`
+   are ignored, so `/opt/bin/codex-as-claude.sh` also reads `Codex`;
+3. the file name of the command, such as `agent.sh` for `./tools/x/agent.sh`.
+
+afm never guesses a provider from part of an unknown file name and never reads
+the file system to name a command.
+
+`unknown_command_name` sets the prefix of the emergency label that the dashboard
+shows only when the server sent no name for a command, for example a newer
+dashboard talking to an older server. Such commands read `<prefix>-1`,
+`<prefix>-2`, … (one number per command), and the raw command stays in the
+tooltip. The default prefix is `Unknown`; project overrides global, spaces are
+trimmed, and an empty value is an error.
+
+Names are presentation only. They do not change which command runs, the
+executor identity saved with a helper task (renaming a command never produces
+`executor_changed`), participant IDs or `@` handles, or the event journal. Names are read when `afm run` starts and there is no hot
+reload: after you edit `command_names`, restart the run, and the new names apply
+to its earlier history as well, because journals keep the raw command. In Docker
+mode the container reads the same mounted global and project config files, so
+the names match the host. The dashboard layer is described in
+[Executor names](dashboard.md#executor-names) and
+[Verify step names](verify.md#naming-a-step).
 
 ## Settings priority
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent as ReactAnimationEvent, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode } from 'react'
 import type { AfmEvent } from '../../types'
 import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
@@ -14,11 +14,13 @@ import { useStageDiscussion } from '../../hooks/use-stage-discussion'
 import { withStageDiscussion } from './stage-discussion-feed'
 import { ConversationMessage } from '../team/ConversationMessage'
 import { mentionHandles } from '../../lib/mesh-roster'
+import { executorLabel, executorTooltip, useUnknownCommandName } from '../../lib/executor-label'
 import { messageText } from '../../lib/agent-result'
 import { canReplyInConversation, isAgentMessageToUser } from '../../lib/mesh-reply'
 import { messageDelivered, sideAgentOutcome } from './mesh-receipt'
 import { MessageTime } from '../message-time/MessageTime'
 import { MeshAvatar } from '../team/MeshAvatar'
+import { ExecutorBadge } from '../ExecutorBadge'
 
 type FeedWorkspaceProps = {
   events: AfmEvent[]
@@ -66,6 +68,9 @@ const ACTOR_LABEL: Record<FeedActor, string> = {
   system: 'Flow',
 }
 const STAGE_AGENT_ROLE = 'Stage agent'
+
+// The chip sits inline after a row's text: inline-block lets its width cap and ellipsis apply there.
+const INLINE_BADGE_STYLE: CSSProperties = { display: 'inline-block', marginLeft: 8, verticalAlign: 'middle' }
 
 // FeedWorkspace — единый воркспейс ленты: мессенджер-презентация РЕАЛЬНЫХ событий.
 export function feedItemSignature(item: { stageId: string; kind: string; actor: string; text: string }): string {
@@ -115,7 +120,8 @@ export function FeedWorkspace({
   }
   const sectionRef = useRef<HTMLElement | null>(null)
 
-  const items = useMemo(() => toFeedItems(events), [events])
+  const unknownPrefix = useUnknownCommandName()
+  const items = useMemo(() => toFeedItems(events, unknownPrefix), [events, unknownPrefix])
   // The stage's conversations, interleaved with its events — only in a stage feed with the mesh on — together
   // with its conversation log with its agent: the "Not answered" marks and the posts only that log has.
   const conversation = useStageConversation(mesh !== undefined ? stageId : null)
@@ -188,7 +194,8 @@ export function FeedWorkspace({
   const canAnswerInConversation = composerMounted && mesh !== undefined
   const canAnswerThought = composerMounted && (mesh === undefined || reviseAvailable)
   const stageIndex = mesh?.stages.findIndex((stage) => stage.id === stageId) ?? -1
-  const stageCommand = participants.find((person) => person.id === `stage:${stageId}`)?.command
+  const stageAgent = participants.find((person) => person.id === `stage:${stageId}`)
+  const stageExecutor = executorLabel(stageAgent?.command ?? '', stageAgent?.command_name, useUnknownCommandName())
   const unseen = useUnseenCount(feed.stick, items.length + conversationMessages.length, stageId)
 
   // Раскрытая группа — режим чтения: новые события не уводят её из вида. Свернули — снова решаем по позиции,
@@ -199,14 +206,14 @@ export function FeedWorkspace({
     if (details.open) details.addEventListener('toggle', feed.recheck, { once: true })
     else feed.release()
   }
-  const filterContext = stageIndex >= 0 ? `Stage ${stageIndex + 1} of ${mesh!.stages.length}${stageCommand ? ` · ${stageCommand}` : ''}` : stageCommand
+  const filterContext = stageIndex >= 0 ? `Stage ${stageIndex + 1} of ${mesh!.stages.length}${stageExecutor.label ? ` · ${stageExecutor.label}` : ''}` : stageExecutor.label
 
   return (
     <section className="feed-workspace" aria-label="Feed" ref={sectionRef}>
       {(mesh !== undefined || conversationMessages.length > 0) && (
         <div className="feed-filter-row">
           <FeedFilterChips filter={filter} onChange={setFilter} counts={filterCounts} />
-          {filterContext && <span className="feed-filter-context">{filterContext}</span>}
+          {filterContext && <span className="feed-filter-context" title={executorTooltip(stageExecutor) || undefined}>{filterContext}</span>}
         </div>
       )}
       {/* Фрагмент отделяет ключ слота от key={noteTarget} композера: совпавшие ключи среди детей section осиротят DOM слота. */}
@@ -470,7 +477,12 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
                   </div>
                 )
               ) : (
-                <span className="feed-item-text">{item.text}</span>
+                <span className="feed-item-text" title={item.title}>
+                  {item.text}
+                  {item.executor !== undefined && (
+                    <ExecutorBadge command={item.executor.raw} commandName={item.executor.label} className="conversation-command-chip" style={INLINE_BADGE_STYLE} />
+                  )}
+                </span>
               )}
               {(!timeInHead || item !== firstItem) && <MessageTime timestamp={item.ts} gap={item.gap} firstEvent={item.firstEvent} focusable={!isInteractiveRow} />}
             </>

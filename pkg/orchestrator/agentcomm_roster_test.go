@@ -13,12 +13,14 @@ import (
 
 // The roster tells the dashboard which command each participant runs and which read-only guarantee backs it,
 // so the people panel never guesses them from a model name: a stage agent's effective command, a helper's and
-// a run agent's command and guarantee frozen into their task's profile snapshot. Script stages run no agent.
+// a run agent's command and guarantee frozen into their task's profile snapshot, the command the Assistant's
+// runtime runs. Script stages run no agent.
 func TestRoster_ParticipantCommandAndReadonlyEnforcement(t *testing.T) {
 	o, store := newAssistantsTestOrchestrator(t, true, flow.Stage{ID: "lint", Script: "make lint"})
 	ctx := context.Background()
 	activateStage(t, o, assistantsTestStageID)
 	helperTask := newRunningHelperForMesh(t, o, store, "op-roster-cmd")
+	side := registerTestSideAgent(t, o).ID
 
 	msg := "hello"
 	added, err := o.AddRunAgent(ctx, AddRunAgentRequest{
@@ -53,6 +55,7 @@ func TestRoster_ParticipantCommandAndReadonlyEnforcement(t *testing.T) {
 		{"helper", meshHelperParticipantID(helperTask), "helper-cmd", none, os, true},
 		{"run agent", added.ParticipantID, "helper-cmd", none, os, true},
 		{"user", meshUserParticipantID, "", "", "", true},
+		{"Assistant", side, "claude", "", "", true},
 	}
 	for _, c := range cases {
 		p, ok := byID[c.id]
@@ -73,9 +76,11 @@ func TestRoster_ParticipantCommandAndReadonlyEnforcement(t *testing.T) {
 	}
 
 	// Derived on read, never journaled: the run agent's stored descriptor carries none of the fields.
-	stored := store.Snapshot().Assistants.Mesh.Participants[added.ParticipantID]
-	if stored == nil || stored.Command != "" || stored.ReadonlyEnforcement != "" || stored.AdmittedReadonlyEnforcement != "" {
-		t.Fatalf("journaled run participant = %+v, want no command/readonly fields", stored)
+	for _, id := range []agentcomm.ParticipantID{added.ParticipantID, side} {
+		stored := store.Snapshot().Assistants.Mesh.Participants[id]
+		if stored == nil || stored.Command != "" || stored.ReadonlyEnforcement != "" || stored.AdmittedReadonlyEnforcement != "" {
+			t.Fatalf("journaled participant %s = %+v, want no command/readonly fields", id, stored)
+		}
 	}
 }
 

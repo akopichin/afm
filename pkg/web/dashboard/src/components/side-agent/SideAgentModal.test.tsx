@@ -4,6 +4,7 @@ import { SideAgentModal } from './SideAgentModal'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
 import { useState } from 'react'
 import { useSideAgentShortcut } from '../../hooks/use-side-agent-shortcut'
+import { resetUnknownCommandLabels } from '../../lib/executor-label'
 
 function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
   return {
@@ -12,6 +13,7 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
     activeSource: null,
     unavailable: false,
     command: 'claude',
+    commandName: 'Claude Code',
     draft: '',
     setDraft: vi.fn(),
     isOpen: true,
@@ -32,7 +34,7 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
 }
 
 describe('SideAgentModal', () => {
-  beforeEach(() => vi.useFakeTimers())
+  beforeEach(() => { resetUnknownCommandLabels(); vi.useFakeTimers() })
   afterEach(() => { act(() => vi.runOnlyPendingTimers()); vi.useRealTimers(); vi.restoreAllMocks() })
 
   function renderModal(over: Partial<SideAgentApi> = {}) {
@@ -49,9 +51,20 @@ describe('SideAgentModal', () => {
     expect(document.getElementById('side-agent-title')?.textContent).toContain('Assistant')
   })
 
-  it('shows the configured command name', () => {
-    renderModal({ isOpen: true, command: 'codex-as-claude' })
-    expect(screen.getByText('codex-as-claude')).toBeInTheDocument()
+  it('shows the executor by its readable name, with the raw command in the tooltip', () => {
+    renderModal({ isOpen: true })
+    expect(screen.getByText('Claude Code')).toHaveAttribute('title', 'Claude Code\nCommand: claude')
+    expect(screen.queryByText('claude')).toBeNull()
+  })
+
+  it('numbers an executor the server sent no name for, and hides the raw command when the skin asks', () => {
+    document.documentElement.style.setProperty('--afm-raw-command-tooltip', 'none')
+    try {
+      renderModal({ isOpen: true, command: './x/agent.sh', commandName: undefined })
+      expect(screen.getByText('Unknown-1')).toHaveAttribute('title', 'Unknown-1')
+    } finally {
+      document.documentElement.style.removeProperty('--afm-raw-command-tooltip')
+    }
   })
 
   it('is hidden and inert when closed', () => {

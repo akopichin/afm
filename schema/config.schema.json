@@ -32,6 +32,17 @@
       "type": "string",
       "description": "A fully custom dashboard skin directory (containing index.css). Overrides `theme`."
     },
+    "command_names": {
+      "type": "object",
+      "description": "Readable dashboard names for agent commands, keyed by the exact command string. Project keys override global ones; values are trimmed. Presentation only: it never changes how an agent runs. Built-in names cover claude, codex-as-claude, cursor-agent-as-claude, openai-as-claude and openai-agent-as-claude; other commands show their file name.",
+      "propertyNames": { "pattern": "\\S" },
+      "additionalProperties": { "type": "string", "pattern": "\\S" }
+    },
+    "unknown_command_name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Label prefix the dashboard uses for a command the server did not name (<prefix>-1, <prefix>-2, ...). Project overrides global; trimmed. Default Unknown."
+    },
     "auto_recover": {
       "type": "boolean",
       "description": "Auto-reset failed stages to pending on run start/resume. Default true."

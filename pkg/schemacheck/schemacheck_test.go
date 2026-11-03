@@ -300,6 +300,15 @@ func TestFlowSchemaMatchesParserEdgeCases(t *testing.T) {
 		{"verify container max_failures and review_patience", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - run: go test ./...\n        - command: codex\n      max_failures: 6\n      review_patience: 2\n", true},
 		{"verify container zero review_patience", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - command: codex\n      review_patience: 0\n", true},
 		{"verify container negative review_patience", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - command: codex\n      review_patience: -1\n", false},
+		{"verify run step name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      run: go test ./...\n      name: Unit tests\n", true},
+		{"verify command step name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      command: codex\n      name: Code review\n", true},
+		{"verify list step names", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      - run: go test ./...\n        name: Unit tests\n      - command: codex\n", true},
+		{"verify container step names", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - run: go test ./...\n          name: Unit tests\n        - command: codex\n          name: Code review\n", true},
+		{"verify blank step name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      run: go test ./...\n      name: \"  \"\n", false},
+		{"verify empty step name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      run: go test ./...\n      name: \"\"\n", false},
+		{"verify numeric step name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      run: go test ./...\n      name: 123\n", false},
+		{"verify null step name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      run: go test ./...\n      name: null\n", false},
+		{"verify container level name", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      name: Unit tests\n      steps:\n        - run: go test ./...\n", false},
 		{"verify container fresh_correction false", "name: f\nstages:\n  - id: s\n    agents: [planning, implementation]\n    verify:\n      steps:\n        - run: go test ./...\n      fresh_correction: false\n", true},
 		{"script mixed with buttons", "name: f\nstages:\n  - id: s\n    script: echo ok\n    buttons:\n      Retry: Try again\n", false},
 		{"empty button label", "name: f\nstages:\n  - id: s\n    agents: [planning]\n    buttons:\n      \"\": Try again\n", false},
@@ -495,6 +504,64 @@ func TestConfigSchemaMatchesSkillsDir(t *testing.T) {
 		{"tilde", "skills_dir: ~/skills\n", false},
 		{"newline", "skills_dir: \"a\\nb\"\n", false},
 		{"c1 control character", "skills_dir: \"a\\u0085b\"\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schemaAcceptsYAML(t, sch, tt.body); got != tt.want {
+				t.Errorf("schema accepts = %v, want %v", got, tt.want)
+			}
+			projectDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(projectDir, "config.yaml"), []byte(tt.body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(t.TempDir(), projectDir)
+			if runtimeAccepts := err == nil; runtimeAccepts != tt.want {
+				t.Errorf("config.LoadFrom accepts = %v, want %v (error: %v)", runtimeAccepts, tt.want, err)
+			}
+		})
+	}
+}
+
+func TestConfigSchemaMatchesCommandNames(t *testing.T) {
+	sch := compileSchema(t, configSchemaPath)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"names", "command_names:\n  /opt/a.sh: Agent A\n  claude: Main\n", true},
+		{"empty mapping", "command_names: {}\n", true},
+		{"padded value", "command_names:\n  /a.sh: \" Name \"\n", true},
+		{"numeric string value", "command_names:\n  /a.sh: \"123\"\n", true},
+		{"empty value", "command_names:\n  /a.sh: \"\"\n", false},
+		{"blank value", "command_names:\n  /a.sh: \"  \"\n", false},
+		{"null value", "command_names:\n  /a.sh: null\n", false},
+		{"bare value", "command_names:\n  /a.sh:\n", false},
+		{"number value", "command_names:\n  /a.sh: 123\n", false},
+		{"bool value", "command_names:\n  /a.sh: true\n", false},
+		{"map value", "command_names:\n  /a.sh:\n    x: y\n", false},
+		{"list value", "command_names:\n  /a.sh: [x]\n", false},
+		{"empty key", "command_names:\n  \"\": Name\n", false},
+		{"blank key", "command_names:\n  \"  \": Name\n", false},
+		{"null section", "command_names:\n", false},
+		{"list section", "command_names: [a]\n", false},
+		{"string section", "command_names: Name\n", false},
+		{"unknown name", "unknown_command_name: test\n", true},
+		{"unknown name padded", "unknown_command_name: \" test \"\n", true},
+		{"unknown name empty", "unknown_command_name: \"\"\n", false},
+		{"unknown name blank", "unknown_command_name: \"  \"\n", false},
+		{"unknown name null", "unknown_command_name: null\n", false},
+		{"unknown name bare", "unknown_command_name:\n", false},
+		{"unknown name number", "unknown_command_name: 5\n", false},
+		{"unknown name bool", "unknown_command_name: true\n", false},
+		{"unknown name list", "unknown_command_name: [a]\n", false},
+		{"merged names", "command_names:\n  <<: {claude: Main}\n", true},
+		{"top-level merged names", "<<: {command_names: {claude: Main}, unknown_command_name: Top}\n", true},
+		{"aliased names", "unknown_command_name: &label Shared\ncommand_names:\n  claude: *label\n", true},
+		{"merged number value", "command_names:\n  <<: {claude: 123}\n", false},
+		{"top-level merged number value", "<<: {command_names: {claude: 123}}\n", false},
+		{"top-level merged blank unknown name", "<<: {unknown_command_name: \"  \"}\n", false},
+		{"top-level merged number unknown name", "<<: {unknown_command_name: 123}\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

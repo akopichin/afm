@@ -7,6 +7,15 @@
 # Fully custom dashboard skin: a directory containing index.css. Overrides `theme`. Default: "" (use the
 # built-in theme) skin_dir: .afm/skin/
 
+# Readable dashboard names for agent commands, keyed by the exact command string. Presentation only: it never
+# changes how an agent runs. Project keys override global ones. Without an entry the dashboard shows a built-in
+# name (claude, codex-as-claude, cursor-agent-as-claude, openai-as-claude, openai-agent-as-claude) or the file name.
+# command_names:
+#   "./scripts/dev-agent.sh": Development Agent
+#   codex-as-claude: Codex Reviewer
+# Label prefix for a command the server sent no name for (<prefix>-1, <prefix>-2, ...). Default: Unknown
+# unknown_command_name: Unknown
+
 # Automatically reset failed stages back to pending on run start/resume — no manual `afm retry <id>` per
 # failed stage. Default: true auto_recover: true
 

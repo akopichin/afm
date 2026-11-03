@@ -3,6 +3,7 @@ package flow
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -20,6 +21,8 @@ const (
 // VerifyStep — один шаг проверки завершённости стадии.
 type VerifyStep struct {
 	Kind VerifyKind
+	// Name — необязательное имя проверки для ленты: что проверяет шаг, а не кто его выполняет.
+	Name string
 	// Run — shell-команда (Kind == VerifyShell).
 	Run string
 	// Command — алиас агента-исполнителя (Kind == VerifyAgent), напр. "codex".
@@ -118,6 +121,7 @@ func (s *VerifySpec) UnmarshalYAML(value *yaml.Node) error {
 // Ключи YAML-полей verify. Вынесены в константы, чтобы одни и те же имена
 // использовались и в разборе одиночного шага, и в разборе container-формы.
 const (
+	verifyKeyName            = "name"
 	verifyKeyRun             = "run"
 	verifyKeyCommand         = "command"
 	verifyKeyPrompt          = "prompt"
@@ -136,6 +140,12 @@ func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 		key := node.Content[i].Value
 		val := node.Content[i+1]
 		switch key {
+		case verifyKeyName:
+			name, err := verifyStepName(val)
+			if err != nil {
+				return VerifyStep{}, err
+			}
+			step.Name = name
 		case verifyKeyRun:
 			step.Run = val.Value
 		case verifyKeyCommand:
@@ -161,6 +171,21 @@ func verifyStepFromMapping(node *yaml.Node) (VerifyStep, error) {
 		step.Kind = VerifyAgent
 	}
 	return step, nil
+}
+
+// yamlStringTag — тег YAML-строки: числа, bool и null получают другие теги.
+const yamlStringTag = "!!str"
+
+// verifyStepName требует непустую строку: yaml.v3 иначе молча превратил бы 123 или null в текст имени.
+func verifyStepName(node *yaml.Node) (string, error) {
+	if node.Kind != yaml.ScalarNode || node.ShortTag() != yamlStringTag {
+		return "", errors.New("verify: name must be a string")
+	}
+	name := strings.TrimSpace(node.Value)
+	if name == "" {
+		return "", errors.New("verify: name must not be empty")
+	}
+	return name, nil
 }
 
 // mappingHasKey сообщает, есть ли у mapping-узла ключ key.
@@ -204,7 +229,7 @@ func (s *VerifySpec) unmarshalContainer(node *yaml.Node) error {
 				return fmt.Errorf("verify: invalid fresh_correction: %w", err)
 			}
 			freshCorrection = &b
-		case verifyKeyRun, verifyKeyCommand, verifyKeyPrompt, verifyKeyTimeout:
+		case verifyKeyName, verifyKeyRun, verifyKeyCommand, verifyKeyPrompt, verifyKeyTimeout:
 			return fmt.Errorf("verify: %q cannot be combined with steps (move it inside a steps item)", key)
 		default:
 			return fmt.Errorf("verify: unknown field %q", key)
@@ -269,7 +294,10 @@ func (s VerifySpec) MarshalYAML() (any, error) {
 }
 
 func verifyStepToMap(step VerifyStep) map[string]any {
-	m := make(map[string]any, 3)
+	m := make(map[string]any, 4)
+	if step.Name != "" {
+		m["name"] = step.Name
+	}
 	if step.Kind == VerifyAgent {
 		m["command"] = step.Command
 		if step.Prompt != "" {
@@ -331,6 +359,9 @@ func (s VerifySpec) validate(stageID string) error {
 			return fmt.Errorf("stage %q: verify[%d]: run and command are mutually exclusive", stageID, idx)
 		case step.Run == "" && step.Command == "":
 			return fmt.Errorf("stage %q: verify[%d]: must set run or command", stageID, idx)
+		}
+		if step.Name != "" && strings.TrimSpace(step.Name) == "" {
+			return fmt.Errorf("stage %q: verify[%d]: name must not be blank", stageID, idx)
 		}
 		if step.Timeout < 0 {
 			return fmt.Errorf("stage %q: verify[%d]: timeout must not be negative", stageID, idx)

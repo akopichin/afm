@@ -6,7 +6,7 @@ import { toAssistantProfile, type AssistantProfile } from '../../types/assistant
 import * as meshClient from '../../api/mesh-client'
 
 const profiles: AssistantProfile[] = [
-  { id: 'qa', title: 'QA reviewer', command: 'claude', commandSource: 'client', available: true, unavailableReason: '' },
+  { id: 'qa', title: 'QA reviewer', command: 'claude', commandName: 'Claude Code', commandSource: 'client', available: true, unavailableReason: '' },
   { id: 'ghost', title: 'Ghost', command: 'codex', commandSource: 'profile', available: false, unavailableReason: 'no policy' },
 ]
 
@@ -23,16 +23,16 @@ describe('AddRunAgentDialog', () => {
   })
 
   test('an untitled profile is offered under its id next to its executor', () => {
-    const untitled = toAssistantProfile({ id: 'reviewer', title: '', command: 'claude', command_source: 'client', available: true })
+    const untitled = toAssistantProfile({ id: 'reviewer', title: '', command: 'claude', command_name: 'Claude Code', command_source: 'client', available: true })
     renderDialog({ profiles: [untitled] })
     expect(screen.getByRole('option', { name: 'reviewer' })).toBeTruthy()
-    expect(screen.getByText('claude (run default)')).toBeTruthy()
+    expect(screen.getByText('Claude Code (run default)')).toBeTruthy()
   })
 
   test('shows a read-only "Configured executor" with no model selector', () => {
     renderDialog()
     expect(screen.getByText('Configured executor')).toBeInTheDocument()
-    expect(screen.getByText('claude (run default)')).toBeInTheDocument()
+    expect(screen.getByText('Claude Code (run default)')).toHaveAttribute('title', 'Claude Code\nCommand: claude')
     // No model <select> anywhere in the dialog — only the Role select.
     expect(screen.getAllByRole('combobox')).toHaveLength(1)
     expect(screen.queryByLabelText(/model/i)).toBeNull()
@@ -161,10 +161,10 @@ describe('AddRunAgentDialog', () => {
   })
 
   test('follows the selected role: executor and its source change with it', () => {
-    renderDialog({ profiles: [...profiles.slice(0, 1), { id: 'doc', title: 'Docs', command: 'codex', commandSource: 'profile', available: true, unavailableReason: '' }] })
-    expect(screen.getByText('claude (run default)')).toBeInTheDocument()
+    renderDialog({ profiles: [...profiles.slice(0, 1), { id: 'doc', title: 'Docs', command: 'codex-as-claude', commandName: 'Codex Reviewer', commandSource: 'profile', available: true, unavailableReason: '' }] })
+    expect(screen.getByText('Claude Code (run default)')).toBeInTheDocument()
     fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'doc' } })
-    expect(screen.getByText('codex (profile)')).toBeInTheDocument()
+    expect(screen.getByText('Codex Reviewer (profile)')).toBeInTheDocument()
   })
 
   test('adds the role shown in the executor line when profiles arrive after the dialog opened', async () => {

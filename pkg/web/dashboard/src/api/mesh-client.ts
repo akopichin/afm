@@ -75,6 +75,8 @@ export type MeshParticipant = {
   // admitted_readonly_enforcement — the guarantee recorded when the task was admitted. All server-derived on
   // every roster read; absent for the user, the Side agent and script stages.
   command?: string
+  // command_name — the server's readable name of command (absent from an older server).
+  command_name?: string
   readonly_enforcement?: string
   admitted_readonly_enforcement?: string
 }

@@ -6,6 +6,7 @@ import type { FeedGroup, FeedItem } from './feed-view-model'
 import * as verifyReportClient from '../../api/verify-report-client'
 import * as meshClient from '../../api/mesh-client'
 import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
+import { resetUnknownCommandLabels, UnknownCommandNameContext } from '../../lib/executor-label'
 import { sideAgentFeedGroups } from '../side-agent/side-agent-feed-model'
 import type { SideAgentEvent } from '../../types/side-agent'
 
@@ -13,7 +14,10 @@ const ev = (type: string, payload: unknown, stageId: string, timestamp: string):
   ({ type, payload, stageId, timestamp }) as AfmEvent
 
 describe('FeedWorkspace', () => {
-  beforeEach(() => window.localStorage.clear())
+  beforeEach(() => {
+    window.localStorage.clear()
+    resetUnknownCommandLabels()
+  })
 
   it('renders messenger groups with side alignment', () => {
     const events = [
@@ -568,6 +572,42 @@ describe('FeedWorkspace', () => {
       const { container } = render(<FeedWorkspace events={events} stageId="s1" />)
       expect(container.querySelector('img.feed-image')).toBeNull()
       expect(container.textContent).toContain('[AFM image: nope.png]')
+    })
+  })
+
+  describe('verify rows: check names and executor badges', () => {
+    const verifyEvents = [
+      ev('verify_started', { verification_id: 'v-1', step: 1, kind: 'shell', command: 'make test', name: 'Unit tests' }, 's1', '2026-07-10T10:00:00Z'),
+      ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: 'codex-as-claude', command_name: 'Codex Reviewer', name: 'Code review' }, 's1', '2026-07-10T10:00:01Z'),
+      ev('verify_started', { verification_id: 'v-0', step: 1, kind: 'shell', command: 'make lint' }, 's1', '2026-07-10T10:00:02Z'),
+    ]
+
+    it('a named shell step shows its name with "step N · command" in the tooltip; an unnamed one keeps its command text', () => {
+      render(<FeedWorkspace events={verifyEvents} stageId={null} />)
+      expect(screen.getByText('Unit tests')).toHaveAttribute('title', 'step 1 · make test')
+      expect(screen.getByText('Verify step 1 · make lint')).toHaveAttribute('title', 'step 1 · make lint')
+    })
+
+    it('a named AI step shows the executor as a badge next to its name, with the raw command in the tooltips', () => {
+      render(<FeedWorkspace events={verifyEvents} stageId={null} />)
+      const name = screen.getByText('Code review')
+      expect(name).toHaveAttribute('title', 'step 2 · codex-as-claude')
+      const badge = screen.getByText('Codex Reviewer')
+      expect(badge).toHaveAttribute('title', 'Codex Reviewer\nCommand: codex-as-claude')
+      expect(name.closest('.feed-item')).toContainElement(badge)
+    })
+
+    it('a name is rendered as plain text, not markup', () => {
+      const events = [ev('verify_started', { verification_id: 'v-1', step: 1, kind: 'shell', command: 'x', name: '<b>Tag</b> check' }, 's1', '2026-07-10T10:00:00Z')]
+      const { container } = render(<FeedWorkspace events={events} stageId={null} />)
+      expect(screen.getByText('<b>Tag</b> check')).toBeInTheDocument()
+      expect(container.querySelector('.feed-item b')).toBeNull()
+    })
+
+    it('uses the fallback prefix from the status for an AI step the server sent no name for', () => {
+      const events = [ev('verify_started', { verification_id: 'v-1', step: 2, kind: 'agent', command: './x/agent.sh' }, 's1', '2026-07-10T10:00:00Z')]
+      render(<UnknownCommandNameContext.Provider value="test"><FeedWorkspace events={events} stageId={null} /></UnknownCommandNameContext.Provider>)
+      expect(screen.getByText('Verify step 2 · test-1')).toBeInTheDocument()
     })
   })
 

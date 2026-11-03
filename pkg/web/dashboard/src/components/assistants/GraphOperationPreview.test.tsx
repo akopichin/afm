@@ -35,6 +35,17 @@ describe('GraphOperationPreview', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/review.*currently failed/i)
   })
 
+  test('shows the executor by its readable name, with the raw command in the tooltip', () => {
+    render(<GraphOperationPreview kind="append" preview={{ id: 'review', dependsOn: [], command: 'codex-as-claude', commandName: 'Codex Reviewer' }} />)
+    expect(screen.getByText('Codex Reviewer')).toHaveAttribute('title', 'Codex Reviewer\nCommand: codex-as-claude')
+    expect(screen.queryByText('codex-as-claude')).toBeNull()
+  })
+
+  test('without a preview command there is no executor line', () => {
+    render(<GraphOperationPreview kind="append" preview={{ id: 'review', dependsOn: [] }} />)
+    expect(screen.queryByText(/executor/i)).toBeNull()
+  })
+
   test('append with no dependencies says it starts immediately', () => {
     render(<GraphOperationPreview kind="append" preview={{ id: 'new-stage', dependsOn: [] }} />)
     expect(screen.getByText(/starts immediately/i)).toBeInTheDocument()

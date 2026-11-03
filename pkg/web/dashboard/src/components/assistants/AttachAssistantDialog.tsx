@@ -1,7 +1,8 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { ActionCard } from './ActionCard'
 import { attachAndSendMesh, genMeshRequestId, type MeshAttachAndSendResult } from '../../api/mesh-client'
-import { describeExecutor, describeUnavailable, type AssistantProfile } from '../../types/assistant-profile'
+import { describeExecutor, describeUnavailable, executorTitle, type AssistantProfile } from '../../types/assistant-profile'
+import { useUnknownCommandName } from '../../lib/executor-label'
 import { useModalDialog } from '../../lib/focus-trap'
 
 export type AttachAssistantDialogProps = {
@@ -44,7 +45,8 @@ export function AttachAssistantDialog({
 
   const profile = profiles.find((p) => p.id === profileId)
   const roleTitle = profile?.title ?? profileId
-  const executor = profile === undefined ? '—' : describeExecutor(profile)
+  const unknownPrefix = useUnknownCommandName()
+  const executor = profile === undefined ? '—' : describeExecutor(profile, unknownPrefix)
   const stageTitle = stages.find((s) => s.id === stageId)?.title ?? stageId
   const displayTitle = title !== undefined && title.trim() !== '' ? title : roleTitle
   const remainingDepth = maxDepth === undefined ? undefined : maxDepth - 1
@@ -90,6 +92,7 @@ export function AttachAssistantDialog({
           title={displayTitle}
           instruction={instruction}
           executor={executor}
+          executorTitle={profile === undefined ? undefined : executorTitle(profile, unknownPrefix)}
           mode={mode}
           maxDepth={maxDepth}
           remainingDepth={remainingDepth}

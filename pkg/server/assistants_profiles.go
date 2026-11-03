@@ -26,6 +26,7 @@ type assistantProfileView struct {
 	ID                string `json:"id"`
 	Title             string `json:"title"`
 	Command           string `json:"command"`
+	CommandName       string `json:"command_name,omitempty"`
 	CommandSource     string `json:"command_source"`
 	RuntimeContext    string `json:"runtime_context"`
 	Available         bool   `json:"available"`
@@ -58,6 +59,7 @@ func (s *Server) handleAssistantProfiles(w http.ResponseWriter, r *http.Request)
 			ID:                string(v.ID),
 			Title:             v.Title,
 			Command:           v.Command,
+			CommandName:       s.commandName(v.Command),
 			CommandSource:     string(v.CommandSource),
 			RuntimeContext:    string(v.RuntimeContext),
 			Available:         v.Available,

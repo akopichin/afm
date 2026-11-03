@@ -6,6 +6,7 @@ import { AgentMessageBody } from '../agent-message/AgentMessageBody'
 import { formatEventGap } from '../feed-workspace/feed-view-model'
 import { MessageTime } from '../message-time/MessageTime'
 import { MeshAvatar } from './MeshAvatar'
+import { ExecutorBadge } from '../ExecutorBadge'
 
 export type ConversationMessageProps = {
   message: MeshMessage
@@ -69,10 +70,8 @@ export function ConversationMessage({ message, previousCreatedAt, participants, 
     <>
         <div className="team-conversation-message-header">
           <span className="team-conversation-message-sender">{author}</span>
-          {sender?.command !== undefined && sender.command !== '' && (
-            <span className="conversation-command-chip" title={`Command: ${sender.command}`}>
-              {sender.command}
-            </span>
+          {sender?.command !== undefined && (
+            <ExecutorBadge command={sender.command} commandName={sender.command_name} className="conversation-command-chip" />
           )}
           {authorRole && <span className="conversation-role-chip">{roleLabel(authorRole)}</span>}
           {recipients !== '' && <span className="team-conversation-message-route">→ {recipients}</span>}

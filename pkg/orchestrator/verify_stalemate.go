@@ -185,25 +185,19 @@ func (o *Orchestrator) handleStalemate(ctx context.Context, s flow.Stage, phase 
 // acceptStalemate принимает стадию как завершённую по stalemate — ТОТ ЖЕ терминальный success-путь, что и
 // чистый pass: durable-нотис EventAgentCompleted + publishCritical.
 func (o *Orchestrator) acceptStalemate(ctx context.Context, s flow.Stage, phase string, vre *VerifyRejectedError, rounds int) {
-	command := ""
+	ref := verifyStepRef{Index: vre.Step, Kind: verifyKindAgent}
 	if vre.Step >= 1 && vre.Step <= len(s.Verify.Steps) {
-		command = s.Verify.Steps[vre.Step-1].Command
+		ref = verifyStepRefFor(s.Verify.Steps[vre.Step-1], vre.Step)
 	}
-	o.emitStalemateAccepted(s.ID, vre.ReportID, vre.Step, command, rounds)
+	o.emitStalemateAccepted(s.ID, vre.ReportID, ref, rounds)
 	o.completeAgent(ctx, s.ID, phase, nil)
 }
 
 // emitStalemateAccepted публикует afm-вердикт live и durable через verify_result; декодер ответов модели
 // этот вердикт не принимает.
-func (o *Orchestrator) emitStalemateAccepted(stageID, verID string, step int, command string, rounds int) {
-	summary := fmt.Sprintf("accepted after %d unchanged round(s) (reviewer/author stalemate)", rounds)
-	data := map[string]any{
-		keyVerificationID: verID,
-		keyStep:           step,
-		keyVerifyKind:     verifyKindAgent,
-		keyVerifyCommand:  command,
-		keyVerdict:        string(verify.VerdictAcceptedStalemate),
-		keyVerifyReason:   summary,
-	}
+func (o *Orchestrator) emitStalemateAccepted(stageID, verID string, ref verifyStepRef, rounds int) {
+	data := ref.noticeData(verID)
+	data[keyVerdict] = string(verify.VerdictAcceptedStalemate)
+	data[keyVerifyReason] = fmt.Sprintf("accepted after %d unchanged round(s) (reviewer/author stalemate)", rounds)
 	o.publishNotice(bus.Event{Type: bus.EventVerifyResult, StageID: stageID, Data: data})
 }

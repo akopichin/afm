@@ -1,6 +1,7 @@
 package graph_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/akopichin/afm/pkg/flow"
@@ -87,5 +88,28 @@ func TestRestoreOrPersist_ResumedRunKeepsStoredGraph(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "Original" {
 		t.Fatalf("RestoreOrPersist (resumed) = %+v, want the original stored graph, not the edited one", got)
+	}
+}
+
+func TestSaveLoadRegistry_KeepsVerifyStepNames(t *testing.T) {
+	dir := t.TempDir()
+	stages := []flow.Stage{{ID: "a", Verify: flow.VerifySpec{Steps: []flow.VerifyStep{
+		{Kind: flow.VerifyShell, Run: "make test", Name: "Unit tests"},
+		{Kind: flow.VerifyAgent, Command: "codex", Name: "Code review"},
+		{Kind: flow.VerifyShell, Run: "make lint"},
+	}}}}
+	if err := graph.SaveRegistry(dir, stages); err != nil {
+		t.Fatalf("SaveRegistry: %v", err)
+	}
+	got, _, err := graph.LoadRegistry(dir)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	var names []string
+	for _, st := range got[0].Verify.Steps {
+		names = append(names, st.Name)
+	}
+	if want := []string{"Unit tests", "Code review", ""}; !slices.Equal(names, want) {
+		t.Fatalf("step names after reload = %q, want %q", names, want)
 	}
 }

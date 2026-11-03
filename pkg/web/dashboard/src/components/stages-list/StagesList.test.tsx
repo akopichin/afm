@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { resetUnknownCommandLabels } from '../../lib/executor-label'
 import type { Stage, StageQuota } from '../../types'
 import type { AccountingState, CostSummary } from '../../types/cost'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
@@ -468,6 +469,7 @@ describe('StagesList', () => {
   })
 
   describe('verify badge (V5b.2, now durable stage.verify — Task 7)', () => {
+    beforeEach(() => resetUnknownCommandLabels())
     const stage: Stage = { id: 'a', name: 'Build', status: 'running', updatedAt: '', interactive: false, autonomous: false, autoApprove: false, hasDialog: false, showPlan: true, showDialog: false, isScript: false, pausedFrom: '', preNote: '', buttons: [] }
 
     test('a stage with no verify entry shows no badge', () => {
@@ -475,8 +477,40 @@ describe('StagesList', () => {
       expect(container.querySelector('.verify-badge')).toBeNull()
     })
 
+    test('a named AI step reads "AI verify · <name> · <executor>: <phase>" and keeps the raw command out of the title', () => {
+      const named: Stage = { ...stage, verify: { step: 2, command: 'codex-as-claude', kind: 'agent', name: 'Code review', commandName: 'Codex Reviewer', phase: 'pass' } }
+      const { container } = render(<StagesList stages={[named]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+      expect(container.querySelector('.verify-badge')).toHaveAttribute('title', 'AI verify · Code review · Codex Reviewer: passed')
+    })
+
+    test('a named shell step shows only its name; an unnamed one keeps its number and command, an unnamed AI one its executor', () => {
+      const render1 = (verify: NonNullable<Stage['verify']>) => render(<StagesList stages={[{ ...stage, verify }]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />).container.querySelector('.verify-badge')
+      expect(render1({ step: 1, command: 'make test', kind: 'shell', name: 'Unit tests', phase: 'running' })).toHaveAttribute('title', 'AI verify · Unit tests: in progress')
+      cleanup()
+      expect(render1({ step: 1, command: 'make test', kind: 'shell', phase: 'running' })).toHaveAttribute('title', 'AI verify step 1 · make test: in progress')
+      cleanup()
+      expect(render1({ step: 2, command: 'codex-as-claude', kind: 'agent', commandName: 'Codex Reviewer', phase: 'running' })).toHaveAttribute('title', 'AI verify step 2 · Codex Reviewer: in progress')
+    })
+
+    test('--afm-raw-command-tooltip: none hides the command of an unnamed shell step, keeping only its number', () => {
+      document.documentElement.style.setProperty('--afm-raw-command-tooltip', 'none')
+      try {
+        const legacy: Stage = { ...stage, verify: { step: 1, command: 'make test', kind: 'shell', phase: 'running' } }
+        const { container } = render(<StagesList stages={[legacy]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+        expect(container.querySelector('.verify-badge')).toHaveAttribute('title', 'AI verify step 1: in progress')
+      } finally {
+        document.documentElement.style.removeProperty('--afm-raw-command-tooltip')
+      }
+    })
+
+    test('an AI step without a server name is numbered with the status prefix', () => {
+      const unnamed: Stage = { ...stage, verify: { step: 2, command: './x/agent.sh', phase: 'running' } }
+      const { container } = render(<StagesList stages={[unnamed]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />)
+      expect(container.querySelector('.verify-badge')).toHaveAttribute('title', 'AI verify step 2 · Unknown-1: in progress')
+    })
+
     test('an in-progress verify shows a "running" badge naming the step and command in its title', () => {
-      const running: Stage = { ...stage, verify: { step: 2, command: 'codex', phase: 'running' } }
+      const running: Stage = { ...stage, verify: { step: 2, command: 'codex', commandName: 'Codex', phase: 'running' } }
       const { container } = render(
         <StagesList stages={[running]} selectedStageId={null} onSelect={() => {}} accounting={ACCOUNTING_OK} />,
       )
@@ -484,7 +518,7 @@ describe('StagesList', () => {
       expect(badge).not.toBeNull()
       expect(badge).toHaveAttribute('data-phase', 'running')
       expect(badge?.getAttribute('title')).toContain('2')
-      expect(badge?.getAttribute('title')).toContain('codex')
+      expect(badge?.getAttribute('title')).toContain('Codex')
     })
 
     test('a finished verify (pass/needs_changes/error) reflects the outcome via data-phase, not a new status', () => {

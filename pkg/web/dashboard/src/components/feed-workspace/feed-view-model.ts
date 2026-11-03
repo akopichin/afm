@@ -1,5 +1,7 @@
 import type { AfmEvent, StageStatus } from '../../types'
 import type { MeshMessage } from '../../api/mesh-client'
+import { stepTooltip, type ExecutorLabel } from '../../lib/executor-label'
+import { presentVerifyStep } from '../../lib/verify-step'
 
 // Семантическая презентация ленты: каждое РЕАЛЬНОЕ событие из events.jsonl превращается в FeedItem с
 // ролью, тоном и текстом.
@@ -34,6 +36,10 @@ export type FeedItem = {
   // meshMessageId — a discussion_message row's message id: the row is dropped where the same post is shown as
   // its mirrored conversation bubble (buildFeedTimeline), so the post is not shown twice.
   meshMessageId?: string
+  // title — the row's technical details (a Verify step's number and raw command). executor — a named AI step's
+  // executor, shown as a badge beside the text.
+  title?: string
+  executor?: ExecutorLabel
 }
 
 // FeedGroup — последовательные items одной стороны и стадии, слитые визуально в
@@ -111,11 +117,13 @@ type Mapped = {
   // стабильный идентификатор надёжнее timestamp.
   dedupeId?: string
   meshMessageId?: string
+  title?: string
+  executor?: ExecutorLabel
 }
 
 // mapEvent — единственная точка соответствия «тип события → презентация».
 // null — событие сознательно не рендерится в ленте (см. ask_user/user_answered ниже).
-function mapEvent(event: AfmEvent): Mapped | null {
+function mapEvent(event: AfmEvent, unknownPrefix: string | undefined): Mapped | null {
   const data = event.payload
   const obj = isRecord(data) ? data : {}
 
@@ -197,7 +205,7 @@ function mapEvent(event: AfmEvent): Mapped | null {
     case 'verify_retry':
     case 'verify_tree_modified':
       // Verify-события наблюдательные: рендерятся строкой в ленте (mapVerifyEvent), но не меняют FSM-статус стадии.
-      return mapVerifyEvent(event.type, obj)
+      return mapVerifyEvent(event.type, obj, unknownPrefix)
     case 'approved':
       return { actor: 'user', tone: 'success', kind: 'message', text: 'approved', mono: false }
     case 'revised':
@@ -423,15 +431,36 @@ function mapQuotaNotice(type: 'quota_wait' | 'quota_reset' | 'quota_warning', ob
   return { actor: 'system', tone, kind: 'status', text: lead(message !== '' ? message : fallback), mono: false }
 }
 
-// mapVerifyEvent — презентация AI-verify наблюдательных событий.
-function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry' | 'verify_tree_modified', obj: Record<string, unknown>): Mapped {
+// mapVerifyEvent — презентация AI-verify наблюдательных событий. Именованный шаг показывается своим именем
+// (у AI-шага исполнитель — отдельным бейджем), безымянный — как раньше: с номером и командой/исполнителем.
+function mapVerifyEvent(
+  type: 'verify_started' | 'verify_result' | 'verify_retry' | 'verify_tree_modified',
+  obj: Record<string, unknown>,
+  unknownPrefix: string | undefined,
+): Mapped {
   const step = typeof obj.step === 'number' ? obj.step : Number(str(obj.step))
-  const command = str(obj.command)
   const verificationId = str(obj.verification_id)
   const dedupeId = `verify:${verificationId}:${step}:${type}`
+  const { subject, named, executor } = presentVerifyStep(
+    { step, command: str(obj.command), kind: str(obj.kind), name: str(obj.name), commandName: str(obj.command_name) },
+    unknownPrefix,
+  )
+  // The number moves into the tooltip for a named step; an unnamed one keeps it in the text.
+  const stepTag = named ? '' : ` (step ${step})`
+  const row = (tone: FeedTone, kind: FeedItemKind, text: string, extra: Partial<Mapped> = {}): Mapped => ({
+    actor: 'system',
+    tone,
+    kind,
+    text,
+    mono: false,
+    dedupeId,
+    title: stepTooltip(step, str(obj.command)),
+    executor: named && executor !== null && executor.label !== '' ? executor : undefined,
+    ...extra,
+  })
 
   if (type === 'verify_started') {
-    return { actor: 'system', tone: 'neutral', kind: 'status', text: `Verify step ${step} · ${command}`, mono: false, dedupeId }
+    return row('neutral', 'status', named ? subject : `Verify step ${step} · ${subject}`)
   }
 
   if (type === 'verify_retry') {
@@ -439,56 +468,46 @@ function mapVerifyEvent(type: 'verify_started' | 'verify_result' | 'verify_retry
     // попытку запуска; dedupeId несёт attempt, чтобы разные попытки были отдельными строками, а повтор
     // одной — не дублировался при reload-replay.
     const attempt = typeof obj.attempt === 'number' ? obj.attempt : Number(str(obj.attempt))
-    const reason = str(obj.reason)
-    return {
-      actor: 'system',
-      tone: 'warning',
-      kind: 'status',
-      text: `Verify retry ${attempt} (step ${step}) · ${command}: ${reason}`,
-      mono: false,
+    return row('warning', 'status', `Verify retry ${attempt}${stepTag} · ${subject}: ${str(obj.reason)}`, {
       dedupeId: `verify:${verificationId}:${step}:retry:${attempt}`,
-    }
+    })
   }
 
   if (type === 'verify_tree_modified') {
     // Ридонли-верифаер изменил рабочее дерево — это сбой изоляции самого верификатора, не вердикт по коду
     // автора; в отличие от retry здесь нет поля вроде attempt, различающего повторы, поэтому suffix —
     // фиксированный короткий `tree-modified` вместо `type`, просто для читаемости ключа.
-    return {
-      actor: 'system',
-      tone: 'warning',
-      kind: 'status',
-      text: `Verify step ${step} · ${command} modified the working tree (verifier must be read-only)`,
-      mono: false,
+    return row('warning', 'status', `${named ? 'Verify' : `Verify step ${step}`} · ${subject} modified the working tree (verifier must be read-only)`, {
       dedupeId: `verify:${verificationId}:${step}:tree-modified`,
-    }
+    })
   }
 
   const reason = str(obj.reason)
   const verdict = str(obj.verdict)
   const execError = str(obj.exec_error)
   const reportVerificationId = str(obj.report_path) !== '' ? verificationId : undefined
+  const outcome = (label: string): string => `${label}${stepTag} · ${subject}: ${reason}`
 
   if (verdict === 'pass') {
-    return { actor: 'system', tone: 'success', kind: 'success', text: `Verify passed (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
+    return row('success', 'success', outcome('Verify passed'), { reportVerificationId })
   }
   if (verdict === 'accepted_stalemate') {
     // Синтезированный afm вердикт: стадия принята, потому что автор перестал менять дерево в ответ на
     // повторные отклонения.
-    return { actor: 'system', tone: 'success', kind: 'success', text: `Verify accepted (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+    return row('success', 'success', outcome('Verify accepted'))
   }
   if (verdict === 'needs_changes') {
-    return { actor: 'system', tone: 'warning', kind: 'status', text: `Verify needs changes (step ${step}) · ${command}: ${reason}`, mono: false, reportVerificationId, dedupeId }
+    return row('warning', 'status', outcome('Verify needs changes'), { reportVerificationId })
   }
   if (verdict === 'inconclusive') {
-    return { actor: 'system', tone: 'warning', kind: 'status', text: `Verify inconclusive (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+    return row('warning', 'status', outcome('Verify inconclusive'))
   }
   if (execError === 'interrupted') {
-    return { actor: 'system', tone: 'danger', kind: 'status', text: `Verify interrupted (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+    return row('danger', 'status', outcome('Verify interrupted'))
   }
   // "exec_failure" или неизвестное значение — тоже ошибка ИСПОЛНЕНИЯ, не
   // рейтинг кода: тот же тон, тот же текстовый регистр.
-  return { actor: 'system', tone: 'danger', kind: 'status', text: `Verify execution error (step ${step}) · ${command}: ${reason}`, mono: false, dedupeId }
+  return row('danger', 'status', outcome('Verify execution error'))
 }
 
 // Статичная длительность строки: разница между этим событием и предыдущим в ленте по порядку отображения.
@@ -504,12 +523,12 @@ export function formatEventGap(tsMs: number, prevTsMs: number): string {
 }
 
 // toFeedItems — события → FeedItem[] с уникальными стабильными ключами.
-export function toFeedItems(events: AfmEvent[]): FeedItem[] {
+export function toFeedItems(events: AfmEvent[], unknownPrefix?: string): FeedItem[] {
   const counts = new Map<string, number>()
   const items: FeedItem[] = []
 
   events.forEach((event) => {
-    const m = mapEvent(event)
+    const m = mapEvent(event, unknownPrefix)
     if (m === null) return // ask_user/user_answered — не рендерим (см. mapEvent)
 
     const base = event.seq !== undefined ? `seq:${event.seq}` : (m.dedupeId ?? `${event.timestamp}|${event.type}|${event.stageId}`)
@@ -537,6 +556,8 @@ export function toFeedItems(events: AfmEvent[]): FeedItem[] {
       markdown: m.markdown,
       reportVerificationId: m.reportVerificationId,
       meshMessageId: m.meshMessageId,
+      title: m.title,
+      executor: m.executor,
     })
   })
 

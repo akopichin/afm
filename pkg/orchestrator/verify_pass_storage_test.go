@@ -70,30 +70,38 @@ func TestRunVerification_QuotaManifestStorageOutcomes(t *testing.T) {
 }
 
 func TestRunVerification_QuotaResumeStorageFailure(t *testing.T) {
-	stage := flow.Stage{ID: verifyTestStageID, Verify: flow.VerifySpec{Steps: []flow.VerifyStep{
-		{Kind: flow.VerifyAgent, Command: "codex"},
-		{Kind: flow.VerifyAgent, Command: "codex"},
-	}}}
-	o, stageDir := newVerifyTestOrchestrator(t, stage)
-	o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
-		t.Fatal("corrupt resume must fail before starting an agent")
-		return verify.RunOutcome{}, nil
-	}
-	quota := state.QuotaWait{VerifyID: "v-parked", VerifyStep: 2}
-	ctx := withVerifyResume(context.Background(), quota, 0)
-	_, loadErr := loadVerifyManifest(stageDir, quota.VerifyID)
-	err := o.RunVerification(ctx, stage, phaseImplementation)
-	execErr := assertVerifyStorageError(t, err, 2, loadErr.Error())
-	if execErr.Reason != "verify storage failure: "+loadErr.Error() {
-		t.Fatalf("resume reason = %q", execErr.Reason)
-	}
-	notices := readVerifyNotices(t, o.opts.RunDir)
-	if len(notices) != 1 || notices[0].Type != string(bus.EventVerifyResult) {
-		t.Fatalf("resume notices = %+v", notices)
-	}
-	assertVerifyStorageNotice(t, notices[0], execErr, "", "")
-	if notices[0].Data[keyVerificationID] != quota.VerifyID {
-		t.Errorf("resume verification id = %v", notices[0].Data[keyVerificationID])
+	for _, name := range []string{"", "Security review"} {
+		t.Run("name="+name, func(t *testing.T) {
+			stage := flow.Stage{ID: verifyTestStageID, Verify: flow.VerifySpec{Steps: []flow.VerifyStep{
+				{Kind: flow.VerifyAgent, Command: "codex"},
+				{Kind: flow.VerifyAgent, Command: "codex", Name: name},
+			}}}
+			o, stageDir := newVerifyTestOrchestrator(t, stage)
+			o.runVerifyAgent = func(context.Context, flow.Stage, string, string, string, string) (verify.RunOutcome, error) {
+				t.Fatal("corrupt resume must fail before starting an agent")
+				return verify.RunOutcome{}, nil
+			}
+			quota := state.QuotaWait{VerifyID: "v-parked", VerifyStep: 2}
+			ctx := withVerifyResume(context.Background(), quota, 0)
+			_, loadErr := loadVerifyManifest(stageDir, quota.VerifyID)
+			err := o.RunVerification(ctx, stage, phaseImplementation)
+			execErr := assertVerifyStorageError(t, err, 2, loadErr.Error())
+			if execErr.Reason != "verify storage failure: "+loadErr.Error() {
+				t.Fatalf("resume reason = %q", execErr.Reason)
+			}
+			notices := readVerifyNotices(t, o.opts.RunDir)
+			if len(notices) != 1 || notices[0].Type != string(bus.EventVerifyResult) {
+				t.Fatalf("resume notices = %+v", notices)
+			}
+			assertVerifyStorageNotice(t, notices[0], execErr, verifyKindAgent, "codex")
+			if notices[0].Data[keyVerificationID] != quota.VerifyID {
+				t.Errorf("resume verification id = %v", notices[0].Data[keyVerificationID])
+			}
+			gotName, hasName := notices[0].Data[keyVerifyName]
+			if hasName != (name != "") || (hasName && gotName != name) {
+				t.Errorf("resume notice name = %v (present %v), want %q", gotName, hasName, name)
+			}
+		})
 	}
 }
 

@@ -1,14 +1,15 @@
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ConversationMessage } from './ConversationMessage'
 import { ThreadConversation } from './ThreadConversation'
 import * as meshClient from '../../api/mesh-client'
 import type { MeshMessage, MeshParticipant, MeshThread } from '../../api/mesh-client'
 import { MessageTimeZoneProvider } from '../../lib/message-time-zone'
+import { resetUnknownCommandLabels } from '../../lib/executor-label'
 
 const participants: MeshParticipant[] = [
   { id: 'user', kind: 'user', scope: 'run', display_name: 'You', reachable: true },
-  { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true, command: 'codex' },
+  { id: 'run:qa', kind: 'run_agent', scope: 'run', alias: 'qa', display_name: 'QA reviewer', reachable: true, command: 'codex-as-claude', command_name: 'Codex Reviewer' },
 ]
 
 const question: MeshMessage = { id: 'm1', thread_id: 'mt-1', sender_id: 'user', recipient_ids: ['run:qa'], kind: 'message', body: 'Is it done?', seq: 1, created_at: '2026-10-19T10:00:00Z' }
@@ -23,6 +24,7 @@ function renderMessage(props: Partial<Parameters<typeof ConversationMessage>[0]>
 }
 
 describe('ConversationMessage', () => {
+  beforeEach(() => resetUnknownCommandLabels())
   afterEach(() => vi.restoreAllMocks())
 
   test('feed cards put role, handles and the quote inside the card, with reply and delivery below', () => {
@@ -52,10 +54,19 @@ describe('ConversationMessage', () => {
   test('shows the author, the command it runs, the recipients and the quoted message', () => {
     renderMessage()
     expect(screen.getByText('QA reviewer')).toBeInTheDocument()
-    expect(screen.getByText('codex')).toHaveAttribute('title', 'Command: codex') // a long one is clipped; the tooltip keeps it whole
+    // A long name is clipped; the tooltip keeps it whole, with the raw command.
+    expect(screen.getByText('Codex Reviewer')).toHaveAttribute('title', 'Codex Reviewer\nCommand: codex-as-claude')
+    expect(screen.queryByText('codex-as-claude')).toBeNull()
     expect(screen.getByText('→ You')).toBeInTheDocument()
     expect(screen.getByText('Replying to You')).toBeInTheDocument()
     expect(screen.queryByRole('button')).toBeNull() // Team: no reply link, the quote is not a link
+  })
+
+  test('the executor badge is the same in the feed card, and a command without a server name is numbered', () => {
+    renderMessage({ presentation: 'feed' })
+    expect(document.querySelector('.feed-message-card')).toContainElement(screen.getByText('Codex Reviewer'))
+    renderMessage({ participants: [participants[0]!, { ...participants[1]!, command_name: undefined, command: './x/agent.sh' }] })
+    expect(screen.getByText('Unknown-1')).toHaveAttribute('title', 'Unknown-1\nCommand: ./x/agent.sh')
   })
 
   test('the quote jumps to the quoted message and Reply answers in the conversation', () => {

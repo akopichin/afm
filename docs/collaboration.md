@@ -275,6 +275,13 @@ team:
     title: QA
 ```
 
+A member's `title` is its participant name (`Architecture`) and decides its
+`@` handle. The dashboard shows the executor next to it as a separate chip with a
+[readable name](config-reference.md#executor-names), for example
+`Architecture` + `Codex Reviewer` when `rev-arch` runs `codex-as-claude` and
+`command_names` maps it. Renaming the executor never changes the title, handle or
+participant ID.
+
 afm adds them in the listed order before any stage starts, so the order decides
 who gets `@qa` and who gets `@qa-2` when titles collide. They are ordinary run
 agents (see [Team conversations](#team-conversations)): idle until someone
@@ -320,8 +327,10 @@ both answers with `afm agent wait`, fixes the valid findings, and then passes a
 ## Use helpers in the dashboard
 
 Open a stage's **⋯ → Attach helper…** menu, select an available role, and give
-it an instruction. **Configured executor** shows the command the helper will run
-on this stage and where it comes from (*profile*, *stage* or *run default*); if
+it an instruction. **Configured executor** shows the executor the helper will run
+on this stage, by its [readable name](config-reference.md#executor-names), and
+where it comes from (*profile*, *stage* or *run default*), for example
+`Codex Reviewer (profile)`; the raw command is in the tooltip; if
 no role is available, the dialog lists why. Choose **Advisory** for a result that does not block the
 stage, or **Required** for a result that must pass before the stage finishes.
 Attach helpers after the stage starts. A helper attached while its stage is

@@ -571,6 +571,12 @@ type Config struct {
 	// SkillsDir is the default extra skill library for runs; a flow, stage or team member setting wins.
 	// A relative path is resolved from the effective project root, not from the config's directory.
 	SkillsDir skills.Dir `yaml:"skills_dir,omitempty"`
+	// CommandNames maps an exact agent command to its dashboard display name. It is presentation only and
+	// never part of the executor identity. Project keys override global ones; values are stored trimmed.
+	CommandNames map[string]string `yaml:"command_names,omitempty"`
+	// UnknownCommandName is the label prefix the dashboard uses when the server sent no command name;
+	// read it through EffectiveUnknownCommandName.
+	UnknownCommandName string `yaml:"unknown_command_name,omitempty"`
 	// AutoRecover controls whether failed stages are automatically reset to pending when a run
 	// starts/resumes. nil/true = enabled (default); explicit false disables.
 	AutoRecover *bool `yaml:"auto_recover"`
@@ -774,6 +780,9 @@ func mergeFile(dst *Config, path string, layer string) error {
 		if err := skills.RejectNullKeys(doc.Content[0], "skills_dir"); err != nil {
 			return fmt.Errorf("parse %s config %s: %w", layer, path, err)
 		}
+		if err := validateCommandNaming(doc.Content[0], layer); err != nil {
+			return fmt.Errorf("parse %s config %s: %w", layer, path, err)
+		}
 		if err := doc.Decode(&overlay); err != nil {
 			return fmt.Errorf("parse %s config %s: %w", layer, path, err)
 		}
@@ -810,6 +819,17 @@ func mergeFile(dst *Config, path string, layer string) error {
 	}
 	if overlay.SkillsDir != "" {
 		dst.SkillsDir = overlay.SkillsDir
+	}
+	if overlay.UnknownCommandName != "" {
+		dst.UnknownCommandName = strings.TrimSpace(overlay.UnknownCommandName)
+	}
+	if overlay.CommandNames != nil {
+		if dst.CommandNames == nil {
+			dst.CommandNames = map[string]string{}
+		}
+		for command, name := range overlay.CommandNames {
+			dst.CommandNames[command] = strings.TrimSpace(name) // per-key overlay: project layer wins
+		}
 	}
 	if overlay.Server.Port != nil {
 		dst.Server.Port = overlay.Server.Port

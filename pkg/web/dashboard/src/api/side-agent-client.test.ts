@@ -20,6 +20,7 @@ describe('side-agent-client', () => {
         conversation_id: 'run-1',
         run_id: 'run-1',
         command: 'claude',
+        command_name: 'Claude Code',
         unavailable: false,
         state: 'running',
         events: [
@@ -39,6 +40,7 @@ describe('side-agent-client', () => {
     expect(conv.conversationId).toBe('run-1')
     expect(conv.runId).toBe('run-1')
     expect(conv.command).toBe('claude')
+    expect(conv.commandName).toBe('Claude Code')
     expect(conv.state).toBe('running')
     expect(conv.lastSeq).toBe(3)
     expect(conv.nextCursor).toBe(2)

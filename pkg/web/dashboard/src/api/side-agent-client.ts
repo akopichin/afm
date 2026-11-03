@@ -21,6 +21,7 @@ export type ConversationResponse = {
   conversationId: string
   runId: string
   command: string
+  commandName?: string
   unavailable: boolean
   state: SideAgentConversationState
   events: SideAgentEvent[]
@@ -70,6 +71,7 @@ export function normalizeConversation(raw: unknown): ConversationResponse {
     conversationId: typeof obj.conversation_id === 'string' ? obj.conversation_id : '',
     runId: typeof obj.run_id === 'string' ? obj.run_id : '',
     command: typeof obj.command === 'string' ? obj.command : '',
+    commandName: typeof obj.command_name === 'string' ? obj.command_name : undefined,
     unavailable: obj.unavailable === true,
     state: obj.state === 'running' ? 'running' : 'idle',
     events,

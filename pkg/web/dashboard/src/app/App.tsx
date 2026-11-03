@@ -25,6 +25,7 @@ import { CommentRecipientsContext } from '../components/comments/comment-recipie
 import { FileBrowserProvider } from '../components/file-browser'
 import { SideAgentProvider } from '../components/side-agent'
 import { MessageTimeZoneProvider } from '../lib/message-time-zone'
+import { UnknownCommandNameContext } from '../lib/executor-label'
 import { DialogOpenContext } from '../lib/focus-trap'
 import { ReviewBanner } from '../components/review-banner'
 import { useStatus } from '../hooks/use-status'
@@ -95,7 +96,7 @@ export function App(): ReactElement {
     description, version, idleAccumulatedMs, idleSince, backoffAccumulatedMs,
     backoffOpenSince, capabilities, graphRevision, runId, flowPauseState, flowPausedStages, collaborationMode, runCost,
     runOverheadCost, coverageIssues, accounting, usageAnalytics, statusAvailable, refresh, runStatus,
-    timeZone, utcOffsetMinutes,
+    timeZone, utcOffsetMinutes, unknownCommandName,
   } = useStatus()
   const runEpoch = useRunEpoch(runId)
   const stageActions = useMemo(createStageActions, [runEpoch])
@@ -632,6 +633,7 @@ export function App(): ReactElement {
   return (
     // MessageTimeZoneProvider стоит СНАРУЖИ SideAgentProvider: Feed, Team и история бокового агента
     // должны видеть одну и ту же хост-зону для времени сообщений.
+    <UnknownCommandNameContext.Provider value={unknownCommandName}>
     <MessageTimeZoneProvider timeZone={timeZone} utcOffsetMinutes={utcOffsetMinutes}>
     <DialogOpenContext.Provider value={reportDialogOpen}>
     {/* SideAgentProvider MUST wrap FileBrowserProvider, not the other way around: FileBrowserProvider calls
@@ -982,6 +984,7 @@ export function App(): ReactElement {
     </SideAgentProvider>
     </DialogOpenContext.Provider>
     </MessageTimeZoneProvider>
+    </UnknownCommandNameContext.Provider>
   )
 }
 

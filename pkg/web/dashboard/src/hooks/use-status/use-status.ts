@@ -62,6 +62,8 @@ export type FlowStatus = {
   // MessageTimeZoneProvider взять browser-local fallback.
   timeZone: string
   utcOffsetMinutes: number | null
+  // unknownCommandName — prefix of the `<prefix>-N` label for a command the server sent no name for.
+  unknownCommandName: string
 }
 
 const EMPTY_STATUS: FlowStatus = {
@@ -88,6 +90,7 @@ const EMPTY_STATUS: FlowStatus = {
   usageAnalytics: null,
   timeZone: '',
   utcOffsetMinutes: null,
+  unknownCommandName: 'Unknown',
 }
 
 // Сырой ответ GET /api/status приводится к FlowStatus в normalizeStatus: stages — уже упорядоченный массив
@@ -238,6 +241,10 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     ? obj.utc_offset_minutes
     : null
 
+  const unknownCommandName = typeof obj.unknown_command_name === 'string' && obj.unknown_command_name.trim() !== ''
+    ? obj.unknown_command_name
+    : EMPTY_STATUS.unknownCommandName
+
   return {
     flowName,
     stages,
@@ -265,6 +272,7 @@ export function normalizeStatus(raw: unknown): FlowStatus {
     usageAnalytics,
     timeZone,
     utcOffsetMinutes,
+    unknownCommandName,
   }
 }
 
@@ -318,7 +326,9 @@ function toVerifyView(raw: unknown): StageVerify | undefined {
   const step = typeof obj.step === 'number' ? obj.step : 0
   const command = typeof obj.command === 'string' ? obj.command : ''
 
-  return { step, command, phase }
+  const optionalText = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined)
+
+  return { step, command, kind: optionalText(obj.kind), name: optionalText(obj.name), commandName: optionalText(obj.command_name), phase }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

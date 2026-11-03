@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { resetUnknownCommandLabels } from '../lib/executor-label'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 import { isTeamUnread } from '../lib/team-unread'
@@ -96,6 +97,7 @@ function openDetail(): void {
 
 describe('App', () => {
   beforeEach(() => {
+    resetUnknownCommandLabels()
     StubWebSocket.instances = []
     vi.stubGlobal('WebSocket', StubWebSocket)
   })
@@ -3444,7 +3446,10 @@ describe('App', () => {
       if (!url.includes('/api/assistant-profiles')) return base(input, init)
       profileRequests.push(url)
       const inStage = url.includes('stage_id=s1')
-      const profile = { id: 'qa', title: 'QA role', command: inStage ? 'codex' : 'claude', command_source: inStage ? 'stage' : 'client', available: true }
+      const profile = {
+        id: 'qa', title: 'QA role', command: inStage ? 'codex-as-claude' : 'claude', command_name: inStage ? 'Codex Reviewer' : 'Claude Code',
+        command_source: inStage ? 'stage' : 'client', available: true,
+      }
       return { ok: true, json: async () => ({ profiles: [profile] }) } as Response
     })
   }
@@ -3459,8 +3464,32 @@ describe('App', () => {
     const header = within(document.querySelector('.workspace-header') as HTMLElement)
     fireEvent.click(header.getByRole('button', { name: 'Attach helper…' }))
     const dialog = within(await screen.findByRole('dialog'))
-    expect(await dialog.findByText('codex (stage)')).toBeInTheDocument()
+    expect(await dialog.findByText('Codex Reviewer (stage)')).toBeInTheDocument()
     expect(profileRequests).toContain('/api/assistant-profiles?stage_id=s1')
+  })
+
+  test('the status unknown_command_name labels an executor the server sent no name for, numbered per command', async () => {
+    mockModeRun([], () => 'assistants')
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const base = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/status')) {
+        const body = await (await base(input, init)).json()
+        return { ok: true, json: async () => ({ ...body, unknown_command_name: 'test' }) } as Response
+      }
+      if (url.includes('/api/assistant-profiles')) {
+        return { ok: true, json: async () => ({ profiles: [{ id: 'qa', title: 'QA role', command: './x/agent.sh', command_source: 'stage', available: true }] }) } as Response
+      }
+      return base(input, init)
+    })
+    render(<App />)
+    await screen.findByText('Found a bug in parse()')
+
+    const header = within(document.querySelector('.workspace-header') as HTMLElement)
+    fireEvent.click(header.getByRole('button', { name: 'Attach helper…' }))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(await dialog.findByText('test-1 (stage)')).toHaveAttribute('title', 'test-1\nCommand: ./x/agent.sh')
   })
 
   test('Add run agent uses the run-level profiles and shows the run default executor', async () => {
@@ -3471,7 +3500,7 @@ describe('App', () => {
 
     const people = await screen.findByRole('navigation', { name: 'People' })
     fireEvent.click(within(people).getByRole('button', { name: 'Add run agent…' }))
-    expect(await screen.findByText('claude (run default)')).toBeInTheDocument()
+    expect(await screen.findByText('Claude Code (run default)')).toBeInTheDocument()
     expect(profileRequests).toContain('/api/assistant-profiles')
   })
 

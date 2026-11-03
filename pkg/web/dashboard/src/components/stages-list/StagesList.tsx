@@ -3,6 +3,8 @@ import { STAGE_STATUS_LABELS, type Stage, type StageVerify } from '../../types'
 import type { AccountingState, Coverage } from '../../types/cost'
 import { attentionKindFor } from '../../hooks/use-attention'
 import { formatStageDuration, type StageTimes } from '../../lib/stage-timing'
+import { rawCommandTooltipsEnabled, useUnknownCommandName } from '../../lib/executor-label'
+import { presentVerifyStep } from '../../lib/verify-step'
 import type { StageAssistantsSummary } from '../../hooks/use-stage-assistants'
 import { AssistantTaskRow } from '../assistants'
 import { QuotaCountdown } from './QuotaCountdown'
@@ -51,6 +53,16 @@ function verifyPhaseLabel(phase: StageVerify['phase']): string {
     case 'error':
       return 'execution error'
   }
+}
+
+// verifyBadgeTitle: a named check reads "AI verify · Code review · Codex Reviewer: passed", a legacy one keeps its
+// step number and shows the command (shell, unless a skin hides raw commands) or the executor (AI).
+function verifyBadgeTitle(verify: StageVerify, unknownPrefix: string): string {
+  const { subject, named, executor } = presentVerifyStep(verify, unknownPrefix)
+  const isRawCommand = !named && executor === null
+  const shownSubject = isRawCommand && !rawCommandTooltipsEnabled() ? '' : subject
+  const what = named ? ['AI verify', subject, executor?.label] : [`AI verify step ${verify.step}`, shownSubject]
+  return `${what.filter((part) => part !== undefined && part !== '').join(' · ')}: ${verifyPhaseLabel(verify.phase)}`
 }
 
 // isStaleRunningVerify — defensive gate: the pulsing "running" verify badge is only true while the stage
@@ -107,6 +119,7 @@ export function StagesList({
   // useId нельзя звать внутри stages.map — берём одну базу на компонент и добавляем к ней индекс строки,
   // чтобы id стоимостного спана оставался уникальным и стабильным для React.
   const costIdBase = useId()
+  const unknownPrefix = useUnknownCommandName()
   const prevStatus = useRef<Record<string, string>>({})
   const timers = useRef<Record<string, number>>({})
   const [justDone, setJustDone] = useState<Set<string>>(new Set())
@@ -280,7 +293,7 @@ export function StagesList({
               <span
                 className="verify-badge"
                 data-phase={stage.verify.phase}
-                title={`AI verify step ${stage.verify.step} · ${stage.verify.command}: ${verifyPhaseLabel(stage.verify.phase)}`}
+                title={verifyBadgeTitle(stage.verify, unknownPrefix)}
               >
                 🔎
               </span>

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,7 +19,10 @@ import (
 	"github.com/akopichin/afm/pkg/config"
 	"github.com/akopichin/afm/pkg/executor"
 	"github.com/akopichin/afm/pkg/flow"
+	"github.com/akopichin/afm/pkg/orchestrator"
+	"github.com/akopichin/afm/pkg/server"
 	"github.com/akopichin/afm/pkg/sideagent"
+	"github.com/akopichin/afm/pkg/state"
 )
 
 // blockingRunner — управляемый фейк агента для Phase D тестов: эмитит один видимый ответ, затем
@@ -299,6 +305,107 @@ func TestSideAgentEnabled_Precedence(t *testing.T) {
 				t.Errorf("sideAgentEnabled: got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Ростер дашборда называет бокового агента Assistant, а его исполнителя — отдельным полем, и в новом ране, и в
+// ране, сохранённом до переименования (display_name там — команда). Повторный старт ничего не пишет в журнал.
+func TestStartSideAgent_RosterNamesAssistantAndItsExecutor(t *testing.T) {
+	cases := []struct {
+		name, savedName, command, wantCommandName string
+	}{
+		{"new run", "", "codex-as-claude", "Codex"},
+		{"run saved before the rename", "claude", "claude", "Claude Code"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			previous := rootDir
+			rootDir = t.TempDir()
+			t.Cleanup(func() { rootDir = previous })
+			const runID = "names-run"
+			runDir := t.TempDir()
+			store, err := state.Open(runDir, []string{"impl"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			if c.savedName != "" {
+				seedSavedSideParticipant(t, store, runID, c.savedName)
+			}
+			journalPath := filepath.Join(runDir, "events.jsonl")
+			journal, _ := os.ReadFile(journalPath)
+
+			cfg := config.Default()
+			cfg.Client.Command = c.command
+			orch := orchestrator.New(orchestrator.Options{
+				RunDir: runDir, RunID: runID, Store: store, Config: cfg, Prompts: orchestrator.DefaultPrompts(),
+				Stages: []flow.Stage{{ID: "impl", Name: "impl", Agents: []flow.AgentType{flow.AgentAuto}}},
+			})
+			side, err := startSideAgent(runID, cfg, runEnvironment{}, nil, orch, store)
+			if err != nil {
+				t.Fatalf("startSideAgent: %v", err)
+			}
+			t.Cleanup(func() { side.closeStores(side.shutdownNormal(context.Background())) })
+			dashboard := httptest.NewServer(server.New(server.Config{
+				RunDir: runDir, Store: store, Stages: registryStageProvider{orch: orch}, Mesh: meshServerActions(orch),
+			}).Handler())
+			t.Cleanup(dashboard.Close)
+
+			type rosterEntry struct {
+				ID          string `json:"id"`
+				Alias       string `json:"alias"`
+				DisplayName string `json:"display_name"`
+				Command     string `json:"command"`
+				CommandName string `json:"command_name"`
+			}
+			var roster struct {
+				Participants []rosterEntry `json:"participants"`
+			}
+			decodeDashboardJSON(t, dashboard.URL+"/api/mesh/participants", &roster)
+			found := false
+			for _, p := range roster.Participants {
+				if p.ID != "side:"+runID {
+					continue
+				}
+				found = true
+				if p.DisplayName != "Assistant" || p.Alias != "assistant" || p.Command != c.command || p.CommandName != c.wantCommandName {
+					t.Errorf("roster entry = %+v, want the Assistant @assistant running %s (%s)", p, c.command, c.wantCommandName)
+				}
+			}
+			if !found {
+				t.Fatalf("roster %+v has no side:%s", roster.Participants, runID)
+			}
+
+			after, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := bytes.Count(after, []byte(`"op_kind":"mesh_register_side_agent"`)); n != 1 {
+				t.Errorf("events.jsonl holds %d side registrations, want 1", n)
+			}
+			if c.savedName != "" && !bytes.Equal(after, journal) {
+				t.Errorf("starting over a saved registration changed events.jsonl:\nbefore %s\nafter  %s", journal, after)
+			}
+		})
+	}
+}
+
+// seedSavedSideParticipant журналирует регистрацию бокового агента так, как её записывали раньше: display_name
+// — команда исполнителя.
+func seedSavedSideParticipant(t *testing.T, store *state.Store, runID, displayName string) {
+	t.Helper()
+	payload, err := json.Marshal(state.MeshParticipantAddedPayload{
+		Kind: string(agentcomm.KindSideAgent), Scope: string(agentcomm.ScopeRun), Alias: "assistant", DisplayName: displayName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := state.Operation{
+		ID: "register-side-agent:" + runID, Kind: "mesh_register_side_agent", Actor: state.Actor{Kind: "system"},
+		Effects: []state.Effect{{Kind: "mesh_participant_added", Target: state.Target{ParticipantID: "side:" + runID}, Payload: payload}},
+	}
+	if _, err := store.ApplyRunOperation(op, func(state.OperationResult) {}); err != nil {
+		t.Fatal(err)
 	}
 }
 

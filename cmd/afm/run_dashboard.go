@@ -176,6 +176,8 @@ func startDashboard(cfg config.Config, sc server.Config, orch *orchestrator.Orch
 	sc.Theme = cfg.EffectiveTheme()
 	sc.Version = version
 	sc.SkinDir = cfg.SkinDir
+	sc.CommandNames = cfg.CommandNames
+	sc.UnknownCommandName = cfg.EffectiveUnknownCommandName()
 	sc.ShowMoney = cfg.Accounting.ShowMoneyEnabled()
 	// The analytics provider does not depend on the cost display gate: with accounting hidden it still serves time.
 	sc.UsageMode = server.UsageModeFor(cfg.Accounting.IsEnabled(), cfg.Accounting.ShowMoneyEnabled())

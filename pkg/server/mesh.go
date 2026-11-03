@@ -307,7 +307,11 @@ func (s *Server) handleMeshParticipants(w http.ResponseWriter, r *http.Request) 
 		s.writeAssistantError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"participants": participants})
+	views := make([]meshParticipantView, 0, len(participants))
+	for _, p := range participants {
+		views = append(views, s.meshParticipantView(p))
+	}
+	writeJSON(w, map[string]any{"participants": views})
 }
 
 // handleMeshThreads is GET /api/mesh/threads (bare, list form) — the T7.3 dependency: every thread the human
@@ -633,5 +637,14 @@ func (s *Server) handleMeshAttachAndSend(w http.ResponseWriter, r *http.Request)
 		s.writeAssistantError(w, err)
 		return
 	}
-	writeJSON(w, result)
+	// The outer participant field shadows the embedded one in JSON, so the roster entry carries command_name.
+	resp := struct {
+		MeshAttachAndSendResult
+		Participant *meshParticipantView `json:"participant,omitempty"`
+	}{MeshAttachAndSendResult: result}
+	if result.Participant != nil {
+		view := s.meshParticipantView(*result.Participant)
+		resp.Participant = &view
+	}
+	writeJSON(w, resp)
 }
