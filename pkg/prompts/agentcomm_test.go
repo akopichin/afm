@@ -587,6 +587,21 @@ func TestAgentComm_SpawnCommandsAreForStageAgentsOnly(t *testing.T) {
 	}
 }
 
+// A stage agent learns that its on_completion helper starts by itself, so it never waits for it; the legacy block
+// of a participant that cannot spawn does not carry the line.
+func TestAgentComm_StageAgentIsToldNotToWaitForItsCompletionHelper(t *testing.T) {
+	stage := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "stage:build", Scope: "stage", Available: true, CanSpawnHelpers: true})
+	for _, want := range []string{"`on_completion`", "starts by itself after you finish your own work", "do not wait for it"} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("a stage agent's block lacks %q:\n%s", want, stage)
+		}
+	}
+	other := AgentCommunicationBlock(AgentCommInputs{ParticipantID: "helper:t-1", Scope: "stage", Available: true})
+	if strings.Contains(other, "on_completion") {
+		t.Fatalf("a participant that cannot spawn must not be told about on_completion helpers:\n%s", other)
+	}
+}
+
 func TestAgentCommHelpersBlock_ListsIDTitleAndStatusOnly(t *testing.T) {
 	if got := AgentCommHelpersBlock(nil, 0); got != "" {
 		t.Fatalf("no helpers must render nothing, got %q", got)

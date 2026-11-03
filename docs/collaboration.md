@@ -407,13 +407,47 @@ files exist and any `verify:` step has passed. In status terms, that is
   stage paused after its result is ready starts the helper on **Continue**.
   **Restart with note** makes an earlier pass stale: it cannot start or close
   the gate of the new attempt.
-- A stage that fails or is cancelled does not start it. The helper stays
-  waiting, which keeps the run open: cancel it, or retry the stage.
+- A stage that fails or is cancelled does not start it. A pass that has not
+  started is cancelled (`cancelled`) with a system reason beginning
+  `parent stage failed before completion:` and the stage ID, so it does not keep
+  the run open; no verdict is recorded and no waiver is needed. This also holds
+  for a failure recorded before an afm restart. **Retry** of the stage prepares
+  the pass again: it goes back to waiting and starts once the new result is
+  ready. A pass you cancelled yourself, and a helper that already started and
+  failed, are not restored.
 - A helper started by another helper (delegation) keeps its own rules and is not
   held back this way.
 
 `checkpoints` helpers are different: they follow the stage agent's output and may
 run several times while it works.
+
+#### Do not wait for your own on-completion helper
+
+The stage agent does not need to wait for its `on_completion` helper, and
+`required` does not change that: afm starts the helper after the agent finishes
+its own work. A wait by the stage agent that could end only after that helper
+(`afm agent wait` with `task_result` or `reply_to`, an item of a batch, or an
+`addressed_message` on a thread whose only other member is the helper) can never
+finish, so it is refused with `wait_cycle` before it is recorded. The stage keeps
+running and nothing is parked. The reason names the helper and the stage, for
+example:
+
+```text
+this wait would never end: on_completion helper(s) Gate (t-…) start only after
+stage(s) build produced a result — finish this stage's own work instead: AFM
+runs the helper automatically
+```
+
+The check follows the wait graph, so a wait that reaches the helper through
+another helper, a run agent or a stage that depends on the unfinished one is
+refused too. Waits that can end are not refused: on a helper that has already
+started, on a stage whose result is ready, or on a colleague who does not depend
+on the stage. An agent that repeats the refused wait is refused again. If its
+turn ends without a result, the usual missing-summary reminders apply and then
+the stage fails; the stage is never parked in `awaiting_peer` by such a wait,
+and the helper is cancelled as described above. `awaiting_peer` means the stage
+agent yielded for a colleague's reply; `awaiting_assistants` means its own work
+is finished and helpers are running or about to start.
 
 `trigger`, `mode` and `verdict` are independent:
 
@@ -952,6 +986,8 @@ answer; a stage agent's separate waits remain alternatives, while a batch
 requires all its items to end. The check
 also includes a run agent waiting for its delegated children, and refuses a
 child's wait on that parent when it would close a cycle.
+A stage agent's wait on its own `on_completion` helper is such a cycle; see
+[Do not wait for your own on-completion helper](#do-not-wait-for-your-own-on-completion-helper).
 
 A wait registered while someone could still answer is cancelled if no one can
 answer later: when every recipient of the message (or every other member of the

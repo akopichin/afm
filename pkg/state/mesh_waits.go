@@ -125,10 +125,7 @@ func (as *AssistantsState) meshWaitSatisfied(w *MeshWait) bool {
 		}
 		return as.Mesh.MessageAnswered(cond.MessageID)
 	case agentcomm.WaitOnAddressedMessage:
-		if cond.ThreadID == "" {
-			return as.Mesh.HasWakingUnreadFor(w.Waiter)
-		}
-		return as.Mesh.hasMessageAddressedTo(cond.ThreadID, w.Waiter)
+		return as.Mesh.AddressedMessageArrived(cond.ThreadID, w.Waiter)
 	case agentcomm.WaitOnTaskResult:
 		// A task's result is final once it is terminal. A run agent never becomes terminal: it returns to
 		// queued after every turn with that turn's result recorded — only a result recorded after the wait was

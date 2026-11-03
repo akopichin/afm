@@ -129,6 +129,10 @@ func (o *Orchestrator) startPlanningForPending(ctx context.Context) {
 		if err := o.finishBarrierFailureBump(s.ID); err != nil {
 			log.Printf("WARN: recover stage %q: start a new generation of its required helpers: %v", s.ID, err)
 		}
+		// auto_recover, or a crash between a Retry and its restore: the new attempt is owed its passes back.
+		if err := o.restoreCompletionPassesAfterRetry(s.ID); err != nil {
+			log.Printf("WARN: recover stage %q: restore the on_completion passes its failure cancelled: %v", s.ID, err)
+		}
 
 		o.continueMu.Lock()
 		current := o.opts.Store.Get(s.ID)

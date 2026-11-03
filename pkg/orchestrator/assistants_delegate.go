@@ -616,10 +616,14 @@ func (o *Orchestrator) settleAssistantsAfterRestart() {
 		// process must recreate it before the poller can ever fire this task again. A watcher in "watching"
 		// needs nothing else: binding it is what lets a RESUMED watcher resume watching, instead of being stuck.
 		if !t.Status.Terminal() && isWatcherTrigger(t.Trigger) {
-			o.bindWatcher(id, t.Task)
+			o.reconcileWatcherBinding(id)
 		}
 		if t.Status == assistants.StatusRunning {
 			o.finishTaskFrom(id, assistants.StatusRunning, assistants.StatusQueued, "resumed after restart")
+		}
+		// The failure may have come before the crash, or under a binary that did not end the pass.
+		if isCompletionHelper(t.Task) && rs.Stages[t.RootStageID].Status == state.StatusFailed {
+			o.cancelCompletionPassOfFailedStage(id)
 		}
 	}
 }

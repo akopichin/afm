@@ -5,6 +5,23 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-03
 
+### Fix: a stage agent no longer hangs waiting for its own `on_completion` helper
+
+A stage agent that ran `afm agent wait` on its own `on_completion` helper froze
+the stage: the helper starts only after the agent finishes, so the wait could
+never end. Such a wait is now refused with `wait_cycle` before it is recorded;
+the reason names the helper and the stage, and the agent keeps working. The
+stage agent's prompt also says that the helper starts by itself. See
+[Do not wait for your own on-completion helper](docs/collaboration.md#do-not-wait-for-your-own-on-completion-helper).
+
+### Fix: a failed stage no longer keeps the run open through its unstarted `on_completion` helper
+
+When a stage failed, its `on_completion` helper that had not started stayed
+waiting and kept `afm run` from finishing. The pass is now cancelled with a
+system reason (`parent stage failed before completion: …`), including after a
+restart of afm, and **Retry** of the stage prepares it again. See
+[When an on-completion helper starts](docs/collaboration.md#when-an-on-completion-helper-starts).
+
 ### Fix: an `on_completion` helper starts only after the stage result is ready
 
 A stage helper with `trigger: on_completion` could start while the stage agent

@@ -239,6 +239,10 @@ func (o *Orchestrator) retryStage(ctx context.Context, stageID string) {
 		log.Printf("WARN: retry stage %q: start a new generation of its required helpers: %v", stageID, err)
 		return
 	}
+	if err := o.restoreCompletionPassesAfterRetry(stageID); err != nil {
+		log.Printf("WARN: retry stage %q: restore the on_completion passes its failure cancelled: %v", stageID, err)
+		return
+	}
 
 	// Только победитель CAS чистит. Для interactive-стадии чистим phase-сессии (leftover <phase>.session.json
 	// сослался бы на несуществующий разговор → claude «No conversation found») и усекаем <phase>.jsonl
@@ -333,7 +337,11 @@ func (o *Orchestrator) shouldExit() bool {
 		return false
 	}
 	snap := o.opts.Store.Snapshot()
-	if !o.runStateAllowsExitCore(&snap) {
+	allowed := o.runStateAllowsExitCore(&snap)
+	if o.exitDecidedHook != nil {
+		o.exitDecidedHook(snap, allowed)
+	}
+	if !allowed {
 		return false
 	}
 	if o.sideMeshDrain != nil && !o.sideMeshDrained.Load() {

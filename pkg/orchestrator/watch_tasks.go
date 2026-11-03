@@ -52,6 +52,33 @@ func completionHelperGated(rs state.RunState, t *state.TaskState) bool {
 	return status != state.StatusAwaitingAssistants && status != state.StatusDone
 }
 
+// stageResultReady reports whether the stage finished its own work: awaiting_assistants or done, or paused from
+// awaiting_assistants. The status is read first because PausedFrom outlives the pause.
+func stageResultReady(st state.StageState) bool {
+	switch st.Status {
+	case state.StatusAwaitingAssistants, state.StatusDone:
+		return true
+	case state.StatusPaused:
+		return st.PausedFrom == state.StatusAwaitingAssistants
+	default:
+		return false
+	}
+}
+
+// completionPassPending reports whether t is a completion helper of its stage's current attempt that has not
+// started and waits for the stage's result. A helper that already runs finishes without the stage.
+func completionPassPending(rs state.RunState, t *state.TaskState) bool {
+	if !isCompletionHelper(t.Task) || t.RootGeneration != rs.Assistants.RootGenerations[t.RootStageID] {
+		return false
+	}
+	switch t.Status {
+	case assistants.StatusWaitingParent, assistants.StatusWatching, assistants.StatusQueued:
+		return !stageResultReady(rs.Stages[t.RootStageID])
+	default:
+		return false
+	}
+}
+
 // completionPassDeferred reports whether t is a completion helper that may not start now: its stage has no result,
 // or a resumed run has not settled its helpers yet. A start before that settle would be taken for a turn the crash
 // cut short and run twice; the restart issues the pass itself once settled.
@@ -136,8 +163,8 @@ func (o *Orchestrator) removeFromStageListLocked(b *watcherBinding) {
 	}
 }
 
-// unbindWatcher permanently removes a terminal task's binding — called once its status is known to be
-// terminal (settleWatcherBinding), so the poller stops iterating a task that will never fire again.
+// unbindWatcher permanently removes a terminal task's binding, so the poller stops iterating a task that will
+// never fire again.
 func (o *Orchestrator) unbindWatcher(taskID assistants.TaskID) {
 	o.watchMu.Lock()
 	defer o.watchMu.Unlock()
@@ -147,6 +174,23 @@ func (o *Orchestrator) unbindWatcher(taskID assistants.TaskID) {
 	}
 	delete(o.watchByTask, taskID)
 	o.removeFromStageListLocked(b)
+}
+
+// reconcileWatcherBinding binds taskID's watcher while the journal has the task open and unbinds it once finished.
+// The read and the change are one step under watchReconcileMu, so a late call cannot rebind a cancelled pass or
+// unbind a restored one.
+func (o *Orchestrator) reconcileWatcherBinding(taskID assistants.TaskID) {
+	o.watchReconcileMu.Lock()
+	defer o.watchReconcileMu.Unlock()
+	t, ok := o.opts.Store.Snapshot().Assistants.Tasks[taskID]
+	if o.watcherBindingDecidedHook != nil {
+		o.watcherBindingDecidedHook(taskID)
+	}
+	if ok && !t.Status.Terminal() {
+		o.bindWatcher(taskID, t.Task)
+		return
+	}
+	o.unbindWatcher(taskID)
 }
 
 // feedWatchCollectors fans out one Observation to every checkpoints watcher currently bound to stageID — called
@@ -173,7 +217,7 @@ func (o *Orchestrator) settleWatcherBinding(taskID assistants.TaskID) {
 		return
 	}
 	if o.taskTerminal(taskID) {
-		o.unbindWatcher(taskID)
+		o.reconcileWatcherBinding(taskID)
 		return
 	}
 	b.fireMu.Lock()

@@ -648,7 +648,7 @@ func TestCompletionHelper_AttachedAfterTheStageResultRunsOnce(t *testing.T) {
 	}
 }
 
-// A stage that fails has no result: its on_completion helpers get no pass, whoever asks.
+// A stage that fails has no result: its on_completion helpers get no pass, whoever asks, and the pass ends cancelled.
 func TestCompletionHelper_FailedStageGetsNoPass(t *testing.T) {
 	for _, ev := range []bus.FSMEvent{bus.EvFail, bus.EvVerifyFail} {
 		t.Run(string(ev), func(t *testing.T) {
@@ -660,7 +660,7 @@ func TestCompletionHelper_FailedStageGetsNoPass(t *testing.T) {
 				t.Fatalf("%s failed", ev)
 			}
 			o.issueCompletionPasses(context.Background(), assistantsTestStageID)
-			requireNoTurn(t, o, turns, helper, assistants.StatusWatching)
+			requireNoTurn(t, o, turns, helper, assistants.StatusCancelled)
 		})
 	}
 }

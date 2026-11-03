@@ -313,6 +313,8 @@ type Orchestrator struct {
 	requiredFailureDecidedHook func(stageID string)
 	stageCompletingHook        func(stageID string) // тестовый шов: снимок гейта прочитан, EvComplete ещё не закоммичен
 	finalizeDecidedHook        func()
+	// exitDecidedHook — тест-сейм: run-state решение shouldExit и снимок, по которому оно принято.
+	exitDecidedHook func(rs state.RunState, allowed bool)
 
 	// pendingAfterHooks — счётчик живых script_after горутин. Обычный sync.WaitGroup не даёт прочитать
 	// текущий счётчик, поэтому отдельный atomic.
@@ -407,7 +409,8 @@ type Orchestrator struct {
 	feedbackDeliveryDecidedHook func(stageID string)
 
 	// taskRequeueBarrier — тест-сейм перед requeue-commit (running->queued) в spawnTask, когда ход возвращается в
-	// очередь (held или стадия без результата): тест вклинивает в это окно Continue, чей запуск ещё не сработает.
+	// очередь (held, стадия без результата или hold провайдера): тест вклинивает в это окно Continue, чей запуск ещё
+	// не сработает, или провал стадии.
 	taskRequeueBarrier func(taskID assistants.TaskID)
 	// taskRequeuePreDeferHook — тест-сейм: вызывается в runHelperTask's requeue-while-running ветке СРАЗУ
 	// после синхронного maybeScheduleTask (который уже мог успеть застартовать СЛЕДУЮЩУЮ попытку в новой
@@ -462,8 +465,8 @@ type Orchestrator struct {
 	// удаления.
 	testClearReviewArtifacts func() error
 
-	// testAfterAttachSnapshot runs in AttachAndSend right after it reads the snapshot it plans from, so a test
-	// can commit a competing attach in between (the alias race initTeam retries).
+	// testAfterAttachSnapshot runs in Attach and AttachAndSend right after they read the snapshot they plan from, so
+	// a test can commit a competing attach (the alias race initTeam retries) or a stage failure in between.
 	testAfterAttachSnapshot func()
 
 	// testAfterBoardTaskLookup runs in BoardTask right after its lookup of a committed request with the same id
@@ -477,6 +480,12 @@ type Orchestrator struct {
 	watchMu      sync.Mutex
 	watchByStage map[string][]*watcherBinding
 	watchByTask  map[assistants.TaskID]*watcherBinding
+	// watchReconcileMu orders reconcileWatcherBinding's read of a task and the binding change it decides. It is taken
+	// before the Store lock and watchMu, never under them: a loop tick's commit check takes watchMu under the Store lock.
+	watchReconcileMu sync.Mutex
+	// watcherBindingDecidedHook runs between reading a watcher task and changing its binding to match, so a test
+	// can commit a competing cancellation or restore in between.
+	watcherBindingDecidedHook func(taskID assistants.TaskID)
 	// taskFinalPass keeps a watcher's final-pass intent across rejected turns.
 	// Only a successful guarded result commit consumes it.
 	taskFinalPass sync.Map
@@ -742,6 +751,10 @@ func (o *Orchestrator) triggerWithSeq(stageID string, ev bus.FSMEvent, ctx bus.G
 		// Whatever event brought the stage here (its completion, a Continue), its on_completion helpers may start.
 		if o.opts.AssistantsEnabled && (to == state.StatusAwaitingAssistants || to == state.StatusDone) {
 			o.issueCompletionPasses(o.runContext(context.Background()), stageID)
+		}
+		// A failed stage never produces the result its on_completion helpers wait for: their passes end with it.
+		if to == state.StatusFailed {
+			o.cancelCompletionPassesOfFailedStage(stageID)
 		}
 		// T6.5/T6.6: a stage settling into ANY new status may be exactly what a deferred FeedbackIntent
 		// (planning/revising/retrying/paused/awaiting_user_input/hook_failed -> now interruptible or terminal)

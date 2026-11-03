@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -355,7 +356,7 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest, stages []flow.Sta
 	if err := validateWaitTarget(rs, req); err != nil {
 		return err
 	}
-	if waitConditionHolds(rs, req.Condition) {
+	if waitConditionHolds(rs, req.Waiter, req.Condition) {
 		return nil
 	}
 	all := meshWaitTargets(rs, req.Condition)
@@ -371,15 +372,27 @@ func validateWaitAdmission(rs state.RunState, req WaitRequest, stages []flow.Sta
 	if reason, none := nobodyLeft(rs, req.Condition, targets); none {
 		return &state.OperationRejectedError{Code: assistants.CodeInvalidStatus, Reason: reason}
 	}
-	waitGraph := buildMeshWaitGraph(rs, &agentcomm.Wait{Waiter: req.Waiter, Condition: req.Condition}, stages)
-	edge := waitEdge(rs, req.Condition, targets, stages)
-	if !waitGraph.edgeDependsOn(edge, req.Waiter, 0, map[agentcomm.ParticipantID]bool{}, map[agentcomm.ParticipantID]bool{}) {
+	explicit := buildExplicitWaitGraph(rs, &agentcomm.Wait{Waiter: req.Waiter, Condition: req.Condition}, stages)
+	completion := completionPrerequisites(rs, stages)
+	edge := waitEdge(rs, req.Condition, answerableTargets(rs, req.Condition, targets), stages)
+	if !explicit.with(completion).closesCycle(edge, req.Waiter) {
 		return nil // what it waits for can still happen on its own
+	}
+	if !explicit.closesCycle(edge, req.Waiter) {
+		return &state.OperationRejectedError{
+			Code: agentcomm.CodeWaitCycle, Reason: completionCycleReason(rs, req.Waiter, edge, explicit, completion),
+		}
 	}
 	return &state.OperationRejectedError{
 		Code:   agentcomm.CodeWaitCycle,
 		Reason: fmt.Sprintf("everyone who could satisfy this wait (%v) already (transitively) waits on %q, or the chain is longer than %d hops", edge.targets, req.Waiter, agentcomm.MaxCausalHops),
 	}
+}
+
+// answerableTargets are the targets that can still produce what cond waits for: one that cannot is no way out of a
+// cycle, however free its own wait graph looks.
+func answerableTargets(rs state.RunState, cond agentcomm.WaitCondition, targets []agentcomm.ParticipantID) []agentcomm.ParticipantID {
+	return slices.DeleteFunc(slices.Clone(targets), func(p agentcomm.ParticipantID) bool { return !canStillAnswer(rs, cond, p) })
 }
 
 // canStillAnswer reports whether participant p can still send the message a reply_to or addressed_message wait
@@ -455,12 +468,14 @@ func validateWaitTarget(rs state.RunState, req WaitRequest) error {
 	return nil
 }
 
-// waitConditionHolds reports whether cond is already satisfied for kinds whose answer does not depend on the
-// waiter: such a wait is ready at once, whoever its producer is.
-func waitConditionHolds(rs state.RunState, cond agentcomm.WaitCondition) bool {
+// waitConditionHolds reports whether cond already holds for waiter, by the projection's own rules: such a wait
+// is ready at once, whoever its producer is.
+func waitConditionHolds(rs state.RunState, waiter agentcomm.ParticipantID, cond agentcomm.WaitCondition) bool {
 	switch cond.Kind {
 	case agentcomm.WaitOnReplyTo:
 		return rs.Assistants.Mesh.MessageAnsweredByRecipient(cond.MessageID)
+	case agentcomm.WaitOnAddressedMessage:
+		return rs.Assistants.Mesh.AddressedMessageArrived(cond.ThreadID, waiter)
 	case agentcomm.WaitOnStageStatus:
 		st, ok := rs.Stages[cond.StageID]
 		return ok && string(st.Status) == cond.Status
@@ -847,11 +862,28 @@ type meshWaitEdge struct {
 // meshWaitGraph maps a blocked participant to the edges that can unblock it; any one edge resolving wakes it.
 type meshWaitGraph map[agentcomm.ParticipantID][]meshWaitEdge
 
-// buildMeshWaitGraph returns every "X cannot proceed until Y acts" relationship currently known to the
-// projection: live (WaitPending) mesh waits, assistants' own waiting_children links, and the unfinished
-// depends_on of the stages that have not started or that a wait needs done (waitEdge). depends_on alone is
-// cycle-free by flow validation, but it closes a cycle together with a mesh wait of a dependency for its dependent stage.
+// buildMeshWaitGraph returns every "X cannot proceed until Y acts" relationship in the projection: the declared
+// ones plus the start condition of each completion helper that has not started.
 func buildMeshWaitGraph(rs state.RunState, candidate *agentcomm.Wait, stages []flow.Stage) meshWaitGraph {
+	return buildExplicitWaitGraph(rs, candidate, stages).with(completionPrerequisites(rs, stages))
+}
+
+// with returns g plus the edges of extra, leaving both unchanged.
+func (g meshWaitGraph) with(extra meshWaitGraph) meshWaitGraph {
+	merged := make(meshWaitGraph, len(g)+len(extra))
+	for p, edges := range g {
+		merged[p] = slices.Clone(edges)
+	}
+	for p, edges := range extra {
+		merged[p] = append(merged[p], edges...)
+	}
+	return merged
+}
+
+// buildExplicitWaitGraph returns the declared relationships: live (WaitPending) mesh waits, waiting_children links
+// and the unfinished depends_on of stages that have not started or that a wait needs done (waitEdge). depends_on
+// is cycle-free alone, but closes a cycle with a mesh wait of a dependency for its dependent stage.
+func buildExplicitWaitGraph(rs state.RunState, candidate *agentcomm.Wait, stages []flow.Stage) meshWaitGraph {
 	g := meshWaitGraph{}
 	batchItems := map[string][]meshWaitEdge{} // the pending items of each batch
 	batchWaiter := map[string]agentcomm.ParticipantID{}
@@ -860,6 +892,7 @@ func buildMeshWaitGraph(rs state.RunState, candidate *agentcomm.Wait, stages []f
 			continue
 		}
 		targets := slices.DeleteFunc(meshWaitTargets(rs, w.Condition), func(p agentcomm.ParticipantID) bool { return p == w.Waiter })
+		targets = answerableTargets(rs, w.Condition, targets)
 		if len(targets) == 0 || stageWaitsOnlyForCallbackHelpers(rs, w.Waiter, targets, candidate) {
 			continue
 		}
@@ -906,6 +939,63 @@ func unfinishedDependencies(rs state.RunState, s flow.Stage) (meshWaitEdge, bool
 	return meshWaitEdge{targets: deps, needsAll: true}, len(deps) > 0
 }
 
+// completionPrerequisites maps each completion helper that has not started to its stage's result, which like a wait
+// for the stage to be done needs the stage's unfinished depends_on.
+func completionPrerequisites(rs state.RunState, stages []flow.Stage) meshWaitGraph {
+	g := meshWaitGraph{}
+	for _, t := range rs.Assistants.Tasks {
+		if !completionPassPending(rs, t) {
+			continue
+		}
+		stageDone := agentcomm.WaitCondition{Kind: agentcomm.WaitOnStageStatus, StageID: t.RootStageID, Status: string(state.StatusDone)}
+		helper := meshParticipantForTask(rs, t.Task)
+		g[helper] = []meshWaitEdge{waitEdge(rs, stageDone, []agentcomm.ParticipantID{meshStageParticipantID(t.RootStageID)}, stages)}
+	}
+	return g
+}
+
+// completionCycleReason explains a wait that closes a cycle only through completion helpers' start condition: it
+// names the helpers and stages involved, and tells only the stage's own agent to finish instead.
+func completionCycleReason(rs state.RunState, waiter agentcomm.ParticipantID, edge meshWaitEdge, explicit, completion meshWaitGraph) string {
+	var names, stageIDs []string
+	for _, p := range cycleCompletionHelpers(waiter, edge, explicit, completion) {
+		taskID, _ := participantTask(rs, p)
+		t := rs.Assistants.Tasks[taskID]
+		names = append(names, strings.TrimSpace(t.Title+" ("+string(taskID)+")"))
+		if !slices.Contains(stageIDs, t.RootStageID) {
+			stageIDs = append(stageIDs, t.RootStageID)
+		}
+	}
+	reason := fmt.Sprintf("this wait would never end: on_completion helper(s) %s start only after stage(s) %s produced a result",
+		strings.Join(names, ", "), strings.Join(stageIDs, ", "))
+	if slices.ContainsFunc(stageIDs, func(id string) bool { return meshStageParticipantID(id) == waiter }) {
+		reason += " — finish this stage's own work instead: AFM runs the helper automatically"
+	}
+	return reason
+}
+
+// cycleCompletionHelpers returns the completion helpers the cycle of edge needs: the wait's own targets first, then
+// the rest by id; the last are dropped first, so the result is stable.
+func cycleCompletionHelpers(waiter agentcomm.ParticipantID, edge meshWaitEdge, explicit, completion meshWaitGraph) []agentcomm.ParticipantID {
+	helpers := slices.Sorted(maps.Keys(completion))
+	isTarget := func(p agentcomm.ParticipantID) bool { return slices.Contains(edge.targets, p) }
+	ordered := slices.DeleteFunc(slices.Clone(helpers), func(p agentcomm.ParticipantID) bool { return !isTarget(p) })
+	ordered = append(ordered, slices.DeleteFunc(slices.Clone(helpers), isTarget)...)
+
+	needed := slices.Clone(ordered)
+	for i := len(ordered) - 1; i >= 0; i-- {
+		without := slices.DeleteFunc(slices.Clone(needed), func(p agentcomm.ParticipantID) bool { return p == ordered[i] })
+		subset := make(meshWaitGraph, len(without))
+		for _, p := range without {
+			subset[p] = completion[p]
+		}
+		if explicit.with(subset).closesCycle(edge, waiter) {
+			needed = without
+		}
+	}
+	return needed
+}
+
 func dependenciesNotDone(rs state.RunState, s flow.Stage) []agentcomm.ParticipantID {
 	var deps []agentcomm.ParticipantID
 	for _, id := range s.DependsOn {
@@ -935,19 +1025,34 @@ func waitEdge(rs state.RunState, cond agentcomm.WaitCondition, targets []agentco
 }
 
 // stageWaitsOnlyForCallbackHelpers: a stage waiting only on its own helpers is woken by their callbacks, so a
-// helper waiting for the answer to one is no deadlock. Any other wait of the helper (the candidate included)
-// needs more than a callback turn, so the edge stays.
+// helper waiting for the answer to one is no deadlock; any other wait of the helper, the candidate's too, keeps the
+// edge. Its completion helpers that have not started answer only after its result: skipped, but alone exempt nothing.
 func stageWaitsOnlyForCallbackHelpers(rs state.RunState, waiter agentcomm.ParticipantID, targets []agentcomm.ParticipantID, candidate *agentcomm.Wait) bool {
 	stageID, isStage := stageIDFromMeshParticipant(waiter)
 	if !isStage {
 		return false
 	}
+	callbacks := 0
 	for _, p := range targets {
-		if !isOwnOneShotHelper(rs, stageID, p) || !waitsOnlyForAnswersTo(rs, p, waiter, candidate) {
+		switch {
+		case isOwnPendingCompletionPass(rs, stageID, p):
+		case isOwnOneShotHelper(rs, stageID, p) && waitsOnlyForAnswersTo(rs, p, waiter, candidate):
+			callbacks++
+		default:
 			return false
 		}
 	}
-	return true
+	return callbacks > 0
+}
+
+// isOwnPendingCompletionPass reports whether p is a completion helper of stage stageID that waits for its result.
+func isOwnPendingCompletionPass(rs state.RunState, stageID string, p agentcomm.ParticipantID) bool {
+	taskID, ok := participantTask(rs, p)
+	if !ok {
+		return false
+	}
+	t, found := rs.Assistants.Tasks[taskID]
+	return found && t.RootStageID == stageID && completionPassPending(rs, t)
 }
 
 // isOwnOneShotHelper reports whether p is a helper of stage stageID's current root generation that runs one turn
@@ -1013,6 +1118,11 @@ func (g meshWaitGraph) dependsOn(node, waiter agentcomm.ParticipantID, depth int
 // and the human continue on the first one that clears, so their waits stay any-of.
 func resumesAfterAllWaits(id agentcomm.ParticipantID) bool {
 	return strings.HasPrefix(string(id), meshHelperPrefix) || strings.HasPrefix(string(id), meshRunPrefix)
+}
+
+// closesCycle reports whether waiting for edge would make waiter wait, transitively, on itself.
+func (g meshWaitGraph) closesCycle(edge meshWaitEdge, waiter agentcomm.ParticipantID) bool {
+	return g.edgeDependsOn(edge, waiter, 0, map[agentcomm.ParticipantID]bool{}, map[agentcomm.ParticipantID]bool{})
 }
 
 // edgeDependsOn: an any-of edge depends on the waiter when every target does; an all-of edge when one does; a

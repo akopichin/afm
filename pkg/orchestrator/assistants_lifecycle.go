@@ -605,9 +605,8 @@ func (o *Orchestrator) requeuePausedTurn(ctx context.Context, taskID assistants.
 	o.taskPausePending.LoadAndDelete(taskID)
 	o.taskClarifyPending.LoadAndDelete(taskID)
 	o.finishTaskTurn(taskID, 0, assistants.StatusRunning, assistants.StatusQueued, "re-queued: paused while running")
-	if !o.taskHeld(taskID) {
-		o.maybeScheduleTask(ctx, taskID)
-	}
+	// Even while held: it returns on the hold, but first ends the pass of a stage that failed while the turn ran.
+	o.maybeScheduleTask(ctx, taskID)
 	if o.taskRequeuePreDeferHook != nil {
 		o.taskRequeuePreDeferHook(taskID)
 	}
@@ -816,6 +815,10 @@ func (o *Orchestrator) parkTaskForQuota(ctx context.Context, taskID assistants.T
 		o.publishQuotaNotice(eventQuotaWait, t.RootStageID, taskID, quotaNoticeData(&q, QuotaWaitMessage(&q)))
 		// Parked idle: the waits on what the cut-short turn read and left end now, not at the next start.
 		o.releaseUnanswerableWaitsAfterFinish()
+		// The pass of a stage that failed while the turn ran never starts again: it ends now, not at q.Until.
+		if o.cancelCompletionPassOfFailedStage(taskID) {
+			return
+		}
 		if q.PauseReason == "" {
 			o.retryTaskAt(ctx, taskID, q.Until)
 		}

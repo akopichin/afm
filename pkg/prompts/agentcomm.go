@@ -75,6 +75,7 @@ func AgentCommunicationBlock(in AgentCommInputs) string {
 	sb.WriteString(AgentWaitGuidance)
 	if in.CanSpawnHelpers {
 		sb.WriteString(spawnInstructions)
+		sb.WriteString(completionHelperInstructions)
 	}
 	if in.TypedBoardTasks {
 		sb.WriteString("- `afm agent board get`/`afm agent board publish --key <k> --status <s>` — read/publish shared facts (\"what is ready now\"), separate from a direct conversation. Publish only facts there, never under `task/` keys: tasks have their own commands below. Only a key's author can update the key itself.\n")
@@ -119,6 +120,10 @@ const AgentWaitGuidance = "Read the wait command's returned status before decidi
 // spawnInstructions — a stage agent's temporary helpers. Every command and flag matches cmd/afm/agent.go
 // (newAgentSpawnCmd, newAgentHelperResultCmd). Helper tasks are not board tasks: they have their own ID.
 const spawnInstructions = "- `afm agent spawn --profile <profile> --title <title> --instruction <text>` — start a temporary helper of a configured profile for one job; it prints `task_id` and the `message_id` of your request to it. The helper answers that message (or its wait ends with the reason it could not), so pass the `message_id`s of several helpers to ONE `--condition reply_to_all` wait. `afm agent helper-result --task-id <task_id>` reads the helper's status and its full result once it finished. These are helper tasks, not board tasks. Your <your_helpers> block lists the helpers you already started: do not start a running or finished one again.\n"
+
+// completionHelperInstructions — a helper with trigger on_completion starts only after the stage agent finished, so
+// a wait on it can never end and admission refuses it (wait_cycle); the agent only has to finish its own work.
+const completionHelperInstructions = "A helper with trigger `on_completion` starts by itself after you finish your own work: do not wait for it before that, such a wait is refused.\n"
 
 // typedBoardTasksInstructions — the board task protocol of a run created with typed tasks. Every command and
 // flag matches cmd/afm/agent_task.go.

@@ -101,6 +101,14 @@ Required-гейт использует durable verdict/waiver текущего �
   внутри commit (registry плюс `DynamicStages` журнала): ожидание зависимости на её зависимую стадию — `wait_cycle`.
   Ожидание `done` стадии требует и её невыполненных `depends_on` при любом её статусе (eager planning стадия уже
   планирует и отвечает на сообщения); исключение — eager planning-only стадия, её завершает approve плана.
+- `on_completion`-помощник стартует только после результата своей стадии, поэтому граф admission даёт ещё не запущенному помощнику ребро
+  к стадии и её `depends_on` (`completionPassPending`): ожидание автора на него — `wait_cycle`; запущенный помощник ребра не имеет.
+  Такой ещё не начатый помощник стадии не отменяет и не заменяет callback-исключение её one-shot помощников.
+- Провал стадии отменяет по тому же `completionPassPending` её ещё не начатые проходы (`cancelled`, префикс `completionPassFailedReason`)
+  на всех путях — переход, рестарт, `maybeScheduleTask` и каждый возврат хода в queued (слот, пауза, quota park): провал мог
+  прийти, пока ход был running. Retry до старта новой попытки возвращает в `watching` только их.
+- Привязку watcher'а после коммита меняет только `reconcileWatcherBinding`: чтение задачи и смена привязки — один шаг под
+  `watchReconcileMu`, взятым до lock Store и `watchMu` (проверка loop tick берёт `watchMu` под lock Store).
 - Recovery решает по намерению из журнала, а не по текущему статусу: bump Revise доделывается для любой стадии,
   стадия с pending-ожиданием не завершается по маркеру, а паркуется (`parkInterruptedTurn`, из running и retrying).
 - Завершение autonomous-стадии по файлам решает один `executionProbe` (summary, не `.done`) на всех путях recovery;

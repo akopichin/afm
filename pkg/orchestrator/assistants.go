@@ -247,7 +247,11 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 		return o.replayedTopLevelTask(op, treq)
 	}
 
-	task, err := o.admitTopLevelTask(o.opts.Store.Snapshot(), treq)
+	rs := o.opts.Store.Snapshot()
+	if o.testAfterAttachSnapshot != nil {
+		o.testAfterAttachSnapshot()
+	}
+	task, err := o.admitTopLevelTask(rs, treq)
 	if err != nil {
 		return "", err
 	}
@@ -258,11 +262,7 @@ func (o *Orchestrator) Attach(ctx context.Context, req AttachRequest) (assistant
 			"task_id": string(task.ID), "profile_id": string(req.ProfileID),
 		}})
 		if isWatcherTrigger(task.Trigger) {
-			// bindWatcher only needs the identity fields (RootStageID/Trigger) — read back the just-committed
-			// task rather than constructing a partial assistants.Task by hand here.
-			if t, ok := o.opts.Store.Snapshot().Assistants.Tasks[task.ID]; ok {
-				o.bindWatcher(task.ID, t.Task)
-			}
+			o.reconcileWatcherBinding(task.ID)
 		}
 		if task.Status == assistants.StatusQueued {
 			o.maybeScheduleTask(runCtx, task.ID)
@@ -405,6 +405,10 @@ func queuedTurnDue(rs state.RunState) bool {
 // and no-ops. A task currently held (PauseTask) is left queued — ContinueTask re-attempts scheduling once
 // the hold clears.
 func (o *Orchestrator) maybeScheduleTask(ctx context.Context, taskID assistants.TaskID) {
+	// A pass of a failed stage can never start; held or deferred instead, it would keep the run open forever.
+	if o.cancelCompletionPassOfFailedStage(taskID) {
+		return
+	}
 	if o.taskHeld(taskID) {
 		return
 	}
@@ -505,7 +509,7 @@ func (o *Orchestrator) taskAdmissionHold(task assistants.Task) *executor.UsageLi
 // gets held while queued behind a full command semaphore can be put visibly BACK to "queued" instead of
 // being left stuck in "running" with no process ever having started (SpawnOwned's shouldRun-false path is
 // silent/fire-and-forget by design — fine for stages, which have no equivalent requeue state machine, but
-// wrong for tasks, which do). After the requeue commits, a not-held re-check retries maybeScheduleTask once —
+// wrong for tasks, which do). After the requeue commits, maybeScheduleTask is retried once —
 // closing a lost-wakeup window where a concurrent ContinueTask's own reschedule attempt landed too early
 // (status still "running") and silently no-op'd, leaving the task stuck in "queued" with the hold already
 // cleared and nothing left to wake it (see the finish-queue block below for the full trace).
@@ -523,12 +527,9 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 			// maybeScheduleTask's CAS precondition) — retry scheduling now that the task is actually "queued"
 			// again, closing that lost-wakeup window. Use the OUTER ctx (spawnTask's own parameter), not
 			// runCtx: runCtx belongs to the subprocess invocation that never actually started on this path.
-			// Safe to call unconditionally when not held: maybeScheduleTask's own queued-only CAS precondition
-			// means a redundant call here is always a safe no-op if someone else already won the
-			// queued->running transition in the meantime.
-			if !o.taskHeld(taskID) {
-				o.maybeScheduleTask(ctx, taskID)
-			}
+			// Called even while held: maybeScheduleTask still returns on the hold, but first ends the pass of a
+			// stage that failed meanwhile. Its queued-only CAS precondition keeps a redundant call a no-op.
+			o.maybeScheduleTask(ctx, taskID)
 			return
 		}
 		// The stage may have lost its result while the turn waited for the slot. Its Continue may already have
@@ -543,8 +544,14 @@ func (o *Orchestrator) spawnTask(ctx context.Context, taskID assistants.TaskID, 
 		}
 		// Слот команды получен: hold мог появиться, пока задача ждала его (тот же возврат в queued, что и при паузе).
 		if hold := o.taskAdmissionHold(task); hold != nil {
+			if o.taskRequeueBarrier != nil {
+				o.taskRequeueBarrier(taskID)
+			}
 			o.finishTaskFrom(taskID, assistants.StatusRunning, assistants.StatusQueued, "re-queued: provider usage limit hold")
-			o.retryTaskAt(ctx, taskID, hold.ResetAt)
+			// The stage may have failed while the turn waited for the slot: its pass ends now, not when the hold lifts.
+			if !o.cancelCompletionPassOfFailedStage(taskID) {
+				o.retryTaskAt(ctx, taskID, hold.ResetAt)
+			}
 			return
 		}
 		o.runHelperTask(runCtx, taskID, task)

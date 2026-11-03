@@ -253,9 +253,17 @@ func (ms *MeshState) appendToInbox(recipient agentcomm.ParticipantID, id agentco
 	ms.Inbox[recipient] = ids
 }
 
+// AddressedMessageArrived is THE rule for an addressed_message wait of waiter: a message waiting for it in threadID
+// (any thread when empty). Registration (mesh_waits.go) and admission decide a wait already satisfied through it.
+func (ms MeshState) AddressedMessageArrived(threadID agentcomm.ThreadID, waiter agentcomm.ParticipantID) bool {
+	if threadID == "" {
+		return ms.HasWakingUnreadFor(waiter)
+	}
+	return ms.hasMessageAddressedTo(threadID, waiter)
+}
+
 // hasMessageAddressedTo reports whether some message already in threadID, other than a passive turn result,
-// names recipient among its Recipients — used by mesh_wait_registered (mesh_waits.go) to decide whether a WaitOnAddressedMessage
-// condition is already satisfied at registration time.
+// names recipient among its Recipients.
 func (ms MeshState) hasMessageAddressedTo(threadID agentcomm.ThreadID, recipient agentcomm.ParticipantID) bool {
 	for _, id := range ms.MessagesByThread[threadID] {
 		m := ms.Messages[id]
