@@ -34,7 +34,7 @@ export type ImagePasteDraft = readonly AttachmentRecord[]
 
 // attachmentMarker — the "[Screenshot: <path>]" label a paste put into the text, without the line break it adds
 // (the user may edit that break out). Null until the upload has inserted it.
-function attachmentMarker(record: Pick<AttachmentRecord, 'insertedText'>): string | null {
+export function attachmentMarker(record: Pick<AttachmentRecord, 'insertedText'>): string | null {
   return record.insertedText === null ? null : record.insertedText.replace(/\n$/, '')
 }
 

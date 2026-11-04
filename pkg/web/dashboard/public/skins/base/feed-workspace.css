@@ -471,15 +471,8 @@
 .pause-banner-resume:hover { background: rgba(var(--attention-rgb), 0.16); }
 .pause-banner-resume:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-/* === Agent Mesh Phase 7, T7.4 — Message/Revise mode toggle + Message mode's own subtree === Structural only,
-   same semantic tokens as the rest of this file; .feed-reply-chip above is REUSED as-is
-   (Message mode's reply chip, below, is the SAME chip chrome Revise's reply-to-thought already uses). */
-/* The Message/Revise tab panel keeps the composer's column layout and spacing. */
-.feed-composer-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+/* === The "Send as" switch (Chat / Restart with note) and its mode's option in one header row === Same semantic
+   tokens as the rest of this file; every reply context reuses the .feed-reply-chip chrome above. */
 .feed-composer-header {
   display: flex;
   align-items: center;
@@ -539,23 +532,14 @@
   cursor: pointer;
 }
 .feed-composer-mode:hover { background: var(--surface-hover); color: var(--text-secondary); }
-.feed-composer-mode.active { background: rgba(var(--accent-primary-rgb), 0.16); color: var(--accent-text); font-weight: 600; }
+.feed-composer-mode[aria-pressed="true"] { background: rgba(var(--accent-primary-rgb), 0.16); color: var(--accent-text); font-weight: 600; }
 .feed-composer-mode:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-
-.mesh-message-composer {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 
 .mesh-message-error { color: var(--danger-text); font-size: 12px; }
 .mesh-recipient-problems { margin: 0; padding-left: 16px; }
 .mesh-message-receipt { color: var(--text-muted); font-size: 11px; }
 .mesh-message-receipts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .mesh-receipt-name { color: var(--text-secondary); }
-
-/* Both composer panels stay mounted (each keeps its draft); the hidden one must not take space. */
-.feed-composer-panel[hidden] { display: none; }
 
 /* "To" row: the chips and the "+" button are styled by chat-composer.css; these are the leftovers. */
 .mesh-recipients-label { color: var(--text-muted); font-weight: 600; margin-right: 2px; }
@@ -602,10 +586,25 @@
 .mesh-loop-result strong { color: var(--text-secondary); font-weight: 600; }
 .mesh-loop-result code { color: var(--text-secondary); }
 
-/* Answering a conversation message (Message mode) is told apart from answering a thought (Revise, accent):
-   its chip and the message it answers use the success hue. */
+/* Answering a conversation message is told apart from answering a thought (accent): its chip and the message
+   it answers use the success hue. */
 .feed-reply-chip--conversation { border-left-color: var(--success); }
 .feed-reply-chip--conversation .feed-reply-chip-label { color: var(--success-text); }
+
+/* The reply context of the one input: at most one chip. A note or actions take their own line, so the chip
+   wraps instead of overflowing a narrow Feed. */
+.feed-reply-context { display: flex; flex-direction: column; min-width: 0; }
+.feed-reply-chip { flex-wrap: wrap; }
+.feed-reply-chip-note { flex-basis: 100%; color: var(--text-secondary); font-size: 11.5px; }
+.feed-reply-chip-actions { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 6px; font-size: 12px; }
+/* In Restart a conversation reply is kept for Chat but not sent: the chip steps back, its note stays readable. */
+.feed-reply-chip--conversation.is-unused { border-left-color: var(--separator-subtle); }
+.feed-reply-chip--conversation.is-unused .feed-reply-chip-label { color: var(--text-muted); }
+.feed-reply-chip--conversation.is-closed { border-left-color: var(--attention); }
+.feed-reply-chip--conversation.is-closed .feed-reply-chip-note { color: var(--attention-text); }
+
+/* Why Send cannot deliver in the chosen mode, with the explicit way to the other one. */
+.feed-composer-blocked { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-secondary); font-size: 12px; }
 .feed-conversation .team-conversation-message.is-reply-target .team-conversation-message-body {
   box-shadow: inset 2px 0 0 var(--success);
   background: rgba(var(--success-rgb), 0.08);

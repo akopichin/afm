@@ -4,7 +4,9 @@ import { useStickToBottom } from '../../hooks/use-stick-to-bottom'
 import { useEnteringLast } from '../../hooks/use-entering-last'
 import { toFeedItems, buildFeedTimeline, feedFilterCounts, groupToolRuns, isForYou, toolCall, toolRunSummary, type FeedActor, type FeedFilter, type FeedGroup, type FeedItem } from './feed-view-model'
 import { JumpToLatestButton } from '../jump-to-latest'
-import { FeedComposer, emptyComposerDraft, type ComposerDraft, type FeedComposerMeshProps } from './FeedComposer'
+import { FeedComposer, type FeedComposerMeshProps } from './FeedComposer'
+import { selectConversation, selectThought } from './composer-draft'
+import { createComposerDraftStore, useComposerContext, type ComposerDraftStore } from './composer-draft-store'
 import { renderPlainMarkdown } from '../plan-panel/markdown'
 import { splitImageMarkers } from './split-image-markers'
 import { getVerifyReport } from '../../api/verify-report-client'
@@ -49,13 +51,14 @@ type FeedWorkspaceProps = {
   // imagePolicy — как трактовать маркеры [AFM image: …] в прозе агента. 'stage' (дефолт) — разбирать в
   // <FeedImage> с per-stage URL (лента стадий).
   imagePolicy?: 'stage' | 'none'
-  // reviseAvailable — with mesh: the composer's stage takes a Revise now (its tab and replies to thoughts).
-  // Without mesh the composer is the Revise note itself and is shown only when it is available.
+  // reviseAvailable — with mesh: the composer's stage takes a Restart with note now.
+  // Without mesh the composer is the Restart note itself and is shown only when it is available.
   reviseAvailable?: boolean
-  // composerDrafts — each stage's composer draft (ComposerDraft), owned by the caller so it outlives this view too
-  // (the Team tab and back). Without it the drafts live as long as this FeedWorkspace.
-  composerDrafts?: ReadonlyMap<string, ComposerDraft>
-  onComposerDraftChange?: (stageId: string, patch: Partial<ComposerDraft>) => void
+  // draftStore — the run's composer drafts, owned by the caller so a draft outlives this view too (the Team tab
+  // and back). Without it the drafts live as long as this FeedWorkspace.
+  draftStore?: ComposerDraftStore
+  // holdActive — Hold has an operation on the composer's stage (App's usePauseOnFocus).
+  holdActive?: boolean
   paused?: boolean
   onReplyNeededChange?: (stageId: string | null, count: number) => void
   // aboveFeed — a block between the filter row and the feed (the Stage note); it stays outside the scroll area.
@@ -93,8 +96,8 @@ export function FeedWorkspace({
   imagePolicy = 'stage',
   mesh,
   reviseAvailable = true,
-  composerDrafts,
-  onComposerDraftChange,
+  draftStore,
+  holdActive = false,
   paused = false,
   onReplyNeededChange,
   aboveFeed,
@@ -102,22 +105,13 @@ export function FeedWorkspace({
   const feed = useStickToBottom<HTMLDivElement>()
   // Drafts are per stage: switching stages (or the Feed following the run) remounts the composer for the new
   // stage, and coming back restores what was written and picked there.
-  const draftsRef = useRef(composerDrafts ?? new Map<string, ComposerDraft>())
-  const receivedDrafts = useRef(composerDrafts)
-  if (receivedDrafts.current !== composerDrafts && composerDrafts !== undefined) draftsRef.current = composerDrafts
-  receivedDrafts.current = composerDrafts
-  const [, refreshDrafts] = useState(0)
-  const drafts = draftsRef.current
-  function updateDraft(id: string, patch: Partial<ComposerDraft>): void {
-    const previous = draftsRef.current.get(id) ?? emptyComposerDraft()
-    if ('replyAttachments' in patch) {
-      const kept = new Set(patch.replyAttachments?.map((a) => a.previewUrl))
-      previous.replyAttachments?.filter((a) => !kept.has(a.previewUrl)).forEach((a) => URL.revokeObjectURL(a.previewUrl))
-    }
-    draftsRef.current = new Map(draftsRef.current).set(id, { ...previous, ...patch })
-    if (onComposerDraftChange !== undefined) onComposerDraftChange(id, patch)
-    else if (Object.keys(patch).some((key) => !['revise', 'message', 'replyMessage'].includes(key))) refreshDrafts((n) => n + 1)
-  }
+  const [ownDraftStore] = useState(createComposerDraftStore)
+  const drafts = draftStore ?? ownDraftStore
+  // Only the reply context is read here: typing in the composer does not re-render the feed.
+  const context = useComposerContext(drafts, noteTarget)
+  // focusRequest — an action that wants the input focused (↩, Reply in conversation); a restored draft never does.
+  const [focusRequest, setFocusRequest] = useState({ stageId: '', seq: 0 })
+  const requestFocus = (id: string): void => setFocusRequest((prev) => ({ stageId: id, seq: prev.seq + 1 }))
   const sectionRef = useRef<HTMLElement | null>(null)
 
   const unknownPrefix = useUnknownCommandName()
@@ -176,23 +170,18 @@ export function FeedWorkspace({
     return () => window.clearTimeout(timer)
   }, [messageEntrance.animate, messageEntrance.onEntered, newestMessage?.id])
 
-  const draft = noteTarget !== null ? drafts.get(noteTarget) : undefined
-  const activeReply = draft?.thoughtReply ?? null
-  const activeReplyKey = activeReply?.key ?? null
-  const storedMeshReply = draft?.meshReply ?? null
-  const replyThreadClosed = storedMeshReply !== null && conversation.threads[storedMeshReply.threadId]?.status === 'closed'
-  const activeMeshReply = replyThreadClosed ? null : storedMeshReply
-  useEffect(() => {
-    if (replyThreadClosed && noteTarget !== null) updateDraft(noteTarget, { meshReply: null, replyMessage: '', replyPicked: [] })
-  }, [replyThreadClosed, noteTarget])
+  const activeReplyKey = context?.kind === 'thought' ? context.key : null
+  const activeMeshReplyId = context?.kind === 'conversation' ? context.target.messageId : null
+  // A conversation closed while its reply is written keeps the reply and the input; the composer says so.
+  const conversationClosed = context?.kind === 'conversation' && conversation.threads[context.target.threadId]?.status === 'closed'
   const waitingForYou = new Set(conversationMessages.filter((m) => m.kind === 'request' && isAgentMessageToUser(m) && canReplyInConversation(m, conversation.threads[m.thread_id], participants) && !conversationMessages.some((answer) => m.recipient_ids.includes(answer.sender_id) && answer.in_reply_to === m.id)).map((m) => m.id))
   const replyNeeded = waitingForYou.size
   useEffect(() => { onReplyNeededChange?.(stageId, replyNeeded) }, [stageId, replyNeeded, onReplyNeededChange])
 
   const composerMounted = noteTarget !== null && onSendNote !== undefined
-  // Reply in conversation needs the Message composer; a reply to a thought needs Revise.
+  // A reply is a context of the composer's one input: it needs the composer, and Chat for a conversation.
   const canAnswerInConversation = composerMounted && mesh !== undefined
-  const canAnswerThought = composerMounted && (mesh === undefined || reviseAvailable)
+  const canAnswerThought = composerMounted
   const stageIndex = mesh?.stages.findIndex((stage) => stage.id === stageId) ?? -1
   const stageAgent = participants.find((person) => person.id === `stage:${stageId}`)
   const stageExecutor = executorLabel(stageAgent?.command ?? '', stageAgent?.command_name, useUnknownCommandName())
@@ -237,7 +226,7 @@ export function FeedWorkspace({
                     participants={participants}
                     answered={m.in_reply_to !== undefined ? messageById.get(m.in_reply_to) : undefined}
                     onJumpToQuote={jumpTo}
-                    replyActive={activeMeshReply?.messageId === m.id}
+                    replyActive={activeMeshReplyId === m.id}
                     notAnswered={unanswered.has(m.id)}
                     sideOutcome={sideAgentOutcome(m, conversationMessages, mesh?.sideFailures ?? new Set())}
                     markdown
@@ -245,17 +234,16 @@ export function FeedWorkspace({
                     evidence={legacy.get(m.id)?.evidence}
                     onReply={
                       canAnswerInConversation && noteTarget !== null && canReplyInConversation(m, conversation.threads[m.thread_id], participants)
-                        ? () =>
-                            updateDraft(noteTarget, {
-                              ...(drafts.get(noteTarget)?.meshReply?.messageId === m.id ? {} : { replyMessage: '', replyPicked: [], replyAttachments: undefined }),
-                              meshReply: {
-                                messageId: m.id,
-                                threadId: m.thread_id,
-                                senderId: m.sender_id,
-                                preview: messageText(m.body, true).slice(0, 120),
-                                members: conversation.threads[m.thread_id]?.members ?? [],
-                              },
-                            })
+                        ? () => {
+                            drafts.update(noteTarget, (d) => selectConversation(d, {
+                              messageId: m.id,
+                              threadId: m.thread_id,
+                              senderId: m.sender_id,
+                              preview: messageText(m.body, true).slice(0, 120),
+                              members: conversation.threads[m.thread_id]?.members ?? [],
+                            }))
+                            requestFocus(noteTarget)
+                          }
                         : undefined
                     }
                   />
@@ -271,13 +259,16 @@ export function FeedWorkspace({
                 onEntered={onEntered}
                 toolCountScope={`${stageId ?? ''}|${filter}`}
                 onOpenDialog={onOpenDialog}
-                // Репляибл только per-stage Feed с живым композером: мысль выбирается
-                // ТОЛЬКО когда есть куда доставлять ответ (noteTarget + onSendNote).
+                // A thought is answerable only where the composer is: the quote becomes its reply context.
                 onReplyToThought={
                   canAnswerThought && noteTarget !== null
-                    ? (key, text) => updateDraft(noteTarget, { thoughtReply: { key, text } })
+                    ? (key, text) => {
+                        drafts.update(noteTarget, (d) => selectThought(d, { key, text }, mesh !== undefined))
+                        requestFocus(noteTarget)
+                      }
                     : undefined
                 }
+                quoteRestarts={mesh === undefined}
                 activeReplyKey={activeReplyKey}
               />
             ),
@@ -287,21 +278,17 @@ export function FeedWorkspace({
         {!feed.stick && <JumpToLatestButton onClick={feed.jumpToBottom} unseen={unseen} />}
       </div>
 
-      {/* Messenger-поле заметки живому агенту — прибито к низу ленты, только когда
-          стадия принимает заметки (noteTarget != null: running и не скрипт).
-          key=noteTarget: смена стадии даёт свежий пустой черновик (черновик не
-          «переедет» в другую стадию). */}
+      {/* The composer is pinned under the feed while the stage takes notes. key=noteTarget: each stage has its own
+          composer over its own draft, so a draft never moves to another stage. */}
       {composerMounted && (
         <FeedComposer
           key={noteTarget}
           stageId={noteTarget}
           onSend={(text) => onSendNote(noteTarget, text)}
-          replyQuote={activeReply?.text ?? null}
-          replyKey={activeReply?.key}
-          onCancelReply={() => updateDraft(noteTarget, { thoughtReply: null })}
-          // Сброс только совпадающего ключа: если пользователь выбрал другую
-          // мысль, пока шла отправка, свежая цель переживёт (race-safe).
-          onSent={(key) => { if (draftsRef.current.get(noteTarget)?.thoughtReply?.key === key) updateDraft(noteTarget, { thoughtReply: null }) }}
+          draftStore={drafts}
+          focusRequest={focusRequest.stageId === noteTarget ? focusRequest.seq : 0}
+          conversationClosed={conversationClosed}
+          holdActive={holdActive}
           pauseOnFocusEnabled={pauseOnFocusEnabled}
           onTogglePauseOnFocus={onTogglePauseOnFocus}
           paused={composerPaused}
@@ -311,16 +298,6 @@ export function FeedWorkspace({
           mesh={mesh}
           reviseAvailable={reviseAvailable}
           conversationMessages={conversationMessages}
-          meshReply={activeMeshReply}
-          onCancelMeshReply={() => updateDraft(noteTarget, { meshReply: null, replyMessage: '', replyPicked: [], replyAttachments: undefined })}
-          // Reset only if the same message is still being answered (another may have been picked meanwhile).
-          onMeshReplySent={(id) => { if (draftsRef.current.get(noteTarget)?.meshReply?.messageId === id) updateDraft(noteTarget, { meshReply: null, replyMessage: '', replyPicked: [], replyAttachments: undefined }) }}
-          draft={drafts.get(noteTarget)}
-          onDraftChange={(patch) => updateDraft(noteTarget, patch)}
-          onReplyAttachmentsChange={(replyId, attachments) => {
-            if (draftsRef.current.get(noteTarget)?.meshReply?.messageId === replyId) updateDraft(noteTarget, { replyAttachments: attachments })
-            else attachments.forEach((a) => URL.revokeObjectURL(a.previewUrl))
-          }}
         />
       )}
     </section>
@@ -392,8 +369,10 @@ type FeedGroupViewProps = {
   systemAuthorLabel?: string
   imagePolicy?: 'stage' | 'none'
   onOpenDialog?: (stageId: string, phase: string, id: string) => void
-  // onReplyToThought — выбрать мысль агента для ответа.
+  // onReplyToThought — выбрать мысль агента для ответа. quoteRestarts — без mesh ответ на мысль — это перезапуск
+  // с цитатой, и кнопка ↩ называет именно это действие.
   onReplyToThought?: (key: string, text: string) => void
+  quoteRestarts?: boolean
   // activeReplyKey — ключ выбранной мысли: ровно одна строка получает
   // is-reply-target (подсветка выбора).
   activeReplyKey?: string | null
@@ -408,7 +387,7 @@ type FeedGroupViewProps = {
 
 // FeedGroupView — одна группа: стейдж-агент — строка автора и тело без рамки, события флоу — тихие строки,
 // пользователь и карточки истории — пузырь с шапкой.
-export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false }: FeedGroupViewProps): ReactElement {
+export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flow', imagePolicy = 'stage', onOpenDialog, onReplyToThought, quoteRestarts = false, activeReplyKey = null, enteringKey = null, onEntered, toolCountScope, messageCard = false }: FeedGroupViewProps): ReactElement {
   // Подпись автора: agent/user — фиксированные, system — параметризуемая (боковой
   // чат заменяет «Flow» своей подписью, см. systemAuthorLabel).
   const authorLabel = group.authorLabel ?? (group.actor === 'system' || (messageCard && group.actor === 'agent') ? systemAuthorLabel : ACTOR_LABEL[group.actor])
@@ -520,7 +499,9 @@ export function FeedGroupView({ group, showStageBadges, systemAuthorLabel = 'Flo
                 <button
                   type="button"
                   className="feed-thought-reply"
-                  aria-label="Reply to this thought"
+                  aria-label={quoteRestarts ? 'Restart with quoted note' : 'Reply to this thought'}
+                  aria-pressed={selected}
+                  title={quoteRestarts ? 'Quote this thought in a restart note' : 'Reply to this thought in the composer'}
                   onClick={() => onReplyToThought(item.key, item.text)}
                 >
                   ↩

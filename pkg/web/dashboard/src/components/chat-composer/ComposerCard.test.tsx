@@ -3,12 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { ComposerCard, ComposerHint, ComposerRecipients } from './ComposerCard'
 
 describe('ComposerCard', () => {
-  it('draws the card, paused and plain-row variants of the input row', () => {
-    const { container } = render(<><ComposerCard>a</ComposerCard><ComposerCard card={false} paused>b</ComposerCard></>)
-    const [card, plain] = Array.from(container.children) as [Element, Element]
+  it('draws the input row as a card, tinted while paused', () => {
+    const { container } = render(<><ComposerCard>a</ComposerCard><ComposerCard paused>b</ComposerCard></>)
+    const [card, paused] = Array.from(container.children) as [Element, Element]
     expect(card).toHaveClass('chat-composer-row', 'chat-composer-card')
-    expect(plain).toHaveClass('chat-composer-row', 'paused')
-    expect(plain).not.toHaveClass('chat-composer-card')
+    expect(card).not.toHaveClass('paused')
+    expect(paused).toHaveClass('chat-composer-row', 'chat-composer-card', 'paused')
   })
 
   it('labels the recipients row "To" by default and takes a loop label', () => {

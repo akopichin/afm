@@ -671,19 +671,19 @@ describe('FeedWorkspace', () => {
   describe('note composer', () => {
     it('renders the composer when noteTarget is set', () => {
       render(<FeedWorkspace events={[]} stageId="s1" noteTarget="s1" onSendNote={vi.fn()} />)
-      expect(screen.getByRole('button', { name: /send note to agent/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Restart with note' })).toBeInTheDocument()
     })
 
     it('does not render the composer when noteTarget is null', () => {
       render(<FeedWorkspace events={[]} stageId="s1" noteTarget={null} onSendNote={vi.fn()} />)
-      expect(screen.queryByRole('button', { name: /send note to agent/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Restart with note' })).not.toBeInTheDocument()
     })
 
     it('delivers the typed note to onSendNote for the target stage', () => {
       const onSendNote = vi.fn().mockResolvedValue(undefined)
       render(<FeedWorkspace events={[]} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
       fireEvent.change(screen.getByRole('textbox'), { target: { value: 'учти 500' } })
-      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
+      fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
       expect(onSendNote).toHaveBeenCalledWith('s1', 'учти 500')
     })
   })
@@ -806,6 +806,15 @@ describe('FeedWorkspace', () => {
       expect(targets[0]?.textContent).toContain('вторая')
     })
 
+    it('↩ says what it does: a restart with the quote without the mesh, and shows which thought is chosen', () => {
+      const items = [thoughtItem({ key: 'k1', text: 'первая' }), thoughtItem({ key: 'k2', text: 'вторая' })]
+      render(<FeedGroupView group={groupOf(items)} showStageBadges={false} onReplyToThought={vi.fn()} quoteRestarts activeReplyKey="k2" />)
+      const buttons = screen.getAllByRole('button', { name: 'Restart with quoted note' })
+      expect(buttons.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'true'])
+      expect(buttons[0]).toHaveAttribute('title', 'Quote this thought in a restart note')
+      expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
+    })
+
     it('без onReplyToThought мысли не репляиблы', () => {
       const { container } = render(<FeedGroupView group={groupOf([thoughtItem()])} showStageBadges={false} />)
       expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
@@ -820,37 +829,45 @@ describe('FeedWorkspace', () => {
       ev('agent_action', { tool: 'text', detail: 'Мысль для ответа' }, 's1', '2026-07-10T10:00:00Z'),
     ]
 
-    it('клик по ↩ в per-stage Feed показывает quote-чип в композере', () => {
+    it('клик по ↩ в per-stage Feed показывает quote-чип в композере и переводит фокус в поле, сохраняя ввод', () => {
       render(<FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={vi.fn().mockResolvedValue(undefined)} />)
-      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
+      const textarea = screen.getByRole('textbox')
+      fireEvent.change(textarea, { target: { value: 'уже написано' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Restart with quoted note' }))
       expect(screen.getByText(/in reply to/i)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /cancel reply to thought/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Remove reply to thought' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Restart with quoted note' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('textbox')).toBe(textarea)
+      expect(textarea).toHaveValue('уже написано')
+      expect(textarea).toHaveFocus()
     })
 
-    it('смена стадии сбрасывает reply-чип (нет stale-цитаты)', () => {
+    it('другая стадия — свой черновик без цитаты; возврат восстанавливает цитату', () => {
       const { rerender } = render(
         <FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={vi.fn().mockResolvedValue(undefined)} />,
       )
-      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
-      expect(screen.getByRole('button', { name: /cancel reply to thought/i })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Restart with quoted note' }))
+      expect(screen.getByRole('button', { name: 'Remove reply to thought' })).toBeInTheDocument()
 
       rerender(<FeedWorkspace events={thoughtEvents()} stageId="s2" noteTarget="s2" onSendNote={vi.fn().mockResolvedValue(undefined)} />)
-      expect(screen.queryByRole('button', { name: /cancel reply to thought/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Remove reply to thought' })).toBeNull()
+      rerender(<FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={vi.fn().mockResolvedValue(undefined)} />)
+      expect(screen.getByRole('button', { name: 'Remove reply to thought' })).toBeInTheDocument()
     })
 
     it('успешная отправка ответа доставляет quote+comment и сбрасывает чип', async () => {
       const onSendNote = vi.fn().mockResolvedValue(undefined)
       render(<FeedWorkspace events={thoughtEvents()} stageId="s1" noteTarget="s1" onSendNote={onSendNote} />)
-      fireEvent.click(screen.getByRole('button', { name: /reply to this thought/i }))
+      fireEvent.click(screen.getByRole('button', { name: 'Restart with quoted note' }))
       fireEvent.change(screen.getByRole('textbox'), { target: { value: 'ответ' } })
-      fireEvent.click(screen.getByRole('button', { name: /send note to agent/i }))
-      await waitFor(() => expect(screen.queryByRole('button', { name: /cancel reply to thought/i })).toBeNull())
+      fireEvent.click(screen.getByRole('button', { name: 'Restart with note' }))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove reply to thought' })).toBeNull())
       expect(onSendNote).toHaveBeenCalledWith('s1', expect.stringContaining('> Мысль для ответа'))
     })
 
     it('Лента без композера рендерит мысли не репляиблыми', () => {
       render(<FeedWorkspace events={thoughtEvents()} stageId={null} />)
-      expect(screen.queryByRole('button', { name: /reply to this thought/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /reply to this thought|restart with quoted note/i })).toBeNull()
     })
   })
 

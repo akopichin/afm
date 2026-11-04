@@ -154,6 +154,41 @@ describe('AttachAssistantDialog', () => {
     expect(firstCall?.[0].requestId).toBe(secondCall?.[0].requestId)
   })
 
+  // The composer owns the request's lifecycle, so it hands the dialog its own sender; the dialog still owns the
+  // request id and the error.
+  describe('with a send prop from the composer', () => {
+    const result = { task_id: 't-1', participant_id: 'helper:t-1', thread_id: 'mt-1', message_id: 'm-1' }
+
+    test('the given send is used instead of attachAndSendMesh and success confirms', async () => {
+      const attachSpy = vi.spyOn(meshClient, 'attachAndSendMesh')
+      const send = vi.fn().mockResolvedValue(result)
+      const { onConfirmed } = renderDialog({ send })
+
+      fireEvent.click(screen.getByRole('button', { name: /attach and send/i }))
+
+      await waitFor(() => expect(onConfirmed).toHaveBeenCalledWith(result))
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'qaEngineer', stageId: 'impl', scope: 'stage', instruction: 'Please review', firstMessage: 'Please review' }))
+      expect(attachSpy).not.toHaveBeenCalled()
+    })
+
+    test('a refusal shows the error, allows a retry, and the retry carries the same request_id', async () => {
+      const send = vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValueOnce(result)
+      const { onConfirmed } = renderDialog({ send })
+
+      const button = screen.getByRole('button', { name: /attach and send/i })
+      fireEvent.click(button)
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/locked/i))
+      expect(onConfirmed).not.toHaveBeenCalled()
+      expect(button).not.toBeDisabled()
+
+      fireEvent.click(button)
+      await waitFor(() => expect(onConfirmed).toHaveBeenCalledWith(result))
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(send.mock.calls[0]?.[0].requestId).toBe(send.mock.calls[1]?.[0].requestId)
+    })
+  })
+
   test('disables the confirm button and explains why at the depth limit', () => {
     renderDialog({ maxDepth: 0 })
     expect(screen.getByRole('button', { name: /attach and send/i })).toBeDisabled()
