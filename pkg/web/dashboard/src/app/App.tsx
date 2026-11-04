@@ -11,8 +11,7 @@ import { StageNote } from '../components/stage-note'
 import { ReviewNotesModal } from '../components/review-notes-modal'
 import { PlanPanel } from '../components/plan-panel'
 import { DialogChannel } from '../components/dialog-channel'
-import { FeedWorkspace, meshDeliveries, type ComposerDraft, type MeshPick } from '../components/feed-workspace'
-import { emptyComposerDraft } from '../components/feed-workspace/FeedComposer'
+import { FeedWorkspace, createComposerDraftStore, meshDeliveries, type MeshPick } from '../components/feed-workspace'
 import { sideAgentFailures } from '../components/feed-workspace/mesh-receipt'
 import { CostPanel } from '../components/cost-panel'
 import { UsageDetails } from '../components/usage-analytics'
@@ -450,25 +449,18 @@ export function App(): ReactElement {
     () => ({ runId, participants: stageMesh ? meshParticipants : NO_PARTICIPANTS, stages }),
     [runId, stageMesh, meshParticipants, stages],
   )
-  // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
-  // composerDrafts — every stage's Feed composer draft for this page session (FeedWorkspace's composerDrafts).
-  // A new run starts without them: the same stage ID in the next run is another conversation.
-  const composerDrafts = useRef({ runEpoch, drafts: new Map<string, ComposerDraft>() })
-  const [, refreshComposerDrafts] = useState(0)
-  if (composerDrafts.current.runEpoch !== runEpoch) composerDrafts.current = { runEpoch, drafts: new Map() }
-  const draftPreviews = useMemo(() => new Set<string>(), [runEpoch])
-  useEffect(() => () => { draftPreviews.forEach((url) => URL.revokeObjectURL(url)) }, [draftPreviews])
-  const updateComposerDraft = useCallback((stageId: string, patch: Partial<ComposerDraft>) => {
-    for (const attachments of [patch.reviseAttachments, patch.messageAttachments, patch.replyAttachments]) {
-      attachments?.forEach((attachment) => draftPreviews.add(attachment.previewUrl))
-    }
-    if (composerDrafts.current.runEpoch !== runEpoch) return
-    const previous = composerDrafts.current.drafts.get(stageId) ?? emptyComposerDraft()
-    if (Object.entries(patch).every(([key, value]) => previous[key as keyof ComposerDraft] === value)) return
-    composerDrafts.current = { runEpoch, drafts: new Map(composerDrafts.current.drafts).set(stageId, { ...previous, ...patch }) }
-    // Text is rendered locally; saving it must not repaint the feed on every keystroke.
-    if (Object.keys(patch).some((key) => !['revise', 'message', 'replyMessage'].includes(key))) refreshComposerDrafts((n) => n + 1)
-  }, [runEpoch, draftPreviews])
+  // composerDrafts — every stage's Feed composer draft for this page session. A new run starts with a new store:
+  // the same stage ID in the next run is another conversation, and a late send of the old run lands in the old one.
+  const composerDrafts = useRef({ runEpoch, store: createComposerDraftStore() })
+  if (composerDrafts.current.runEpoch !== runEpoch) composerDrafts.current = { runEpoch, store: createComposerDraftStore() }
+  const draftStore = composerDrafts.current.store
+  // The previous run's previews are released only when the run really changed (StrictMode re-runs effects).
+  const previousDraftStore = useRef(draftStore)
+  useEffect(() => {
+    if (previousDraftStore.current === draftStore) return
+    previousDraftStore.current.revokeAll()
+    previousDraftStore.current = draftStore
+  }, [draftStore])
   // stageNoteDrafts — each stage's unsaved Stage note text for this page session. Separate from the composer drafts:
   // it is another input with another destination. A new run starts without them. Typing only writes the ref.
   const stageNoteDrafts = useRef({ runEpoch, drafts: new Map<string, string>() })
@@ -480,6 +472,7 @@ export function App(): ReactElement {
     else drafts.set(stageId, text)
     stageNoteDrafts.current = { runEpoch, drafts }
   }, [runEpoch])
+  // meshDeliveryReceipts — the run's real per-recipient delivery receipts, for the composer's "Delivered".
   const meshDeliveryReceipts = useMemo(() => (stageMesh ? meshDeliveries(events) : NO_DELIVERIES), [stageMesh, events])
   const meshSideFailures = useMemo(() => (stageMesh ? sideAgentFailures(events) : NO_DELIVERIES), [stageMesh, events])
   // With the mesh the gate is split: Message — any non-script stage while the run is alive; Revise — only the
@@ -841,8 +834,8 @@ export function App(): ReactElement {
                       emptyHint={workspaceStage === null ? 'Select a stage to see its feed' : 'No events for this stage yet'}
                       onOpenDialog={handleOpenDialogFromFeed}
                       noteTarget={noteTarget}
-                      composerDrafts={composerDrafts.current.drafts}
-                      onComposerDraftChange={updateComposerDraft}
+                      draftStore={draftStore}
+                      holdActive={workspaceStage !== null && pauseOnFocus.hasActiveOp(workspaceStage.id)}
                       onSendNote={pauseOnFocus.handleSend}
                       pauseOnFocusEnabled={pauseOnFocus.enabled}
                       onTogglePauseOnFocus={pauseOnFocus.setEnabled}
@@ -862,7 +855,7 @@ export function App(): ReactElement {
                       }
                       // mesh (Agent Mesh Phase 7, T7.4) — same roster/profiles App.tsx already owns for Team,
                       // only with stageMesh: undefined gives the plain Feed (no conversations, no poll of them)
-                      // and the plain note-to-agent composer (no Message/Revise tabs).
+                      // and the plain Restart-with-note composer (no Chat).
                       mesh={stageMesh ? { roster: mergedRoster, profiles: stageProfiles, stages, pick: peoplePick, deliveries: meshDeliveryReceipts, sideFailures: meshSideFailures } : undefined}
                       reviseAvailable={reviseAvailable}
                       paused={workspaceStage?.status === 'paused' || flowPauseState !== 'none'}

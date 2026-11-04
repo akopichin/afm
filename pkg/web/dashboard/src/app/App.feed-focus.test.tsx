@@ -105,7 +105,7 @@ it('Focus hides the run chrome and keeps the same Feed, composer and draft conte
     expect(input).toHaveValue(draft)
     expect([input.selectionStart, input.selectionEnd]).toEqual([2, 6])
     expect(input.style.height).toBe('110px')
-    expect(screen.getByRole('button', { name: 'Cancel reply in conversation' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove reply in conversation' })).toBeInTheDocument()
     expect(screen.getByAltText('Pasted screenshot')).toBeInTheDocument()
     expect(within(screen.getByRole('group', { name: 'Recipients' })).getByText('@qa')).toBeInTheDocument()
     expect(document.querySelector('.feed-scroll')).toBe(feed)

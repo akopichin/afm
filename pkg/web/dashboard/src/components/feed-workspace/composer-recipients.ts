@@ -81,7 +81,8 @@ export type ComposerRecipientsInput = {
   // picked — participant ids added as chips from the People panel.
   picked: string[]
   draft: string
-  // replyTo — the sender of the conversation message being answered: a recipient for that reply only.
+  // replyTo — a recipient required for this reply only: the sender of the conversation message being answered, or,
+  // for a reply to the stage agent's thought, `stage:<id>` with replyMembers null.
   replyTo?: string | null
   // replyMembers — the members of that message's conversation: a reply stays in it, so it can go to them only
   // (a conversation never gains members). null — not a reply.
@@ -149,6 +150,19 @@ export function composerRecipients({ participants, stages, stageId, picked, draf
   }
 }
 
+// The waiting stage agent reads a note only through Restart with note, so keep that offer
+// when it is the recipient, including after it became an explicit one (named, picked, answered).
+export function awaitingAgentNeedsRestart({ recipients, defaultProblem, stageId, stages }: {
+  recipients: ComposerRecipient[]
+  defaultProblem: string | null
+  stageId: string
+  stages: StageStatusLike[]
+}): boolean {
+  if (stages.find((s) => s.id === stageId)?.status !== 'awaiting_assistants') return false
+  if (recipients.length === 0) return defaultProblem !== null
+  return recipients.some((r) => r.participantId === `stage:${stageId}`)
+}
+
 // withoutRecipient — the picked list and draft after × on chip r: its pick goes and every token naming it is
 // cut from the text. The message being answered keeps its sender (cancel the reply instead).
 export function withoutRecipient(r: ComposerRecipient, current: { picked: string[]; draft: string }): { picked: string[]; draft: string } {
@@ -156,12 +170,6 @@ export function withoutRecipient(r: ComposerRecipient, current: { picked: string
     picked: r.picked ? current.picked.filter((id) => id !== r.key) : current.picked,
     draft: r.typedTokens.reduce((d, token) => removeMention(d, token), current.draft),
   }
-}
-
-// recipientFence — one message's identity for useRetryableSubmit: the recipient set (order-insensitive), the
-// thread and the message it answers. Changing any of them makes it a different message with a new request id.
-export function recipientFence(recipientIds: string[], threadId: string, replyTo: string): string {
-  return JSON.stringify([[...recipientIds].sort(), threadId, replyTo])
 }
 
 // MessageRoute — how a Message is delivered.

@@ -1061,8 +1061,9 @@ garble ordinary text.
 
 A stage's [Feed composer](dashboard.md#writing-to-a-stage-from-its-feed) sends a
 **Chat** — one message to one or several participants, the stage's agent by
-default — or attaches a configured helper through a preview. Its **Restart with note** mode
-continues to send stage feedback through the existing revision path. In the Assistant, an `@` mention records a role with
+default — or attaches a configured helper through a preview. The same single input can
+instead be sent with **Restart with note**, which continues to send stage feedback
+through the existing revision path. In the Assistant, an `@` mention records a role with
 the chat message; it still does not attach a helper by itself.
 
 ## Mesh development escalation

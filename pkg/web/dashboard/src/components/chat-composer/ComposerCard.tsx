@@ -4,14 +4,12 @@ import type { ReactElement, ReactNode } from 'react'
 // its "To" row and the hint line under it. Styles: chat-composer.css.
 
 type ComposerCardProps = {
-  // card — the bordered card with a recipients row; without it the plain input row of a legacy note composer.
-  card?: boolean
   paused?: boolean
   children: ReactNode
 }
 
-export function ComposerCard({ card = true, paused = false, children }: ComposerCardProps): ReactElement {
-  return <div className={`chat-composer-row${card ? ' chat-composer-card' : ''}${paused ? ' paused' : ''}`}>{children}</div>
+export function ComposerCard({ paused = false, children }: ComposerCardProps): ReactElement {
+  return <div className={`chat-composer-row chat-composer-card${paused ? ' paused' : ''}`}>{children}</div>
 }
 
 type ComposerRecipientsProps = {

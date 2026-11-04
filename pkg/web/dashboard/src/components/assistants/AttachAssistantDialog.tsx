@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactElement } from 'react'
 import { ActionCard } from './ActionCard'
-import { attachAndSendMesh, genMeshRequestId, type MeshAttachAndSendResult } from '../../api/mesh-client'
+import { attachAndSendMesh, genMeshRequestId, type AttachAndSendMeshRequest, type MeshAttachAndSendResult } from '../../api/mesh-client'
 import { describeExecutor, describeUnavailable, executorTitle, type AssistantProfile } from '../../types/assistant-profile'
 import { useUnknownCommandName } from '../../lib/executor-label'
 import { useModalDialog } from '../../lib/focus-trap'
@@ -22,6 +22,9 @@ export type AttachAssistantDialogProps = {
   // T4.6, §12.4). Optional: the Feed's attach preview (T7.5) does not thread this through yet, and ActionCard
   // simply omits the depth row rather than showing a misleading value.
   maxDepth?: number
+  // send — how the request goes out; the Feed composer passes its own so it controls the request's lifecycle.
+  // Defaults to attachAndSendMesh.
+  send?: (req: AttachAndSendMeshRequest) => Promise<MeshAttachAndSendResult>
   onConfirmed: (result: MeshAttachAndSendResult) => void
   onCancel: () => void
 }
@@ -33,7 +36,7 @@ export type AttachAssistantDialogProps = {
 // job folds that unmounted flow into the mesh composite rather than keeping two). Uses the shared modal
 // focus lifecycle (useModalDialog) rather than reinventing one.
 export function AttachAssistantDialog({
-  profileId, stageId, title, instruction, mode, profiles, stages, maxDepth, onConfirmed, onCancel,
+  profileId, stageId, title, instruction, mode, profiles, stages, maxDepth, send = attachAndSendMesh, onConfirmed, onCancel,
 }: AttachAssistantDialogProps): ReactElement {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -66,7 +69,7 @@ export function AttachAssistantDialog({
     if (submitting || !canAttach) return
     setSubmitting(true)
     setError(null)
-    attachAndSendMesh({
+    send({
       requestId: requestIdRef.current,
       profileId,
       scope: 'stage',

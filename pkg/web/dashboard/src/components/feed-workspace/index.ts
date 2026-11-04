@@ -1,5 +1,6 @@
 export { FeedWorkspace, FeedGroupView } from './FeedWorkspace'
 export { toFeedItems, groupFeedItems, formatEventGap } from './feed-view-model'
 export type { FeedItem, FeedGroup, FeedActor, FeedTone, FeedItemKind } from './feed-view-model'
-export type { ComposerDraft, MeshPick } from './FeedComposer'
+export type { MeshPick } from './FeedComposer'
+export { createComposerDraftStore, type ComposerDraftStore } from './composer-draft-store'
 export { meshDeliveries } from './mesh-receipt'

@@ -11,11 +11,13 @@ export type ChatSendButtonProps = {
   paused?: boolean
   // sending — запрос в полёте: кнопка недоступна и называется «Sending…» (видно и экранному диктору).
   sending?: boolean
+  // describedBy — id of the text that explains why the button is off: a disabled button cannot be focused for it.
+  describedBy?: string
 }
 
 // ChatSendButton — круглая кнопка отправки с самолётиком. Одна на все чат-композеры (лента, обсуждение,
 // Team, боковой агент) и живёт внутри строки ввода .chat-composer-row.
-export function ChatSendButton({ label, visibleLabel, disabled, onClick, paused = false, sending = false }: ChatSendButtonProps): ReactElement {
+export function ChatSendButton({ label, visibleLabel, disabled, onClick, paused = false, sending = false, describedBy }: ChatSendButtonProps): ReactElement {
   const name = sending ? 'Sending…' : label
   return (
     <button
@@ -23,6 +25,7 @@ export function ChatSendButton({ label, visibleLabel, disabled, onClick, paused 
       className={`chat-send${visibleLabel !== undefined ? ' chat-send--labelled' : ''}${paused ? ' paused' : ''}`}
       aria-label={name}
       aria-busy={sending}
+      aria-describedby={describedBy}
       title={name}
       disabled={disabled || sending}
       onClick={onClick}

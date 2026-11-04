@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { composerRecipients, messageRoute, recipientFence, recipientProblem, resolveTyped, typedMentionHandles, withoutRecipient } from './composer-recipients'
+import { awaitingAgentNeedsRestart, composerRecipients, FINISHED_STAGE_NOTE, messageRoute, recipientProblem, resolveTyped, typedMentionHandles, withoutRecipient } from './composer-recipients'
 import { mentionHandles } from '../../lib/mesh-roster'
 import type { MeshParticipant } from '../../api/mesh-client'
 
@@ -145,14 +145,6 @@ describe('withoutRecipient', () => {
   })
 })
 
-describe('recipientFence', () => {
-  it('is the recipient set (in any order) plus the thread and the reply target', () => {
-    expect(recipientFence(['b', 'a'], 'mt-1', 'mm-2')).toBe(recipientFence(['a', 'b'], 'mt-1', 'mm-2'))
-    expect(recipientFence(['a'], '', '')).not.toBe(recipientFence(['a', 'b'], '', ''))
-    expect(recipientFence(['a'], 'mt-1', '')).not.toBe(recipientFence(['a'], 'mt-1', 'mm-2'))
-  })
-})
-
 describe('messageRoute', () => {
   it("a new message naming the stage's own agent goes to the stage conversation, the others joining it", () => {
     expect(messageRoute('impl', ['run:t-1', 'stage:impl', 'stage:docs'], false)).toEqual({ kind: 'stage', mentions: ['run:t-1', 'stage:docs'] })
@@ -162,5 +154,67 @@ describe('messageRoute', () => {
   it('a message without the stage agent, or any reply, goes to exactly its recipients', () => {
     expect(messageRoute('impl', ['run:t-1', 'stage:docs'], false)).toEqual({ kind: 'set' })
     expect(messageRoute('impl', ['stage:impl'], true)).toEqual({ kind: 'set' })
+  })
+})
+
+describe("the stage agent as a required recipient of a thought reply", () => {
+  const awaiting = [{ id: 'impl', status: 'awaiting_assistants' }, { id: 'docs', status: 'running' }]
+  const thoughtReply = { replyTo: 'stage:impl', replyMembers: null }
+  const doneStages = [{ id: 'impl', status: 'done' }, { id: 'docs', status: 'running' }]
+
+  it('is a chip from the reply, not a default', () => {
+    const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: [], draft: 'why?', ...thoughtReply })
+    expect(r.recipients.map((x) => [x.participantId, x.source, x.problem, x.note])).toEqual([['stage:impl', 'reply', null, null]])
+    expect(r.defaultProblem).toBeNull()
+  })
+
+  it('carries the awaiting_assistants problem while the agent waits for its helpers', () => {
+    const r = composerRecipients({ participants, stages: awaiting, stageId: 'impl', picked: [], draft: 'why?', ...thoughtReply })
+    expect(r.recipients[0]?.problem).toMatch(/waits for its helpers/)
+  })
+
+  it('is marked finished, not an error, once the stage is done', () => {
+    const r = composerRecipients({ participants: [user, { ...impl, reachable: false }, qa], stages: doneStages, stageId: 'impl', picked: [], draft: 'why?', ...thoughtReply })
+    expect(r.recipients.map((x) => [x.source, x.problem, x.note])).toEqual([['reply', null, FINISHED_STAGE_NOTE]])
+  })
+
+  it('routes to the stage conversation with the other recipients as mentions', () => {
+    const r = composerRecipients({ participants, stages: running, stageId: 'impl', picked: [], draft: '@qa why?', ...thoughtReply })
+    const ids = r.recipients.map((x) => x.participantId ?? x.key)
+    expect(ids).toEqual(['stage:impl', 'run:t-1'])
+    expect(messageRoute('impl', ids, false)).toEqual({ kind: 'stage', mentions: ['run:t-1'] })
+  })
+})
+
+describe('awaitingAgentNeedsRestart', () => {
+  const awaiting = [{ id: 'impl', status: 'awaiting_assistants' }, { id: 'docs', status: 'running' }]
+  const doneStages = [{ id: 'impl', status: 'done' }, { id: 'docs', status: 'running' }]
+  const needs = (draft: string, stages: { id: string; status: string }[], extra: Partial<Parameters<typeof composerRecipients>[0]> = {}): boolean => {
+    const { recipients, defaultProblem } = composerRecipients({ participants, stages, stageId: 'impl', picked: [], draft, ...extra })
+    return awaitingAgentNeedsRestart({ recipients, defaultProblem, stageId: 'impl', stages })
+  }
+
+  it('is true when the waiting agent would be the default recipient', () => {
+    expect(needs('hi', awaiting)).toBe(true)
+  })
+
+  it('stays true when the agent is a recipient of a thought reply', () => {
+    expect(needs('hi', awaiting, { replyTo: 'stage:impl', replyMembers: null })).toBe(true)
+  })
+
+  it('stays true when the agent is named in the text or picked', () => {
+    expect(needs('@impl hi', awaiting)).toBe(true)
+    expect(needs('hi', awaiting, { picked: ['stage:impl'] })).toBe(true)
+  })
+
+  it('is false when only other people are addressed', () => {
+    expect(needs('@qa hi', awaiting)).toBe(false)
+    expect(needs('hi', awaiting, { picked: ['stage:docs'] })).toBe(false)
+  })
+
+  it('is false for any other stage status', () => {
+    expect(needs('hi', running)).toBe(false)
+    expect(needs('hi', doneStages)).toBe(false)
+    expect(needs('@impl hi', [{ id: 'impl', status: 'paused' }])).toBe(false)
   })
 })

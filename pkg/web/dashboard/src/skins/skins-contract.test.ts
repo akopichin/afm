@@ -1106,7 +1106,7 @@ describe('skins CSS contract — neutral text inside a tone wash', () => {
     '.feed-focus-wait-count',
     '.feed-focus-wait .feed-focus-wait-count',
     '.message-mention',
-    '.feed-composer-mode.active',
+    '.feed-composer-mode',
     '.pause-banner-resume:hover',
     '.jump-latest:hover',
     '.comment-remove:hover',

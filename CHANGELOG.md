@@ -23,6 +23,21 @@ The run-wide **Board** tab in `team` mode lists non-task board entries in a
 **Facts** section under the task columns, with the same cards as Team's Board
 subtab. See [Board tab](docs/dashboard.md#board-tab).
 
+### Improvement: one Feed composer for Chat and Restart with note
+
+A stage's Feed now has a single input. **Chat** and **Restart with note** became a
+**Send as** choice for what Send does with it: switching changes nothing that you
+wrote, and the text, images, selection and cursor stay in the same field. Replying
+to a thought with **↩** or to a message with **Reply in conversation** is context for
+that input rather than a separate draft: the thought's author stays a required
+recipient, the quote is added only when you send (in Chat and in a restart note
+alike), and a conversation reply is kept, but not sent, while Restart with note is
+chosen. A send that is still running blocks the other way from sending the same
+input, and a late result no longer clears what you typed after pressing Send. A
+choice that has become unavailable is explained instead of being switched for you,
+and **Hold the agent while you type** applies to Restart with note only. See
+[Writing to a stage from its Feed](docs/dashboard.md#writing-to-a-stage-from-its-feed).
+
 ## 2026-11-03
 
 ### Fix: a stage agent no longer hangs waiting for its own `on_completion` helper
