@@ -3,6 +3,26 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-04
+
+### Improvement: `assistants` mode turns the Board off for everyone
+
+With `collaboration.mode: assistants` the Board (shared facts, typed and legacy
+tasks, `board_key` waits) is no longer just hidden in the dashboard. The API,
+`afm agent board`, `afm agent task` and `afm agent wait --condition board_key`
+refuse every request with `feature_disabled` (HTTP 404, CLI exit code 1) before
+anything is read or written, and the built-in agent instructions no longer
+mention the Board or carry `<your_board_tasks>`. Messages, `team:` run agents,
+helpers and the required and `on_completion` helper gates work as before; `team`
+mode is unchanged. See
+[The Board in `assistants` mode](docs/collaboration.md#the-board-in-assistants-mode).
+
+### Improvement: the run-wide Board tab shows board facts
+
+The run-wide **Board** tab in `team` mode lists non-task board entries in a
+**Facts** section under the task columns, with the same cards as Team's Board
+subtab. See [Board tab](docs/dashboard.md#board-tab).
+
 ## 2026-11-03
 
 ### Fix: a stage agent no longer hangs waiting for its own `on_completion` helper

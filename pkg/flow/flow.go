@@ -437,7 +437,8 @@ func (c RepeatConfig) validate() error {
 
 var errRepeatInvalid = errors.New("repeat must be true, false, or an object with max_cycles and keep_runs")
 
-// FlowCollaboration is the per-flow override of collaboration.max_depth and collaboration.mode only.
+// FlowCollaboration is the per-flow override of collaboration.max_depth and collaboration.mode only. The
+// mode also decides Board availability, not just the dashboard layout.
 type FlowCollaboration struct {
 	MaxDepth *int
 	// Mode is nil when the flow does not set collaboration.mode (defer to config).

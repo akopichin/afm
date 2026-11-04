@@ -54,8 +54,7 @@ func (o *Orchestrator) renderInbox(participant agentcomm.ParticipantID, unfinish
 		// wiring) without a real Store — nothing to read, so there is nothing pending and nothing to deliver.
 		return "", nil, func() {}
 	}
-	rs := o.opts.Store.Snapshot()
-	mesh := rs.Assistants.Mesh
+	mesh := o.agentMesh(o.opts.Store.Snapshot())
 
 	var again, waking, passive []*agentcomm.Message
 	for _, id := range mesh.Inbox[participant] {
@@ -279,7 +278,7 @@ func (o *Orchestrator) markInboxDelivered(participant agentcomm.ParticipantID, i
 func (o *Orchestrator) agentCommInboxForTask(taskID assistants.TaskID) (block string, rendered []agentcomm.MessageID, markDelivered func()) {
 	participant := o.taskMeshParticipant(taskID)
 	block, rendered, markDelivered = o.renderInbox(participant, o.unfinishedTurnInput(taskID))
-	return block + boardTasksBlockFor(o.opts.Store.Snapshot(), participant), rendered, markDelivered
+	return block + o.boardTasksBlockFor(o.opts.Store.Snapshot(), participant), rendered, markDelivered
 }
 
 // maxListedBoardTasks bounds the <your_board_tasks> block, which repeats on every turn.
@@ -287,9 +286,9 @@ const maxListedBoardTasks = 20
 
 // boardTasksBlockFor renders participant's <your_board_tasks> block: its active assignments on typed board
 // tasks, oldest assignment first, at most maxListedBoardTasks. A run without the typed protocol has no such
-// tasks and gets nothing.
-func boardTasksBlockFor(rs state.RunState, participant agentcomm.ParticipantID) string {
-	if !boardTasksEnabled(rs) {
+// tasks and gets nothing; without the Board, assignments left in the journal are not shown either.
+func (o *Orchestrator) boardTasksBlockFor(rs state.RunState, participant agentcomm.ParticipantID) string {
+	if !o.boardAvailable() || !boardTasksEnabled(rs) {
 		return ""
 	}
 	type assigned struct {

@@ -19,7 +19,7 @@ type CollaborationConfig struct {
 	// deliberately does NOT set this field; the numeric default lives only in assistants.ResolveDepth, the
 	// same way IsEnabled (not Default()) holds the default for the bool switch above.
 	MaxDepth *int `yaml:"max_depth,omitempty"`
-	// Mode — dashboard view mode (assistants.CollaborationMode). nil = not set by this layer; like MaxDepth,
+	// Mode — collaboration mode (assistants.CollaborationMode): dashboard layout and Board availability. nil = not set by this layer; like MaxDepth,
 	// Default() deliberately does NOT set it: the "team" default lives only at mode resolution
 	// (cmd/afm/run_collaboration.go). The value is validated per layer by UnmarshalYAML.
 	Mode *assistants.CollaborationMode `yaml:"mode,omitempty"`

@@ -14,7 +14,7 @@ Add roles to global `~/.afm/config.yaml` or project `.afm/config.yaml`:
 ```yaml
 collaboration:
   enabled: true                 # default; AFM_COLLABORATION=0 disables it
-  mode: team                    # dashboard: team (default) or assistants
+  mode: team                    # team (default) or assistants; assistants also turns the Board off
   hide_attach_helpers: false    # default; true hides the manual Attach helper buttons
   runtime_context: isolated     # default; isolated or wrapper, see below
   max_depth: 3                 # default; 0 prevents helper creation
@@ -158,7 +158,7 @@ collaboration:
 
 The flow cannot set `collaboration.enabled`. Mode and depth do not change the
 enabled setting. See [Collaboration modes](#collaboration-modes) for what the
-mode changes in the dashboard.
+mode changes in the dashboard and for the Board.
 
 Depth 1 is a helper attached directly to a stage; deeper tasks are its children.
 `delegate: true` permits a role to create children, subject to the depth and
@@ -169,12 +169,13 @@ config or the environment disables it.
 ## Collaboration modes
 
 `collaboration.mode` is `team` or `assistants`. An omitted value uses `team`,
-preserving the existing dashboard. Set it in global or project `config.yaml`, or
+preserving the existing dashboard and Board. Set it in global or project `config.yaml`, or
 at the top level of `flow.yaml`; precedence is flow > project > global > `team`.
 Invalid values, including an empty value or `null`, stop config loading even if a
 higher layer sets a valid mode. There is no mode environment variable or dashboard
-switch. On resume, the dashboard uses the current YAML setting; the mode does
-not rewrite `flow.yaml` or stored participants.
+switch. On resume, the dashboard and the Board rules use the current YAML
+setting; the mode does not rewrite `flow.yaml` or stored participants. The run
+resolves the mode once, so the dashboard and the agents always see the same one.
 
 In `team` mode, the dashboard shows **Team**, **Board**, and the stage Feed's
 **People** panel when their usual capabilities are available. In `assistants`
@@ -182,8 +183,39 @@ mode, those views and People controls are hidden and the Feed uses their space.
 Stage helpers remain under their stages; the stage header's **Attach helper…**, the Assistant,
 stage Feed conversations, and **Chat** / **Restart with note** remain available under
 their existing gates. Run agents declared in `team:` still start, and agents can
-still exchange messages and use the board. **Add run agent** and human **New
+still exchange messages and spawn helpers. **Add run agent** and human **New
 task** / **Post task** controls are available in `team` mode only.
+
+### The Board in `assistants` mode
+
+In `assistants` mode the Board is off for everyone: you, stage agents, helpers,
+run agents and the Assistant. That covers shared board facts, typed and legacy
+board tasks, and `board_key` waits. Hiding the tab is not the whole switch: afm
+refuses the operations on the server, whoever sends them. A refused request
+answers with the code `feature_disabled` and the message `Board is unavailable
+in assistants mode`, before it reads the Board or changes anything: the journal,
+task versions, messages and waits stay as they were, and no agent wakes up.
+
+| Where | Refused in `assistants` mode | Result |
+| --- | --- | --- |
+| Dashboard API | `GET` and `POST /api/mesh/board`, `POST /api/mesh/tasks` | HTTP 404 |
+| Agent API | `GET /api/agent-mesh/board`, `POST /api/agent-mesh/publish`, `GET /api/agent-mesh/tasks`, `POST /api/agent-mesh/task`, `POST /api/agent-mesh/wait` with a `board_key` condition | HTTP 404 |
+| CLI | `afm agent board get` and `publish`, `afm agent task …`, `afm agent wait --condition board_key` | exit code 1, JSON error with `feature_disabled` on stderr |
+
+Authentication and the same-origin check run first, so a request without a valid
+token still gets 401 and one from a foreign origin 403. Messages (`send`,
+`reply`, `inbox`), the other waits (`reply_to`, `addressed_message`,
+`task_result`, `stage_status`), `team:` run agents, helpers (`spawn`,
+`helper-result`) and the required and `on_completion` helper gates work in both
+modes.
+
+The built-in agent instructions follow the mode. In `assistants` mode they do
+not mention `afm agent board`, `afm agent task` or `board_key` and carry no
+`<your_board_tasks>` block. They say instead that the Board is unavailable and
+that work is handed over with direct requests and replies, and with temporary
+helpers where the agent may start them. In `team` mode the instructions are
+unchanged. afm does not delete or migrate Board data when the mode changes: the
+journal keeps what is already there, and `team` mode shows it again.
 
 With Agent Mesh available, `assistants` mode shows a **Run conversations** button
 and a closed panel beside the workspace only while the run has a conversation that
@@ -721,10 +753,14 @@ in, and your conversation with its agent. See [the stage feed](dashboard.md#conv
 
 ### Board tasks
 
+The Board and its tasks exist in `team` mode only; in `assistants` mode every
+Board operation is refused (see [The Board in `assistants` mode](#the-board-in-assistants-mode)).
 In `team` mode, when Agent Mesh is available, **Board** appears beside **Team**
 as a run-wide tab.
-It shows only task keys (`task/<slug>`), grouped into **Todo** (gray), **In
-progress** (blue), and **Done** (green) columns. Use **New task** to post from this
+It groups task keys (`task/<slug>`) into **Todo** (gray), **In progress** (blue),
+and **Done** (green) columns. Other board facts, with the reports on them, appear
+below the columns in a **Facts** section that search and the assignee filter do not
+affect; the section is absent while there are no facts. Use **New task** to post from this
 tab, or **Post task** in Team's **Board** subtab. Both use the same form.
 
 A run started by this afm version keeps **typed tasks**: each task has explicit
@@ -909,7 +945,7 @@ dashboard has no control for a person to change status.
 
 The run-wide Board offers search by task key or text, an assignee/Unassigned
 filter, and a completion count. Team's Board keeps tasks and other board facts
-together in one mixed grid, with the same task colors and reports nested under
+together in one mixed grid (the run-wide tab shows the same fact cards in **Facts**), with the same task colors and reports nested under
 their entries. Only a direct `<key>/<alias>` report nests, one level deep; a
 deeper key appears as its own fact, so no entry is hidden. Both views use the
 same board updates; facts and reports do not become separate task cards.

@@ -111,6 +111,9 @@ func startSideAgent(runID string, cfg config.Config, env runEnvironment, registr
 		Reasoning:   cfg.Client.Reasoning,
 		Context:     sideagent.ContextBuilder{ByteLimit: sideAgentContextByteLimit, Instruction: sideagent.DefaultInstruction + prompts.SideAgentCommunicationBlock(string(orch.SideAgentParticipantID()))},
 		MeshClient:  orch.SideAgentMeshClient,
+		// The Assistant's journal outlives a mode change: a Board notice it answered in team mode must not return
+		// as history once the Board is off.
+		HideSource:  func(id string) bool { return orch.HidesFromAgents(agentcomm.MessageID(id)) },
 		SourceReply: orch.SideAgentExplicitReply,
 		OnSourceDelivered: func(sourceMessageID string) {
 			if err := orch.MarkMessageDelivered(context.Background(), agentcomm.MessageID(sourceMessageID), orch.SideAgentParticipantID()); err != nil {

@@ -36,6 +36,8 @@ type ContextBuilder struct {
 	// ByteLimit — явный верхний предел размера промпта в байтах. <= 0 означает
 	// «без предела». Превышение → ErrContextLimit (без молчаливого усечения).
 	ByteLimit int
+	// HideSource reports a source message whose turn the history must not show. nil → nothing is hidden.
+	HideSource func(sourceMessageID string) bool
 }
 
 // Build собирает промпт: инструкция + история прошлых сообщений в порядке отправки + текущее сообщение.
@@ -50,7 +52,7 @@ func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string
 	sb.WriteString(instruction)
 	sb.WriteString("\n\n")
 
-	if lines := renderHistory(history); len(lines) > 0 {
+	if lines := b.renderHistory(history); len(lines) > 0 {
 		sb.WriteString(HistoryHeading)
 		sb.WriteString("\n")
 		for _, l := range lines {
@@ -82,9 +84,13 @@ func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string
 }
 
 // renderHistory превращает события в строки истории в порядке отправки.
-func renderHistory(history []Event) []string {
+func (b ContextBuilder) renderHistory(history []Event) []string {
+	hidden := b.hiddenTurns(history)
 	var lines []string
 	for _, e := range history {
+		if hidden[e.TurnID] {
+			continue
+		}
 		switch e.Type {
 		case EventTurnAccepted:
 			var d TurnAcceptedData
@@ -110,6 +116,21 @@ func renderHistory(history []Event) []string {
 		}
 	}
 	return lines
+}
+
+// hiddenTurns returns the turns started by a hidden source; the Assistant's answer repeats what the source said.
+func (b ContextBuilder) hiddenTurns(history []Event) map[string]bool {
+	if b.HideSource == nil {
+		return nil
+	}
+	hidden := map[string]bool{}
+	for _, e := range history {
+		var d TurnAcceptedData
+		if e.Type == EventTurnAccepted && e.DecodeData(&d) == nil && d.SourceMessageID != "" && b.HideSource(d.SourceMessageID) {
+			hidden[e.TurnID] = true
+		}
+	}
+	return hidden
 }
 
 // Each line of a historical peer message stays inside a Markdown quotation,

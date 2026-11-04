@@ -200,3 +200,31 @@ func TestSideAgentContext_HistoricalPeerCannotForgeHeadingsOrRoles(t *testing.T)
 		t.Fatalf("carriage-return line was not quoted: %s", p)
 	}
 }
+
+// A hidden source is dropped together with the whole turn it started: the Assistant's answer repeats it.
+func TestBuild_HiddenSourceTurnIsNotRenderedInHistory(t *testing.T) {
+	history := []Event{
+		ev(t, EventTurnAccepted, "hidden", TurnAcceptedData{Message: "secret notice body", SourceMessageID: "mm-hidden", SourceThreadID: "mt-1", SourceSenderID: "run:one"}),
+		ev(t, EventAssistantText, "hidden", AssistantTextData{Text: "answer quoting the notice"}),
+		ev(t, EventToolAction, "hidden", ToolActionData{Tool: "Bash", Detail: "afm agent board get"}),
+		ev(t, EventTurnCompleted, "hidden", TurnCompletedData{}),
+		ev(t, EventTurnAccepted, "shown", TurnAcceptedData{Message: "ordinary peer message", SourceMessageID: "mm-shown", SourceThreadID: "mt-2", SourceSenderID: "run:two"}),
+		ev(t, EventAssistantText, "shown", AssistantTextData{Text: "ordinary answer"}),
+		ev(t, EventTurnAccepted, "direct", TurnAcceptedData{Message: "typed by the user"}),
+	}
+	b := ContextBuilder{HideSource: func(id string) bool { return id == "mm-hidden" }}
+	p, err := b.Build(history, TurnAcceptedData{Message: "current question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"secret notice body", "mm-hidden", "answer quoting the notice", "afm agent board get"} {
+		if strings.Contains(p, leaked) {
+			t.Errorf("prompt shows hidden source content %q: %s", leaked, p)
+		}
+	}
+	for _, want := range []string{"ordinary peer message", "ordinary answer", "typed by the user", "current question"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lost visible content %q: %s", want, p)
+		}
+	}
+}

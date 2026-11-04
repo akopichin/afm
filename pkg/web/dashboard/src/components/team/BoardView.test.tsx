@@ -435,4 +435,52 @@ describe('BoardView', () => {
     expect(within(screen.getByRole('dialog', { name: 'Task details' })).queryByRole('button', { name: /Release|Reopen|Assign/ })).toBeNull()
     expect(typed).not.toHaveBeenCalled()
   })
+
+  describe('facts', () => {
+    const fact = { ...entry('stage:api', 'fact/live', 'ready', 20), version: 2, artifact_refs: ['api/out.txt'] }
+    const factsSection = () => screen.getByRole('region', { name: 'Facts' })
+
+    test('shows the facts below the lanes with key, version, status and author', () => {
+      renderView(boardOf([...entries, fact]))
+      const section = factsSection()
+      expect(within(section).getByRole('heading', { name: 'Facts' })).toBeInTheDocument()
+      expect(within(section).getByText('1')).toBeInTheDocument()
+      const card = within(section).getByRole('article', { name: 'fact/live' })
+      expect(within(card).getByText('v2')).toBeInTheDocument()
+      expect(within(card).getByText('ready')).toBeInTheDocument()
+      expect(within(card).getByText('api')).toBeInTheDocument()
+      expect(within(card).getByText('api/out.txt')).toBeInTheDocument()
+      const lanesEl = lane('Done').closest('.board-lanes') as HTMLElement
+      expect(lanesEl.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    test('a fact report stays inside its card and is not a card of its own', () => {
+      renderView(boardOf([...entries, fact, entry('run:t-1', 'fact/live/qa', 'checked', 21)]))
+      expect(screen.getAllByRole('article')).toHaveLength(1)
+      const reports = within(screen.getByRole('article', { name: 'fact/live' })).getByRole('list', { name: 'Reports' })
+      expect(within(reports).getByText('QA')).toBeInTheDocument()
+      expect(within(reports).getByText('checked')).toBeInTheDocument()
+    })
+
+    test('without facts there is no Facts section', () => {
+      renderView(boardOf(entries))
+      expect(screen.queryByRole('region', { name: 'Facts' })).toBeNull()
+      expect(screen.queryByRole('article')).toBeNull()
+    })
+
+    test('task keys are not shown as facts', () => {
+      renderView(boardOf([...entries, fact]))
+      expect(within(factsSection()).getAllByRole('article').map((a) => a.getAttribute('aria-label'))).toEqual(['fact/live'])
+    })
+
+    test('typed tasks are not facts either and the filters leave facts alone', () => {
+      renderView(boardOf([fact], { tasks: [typedTaskView({ key: 'task/csv', title: 'CSV export' })], typedTasks: true }))
+      expect(within(factsSection()).getAllByRole('article').map((a) => a.getAttribute('aria-label'))).toEqual(['fact/live'])
+
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search tasks' }), { target: { value: 'nothing-matches' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Assignee' }), { target: { value: 'run:t-1' } })
+      expect(within(factsSection()).getByRole('article', { name: 'fact/live' })).toBeInTheDocument()
+      expect(screen.getByText('0 of 1 tasks done')).toBeInTheDocument()
+    })
+  })
 })

@@ -97,6 +97,9 @@ func (o *Orchestrator) Wait(ctx context.Context, req WaitRequest) (WaitReceipt, 
 	if req.Waiter == "" {
 		return WaitReceipt{}, errors.New("agentcomm: waiter is required")
 	}
+	if req.Condition.Kind == agentcomm.WaitOnBoardKey && !o.boardAvailable() {
+		return WaitReceipt{}, errBoardUnavailable()
+	}
 	req.invocation = MeshInvocation(ctx)
 	if len(req.MessageIDs) > 0 {
 		if req.Condition.Kind != agentcomm.WaitOnReplyTo || req.Condition.MessageID != "" {

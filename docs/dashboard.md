@@ -218,8 +218,11 @@ and the controls available in each mode.
 In `team` mode, the run-wide **Board** tab shows tasks in **Todo**, **In progress**,
 and **Done** columns. Task cards are gray, blue, and green, respectively. Search matches a
 task's key and text; the assignee filter can show one agent's tasks or unassigned
-tasks. The header shows completed tasks out of all tasks. **New task** opens the
-posting form, and selecting a card opens its text, assignees, and current reports.
+tasks. The header shows completed tasks out of all tasks. Below the columns, a
+**Facts** section lists the other board entries (key, version, status, author,
+artifacts and the reports on them) with the same cards as Team's Board subtab; search
+and the filter do not apply to it, and it is absent when the board has no facts.
+**New task** opens the posting form, and selecting a card opens its text, assignees, and current reports.
 New tasks start in Todo.
 
 In a run with [typed tasks](collaboration.md#typed-tasks) (every run started by
@@ -257,6 +260,9 @@ one mixed grid alongside non-task board entries, without status columns. Both
 views update from the shared board. While it loads, the Board tab says so; if
 loading fails, **Retry** is available. If a later refresh fails, the last loaded
 cards stay visible with an out-of-date warning.
+
+In `assistants` mode neither Board view exists: the Board is off for the dashboard,
+agents and the CLI. See [The Board in `assistants` mode](collaboration.md#the-board-in-assistants-mode).
 
 ## Message times
 

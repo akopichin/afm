@@ -6,8 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// CollaborationMode — режим представления collaboration в dashboard. Влияет только на UI: механизмы
-// team/mesh/board и их исполнение от режима не зависят.
+// CollaborationMode — режим collaboration. В assistants скрыты Team, Board и People, а Board недоступен
+// на сервере и в промптах (feature_disabled); сообщения, помощники и гейты работают в обоих режимах.
 type CollaborationMode string
 
 const (

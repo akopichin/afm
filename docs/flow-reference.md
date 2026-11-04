@@ -212,11 +212,13 @@ this flow, taking precedence over `AFM_SIDEAGENT` and `config.yaml`. Omit it to 
 to those (default ON).
 
 `collaboration: { max_depth: N, mode: assistants }` can override the helper
-delegation depth and dashboard mode for this flow. `mode` is `team` (the default)
-or `assistants`; resolution is flow > project config > global config > `team`.
+delegation depth and collaboration mode for this flow. `mode` is `team` (the default)
+or `assistants`, which also turns the Board off for agents, the CLI and the API;
+resolution is flow > project config > global config > `team`.
 Neither setting enables collaboration. There is no flow-level `enabled` field;
 use `collaboration.enabled` in `config.yaml` or `AFM_COLLABORATION` to switch
-collaboration on or off. See [Collaboration modes](collaboration.md#collaboration-modes).
+collaboration on or off. See [Collaboration modes](collaboration.md#collaboration-modes)
+and [The Board in `assistants` mode](collaboration.md#the-board-in-assistants-mode).
 
 ### `repeat` — run successful flows again
 

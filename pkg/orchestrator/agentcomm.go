@@ -293,6 +293,11 @@ func deriveMeshMessageID(operationID string) agentcomm.MessageID {
 	return agentcomm.MessageID("mm-" + deriveMeshID("mesh-message", operationID))
 }
 
+// boardNoticeMessageID is the id of the notice a Board change, committed as operation opID, sends recipient.
+func boardNoticeMessageID(opID string, recipient agentcomm.ParticipantID) agentcomm.MessageID {
+	return deriveMeshMessageID(opID + ":notify:" + string(recipient))
+}
+
 func deriveMeshWaitID(operationID string) agentcomm.WaitID {
 	return agentcomm.WaitID("mw-" + deriveMeshID("mesh-wait", operationID))
 }
@@ -316,8 +321,8 @@ func (o *Orchestrator) agentCommInboxBlock(s flow.Stage) string {
 	}
 	if o.opts.Store != nil {
 		rs := o.opts.Store.Snapshot()
-		block += agentCommRequestsBlock(rs.Assistants.Mesh, o.liveRoster(rs), participant)
-		block += boardTasksBlockFor(rs, participant)
+		block += agentCommRequestsBlock(o.agentMesh(rs), o.liveRoster(rs), participant)
+		block += o.boardTasksBlockFor(rs, participant)
 		block += stageHelpersBlock(rs, s.ID)
 	}
 	return block
@@ -337,7 +342,7 @@ func (o *Orchestrator) agentCommOnDeliveredForStage(s flow.Stage) func() {
 func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(meshStageParticipantID(s.ID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
-		TypedBoardTasks: o.BoardTasksEnabled(), CanSelfLoop: false, CanSpawnHelpers: o.opts.AssistantsEnabled,
+		TypedBoardTasks: o.BoardTasksEnabled(), BoardUnavailable: !o.boardAvailable(), CanSelfLoop: false, CanSpawnHelpers: o.opts.AssistantsEnabled,
 	})
 }
 
@@ -358,7 +363,7 @@ func (o *Orchestrator) agentCommBlockForTask(taskID assistants.TaskID) string {
 	}
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(participantID), Scope: string(scope), Available: o.MeshBaseURL() != "",
-		TypedBoardTasks: o.BoardTasksEnabled(), CanSelfLoop: true,
+		TypedBoardTasks: o.BoardTasksEnabled(), BoardUnavailable: !o.boardAvailable(), CanSelfLoop: true,
 	})
 }
 

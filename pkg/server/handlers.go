@@ -67,7 +67,7 @@ type statusResponse struct {
 	BackoffOpenSince     []time.Time     `json:"backoff_open_since,omitempty"`
 	Capabilities         capabilities    `json:"capabilities"`
 	// CollaborationMode — режим представления collaboration ("team"|"assistants"). Всегда присутствует и не
-	// зависит от capabilities.collaboration: это только подсказка dashboard, какие разделы показывать.
+	// зависит от capabilities.collaboration: dashboard по нему выбирает разделы, а сервер — доступность Board.
 	CollaborationMode assistants.CollaborationMode `json:"collaboration_mode"`
 	// UnknownCommandName is the label prefix the dashboard numbers commands with when a response has no
 	// command_name; always present so the fallback never needs a client-side default.
