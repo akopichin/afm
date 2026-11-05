@@ -31,6 +31,8 @@ type AgentCommInputs struct {
 	// BoardUnavailable drops every Board instruction: in assistants mode the server refuses Board commands. It wins
 	// over TypedBoardTasks; the zero value keeps the Board for every existing caller.
 	BoardUnavailable bool
+	// InteractiveStage applies only to the stage author; helpers cannot use its human dialog.
+	InteractiveStage bool
 	// CanSelfLoop excludes stage main agents: they can schedule a colleague but cannot target themselves.
 	CanSelfLoop bool
 
@@ -65,7 +67,12 @@ func AgentCommunicationBlock(in AgentCommInputs) string {
 		sb.WriteString("</agent_communication>\n")
 		return sb.String()
 	}
-	fmt.Fprintf(&sb, "You are participant %q (scope: %s) on the Agent Mesh — the shared protocol every stage agent, helper and standing run-scoped role uses to talk to each other and to the human.\n", in.ParticipantID, in.Scope)
+	if in.BoardUnavailable && in.InteractiveStage {
+		fmt.Fprintf(&sb, "You are participant %q (scope: %s) on the Agent Mesh. Use it to coordinate with other agents and reply to incoming chat messages.\n", in.ParticipantID, in.Scope)
+		sb.WriteString("When your task requires a question, clarification, choice, or approval from the human (including instructions such as \"ask the user\"), use `afm stage ask`, then `afm stage wait-answer` as described in <interactive_rules>. Do not substitute a mesh message or `afm agent wait` for this dialog, and do not ask the user to @mention you to continue. This rule takes precedence over the mesh wait instructions below.\n")
+	} else {
+		fmt.Fprintf(&sb, "You are participant %q (scope: %s) on the Agent Mesh — the shared protocol every stage agent, helper and standing run-scoped role uses to talk to each other and to the human.\n", in.ParticipantID, in.Scope)
+	}
 	sb.WriteString("Available operations, all through the hidden `afm agent` CLI (never a tool you need to install):\n")
 	sb.WriteString("- `afm agent list` — see every reachable colleague, their alias and whether they are currently reachable.\n")
 	sb.WriteString("- `afm agent send --to <alias,alias,...> --kind message --body \"...\"` — start or continue a conversation with those colleagues (aliases from `afm agent list`, e.g. `--to docs`). No thread id needed: it reuses your open conversation with exactly them or opens one, and prints its `thread_id`. Use `--kind request` when you expect an answer.\n")

@@ -5,6 +5,13 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-05
 
+### Fix: human questions use the stage dialog in assistants mode
+
+Interactive stage agents in `collaboration.mode: assistants` now receive an explicit
+prompt rule to ask human questions through `afm stage ask` and `afm stage wait-answer`,
+instead of substituting mesh messages and waiting for an `@mention` to continue.
+See [Interactive stages](docs/interactive-stages.md).
+
 ### Improvement: visible helper work in the dashboard
 
 A selected helper now shows its messages and tool calls as they happen: a

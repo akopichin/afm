@@ -5,6 +5,12 @@ The agent uses two commands, `afm stage ask` and `afm stage wait-answer`. A "Dia
 section appears in the dashboard where the user answers. While there's no answer,
 the stage sits in `awaiting_user_input` status; once answered, execution continues.
 
+With `collaboration.mode: assistants`, the stage agent's mesh instructions explicitly
+route questions, clarifications, choices and approvals from the human through this
+dialog. An instruction such as "ask the user" means `afm stage ask` followed by
+`afm stage wait-answer`, rather than a mesh message or a wait for an `@mention`.
+The agent can still reply to incoming chat messages through the mesh.
+
 ```sh
 afm stage ask --option "Go" --option "Python" <<'EOF'
 ## Full context here

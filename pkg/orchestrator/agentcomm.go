@@ -343,6 +343,7 @@ func (o *Orchestrator) agentCommBlockFor(s flow.Stage) string {
 	return prompts.AgentCommunicationBlock(prompts.AgentCommInputs{
 		ParticipantID: string(meshStageParticipantID(s.ID)), Scope: string(agentcomm.ScopeStage), Available: o.MeshBaseURL() != "",
 		TypedBoardTasks: o.BoardTasksEnabled(), BoardUnavailable: !o.boardAvailable(), CanSelfLoop: false, CanSpawnHelpers: o.opts.AssistantsEnabled,
+		InteractiveStage: s.Interactive,
 	})
 }
 
