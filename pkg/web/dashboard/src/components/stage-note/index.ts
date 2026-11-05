@@ -1,1 +1,1 @@
-export { StageNote, type StageNoteStage } from './StageNote'
+export { StageNote, type StageNotePreference, type StageNotePresentation, type StageNoteStage } from './StageNote'

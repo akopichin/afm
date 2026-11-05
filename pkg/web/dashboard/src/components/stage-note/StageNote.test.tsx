@@ -47,10 +47,11 @@ describe('StageNote visibility', () => {
 
   test('a started stage shows its note read only, without Edit', () => {
     renderNote({ stage: { ...pending, status: 'running', preNote: 'mind the limits' } })
-    expect(screen.getByText('mind the limits')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.getByText('mind the limits', { selector: 'p' })).toBeInTheDocument()
     expect(screen.getByText('Read only')).toBeInTheDocument()
     expect(screen.getByText('Before start')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /note/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /(Add|Edit) note/ })).toBeNull()
   })
 
   test.each([
@@ -170,6 +171,87 @@ describe('StageNote editing', () => {
   })
 })
 
+describe('StageNote shows the saved text before the status catches up', () => {
+  test('after Save the card shows the new text while preNote is unchanged, and a changed preNote wins again', async () => {
+    vi.spyOn(runClient, 'setStageNote').mockResolvedValue()
+    const stage = { ...pending, preNote: 'old text' }
+    const { rerender, onDraftChange, onChanged } = renderNote({ stage })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'new text' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit note' })).toHaveFocus())
+    expect(screen.getByText('new text')).toBeInTheDocument()
+    expect(screen.queryByText('old text')).not.toBeInTheDocument()
+
+    rerender(<StageNote stage={{ ...stage, preNote: 'new text' }} onDraftChange={onDraftChange} onChanged={onChanged} />)
+    expect(screen.getByText('new text')).toBeInTheDocument()
+    rerender(<StageNote stage={{ ...stage, preNote: 'from elsewhere' }} onDraftChange={onDraftChange} onChanged={onChanged} />)
+    expect(screen.getByText('from elsewhere')).toBeInTheDocument()
+  })
+
+  async function saveNote(replaced: string, saved: string) {
+    vi.spyOn(runClient, 'setStageNote').mockResolvedValue()
+    const stage = { ...pending, preNote: replaced }
+    const view = renderNote({ stage })
+    fireEvent.click(screen.getByRole('button', { name: replaced === '' ? 'Add note' : 'Edit note' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: saved } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit note' })).toHaveFocus())
+    const show = (preNote: string) => view.rerender(<StageNote stage={{ ...stage, preNote }} onDraftChange={view.onDraftChange} onChanged={view.onChanged} />)
+    return show
+  }
+
+  async function saveThenCatchUp(replaced: string, saved: string) {
+    const show = await saveNote(replaced, saved)
+    show(saved)
+    return show
+  }
+
+  test('once the status caught up, a server note back to the old value is shown', async () => {
+    const show = await saveThenCatchUp('old text', 'new text')
+    show('old text')
+    expect(screen.getByText('old text')).toBeInTheDocument()
+    expect(screen.queryByText('new text')).not.toBeInTheDocument()
+  })
+
+  test('once the status caught up, a server note removed elsewhere is not revived', async () => {
+    const show = await saveThenCatchUp('', 'new text')
+    show('')
+    expect(screen.queryByText('new text')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument()
+  })
+
+  test('once the status caught up, a server note changed to a third value wins, then back to empty', async () => {
+    const show = await saveThenCatchUp('old text', 'new text')
+    show('third')
+    expect(screen.getByText('third')).toBeInTheDocument()
+    show('')
+    expect(screen.queryByText('new text')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument()
+  })
+
+  test('a second edit after Save starts from the saved text and is shown', async () => {
+    const show = await saveNote('old text', 'new text')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('new text')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'newer text' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Stage note' })).not.toBeInTheDocument())
+    expect(screen.getByText('newer text')).toBeInTheDocument()
+    show('newer text')
+    expect(screen.getByText('newer text')).toBeInTheDocument()
+  })
+
+  test('Remove note hides the note right away', async () => {
+    vi.spyOn(runClient, 'setStageNote').mockResolvedValue()
+    renderNote({ stage: { ...pending, preNote: 'old text' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove note' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument())
+    expect(screen.queryByText('old text')).not.toBeInTheDocument()
+  })
+})
+
 describe('StageNote editor footer', () => {
   function openEditor(stage: StageNoteStage = pending) {
     const view = renderNote({ stage })
@@ -223,6 +305,7 @@ describe('StageNote failures keep the draft', () => {
     // The status poll reports the start while the request is still in flight.
     view.rerender(<StageNote stage={{ ...pending, status: 'running' }} initialDraft="too late" onDraftChange={view.onDraftChange} onChanged={view.onChanged} />)
     await act(async () => { reject(new runClient.FlowApiError('/api/stages/s1/note', 400, undefined)) })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Not saved — the stage has already started.')
   })
 
@@ -269,6 +352,7 @@ describe('StageNote when the stage starts while editing', () => {
 
   test('the editor turns read only with the reason and the draft is not removed', () => {
     const { onDraftChange } = renderNote({ stage: started, initialDraft: 'unsent thoughts' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     const editor = screen.getByRole('textbox', { name: 'Stage note' })
     expect(editor).toHaveValue('unsent thoughts')
     expect(editor).toHaveAttribute('readonly')
@@ -279,6 +363,7 @@ describe('StageNote when the stage starts while editing', () => {
 
   test('Discard draft removes it', () => {
     const { onDraftChange, container } = renderNote({ stage: started, initialDraft: 'unsent thoughts' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }))
     expect(onDraftChange).toHaveBeenLastCalledWith('s1', null)
     expect(container).toBeEmptyDOMElement()
@@ -286,12 +371,15 @@ describe('StageNote when the stage starts while editing', () => {
 
   test('Discard draft keeps showing the saved note read only', () => {
     renderNote({ stage: { ...started, preNote: 'saved before start' }, initialDraft: 'unsent' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }))
-    expect(screen.getByText('saved before start')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.getByText('saved before start', { selector: 'p' })).toBeInTheDocument()
   })
 
   test('a stage that becomes pending again (Retry) makes the draft editable', () => {
     const view = renderNote({ stage: started, initialDraft: 'unsent' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     view.rerender(<StageNote stage={pending} initialDraft="unsent" onDraftChange={view.onDraftChange} onChanged={view.onChanged} />)
     expect(screen.getByRole('textbox', { name: 'Stage note' })).not.toHaveAttribute('readonly')
     expect(screen.getByRole('button', { name: 'Save note' })).toBeEnabled()
@@ -305,6 +393,7 @@ describe('StageNote when the stage starts while editing', () => {
     view.rerender(<StageNote stage={started} initialDraft="unsent" onDraftChange={view.onDraftChange} onChanged={view.onChanged} />)
     await act(async () => { reject(new runClient.FlowApiError('/api/stages/s1/note', 409, undefined)) })
     view.rerender(<StageNote stage={pending} initialDraft="unsent" onDraftChange={view.onDraftChange} onChanged={view.onChanged} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     expect(screen.getByRole('textbox', { name: 'Stage note' })).not.toHaveFocus()
   })
 })
@@ -355,8 +444,299 @@ describe('StageNote save outcome', () => {
     const view = renderNote({ initialDraft: 'unsent' })
     fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
     view.rerender(<StageNote stage={{ ...pending, status: 'running' }} initialDraft="unsent" onDraftChange={view.onDraftChange} onChanged={view.onChanged} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
     expect(screen.getByRole('button', { name: 'Discard draft' })).toBeDisabled()
     await act(async () => { save.reject(new runClient.FlowApiError('/api/stages/s1/note', 409, undefined)) })
     expect(screen.getByRole('button', { name: 'Discard draft' })).toBeEnabled()
+  })
+})
+
+describe('StageNote presentation defaults', () => {
+  const notStarted = { started: false }
+  const startedTiming = { started: true }
+  const withTiming = (stage: StageNoteStage, timing: object): StageNoteStage => ({ ...stage, timing: timing as StageNoteStage['timing'] })
+
+  test.each([
+    ['pending with a note', { ...pending, preNote: 'saved note' }, 'expanded'],
+    ['pending without a note', pending, 'expanded'],
+    ['pending, not started, long note', { ...pending, preNote: 'x'.repeat(5000) }, 'expanded'],
+    ['running', { ...pending, status: 'running' as const, preNote: 'saved note' }, 'compact'],
+    ['failed', { ...pending, status: 'failed' as const, preNote: 'saved note' }, 'compact'],
+    ['done', { ...pending, status: 'done' as const, preNote: 'saved note' }, 'compact'],
+  ])('%s opens %s', (_name, stage, mode) => {
+    const { container } = renderNote({ stage })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', mode)
+  })
+
+  test('a Retry stage (pending, already started) opens compact', () => {
+    const { container } = renderNote({ stage: withTiming({ ...pending, preNote: 'saved' }, startedTiming) })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+  })
+
+  test('timing.started false wins over a running status fallback', () => {
+    const { container } = renderNote({ stage: withTiming({ ...pending, status: 'ready', preNote: 'saved' }, notStarted) })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+  })
+
+  test('a stored draft before the start opens the editor expanded even if compact was chosen', () => {
+    const { container } = renderNote({ initialDraft: 'unsaved', initialPresentation: { presentation: 'compact', started: false } })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('unsaved')
+  })
+
+  test('a stored choice with the same start fact is restored', () => {
+    const { container } = renderNote({ stage: { ...pending, status: 'running', preNote: 'n' }, initialPresentation: { presentation: 'expanded', started: true } })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+  })
+
+  test('a stored choice made before the start gives way to the started default', () => {
+    const { container } = renderNote({ stage: { ...pending, status: 'running', preNote: 'n' }, initialPresentation: { presentation: 'expanded', started: false } })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+  })
+
+  test('the chosen presentation is reported on mount', () => {
+    const onPresentationChange = vi.fn()
+    renderNote({ stage: { ...pending, status: 'running', preNote: 'n' }, onPresentationChange })
+    expect(onPresentationChange).toHaveBeenLastCalledWith('s1', { presentation: 'compact', started: true })
+  })
+})
+
+describe('StageNote expand button', () => {
+  const running: StageNoteStage = { ...pending, status: 'running', preNote: 'first line\n  second   line' }
+
+  test('is a real button with aria-expanded and aria-controls pointing at the body', () => {
+    const { container } = renderNote({ stage: running })
+    const toggle = screen.getByRole('button', { name: 'Expand stage note' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    const body = container.querySelector(`[id="${toggle.getAttribute('aria-controls')}"]`)
+    expect(body).not.toBeNull()
+    expect(body).toHaveAttribute('hidden')
+  })
+
+  test('the compact row shows the note as one line preview inside the button', () => {
+    renderNote({ stage: running })
+    expect(screen.getByRole('button', { name: 'Expand stage note' })).toHaveTextContent('first line second line')
+    expect(screen.getByText('Read only')).toBeInTheDocument()
+  })
+
+  test('compact hides the body content from the document and the tab order', () => {
+    renderNote({ stage: running, initialDraft: 'unsent' })
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Discard draft' })).toBeNull()
+    expect(screen.queryByText('Before start')).toBeNull()
+    expect(screen.getByText('Unsaved draft')).toBeInTheDocument()
+  })
+
+  test('click expands, click collapses, without any request or draft change', () => {
+    const save = vi.spyOn(runClient, 'setStageNote').mockResolvedValue()
+    const { container, onDraftChange } = renderNote({ stage: running })
+    const section = container.querySelector('section')
+    screen.getByRole('button', { name: 'Expand stage note' }).focus()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(section).toHaveAttribute('data-presentation', 'expanded')
+    const toggle = screen.getByRole('button', { name: 'Collapse stage note' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle).toHaveFocus()
+    fireEvent.click(toggle)
+    expect(section).toHaveAttribute('data-presentation', 'compact')
+    expect(save).not.toHaveBeenCalled()
+    expect(onDraftChange).not.toHaveBeenCalled()
+  })
+
+  test('is a native type=button element, so Enter and Space activate it without custom key handling', () => {
+    renderNote({ stage: running })
+    const toggle = screen.getByRole('button', { name: 'Expand stage note' })
+    expect(toggle.tagName).toBe('BUTTON')
+    expect(toggle).toHaveAttribute('type', 'button')
+  })
+
+  test('expanding a pending note does not focus an editor', () => {
+    renderNote({ stage: { ...pending, preNote: 'saved' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse stage note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  test('a manually collapsed empty pending note keeps the title row and Add note without a preview', () => {
+    renderNote()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse stage note' }))
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Expand stage note' })).toHaveTextContent(/^Stage note$/)
+  })
+
+  test('Add note from the compact row expands the card and focuses the editor', () => {
+    const { container } = renderNote({ stage: { ...pending, preNote: 'saved' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse stage note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveFocus()
+  })
+
+  test('is locked while the editor is open before the start and while saving', async () => {
+    let finish: () => void = () => {}
+    vi.spyOn(runClient, 'setStageNote').mockReturnValue(new Promise<void>((resolve) => { finish = resolve }))
+    renderNote({ initialDraft: 'typing' })
+    expect(screen.getByRole('button', { name: 'Collapse stage note' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    expect(screen.getByRole('button', { name: 'Collapse stage note' })).toBeDisabled()
+    await act(async () => { finish() })
+  })
+
+  test('an unsaved draft after the start can be collapsed and keeps its text', () => {
+    renderNote({ stage: running, initialDraft: 'unsent' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('unsent')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse stage note' }))
+    expect(screen.getByText('Unsaved draft')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('unsent')
+  })
+
+  test('Discard draft after the start returns to the row and focuses the expand button', () => {
+    const { container } = renderNote({ stage: running, initialDraft: 'unsent' })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+    expect(screen.getByRole('button', { name: 'Expand stage note' })).toHaveFocus()
+  })
+
+  test('manual choices are reported with the start fact', () => {
+    const onPresentationChange = vi.fn()
+    renderNote({ stage: running, onPresentationChange })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(onPresentationChange).toHaveBeenLastCalledWith('s1', { presentation: 'expanded', started: true })
+  })
+})
+
+describe('StageNote first start', () => {
+  const view = (stage: StageNoteStage, props: Props = {}) => (
+    <StageNote stage={stage} onDraftChange={vi.fn()} onChanged={vi.fn()} {...props} />
+  )
+
+  test('collapses once when the stage starts, and a later manual expand survives polls', () => {
+    const onPresentationChange = vi.fn()
+    const { container, rerender } = render(view({ ...pending, preNote: 'saved' }, { onPresentationChange }))
+    const section = container.querySelector('section')
+    expect(section).toHaveAttribute('data-presentation', 'expanded')
+    rerender(view({ ...pending, status: 'running', preNote: 'saved' }, { onPresentationChange }))
+    expect(section).toHaveAttribute('data-presentation', 'compact')
+    expect(onPresentationChange).toHaveBeenLastCalledWith('s1', { presentation: 'compact', started: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    rerender(view({ ...pending, status: 'running', preNote: 'saved' }, { onPresentationChange }))
+    rerender(view({ ...pending, status: 'done', preNote: 'saved' }, { onPresentationChange }))
+    expect(section).toHaveAttribute('data-presentation', 'expanded')
+  })
+
+  test('Retry back to pending does not restore the before-start behaviour', () => {
+    const { container, rerender } = render(view({ ...pending, status: 'failed', preNote: 'saved' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    rerender(view({ ...pending, status: 'pending', preNote: 'saved', timing: { started: true } as StageNoteStage['timing'] }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+    rerender(view({ ...pending, status: 'ready', preNote: 'saved' }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+  })
+
+  test('timing disappearing after the start does not reopen the first-start collapse', () => {
+    const { container, rerender } = render(view({ ...pending, preNote: 'saved' }))
+    rerender(view({ ...pending, status: 'running', preNote: 'saved' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    rerender(view({ ...pending, status: 'pending', preNote: 'saved' }))
+    rerender(view({ ...pending, status: 'running', preNote: 'saved' }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+  })
+
+  test('starting while typing keeps the draft and collapses behind Unsaved draft', () => {
+    const { container, rerender } = render(view(pending, { initialDraft: 'half typed' }))
+    rerender(view({ ...pending, status: 'running' }, { initialDraft: 'half typed' }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+    expect(screen.getByText('Unsaved draft')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('half typed')
+  })
+
+  test('starting during a save does not cancel the request and keeps the 409 error visible after expanding', async () => {
+    let reject: (reason: unknown) => void = () => {}
+    const save = vi.spyOn(runClient, 'setStageNote').mockReturnValue(new Promise<void>((_resolve, rej) => { reject = rej }))
+    const onChanged = vi.fn()
+    const { container, rerender } = render(view(pending, { initialDraft: 'late', onChanged }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    rerender(view({ ...pending, status: 'running' }, { initialDraft: 'late', onChanged }))
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+    await act(async () => { reject(new runClient.FlowApiError('/api/stages/s1/note', 409, undefined)) })
+    expect(save).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand stage note' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Saved, but the stage started')
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveValue('late')
+  })
+
+  test('a successful save started at the same moment ends compact', async () => {
+    let resolve: () => void = () => {}
+    vi.spyOn(runClient, 'setStageNote').mockReturnValue(new Promise<void>((res) => { resolve = res }))
+    const { container, rerender } = render(view({ ...pending, preNote: 'old' }, { initialDraft: 'new' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    rerender(view({ ...pending, status: 'running', preNote: 'old' }, { initialDraft: 'new' }))
+    await act(async () => { resolve() })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+  })
+
+  test('focus inside the note moves to the expand button on auto-collapse', () => {
+    const { rerender } = render(view({ ...pending, preNote: 'saved' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    expect(screen.getByRole('textbox', { name: 'Stage note' })).toHaveFocus()
+    rerender(view({ ...pending, status: 'running', preNote: 'saved' }))
+    expect(screen.getByRole('button', { name: 'Expand stage note' })).toHaveFocus()
+  })
+
+  test('focus outside the note is left alone on auto-collapse', () => {
+    const outside = document.createElement('input')
+    document.body.append(outside)
+    const { rerender } = render(view({ ...pending, preNote: 'saved' }))
+    outside.focus()
+    rerender(view({ ...pending, status: 'running', preNote: 'saved' }))
+    expect(outside).toHaveFocus()
+    outside.remove()
+  })
+
+  test('Save and Cancel return to the expanded default before the start', async () => {
+    vi.spyOn(runClient, 'setStageNote').mockResolvedValue()
+    const cancelled = renderNote({ initialDraft: 'x', initialPresentation: { presentation: 'compact', started: false } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(cancelled.container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+    cancelled.unmount()
+
+    const saved = renderNote({ initialDraft: 'x', initialPresentation: { presentation: 'compact', started: false } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    await waitFor(() => expect(saved.onChanged).toHaveBeenCalled())
+    expect(saved.container.querySelector('section')).toHaveAttribute('data-presentation', 'expanded')
+  })
+
+  test('Save and Cancel return to compact on an already started Retry stage', async () => {
+    vi.spyOn(runClient, 'setStageNote').mockResolvedValue()
+    const retry = { ...pending, preNote: 'old' }
+    const cancelled = renderNote({ stage: retry, initialDraft: 'x', initialPresentation: { presentation: 'expanded', started: true } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(cancelled.container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+    cancelled.unmount()
+
+    const saved = renderNote({ stage: retry, initialDraft: 'x', initialPresentation: { presentation: 'expanded', started: true } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    await waitFor(() => expect(saved.onChanged).toHaveBeenCalled())
+    expect(saved.container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+  })
+
+  test('a remembered start survives a remount of a Retry stage without timing', () => {
+    const onPresentationChange = vi.fn()
+    const retry = { ...pending, preNote: 'saved' }
+    const { container } = renderNote({ stage: retry, initialPresentation: { presentation: 'compact', started: true }, onPresentationChange })
+    expect(container.querySelector('section')).toHaveAttribute('data-presentation', 'compact')
+    expect(onPresentationChange).toHaveBeenLastCalledWith('s1', { presentation: 'compact', started: true })
+  })
+
+  test('typing never reports a presentation change', () => {
+    const onPresentationChange = vi.fn()
+    renderNote({ initialDraft: 'a', onPresentationChange })
+    onPresentationChange.mockClear()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Stage note' }), { target: { value: 'ab' } })
+    expect(onPresentationChange).not.toHaveBeenCalled()
   })
 })

@@ -3,6 +3,16 @@
 All notable changes to afm are documented here; newest releases are at the top,
 older ones further down. Dates follow the commits that shipped each change.
 
+## 2026-11-05
+
+### Improvement: Stage note folds into a one-line row
+
+Once a stage starts, its Stage note folds into a one-line row with a preview and
+a **Read only** badge, so the Feed gets the space back. Click the title (or press
+Enter/Space) to expand or fold it again; the choice is remembered per stage until
+the page is reloaded. See
+[Stage note](docs/dashboard.md#stage-note).
+
 ## 2026-11-04
 
 ### Improvement: `assistants` mode turns the Board off for everyone

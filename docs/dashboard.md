@@ -1083,10 +1083,32 @@ already-running agent).
   reload the page.
 - The stage rail marks a stage that has a note with a 📝 icon.
 
-Once the stage starts, the block stays above the Feed as **Read only**, so you can
+### Folding the note
+
+The note has two modes, expanded and compact:
+
+- Before the stage first starts the note is expanded. When the stage first
+  starts, the note folds once into a one-line row; stages that have already
+  started show the row from the beginning.
+- The row shows the **Stage note** title, a one-line preview of the text, and a
+  **Read only** badge. On a `pending` stage it shows **Edit note** (or **Add
+  note**) instead. An unsaved draft is marked **Unsaved draft**.
+- Click the title to expand or fold the note; with the keyboard, focus it and
+  press **Enter** or **Space**. Expanded, the note scrolls inside its own card,
+  so the header and the Feed composer stay in view.
+- Your choice is remembered per stage until you reload the page or start a new
+  run. After a reload the default applies again. Other stages changing state
+  never changes a note you opened or folded.
+- The note cannot be folded while an editable editor is open or a save is in
+  progress. **Edit note** on the row expands the note and opens the editor.
+- After the stage starts, a read-only draft can be folded and expanded again
+  like any note. Expand the **Unsaved draft** row to reach **Discard draft**.
+
+Once the stage starts, the note stays above the Feed as **Read only**, so you can
 check what the agent was given. If it starts while you are editing, the editor
 turns read only, keeps your draft and offers **Discard draft**; the note is not
-saved. If the stage starts at the very moment you save, the dashboard warns that
+saved. After you discard the draft, the note returns to the saved text in the
+row. If the stage starts at the very moment you save, the dashboard warns that
 the agent may not have received the note.
 
 ## File comments (Docker mode)

@@ -33,6 +33,7 @@ type StageViewOverrides = {
   // существующие тесты не менялись; тесты про повторные эпизоды одной стадии задают разные t1/t2.
   updatedAt?: string
   preNote?: string
+  timing?: { started: boolean; complete: boolean }
 }
 
 // Строит один элемент нового wire-формата stages: []StageView.
@@ -55,6 +56,7 @@ function stageView(id: string, name: string, status: string, overrides: StageVie
     show_plan: overrides.showPlan ?? ((status !== 'pending' && !isScript && !autonomous) || status === 'failed' || status === 'paused'),
     show_dialog: overrides.showDialog ?? (hasDialog || status === 'awaiting_user_input'),
     pre_note: overrides.preNote ?? '',
+    ...(overrides.timing === undefined ? {} : { timing: overrides.timing }),
   }
 }
 
@@ -1072,7 +1074,7 @@ describe('App', () => {
   // The live configuration: the mesh answers, so the stage feed has a composer keyed by the selected stage next to
   // the Stage note slot. These tests must see exactly one note block through stage switches and status polls.
   describe('Stage note with the mesh on', () => {
-    type RunState = { s1: string; s2: string; s1Note: string; s2Note: string }
+    type RunState = { s1: string; s2: string; s1Note: string; s2Note: string; s2Started?: boolean; runId?: string }
 
     function mockMeshRun(state: RunState, options: { mesh?: boolean } = {}) {
       const mesh = options.mesh !== false
@@ -1082,11 +1084,11 @@ describe('App', () => {
         if (url.includes('/api/status')) {
           return json({
             flow_name: 'demo',
-            run_id: 'mesh-note-run',
+            run_id: state.runId ?? 'mesh-note-run',
             collaboration_mode: 'team',
             capabilities: { collaboration: mesh },
             accounting: { health: 'ok', has_data: false, show_money: true },
-            stages: [stageView('s1', 'Alpha', state.s1, { preNote: state.s1Note }), stageView('s2', 'Beta', state.s2, { preNote: state.s2Note })],
+            stages: [stageView('s1', 'Alpha', state.s1, { preNote: state.s1Note }), stageView('s2', 'Beta', state.s2, { preNote: state.s2Note, timing: state.s2Started === undefined ? undefined : { started: state.s2Started, complete: false } })],
           })
         }
         if (url.includes('/api/mesh/participants')) {
@@ -1142,12 +1144,91 @@ describe('App', () => {
       await openMeshRun({ s1: 'running', s2: 'running', s1Note: 'mind the limits', s2Note: '' })
       expect(regions()).toHaveLength(1)
       expect(within(regions()[0]!).getByText('mind the limits')).toBeInTheDocument()
+      expect(within(regions()[0]!).getByRole('button', { name: 'Expand stage note' })).toBeInTheDocument()
 
       await selectStage(/^s2 /, 's2')
       expect(regions()).toHaveLength(0)
       await selectStage(/^s1 /, 's1')
       expect(regions()).toHaveLength(1)
       expect(within(regions()[0]!).getByText('Read only')).toBeInTheDocument()
+    })
+
+    const toggle = (name: 'Expand stage note' | 'Collapse stage note') => screen.getByRole('button', { name })
+
+    test('the chosen presentation survives A to B to A, a tab change and status polls', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: '', s2Note: 'plan it' }
+      await openMeshRun(state)
+      await selectStage(/^s2 /, 's2')
+      fireEvent.click(toggle('Collapse stage note'))
+
+      await selectStage(/^s1 /, 's1')
+      await selectStage(/^s2 /, 's2')
+      expect(toggle('Expand stage note')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Cost' }))
+      fireEvent.click(within(screen.getByRole('tablist', { name: 'Workspace' })).getByRole('tab', { name: 'Feed' }))
+      await pollStatus()
+      expect(toggle('Expand stage note')).toBeInTheDocument()
+      expect(regions()).toHaveLength(1)
+    })
+
+    test('a stage that started while another was selected folds once and then keeps a manual expand', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: '', s2Note: 'plan it' }
+      await openMeshRun(state)
+      await selectStage(/^s2 /, 's2')
+      expect(toggle('Collapse stage note')).toBeInTheDocument()
+      await selectStage(/^s1 /, 's1')
+
+      state.s2 = 'running'
+      state.s2Started = true
+      await pollStatus()
+      await selectStage(/^s2 /, 's2')
+      expect(toggle('Expand stage note')).toBeInTheDocument()
+
+      fireEvent.click(toggle('Expand stage note'))
+      await selectStage(/^s1 /, 's1')
+      await selectStage(/^s2 /, 's2')
+      expect(toggle('Collapse stage note')).toBeInTheDocument()
+      expect(regions()).toHaveLength(1)
+    })
+
+    test('a first view picks the presentation from timing.started, and Retry is not before the start', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: 'live note', s2Note: 'plan it', s2Started: true }
+      await openMeshRun(state)
+      expect(toggle('Expand stage note')).toBeInTheDocument()
+      await selectStage(/^s2 /, 's2')
+      expect(toggle('Expand stage note')).toBeInTheDocument()
+      expect(within(regions()[0]!).getByRole('button', { name: 'Edit note' })).toBeInTheDocument()
+
+      state.s2Started = false
+      state.runId = 'mesh-note-run-2'
+      await pollStatus()
+      await waitFor(() => expect(toggle('Collapse stage note')).toBeInTheDocument())
+    })
+
+    test('a new run with the same stage id starts with the default presentation', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: '', s2Note: 'plan it' }
+      await openMeshRun(state)
+      await selectStage(/^s2 /, 's2')
+      fireEvent.click(toggle('Collapse stage note'))
+
+      state.runId = 'mesh-note-run-b'
+      await pollStatus()
+      await waitFor(() => expect(toggle('Collapse stage note')).toBeInTheDocument())
+      expect(regions()).toHaveLength(1)
+    })
+
+    test('without the mesh the presentation is remembered the same way', async () => {
+      const state: RunState = { s1: 'running', s2: 'pending', s1Note: '', s2Note: 'plan it' }
+      mockMeshRun(state, { mesh: false })
+      render(<App />)
+      await waitFor(() => expect(document.getElementById('detail-title')).toHaveTextContent('s1'))
+      await selectStage(/^s2 /, 's2')
+      fireEvent.click(toggle('Collapse stage note'))
+      await selectStage(/^s1 /, 's1')
+      await selectStage(/^s2 /, 's2')
+      expect(toggle('Expand stage note')).toBeInTheDocument()
+      expect(regions()).toHaveLength(1)
     })
 
     test('an open editor of a stage that starts becomes one read-only block that keeps the draft', async () => {
@@ -1163,6 +1244,7 @@ describe('App', () => {
       state.s2 = 'running'
       await pollStatus()
 
+      fireEvent.click(await screen.findByRole('button', { name: 'Expand stage note' }))
       await screen.findByRole('button', { name: 'Discard draft' })
       expect(regions()).toHaveLength(1)
       const boxes = screen.getAllByRole('textbox', { name: 'Stage note' })
