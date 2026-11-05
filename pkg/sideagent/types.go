@@ -72,6 +72,11 @@ const (
 	EventTurnCompleted   EventType = "turn_completed"
 	EventTurnFailed      EventType = "turn_failed"
 	EventTurnInterrupted EventType = "turn_interrupted"
+
+	// События очереди принимаются без хода (turn_id пустой): сообщение живёт дольше любого хода.
+	EventMessageQueued    EventType = "message_queued"
+	EventMessageCancelled EventType = "message_cancelled"
+	EventMessageFailed    EventType = "message_failed"
 )
 
 // knownEventTypes — множество допустимых типов. Неизвестный тип → ошибка.
@@ -83,6 +88,10 @@ var knownEventTypes = map[EventType]struct{}{
 	EventTurnCompleted:   {},
 	EventTurnFailed:      {},
 	EventTurnInterrupted: {},
+
+	EventMessageQueued:    {},
+	EventMessageCancelled: {},
+	EventMessageFailed:    {},
 }
 
 // Valid сообщает, входит ли тип в известный каталог.
@@ -176,6 +185,32 @@ type TurnAcceptedData struct {
 	SourceThreadID   string   `json:"source_thread_id,omitempty"`
 	SourceSenderID   string   `json:"source_sender_id,omitempty"`
 	SourceSenderName string   `json:"source_sender_name,omitempty"`
+	// MessageIDs — сообщения очереди, которые забирает этот ход. Message и ClientMessageID у такого хода
+	// пустые: тексты лежат в message_queued.
+	MessageIDs []string `json:"message_ids,omitempty"`
+}
+
+// MessageQueuedData — принятое сервером сообщение, ожидающее хода. Контекст (стадия/задача), упоминания и
+// итоговый текст фиксируются при приёме и дальше не меняются.
+type MessageQueuedData struct {
+	MessageID       string   `json:"message_id"`
+	ClientMessageID string   `json:"client_message_id"`
+	Message         string   `json:"message"`
+	StageID         string   `json:"stage_id,omitempty"`
+	AssistantTaskID string   `json:"assistant_task_id,omitempty"`
+	Mentions        []string `json:"mentions,omitempty"`
+}
+
+// MessageCancelledData — пользователь удалил ожидающее сообщение.
+type MessageCancelledData struct {
+	MessageID string `json:"message_id"`
+}
+
+// MessageFailedData — сообщение не удалось подготовить к ходу (например, context_limit).
+type MessageFailedData struct {
+	MessageID string    `json:"message_id"`
+	Code      ErrorCode `json:"code"`
+	Message   string    `json:"message,omitempty"`
 }
 
 // TurnStartedData — запись запроса: фактически использованная команда агента и
@@ -228,6 +263,10 @@ const (
 	ErrCodeShuttingDown       ErrorCode = "shutting_down"
 	ErrCodeStorageUnavailable ErrorCode = "storage_unavailable"
 	ErrCodeStaleTurn          ErrorCode = "stale_turn"
+
+	ErrCodeClientMessageIDConflict ErrorCode = "client_message_id_conflict"
+	ErrCodeMessageNotQueued        ErrorCode = "message_not_queued"
+	ErrCodeMessageNotFound         ErrorCode = "message_not_found"
 )
 
 // --- Конечный автомат состояний хода ---

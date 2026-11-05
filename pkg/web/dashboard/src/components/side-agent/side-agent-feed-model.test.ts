@@ -124,6 +124,53 @@ describe('toSideAgentFeedItems', () => {
   })
 })
 
+describe('queued message history', () => {
+  const queued = (seq: number, id: string, message: string): SideAgentEvent =>
+    ev({ type: 'message_queued', seq, turnId: '', data: { messageId: id, clientMessageId: `c-${id}`, message, stageId: '' } })
+
+  it('renders a group claim as separate user replies in claim order, with no empty bubble', () => {
+    const items = toSideAgentFeedItems([
+      queued(1, 'b', 'second question'),
+      queued(2, 'd', 'fourth question'),
+      ev({ type: 'turn_accepted', seq: 3, turnId: 't2', data: { message: '', clientMessageId: '', messageIds: ['b', 'd'] } }),
+      ev({ type: 'assistant_text', seq: 4, turnId: 't2', data: { text: 'one answer' } }),
+    ])
+    expect(items.map((i) => [i.key, i.actor, i.side, i.text])).toEqual([
+      ['seq:3:b', 'user', 'right', 'second question'],
+      ['seq:3:d', 'user', 'right', 'fourth question'],
+      ['seq:4', 'agent', 'left', 'one answer'],
+    ])
+  })
+
+  it('does not render queued or cancelled messages that were never claimed', () => {
+    const items = toSideAgentFeedItems([
+      queued(1, 'b', 'waiting'),
+      queued(2, 'c', 'removed'),
+      ev({ type: 'message_cancelled', seq: 3, turnId: '', data: { messageId: 'c' } }),
+    ])
+    expect(items).toEqual([])
+  })
+
+  it('shows a failed message as a danger row with the reason and the message text', () => {
+    const items = toSideAgentFeedItems([
+      queued(1, 'b', 'too big'),
+      ev({ type: 'message_failed', seq: 2, turnId: '', data: { messageId: 'b', code: 'context_limit', message: '' } }),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ actor: 'system', tone: 'danger', kind: 'status' })
+    expect(items[0]?.text).toBe('Message not sent: Conversation too long for one request — too big')
+  })
+
+  it('keeps legacy and Mesh turns as before next to a group turn', () => {
+    const items = toSideAgentFeedItems([
+      ev({ type: 'turn_accepted', seq: 1, turnId: 't1', data: { message: 'legacy', clientMessageId: 'c1' } }),
+      queued(2, 'b', 'queued one'),
+      ev({ type: 'turn_accepted', seq: 3, turnId: 't2', data: { message: '', clientMessageId: '', messageIds: ['b'] } }),
+    ])
+    expect(items.map((i) => [i.key, i.text])).toEqual([['seq:1', 'legacy'], ['seq:3:b', 'queued one']])
+  })
+})
+
 describe('sideAgentFeedGroups', () => {
   it('keeps adjacent Mesh senders in separate left bubbles with their names or IDs', () => {
     const groups = sideAgentFeedGroups([

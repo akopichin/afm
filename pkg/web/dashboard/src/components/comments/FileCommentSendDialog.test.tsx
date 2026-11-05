@@ -400,10 +400,11 @@ describe('FileCommentSendDialog in flight and defaults', () => {
 })
 
 describe('FileCommentSendDialog gating', () => {
-  it('a busy Assistant disables Send with the reason', async () => {
+  it('a working Assistant does not block Send: the package joins its queue', async () => {
     setup([A], { only: null, side: { active: true } })
-    expect(await screen.findByText('The Assistant is still answering — send when it finishes', { selector: '.comment-recipient-note' })).toBeInTheDocument()
-    expect(sendButton()).toBeDisabled()
+    await screen.findByRole('button', { name: /^send/i })
+    expect(screen.queryByText(/still answering/i)).toBeNull()
+    expect(sendButton()).toBeEnabled()
   })
 
   it('a recipient that left the roster blocks Send with the reason and keeps the choice', async () => {

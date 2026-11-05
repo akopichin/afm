@@ -317,3 +317,210 @@ func TestOpen_SingleWriter(t *testing.T) {
 		t.Fatalf("second Open: want ErrLocked, got %v", err)
 	}
 }
+
+// --- очередь сообщений (B1) ---
+
+func queueMsg(t *testing.T, s *Store, id, text, stage string) {
+	t.Helper()
+	if _, err := s.Append(EventMessageQueued, "", MessageQueuedData{MessageID: id, ClientMessageID: "c-" + id, Message: text, StageID: stage}); err != nil {
+		t.Fatalf("queue %s: %v", id, err)
+	}
+}
+
+func TestStore_QueueSurvivesRestart(t *testing.T) {
+	base := t.TempDir()
+	s, _ := Open(base, "run-1")
+	queueMsg(t, s, "m1", "A", "")
+	queueMsg(t, s, "m2", "B", "")
+	if _, err := s.Append(EventMessageCancelled, "", MessageCancelledData{MessageID: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s2, err := Open(base, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	q := s2.Conversation().Queued()
+	if len(q) != 1 || q[0].MessageID != "m2" {
+		t.Fatalf("queue after restart = %+v, want [m2]", q)
+	}
+}
+
+func TestStore_ClaimValidatedBeforeWrite(t *testing.T) {
+	s, _ := Open(t.TempDir(), "run-1")
+	defer s.Close()
+	queueMsg(t, s, "m1", "A", "")
+	queueMsg(t, s, "m2", "B", "")
+	before := len(s.History())
+
+	// m2 не голова очереди
+	if _, err := s.Append(EventTurnAccepted, "t1", TurnAcceptedData{MessageIDs: []string{"m2"}}); !isErr(err, ErrInvalidTransition) {
+		t.Fatalf("claim of non-head = %v", err)
+	}
+	if len(s.History()) != before || s.Unavailable() {
+		t.Fatal("rejected claim must neither write nor poison the store")
+	}
+	if _, err := s.Append(EventTurnAccepted, "t1", TurnAcceptedData{MessageIDs: []string{"m1", "m2"}}); err != nil {
+		t.Fatal(err)
+	}
+	// после claim отмена невозможна
+	if _, err := s.Append(EventMessageCancelled, "", MessageCancelledData{MessageID: "m1"}); !isErr(err, ErrMessageNotQueued) {
+		t.Fatalf("cancel after claim = %v", err)
+	}
+}
+
+func TestStore_RecoveryInterruptsActiveAndKeepsQueue(t *testing.T) {
+	base := t.TempDir()
+	s, _ := Open(base, "run-1")
+	queueMsg(t, s, "m1", "A", "")
+	_, _ = s.Append(EventTurnAccepted, "t1", TurnAcceptedData{MessageIDs: []string{"m1"}})
+	_, _ = s.Append(EventTurnStarted, "t1", TurnStartedData{})
+	queueMsg(t, s, "m2", "B", "")
+	queueMsg(t, s, "m3", "C", "")
+	s.Close()
+
+	s2, err := Open(base, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	c := s2.Conversation()
+	if m, _ := c.Message("m1"); m.State != MessageStateInterrupted {
+		t.Fatalf("m1 = %q, want interrupted", m.State)
+	}
+	if q := c.Queued(); len(q) != 2 || q[0].MessageID != "m2" {
+		t.Fatalf("queue = %+v, want m2,m3", q)
+	}
+	if c.State() != StateIdle {
+		t.Fatalf("state = %q", c.State())
+	}
+}
+
+func TestStore_WriteFailureOnMessageEventsLeavesNoMemoryTrace(t *testing.T) {
+	steps := map[string]func(*Store) error{
+		"queued": func(s *Store) error {
+			_, err := s.Append(EventMessageQueued, "", MessageQueuedData{MessageID: "m9", Message: "x"})
+			return err
+		},
+		"claim": func(s *Store) error {
+			_, err := s.Append(EventTurnAccepted, "t1", TurnAcceptedData{MessageIDs: []string{"m1"}})
+			return err
+		},
+		"cancel": func(s *Store) error {
+			_, err := s.Append(EventMessageCancelled, "", MessageCancelledData{MessageID: "m1"})
+			return err
+		},
+	}
+	for name, step := range steps {
+		t.Run(name, func(t *testing.T) {
+			s, _ := Open(t.TempDir(), "run-1")
+			defer s.Close()
+			queueMsg(t, s, "m1", "A", "")
+			before := len(s.History())
+			s.chatLog.Close()
+			if err := step(s); err == nil {
+				t.Fatal("append on a dead journal must fail")
+			}
+			if len(s.History()) != before || !s.Unavailable() {
+				t.Fatalf("history len %d (want %d), unavailable=%v", len(s.History()), before, s.Unavailable())
+			}
+			if q := s.Conversation().Queued(); len(q) != 1 || q[0].MessageID != "m1" {
+				t.Fatalf("queue mutated on failed write: %+v", q)
+			}
+		})
+	}
+}
+
+// Журнал, записанный до очереди, читается как раньше.
+func TestStore_LegacyJournalOpens(t *testing.T) {
+	base := t.TempDir()
+	s, _ := Open(base, "run-1")
+	_, _ = s.Append(EventTurnAccepted, "t1", TurnAcceptedData{Message: "hi", ClientMessageID: "c1"})
+	_, _ = s.Append(EventTurnStarted, "t1", TurnStartedData{})
+	_, _ = s.Append(EventTurnCompleted, "t1", TurnCompletedData{})
+	s.Close()
+
+	s2, err := Open(base, "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	c := s2.Conversation()
+	if c.State() != StateIdle || len(c.Queued()) != 0 {
+		t.Fatalf("state=%q queue=%d", c.State(), len(c.Queued()))
+	}
+	if rec, ok := c.Client("c1"); !ok || rec.TurnID != "t1" {
+		t.Fatalf("legacy idempotency lost: %+v", rec)
+	}
+}
+
+// syncFailLog пропускает write на диск, но отказывает fsync: запись могла дойти до журнала, хотя commit не подтверждён.
+type syncFailLog struct{ journalFile }
+
+func (syncFailLog) Sync() error { return errors.New("injected fsync failure") }
+
+func failSyncAfterWrite(s *Store) { s.chatLog = syncFailLog{s.chatLog} }
+
+// Write прошёл, fsync нет: в памяти и подписчикам ничего, а повторное открытие согласованно подбирает записанное.
+func TestStore_SyncFailureAfterWriteLeavesNoMemoryTraceAndReplaysConsistently(t *testing.T) {
+	steps := []struct {
+		name   string
+		step   func(*Store) error
+		verify func(t *testing.T, c *Conversation)
+	}{
+		{"queued", func(s *Store) error {
+			_, err := s.Append(EventMessageQueued, "", MessageQueuedData{MessageID: "m9", ClientMessageID: "c-m9", Message: "x"})
+			return err
+		}, func(t *testing.T, c *Conversation) {
+			if m, ok := c.Message("m9"); !ok || m.State != MessageStateQueued {
+				t.Fatalf("m9 after replay = %+v ok=%v, want queued", m, ok)
+			}
+		}},
+		{"claim", func(s *Store) error {
+			_, err := s.Append(EventTurnAccepted, "t1", TurnAcceptedData{MessageIDs: []string{"m1"}})
+			return err
+		}, func(t *testing.T, c *Conversation) {
+			if m, _ := c.Message("m1"); m.State != MessageStateInterrupted {
+				t.Fatalf("m1 after replay = %q, want interrupted (claim written, never relaunched)", m.State)
+			}
+			if len(c.Queued()) != 0 {
+				t.Fatalf("queue after replay = %+v", c.Queued())
+			}
+		}},
+		{"cancel", func(s *Store) error {
+			_, err := s.Append(EventMessageCancelled, "", MessageCancelledData{MessageID: "m1"})
+			return err
+		}, func(t *testing.T, c *Conversation) {
+			if m, _ := c.Message("m1"); m.State != MessageStateCancelled {
+				t.Fatalf("m1 after replay = %q, want cancelled", m.State)
+			}
+		}},
+	}
+	for _, tc := range steps {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			s, _ := Open(base, "run-1")
+			queueMsg(t, s, "m1", "A", "")
+			before := len(s.History())
+			failSyncAfterWrite(s)
+			if err := tc.step(s); !errors.Is(err, ErrStorageUnavailable) {
+				t.Fatalf("append err = %v, want ErrStorageUnavailable", err)
+			}
+			if len(s.History()) != before || !s.Unavailable() {
+				t.Fatalf("history len %d (want %d), unavailable=%v", len(s.History()), before, s.Unavailable())
+			}
+			if q := s.Conversation().Queued(); len(q) != 1 || q[0].MessageID != "m1" {
+				t.Fatalf("queue mutated by an unconfirmed write: %+v", q)
+			}
+			s.Close()
+			s2, err := Open(base, "run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s2.Close()
+			tc.verify(t, s2.Conversation())
+		})
+	}
+}

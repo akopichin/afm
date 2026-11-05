@@ -111,13 +111,13 @@ type activeTurn struct {
 	meshToken atomic.Value  // token minted by this invocation, retained for redacting terminal errors after revoke
 }
 
-// turnRecord — минимум для идемпотентности: совпадение client_message_id.
-type turnRecord struct {
-	message         string
-	turnID          string
-	sourceMessageID string
-	sourceThreadID  string
-	sourceSenderID  string
+// MessageReceipt — результат приёма или отмены сообщения очереди. MessageID пуст, когда повтор попал на
+// старый/Mesh-ход (у него нет записи очереди); TurnID заполнен, пока сообщение забрано ходом.
+type MessageReceipt struct {
+	MessageID string
+	State     MessageState
+	ErrorCode ErrorCode
+	TurnID    string
 }
 
 // Manager владеет единственным активным ходом бокового разговора: durable-first приём, запуск агента под
@@ -145,19 +145,29 @@ type Manager struct {
 	// него НЕ влияет: ход прерывается только через Stop/Shutdown (InterruptCh).
 	ctx context.Context
 
-	// mu защищает admission: активный ход, карту идемпотентности и флаг shutdown.
-	// Один активный ход за раз.
+	// mu защищает admission и диспетчер: активный ход и флаги жизненного цикла. Один активный ход за раз;
+	// все запуски ходов идут через dispatchLocked под mu.
 	mu     sync.Mutex
 	active *activeTurn
-	// idem хранит client_message_id → принятый ход для всей беседы, включая рестарты, предотвращая повторный
-	// запуск.
-	idem         map[string]turnRecord
-	shuttingDown bool
+	// admissionClosed — приём закрыт (graceful или emergency): очередь при этом дорабатывается.
+	admissionClosed bool
+	// noStart — emergency: новые ходы не стартуют, не начатая очередь остаётся в журнале.
+	noStart bool
+	// dispatchEnabled включает исполнение (Start): до него принятые сообщения только лежат в очереди.
+	dispatchEnabled bool
 
 	// wg учитывает агентскую горутину (своя, не concurrency.WaitAgents) — Drain
 	// сообщает, реально ли дождались завершения.
 	wg sync.WaitGroup
 
+	// afterAppend — тест-шов: вызывается в record между durable-записью и публикацией.
+	afterAppend func(Event)
+	// beforeRelease — тест-шов: вызывается после терминального события хода, до освобождения слота.
+	beforeRelease func()
+
+	// recMu делает «durable-запись + публикация» неделимой: подписчики видят события строго в порядке seq
+	// независимо от того, держит ли писатель mu.
+	recMu sync.Mutex
 	// subMu защищает подписчиков.
 	subMu     sync.Mutex
 	subs      map[int]chan Event
@@ -194,25 +204,8 @@ func New(cfg Config) *Manager {
 		sourceReply:       cfg.SourceReply,
 		newExecutor:       nx,
 		ctx:               context.Background(),
-		idem:              rebuildIdempotency(cfg.Store.History()),
 		subs:              make(map[int]chan Event),
 	}
-}
-
-// rebuildIdempotency восстанавливает client_message_id → ход из всей durable-истории turn_accepted.
-func rebuildIdempotency(history []Event) map[string]turnRecord {
-	idem := make(map[string]turnRecord)
-	for _, e := range history {
-		if e.Type != EventTurnAccepted {
-			continue
-		}
-		var d TurnAcceptedData
-		if err := e.DecodeData(&d); err != nil || d.ClientMessageID == "" {
-			continue
-		}
-		idem[d.ClientMessageID] = turnRecord{message: d.Message, turnID: e.TurnID, sourceMessageID: d.SourceMessageID, sourceThreadID: d.SourceThreadID, sourceSenderID: d.SourceSenderID}
-	}
-	return idem
 }
 
 // --- Аксессоры для C1 ---
@@ -229,53 +222,141 @@ func (m *Manager) Command() string { return m.command }
 // Unavailable сообщает, заблокирован ли журнал (порча/сбой записи).
 func (m *Manager) Unavailable() bool { return m.store.Unavailable() }
 
-// --- Send ---
+// --- Приём: Enqueue / CancelQueued / Send ---
 
-// Send принимает ход разговора. Durable-first: turn_accepted фиксируется в журнале (fsync) ДО
-// резервирования активного хода и возврата turnID.
-//
-// target — адресат, фиксируемый НАВСЕГДА в этой записи (T4.3): после возврата Send ничто (включая смену
-// выбранной стадии в дашборде) не может задним числом поменять то, что уже ушло в durable-журнал. Mentions
-// в target не передаются — Send сам извлекает их из text через Config.MentionResolve (клиент не может
-// заявить, что упомянул роль, которую не упоминал).
-func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string, error) {
-	// Шаг 1: валидация без блокировок.
+// validateRequest — проверки сообщения, общие для Enqueue и Send; блокировки не нужны.
+func (m *Manager) validateRequest(clientMessageID, text string) error {
 	if clientMessageID == "" {
-		return "", newErr(ErrCodeInvalidMessage, "client_message_id required")
+		return newErr(ErrCodeInvalidMessage, "client_message_id required")
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", newErr(ErrCodeInvalidMessage, "message is empty")
+		return newErr(ErrCodeInvalidMessage, "message is empty")
 	}
 	if len(text) > MaxMessageBytes {
-		return "", newErr(ErrCodeMessageTooLarge, fmt.Sprintf("message %d > %d bytes", len(text), MaxMessageBytes))
+		return newErr(ErrCodeMessageTooLarge, fmt.Sprintf("message %d > %d bytes", len(text), MaxMessageBytes))
 	}
 	if m.store.Unavailable() {
-		return "", newErr(ErrCodeStorageUnavailable, "conversation journal unavailable")
+		return newErr(ErrCodeStorageUnavailable, "conversation journal unavailable")
+	}
+	return nil
+}
+
+// sameRequest сообщает, что повтор client_message_id несёт тот же текст и адресат, что исходный запрос.
+func sameRequest(rec ClientRecord, text string, target TurnTarget) bool {
+	return rec.Text == text && rec.StageID == target.StageID && rec.AssistantTaskID == target.AssistantTaskID &&
+		rec.SourceMessageID == target.SourceMessageID && rec.SourceThreadID == target.SourceThreadID &&
+		rec.SourceSenderID == target.SourceSenderID
+}
+
+// Enqueue durable-принимает сообщение в очередь и сразу пробует запустить ход; принято не значит прочитано.
+// Стадия и задача из target фиксируются в message_queued навсегда, а mentions извлекает сам Enqueue.
+func (m *Manager) Enqueue(clientMessageID, text string, target TurnTarget) (MessageReceipt, error) {
+	if err := m.validateRequest(clientMessageID, text); err != nil {
+		return MessageReceipt{}, err
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.admissionClosed {
+		return MessageReceipt{}, newErr(ErrCodeShuttingDown, "service is shutting down")
+	}
+	conv := m.store.Conversation()
+	if rec, ok := conv.Client(clientMessageID); ok {
+		if !sameRequest(rec, text, target) {
+			return MessageReceipt{}, newErr(ErrCodeClientMessageIDConflict, "client_message_id reused with a different request")
+		}
+		return receiptFor(conv, rec), nil
+	}
 
-	// Шаг 2: admission. Один активный ход; shutdown закрывает приём.
-	if m.shuttingDown {
+	messageID := newMessageID()
+	queued := MessageQueuedData{
+		MessageID: messageID, ClientMessageID: clientMessageID, Message: text,
+		StageID: target.StageID, AssistantTaskID: target.AssistantTaskID,
+		Mentions: extractMentions(text, m.mentionResolve),
+	}
+	if _, err := m.record(EventMessageQueued, "", queued); err != nil {
+		return MessageReceipt{}, newErr(ErrCodeStorageUnavailable, err.Error())
+	}
+	// Сообщение уже durable: сбой запуска не отменяет приём, ход подберёт следующий dispatch.
+	m.dispatchLocked()
+	return receiptFor(m.store.Conversation(), ClientRecord{MessageID: messageID}), nil
+}
+
+// receiptFor описывает состояние ранее принятого обращения по проекции журнала.
+func receiptFor(conv *Conversation, rec ClientRecord) MessageReceipt {
+	if rec.MessageID == "" {
+		state, _ := conv.TurnState(rec.TurnID)
+		return MessageReceipt{State: messageStateOfTurn(state), TurnID: rec.TurnID}
+	}
+	msg, _ := conv.Message(rec.MessageID)
+	return MessageReceipt{MessageID: msg.MessageID, State: msg.State, ErrorCode: msg.ErrorCode, TurnID: msg.TurnID}
+}
+
+func messageStateOfTurn(state TurnState) MessageState {
+	switch state {
+	case TurnStateCompleted:
+		return MessageStateCompleted
+	case TurnStateFailed:
+		return MessageStateFailed
+	case TurnStateInterrupted:
+		return MessageStateInterrupted
+	default:
+		return MessageStateRunning
+	}
+}
+
+// CancelQueued удаляет ожидающее сообщение. Работает под mu вместе с диспетчером, поэтому гонка с claim
+// даёт ровно один исход; уже забранное ходом сообщение отменить нельзя. Повтор отмены идемпотентен.
+func (m *Manager) CancelQueued(messageID string) (MessageReceipt, error) {
+	if m.store.Unavailable() {
+		return MessageReceipt{}, newErr(ErrCodeStorageUnavailable, "conversation journal unavailable")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	msg, ok := m.store.Conversation().Message(messageID)
+	switch {
+	case !ok:
+		return MessageReceipt{}, newErr(ErrCodeMessageNotFound, "no such message")
+	case msg.State == MessageStateCancelled:
+		return MessageReceipt{MessageID: messageID, State: MessageStateCancelled}, nil
+	case msg.State != MessageStateQueued:
+		return MessageReceipt{}, newErr(ErrCodeMessageNotQueued, "message is already "+string(msg.State))
+	}
+	if _, err := m.record(EventMessageCancelled, "", MessageCancelledData{MessageID: messageID}); err != nil {
+		if errors.Is(err, ErrMessageNotQueued) {
+			return MessageReceipt{}, newErr(ErrCodeMessageNotQueued, err.Error())
+		}
+		return MessageReceipt{}, newErr(ErrCodeStorageUnavailable, err.Error())
+	}
+	return MessageReceipt{MessageID: messageID, State: MessageStateCancelled}, nil
+}
+
+// Send принимает Mesh-ход (сообщение другого участника): без очереди, в одиночку и только когда
+// исполнитель свободен, диспетчер включён, а очередь пользователя пуста — сообщения пользователя
+// приоритетнее. Durable-first: turn_accepted фиксируется (fsync) ДО резервирования активного хода.
+func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string, error) {
+	if err := m.validateRequest(clientMessageID, text); err != nil {
+		return "", err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.admissionClosed {
 		return "", newErr(ErrCodeShuttingDown, "service is shutting down")
 	}
-	// Идемпотентность по client_message_id (вся беседа, durable — см. idem).
-	if rec, ok := m.idem[clientMessageID]; ok {
-		if rec.message == text && rec.sourceMessageID == target.SourceMessageID && rec.sourceThreadID == target.SourceThreadID && rec.sourceSenderID == target.SourceSenderID {
-			return rec.turnID, nil // тот же ход, без повторного запуска
+	history := m.store.History()
+	conv := ProjectConversation(history)
+	if rec, ok := conv.Client(clientMessageID); ok {
+		if rec.TurnID == "" || !sameRequest(rec, text, target) {
+			return "", newErr(ErrCodeClientMessageIDConflict, "client_message_id reused with a different request")
 		}
-		if rec.sourceMessageID != target.SourceMessageID || rec.sourceThreadID != target.SourceThreadID || rec.sourceSenderID != target.SourceSenderID {
-			return "", newErr(ErrCodeInvalidMessage, "client_message_id reused for a different source")
-		}
-		return "", newErr(ErrCodeBusy, "client_message_id reused with different text")
+		return rec.TurnID, nil // тот же ход, без повторного запуска
 	}
-	if m.active != nil {
+	if !m.dispatchEnabled || m.active != nil || len(conv.Queued()) > 0 {
 		return "", newErr(ErrCodeBusy, "another request is in progress")
 	}
 
-	// Шаг 3: сборка контекста и бюджет ДО приёма — при превышении ничего не
-	// пишем, прежняя история и черновик сохраняются.
+	// Сборка контекста и бюджет ДО приёма — при превышении ничего не пишем.
 	accepted := TurnAcceptedData{
 		Message: text, ClientMessageID: clientMessageID,
 		StageID: target.StageID, AssistantTaskID: target.AssistantTaskID,
@@ -283,7 +364,7 @@ func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string,
 		SourceMessageID: target.SourceMessageID, SourceThreadID: target.SourceThreadID,
 		SourceSenderID: target.SourceSenderID, SourceSenderName: target.SourceSenderName,
 	}
-	prompt, err := m.ctxBuilder.Build(m.store.History(), accepted)
+	prompt, err := m.ctxBuilder.Build(history, accepted)
 	if err != nil {
 		if errors.Is(err, ErrContextLimit) {
 			return "", newErr(ErrCodeContextLimit, err.Error())
@@ -291,25 +372,100 @@ func (m *Manager) Send(clientMessageID, text string, target TurnTarget) (string,
 		return "", newErr(ErrCodeAgentError, err.Error())
 	}
 
-	// Шаг 4: turn_accepted (fsync) → резерв активного хода → учёт горутины.
 	turnID := newTurnID()
 	if _, err := m.record(EventTurnAccepted, turnID, accepted); err != nil {
 		return "", newErr(ErrCodeStorageUnavailable, err.Error())
 	}
+	m.startTurnLocked(turnID, prompt, accepted.SourceMessageID)
+	return turnID, nil
+}
+
+// --- Диспетчер ---
+
+// dispatchLocked — единственный путь запуска хода из очереди; вызывается под mu после приёма, освобождения
+// исполнителя и из Start. Группу забирает одна запись turn_accepted, неподъёмную голову — message_failed.
+// Любая ошибка записи прекращает цикл: сообщения остаются в журнале.
+func (m *Manager) dispatchLocked() {
+	for m.active == nil && m.dispatchEnabled && !m.noStart && !m.store.Unavailable() {
+		history := m.store.History()
+		group := ProjectConversation(history).QueuedGroup()
+		if len(group) == 0 {
+			return
+		}
+		prompt, used, err := m.ctxBuilder.BuildGroup(history, group)
+		if err != nil {
+			code := ErrCodeAgentError
+			if errors.Is(err, ErrContextLimit) {
+				code = ErrCodeContextLimit
+			}
+			failed := MessageFailedData{MessageID: group[0].MessageID, Code: code, Message: err.Error()}
+			if _, err := m.record(EventMessageFailed, "", failed); err != nil {
+				return
+			}
+			continue
+		}
+		group = group[:used]
+		turnID := newTurnID()
+		accepted := TurnAcceptedData{
+			StageID: group[0].StageID, AssistantTaskID: group[0].AssistantTaskID,
+			Mentions: groupMentions(group), MessageIDs: messageIDs(group),
+		}
+		if _, err := m.record(EventTurnAccepted, turnID, accepted); err != nil {
+			return
+		}
+		m.startTurnLocked(turnID, prompt, "")
+		return
+	}
+}
+
+// startTurnLocked резервирует активный ход и запускает его горутину. wg.Add «с нуля» допустим только
+// здесь под mu при открытом приёме (Enqueue, Send, Start); из releaseActive счётчик уже ≥ 1.
+func (m *Manager) startTurnLocked(turnID, prompt, sourceMessageID string) {
 	at := &activeTurn{turnID: turnID, interrupt: make(chan struct{}, 1)}
 	m.active = at
-	m.idem[clientMessageID] = turnRecord{message: text, turnID: turnID, sourceMessageID: target.SourceMessageID, sourceThreadID: target.SourceThreadID, sourceSenderID: target.SourceSenderID}
-
-	// wg.Add ДО выхода из admission-mutex: shutdown/Drain не сможет обогнать
-	// регистрацию горутины.
 	m.wg.Add(1)
-	go m.runTurn(at, prompt, accepted.SourceMessageID)
+	go m.runTurn(at, prompt, sourceMessageID)
+}
 
-	return turnID, nil
+// Start включает исполнение очереди: конструктор и Open ничего не запускают, пока вызывающий не готов
+// (например, пока не известен URL Mesh-клиента). После закрытия приёма не делает ничего.
+func (m *Manager) Start() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.admissionClosed {
+		return
+	}
+	m.dispatchEnabled = true
+	m.dispatchLocked()
+}
+
+func messageIDs(group []MessageInfo) []string {
+	ids := make([]string, len(group))
+	for i, g := range group {
+		ids[i] = g.MessageID
+	}
+	return ids
+}
+
+// groupMentions объединяет упоминания сообщений группы без дублей, в порядке появления.
+func groupMentions(group []MessageInfo) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, g := range group {
+		for _, mention := range g.Mentions {
+			if _, dup := seen[mention]; !dup {
+				seen[mention] = struct{}{}
+				out = append(out, mention)
+			}
+		}
+	}
+	return out
 }
 
 // runTurn выполняет ход под процессным ctx менеджера.
 func (m *Manager) runTurn(at *activeTurn, prompt, sourceMessageID string) {
+	// Порядок defer важен: releaseActive может запустить следующий ход (wg.Add) и должен успеть до wg.Done,
+	// иначе Drain увидит нулевой счётчик между ходами очереди.
 	defer m.wg.Done()
 	defer m.releaseActive(at)
 
@@ -426,14 +582,18 @@ func (m *Manager) runTurn(at *activeTurn, prompt, sourceMessageID string) {
 	}
 }
 
-// releaseActive снимает резерв активного хода (не трогая idem — идемпотентность
-// переживает завершение).
+// releaseActive снимает резерв активного хода и сразу запускает следующую группу очереди под тем же mu —
+// между ходами нет окна для гонки с новым Enqueue.
 func (m *Manager) releaseActive(at *activeTurn) {
+	if m.beforeRelease != nil {
+		m.beforeRelease()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.active == at {
 		m.active = nil
 	}
+	m.dispatchLocked()
 }
 
 // --- Stop / Shutdown / Drain ---
@@ -453,18 +613,20 @@ func (m *Manager) Stop(turnID string) error {
 	return nil
 }
 
-// CloseAdmission закрывает приём новых ходов, НЕ прерывая активный ход.
+// CloseAdmission закрывает приём новых сообщений, НЕ прерывая активный ход: уже принятая очередь
+// дорабатывается (Drain ждёт её целиком). Отмена ожидающих сообщений остаётся доступной.
 func (m *Manager) CloseAdmission() {
 	m.mu.Lock()
-	m.shuttingDown = true
+	m.admissionClosed = true
 	m.mu.Unlock()
 }
 
-// Shutdown закрывает приём новых ходов И мягко прерывает активный ход (аварийное
-// завершение). Дожидаться завершения — через Drain.
+// Shutdown — аварийное завершение: закрывает приём, запрещает запуск новых ходов (не начатая очередь
+// остаётся в журнале) и мягко прерывает активный ход. Дожидаться завершения — через Drain.
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
-	m.shuttingDown = true
+	m.admissionClosed = true
+	m.noStart = true
 	at := m.active
 	m.mu.Unlock()
 	if at != nil {
@@ -529,9 +691,14 @@ func (m *Manager) publish(ev Event) {
 
 // record — единая точка: durable-запись в журнал + доставка подписчикам.
 func (m *Manager) record(typ EventType, turnID string, data any) (Event, error) {
+	m.recMu.Lock()
+	defer m.recMu.Unlock()
 	ev, err := m.store.Append(typ, turnID, data)
 	if err != nil {
 		return Event{}, err
+	}
+	if m.afterAppend != nil {
+		m.afterAppend(ev)
 	}
 	m.publish(ev)
 	return ev, nil
@@ -561,6 +728,13 @@ func (m *Manager) turnPaths(turnID string) (logFile, logRef string, err error) {
 		return "", "", err
 	}
 	return filepath.Join(dir, turnLogName), filepath.Join("turns", turnID, turnLogName), nil
+}
+
+// newMessageID генерирует уникальный id сообщения очереди: m-<unixnano>-<rand4hex>.
+func newMessageID() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("m-%d-%x", time.Now().UTC().UnixNano(), b[:])
 }
 
 // newTurnID генерирует уникальный id хода: t-<unixnano>-<rand4hex>.

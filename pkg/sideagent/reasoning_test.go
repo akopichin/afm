@@ -6,7 +6,7 @@ import "testing"
 // builds for a turn.
 func TestManager_ForwardsReasoningToExecutor(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{actions: []fakeAction{{"text", "ok"}}}}}
-	m := New(Config{
+	m := newStarted(Config{
 		Store:       newTestStore(t),
 		Command:     "claude",
 		Reasoning:   "high",

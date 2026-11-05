@@ -116,7 +116,7 @@ func TestActions_NotParsedFromToolOutput(t *testing.T) {
 		{"text", "Here is my answer. I am not proposing any action right now."},
 	}}}}
 	store := newTestStore(t)
-	m := New(Config{
+	m := newStarted(Config{
 		Store:           store,
 		Command:         "claude",
 		Context:         ContextBuilder{},
@@ -158,7 +158,7 @@ func TestActions_RecordedFromFinalNarration(t *testing.T) {
 		`[{"type":"attach_assistant","target":{"profile_id":"qaEngineer"},"expected_revision":"1"}]` + "\n```"
 	ff := &fakeFactory{fakes: []*fakeRunner{{actions: []fakeAction{{"text", finalText}}}}}
 	store := newTestStore(t)
-	m := New(Config{
+	m := newStarted(Config{
 		Store:           store,
 		Command:         "claude",
 		Context:         ContextBuilder{},

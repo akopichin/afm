@@ -5,6 +5,15 @@ older ones further down. Dates follow the commits that shipped each change.
 
 ## 2026-11-05
 
+### Improvement: message queue in the Assistant
+
+You can keep sending messages while the Assistant is replying. They wait in a
+durable server-side queue (**Queued (N)**), can be deleted with **Remove from
+queue**, and survive closing the window, reloading and restarting afm. Waiting
+messages with the same context are merged into the next turn; file comments sent
+while the Assistant is busy are queued too, and Agent Mesh messages are never
+merged. See [Dashboard](docs/dashboard.md#assistant-a-free-form-chat-alongside-the-run).
+
 ### Fix: human questions use the stage dialog in assistants mode
 
 Interactive stage agents in `collaboration.mode: assistants` now receive an explicit

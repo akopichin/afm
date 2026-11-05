@@ -5,7 +5,6 @@ import { MeshApiError, sendMeshMessageTo } from '../../api/mesh-client'
 import { SideAgentApiError } from '../../api/side-agent-client'
 import { errorCodeToMessage } from '../../types/side-agent'
 import { renderDraftComments, type DraftComment } from '../file-browser/draft-comments'
-import { ASSISTANT_BUSY } from './comment-recipients'
 import type { FrozenSend } from './CommentProvider'
 
 // Пределы серверов: Mesh — agentcomm.MaxBodyBytes, Assistant — sideagent.MaxMessageBytes.
@@ -46,7 +45,6 @@ function meshFailure(err: unknown): unknown {
 
 function assistantFailure(err: unknown): unknown {
   if (!(err instanceof SideAgentApiError)) return err
-  if (err.code === 'busy') return new Error(ASSISTANT_BUSY)
   if (err.code === 'message_too_large') {
     return new Error(`The Assistant refused the message as too large (limit ${LIMITS.assistant.label}) — send fewer comments at once`)
   }

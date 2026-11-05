@@ -10,7 +10,7 @@ import (
 
 // ContextFormatVersion — версия формата сборки промпта. Фиксируется в событии
 // turn_started, чтобы восстановление и downstream знали, как был собран контекст.
-const ContextFormatVersion = "v2"
+const ContextFormatVersion = "v3"
 
 // Заголовки секций промпта (экспортированы для тестов и downstream-навигации).
 const (
@@ -19,10 +19,10 @@ const (
 )
 
 // DefaultInstruction — короткая инструкция обычного разговора. Прошлые сообщения даются как
-// контекст-история: их не нужно переисполнять, отвечать нужно только на текущее сообщение.
+// контекст-история: их не нужно переисполнять, отвечать нужно только на текущие сообщения.
 const DefaultInstruction = "Ты ведёшь обычный разговор в боковом чате по текущему проекту. " +
 	"Блок истории ниже — только контекст прошлых реплик; не переисполняй прошлые просьбы. " +
-	"Ответь только на текущее сообщение."
+	"Ответь только на текущее сообщение; если их несколько, ответь на все сразу, учитывая поздние уточнения."
 
 // ErrContextLimit — собранный промпт превысил явный байтовый бюджет.
 var ErrContextLimit = errors.New("sideagent: assembled prompt exceeds byte budget")
@@ -40,9 +40,8 @@ type ContextBuilder struct {
 	HideSource func(sourceMessageID string) bool
 }
 
-// Build собирает промпт: инструкция + история прошлых сообщений в порядке отправки + текущее сообщение.
-// Метод чистый: он не мутирует history и не усекает её.
-func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string, error) {
+// head собирает промпт до текущих сообщений: инструкция, история и заголовок текущего блока.
+func (b ContextBuilder) head(history []Event) string {
 	instruction := b.Instruction
 	if instruction == "" {
 		instruction = DefaultInstruction
@@ -51,7 +50,6 @@ func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string
 	var sb strings.Builder
 	sb.WriteString(instruction)
 	sb.WriteString("\n\n")
-
 	if lines := b.renderHistory(history); len(lines) > 0 {
 		sb.WriteString(HistoryHeading)
 		sb.WriteString("\n")
@@ -61,9 +59,16 @@ func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string
 		}
 		sb.WriteString("\n")
 	}
-
 	sb.WriteString(CurrentHeading)
 	sb.WriteString("\n")
+	return sb.String()
+}
+
+// Build собирает промпт одного сообщения: инструкция + история прошлых сообщений в порядке отправки +
+// текущее сообщение (Mesh-запрос оформляется как inbox-блок). Метод чистый: он не мутирует history.
+func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string, error) {
+	var sb strings.Builder
+	sb.WriteString(b.head(history))
 	if current.SourceMessageID != "" {
 		sb.WriteString(prompts.AgentCommInboxBlock([]prompts.AgentCommInboxMessage{{
 			MessageID: current.SourceMessageID,
@@ -83,9 +88,34 @@ func (b ContextBuilder) Build(history []Event, current TurnAcceptedData) (string
 	return prompt, nil
 }
 
+// BuildGroup собирает промпт одного хода для группы сообщений очереди и возвращает, сколько сообщений
+// группы поместилось (наибольший префикс). Голова, которая не помещается, — ErrContextLimit. Инструкция и
+// история рендерятся один раз; разметка каждого сообщения не зависит от размера группы.
+func (b ContextBuilder) BuildGroup(history []Event, group []MessageInfo) (string, int, error) {
+	if len(group) == 0 {
+		return "", 0, errors.New("sideagent: empty message group")
+	}
+	var sb strings.Builder
+	sb.WriteString(b.head(history))
+	used := 0
+	for i, msg := range group {
+		piece := fmt.Sprintf("[Сообщение %d]\n%s\n[Конец сообщения %d]\n", i+1, msg.Text, i+1)
+		if b.ByteLimit > 0 && sb.Len()+len(piece) > b.ByteLimit {
+			break
+		}
+		sb.WriteString(piece)
+		used++
+	}
+	if used == 0 {
+		return "", 0, fmt.Errorf("%w: head alone needs more than %d bytes", ErrContextLimit, b.ByteLimit)
+	}
+	return sb.String(), used, nil
+}
+
 // renderHistory превращает события в строки истории в порядке отправки.
 func (b ContextBuilder) renderHistory(history []Event) []string {
 	hidden := b.hiddenTurns(history)
+	queuedText := queuedTexts(history)
 	var lines []string
 	for _, e := range history {
 		if hidden[e.TurnID] {
@@ -94,12 +124,20 @@ func (b ContextBuilder) renderHistory(history []Event) []string {
 		switch e.Type {
 		case EventTurnAccepted:
 			var d TurnAcceptedData
-			if e.DecodeData(&d) == nil && d.Message != "" {
-				if d.SourceMessageID != "" {
-					lines = append(lines, quoteHistoryEntry("From "+peerLabel(d)+" ["+prompts.EscapeTagsForReprompt(d.SourceMessageID)+"] in thread "+prompts.EscapeTagsForReprompt(d.SourceThreadID)+": "+prompts.EscapeTagsForReprompt(d.Message)))
-				} else {
-					lines = append(lines, "Пользователь: "+d.Message)
-				}
+			if e.DecodeData(&d) != nil {
+				continue
+			}
+			// Групповой ход показывает сообщения в позиции claim, а не приёма: между ними мог идти ответ.
+			for _, id := range d.MessageIDs {
+				lines = append(lines, "Пользователь: "+queuedText[id])
+			}
+			if d.Message == "" {
+				continue
+			}
+			if d.SourceMessageID != "" {
+				lines = append(lines, quoteHistoryEntry("From "+peerLabel(d)+" ["+prompts.EscapeTagsForReprompt(d.SourceMessageID)+"] in thread "+prompts.EscapeTagsForReprompt(d.SourceThreadID)+": "+prompts.EscapeTagsForReprompt(d.Message)))
+			} else {
+				lines = append(lines, "Пользователь: "+d.Message)
 			}
 		case EventAssistantText:
 			var d AssistantTextData
@@ -116,6 +154,18 @@ func (b ContextBuilder) renderHistory(history []Event) []string {
 		}
 	}
 	return lines
+}
+
+// queuedTexts индексирует тексты сообщений очереди; в историю они попадают только вместе с claim-ходом.
+func queuedTexts(history []Event) map[string]string {
+	texts := map[string]string{}
+	for _, e := range history {
+		var d MessageQueuedData
+		if e.Type == EventMessageQueued && e.DecodeData(&d) == nil {
+			texts[d.MessageID] = d.Message
+		}
+	}
+	return texts
 }
 
 // hiddenTurns returns the turns started by a hidden source; the Assistant's answer repeats what the source said.

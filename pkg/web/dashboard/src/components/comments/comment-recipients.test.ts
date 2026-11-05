@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeshParticipant } from '../../api/mesh-client'
-import { ASSISTANT_BUSY, CHOOSE_AGENT, commentRecipients, resolveCommentRecipient, type CommentRecipientsInput } from './comment-recipients'
+import { CHOOSE_AGENT, commentRecipients, resolveCommentRecipient, type CommentRecipientsInput } from './comment-recipients'
 
 const impl: MeshParticipant = { id: 'stage:impl', kind: 'stage_agent', scope: 'stage', stage_id: 'impl', alias: 'impl', display_name: 'Backend', reachable: true }
 const docs: MeshParticipant = { id: 'stage:docs', kind: 'stage_agent', scope: 'stage', stage_id: 'docs', alias: 'docs', reachable: true }
@@ -22,7 +22,7 @@ function input(over: Partial<CommentRecipientsInput> = {}): CommentRecipientsInp
     runId: 'r1',
     participants: [user, rosterSide, impl, docs, script, helper, qa, gone],
     stages: running,
-    assistant: { available: true, busy: false },
+    assistant: { available: true },
     ...over,
   }
 }
@@ -69,7 +69,7 @@ describe('commentRecipients', () => {
   })
 
   it('drops the Assistant when the side-agent capability is off or the run is unknown, keeping the roster', () => {
-    expect(commentRecipients(input({ assistant: { available: false, busy: false } })).map((r) => r.id)).not.toContain('side:r1')
+    expect(commentRecipients(input({ assistant: { available: false } })).map((r) => r.id)).not.toContain('side:r1')
     expect(commentRecipients(input({ runId: '' })).map((r) => r.id)).not.toContain('side:r1')
   })
 
@@ -77,10 +77,10 @@ describe('commentRecipients', () => {
     expect(commentRecipients(input()).filter((r) => r.id === 'side:r1')).toHaveLength(1)
   })
 
-  it('marks the Assistant busy while it answers', () => {
-    const assistant = commentRecipients(input({ assistant: { available: true, busy: true } })).find((r) => r.id === 'side:r1')
-    expect(assistant?.busy).toBe(true)
-    expect(commentRecipients(input()).every((r) => !r.busy)).toBe(true)
+  it('does not model a busy Assistant: comments queue while it answers', () => {
+    const assistant = commentRecipients(input()).find((r) => r.id === 'side:r1')
+    expect(assistant).toBeDefined()
+    expect(assistant).not.toHaveProperty('busy')
   })
 })
 
@@ -121,10 +121,9 @@ describe('resolveCommentRecipient', () => {
     expect(resolveCommentRecipient(several, '', 'run:t-9')).toEqual({ recipient: null, problem: CHOOSE_AGENT })
   })
 
-  it('resolves a busy Assistant with the reason Send must wait', () => {
-    const busy = commentRecipients(input({ participants: [], assistant: { available: true, busy: true } }))
-    const r = resolveCommentRecipient(busy, '', '')
+  it('resolves the only Assistant without a problem', () => {
+    const r = resolveCommentRecipient(commentRecipients(input({ participants: [] })), '', '')
     expect(r.recipient?.id).toBe('side:r1')
-    expect(r.problem).toBe(ASSISTANT_BUSY)
+    expect(r.problem).toBeNull()
   })
 })

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent, type ReactElement } from 
 import { createPortal } from 'react-dom'
 import { SideAgentHistory } from './SideAgentHistory'
 import { SideAgentComposer } from './SideAgentComposer'
+import { SideAgentQueue } from './SideAgentQueue'
 import type { SideAgentApi } from '../../hooks/use-side-agent'
 import type { AssistantProfile } from '../../types/assistant-profile'
 import { trapTab } from '../../lib/focus-trap'
@@ -29,7 +30,7 @@ export type SideAgentModalProps = {
 export function SideAgentModal({ api, attentionShortcut = null, stages = [], assistantProfiles = [] }: SideAgentModalProps): ReactElement {
   const {
     isOpen, close, command, commandName, events, draft, setDraft, send, interrupt, requestState, activeSource, error, unavailable,
-    quote, clearQuote, contextStageId, setContextStageId,
+    quote, clearQuote, contextStageId, setContextStageId, queue, removal, removeQueued, submitting,
   } = api
 
   // phase: closed → open → closing → closed. Разведение open/closing нужно, чтобы закрытие доигрывалось,
@@ -72,7 +73,7 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
     const el = overlayRef.current
     if (el !== null) el.inert = phase !== 'open'
     if (phase === 'open') {
-      modalRef.current?.querySelector<HTMLTextAreaElement>('.side-agent-composer .chat-composer-input')?.focus()
+      focusComposer()
     } else if (modalRef.current?.contains(document.activeElement) || document.activeElement === document.body) {
       openerRef.current?.focus()
     }
@@ -104,6 +105,10 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
     } else if (modalRef.current !== null) {
       trapTab(e, modalRef.current)
     }
+  }
+
+  function focusComposer(): void {
+    modalRef.current?.querySelector<HTMLTextAreaElement>('.side-agent-composer .chat-composer-input')?.focus()
   }
 
   const running = requestState === 'running'
@@ -188,12 +193,15 @@ export function SideAgentModal({ api, attentionShortcut = null, stages = [], ass
           <SideAgentHistory events={events} />
         </div>
 
+        <SideAgentQueue queue={queue} removal={removal} stages={stages} onRemove={removeQueued} onFocusComposer={focusComposer} />
+
         <SideAgentComposer
           draft={draft}
           onDraftChange={setDraft}
           onSend={() => void send(draft)}
           onStop={activeSource?.kind === 'modal' ? interrupt : undefined}
           running={running}
+          submitting={submitting}
           quote={quote}
           onCancelQuote={clearQuote}
           assistantProfiles={assistantProfiles}

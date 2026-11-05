@@ -3,6 +3,8 @@ import {
   SideAgentApiError,
   getConversation,
   interrupt,
+  normalizeConversation,
+  removeQueued,
   sendMessage,
   streamUrl,
 } from './side-agent-client'
@@ -75,6 +77,9 @@ describe('side-agent-client', () => {
       command: '',
       unavailable: false,
       state: 'idle',
+      activeTurnId: '',
+      activeSource: null,
+      queued: [],
       events: [],
       lastSeq: 0,
       nextCursor: 0,
@@ -106,7 +111,7 @@ describe('side-agent-client', () => {
 
     const resp = await sendMessage('c-7', 'do a thing')
 
-    expect(resp).toEqual({ turnId: 't-7', state: 'running', cursor: 12 })
+    expect(resp).toEqual({ messageId: '', messageState: 'queued', errorCode: '', turnId: 't-7', state: 'running', cursor: 12 })
     const [url, init] = fetchSpy.mock.calls[0]!
     expect(url).toBe('/api/side-agent/messages')
     expect(init?.method).toBe('POST')
@@ -140,6 +145,55 @@ describe('side-agent-client', () => {
 
     await expect(sendMessage('c-1', 'x')).rejects.toBeInstanceOf(SideAgentApiError)
     await expect(sendMessage('c-1', 'x')).rejects.toMatchObject({ code: 'busy', status: 409 })
+  })
+
+  test('sendMessage parses the queue receipt, including a failed state with its error code', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ message_id: 'm-1', message_state: 'failed', error_code: 'context_limit', state: 'idle', cursor: 5 }),
+    } as Response)
+
+    expect(await sendMessage('c-1', 'x')).toEqual({
+      messageId: 'm-1', messageState: 'failed', errorCode: 'context_limit', turnId: '', state: 'idle', cursor: 5,
+    })
+  })
+
+  test('removeQueued sends DELETE for the encoded message id and parses the receipt', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ message_id: 'm/1', message_state: 'cancelled', cursor: 9 }),
+    } as Response)
+
+    expect(await removeQueued('m/1')).toEqual({ messageId: 'm/1', messageState: 'cancelled', cursor: 9 })
+    const [url, init] = fetchSpy.mock.calls[0]!
+    expect(url).toBe('/api/side-agent/messages/m%2F1')
+    expect(init?.method).toBe('DELETE')
+  })
+
+  test('removeQueued surfaces message_not_queued as a typed 409', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'message_not_queued' }),
+    } as Response)
+
+    await expect(removeQueued('m-1')).rejects.toMatchObject({ code: 'message_not_queued', status: 409 })
+  })
+
+  test('normalizeConversation reads the active turn, its source and the queue', () => {
+    const c = normalizeConversation({
+      state: 'idle',
+      active_turn_id: 't-1',
+      active_source: { kind: 'mesh', sender_id: 'run:qa', sender_name: 'QA' },
+      queued: [{ message_id: 'm-1', client_message_id: 'c-1', text: 'hi', stage_id: 's1', assistant_task_id: 'a1', seq: 4 }],
+    })
+    expect(c.activeTurnId).toBe('t-1')
+    expect(c.activeSource).toEqual({ kind: 'mesh', senderId: 'run:qa', senderName: 'QA' })
+    expect(c.queued).toEqual([{ messageId: 'm-1', clientMessageId: 'c-1', text: 'hi', stageId: 's1', assistantTaskId: 'a1', seq: 4 }])
+    expect(normalizeConversation({}).queued).toEqual([])
+    expect(normalizeConversation({}).activeSource).toBeNull()
   })
 
   test('interrupt posts the turn id', async () => {

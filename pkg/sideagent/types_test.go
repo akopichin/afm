@@ -57,6 +57,9 @@ func TestEvent_RoundTripAllTypes(t *testing.T) {
 		}}}},
 		{EventTurnFailed, TurnFailedData{Code: ErrCodeContextLimit, Message: "too big"}},
 		{EventTurnInterrupted, TurnInterruptedData{Reason: "shutdown"}},
+		{EventMessageQueued, MessageQueuedData{MessageID: "m1", ClientMessageID: "cm-1", Message: "hi", StageID: "s", Mentions: []string{"qa"}}},
+		{EventMessageCancelled, MessageCancelledData{MessageID: "m1"}},
+		{EventMessageFailed, MessageFailedData{MessageID: "m1", Code: ErrCodeContextLimit, Message: "big"}},
 	}
 
 	for _, c := range cases {
@@ -114,6 +117,24 @@ func TestEvent_RoundTripAllTypes(t *testing.T) {
 				}
 			case TurnFailedData:
 				var d TurnFailedData
+				mustDecode(t, got, &d)
+				if d != want {
+					t.Fatalf("data mismatch: got %+v want %+v", d, want)
+				}
+			case MessageQueuedData:
+				var d MessageQueuedData
+				mustDecode(t, got, &d)
+				if !reflect.DeepEqual(d, want) {
+					t.Fatalf("data mismatch: got %+v want %+v", d, want)
+				}
+			case MessageCancelledData:
+				var d MessageCancelledData
+				mustDecode(t, got, &d)
+				if d != want {
+					t.Fatalf("data mismatch: got %+v want %+v", d, want)
+				}
+			case MessageFailedData:
+				var d MessageFailedData
 				mustDecode(t, got, &d)
 				if d != want {
 					t.Fatalf("data mismatch: got %+v want %+v", d, want)
@@ -240,7 +261,7 @@ func TestEventType_TurnState(t *testing.T) {
 		}
 	}
 	// content-события не меняют состояние хода
-	for _, ty := range []EventType{EventAssistantText, EventToolAction} {
+	for _, ty := range []EventType{EventAssistantText, EventToolAction, EventMessageQueued, EventMessageCancelled, EventMessageFailed} {
 		if _, ok := ty.TurnState(); ok {
 			t.Fatalf("%s should not map to a turn state", ty)
 		}
@@ -259,13 +280,16 @@ func TestDecodeData_EmptyIsNoop(t *testing.T) {
 // Error-коды — стабильные строковые константы (часть контракта API).
 func TestErrorCodes_Values(t *testing.T) {
 	got := map[ErrorCode]string{
-		ErrCodeBusy:               "busy",
-		ErrCodeInvalidMessage:     "invalid_message",
-		ErrCodeMessageTooLarge:    "message_too_large",
-		ErrCodeContextLimit:       "context_limit",
-		ErrCodeShuttingDown:       "shutting_down",
-		ErrCodeStorageUnavailable: "storage_unavailable",
-		ErrCodeStaleTurn:          "stale_turn",
+		ErrCodeBusy:                    "busy",
+		ErrCodeInvalidMessage:          "invalid_message",
+		ErrCodeMessageTooLarge:         "message_too_large",
+		ErrCodeContextLimit:            "context_limit",
+		ErrCodeShuttingDown:            "shutting_down",
+		ErrCodeStorageUnavailable:      "storage_unavailable",
+		ErrCodeStaleTurn:               "stale_turn",
+		ErrCodeClientMessageIDConflict: "client_message_id_conflict",
+		ErrCodeMessageNotQueued:        "message_not_queued",
+		ErrCodeMessageNotFound:         "message_not_found",
 	}
 	for code, want := range got {
 		if string(code) != want {

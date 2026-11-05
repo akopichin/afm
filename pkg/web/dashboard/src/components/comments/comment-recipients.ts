@@ -10,7 +10,6 @@ import { useComments } from './CommentProvider'
 
 export const CHOOSE_AGENT = 'Choose an agent'
 export const NO_RECIPIENTS = 'No agent can receive comments right now'
-export const ASSISTANT_BUSY = 'The Assistant is still answering — send when it finishes'
 export const RECIPIENT_GONE = 'The chosen agent is no longer available — choose another one'
 
 export type CommentRecipient = {
@@ -21,7 +20,6 @@ export type CommentRecipient = {
   route: 'mesh' | 'assistant'
   // originStage — стадия, в чьей ленте и треде показывается разговор; достижимость сервер проверяет для любого адресата.
   originStage: string
-  busy: boolean
 }
 
 export type CommentRecipientsInput = {
@@ -29,7 +27,7 @@ export type CommentRecipientsInput = {
   // participants — ростер Mesh или пусто, если Mesh/collaboration выключены.
   participants: MeshParticipant[]
   stages: { id: string; status: string }[]
-  assistant: { available: boolean; busy: boolean }
+  assistant: { available: boolean }
 }
 
 const FINISHED_STAGE_STATUSES = ['done', 'failed']
@@ -44,7 +42,7 @@ function canReceive(p: MeshParticipant, stages: CommentRecipientsInput['stages']
 export function commentRecipients({ runId, participants, stages, assistant }: CommentRecipientsInput): CommentRecipient[] {
   const list: CommentRecipient[] = []
   if (assistant.available && runId !== '') {
-    list.push({ id: `side:${runId}`, label: 'Assistant', role: 'Assistant', route: 'assistant', originStage: '', busy: assistant.busy })
+    list.push({ id: `side:${runId}`, label: 'Assistant', role: 'Assistant', route: 'assistant', originStage: '' })
   }
   for (const p of participants) {
     if (!canReceive(p, stages)) continue
@@ -54,7 +52,6 @@ export function commentRecipients({ runId, participants, stages, assistant }: Co
       role: participantRole(p.kind),
       route: 'mesh',
       originStage: p.kind === 'stage_agent' ? p.stage_id ?? '' : '',
-      busy: false,
     })
   }
   return list
@@ -70,7 +67,7 @@ export function resolveCommentRecipient(options: CommentRecipient[], recipientId
   if (recipientId !== '' && chosen === undefined) return { recipient: null, problem: RECIPIENT_GONE }
   const recipient = chosen ?? find(lastRecipientId) ?? (options.length === 1 ? options[0] : undefined)
   if (recipient === undefined) return { recipient: null, problem: options.length === 0 ? NO_RECIPIENTS : CHOOSE_AGENT }
-  return { recipient, problem: recipient.busy ? ASSISTANT_BUSY : null }
+  return { recipient, problem: null }
 }
 
 export type CommentRecipientsRoster = { runId: string; participants: MeshParticipant[]; stages: { id: string; status: string }[] }
@@ -80,10 +77,10 @@ export const CommentRecipientsContext = createContext<CommentRecipientsRoster>({
 
 export function useCommentRecipients(): CommentRecipient[] {
   const { runId, participants, stages } = useContext(CommentRecipientsContext)
-  const { enabled, active } = useSideAgentContext()
+  const { enabled } = useSideAgentContext()
   return useMemo(
-    () => commentRecipients({ runId, participants, stages, assistant: { available: enabled, busy: active } }),
-    [runId, participants, stages, enabled, active],
+    () => commentRecipients({ runId, participants, stages, assistant: { available: enabled } }),
+    [runId, participants, stages, enabled],
   )
 }
 

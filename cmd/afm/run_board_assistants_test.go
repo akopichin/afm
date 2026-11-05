@@ -424,7 +424,7 @@ func TestSideAgentMesh_AssistantsModeDoesNotPromptBoardNotice(t *testing.T) {
 	}
 
 	prompts := make(chan string, 2)
-	mgr := sideagent.New(sideagent.Config{
+	mgr := newStartedSideManager(sideagent.Config{
 		Store: sideStore, Command: "codex", SourceReply: orch.SideAgentExplicitReply,
 		HideSource: func(id string) bool { return orch.HidesFromAgents(agentcomm.MessageID(id)) },
 		OnSourceDelivered: func(id string) {

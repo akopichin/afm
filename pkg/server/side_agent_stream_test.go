@@ -223,3 +223,21 @@ func TestSideAgentStream_ShutdownReturns(t *testing.T) {
 		t.Fatal("stream handler did not return after Shutdown")
 	}
 }
+
+func TestSideAgentStream_CarriesQueueEvents(t *testing.T) {
+	ch := make(chan sideagent.Event, 1)
+	ch <- ev(3, sideagent.EventMessageFailed, "")
+	close(ch)
+	fake := &fakeSideAgent{
+		history: []sideagent.Event{ev(1, sideagent.EventMessageQueued, ""), ev(2, sideagent.EventMessageCancelled, "")},
+		subCh:   ch,
+	}
+	srv := newTestServer(t, Config{SideAgent: fake})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/side-agent/stream", nil))
+	for _, typ := range []string{"message_queued", "message_cancelled", "message_failed"} {
+		if !strings.Contains(w.Body.String(), "event: "+typ+"\n") {
+			t.Errorf("stream lacks %s:\n%s", typ, w.Body.String())
+		}
+	}
+}

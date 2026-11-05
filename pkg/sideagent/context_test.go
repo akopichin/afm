@@ -228,3 +228,65 @@ func TestBuild_HiddenSourceTurnIsNotRenderedInHistory(t *testing.T) {
 		}
 	}
 }
+
+func group(texts ...string) []MessageInfo {
+	var out []MessageInfo
+	for i, text := range texts {
+		out = append(out, MessageInfo{MessageID: "m" + string(rune('1'+i)), Text: text})
+	}
+	return out
+}
+
+func TestBuildGroup_MessagesInOrderWithBoundaries(t *testing.T) {
+	p, used, err := ContextBuilder{ByteLimit: 100000}.BuildGroup(nil, group("первое", "второе"))
+	if err != nil || used != 2 {
+		t.Fatalf("used=%d err=%v", used, err)
+	}
+	cur := p[strings.Index(p, CurrentHeading):]
+	i1, i2 := strings.Index(cur, "первое"), strings.Index(cur, "второе")
+	if i1 < 0 || i2 < i1 {
+		t.Fatalf("order wrong:\n%s", cur)
+	}
+	if strings.Count(cur, "Сообщение 1") == 0 || strings.Count(cur, "Сообщение 2") == 0 {
+		t.Fatalf("no explicit message boundaries:\n%s", cur)
+	}
+}
+
+func TestBuildGroup_LargestFittingPrefix(t *testing.T) {
+	full, _, _ := ContextBuilder{}.BuildGroup(nil, group("aaaa", "bbbb", "cccc"))
+	p, used, err := ContextBuilder{ByteLimit: len(full) - 1}.BuildGroup(nil, group("aaaa", "bbbb", "cccc"))
+	if err != nil || used != 2 || strings.Contains(p, "cccc") {
+		t.Fatalf("used=%d err=%v\n%s", used, err, p)
+	}
+}
+
+func TestBuildGroup_HeadThatDoesNotFitIsContextLimit(t *testing.T) {
+	_, used, err := ContextBuilder{ByteLimit: 50}.BuildGroup(nil, group("x"))
+	if !errors.Is(err, ErrContextLimit) || used != 0 {
+		t.Fatalf("used=%d err=%v", used, err)
+	}
+}
+
+func TestBuildGroup_QueuedTextsStayOutOfHistoryUntilClaimed(t *testing.T) {
+	history := []Event{
+		ev(t, EventMessageQueued, "", MessageQueuedData{MessageID: "m0", Message: "ждёт"}),
+		ev(t, EventMessageQueued, "", MessageQueuedData{MessageID: "m9", Message: "в ходе"}),
+		ev(t, EventTurnAccepted, "t1", TurnAcceptedData{MessageIDs: []string{"m9"}}),
+		ev(t, EventAssistantText, "t1", AssistantTextData{Text: "ответ"}),
+		ev(t, EventMessageCancelled, "", MessageCancelledData{MessageID: "m0"}),
+	}
+	p, _, err := ContextBuilder{}.BuildGroup(history, group("новое"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist := p[:strings.Index(p, CurrentHeading)]
+	if strings.Contains(hist, "ждёт") || !strings.Contains(hist, "Пользователь: в ходе") || !strings.Contains(hist, "Агент: ответ") {
+		t.Fatalf("history:\n%s", hist)
+	}
+}
+
+func TestContextFormatVersionIsV3(t *testing.T) {
+	if ContextFormatVersion != "v3" {
+		t.Fatalf("version = %q", ContextFormatVersion)
+	}
+}

@@ -113,15 +113,21 @@ func newCorruptStore(t *testing.T) *Store {
 	return s
 }
 
+// newStarted строит Manager с включённым исполнением очереди (Start), как в рантайме.
+func newStarted(cfg Config) *Manager {
+	m := New(cfg)
+	m.Start()
+	return m
+}
+
 func newManager(t *testing.T, store *Store, ff *fakeFactory, cb ContextBuilder) *Manager {
 	t.Helper()
-	m := New(Config{
+	return newStarted(Config{
 		Store:       store,
 		Command:     "claude",
 		Context:     cb,
 		NewExecutor: ff.make,
 	})
-	return m
 }
 
 // drainUntilTerminal читает события из подписки, пока не встретит терминальное
@@ -203,7 +209,7 @@ func TestSideAgent_MeshSourceAndInvocation(t *testing.T) {
 	store := newTestStore(t)
 	runner := &fakeRunner{actions: []fakeAction{{"text", "answer"}}, started: make(chan struct{})}
 	var made, delivered bool
-	m := New(Config{Store: store, Command: "codex", MeshClient: func() *executor.MeshClient {
+	m := newStarted(Config{Store: store, Command: "codex", MeshClient: func() *executor.MeshClient {
 		made = true
 		return &executor.MeshClient{ParticipantID: "side:run-test"}
 	}, OnSourceDelivered: func(id string) {
@@ -248,7 +254,7 @@ func TestSideAgent_MeshSourceAndInvocation(t *testing.T) {
 func TestSideAgent_ModalSourceOmitted(t *testing.T) {
 	store := newTestStore(t)
 	runner := &fakeRunner{actions: []fakeAction{{"text", "answer"}}}
-	m := New(Config{Store: store, Command: "codex", NewExecutor: func(cfg executor.Config) AgentRunner { runner.cfg = cfg; return runner }})
+	m := newStarted(Config{Store: store, Command: "codex", NewExecutor: func(cfg executor.Config) AgentRunner { runner.cfg = cfg; return runner }})
 	if _, err := m.Send("modal-1", "hi", TurnTarget{}); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +286,7 @@ func TestSideAgent_OldJournalWithoutSourceLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	m := New(Config{Store: reopened})
+	m := newStarted(Config{Store: reopened})
 	var d TurnAcceptedData
 	if err := m.History()[0].DecodeData(&d); err != nil {
 		t.Fatal(err)
@@ -296,7 +302,7 @@ func TestSideAgent_OldJournalWithoutSourceLoads(t *testing.T) {
 func TestSideAgent_IdempotencyBindsMeshSource(t *testing.T) {
 	store := newTestStore(t)
 	runner := &fakeRunner{block: make(chan struct{}), started: make(chan struct{})}
-	m := New(Config{Store: store, Command: "codex", NewExecutor: func(cfg executor.Config) AgentRunner {
+	m := newStarted(Config{Store: store, Command: "codex", NewExecutor: func(cfg executor.Config) AgentRunner {
 		runner.cfg = cfg
 		return runner
 	}})
@@ -310,14 +316,14 @@ func TestSideAgent_IdempotencyBindsMeshSource(t *testing.T) {
 	if !m.Drain(ctxWithTimeout(t, time.Second)) {
 		t.Fatal("drain")
 	}
-	if _, err := m.Send("mesh:claimed", "same body", TurnTarget{SourceMessageID: "claimed", SourceThreadID: "thread", SourceSenderID: "peer"}); codeOf(t, err) != ErrCodeInvalidMessage {
+	if _, err := m.Send("mesh:claimed", "same body", TurnTarget{SourceMessageID: "claimed", SourceThreadID: "thread", SourceSenderID: "peer"}); codeOf(t, err) != ErrCodeClientMessageIDConflict {
 		t.Fatalf("Mesh source reused modal id: %v", err)
 	}
 }
 
 func TestSideAgent_ContextRejectionDoesNotPersistSource(t *testing.T) {
 	store := newTestStore(t)
-	m := New(Config{Store: store, Context: ContextBuilder{ByteLimit: 20}})
+	m := newStarted(Config{Store: store, Context: ContextBuilder{ByteLimit: 20}})
 	_, err := m.Send("mesh:mm-1", "hello", TurnTarget{SourceMessageID: "mm-1", SourceSenderID: "run:peer"})
 	if code := codeOf(t, err); code != ErrCodeContextLimit {
 		t.Fatalf("code = %s", code)
@@ -338,7 +344,7 @@ func TestSideAgent_MeshTokenNeverEntersJournal(t *testing.T) {
 		}
 		revoke()
 	}
-	m := New(Config{Store: store, Command: "codex", MeshClient: func() *executor.MeshClient {
+	m := newStarted(Config{Store: store, Command: "codex", MeshClient: func() *executor.MeshClient {
 		return &executor.MeshClient{ParticipantID: "side:run-test", Mint: func() (string, string, func()) {
 			return "http://localhost", token, func() {}
 		}}
@@ -362,7 +368,7 @@ func TestSideAgent_MeshTokenNeverEntersJournal(t *testing.T) {
 func TestSideAgent_FailedExecutorStartDoesNotDeliverAndRevokes(t *testing.T) {
 	store := newTestStore(t)
 	var minted, revoked, delivered atomic.Bool
-	m := New(Config{Store: store, Command: "afm-side-agent-command-that-does-not-exist", MeshClient: func() *executor.MeshClient {
+	m := newStarted(Config{Store: store, Command: "afm-side-agent-command-that-does-not-exist", MeshClient: func() *executor.MeshClient {
 		return &executor.MeshClient{ParticipantID: "side:run-test", Mint: func() (string, string, func()) {
 			minted.Store(true)
 			return "http://127.0.0.1:9876/api/agent-mesh", "secret-token", func() { revoked.Store(true) }
@@ -389,7 +395,7 @@ func TestSideAgent_FailedExecutorStartDoesNotDeliverAndRevokes(t *testing.T) {
 func TestManager_SendRecordsTargetAndResolvesMentions(t *testing.T) {
 	ff := &fakeFactory{fakes: []*fakeRunner{{actions: []fakeAction{{"text", "ok"}}}}}
 	store := newTestStore(t)
-	m := New(Config{
+	m := newStarted(Config{
 		Store:       store,
 		Command:     "claude",
 		Context:     ContextBuilder{},
@@ -529,8 +535,8 @@ func TestManager_SameIDDifferentTextIsConflict(t *testing.T) {
 	<-ff.fakes[0].started
 
 	_, err := m.Send("c1", "ДРУГОЙ текст", TurnTarget{})
-	if code := codeOf(t, err); code != ErrCodeBusy {
-		t.Fatalf("code = %q, want %q", code, ErrCodeBusy)
+	if code := codeOf(t, err); code != ErrCodeClientMessageIDConflict {
+		t.Fatalf("code = %q, want %q", code, ErrCodeClientMessageIDConflict)
 	}
 	close(block)
 	m.Drain(ctxWithTimeout(t, time.Second))
@@ -715,7 +721,7 @@ func TestManager_RedactionAcrossUserEvents(t *testing.T) {
 		retErr: &Error{Code: ErrCodeAgentError, Message: "упал с " + secret},
 	}}}
 	store := newTestStore(t)
-	m := New(Config{
+	m := newStarted(Config{
 		Store:       store,
 		Command:     "claude",
 		NewExecutor: ff.make,

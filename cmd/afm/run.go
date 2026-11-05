@@ -405,6 +405,8 @@ func executeFlow(ctx context.Context, f *flow.Flow, cfg config.Config, hooks []l
 	}
 	var unavailableSideMesh *sideAgentMeshBridge
 	if side != nil {
+		// The dashboard URL is known now: queued messages may start, and Mesh input opens after them.
+		side.manager.Start()
 		side.mesh = startSideAgentMesh(orch, side.manager)
 		// Flow finalization drains Mesh input. Direct modal admission remains open
 		// while the dashboard stays up after the flow has finalized.

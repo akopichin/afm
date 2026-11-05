@@ -124,9 +124,9 @@ describe('deliverComments', () => {
     expect(meshSend).not.toHaveBeenCalled()
   })
 
-  it('Assistant busy rejects with a readable reason', async () => {
-    const assistant = vi.fn().mockRejectedValue(new SideAgentApiError(409, 'busy'))
-    await expect(deliverComments(frozen({ route: 'assistant' }), 'req-2', assistant)).rejects.toThrow(/still answering/i)
+  it('a failed receipt from the Assistant (context limit) rejects with its reason', async () => {
+    const assistant = vi.fn().mockRejectedValue(new SideAgentApiError(202, 'context_limit'))
+    await expect(deliverComments(frozen({ route: 'assistant' }), 'req-2', assistant)).rejects.toThrow(/conversation.*too long/i)
   })
 
   it('Assistant 413 and context limit are explained', async () => {

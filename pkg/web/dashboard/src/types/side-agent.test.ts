@@ -59,6 +59,20 @@ describe('parseSideAgentEvent', () => {
     expect(completed?.data).toEqual({})
   })
 
+  test('parses queue events and the group fields of turn_accepted', () => {
+    const queued = parseSideAgentEvent({
+      seq: 1, type: 'message_queued', turn_id: '',
+      data: { message_id: 'm-1', client_message_id: 'c-1', message: 'hi', stage_id: 's1' },
+    })
+    expect(queued).toMatchObject({ type: 'message_queued', data: { messageId: 'm-1', clientMessageId: 'c-1', message: 'hi', stageId: 's1' } })
+    expect(parseSideAgentEvent({ seq: 2, type: 'message_cancelled', data: { message_id: 'm-1' } }))
+      .toMatchObject({ data: { messageId: 'm-1' } })
+    expect(parseSideAgentEvent({ seq: 3, type: 'message_failed', data: { message_id: 'm-1', code: 'context_limit', message: 'big' } }))
+      .toMatchObject({ data: { messageId: 'm-1', code: 'context_limit', message: 'big' } })
+    expect(parseSideAgentEvent({ seq: 4, type: 'turn_accepted', turn_id: 't1', data: { message_ids: ['m-1', 'm-2'], stage_id: 's1' } }))
+      .toMatchObject({ data: { messageIds: ['m-1', 'm-2'], stageId: 's1' } })
+  })
+
   test('drops an event with an unknown type', () => {
     expect(parseSideAgentEvent({ seq: 7, type: 'something_else', data: {} })).toBeNull()
   })
@@ -96,6 +110,11 @@ describe('errorCodeToMessage', () => {
     expect(errorCodeToMessage('busy')).toBe('Another request is in progress')
     expect(errorCodeToMessage('message_too_large')).toBe('Message too large')
     expect(errorCodeToMessage('context_limit')).toBe('Conversation too long for one request')
+  })
+
+  test('explains queue error codes', () => {
+    expect(errorCodeToMessage('message_not_queued')).toBe('Message is already being processed')
+    expect(errorCodeToMessage('message_not_found')).toBe('Message not found')
   })
 
   test('falls back to a generic message for an unknown/transport code', () => {

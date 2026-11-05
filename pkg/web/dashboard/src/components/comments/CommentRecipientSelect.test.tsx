@@ -83,10 +83,10 @@ describe('CommentRecipientSelect', () => {
     expect(screen.queryByText(/no longer available/i)).toBeNull()
   })
 
-  it('shows that the Assistant is busy', () => {
+  it('does not mark a working Assistant as busy: comments queue', () => {
     renderSelect({ roster: { runId: 'r1', participants: [], stages: [] }, side: sideAgent({ active: true }) })
-    expect(screen.getByRole('option', { name: 'Assistant · Assistant (busy)' })).toBeTruthy()
-    expect(screen.getByText(/still answering/i)).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Assistant · Assistant' })).toBeTruthy()
+    expect(screen.queryByText(/still answering/i)).toBeNull()
   })
 
   it('explains an empty list when nobody can receive comments', () => {

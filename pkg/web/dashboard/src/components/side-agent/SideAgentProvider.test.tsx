@@ -17,10 +17,11 @@ function fakeDeps(): SideAgentDeps {
   return {
     getConversation: vi.fn().mockResolvedValue({
       conversationId: 'c1', runId: 'r1', command: 'claude', unavailable: false,
-      state: 'idle', events: [], lastSeq: 0, nextCursor: 0, hasMore: false,
+      state: 'idle', activeTurnId: '', activeSource: null, queued: [], events: [], lastSeq: 0, nextCursor: 0, hasMore: false,
     }),
-    sendMessage: vi.fn().mockResolvedValue({ turnId: 't1', state: 'running', cursor: 1 }),
+    sendMessage: vi.fn().mockResolvedValue({ messageId: 'm-1', messageState: 'running', errorCode: '', turnId: 't1', state: 'running', cursor: 1 }),
     interrupt: vi.fn().mockResolvedValue(undefined),
+    removeQueued: vi.fn().mockResolvedValue({ messageId: 'm-1', messageState: 'cancelled', cursor: 2 }),
     openStream: vi.fn(() => ({ close: vi.fn() })),
   }
 }
@@ -189,14 +190,14 @@ describe('SideAgentProvider (App-level wiring)', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: 'exact' })).toHaveAttribute('data-active', 'true'))
     })
 
-    it('rejects to the caller while a turn runs, with no second POST', async () => {
+    it('posts again while a turn runs: the package joins the queue', async () => {
       const deps = runningDeps()
       const onResult = vi.fn()
       render(<SideAgentProvider runId="r1" enabled deps={deps}><ExactConsumer onResult={onResult} /></SideAgentProvider>)
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'exact' })) })
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'exact' })) })
-      expect(deps.sendMessage).toHaveBeenCalledTimes(1)
-      expect(onResult).toHaveBeenLastCalledWith(expect.stringMatching(/busy|progress/i))
+      expect(deps.sendMessage).toHaveBeenCalledTimes(2)
+      expect(onResult).toHaveBeenLastCalledWith('ok')
     })
 
     it('without a provider (Assistant off) the default context rejects', async () => {

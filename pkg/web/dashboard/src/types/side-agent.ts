@@ -11,6 +11,9 @@ export const SIDE_AGENT_EVENT_TYPES = [
   'turn_completed',
   'turn_failed',
   'turn_interrupted',
+  'message_queued',
+  'message_cancelled',
+  'message_failed',
 ] as const
 
 export type SideAgentEventType = (typeof SIDE_AGENT_EVENT_TYPES)[number]
@@ -27,6 +30,9 @@ export const SIDE_AGENT_ERROR_CODES = [
   'stale_turn',
   'agent_error',
   'no_answer',
+  'client_message_id_conflict',
+  'message_not_queued',
+  'message_not_found',
 ] as const
 
 export type SideAgentErrorCode = (typeof SIDE_AGENT_ERROR_CODES)[number]
@@ -52,6 +58,12 @@ export function errorCodeToMessage(code: string): string {
       return 'The agent failed to answer'
     case 'no_answer':
       return 'The agent returned no answer'
+    case 'client_message_id_conflict':
+      return 'This message ID was already used for a different message'
+    case 'message_not_queued':
+      return 'Message is already being processed'
+    case 'message_not_found':
+      return 'Message not found'
     default:
       return 'Request failed'
   }
@@ -66,7 +78,13 @@ export type TurnAcceptedData = {
   sourceThreadId?: string
   sourceSenderId?: string
   sourceSenderName?: string
+  // Групповой ход: message и clientMessageId пусты, тексты лежат в событиях message_queued.
+  messageIds?: string[]
+  stageId?: string
 }
+export type MessageQueuedData = { messageId: string; clientMessageId: string; message: string; stageId: string }
+export type MessageCancelledData = { messageId: string }
+export type MessageFailedData = { messageId: string; code: string; message: string }
 export type TurnStartedData = { command: string; contextFormatVersion: string }
 export type AssistantTextData = { text: string }
 export type ToolActionData = { tool: string; detail: string; logRef: string }
@@ -93,6 +111,9 @@ export type SideAgentEvent = SideAgentEventEnvelope &
     | { type: 'turn_completed'; data: TurnCompletedData }
     | { type: 'turn_failed'; data: TurnFailedData }
     | { type: 'turn_interrupted'; data: TurnInterruptedData }
+    | { type: 'message_queued'; data: MessageQueuedData }
+    | { type: 'message_cancelled'; data: MessageCancelledData }
+    | { type: 'message_failed'; data: MessageFailedData }
   )
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -118,6 +139,8 @@ function parseEventData(type: SideAgentEventType, raw: unknown): SideAgentEvent[
       if (typeof d.source_thread_id === 'string' && d.source_thread_id !== '') accepted.sourceThreadId = d.source_thread_id
       if (typeof d.source_sender_id === 'string' && d.source_sender_id !== '') accepted.sourceSenderId = d.source_sender_id
       if (typeof d.source_sender_name === 'string' && d.source_sender_name !== '') accepted.sourceSenderName = d.source_sender_name
+      if (Array.isArray(d.message_ids)) accepted.messageIds = d.message_ids.filter((id): id is string => typeof id === 'string')
+      if (typeof d.stage_id === 'string' && d.stage_id !== '') accepted.stageId = d.stage_id
       return accepted
     }
     case 'turn_started':
@@ -132,6 +155,12 @@ function parseEventData(type: SideAgentEventType, raw: unknown): SideAgentEvent[
       return { reason: str(d.reason) }
     case 'turn_completed':
       return {}
+    case 'message_queued':
+      return { messageId: str(d.message_id), clientMessageId: str(d.client_message_id), message: str(d.message), stageId: str(d.stage_id) }
+    case 'message_cancelled':
+      return { messageId: str(d.message_id) }
+    case 'message_failed':
+      return { messageId: str(d.message_id), code: str(d.code), message: str(d.message) }
   }
 }
 

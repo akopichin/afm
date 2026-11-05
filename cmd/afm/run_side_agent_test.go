@@ -60,7 +60,7 @@ func newRuntimeWithRunner(t *testing.T, r *blockingRunner) *sideAgentRuntime {
 	if err != nil {
 		t.Fatalf("Open store: %v", err)
 	}
-	mgr := sideagent.New(sideagent.Config{
+	mgr := newStartedSideManager(sideagent.Config{
 		Store:   store,
 		Command: "claude",
 		NewExecutor: func(cfg executor.Config) sideagent.AgentRunner {
@@ -490,4 +490,11 @@ func importPathValue(t *testing.T, imp *ast.ImportSpec) string {
 		t.Fatalf("unquote import %s: %v", imp.Path.Value, err)
 	}
 	return v
+}
+
+// newStartedSideManager builds a Manager with queue execution enabled, as startup does once the dashboard is up.
+func newStartedSideManager(cfg sideagent.Config) *sideagent.Manager {
+	m := sideagent.New(cfg)
+	m.Start()
+	return m
 }

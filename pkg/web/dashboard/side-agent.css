@@ -260,6 +260,71 @@
 .feed-history-card .feed-item { padding: 0; color: var(--text-secondary); font-size: 14px; line-height: 1.65; }
 .feed-history-card .feed-item .md { font: inherit; }
 
+/* --- Очередь сообщений --- Блок между историей и композером; список прокручивается сам, чтобы очередь
+   не вытесняла историю. */
+.side-agent-queue {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--separator-subtle);
+  background: var(--surface-canvas);
+}
+.side-agent-queue-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.side-agent-queue-note { margin: 0; font-size: 11.5px; color: var(--text-muted); }
+.side-agent-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(200px, 24dvh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.side-agent-queue-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 10px;
+  background: var(--surface-user-message);
+  border-radius: var(--radius-sm);
+}
+.side-agent-queue-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.side-agent-queue-text.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.side-agent-queue-toggle,
+.side-agent-queue-remove {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.side-agent-queue-toggle { align-self: flex-start; padding-left: 0; }
+.side-agent-queue-toggle:hover,
+.side-agent-queue-remove:hover { background: var(--surface-hover); }
+.side-agent-queue-toggle:focus-visible,
+.side-agent-queue-remove:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.side-agent-queue-remove[aria-disabled='true'] { color: var(--text-disabled); cursor: default; }
+.side-agent-queue-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.side-agent-queue-context { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-muted); }
+.side-agent-queue-error { font-size: 11.5px; color: var(--danger-text); }
+
 /* --- Композер (закреплён) --- Строка ввода — общая .chat-composer-row (public/chat-composer.css); здесь
    только место композера в модалке: опциональный чип цитаты сверху, под ним строка. */
 .side-agent-composer {
@@ -386,6 +451,8 @@
   .side-agent-context-row { padding: 8px 12px; flex-wrap: wrap; }
   .side-agent-history { padding: 18px 12px; }
   .side-agent-composer { padding: 8px 12px; }
+  .side-agent-queue { padding: 8px 12px; }
+  .side-agent-queue-toggle, .side-agent-queue-remove { min-height: 44px; }
   .side-agent-history .feed-history-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .feed-history-message > .mesh-avatar { width: 25px; height: 25px; font-size: 9px; }
   .feed-history-card .feed-item { font-size: 13px; }

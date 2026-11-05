@@ -17,7 +17,7 @@ export function CommentRecipientSelect({ recipientId, onChange }: { recipientId:
         {recipient === null && <option value="">{CHOOSE_AGENT}</option>}
         {options.map((o) => (
           <option key={o.id} value={o.id}>
-            {`${o.label} · ${o.role}${o.busy ? ' (busy)' : ''}`}
+            {`${o.label} · ${o.role}`}
           </option>
         ))}
       </select>

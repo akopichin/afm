@@ -22,8 +22,9 @@ type fakeSideAgent struct {
 	convID      string
 	unavailable bool
 
-	sendFn func(clientMessageID, text string, target sideagent.TurnTarget) (string, error)
-	stopFn func(turnID string) error
+	enqueueFn func(clientMessageID, text string, target sideagent.TurnTarget) (sideagent.MessageReceipt, error)
+	cancelFn  func(messageID string) (sideagent.MessageReceipt, error)
+	stopFn    func(turnID string) error
 
 	// subCh — канал, который возвращает Subscribe. Тест заполняет/закрывает его,
 	// чтобы смоделировать live-поток и overflow-drop.
@@ -34,6 +35,7 @@ type fakeSideAgent struct {
 	sentCMID     string
 	sentText     string
 	sentTarget   sideagent.TurnTarget
+	cancelledID  string
 }
 
 func (f *fakeSideAgent) record(name string) {
@@ -47,16 +49,26 @@ func (f *fakeSideAgent) History() []sideagent.Event {
 	return f.history
 }
 
-func (f *fakeSideAgent) Send(clientMessageID, text string, target sideagent.TurnTarget) (string, error) {
+func (f *fakeSideAgent) Enqueue(clientMessageID, text string, target sideagent.TurnTarget) (sideagent.MessageReceipt, error) {
 	f.mu.Lock()
 	f.sentCMID = clientMessageID
 	f.sentText = text
 	f.sentTarget = target
 	f.mu.Unlock()
-	if f.sendFn != nil {
-		return f.sendFn(clientMessageID, text, target)
+	if f.enqueueFn != nil {
+		return f.enqueueFn(clientMessageID, text, target)
 	}
-	return "t-1", nil
+	return sideagent.MessageReceipt{MessageID: "m-1", State: sideagent.MessageStateQueued}, nil
+}
+
+func (f *fakeSideAgent) CancelQueued(messageID string) (sideagent.MessageReceipt, error) {
+	f.mu.Lock()
+	f.cancelledID = messageID
+	f.mu.Unlock()
+	if f.cancelFn != nil {
+		return f.cancelFn(messageID)
+	}
+	return sideagent.MessageReceipt{MessageID: messageID, State: sideagent.MessageStateCancelled}, nil
 }
 
 func (f *fakeSideAgent) Stop(turnID string) error {
@@ -134,12 +146,15 @@ func TestSideAgent_ErrorCodeMapping(t *testing.T) {
 		{sideagent.ErrCodeShuttingDown, http.StatusServiceUnavailable},
 		{sideagent.ErrCodeStorageUnavailable, http.StatusServiceUnavailable},
 		{sideagent.ErrCodeAgentError, http.StatusInternalServerError},
+		{sideagent.ErrCodeClientMessageIDConflict, http.StatusConflict},
+		{sideagent.ErrCodeMessageNotQueued, http.StatusConflict},
+		{sideagent.ErrCodeMessageNotFound, http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.code), func(t *testing.T) {
 			fake := &fakeSideAgent{
-				sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) {
-					return "", &sideagent.Error{Code: tc.code, Message: "boom"}
+				enqueueFn: func(_, _ string, _ sideagent.TurnTarget) (sideagent.MessageReceipt, error) {
+					return sideagent.MessageReceipt{}, &sideagent.Error{Code: tc.code, Message: "boom"}
 				},
 			}
 			srv := newTestServer(t, Config{SideAgent: fake})
@@ -162,77 +177,248 @@ func TestSideAgent_ErrorCodeMapping(t *testing.T) {
 	}
 }
 
-func TestSideAgent_SendSuccessAndIdempotent(t *testing.T) {
-	// Fake returns the same turn id for a repeated client_message_id — handler
-	// just forwards it; a repeat POST is safe and yields the same turn.
+func postMessage(t *testing.T, srv *Server, body map[string]string) (int, map[string]any) {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/side-agent/messages", bytes.NewReader(raw))
+	req.Header.Set("Origin", "http://"+req.Host)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	var m map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &m)
+	return w.Code, m
+}
+
+func TestSideAgent_SendReturnsReceiptForQueuedMessage(t *testing.T) {
 	fake := &fakeSideAgent{
-		sendFn: func(cmid, _ string, _ sideagent.TurnTarget) (string, error) { return "turn-for-" + cmid, nil },
+		history: []sideagent.Event{
+			ev(1, sideagent.EventTurnAccepted, "t1"),
+			ev(2, sideagent.EventTurnStarted, "t1"),
+			{Seq: 3, Type: sideagent.EventMessageQueued, Data: json.RawMessage(`{"message_id":"m-1","client_message_id":"c1","message":"hello"}`)},
+		},
+		enqueueFn: func(string, string, sideagent.TurnTarget) (sideagent.MessageReceipt, error) {
+			return sideagent.MessageReceipt{MessageID: "m-1", State: sideagent.MessageStateQueued}, nil
+		},
 	}
 	srv := newTestServer(t, Config{SideAgent: fake})
-	post := func() (int, map[string]any) {
-		body, _ := json.Marshal(map[string]string{"client_message_id": "c1", "text": "hello"})
-		req := httptest.NewRequest(http.MethodPost, "/api/side-agent/messages", bytes.NewReader(body))
-		req.Header.Set("Origin", "http://"+req.Host)
-		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
-		var m map[string]any
-		_ = json.Unmarshal(w.Body.Bytes(), &m)
-		return w.Code, m
-	}
-	code1, m1 := post()
-	code2, m2 := post()
-	if code1 != http.StatusAccepted || code2 != http.StatusAccepted {
-		t.Fatalf("expected 202 on both, got %d and %d", code1, code2)
-	}
-	if m1["turn_id"] != "turn-for-c1" || m2["turn_id"] != "turn-for-c1" {
-		t.Errorf("turn_id mismatch: %v vs %v", m1["turn_id"], m2["turn_id"])
+	for i := 0; i < 2; i++ { // повтор безопасен: сервер просто возвращает квитанцию
+		code, m := postMessage(t, srv, map[string]string{"client_message_id": "c1", "text": "hello"})
+		if code != http.StatusAccepted {
+			t.Fatalf("HTTP %d, want 202", code)
+		}
+		if m["message_id"] != "m-1" || m["message_state"] != "queued" {
+			t.Fatalf("receipt = %v", m)
+		}
+		if _, has := m["turn_id"]; has {
+			t.Errorf("queued message has no turn: %v", m)
+		}
+		if m["state"] != "running" || m["cursor"] != float64(3) {
+			t.Errorf("state/cursor = %v/%v, want running/3 (conversation state, not message state)", m["state"], m["cursor"])
+		}
 	}
 }
 
-// Идемпотентный повтор уже ЗАВЕРШЁННОГО хода должен отдавать state:"idle": агент не запускался, ход
-// неактивен — клиент не должен считать его активным. Свежий send того же хендлера — "running".
-func TestSideAgent_SendStateReflectsReturnedTurn(t *testing.T) {
-	ev := func(typ sideagent.EventType, turnID string, seq uint64) sideagent.Event {
-		return sideagent.Event{Type: typ, TurnID: turnID, Seq: seq}
+func TestSideAgent_SendReceiptVariants(t *testing.T) {
+	idle := []sideagent.Event{
+		ev(1, sideagent.EventTurnAccepted, "t1"),
+		ev(2, sideagent.EventTurnStarted, "t1"),
+		ev(3, sideagent.EventTurnCompleted, "t1"),
 	}
-	post := func(fake *fakeSideAgent) string {
-		srv := newTestServer(t, Config{SideAgent: fake})
-		body, _ := json.Marshal(map[string]string{"client_message_id": "c1", "text": "hi"})
-		req := httptest.NewRequest(http.MethodPost, "/api/side-agent/messages", bytes.NewReader(body))
+	cases := []struct {
+		name    string
+		receipt sideagent.MessageReceipt
+		want    map[string]any
+	}{
+		{"running turn", sideagent.MessageReceipt{MessageID: "m-1", State: sideagent.MessageStateRunning, TurnID: "t9"},
+			map[string]any{"message_id": "m-1", "message_state": "running", "turn_id": "t9", "state": "idle"}},
+		{"failed with code", sideagent.MessageReceipt{MessageID: "m-2", State: sideagent.MessageStateFailed, ErrorCode: sideagent.ErrCodeContextLimit},
+			map[string]any{"message_id": "m-2", "message_state": "failed", "error_code": "context_limit"}},
+		{"cancelled repeat", sideagent.MessageReceipt{MessageID: "m-3", State: sideagent.MessageStateCancelled},
+			map[string]any{"message_id": "m-3", "message_state": "cancelled"}},
+		{"legacy turn", sideagent.MessageReceipt{State: sideagent.MessageStateCompleted, TurnID: "t1"},
+			map[string]any{"message_id": "", "message_state": "completed", "turn_id": "t1", "state": "idle"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSideAgent{history: idle, enqueueFn: func(string, string, sideagent.TurnTarget) (sideagent.MessageReceipt, error) {
+				return tc.receipt, nil
+			}}
+			code, m := postMessage(t, newTestServer(t, Config{SideAgent: fake}), map[string]string{"client_message_id": "c", "text": "x"})
+			if code != http.StatusAccepted {
+				t.Fatalf("HTTP %d", code)
+			}
+			for k, want := range tc.want {
+				if m[k] != want {
+					t.Errorf("%s = %v, want %v (body %v)", k, m[k], want, m)
+				}
+			}
+		})
+	}
+}
+
+func TestSideAgent_SendPassesStageContext(t *testing.T) {
+	fake := &fakeSideAgent{}
+	srv := newTestServer(t, Config{SideAgent: fake})
+	postMessage(t, srv, map[string]string{"client_message_id": "c", "text": "x", "stage_id": "impl"})
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.sentTarget.StageID != "impl" || fake.sentTarget.SourceMessageID != "" {
+		t.Fatalf("target = %+v", fake.sentTarget)
+	}
+}
+
+func deleteMessage(srv *Server, id string, origin bool) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodDelete, "/api/side-agent/messages/"+id, nil)
+	if origin {
 		req.Header.Set("Origin", "http://"+req.Host)
-		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
-		if w.Code != http.StatusAccepted {
-			t.Fatalf("got %d, want 202", w.Code)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	return w
+}
+
+func TestSideAgent_DeleteQueuedMessage(t *testing.T) {
+	fake := &fakeSideAgent{history: []sideagent.Event{ev(7, sideagent.EventTurnCompleted, "t1")}}
+	srv := newTestServer(t, Config{SideAgent: fake})
+	for i := 0; i < 2; i++ { // повтор тоже 200
+		w := deleteMessage(srv, "m-123-ab", true)
+		if w.Code != http.StatusOK {
+			t.Fatalf("HTTP %d (%s)", w.Code, w.Body.String())
 		}
 		var m map[string]any
 		_ = json.Unmarshal(w.Body.Bytes(), &m)
-		return m["state"].(string)
+		if m["message_id"] != "m-123-ab" || m["message_state"] != "cancelled" || m["cursor"] != float64(7) {
+			t.Fatalf("body = %v", m)
+		}
+	}
+	if fake.cancelledID != "m-123-ab" {
+		t.Fatalf("cancelled %q", fake.cancelledID)
+	}
+}
+
+func TestSideAgent_DeleteErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		id     string
+		origin bool
+		err    sideagent.ErrorCode
+		status int
+		code   string
+	}{
+		{"claimed message", "m-1", true, sideagent.ErrCodeMessageNotQueued, http.StatusConflict, "message_not_queued"},
+		{"unknown message", "m-2", true, sideagent.ErrCodeMessageNotFound, http.StatusNotFound, "message_not_found"},
+		{"foreign origin", "m-3", false, "", http.StatusForbidden, "forbidden_origin"},
+		{"unsafe segment", "a%2Fb", true, "", http.StatusNotFound, "message_not_found"},
+		{"nested path", "m-1/extra", true, "", http.StatusNotFound, ""},
+		{"storage down", "m-4", true, sideagent.ErrCodeStorageUnavailable, http.StatusServiceUnavailable, "storage_unavailable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeSideAgent{cancelFn: func(string) (sideagent.MessageReceipt, error) {
+				if tc.err == "" {
+					t.Error("CancelQueued must not run for a rejected request")
+					return sideagent.MessageReceipt{}, nil
+				}
+				return sideagent.MessageReceipt{}, &sideagent.Error{Code: tc.err}
+			}}
+			w := deleteMessage(newTestServer(t, Config{SideAgent: fake}), tc.id, tc.origin)
+			if w.Code != tc.status {
+				t.Fatalf("HTTP %d, want %d (%s)", w.Code, tc.status, w.Body.String())
+			}
+			if tc.code != "" && !strings.Contains(w.Body.String(), `"`+tc.code+`"`) {
+				t.Fatalf("body %s lacks %s", w.Body.String(), tc.code)
+			}
+		})
+	}
+}
+
+func TestSideAgent_DeleteRouteAbsentWhenCapabilityOff(t *testing.T) {
+	w := deleteMessage(newTestServer(t, Config{}), "m-1", true)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("HTTP %d, want 404", w.Code)
+	}
+}
+
+// Снимок: очередь, активный ход и источник берутся из той же копии журнала, что state и last_seq.
+func TestSideAgent_SnapshotHasQueueAndActiveTurn(t *testing.T) {
+	queued := func(seq uint64, id, stage string) sideagent.Event {
+		return sideagent.Event{Seq: seq, Type: sideagent.EventMessageQueued,
+			Data: json.RawMessage(`{"message_id":"` + id + `","client_message_id":"c-` + id + `","message":"text ` + id + `","stage_id":"` + stage + `"}`)}
+	}
+	fake := &fakeSideAgent{convID: "run-1", history: []sideagent.Event{
+		{Seq: 1, Type: sideagent.EventTurnAccepted, TurnID: "t1", Data: json.RawMessage(`{"message":"ping","client_message_id":"mesh:x","source_message_id":"x","source_sender_id":"stage:a","source_sender_name":"Alice"}`)},
+		ev(2, sideagent.EventTurnStarted, "t1"),
+		queued(3, "m-1", "impl"),
+		queued(4, "m-2", ""),
+		{Seq: 5, Type: sideagent.EventMessageCancelled, Data: json.RawMessage(`{"message_id":"m-2"}`)},
+	}}
+	srv := newTestServer(t, Config{SideAgent: fake})
+	req := httptest.NewRequest(http.MethodGet, "/api/side-agent?after_seq=4&limit=1", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	var m struct {
+		State        string         `json:"state"`
+		ActiveTurnID string         `json:"active_turn_id"`
+		ActiveSource map[string]any `json:"active_source"`
+		Queued       []map[string]any
+		LastSeq      uint64 `json:"last_seq"`
+		Events       []any  `json:"events"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.State != "running" || m.ActiveTurnID != "t1" || m.LastSeq != 5 || len(m.Events) != 1 {
+		t.Fatalf("snapshot = %+v", m)
+	}
+	if m.ActiveSource["kind"] != "mesh" || m.ActiveSource["sender_id"] != "stage:a" || m.ActiveSource["sender_name"] != "Alice" {
+		t.Fatalf("active_source = %v", m.ActiveSource)
+	}
+	if len(m.Queued) != 1 || m.Queued[0]["message_id"] != "m-1" || m.Queued[0]["text"] != "text m-1" ||
+		m.Queued[0]["stage_id"] != "impl" || m.Queued[0]["client_message_id"] != "c-m-1" || m.Queued[0]["seq"] != float64(3) {
+		t.Fatalf("queued = %v", m.Queued)
+	}
+}
+
+func TestSideAgent_SnapshotIdleWithQueueAndModalSource(t *testing.T) {
+	fake := &fakeSideAgent{history: []sideagent.Event{
+		{Seq: 1, Type: sideagent.EventMessageQueued, Data: json.RawMessage(`{"message_id":"m-1","message":"x"}`)},
+	}}
+	srv := newTestServer(t, Config{SideAgent: fake})
+	req := httptest.NewRequest(http.MethodGet, "/api/side-agent", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	var m map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &m)
+	if m["state"] != "idle" || m["active_turn_id"] != "" || m["active_source"] != nil {
+		t.Fatalf("idle snapshot = %v", m)
+	}
+	if q, _ := m["queued"].([]any); len(q) != 1 {
+		t.Fatalf("idle state must not hide the queue: %v", m["queued"])
 	}
 
-	// Завершённый ход → idle.
-	completed := &fakeSideAgent{
-		history: []sideagent.Event{
-			ev(sideagent.EventTurnAccepted, "t1", 1),
-			ev(sideagent.EventTurnStarted, "t1", 2),
-			ev(sideagent.EventTurnCompleted, "t1", 3),
-		},
-		sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) { return "t1", nil },
+	empty := newTestServer(t, Config{SideAgent: &fakeSideAgent{}})
+	w = httptest.NewRecorder()
+	empty.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/side-agent", nil))
+	if !strings.Contains(w.Body.String(), `"queued":[]`) {
+		t.Fatalf("empty queue must be [] not null: %s", w.Body.String())
 	}
-	if got := post(completed); got != "idle" {
-		t.Errorf("повтор завершённого хода: state=%q, want idle", got)
-	}
+}
 
-	// Активный ход → running.
-	running := &fakeSideAgent{
-		history: []sideagent.Event{
-			ev(sideagent.EventTurnAccepted, "t2", 1),
-			ev(sideagent.EventTurnStarted, "t2", 2),
-		},
-		sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) { return "t2", nil },
+func TestSideAgent_SnapshotModalActiveSource(t *testing.T) {
+	fake := &fakeSideAgent{history: []sideagent.Event{
+		{Seq: 1, Type: sideagent.EventMessageQueued, Data: json.RawMessage(`{"message_id":"m-1","message":"x"}`)},
+		{Seq: 2, Type: sideagent.EventTurnAccepted, TurnID: "t1", Data: json.RawMessage(`{"message_ids":["m-1"]}`)},
+	}}
+	w := httptest.NewRecorder()
+	newTestServer(t, Config{SideAgent: fake}).Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/side-agent", nil))
+	var m map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &m)
+	src, _ := m["active_source"].(map[string]any)
+	if m["active_turn_id"] != "t1" || src["kind"] != "modal" || len(src) != 1 {
+		t.Fatalf("snapshot = %v", m)
 	}
-	if got := post(running); got != "running" {
-		t.Errorf("активный ход: state=%q, want running", got)
+	if q, _ := m["queued"].([]any); len(q) != 0 {
+		t.Fatalf("claimed message must leave the queue: %v", q)
 	}
 }
 
@@ -240,7 +426,10 @@ func TestSideAgent_SendStateReflectsReturnedTurn(t *testing.T) {
 // не 400 invalid_body: сообщение слишком велико, а не битый JSON.
 func TestSideAgent_OversizeBodyIsMessageTooLarge(t *testing.T) {
 	sendCalled := false
-	fake := &fakeSideAgent{sendFn: func(_, _ string, _ sideagent.TurnTarget) (string, error) { sendCalled = true; return "t", nil }}
+	fake := &fakeSideAgent{enqueueFn: func(_, _ string, _ sideagent.TurnTarget) (sideagent.MessageReceipt, error) {
+		sendCalled = true
+		return sideagent.MessageReceipt{}, nil
+	}}
 	srv := newTestServer(t, Config{SideAgent: fake})
 
 	huge := strings.Repeat("x", int(maxSideAgentBodyBytes)+4096)
@@ -259,7 +448,7 @@ func TestSideAgent_OversizeBodyIsMessageTooLarge(t *testing.T) {
 		t.Errorf("error code = %v, want message_too_large", m["error"])
 	}
 	if sendCalled {
-		t.Error("Send не должен вызываться для тела сверх капа")
+		t.Error("Enqueue не должен вызываться для тела сверх капа")
 	}
 }
 

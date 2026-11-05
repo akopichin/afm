@@ -29,18 +29,24 @@ var (
 	ErrInvalidTransition = errors.New("sideagent: invalid turn transition")
 )
 
+// journalFile — запись журнала на диск; интерфейс нужен, чтобы тест мог отказать fsync после успешного write.
+type journalFile interface {
+	Write(p []byte) (int, error)
+	Sync() error
+	Close() error
+}
+
 // Store — единственный живой писатель журнала одного разговора. seq принадлежит стору.
 type Store struct {
 	mu             sync.Mutex
 	dir            string
 	conversationID string
-	chatLog        *os.File
+	chatLog        journalFile
 	lock           *progress.Lock
 
-	history    []Event
-	lastSeq    uint64
-	turnStates map[string]TurnState
-	turnOrder  []string
+	history []Event
+	lastSeq uint64
+	conv    *Conversation
 
 	unavailable bool
 	lastErr     error
@@ -77,10 +83,7 @@ func Open(base, runID string) (*Store, error) {
 		lock:           lock,
 		history:        events,
 		lastSeq:        lastSeq,
-		turnStates:     make(map[string]TurnState),
-	}
-	for _, e := range events {
-		s.applyTurnState(e)
+		conv:           ProjectConversation(events),
 	}
 
 	if corrupt {
@@ -184,8 +187,8 @@ func splitLines(data []byte) [][]byte {
 // recoverOrphans помечает незавершённые ходы как interrupted в порядке их
 // появления. Вызывается только из Open (без конкуренции) с удерживаемым flock.
 func (s *Store) recoverOrphans() error {
-	for _, turnID := range s.turnOrder {
-		if s.turnStates[turnID].IsTerminal() {
+	for _, turnID := range s.conv.turnOrder {
+		if s.conv.turns[turnID].state.IsTerminal() {
 			continue
 		}
 		if _, err := s.appendLocked(EventTurnInterrupted, turnID, TurnInterruptedData{Reason: "recovered: no terminal event"}); err != nil {
@@ -193,18 +196,6 @@ func (s *Store) recoverOrphans() error {
 		}
 	}
 	return nil
-}
-
-// applyTurnState обновляет in-memory FSM-карту ходов по событию.
-func (s *Store) applyTurnState(e Event) {
-	st, ok := e.Type.TurnState()
-	if !ok {
-		return // content-событие состояние хода не меняет
-	}
-	if _, seen := s.turnStates[e.TurnID]; !seen {
-		s.turnOrder = append(s.turnOrder, e.TurnID)
-	}
-	s.turnStates[e.TurnID] = st
 }
 
 // Append добавляет событие в журнал: валидация перехода → durable-запись с fsync → и только потом мутация
@@ -223,10 +214,6 @@ func (s *Store) appendLocked(typ EventType, turnID string, data any) (Event, err
 		s.markUnavailable(os.ErrClosed)
 		return Event{}, s.lastErr
 	}
-	if err := s.validateTransition(typ, turnID); err != nil {
-		return Event{}, err
-	}
-
 	e := Event{
 		SchemaVersion:  SchemaVersion,
 		Seq:            s.lastSeq + 1,
@@ -239,6 +226,9 @@ func (s *Store) appendLocked(typ EventType, turnID string, data any) (Event, err
 		if err := e.SetData(data); err != nil {
 			return Event{}, err
 		}
+	}
+	if err := s.conv.validate(e); err != nil {
+		return Event{}, err
 	}
 	raw, err := e.Encode()
 	if err != nil {
@@ -258,35 +248,8 @@ func (s *Store) appendLocked(typ EventType, turnID string, data any) (Event, err
 	// durable-first: журнал на диске, теперь обновляем runtime-состояние.
 	s.lastSeq = e.Seq
 	s.history = append(s.history, e)
-	s.applyTurnState(e)
+	s.conv.apply(e)
 	return e, nil
-}
-
-// validateTransition проверяет допустимость события для текущего состояния хода.
-func (s *Store) validateTransition(typ EventType, turnID string) error {
-	newState, isFSM := typ.TurnState()
-	cur, exists := s.turnStates[turnID]
-
-	if !isFSM {
-		// content-событие допустимо только для активного (started) хода
-		if !exists || cur != TurnStateStarted {
-			return fmt.Errorf("%w: %s on turn %q in state %q", ErrInvalidTransition, typ, turnID, cur)
-		}
-		return nil
-	}
-	if newState == TurnStateAccepted {
-		if exists {
-			return fmt.Errorf("%w: turn %q already exists", ErrInvalidTransition, turnID)
-		}
-		return nil
-	}
-	if !exists {
-		return fmt.Errorf("%w: turn %q not found for %s", ErrInvalidTransition, turnID, typ)
-	}
-	if !cur.CanTransitionTo(newState) {
-		return fmt.Errorf("%w: %s->%s on turn %q", ErrInvalidTransition, cur, newState, turnID)
-	}
-	return nil
 }
 
 // markUnavailable должен вызываться с удерживаемым mu.
@@ -302,6 +265,13 @@ func (s *Store) History() []Event {
 	out := make([]Event, len(s.history))
 	copy(out, s.history)
 	return out
+}
+
+// Conversation возвращает проекцию текущего журнала.
+func (s *Store) Conversation() *Conversation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ProjectConversation(s.history)
 }
 
 // ConversationID возвращает id разговора (== run_id).

@@ -11,6 +11,10 @@ function fakeApi(over: Partial<SideAgentApi> = {}): SideAgentApi {
     events: [],
     requestState: 'idle',
     activeSource: null,
+    queue: [],
+    removal: {},
+    removeQueued: vi.fn(),
+    submitting: false,
     unavailable: false,
     command: 'claude',
     commandName: 'Claude Code',
@@ -300,6 +304,43 @@ describe('SideAgentModal', () => {
   it('has no attention shortcut when none is pending', () => {
     renderModal({ isOpen: true })
     expect(screen.queryByText(/waiting/i)).toBeNull()
+  })
+
+  it('keeps Send available while the Assistant answers and sends the draft to the queue', () => {
+    const send = vi.fn().mockResolvedValue(undefined)
+    renderModal({ requestState: 'running', activeSource: { kind: 'modal' }, draft: 'next', send })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(send).toHaveBeenCalledWith('next')
+  })
+
+  it('blocks Send only while the server is accepting a message', () => {
+    renderModal({ draft: 'next', submitting: true })
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+  })
+
+  it('shows the queue between the history and the composer and removes through the api', () => {
+    const removeQueued = vi.fn()
+    renderModal({ queue: [{ messageId: 'm1', text: 'queued question', stageId: '', seq: 1 }], removeQueued })
+    const queue = screen.getByRole('region', { name: 'Queued messages' })
+    const history = screen.getByRole('region', { name: 'Assistant history' })
+    const composer = screen.getByLabelText('Message the assistant')
+    expect(history.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(queue.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from queue' }))
+    expect(removeQueued).toHaveBeenCalledWith('m1')
+  })
+
+  it('after the last queued message is removed focus returns to the composer', () => {
+    const queue = [{ messageId: 'm1', text: 'queued question', stageId: '', seq: 1 }]
+    const api = fakeApi({ queue })
+    let utils!: ReturnType<typeof render>
+    act(() => { utils = render(<SideAgentModal api={api} />) })
+    const remove = screen.getByRole('button', { name: 'Remove from queue' })
+    remove.focus()
+    fireEvent.click(remove)
+    act(() => { utils.rerender(<SideAgentModal api={{ ...api, queue: [] }} />) })
+    expect(screen.getByLabelText('Message the assistant')).toHaveFocus()
+    expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull()
   })
 
   it('shows an error banner when api.error is set', () => {

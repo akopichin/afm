@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,7 +16,8 @@ import (
 // *sideagent.Manager.
 type SideAgentService interface {
 	History() []sideagent.Event
-	Send(clientMessageID, text string, target sideagent.TurnTarget) (string, error)
+	Enqueue(clientMessageID, text string, target sideagent.TurnTarget) (sideagent.MessageReceipt, error)
+	CancelQueued(messageID string) (sideagent.MessageReceipt, error)
 	Stop(turnID string) error
 	Subscribe() (<-chan sideagent.Event, func())
 	ConversationID() string
@@ -38,23 +40,54 @@ type sideAgentStateResponse struct {
 	CommandName    string            `json:"command_name,omitempty"`
 	Unavailable    bool              `json:"unavailable"`
 	State          string            `json:"state"`
+	ActiveTurnID   string            `json:"active_turn_id"`
+	ActiveSource   *sideAgentSource  `json:"active_source"`
+	Queued         []sideAgentQueued `json:"queued"`
 	Events         []sideagent.Event `json:"events"`
 	LastSeq        uint64            `json:"last_seq"`
 	NextCursor     uint64            `json:"next_cursor"`
 	HasMore        bool              `json:"has_more"`
 }
 
-// sideAgentSendResponse — форма ответа на POST /api/side-agent/messages.
-type sideAgentSendResponse struct {
-	TurnID string `json:"turn_id"`
-	State  string `json:"state"`
-	Cursor uint64 `json:"cursor"`
+// sideAgentSource — чей запрос выполняет активный ход: пользователь из модалки или Mesh-участник.
+type sideAgentSource struct {
+	Kind       string `json:"kind"`
+	SenderID   string `json:"sender_id,omitempty"`
+	SenderName string `json:"sender_name,omitempty"`
 }
 
-const (
-	sideStateIdle    = "idle"
-	sideStateRunning = "running"
-)
+// sideAgentQueued — ожидающее сообщение в снимке разговора.
+type sideAgentQueued struct {
+	MessageID       string `json:"message_id"`
+	ClientMessageID string `json:"client_message_id"`
+	Text            string `json:"text"`
+	StageID         string `json:"stage_id"`
+	AssistantTaskID string `json:"assistant_task_id"`
+	Seq             uint64 `json:"seq"`
+}
+
+// sideAgentSendResponse — квитанция POST /api/side-agent/messages. MessageState — состояние записи очереди,
+// State — состояние разговора (для старой открытой вкладки); TurnID есть, только пока сообщение забрано ходом.
+type sideAgentSendResponse struct {
+	MessageID    string `json:"message_id"`
+	MessageState string `json:"message_state"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	TurnID       string `json:"turn_id,omitempty"`
+	State        string `json:"state"`
+	Cursor       uint64 `json:"cursor"`
+}
+
+// sideAgentCancelResponse — ответ DELETE /api/side-agent/messages/{id}.
+type sideAgentCancelResponse struct {
+	MessageID    string `json:"message_id"`
+	MessageState string `json:"message_state"`
+	Cursor       uint64 `json:"cursor"`
+}
+
+const sideAgentMessagesPrefix = "/api/side-agent/messages/"
+
+// safeMessageIDPattern — единственный допустимый сегмент пути с id сообщения.
+var safeMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // routeSideAgent диспетчеризует все /api/side-agent[/...] запросы.
 func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +96,8 @@ func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
 		s.handleSideAgentState(w, r)
 	case r.URL.Path == "/api/side-agent/messages" && r.Method == http.MethodPost:
 		s.handleSideAgentSend(w, r)
+	case strings.HasPrefix(r.URL.Path, sideAgentMessagesPrefix) && r.Method == http.MethodDelete:
+		s.handleSideAgentCancel(w, r)
 	case r.URL.Path == "/api/side-agent/interrupt" && r.Method == http.MethodPost:
 		s.handleSideAgentInterrupt(w, r)
 	case r.URL.Path == "/api/side-agent/stream" && r.Method == http.MethodGet:
@@ -78,10 +113,8 @@ func (s *Server) routeSideAgent(w http.ResponseWriter, r *http.Request) {
 // (idle/running) считается по ВСЕЙ истории, а не только по странице.
 func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 	history := s.sideAgent.History()
-	lastSeq := uint64(0)
-	if n := len(history); n > 0 {
-		lastSeq = history[n-1].Seq
-	}
+	lastSeq := lastSideSeq(history)
+	conv := sideagent.ProjectConversation(history)
 	after := parseUintQuery(r, "after_seq")
 	limit := parseSideAgentLimit(r)
 
@@ -104,7 +137,10 @@ func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 		Command:        s.sideAgent.Command(),
 		CommandName:    s.commandName(s.sideAgent.Command()),
 		Unavailable:    s.sideAgent.Unavailable(),
-		State:          deriveSideAgentState(history),
+		State:          conv.State(),
+		ActiveTurnID:   conv.ActiveTurnID(),
+		ActiveSource:   toSideAgentSource(conv.ActiveSource()),
+		Queued:         toSideAgentQueued(conv.Queued()),
 		Events:         events,
 		LastSeq:        lastSeq,
 		NextCursor:     nextCursor,
@@ -114,11 +150,11 @@ func (s *Server) handleSideAgentState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleSideAgentSend принимает сообщение пользователя. Клиент управляет client_message_id, text и
+// handleSideAgentSend ставит сообщение пользователя в очередь. Клиент управляет client_message_id, text и
 // (опционально) stage_id — какой стадии касается сообщение, для отображения «Context: …» (T4.3). Команда/
 // аргументы/CWD по-прежнему задаются сервером (D1). Любое другое поле (в частности depth/root_stage_id/
 // mentions) тут читать НЕКУДА — у структуры запроса нет для них поля, они всегда вычисляются сервером
-// (TestTurn_DepthAndRootDerivedServerSide, mentions — sideagent.Manager.Send через Config.MentionResolve).
+// (TestTurn_DepthAndRootDerivedServerSide, mentions — sideagent.Manager.Enqueue через Config.MentionResolve).
 func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginOK(r) {
 		writeSideAgentErrCode(w, http.StatusForbidden, "forbidden_origin")
@@ -144,21 +180,67 @@ func (s *Server) handleSideAgentSend(w http.ResponseWriter, r *http.Request) {
 		writeSideAgentErrCode(w, http.StatusBadRequest, string(sideagent.ErrCodeInvalidMessage))
 		return
 	}
-	turnID, err := s.sideAgent.Send(req.ClientMessageID, req.Text, sideagent.TurnTarget{StageID: req.StageID})
+	receipt, err := s.sideAgent.Enqueue(req.ClientMessageID, req.Text, sideagent.TurnTarget{StageID: req.StageID})
 	if err != nil {
 		writeSideAgentError(w, err)
 		return
 	}
-	// Состояние — РЕАЛЬНОЕ состояние возвращённого хода, не хардкод "running": идемпотентный повтор уже
-	// завершённого хода возвращает его id, и клиент не должен считать неактивный ход активным.
+	// state и cursor — из одной копии журнала: состояние разговора, а не сообщения.
 	h := s.sideAgent.History()
-	cursor := uint64(0)
-	if len(h) > 0 {
-		cursor = h[len(h)-1].Seq
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(sideAgentSendResponse{TurnID: turnID, State: turnStateInHistory(h, turnID), Cursor: cursor})
+	_ = json.NewEncoder(w).Encode(sideAgentSendResponse{
+		MessageID: receipt.MessageID, MessageState: string(receipt.State), ErrorCode: string(receipt.ErrorCode),
+		TurnID: receipt.TurnID, State: sideagent.ProjectConversation(h).State(), Cursor: lastSideSeq(h),
+	})
+}
+
+// handleSideAgentCancel удаляет ожидающее сообщение из очереди. Повтор уже отменённого — тоже 200;
+// забранное ходом — 409 message_not_queued.
+func (s *Server) handleSideAgentCancel(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOK(r) {
+		writeSideAgentErrCode(w, http.StatusForbidden, "forbidden_origin")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, sideAgentMessagesPrefix)
+	if !safeMessageIDPattern.MatchString(id) {
+		writeSideAgentErrCode(w, http.StatusNotFound, string(sideagent.ErrCodeMessageNotFound))
+		return
+	}
+	receipt, err := s.sideAgent.CancelQueued(id)
+	if err != nil {
+		writeSideAgentError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sideAgentCancelResponse{
+		MessageID: receipt.MessageID, MessageState: string(receipt.State), Cursor: lastSideSeq(s.sideAgent.History()),
+	})
+}
+
+func lastSideSeq(history []sideagent.Event) uint64 {
+	if len(history) == 0 {
+		return 0
+	}
+	return history[len(history)-1].Seq
+}
+
+func toSideAgentSource(src *sideagent.ActiveSource) *sideAgentSource {
+	if src == nil {
+		return nil
+	}
+	return &sideAgentSource{Kind: src.Kind, SenderID: src.SenderID, SenderName: src.SenderName}
+}
+
+func toSideAgentQueued(queue []sideagent.MessageInfo) []sideAgentQueued {
+	out := make([]sideAgentQueued, len(queue))
+	for i, m := range queue {
+		out[i] = sideAgentQueued{
+			MessageID: m.MessageID, ClientMessageID: m.ClientMessageID, Text: m.Text,
+			StageID: m.StageID, AssistantTaskID: m.AssistantTaskID, Seq: m.Seq,
+		}
+	}
+	return out
 }
 
 // handleSideAgentInterrupt прерывает ровно указанный ход. Устаревший turn_id →
@@ -187,50 +269,6 @@ func (s *Server) handleSideAgentInterrupt(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "interrupting"})
 }
 
-// turnStateInHistory возвращает "running", если последнее FSM-событие хода turnID не терминально, иначе
-// "idle".
-func turnStateInHistory(history []sideagent.Event, turnID string) string {
-	var st sideagent.TurnState
-	found := false
-	for _, e := range history {
-		if e.TurnID != turnID {
-			continue
-		}
-		if s, ok := e.Type.TurnState(); ok {
-			st = s
-			found = true
-		}
-	}
-	if found && !st.IsTerminal() {
-		return sideStateRunning
-	}
-	return sideStateIdle
-}
-
-// deriveSideAgentState возвращает "running", если последний по порядку ход не
-// терминален, иначе "idle" (пустой журнал → idle).
-func deriveSideAgentState(history []sideagent.Event) string {
-	states := make(map[string]sideagent.TurnState)
-	var order []string
-	for _, e := range history {
-		st, ok := e.Type.TurnState()
-		if !ok {
-			continue
-		}
-		if _, seen := states[e.TurnID]; !seen {
-			order = append(order, e.TurnID)
-		}
-		states[e.TurnID] = st
-	}
-	if len(order) == 0 {
-		return sideStateIdle
-	}
-	if states[order[len(order)-1]].IsTerminal() {
-		return sideStateIdle
-	}
-	return sideStateRunning
-}
-
 // sameOriginOK — defence-in-depth проверка Origin для мутирующих POST'ов. Это НЕ авторизация: реальная
 // граница — loopback-bind (инвариант 9, dashboardListenAddr).
 func sameOriginOK(r *http.Request) bool {
@@ -248,8 +286,10 @@ func sameOriginOK(r *http.Request) bool {
 // sideAgentErrStatus маппит стабильный код ошибки в HTTP-статус.
 func sideAgentErrStatus(code sideagent.ErrorCode) int {
 	switch code {
-	case sideagent.ErrCodeBusy, sideagent.ErrCodeStaleTurn:
+	case sideagent.ErrCodeBusy, sideagent.ErrCodeStaleTurn, sideagent.ErrCodeClientMessageIDConflict, sideagent.ErrCodeMessageNotQueued:
 		return http.StatusConflict
+	case sideagent.ErrCodeMessageNotFound:
+		return http.StatusNotFound
 	case sideagent.ErrCodeInvalidMessage:
 		return http.StatusBadRequest
 	case sideagent.ErrCodeMessageTooLarge, sideagent.ErrCodeContextLimit:

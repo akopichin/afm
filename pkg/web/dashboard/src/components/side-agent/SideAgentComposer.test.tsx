@@ -65,16 +65,26 @@ describe('SideAgentComposer', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 
-  it('while running: textarea editable, Send disabled, Stop shown', () => {
+  it('while running: textarea editable, Send enabled and queues, Stop shown', () => {
     const onStop = vi.fn()
     const onSend = vi.fn()
     render(<SideAgentComposer draft="next" onDraftChange={vi.fn()} onSend={onSend} onStop={onStop} running />)
     expect(screen.getByRole('combobox')).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+    expect(screen.getByText(/new messages wait in the queue/)).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true })
+    expect(onSend).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('while the server is accepting a message: Send is disabled, the draft stays editable', () => {
+    const onSend = vi.fn()
+    render(<SideAgentComposer draft="next" onDraftChange={vi.fn()} onSend={onSend} running={false} submitting />)
+    expect(screen.getByRole('combobox')).not.toBeDisabled()
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter', metaKey: true })
     expect(onSend).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
-    expect(onStop).toHaveBeenCalledTimes(1)
   })
 
   it('no Stop button when idle', () => {

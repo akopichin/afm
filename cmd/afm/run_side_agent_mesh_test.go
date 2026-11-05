@@ -95,7 +95,7 @@ func meshSideHarness(t *testing.T, runner *meshSideRunner, builders ...sideagent
 	if len(builders) > 0 {
 		builder = builders[0]
 	}
-	mgr := sideagent.New(sideagent.Config{
+	mgr := newStartedSideManager(sideagent.Config{
 		Store:       sideStore,
 		Command:     "codex",
 		Context:     builder,
@@ -413,7 +413,7 @@ func TestSideAgentMesh_WriteFailureJoinsAndRevokesBeforeFailureReply(t *testing.
 	}
 	t.Cleanup(func() { _ = sideStore.Close() })
 	runner := &failingJournalRunner{started: make(chan string, 1), writeNow: make(chan struct{})}
-	mgr := sideagent.New(sideagent.Config{
+	mgr := newStartedSideManager(sideagent.Config{
 		Store: sideStore, Command: "codex", MeshClient: orch.SideAgentMeshClient,
 		OnSourceDelivered: func(id string) {
 			if err := orch.MarkMessageDelivered(context.Background(), agentcomm.MessageID(id), orch.SideAgentParticipantID()); err != nil {
@@ -510,7 +510,7 @@ func TestSideAgentMesh_HistoricalModalIDClaimCannotStrandSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sideStore.Close() })
-	mgr := sideagent.New(sideagent.Config{
+	mgr := newStartedSideManager(sideagent.Config{
 		Store: sideStore, Command: "codex",
 		NewExecutor: func(cfg executor.Config) sideagent.AgentRunner {
 			return &meshSideRunner{cfg: cfg, started: make(chan struct{}, 1), answer: "modal answer"}
@@ -584,7 +584,7 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"side fina
 	t.Setenv("AFM_TEST_LIST_PATH", listPath)
 	t.Setenv("AFM_TEST_TOKEN_PATH", tokenPath)
 	t.Setenv("AFM_TEST_DESCRIPTOR_PATH", descriptorPath)
-	mgr := sideagent.New(sideagent.Config{
+	mgr := newStartedSideManager(sideagent.Config{
 		Store: sideStore, Command: script, ExtraArgs: []string{"--test"},
 		MeshClient: orch.SideAgentMeshClient,
 		OnSourceDelivered: func(id string) {
@@ -854,7 +854,7 @@ func TestSideAgentMesh_ReconcilePassiveOrphanDoesNotReplayFailureNotice(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sideStore.Close() })
-	mgr := sideagent.New(sideagent.Config{Store: sideStore, Command: "codex", NewExecutor: func(executor.Config) sideagent.AgentRunner {
+	mgr := newStartedSideManager(sideagent.Config{Store: sideStore, Command: "codex", NewExecutor: func(executor.Config) sideagent.AgentRunner {
 		t.Error("passive orphan was rerun")
 		return nil
 	}})
@@ -937,7 +937,7 @@ func TestSideAgentMesh_RestartReconcilesOrphansAndCompletedAnswer(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sideStore.Close() })
-	mgr := sideagent.New(sideagent.Config{Store: sideStore, Command: "codex", NewExecutor: func(executor.Config) sideagent.AgentRunner { t.Error("orphan was rerun"); return nil }})
+	mgr := newStartedSideManager(sideagent.Config{Store: sideStore, Command: "codex", NewExecutor: func(executor.Config) sideagent.AgentRunner { t.Error("orphan was rerun"); return nil }})
 	b := startSideAgentMesh(orch, mgr)
 	t.Cleanup(func() {
 		b.CloseInput()
@@ -1058,7 +1058,7 @@ func TestSideAgentMesh_FinalizedFlowKeepsDirectModalAdmissionUntilShutdown(t *te
 	if err := orch.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.manager.Send("modal-after-flow", "still here?", sideagent.TurnTarget{}); err != nil {
+	if _, err := runtime.manager.Enqueue("modal-after-flow", "still here?", sideagent.TurnTarget{}); err != nil {
 		t.Fatalf("direct modal turn rejected while dashboard grace remains: %v", err)
 	}
 	select {
@@ -1166,7 +1166,7 @@ func TestSideAgentMesh_UnavailableStartupReleasesHistoricalInboxAndReplaysNotice
 					t.Fatalf("expected unavailable side store, got %v, %v", s, err)
 				}
 				t.Cleanup(func() { _ = s.Close() })
-				mgr = sideagent.New(sideagent.Config{Store: s, Command: "codex"})
+				mgr = newStartedSideManager(sideagent.Config{Store: s, Command: "codex"})
 			}
 			var bridge *sideAgentMeshBridge
 			if mode == "disabled" {
@@ -1326,7 +1326,7 @@ func TestSideAgentMesh_UnprocessableResultReleasedByAssistant(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	bridge := startSideAgentMesh(orch, sideagent.New(sideagent.Config{Store: s, Command: "codex"}))
+	bridge := startSideAgentMesh(orch, newStartedSideManager(sideagent.Config{Store: s, Command: "codex"}))
 	defer bridge.Abort()
 	drainCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

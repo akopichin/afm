@@ -299,10 +299,22 @@ project, or run a quick command-style exchange *without* touching the run.
   does not call the model; **Escape** closes it. The header button carries a
   small indicator — it lights while a reply is in flight and
   flags an unseen result once one arrives while the window is closed.
-- **One conversation per run, one request at a time.** The chat keeps a single
-  conversation tied to the run. Messages sent to `@assistant` through Agent Mesh join
-  this history too. Only one turn runs at a time, so you can send a new modal
-  message after the current turn ends. Mesh messages wait for their turn.
+- **One conversation per run, one turn at a time.** The chat keeps a single
+  conversation tied to the run. While the Assistant is replying you can keep
+  sending: the message goes into a durable queue on the server and the field is
+  cleared. Queued messages appear under **Queued (N)** with their context
+  (stage or **No stage**); **Remove from queue** deletes one that has not started.
+  When the current turn ends, afm takes the longest run of waiting messages that
+  share one context and sends them to the agent as the next turn, shown as
+  separate lines in one **You** bubble; a message with a different context waits
+  for its own turn. Accepted does not mean read: a message stays queued until its
+  turn starts. **Stop** or a failed turn does not clear the queue — the next
+  group starts by itself. The queue survives closing the window, reloading the
+  page and restarting afm. Messages sent to `@assistant` through Agent Mesh join
+  this history too, but they wait for their turn and are never merged into a
+  group; while the modal queue is not empty, a Mesh turn and the end of the flow
+  wait for it. A normal finish of afm works through the accepted queue first;
+  `Ctrl+C` keeps messages that have not started for the next resume.
 - **Independent execution.** The Assistant chat has its own journal and its own
   cost accounting; it is *not* part of any stage. Its turns do not change stage
   status or trigger stage timers or lifecycle hooks, and an error in a turn cannot
@@ -329,14 +341,17 @@ project, or run a quick command-style exchange *without* touching the run.
   from this modal; it cannot stop a colleague's turn. `Ctrl+C` or afm shutting
   down also ends the work. Reopening the window catches you back up on whatever
   ran while it was closed.
-- **afm assembles the context, with an explicit budget.** Each message is a fresh
-  agent call; afm rebuilds the conversation itself rather than relying on the agent's
+- **afm assembles the context, with an explicit budget.** Each turn is a fresh
+  agent call (a turn may carry several queued messages); afm rebuilds the conversation itself rather than relying on the agent's
   native resume. The assembled prompt has a hard byte budget — exceeding it is a
-  `context_limit` error (your history and draft are preserved), never a silent drop of
-  older turns.
+  `context_limit` error, never a silent drop of older turns. The budget is checked
+  when a turn starts: a group that does not fit is shortened to the largest fitting
+  prefix, and a message that cannot fit alone is marked failed (`context_limit`) and
+  the queue moves on.
 - **File comments can be sent to the Assistant from the Docker file browser.**
   Use **Send** on one comment or **Send all (N)**, select Assistant, and optionally
-  add a message. The accepted request appears in Assistant history. See
+  add a message. While the Assistant is busy the packet is queued like any other
+  message; the accepted request appears in Assistant history. See
   [File comments](#file-comments-docker-mode).
 - **Mention a helper role.** When collaboration is available, type `@` in the
   message field to choose a configured role. A mention is recorded with the
@@ -1137,7 +1152,8 @@ dialog previews the comments and lets you add an optional message and choose
 helper or run agents; when Assistant is the only choice it is selected
 automatically. **Send all** sends one message to the chosen agent, regardless of
 recipients selected on individual cards. The Assistant route works without Agent
-Mesh. Sending does not pause or revise a stage.
+Mesh; if the Assistant is busy, the packet is placed in its queue (**Queued (N)**)
+and can be removed there before it starts. Sending does not pause or revise a stage.
 
 Before sending, Files checks the source again. If a line changed or disappeared,
 confirm the old quote or choose its current line; if a file is gone, confirm

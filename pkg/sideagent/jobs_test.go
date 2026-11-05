@@ -13,7 +13,7 @@ func TestSideAgent_TurnIsMeasuredAsAJob(t *testing.T) {
 	store := newTestStore(t)
 	runner := &fakeRunner{actions: []fakeAction{{"text", "answer"}}}
 	job := &executor.JobConfig{Meta: agentjobs.JobMeta{AgentID: "side:run-test"}}
-	m := New(Config{Store: store, Command: "codex", Job: job,
+	m := newStarted(Config{Store: store, Command: "codex", Job: job,
 		NewExecutor: func(cfg executor.Config) AgentRunner { runner.cfg = cfg; return runner }})
 	if _, err := m.Send("c-1", "hi", TurnTarget{}); err != nil {
 		t.Fatal(err)

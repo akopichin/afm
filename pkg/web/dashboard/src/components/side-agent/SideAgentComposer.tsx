@@ -15,11 +15,13 @@ export type SideAgentComposerProps = {
   draft: string
   onDraftChange: (value: string) => void
   // Отправить текущий черновик. Вызывается только при непустом (trim) тексте и
-  // когда агент не занят (running → поле редактируемо, но Send недоступен).
+  // когда предыдущая отправка уже принята сервером (submitting).
   onSend: () => void
   // Stop доступен только для хода из модального окна; Mesh-ход нельзя прервать отсюда.
   onStop?: () => void
   running: boolean
+  // submitting — идёт только HTTP-приём сообщения: Send заблокирован до ответа сервера, но не до ответа модели.
+  submitting?: boolean
   // quote — приложенная цитата (openWith). Чип рендерится только когда не null; сама цитата не делает
   // сообщение отправляемым — draft всё равно должен быть непустым.
   quote?: string | null
@@ -32,14 +34,15 @@ export type SideAgentComposerProps = {
   assistantProfiles?: AssistantProfile[]
 }
 
-// SideAgentComposer — свой композер беседы. Поле редактируемо и во время работы агента; отправка
-// следующего сообщения возможна только когда текущий turn завершён (Send disabled при running).
+// SideAgentComposer — свой композер беседы. Поле и Send доступны и во время работы агента: сообщение
+// встаёт в серверную очередь (Send блокируется только на время HTTP-приёма).
 export function SideAgentComposer({
   draft,
   onDraftChange,
   onSend,
   onStop,
   running,
+  submitting = false,
   quote = null,
   onCancelQuote,
   assistantProfiles = [],
@@ -63,7 +66,7 @@ export function SideAgentComposer({
     replaceRange,
   })
 
-  const canSend = !running && draft.trim() !== ''
+  const canSend = !submitting && draft.trim() !== ''
 
   function submit(): void {
     if (canSend) onSend()
@@ -144,7 +147,7 @@ export function SideAgentComposer({
           <ChatSendButton label="Send" visibleLabel="Send" disabled={!canSend} onClick={submit} />
         </div>
       </ComposerCard>
-      <ComposerHint note="Messages go to the Assistant." />
+      <ComposerHint note={running ? 'The Assistant is answering — new messages wait in the queue.' : 'Messages go to the Assistant.'} />
     </div>
   )
 }
